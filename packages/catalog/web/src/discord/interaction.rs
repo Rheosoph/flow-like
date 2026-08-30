@@ -17,6 +17,7 @@ use serenity::all::{
     ButtonStyle, ChannelId, CreateActionRow, CreateButton, CreateMessage, CreateSelectMenu,
     CreateSelectMenuKind, CreateSelectMenuOption, EditMessage,
 };
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 /// Represents a user's reply message

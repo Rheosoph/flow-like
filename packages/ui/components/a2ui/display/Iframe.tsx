@@ -5,6 +5,7 @@ import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, IframeComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -22,7 +23,9 @@ export function A2UIIframe({
 	style,
 }: ComponentProps<IframeComponent>) {
 	const { t } = useTranslation("common");
-	const src = useResolved<string>(component.src);
+	const { url: src, isLoading } = useAssetUrl(
+		useResolved<string>(component.src),
+	);
 	const srcdoc = useResolved<string>(component.srcdoc);
 	const width = useResolved<string>(component.width) ?? "100%";
 	const height = useResolved<string>(component.height) ?? "400px";
@@ -38,7 +41,7 @@ export function A2UIIframe({
 		sandbox ?? (useSrcdoc ? SANDBOX_SRCDOC_DEFAULT : SANDBOX_SRC_DEFAULT);
 	const effectiveReferrerPolicy = referrerPolicy ?? "no-referrer";
 
-	if (!src && !srcdoc) {
+	if (!src && !srcdoc && !isLoading) {
 		return (
 			<div
 				className={cn(
@@ -47,7 +50,7 @@ export function A2UIIframe({
 				)}
 				style={{ ...resolveInlineStyle(style), width, height }}
 			>
-				{t('noContentProvided', 'No content provided')}
+				{t("noContentProvided", "No content provided")}
 			</div>
 		);
 	}

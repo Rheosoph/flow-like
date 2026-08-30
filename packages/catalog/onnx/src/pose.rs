@@ -6,10 +6,11 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_catalog_core::{
-    COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, NodeImage, PoseDetection,
-    SkeletonConnection,
+    COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, SkeletonConnection,
 };
+use flow_like_catalog_core::{NodeImage, PoseDetection};
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
     ndarray::{Array3, Array4, Axis, s},
@@ -355,6 +356,7 @@ impl NodeLogic for PoseEstimationNode {
             "Detect human poses and keypoints using ONNX models. Download models from: YOLOv8-Pose (https://docs.ultralytics.com/models/yolov8/), MoveNet (https://tfhub.dev/google/movenet/), HRNet (https://github.com/OAID/TengineKit)",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "poseEstimation");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
@@ -490,6 +492,7 @@ impl NodeLogic for ExtractKeypointNode {
             "Extract a specific keypoint from a pose by index or name",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "extractKeypoint");
 
         node.add_icon("/flow/icons/find_model.svg");
 

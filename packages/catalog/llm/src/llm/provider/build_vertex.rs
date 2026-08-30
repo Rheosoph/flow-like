@@ -34,6 +34,7 @@ impl NodeLogic for BuildVertexNode {
             "Prepares a Bit for Google Vertex AI Gemini endpoints using ADC or service account credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "vertex");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

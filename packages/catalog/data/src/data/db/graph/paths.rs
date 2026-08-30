@@ -28,6 +28,8 @@ impl NodeLogic for GraphPathsNode {
             "Finds the shortest connections between two objects, including alternative routes",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "paths");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -96,7 +98,8 @@ impl NodeLogic for GraphPathsNode {
             "Paths Payload",
             "Found paths with their nodes and edges",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "found",
             "Found",

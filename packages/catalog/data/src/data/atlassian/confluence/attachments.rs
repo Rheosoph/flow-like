@@ -109,6 +109,7 @@ impl NodeLogic for ListConfluenceAttachmentsNode {
             "List attachments on a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "listAttachments");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -252,6 +253,7 @@ impl NodeLogic for UploadConfluenceAttachmentNode {
             "Upload a file attachment to a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "uploadAttachment");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -421,6 +423,7 @@ impl NodeLogic for DownloadConfluenceAttachmentNode {
             "Download a Confluence attachment to a FlowPath",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "downloadAttachment");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 
@@ -582,6 +585,7 @@ impl NodeLogic for DeleteConfluenceAttachmentNode {
             "Delete a Confluence attachment",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "deleteAttachment");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

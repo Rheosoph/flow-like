@@ -22,13 +22,11 @@ RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
 
 # Limit build parallelism to reduce memory pressure during lance compilation
 ENV CARGO_BUILD_JOBS=2
-ENV RUSTFLAGS="--cfg tokio_unstable"
 
 # Use BuildKit cache mounts for faster rebuilds
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
-    --mount=type=cache,target=/app/target,id=cargo-target-runtime \
-    cargo build --release --package docker-compose-runtime && \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-runtime,sharing=locked \
+    CARGO_HOME=/cargo-home cargo build --locked --release --package docker-compose-runtime && \
     cp /app/target/release/docker-compose-runtime /tmp/docker-compose-runtime
 
 # ============================================================

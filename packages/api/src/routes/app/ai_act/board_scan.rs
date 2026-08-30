@@ -216,6 +216,7 @@ pub async fn scan_app_signals(
 }
 
 /// Convenience: scan and immediately classify with a given answer set.
+#[allow(dead_code)]
 pub async fn scan_and_classify(
     state: &AppState,
     sub: &str,

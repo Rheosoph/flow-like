@@ -25,6 +25,7 @@ impl NodeLogic for CreateSurface {
             "Creates a new A2UI surface with an ID and root component",
             "UI/Surface",
         );
+        node.set_flowscript_name("ui", "createSurface");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

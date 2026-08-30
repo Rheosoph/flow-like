@@ -8,8 +8,11 @@ import {
 	type ComponentProps,
 	getComponentRenderer,
 } from "../ComponentRegistry";
+import { useData } from "../DataContext";
 import { useWidgetRefs } from "../WidgetRefsContext";
+import { applyElementUpdate } from "../apply-a2ui-message";
 import { resolveEventActions } from "../event-handlers";
+import { resolveHidden } from "../resolve-hidden";
 import type {
 	A2UIComponent,
 	Action,
@@ -25,6 +28,7 @@ export interface InlineWidgetDef {
 		id: string;
 		component: Record<string, unknown>;
 		style?: Style;
+		eventRelevant?: boolean;
 	}[];
 }
 
@@ -41,6 +45,7 @@ export type WidgetComponentDef = {
 	id: string;
 	component?: Record<string, unknown>;
 	style?: unknown;
+	eventRelevant?: boolean;
 };
 
 function isBoundValue(value: unknown): boolean {
@@ -142,6 +147,7 @@ export interface WidgetInstanceComponentProps {
 	eventHandlers?: EventHandlers;
 	style?: Style;
 	inlineWidgetDef?: InlineWidgetDef;
+	runtimeChildUpdates?: Record<string, Record<string, unknown>[]>;
 }
 
 export interface WidgetInstanceContextValue {
@@ -153,6 +159,8 @@ export interface WidgetInstanceContextValue {
 	/** Only declarative widget instances expose these; micro widgets route them first. */
 	actions?: Action[];
 	eventHandlers?: EventHandlers;
+	/** Resolved children included in this instance's workflow callback payload. */
+	components?: readonly WidgetComponentDef[];
 }
 
 const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(
@@ -208,6 +216,7 @@ export function WidgetInstanceProvider({
 	componentId,
 	actions,
 	eventHandlers,
+	components,
 	children,
 }: {
 	instanceId: string;
@@ -216,6 +225,7 @@ export function WidgetInstanceProvider({
 	componentId?: string;
 	actions?: Action[];
 	eventHandlers?: EventHandlers;
+	components?: readonly WidgetComponentDef[];
 	children: React.ReactNode;
 }) {
 	const value = useMemo(
@@ -226,14 +236,75 @@ export function WidgetInstanceProvider({
 			componentId,
 			actions,
 			eventHandlers,
+			components,
 		}),
-		[instanceId, widgetId, actionBindings, componentId, actions, eventHandlers],
+		[
+			instanceId,
+			widgetId,
+			actionBindings,
+			componentId,
+			actions,
+			eventHandlers,
+			components,
+		],
 	);
 	return (
 		<WidgetInstanceContext.Provider value={value}>
 			{children}
 		</WidgetInstanceContext.Provider>
 	);
+}
+
+/** Replay instance-local updates against a widget definition loaded from widgetRefs. */
+export function applyRuntimeChildUpdates<T extends WidgetComponentDef>(
+	components: T[],
+	updates: Record<string, Record<string, unknown>[]> | undefined,
+): T[] {
+	if (!updates || Object.keys(updates).length === 0) return components;
+
+	let next = components;
+	let changed = false;
+	for (const [requestedId, operations] of Object.entries(updates)) {
+		for (const operation of operations) {
+			let index = next.findIndex((component) => component.id === requestedId);
+			if (index < 0 && operation.type !== "createComponent") {
+				const suffix = `-${requestedId}`;
+				index = next.findIndex((component) => component.id.endsWith(suffix));
+			}
+			if (index < 0) continue;
+
+			if (!changed) {
+				next = [...components];
+				changed = true;
+			}
+
+			const current = next[index];
+			if (operation.type === "createComponent") {
+				next[index] = {
+					...current,
+					component: operation.component as Record<string, unknown>,
+					style: operation.style ?? current.style,
+				} as T;
+				continue;
+			}
+
+			const updated = applyElementUpdate(
+				{
+					id: current.id,
+					component: current.component as unknown as A2UIComponent,
+					style: current.style as Style | undefined,
+				},
+				operation,
+			);
+			next[index] = {
+				...current,
+				component: updated.component as unknown as Record<string, unknown>,
+				style: updated.style,
+			} as T;
+		}
+	}
+
+	return next;
 }
 
 /**
@@ -243,7 +314,6 @@ export function WidgetInstanceProvider({
 export function A2UIWidgetInstance({
 	component,
 	componentId,
-	surfaceId,
 	appId: rendererAppId,
 	boardId,
 	onAction,
@@ -257,10 +327,12 @@ export function A2UIWidgetInstance({
 		inlineWidgetDef,
 		actionBindings,
 		exposedPropValues,
+		runtimeChildUpdates,
 	} = props;
 	const effectiveAppId = appId ?? rendererAppId;
 	const widgetRefsContext = useWidgetRefs();
 	const backend = useBackend();
+	const { resolve } = useData();
 
 	const fromRefs = widgetRefsContext?.getWidgetRef(instanceId);
 
@@ -295,6 +367,15 @@ export function A2UIWidgetInstance({
 		return { ...widgetDef, components: applied } as typeof widgetDef;
 	}, [widgetDef, exposedPropValues]);
 
+	const renderedWidgetDef = useMemo(() => {
+		const base = resolvedWidgetDef ?? widgetDef;
+		if (!base) return base;
+		const original = base.components as WidgetComponentDef[];
+		const updated = applyRuntimeChildUpdates(original, runtimeChildUpdates);
+		if (updated === original) return base;
+		return { ...base, components: updated } as typeof base;
+	}, [resolvedWidgetDef, widgetDef, runtimeChildUpdates]);
+
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(
 		(childId: string, currentWidgetDef: typeof widgetDef): React.ReactNode => {
@@ -311,6 +392,8 @@ export function A2UIWidgetInstance({
 				return null;
 			}
 
+			if (resolveHidden(childComponent.component.hidden, resolve)) return null;
+
 			const componentType = childComponent.component.type as string;
 			const Renderer = getComponentRenderer(componentType);
 			if (!Renderer) {
@@ -323,7 +406,7 @@ export function A2UIWidgetInstance({
 					key={childId}
 					component={childComponent.component as A2UIComponent}
 					componentId={childId}
-					surfaceId={surfaceId}
+					surfaceId={instanceId}
 					appId={effectiveAppId}
 					boardId={boardId}
 					style={
@@ -337,10 +420,10 @@ export function A2UIWidgetInstance({
 				/>
 			);
 		},
-		[surfaceId, effectiveAppId, boardId, onAction],
+		[instanceId, effectiveAppId, boardId, onAction, resolve],
 	);
 
-	if (!widgetDef) {
+	if (!renderedWidgetDef) {
 		if (shouldFetch && (fetched.isLoading || fetched.isFetching)) {
 			return (
 				<div
@@ -348,20 +431,29 @@ export function A2UIWidgetInstance({
 					data-widget-instance={instanceId}
 					data-widget-id={widgetId}
 				>
-					{t('loadingWidget', 'Loading widget…')}
+					{t("loadingWidget", "Loading widget…")}
 				</div>
 			);
 		}
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">{t('widgetInstanceQuotinstanceidquotCouldNotBeResolved', "Widget instance \"{{instanceId}}\" could not be resolved", { instanceId })}{fetched.error ? `: ${fetched.error.message}` : ""}
+			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
+				{t(
+					"widgetInstanceQuotinstanceidquotCouldNotBeResolved",
+					'Widget instance "{{instanceId}}" could not be resolved',
+					{ instanceId },
+				)}
+				{fetched.error ? `: ${fetched.error.message}` : ""}
 			</div>
 		);
 	}
 
-	if (!widgetDef.rootComponentId) {
+	if (!renderedWidgetDef.rootComponentId) {
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				{t('widgetDefinitionMissingRootcomponentid', 'Widget definition missing rootComponentId')}
+				{t(
+					"widgetDefinitionMissingRootcomponentid",
+					"Widget definition missing rootComponentId",
+				)}
 			</div>
 		);
 	}
@@ -374,6 +466,7 @@ export function A2UIWidgetInstance({
 			componentId={componentId}
 			actions={props.actions}
 			eventHandlers={props.eventHandlers}
+			components={renderedWidgetDef.components as WidgetComponentDef[]}
 		>
 			<div
 				data-widget-instance={instanceId}
@@ -381,8 +474,8 @@ export function A2UIWidgetInstance({
 				className="contents"
 			>
 				{renderWidgetChild(
-					(resolvedWidgetDef ?? widgetDef).rootComponentId,
-					resolvedWidgetDef ?? widgetDef,
+					renderedWidgetDef.rootComponentId,
+					renderedWidgetDef,
 				)}
 			</div>
 		</WidgetInstanceProvider>

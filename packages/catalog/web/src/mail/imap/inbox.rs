@@ -49,6 +49,8 @@ impl NodeLogic for ImapInboxNode {
             "Wraps an IMAP mailbox for paginated fetching",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "inbox");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -129,6 +131,8 @@ impl NodeLogic for ImapListInboxesNode {
             "Lists all available IMAP mailboxes",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "listInboxes");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);
@@ -227,6 +231,8 @@ impl NodeLogic for ImapCreateMailboxNode {
             "Creates a mailbox if it doesn't exist; no-op if it already exists",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "createMailbox");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Execution input", VariableType::Execution);

@@ -18,10 +18,10 @@ execute = [
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like.workspace = true
+flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
-flow-like-storage.workspace = true
+flow-like-storage = { workspace = true, default-features = false }
 flow-like-catalog-macros.workspace = true
 ahash.workspace = true
 tracing.workspace = true

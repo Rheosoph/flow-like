@@ -102,6 +102,7 @@ export interface BuilderContextType {
 	components: Map<string, SurfaceComponent>;
 	addComponent: (component: SurfaceComponent, parentId?: string) => void;
 	addComponents: (components: SurfaceComponent[]) => void;
+	replaceComponents: (components: SurfaceComponent[]) => void;
 	updateComponent: (id: string, updates: Partial<SurfaceComponent>) => void;
 	deleteComponents: (ids: string[]) => void;
 	moveComponent: (id: string, newParentId: string, index?: number) => void;
@@ -748,6 +749,14 @@ export function BuilderProvider({
 		[pushHistory],
 	);
 
+	const replaceComponents = useCallback(
+		(components: SurfaceComponent[]) => {
+			pushHistory();
+			setComponentsMap(new Map(components.map((comp) => [comp.id, comp])));
+		},
+		[pushHistory],
+	);
+
 	const updateComponent = useCallback(
 		(id: string, updates: Partial<SurfaceComponent>) => {
 			const newId = updates.id;
@@ -987,6 +996,7 @@ export function BuilderProvider({
 		components: componentsMap,
 		addComponent,
 		addComponents,
+		replaceComponents,
 		updateComponent,
 		deleteComponents,
 		moveComponent,

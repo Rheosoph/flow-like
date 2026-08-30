@@ -1146,8 +1146,8 @@ impl BitPack {
             if !bits_considered.insert(artifact_key) {
                 continue;
             }
-            if bit.size.is_some() {
-                size += bit.size.unwrap();
+            if let Some(bit_size) = bit.size {
+                size += bit_size;
             }
         }
         size
@@ -1215,7 +1215,7 @@ impl Bit {
         if !matches!(self.bit_type, BitTypes::Llm | BitTypes::Vlm)
             || self
                 .try_to_provider()
-                .is_none_or(|provider| provider.provider_name != "Local")
+                .is_none_or(|provider| !provider.provider_name.eq_ignore_ascii_case("local"))
         {
             return;
         }
@@ -2185,6 +2185,22 @@ mod tests {
         );
         assert!(first.has_matching_user_source_artifact_identity());
         assert!(second.has_matching_user_source_artifact_identity());
+    }
+
+    #[test]
+    fn lowercase_local_provider_normalizes_user_artifact_identity() {
+        let mut bit = local_vlm_bit(Value::Null);
+        let mut parameters: VLMParameters =
+            flow_like_types::json::from_value(bit.parameters.clone())
+                .expect("VLM parameters deserialize");
+        parameters.provider.provider_name = "local".to_string();
+        bit.parameters =
+            flow_like_types::json::to_value(parameters).expect("VLM parameters serialize");
+
+        bit.normalize_user_local_artifact_identity();
+
+        assert!(bit.has_matching_user_source_artifact_identity());
+        assert!(bit.hash.starts_with(USER_SOURCE_ARTIFACT_ID_PREFIX));
     }
 
     #[test]

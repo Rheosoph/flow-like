@@ -25,6 +25,7 @@ impl NodeLogic for BrowserGetLocalStorageNode {
             "Gets a value from browser localStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "getLocalStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -144,6 +145,7 @@ impl NodeLogic for BrowserSetLocalStorageNode {
             "Sets a value in browser localStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "setLocalStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -241,6 +243,7 @@ impl NodeLogic for BrowserGetSessionStorageNode {
             "Gets a value from browser sessionStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "getSessionStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -360,6 +363,7 @@ impl NodeLogic for BrowserSetSessionStorageNode {
             "Sets a value in browser sessionStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "setSessionStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -457,6 +461,7 @@ impl NodeLogic for BrowserClearStorageNode {
             "Clears localStorage and/or sessionStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "clearStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -568,6 +573,7 @@ impl NodeLogic for BrowserGetAllStorageNode {
             "Gets all key-value pairs from localStorage or sessionStorage",
             "Automation/Browser/Storage",
         );
+        node.set_flowscript_name("browser", "getAllStorage");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -620,7 +626,8 @@ impl NodeLogic for BrowserGetAllStorageNode {
             "Data",
             "All storage data as JSON object",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "count",

@@ -6,9 +6,11 @@
 #[cfg(feature = "execute")]
 use ahash::AHashSet;
 #[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
+#[cfg(feature = "execute")]
 use flow_like::flow::execution::internal_node::InternalNode;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -73,6 +75,7 @@ impl NodeLogic for KFoldGeneratorNode {
             "Generate K train/test splits for cross-validation. Each fold uses (K-1)/K data for training and 1/K for validation, and runs the connected fold branch once per fold.",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "kfold");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

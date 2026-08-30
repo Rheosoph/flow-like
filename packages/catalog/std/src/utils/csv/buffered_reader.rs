@@ -34,6 +34,7 @@ impl NodeLogic for BufferedCsvReaderNode {
             "Stream Read a CSV File",
             "Utils/CSV",
         );
+        node.set_flowscript_name("files", "readCsvBuffered");
 
         // node.add_icon("/flow/icons/bool.svg");
 
@@ -72,7 +73,8 @@ impl NodeLogic for BufferedCsvReaderNode {
         );
 
         node.add_output_pin("chunk", "Chunk", "Chunk", VariableType::Struct)
-            .set_value_type(flow_like::flow::pin::ValueType::Array);
+            .set_value_type(flow_like::flow::pin::ValueType::Array)
+            .set_open_schema();
 
         node.add_output_pin("exec_done", "Done", "Done", VariableType::Execution);
 
@@ -446,7 +448,7 @@ mod tests {
             .create_reader(cursor);
 
         let headers = rdr.byte_headers().await.unwrap().clone();
-        let headers: Vec<String> = headers
+        let _headers: Vec<String> = headers
             .iter()
             .map(|h| String::from_utf8_lossy(h).to_string())
             .collect();

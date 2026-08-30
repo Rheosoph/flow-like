@@ -1,10 +1,10 @@
-import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	PointerSensor,
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -103,9 +103,13 @@ export function FlowWrapper({
 					const pointerEvent = event.activatorEvent as
 						| MouseEvent
 						| PointerEvent;
+					// Client coordinates, not screen: every consumer feeds this to
+					// `screenToFlowPosition`, which measures against the viewport. Screen
+					// coordinates put the node off by the browser chrome and the monitor
+					// offset, which is why drops used to land nowhere near the cursor.
 					const screenPosition = {
-						x: pointerEvent.screenX + event.delta.x,
-						y: pointerEvent.screenY + event.delta.y,
+						x: pointerEvent.clientX + event.delta.x,
+						y: pointerEvent.clientY + event.delta.y,
 					};
 
 					// Function layer dropped on the canvas -> place CallFunction node directly
@@ -115,6 +119,21 @@ export function FlowWrapper({
 								detail: {
 									type: "function-layer",
 									layerId: data.layerId,
+									screenPosition,
+								},
+							}),
+						);
+						return;
+					}
+
+					// Stored file dropped on the canvas -> mint the path nodes that address it
+					if (data.type === "storage-path") {
+						document.dispatchEvent(
+							new CustomEvent("flow-drop", {
+								detail: {
+									type: "storage-path",
+									scope: data.scope,
+									path: data.path,
 									screenPosition,
 								},
 							}),
@@ -159,7 +178,9 @@ export function FlowWrapper({
 			>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>{t('reference', 'Reference:')} {detail?.variable.name}</DialogTitle>
+						<DialogTitle>
+							{t("reference", "Reference:")} {detail?.variable.name}
+						</DialogTitle>
 					</DialogHeader>
 					<div className="w-full flex items-center justify-start gap-2 max-w-full">
 						<Button
@@ -167,14 +188,14 @@ export function FlowWrapper({
 							variant={"outline"}
 							onClick={() => placeNode("get")}
 						>
-							{t('get', 'Get')}
+							{t("get", "Get")}
 						</Button>
 						<Button
 							className="flex-grow"
 							variant={"outline"}
 							onClick={() => placeNode("set")}
 						>
-							{t('set', 'Set')}
+							{t("set", "Set")}
 						</Button>
 					</div>
 				</DialogContent>

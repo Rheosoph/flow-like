@@ -292,6 +292,24 @@ export default {
 	"v5.control.item3": "Klaar voor de EU AI Act",
 	"v5.control.item4": "End-to-end observability",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "DE OPEN GIDS VOOR ONTWIKKELAARS",
+	"v5.book.title": "Een ontwikkelaarsgids van incident tot implementatie.",
+	"v5.book.body":
+		"FlowBook is bedoeld voor ontwikkelaars die met Flow-Like bouwen. Volg één uitvoerbare workflow door de getypeerde FlowScript-brontekst, het visuele canvas en het runtime-bewijs dat achterblijft na succes of mislukking.",
+	"v5.book.meta": "Open editie · 2026 · Engels",
+	"v5.book.read": "Lees FlowBook online",
+	"v5.book.download": "Download de pdf",
+	"v5.book.note": "Gratis te lezen. Aanmelden is niet nodig.",
+	"v5.book.generalLabel": "ALGEMENE HANDLEIDINGEN",
+	"v5.book.generalBody":
+		"Begin voor productintroducties en stapsgewijze tutorials bij de documentatie of het YouTube-kanaal van Flow-Like.",
+	"v5.book.docs": "Bekijk de documentatie",
+	"v5.book.youtube": "Bekijk op YouTube",
+	"v5.book.coverCta": "Download de open editie",
+	"v5.book.aria":
+		"Download FlowBook, een ontwikkelaarsgids voor Flow-Like, als pdf",
+
 	"v5.footer.notes.kicker": "Notities uit de machinekamer",
 	"v5.footer.notes.title": "Wat we bouwen, en wat we hebben geleerd.",
 	"v5.footer.notes.all": "Alle notities →",

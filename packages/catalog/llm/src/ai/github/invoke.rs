@@ -10,12 +10,17 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_model_provider::history::Role;
 use flow_like_model_provider::{
-    history::{History, Role},
+    history::History,
     response::{LLMUsageStats, Response},
     response_chunk::ResponseChunk,
 };
-use flow_like_types::{async_trait, json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json;
+#[cfg(feature = "execute")]
 use std::time::Instant;
 
 /// Convert Flow-Like History to Copilot message format
@@ -40,6 +45,7 @@ fn history_to_copilot_context(history: &History) -> String {
 }
 
 /// Create a Response from Copilot response text
+#[cfg(feature = "execute")]
 fn create_response(text: &str, model: &str) -> Response {
     Response::from_text(text, model)
 }
@@ -57,6 +63,8 @@ impl NodeLogic for CopilotSendAndWaitNode {
             "Sends a message to Copilot and waits for complete response. Supports history input for context.",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "sendMessage");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 
@@ -221,6 +229,8 @@ impl NodeLogic for CopilotSendStreamingNode {
             "Sends a message to Copilot and streams the response. Supports history input and matches Model Invoke interface.",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "streamMessage");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 
@@ -427,6 +437,8 @@ impl NodeLogic for CopilotAbortNode {
             "Aborts the current message processing",
             "AI/GitHub/Copilot/Chat",
         );
+        node.set_flowscript_name("github.copilot", "abort");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

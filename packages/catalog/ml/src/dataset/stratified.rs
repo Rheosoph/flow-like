@@ -1,5 +1,7 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -53,6 +55,7 @@ impl NodeLogic for StratifiedSplitNode {
             "Split a dataset into training and testing subsets, keeping every class at its original proportion in both subsets",
             "AI/ML/Dataset",
         );
+        node.set_flowscript_name("ml", "stratifiedSplit");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 

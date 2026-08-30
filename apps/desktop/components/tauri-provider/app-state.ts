@@ -36,6 +36,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { dirname, resolve } from "@tauri-apps/api/path";
 import { mkdir, open as openFile } from "@tauri-apps/plugin-fs";
 import { fetcher, put } from "../../lib/api";
+import type { ApiResponseError } from "../../lib/api-error";
+import { isMissingResourceError } from "../../lib/api-error";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -232,6 +234,35 @@ export class AppState implements IAppState {
 
 		return app;
 	}
+
+	/**
+	 * True when the server no longer holds this app for this user. Deleting an app
+	 * that is already gone answers 404, or 403 once its membership row cascaded away
+	 * with it. A plain 403 also covers "member, but not the owner", so that case is
+	 * settled by re-reading the app: a copy the user can still read is still there.
+	 */
+	private async isRemoteAppGone(
+		appId: string,
+		error: unknown,
+	): Promise<boolean> {
+		if (isMissingResourceError(error)) return true;
+		if ((error as Partial<ApiResponseError>)?.status !== 403) return false;
+		if (!this.backend.profile) return false;
+
+		try {
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}`,
+				undefined,
+				this.getRemoteAuth(),
+			);
+			return false;
+		} catch (probe) {
+			const status = (probe as Partial<ApiResponseError>)?.status;
+			return status === 403 || status === 404 || status === 410;
+		}
+	}
+
 	async deleteApp(appId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
@@ -251,14 +282,25 @@ export class AppState implements IAppState {
 			);
 		}
 
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}`,
-			{
-				method: "DELETE",
-			},
-			this.backend.auth,
-		);
+		try {
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}`,
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		} catch (error) {
+			// An app deleted elsewhere leaves the device holding the only copy, and the
+			// server can never accept a delete for it again. Aborting here would strand
+			// that copy forever, so a "there is nothing here" answer still clears it.
+			if (!(await this.isRemoteAppGone(appId, error))) throw error;
+			console.warn(
+				`App ${appId} no longer exists on the server, removing the local copy only.`,
+			);
+		}
+
 		await invoke("delete_app", {
 			appId: appId,
 		});
@@ -770,6 +812,13 @@ export class AppState implements IAppState {
 				this.backend.auth,
 			);
 		}
+	}
+
+	async recordLocalAppVisibility(
+		appId: string,
+		visibility: IAppVisibility,
+	): Promise<void> {
+		await appsDB.visibility.put({ visibility, appId });
 	}
 
 	async changeAppAllowForking(appId: string, allow: boolean): Promise<void> {

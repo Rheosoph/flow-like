@@ -71,14 +71,19 @@ describe("parseConfig", () => {
 			}),
 		).toThrow(ConfigError);
 
-		for (const [name, value] of [
-			["IMDS_ENDPOINT", "http://localhost:1234"],
-			["HTTPS_PROXY", "https://proxy.example.com"],
-		] as const) {
-			expect(() => parseConfig({ ...validSettings(), [name]: value })).toThrow(
-				new RegExp(`^${name} is forbidden`),
-			);
-		}
+		expect(() =>
+			parseConfig({
+				...validSettings(),
+				IMDS_ENDPOINT: "http://localhost:1234",
+			}),
+		).toThrow(/^IMDS_ENDPOINT is forbidden/);
+
+		expect(() =>
+			parseConfig({
+				...validSettings(),
+				HTTPS_PROXY: "https://proxy.example.com",
+			}),
+		).toThrow(/^HTTPS_PROXY is forbidden/);
 	});
 });
 

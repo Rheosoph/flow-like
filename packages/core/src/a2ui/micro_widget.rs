@@ -1,7 +1,7 @@
 //! Micro widget (package widget) contracts and the unified widget provider.
 //!
 //! The contract types below are a consumer-side mirror of
-//! `packages/wasm/src/widget.rs` (`WidgetContract` et al.), which is the
+//! `packages/wasm/schema/src/widget.rs` (`WidgetContract` et al.), which is the
 //! source of truth for the `contract.json` interchange format. `flow-like-wasm`
 //! depends on this crate, so the types cannot be imported here without a
 //! dependency cycle; the serde shape (camelCase) must stay in sync with
@@ -51,7 +51,7 @@ pub fn package_widget_display_label(name: &str, package_id: &str) -> String {
 }
 
 /// Simple pin-type tag derived from a contract input's top-level `type`/`enum`.
-/// Mirror of `ContractInputType` in `packages/wasm/src/widget.rs`.
+/// Mirror of `ContractInputType` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ContractInputType {
@@ -63,7 +63,7 @@ pub enum ContractInputType {
     Json,
 }
 
-/// A single typed widget input. Mirror of `ContractInput` in `packages/wasm/src/widget.rs`.
+/// A single typed widget input. Mirror of `ContractInput` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractInput {
@@ -86,7 +86,7 @@ pub struct ContractInput {
 }
 
 /// A widget event workflow event nodes can bind to.
-/// Mirror of `ContractEvent` in `packages/wasm/src/widget.rs`.
+/// Mirror of `ContractEvent` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractEvent {
@@ -97,7 +97,7 @@ pub struct ContractEvent {
 }
 
 /// A request/response query on a widget instance.
-/// Mirror of `ContractQuery` in `packages/wasm/src/widget.rs`.
+/// Mirror of `ContractQuery` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractQuery {
@@ -109,7 +109,7 @@ pub struct ContractQuery {
     pub description: Option<String>,
 }
 
-/// Sizing hints for the host iframe. Mirror of `WidgetSizing` in `packages/wasm/src/widget.rs`.
+/// Sizing hints for the host iframe. Mirror of `WidgetSizing` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WidgetSizing {
@@ -144,7 +144,7 @@ impl Default for WidgetSizing {
 }
 
 /// Typed contract of a package widget (`contract.json`).
-/// Mirror of `WidgetContract` in `packages/wasm/src/widget.rs`.
+/// Mirror of `WidgetContract` in `packages/wasm/schema/src/widget.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WidgetContract {

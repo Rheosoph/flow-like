@@ -1,14 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	AtSign,
-	CalendarDays,
-	ExternalLink,
-	IdCard,
-	Mail,
-	UserRound,
-} from "lucide-react";
+import { AtSign, ExternalLink, IdCard, Mail, UserRound } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import {
@@ -22,14 +15,13 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type { IUserLookup } from "../../../state/backend-state/types";
 import { resolveAccountId } from "../../../state/backend-state/user-state";
-import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import {
 	HoverCard,
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../../ui/hover-card";
-import { RelativeTime } from "../../ui/relative-time";
 import { Skeleton } from "../../ui/skeleton";
+import { UserAvatar, UserProfileHoverContent } from "../../ui/user-identity";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -51,24 +43,6 @@ const PROFILE_VARIANTS = new Set<UserProfileVariant>([
 	"detailed",
 	"card",
 ]);
-
-const avatarSizeClasses: Record<string, string> = {
-	xs: "h-5 w-5",
-	sm: "h-6 w-6",
-	md: "h-8 w-8",
-	lg: "h-10 w-10",
-	xl: "h-14 w-14",
-	"2xl": "h-16 w-16",
-};
-
-const avatarFallbackClasses: Record<string, string> = {
-	xs: "text-[9px]",
-	sm: "text-[10px]",
-	md: "text-xs",
-	lg: "text-sm",
-	xl: "text-base",
-	"2xl": "text-lg",
-};
 
 function cleanString(value: unknown): string | undefined {
 	if (value === null || value === undefined) return undefined;
@@ -139,158 +113,6 @@ function avatarSizeForVariant(
 	return "md";
 }
 
-function ProfileAvatar({
-	avatarUrl,
-	initials,
-	label,
-	size,
-	className,
-}: Readonly<{
-	avatarUrl?: string | null;
-	initials: string;
-	label: string;
-	size: string;
-	className?: string;
-}>) {
-	const sizeClass = avatarSizeClasses[size] ?? avatarSizeClasses.md;
-	const fallbackClass = avatarFallbackClasses[size] ?? avatarFallbackClasses.md;
-
-	return (
-		<Avatar className={cn(sizeClass, "shrink-0", className)}>
-			<AvatarImage src={avatarUrl ?? ""} alt={label} />
-			<AvatarFallback className={fallbackClass}>{initials}</AvatarFallback>
-		</Avatar>
-	);
-}
-
-function DetailRow({
-	icon,
-	label,
-	children,
-}: Readonly<{
-	icon: ReactNode;
-	label: string;
-	children: ReactNode;
-}>) {
-	return (
-		<div className="grid min-w-0 grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-3 text-sm">
-			<span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
-				{icon}
-				<span className="truncate">{label}</span>
-			</span>
-			<div className="min-w-0 text-right">{children}</div>
-		</div>
-	);
-}
-
-function ProfileHoverContent({
-	userId,
-	label,
-	subtitle,
-	avatarUrl,
-	initials,
-	description,
-	createdAt,
-	email,
-	showEmail,
-	showUserId,
-	showProfileLink,
-	isLoading,
-}: Readonly<{
-	userId?: string;
-	label: string;
-	subtitle: string | null;
-	avatarUrl?: string | null;
-	initials: string;
-	description?: string | null;
-	createdAt?: string | number | null;
-	email?: string | null;
-	showEmail: boolean;
-	showUserId: boolean;
-	showProfileLink: boolean;
-	isLoading: boolean;
-}>) {
-	const { t } = useTranslation("common");
-	return (
-		<div className="min-w-0">
-			<div className="border-b bg-muted/30 p-4">
-				<div className="flex min-w-0 items-start gap-3">
-					<ProfileAvatar
-						avatarUrl={avatarUrl}
-						initials={initials}
-						label={label}
-						size="lg"
-					/>
-					<div className="min-w-0 flex-1">
-						<div className="truncate font-semibold" title={label}>
-							{label}
-						</div>
-						{subtitle && (
-							<div
-								className="truncate text-xs text-muted-foreground"
-								title={subtitle}
-							>
-								{subtitle}
-							</div>
-						)}
-						{showProfileLink && userId && (
-							<a
-								href={`/profile?sub=${encodeURIComponent(userId)}`}
-								className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-							>
-								{t('viewProfile', 'View profile')}
-								<ExternalLink className="h-3 w-3" />
-							</a>
-						)}
-					</div>
-				</div>
-			</div>
-			<div className="grid gap-3 p-4 text-sm">
-				{isLoading ? (
-					<div className="space-y-2">
-						<Skeleton className="h-4 w-3/4" />
-						<Skeleton className="h-4 w-1/2" />
-						<Skeleton className="h-4 w-2/3" />
-					</div>
-				) : (
-					<>
-						{showEmail && email ? (
-							<DetailRow icon={<Mail className="h-3.5 w-3.5" />} label="Email">
-								<span className="block truncate" title={email}>
-									{email}
-								</span>
-							</DetailRow>
-						) : null}
-						{createdAt ? (
-							<DetailRow
-								icon={<CalendarDays className="h-3.5 w-3.5" />}
-								label="Joined"
-							>
-								<RelativeTime value={createdAt} />
-							</DetailRow>
-						) : null}
-						{showUserId && userId ? (
-							<DetailRow
-								icon={<IdCard className="h-3.5 w-3.5" />}
-								label={t('userId', 'User ID')}
-							>
-								<code className="block truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-									{userId}
-								</code>
-							</DetailRow>
-						) : null}
-						{description ? (
-							<p className="line-clamp-3 rounded-md bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-								{description}
-							</p>
-						) : null}
-					</>
-				)}
-			</div>
-		</div>
-	);
-}
-
 export function A2UIUserProfile({
 	component,
 	style,
@@ -357,7 +179,7 @@ export function A2UIUserProfile({
 	const disabledLabel = missingUser ? fallbackLabel : label;
 
 	const avatar = (
-		<ProfileAvatar
+		<UserAvatar
 			avatarUrl={avatarUrl}
 			initials={initials}
 			label={disabledLabel}
@@ -478,7 +300,9 @@ export function A2UIUserProfile({
 								href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
 								className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline"
 							>
-								<span className="truncate">{t('viewProfile', 'View profile')}</span>
+								<span className="truncate">
+									{t("viewProfile", "View profile")}
+								</span>
 								<ExternalLink className="h-3 w-3 shrink-0" />
 							</a>
 						) : null}
@@ -557,7 +381,7 @@ export function A2UIUserProfile({
 				align="start"
 				className="w-80 max-w-[calc(100vw-2rem)] p-0"
 			>
-				<ProfileHoverContent
+				<UserProfileHoverContent
 					userId={resolvedUserId}
 					label={label}
 					subtitle={subtitle}

@@ -29,10 +29,13 @@ export function NoDefaultInterface({
 							{/* Heading */}
 							<div className="space-y-2">
 								<h3 className="text-lg font-semibold">
-									{t('interfaceNotAvailable', 'Interface Not Available')}
+									{t("interfaceNotAvailable", "Interface Not Available")}
 								</h3>
 								<p className="text-sm text-muted-foreground">
-									{t('thisEventTypeDoesNotSupportACustomInterface', 'This event type does not support a custom interface')}
+									{t(
+										"thisEventTypeDoesNotSupportACustomInterface",
+										"This event type does not support a custom interface",
+									)}
 								</p>
 							</div>
 
@@ -40,7 +43,10 @@ export function NoDefaultInterface({
 							<Alert className="w-full">
 								<HelpCircle className="h-4 w-4" />
 								<AlertDescription>
-									{t('eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction', "Event types without interface support handle data automatically without requiring user interaction.")}
+									{t(
+										"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction",
+										"Event types without interface support handle data automatically without requiring user interaction.",
+									)}
 								</AlertDescription>
 							</Alert>
 
@@ -51,7 +57,7 @@ export function NoDefaultInterface({
 							>
 								<Button variant="outline" className="w-full">
 									<Settings className="w-4 h-4 mr-2" />
-									{t('configureEventSettings', 'Configure Event Settings')}
+									{t("configureEventSettings", "Configure Event Settings")}
 								</Button>
 							</Link>
 						</div>

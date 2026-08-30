@@ -1,459 +1,1029 @@
 "use client";
+
 import { useTranslation } from "@flow-like/locales";
 import {
-	ChevronDown,
-	ChevronUp,
-	Eye,
-	Layers,
-	MessageCircle,
-	MousePointerClick,
-	Navigation,
-	Users,
+	BracesIcon,
+	EyeIcon,
+	EyeOffIcon,
+	FileCode2Icon,
+	HistoryIcon,
+	LayersIcon,
+	MegaphoneIcon,
+	MessageCircleIcon,
+	MousePointerClickIcon,
+	NavigationIcon,
+	PencilLineIcon,
+	PlayIcon,
+	UsersIcon,
+	XIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import {
+	type FocusEvent,
+	type ReactNode,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type PeerUserInfo,
 	colorFromSub,
 	truncateName,
 } from "../../hooks/use-peer-users";
-import type { PeerPresence } from "../../hooks/use-realtime-collaboration";
+import {
+	type IBoardModule,
+	MAIN_FILE_ID,
+	MAIN_FILE_LABEL,
+} from "../../lib/flow-modules";
+import type { PeerPresence } from "../../lib/realtime/peer-presence";
+import {
+	type EditVerb,
+	PING_EMOJI,
+	type PingEmoji,
+} from "../../lib/realtime/presence-signals";
+import { cn } from "../../lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Badge } from "../ui/badge";
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "../ui/tooltip";
+	type PresenceActivity,
+	type PresenceCollaborator,
+	type PresenceEvent,
+	type PresenceLastEdit,
+	type PresenceLastRun,
+	describeActivity,
+	mergeCollaborators,
+	presenceEventRemainingMs,
+	presenceHighlightIds,
+	presenceStats,
+	sortCollaborators,
+} from "./flow-presence-bar-model";
+import { BoardStatusItem } from "./shell/board-status-bar";
 
-function layerLabel(
-	layerPath: string,
-	layerNames?: Map<string, string>,
-): string {
-	if (!layerPath || layerPath === "root") return "Root";
-	const segments = layerPath.split("/");
-	const last = segments[segments.length - 1];
-	return layerNames?.get(last) ?? last.slice(0, 10);
-}
+/** Faces shown in the status bar before the count takes over. */
+const FACEPILE_LIMIT = 4;
+/** Typing marks expire within seconds, so live views re-check at this rate. */
+const LIVE_REFRESH_MS = 1000;
+/** The join/leave notice fades over its last stretch; matches `duration-500`. */
+const EVENT_FADE_MS = 500;
 
-export const FlowPresenceBar = memo(function FlowPresenceBar({
-	peers,
-	peerUsers,
-	followingSub,
-	currentLayerPath,
-	layerNames,
-	onToggleFollow,
-	onJumpToUser,
-	onJumpToLayer,
-	onOpenChat,
-	unreadCount,
-}: {
+export interface FlowPresenceBarProps {
 	peers: PeerPresence[];
 	peerUsers: Map<string, PeerUserInfo>;
+	/** The local user; their other windows are listed as "You". */
+	sub?: string;
 	followingSub?: string;
 	currentLayerPath: string;
 	layerNames?: Map<string, string>;
+	modules?: IBoardModule[];
+	/** Display name of a node, for "editing <node>". */
+	resolveNodeName?: (nodeId: string) => string | undefined;
+	/** Local-clock time a user last did anything; drives the idle badge. */
+	getLastActiveAt?: (sub: string) => number | undefined;
+	/** Local-clock predicates; cheap enough to poll every second. */
+	isTypingInEditor?: (sub: string) => boolean;
+	isTypingInChat?: (sub: string) => boolean;
+	isAway?: (sub: string) => boolean;
 	onToggleFollow: (sub: string) => void;
+	onStopFollowing?: () => void;
 	onJumpToUser: (sub: string) => void;
 	onJumpToLayer: (layerPath: string) => void;
+	onFocusNode?: (nodeId: string) => void;
+	/** Open the FlowScript panel at the node a peer's cursor sits on. */
+	onOpenInCode?: (nodeId: string) => void;
+	/** Light up a collaborator's nodes on the canvas while their row is hovered. */
+	onHighlightNodes?: (nodeIds?: string[]) => void;
 	onOpenChat?: () => void;
 	unreadCount?: number;
-}) {
-	const { t } = useTranslation("flow");
-	const [expanded, setExpanded] = useState(false);
+	/** Peers' shared FlowScript scope node ids, keyed by sub. */
+	peerScopes?: Map<string, string[]>;
+	/** Join a peer's shared scope (opens the FlowScript panel on those nodes). */
+	onJoinScope?: (nodeIds: string[]) => void;
+	/** "Bring everyone here": broadcast the local viewport; absent = hide the button. */
+	onSummon?: () => void;
+	/** Send an emoji reaction at the local cursor. */
+	onReact?: (emoji: PingEmoji) => void;
+	/** Latest join/leave, shown briefly beside the count. */
+	presenceEvent?: PresenceEvent;
+}
 
-	const uniquePeers = useMemo(() => {
-		const byUser = new Map<string, PeerPresence>();
-		for (const p of peers) {
-			if (!p.sub) continue;
-			const existing = byUser.get(p.sub);
-			if (!existing) {
-				byUser.set(p.sub, p);
-			} else {
-				// Merge sessions: combine selections, keep most recent activity
-				const mergedNodes = [
-					...new Set([...existing.selection.nodes, ...p.selection.nodes]),
-				];
-				byUser.set(p.sub, {
-					...existing,
-					selection: { nodes: mergedNodes },
-					cursor: p.cursor ?? existing.cursor,
-					activeNodeId: p.activeNodeId ?? existing.activeNodeId,
-					activeNodeTs:
-						Math.max(p.activeNodeTs ?? 0, existing.activeNodeTs ?? 0) ||
-						undefined,
-				});
-			}
+interface PresenceIdentity {
+	color: string;
+	name: string;
+	shortName: string;
+	avatarUrl?: string;
+	known: boolean;
+}
+
+function identityOf(
+	sub: string,
+	peerUsers: Map<string, PeerUserInfo>,
+): PresenceIdentity {
+	const info = peerUsers.get(sub);
+	const fallback = sub.slice(-8);
+	return {
+		color: info?.color ?? colorFromSub(sub),
+		name: info?.name ?? fallback,
+		shortName: info?.truncatedName ?? truncateName(fallback),
+		avatarUrl: info?.avatarUrl,
+		known: Boolean(info),
+	};
+}
+
+function formatCount(count: number): string {
+	return count > 99 ? "99+" : String(count);
+}
+
+/** Local time, re-read every `intervalMs`; `0` stops the clock. */
+function useClock(intervalMs: number): number {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (intervalMs <= 0) return;
+		const id = setInterval(() => setNow(Date.now()), intervalMs);
+		return () => clearInterval(id);
+	}, [intervalMs]);
+	return now;
+}
+
+/** Shows a join/leave notice for its TTL from `at`, fading at the end. */
+function usePresenceNotice(
+	event: PresenceEvent | undefined,
+): { fading: boolean } | undefined {
+	const [phase, setPhase] = useState<"hidden" | "shown" | "fading">("hidden");
+	useEffect(() => {
+		const remaining = presenceEventRemainingMs(event, Date.now());
+		if (remaining <= 0) {
+			setPhase("hidden");
+			return;
 		}
-		return [...byUser.values()];
-	}, [peers]);
+		setPhase("shown");
+		const fadeId = setTimeout(
+			() => setPhase("fading"),
+			Math.max(0, remaining - EVENT_FADE_MS),
+		);
+		const hideId = setTimeout(() => setPhase("hidden"), remaining);
+		return () => {
+			clearTimeout(fadeId);
+			clearTimeout(hideId);
+		};
+	}, [event]);
+	return phase === "hidden" ? undefined : { fading: phase === "fading" };
+}
 
-	const peersInDifferentLayer = useMemo(
-		() =>
-			uniquePeers.filter(
-				(p) => (p.layerPath ?? "root") !== (currentLayerPath || "root"),
-			),
-		[uniquePeers, currentLayerPath],
+/**
+ * Who else is on the board, as a status-bar item: a facepile and a count that
+ * read at a glance, and a popover that says where each person is and what they
+ * are doing, with follow / jump / open-in-code / join-scope beside each row.
+ */
+export const FlowPresenceBar = memo(function FlowPresenceBar({
+	peers,
+	peerUsers,
+	sub,
+	followingSub,
+	currentLayerPath,
+	layerNames,
+	modules,
+	resolveNodeName,
+	getLastActiveAt,
+	isTypingInEditor,
+	isTypingInChat,
+	isAway,
+	onToggleFollow,
+	onStopFollowing,
+	onJumpToUser,
+	onJumpToLayer,
+	onFocusNode,
+	onOpenInCode,
+	onHighlightNodes,
+	onOpenChat,
+	unreadCount,
+	peerScopes,
+	onJoinScope,
+	onSummon,
+	onReact,
+	presenceEvent,
+}: Readonly<FlowPresenceBarProps>) {
+	const { t } = useTranslation("flow");
+
+	const collaborators = useMemo(
+		() => mergeCollaborators(peers, sub),
+		[peers, sub],
 	);
+	const nameOf = useCallback(
+		(userSub: string) => identityOf(userSub, peerUsers).name,
+		[peerUsers],
+	);
+	const sorted = useMemo(
+		() => sortCollaborators(collaborators, currentLayerPath, nameOf),
+		[collaborators, currentLayerPath, nameOf],
+	);
+	const stats = useMemo(() => presenceStats(collaborators), [collaborators]);
+	const fileLabels = useMemo(() => {
+		const map = new Map<string, string>([[MAIN_FILE_ID, MAIN_FILE_LABEL]]);
+		for (const module of modules ?? []) map.set(module.id, module.pathLabel);
+		return map;
+	}, [modules]);
 
-	const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+	const unread = unreadCount ?? 0;
+	const alone = sorted.length === 0;
+	// The facepile's typing/away marks come from local-clock predicates, so the
+	// bar re-reads them on a slow tick — only while there is a face to mark.
+	const liveFaces = Boolean(isTypingInEditor || isAway);
+	useClock(alone || !liveFaces ? 0 : LIVE_REFRESH_MS);
 
-	if (uniquePeers.length === 0) return null;
-
-	const showPanel = expanded && uniquePeers.length > 0;
+	const notice = usePresenceNotice(presenceEvent);
+	const noticeName = useMemo(() => {
+		if (!presenceEvent) return undefined;
+		const identity = identityOf(presenceEvent.sub, peerUsers);
+		return presenceEvent.sub === sub && !identity.known
+			? t("you", "You")
+			: identity.shortName;
+	}, [presenceEvent, peerUsers, sub, t]);
 
 	return (
-		<div className="flex flex-col gap-0 select-none">
-			{/* Compact bar */}
-			<div className="flex items-center gap-1.5 rounded-xl border border-border/50 bg-background/90 px-2 py-1.5 backdrop-blur-sm shadow-sm">
-				<TooltipProvider delayDuration={200}>
-					<Users className="h-3.5 w-3.5 text-muted-foreground mr-0.5" />
-					{uniquePeers.slice(0, 5).map((peer) => {
-						const userInfo = peer.sub ? peerUsers.get(peer.sub) : undefined;
-						const color = userInfo?.color ?? colorFromSub(peer.sub);
-						const displayName =
-							userInfo?.truncatedName ?? truncateName(peer.sub?.slice(-8));
-						const fullName = userInfo?.name ?? peer.sub?.slice(-8) ?? "User";
-						const isFollowing = followingSub === peer.sub;
-						const sameLayer =
-							(peer.layerPath ?? "root") === (currentLayerPath || "root");
-
-						return (
-							<Tooltip key={peer.sub}>
-								<TooltipTrigger asChild>
-									<button
-										type="button"
-										onClick={() => peer.sub && onToggleFollow(peer.sub)}
-										className="relative group cursor-pointer"
-									>
-										<Avatar
-											className={`h-6 w-6 transition-all duration-150 ${isFollowing ? "ring-2" : "ring-1 ring-border/50"}`}
-											style={{
-												borderColor: color,
-												boxShadow: isFollowing
-													? `0 0 0 2px ${color}, 0 0 12px ${color}40`
-													: undefined,
-											}}
-										>
-											{userInfo?.avatarUrl && (
-												<AvatarImage
-													src={userInfo.avatarUrl}
-													className="object-cover"
-												/>
-											)}
-											<AvatarFallback
-												className="text-[10px] font-bold"
-												style={{
-													background: `linear-gradient(135deg, ${color}, ${color}dd)`,
-													color: "white",
-												}}
-											>
-												{displayName.charAt(0).toUpperCase()}
-											</AvatarFallback>
-										</Avatar>
-										{isFollowing && (
-											<div
-												className="absolute -bottom-0.5 -right-0.5 rounded-full p-0.5"
-												style={{ backgroundColor: color }}
-											>
-												<Eye className="h-2 w-2 text-white" />
-											</div>
-										)}
-										{!sameLayer && (
-											<div className="absolute -top-0.5 -left-0.5 rounded-full bg-background p-0.5 shadow-sm">
-												<Layers className="h-2 w-2 text-muted-foreground" />
-											</div>
-										)}
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom" className="text-xs max-w-56">
-									<div className="flex flex-col gap-0.5">
-										<span className="font-medium">{fullName}</span>
-										<span className="text-muted-foreground">
-											{t('layer', 'Layer:')} {layerLabel(peer.layerPath, layerNames)}
-										</span>
-										{peer.selection?.nodes?.length > 0 && (
-											<span className="text-muted-foreground">
-												<MousePointerClick className="h-3 w-3 inline mr-0.5" />{t('countNodesSelected', { defaultValue_one: '{{count}} node selected', defaultValue_other: '{{count}} nodes selected', count: peer.selection.nodes.length })}
-											</span>
-										)}
-										{isFollowing ? (
-											<span className="text-primary font-medium">
-												{t('followingClickToStop', 'Following — click to stop')}
-											</span>
-										) : (
-											<span className="text-foreground">{t('clickToFollow', 'Click to follow')}</span>
-										)}
-									</div>
-								</TooltipContent>
-							</Tooltip>
-						);
-					})}
-					{uniquePeers.length > 5 && (
-						<span className="text-xs text-muted-foreground ml-0.5">
-							+{uniquePeers.length - 5}
-						</span>
-					)}
-
-					<>
-						<div className="w-px h-4 bg-border/50 mx-0.5" />
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={toggleExpanded}
-									className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-								>
-									{peersInDifferentLayer.length > 0 && (
-										<>
-											<Layers className="h-3 w-3" />
-											<span>{peersInDifferentLayer.length}</span>
-										</>
-									)}
-									{expanded ? (
-										<ChevronUp className="h-2.5 w-2.5" />
-									) : (
-										<ChevronDown className="h-2.5 w-2.5" />
-									)}
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom" className="text-xs">
-								{expanded
-								? t('collapse', 'Collapse')
-									: peersInDifferentLayer.length > 0
-									? t('countUsersInOtherLayers', { defaultValue_one: '{{count}} user in other layers', defaultValue_other: '{{count}} users in other layers', count: peersInDifferentLayer.length })
-									: t('showCollaborators', 'Show collaborators')}
-							</TooltipContent>
-						</Tooltip>
-					</>
-
-					{onOpenChat && (
-						<>
-							<div className="w-px h-4 bg-border/50 mx-0.5" />
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<button
-										type="button"
-										onClick={onOpenChat}
-										className="relative flex items-center justify-center h-6 w-6 rounded-md hover:bg-muted/50 transition-colors"
-									>
-										<MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
-										{(unreadCount ?? 0) > 0 && (
-											<span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">
-												{(unreadCount ?? 0) > 99 ? "99+" : unreadCount}
-											</span>
-										)}
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom" className="text-xs">
-									{t('chat', 'Chat')}
-								</TooltipContent>
-							</Tooltip>
-						</>
-					)}
-				</TooltipProvider>
-			</div>
-
-			{/* Expanded collaborators panel */}
-			{showPanel && (
-				<CollaboratorsPanel
-					peers={uniquePeers}
+		<BoardStatusItem
+			icon={<UsersIcon />}
+			tone={alone ? "muted" : "default"}
+			title={t("showCollaborators", "Show collaborators")}
+			ariaLabel={t("collaboratorsOnline", {
+				defaultValue_one: "{{count}} online — show collaborators",
+				defaultValue_other: "{{count}} online — show collaborators",
+				count: stats.onlineCount,
+			})}
+			popoverAlign="start"
+			popoverClassName="w-80 p-2"
+			popover={
+				<PresencePopover
+					collaborators={sorted}
 					peerUsers={peerUsers}
+					onlineCount={stats.onlineCount}
 					followingSub={followingSub}
 					currentLayerPath={currentLayerPath}
 					layerNames={layerNames}
+					fileLabels={fileLabels}
+					resolveNodeName={resolveNodeName}
+					getLastActiveAt={getLastActiveAt}
+					isTypingInEditor={isTypingInEditor}
+					isTypingInChat={isTypingInChat}
+					isAway={isAway}
 					onToggleFollow={onToggleFollow}
+					onStopFollowing={onStopFollowing}
 					onJumpToUser={onJumpToUser}
 					onJumpToLayer={onJumpToLayer}
+					onFocusNode={onFocusNode}
+					onOpenInCode={onOpenInCode}
+					onHighlightNodes={onHighlightNodes}
+					onOpenChat={onOpenChat}
+					unread={unread}
+					peerScopes={peerScopes}
+					onJoinScope={onJoinScope}
+					onSummon={onSummon}
+					onReact={onReact}
 				/>
+			}
+		>
+			{!alone && (
+				<span className="flex items-center -space-x-1" aria-hidden="true">
+					{sorted.slice(0, FACEPILE_LIMIT).map((collab) => (
+						<PresenceFace
+							key={collab.sub}
+							identity={identityOf(collab.sub, peerUsers)}
+							typing={isTypingInEditor?.(collab.sub) ?? false}
+							away={isAway?.(collab.sub) ?? false}
+						/>
+					))}
+				</span>
+			)}
+			<span className="tabular-nums">{stats.onlineCount}</span>
+			<span className="sr-only" aria-live="polite">
+				{notice && presenceEvent && noticeName
+					? presenceEvent.kind === "joined"
+						? t("presenceJoined", "{{name}} joined", { name: noticeName })
+						: t("presenceLeft", "{{name}} left", { name: noticeName })
+					: ""}
+			</span>
+			{notice && presenceEvent && noticeName && (
+				<span
+					aria-hidden="true"
+					className={cn(
+						"animate-in fade-in text-muted-foreground transition-opacity duration-500 motion-reduce:animate-none motion-reduce:transition-none",
+						notice.fading && "opacity-0",
+					)}
+				>
+					{presenceEvent.kind === "joined"
+						? t("presenceJoined", "{{name}} joined", { name: noticeName })
+						: t("presenceLeft", "{{name}} left", { name: noticeName })}
+				</span>
+			)}
+			{stats.inCodeEditor > 0 && (
+				<span
+					className="flex items-center gap-0.5 text-muted-foreground"
+					title={t("countInCodeEditor", {
+						defaultValue_one: "{{count}} in the code editor",
+						defaultValue_other: "{{count}} in the code editor",
+						count: stats.inCodeEditor,
+					})}
+				>
+					<PencilLineIcon className="size-3" aria-hidden="true" />
+					<span className="tabular-nums">{stats.inCodeEditor}</span>
+				</span>
+			)}
+			{unread > 0 && (
+				<span
+					className="min-w-3.5 rounded-full bg-primary px-1 text-[9px] font-semibold leading-3.5 tabular-nums text-primary-foreground"
+					aria-label={t("countUnreadMessages", {
+						defaultValue_one: "{{count}} unread message",
+						defaultValue_other: "{{count}} unread messages",
+						count: unread,
+					})}
+				>
+					{formatCount(unread)}
+				</span>
+			)}
+		</BoardStatusItem>
+	);
+});
+
+const PresenceFace = memo(function PresenceFace({
+	identity,
+	typing,
+	away,
+}: Readonly<{ identity: PresenceIdentity; typing: boolean; away: boolean }>) {
+	return (
+		<span
+			className={cn("relative inline-flex", away && "opacity-50")}
+			title={identity.name}
+		>
+			<Avatar
+				className="size-4 rounded-full"
+				style={{ boxShadow: `0 0 0 1px ${identity.color}` }}
+			>
+				{identity.avatarUrl && (
+					<AvatarImage
+						src={identity.avatarUrl}
+						alt=""
+						className="object-cover"
+					/>
+				)}
+				<AvatarFallback
+					className="rounded-full text-[8px] font-semibold text-white"
+					style={{ background: identity.color }}
+				>
+					{identity.shortName.charAt(0).toUpperCase()}
+				</AvatarFallback>
+			</Avatar>
+			{typing && (
+				<span
+					className="absolute -bottom-0.5 -right-0.5 flex size-2 animate-pulse items-center justify-center rounded-full bg-primary text-primary-foreground ring-1 ring-background motion-reduce:animate-none"
+					aria-hidden="true"
+				>
+					<PencilLineIcon className="size-1.5" />
+				</span>
+			)}
+		</span>
+	);
+});
+
+const PresencePopover = memo(function PresencePopover({
+	collaborators,
+	peerUsers,
+	onlineCount,
+	followingSub,
+	currentLayerPath,
+	layerNames,
+	fileLabels,
+	resolveNodeName,
+	getLastActiveAt,
+	isTypingInEditor,
+	isTypingInChat,
+	isAway,
+	onToggleFollow,
+	onStopFollowing,
+	onJumpToUser,
+	onJumpToLayer,
+	onFocusNode,
+	onOpenInCode,
+	onHighlightNodes,
+	onOpenChat,
+	unread,
+	peerScopes,
+	onJoinScope,
+	onSummon,
+	onReact,
+}: Readonly<{
+	collaborators: PresenceCollaborator[];
+	peerUsers: Map<string, PeerUserInfo>;
+	onlineCount: number;
+	followingSub?: string;
+	currentLayerPath: string;
+	layerNames?: Map<string, string>;
+	fileLabels: Map<string, string>;
+	resolveNodeName?: (nodeId: string) => string | undefined;
+	getLastActiveAt?: (sub: string) => number | undefined;
+	isTypingInEditor?: (sub: string) => boolean;
+	isTypingInChat?: (sub: string) => boolean;
+	isAway?: (sub: string) => boolean;
+	onToggleFollow: (sub: string) => void;
+	onStopFollowing?: () => void;
+	onJumpToUser: (sub: string) => void;
+	onJumpToLayer: (layerPath: string) => void;
+	onFocusNode?: (nodeId: string) => void;
+	onOpenInCode?: (nodeId: string) => void;
+	onHighlightNodes?: (nodeIds?: string[]) => void;
+	onOpenChat?: () => void;
+	unread: number;
+	peerScopes?: Map<string, string[]>;
+	onJoinScope?: (nodeIds: string[]) => void;
+	onSummon?: () => void;
+	onReact?: (emoji: PingEmoji) => void;
+}>) {
+	const { t } = useTranslation("flow");
+
+	// The popover content only exists while it is open, so this clock — which
+	// advances the idle/ago labels and re-reads the typing predicates — runs
+	// for nobody else.
+	const now = useClock(LIVE_REFRESH_MS);
+
+	const following = followingSub
+		? identityOf(followingSub, peerUsers)
+		: undefined;
+	const nobodyElse = collaborators.every((collab) => collab.self);
+	const reactTitle = t("presenceReact", "React at your cursor");
+
+	return (
+		<div className="flex flex-col">
+			<div className="flex items-center gap-1.5 px-1 py-1">
+				<UsersIcon
+					className="size-3.5 shrink-0 text-muted-foreground"
+					aria-hidden="true"
+				/>
+				<span className="text-xs font-medium">
+					{t("collaborators", "Collaborators")}
+				</span>
+				<span className="text-[11px] tabular-nums text-muted-foreground">
+					{t("countOnline", {
+						defaultValue_one: "{{count}} online",
+						defaultValue_other: "{{count}} online",
+						count: onlineCount,
+					})}
+				</span>
+				<span className="flex-1" />
+				{following && (
+					<span className="flex max-w-36 items-center gap-1 rounded-full bg-primary/10 py-0.5 pl-1.5 pr-0.5 text-[10px] font-medium text-primary">
+						<EyeIcon className="size-3 shrink-0" aria-hidden="true" />
+						<span className="truncate">
+							{t("followingName", "Following {{name}}", {
+								name: following.shortName,
+							})}
+						</span>
+						{onStopFollowing && (
+							<button
+								type="button"
+								onClick={onStopFollowing}
+								title={t("stopFollowing", "Stop following")}
+								aria-label={t("stopFollowing", "Stop following")}
+								className="rounded-full p-0.5 hover:bg-primary/20"
+							>
+								<XIcon className="size-3" aria-hidden="true" />
+							</button>
+						)}
+					</span>
+				)}
+				{onSummon && !nobodyElse && (
+					<HeaderAction
+						label={t("presenceSummon", "Bring everyone here")}
+						onClick={onSummon}
+					>
+						<MegaphoneIcon />
+					</HeaderAction>
+				)}
+				{onOpenChat && (
+					<HeaderAction
+						label={t("chat", "Chat")}
+						onClick={onOpenChat}
+						badge={unread > 0 ? formatCount(unread) : undefined}
+					>
+						<MessageCircleIcon />
+					</HeaderAction>
+				)}
+			</div>
+			{onReact && (
+				<div className="flex items-center gap-0.5 px-1 pb-1">
+					{PING_EMOJI.map((emoji) => (
+						<button
+							key={emoji}
+							type="button"
+							onClick={() => onReact(emoji)}
+							title={reactTitle}
+							className="rounded-sm px-1 py-0.5 text-sm leading-none hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						>
+							{emoji}
+						</button>
+					))}
+				</div>
+			)}
+			{nobodyElse && (
+				<p className="px-2 py-2 text-[11px] text-muted-foreground">
+					{t("presenceAlone", "No one else is on this board right now.")}
+				</p>
+			)}
+			{collaborators.length > 0 && (
+				<ul className="mt-0.5 flex max-h-72 flex-col overflow-y-auto">
+					{collaborators.map((collab) => (
+						<CollaboratorRow
+							key={collab.sub}
+							collab={collab}
+							identity={identityOf(collab.sub, peerUsers)}
+							activity={describeActivity(collab, {
+								currentLayerPath,
+								layerNames,
+								fileLabels,
+								nodeName: resolveNodeName,
+								lastActiveAt: getLastActiveAt?.(collab.sub),
+								typingInEditor: isTypingInEditor?.(collab.sub),
+								typingInChat: isTypingInChat?.(collab.sub),
+								away: isAway?.(collab.sub),
+								now,
+							})}
+							isFollowing={followingSub === collab.sub}
+							scopeNodeIds={peerScopes?.get(collab.sub)}
+							onToggleFollow={onToggleFollow}
+							onJumpToUser={onJumpToUser}
+							onJumpToLayer={onJumpToLayer}
+							onFocusNode={onFocusNode}
+							onOpenInCode={onOpenInCode}
+							onHighlightNodes={onHighlightNodes}
+							onJoinScope={onJoinScope}
+						/>
+					))}
+				</ul>
 			)}
 		</div>
 	);
 });
 
-const CollaboratorsPanel = memo(function CollaboratorsPanel({
-	peers,
-	peerUsers,
-	followingSub,
-	currentLayerPath,
-	layerNames,
+function HeaderAction({
+	label,
+	onClick,
+	badge,
+	children,
+}: Readonly<{
+	label: string;
+	onClick: () => void;
+	badge?: string;
+	children: ReactNode;
+}>) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={label}
+			aria-label={label}
+			className="relative rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground [&>svg]:size-3.5"
+		>
+			{children}
+			{badge && (
+				<span className="absolute -right-0.5 -top-0.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] font-semibold leading-3.5 tabular-nums text-primary-foreground">
+					{badge}
+				</span>
+			)}
+		</button>
+	);
+}
+
+const CollaboratorRow = memo(function CollaboratorRow({
+	collab,
+	identity,
+	activity,
+	isFollowing,
+	scopeNodeIds,
 	onToggleFollow,
 	onJumpToUser,
 	onJumpToLayer,
-}: {
-	peers: PeerPresence[];
-	peerUsers: Map<string, PeerUserInfo>;
-	followingSub?: string;
-	currentLayerPath: string;
-	layerNames?: Map<string, string>;
+	onFocusNode,
+	onOpenInCode,
+	onHighlightNodes,
+	onJoinScope,
+}: Readonly<{
+	collab: PresenceCollaborator;
+	identity: PresenceIdentity;
+	activity: PresenceActivity;
+	isFollowing: boolean;
+	scopeNodeIds?: string[];
 	onToggleFollow: (sub: string) => void;
 	onJumpToUser: (sub: string) => void;
 	onJumpToLayer: (layerPath: string) => void;
-}) {
+	onFocusNode?: (nodeId: string) => void;
+	onOpenInCode?: (nodeId: string) => void;
+	onHighlightNodes?: (nodeIds?: string[]) => void;
+	onJoinScope?: (nodeIds: string[]) => void;
+}>) {
 	const { t } = useTranslation("flow");
-	const grouped = useMemo(() => {
-		const byLayer = new Map<string, PeerPresence[]>();
-		for (const peer of peers) {
-			const key = peer.layerPath ?? "root";
-			const arr = byLayer.get(key) ?? [];
-			arr.push(peer);
-			byLayer.set(key, arr);
-		}
-		// Sort: current layer first, then alphabetical
-		const currentKey = currentLayerPath || "root";
-		const entries = [...byLayer.entries()].sort(([a], [b]) => {
-			if (a === currentKey) return -1;
-			if (b === currentKey) return 1;
-			return a.localeCompare(b);
-		});
-		return entries;
-	}, [peers, currentLayerPath]);
+	const highlightIds = useMemo(() => presenceHighlightIds(collab), [collab]);
 
-	return (
-		<div className="mt-1 w-64 max-h-80 overflow-y-auto rounded-xl border border-border/50 bg-background/95 backdrop-blur-md shadow-lg">
-			<div className="px-3 py-2 border-b border-border/30">
-				<h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-					<Users className="h-3.5 w-3.5" />
-					{t('collaborators', 'Collaborators')}
-					<Badge
-						variant="secondary"
-						className="ml-auto text-[10px] px-1.5 py-0"
-					>
-						{peers.length}
-					</Badge>
-				</h4>
-			</div>
-			<div className="py-1">
-				{grouped.map(([layerKey, layerPeers]) => {
-					const isCurrentLayer = layerKey === (currentLayerPath || "root");
-					const label = layerLabel(layerKey, layerNames);
-					return (
-						<div key={layerKey}>
-							<div className="flex items-center gap-1.5 px-3 py-1">
-								<Layers className="h-3 w-3 text-muted-foreground shrink-0" />
-								<span className="text-[10px] font-medium text-muted-foreground truncate">
-									{label}
-								</span>
-								{isCurrentLayer && (
-									<Badge
-										variant="outline"
-										className="text-[9px] px-1 py-0 ml-auto"
-									>
-										{t('you', 'You')}
-									</Badge>
-								)}
-								{!isCurrentLayer && (
-									<button
-										type="button"
-										onClick={() => onJumpToLayer(layerKey)}
-										className="ml-auto text-[10px] text-primary hover:text-primary/80 font-medium flex items-center gap-0.5 cursor-pointer transition-colors"
-									>
-										<Navigation className="h-2.5 w-2.5" />
-										{t('go', 'Go')}
-									</button>
-								)}
-							</div>
-							{layerPeers.map((peer) => (
-								<CollaboratorRow
-									key={peer.sub}
-									peer={peer}
-									peerUsers={peerUsers}
-									followingSub={followingSub}
-									onToggleFollow={onToggleFollow}
-									onJumpToUser={onJumpToUser}
-								/>
-							))}
-						</div>
-					);
-				})}
-			</div>
-		</div>
+	// Tracks whether this row currently owns the canvas highlight so it can
+	// hand it back when the row (or the whole popover) goes away mid-hover.
+	const highlightingRef = useRef(false);
+	const highlight = useCallback(() => {
+		if (!onHighlightNodes) return;
+		highlightingRef.current = true;
+		onHighlightNodes(highlightIds.length > 0 ? highlightIds : undefined);
+	}, [onHighlightNodes, highlightIds]);
+	const clearHighlight = useCallback(() => {
+		if (!highlightingRef.current) return;
+		highlightingRef.current = false;
+		onHighlightNodes?.(undefined);
+	}, [onHighlightNodes]);
+	const handleBlur = useCallback(
+		(event: FocusEvent<HTMLLIElement>) => {
+			if (event.currentTarget.contains(event.relatedTarget as Node | null))
+				return;
+			clearHighlight();
+		},
+		[clearHighlight],
 	);
-});
+	useEffect(() => () => clearHighlight(), [clearHighlight]);
 
-const CollaboratorRow = memo(function CollaboratorRow({
-	peer,
-	peerUsers,
-	followingSub,
-	onToggleFollow,
-	onJumpToUser,
-}: {
-	peer: PeerPresence;
-	peerUsers: Map<string, PeerUserInfo>;
-	followingSub?: string;
-	onToggleFollow: (sub: string) => void;
-	onJumpToUser: (sub: string) => void;
-}) {
-	const { t } = useTranslation("flow");
-	const userInfo = peer.sub ? peerUsers.get(peer.sub) : undefined;
-	const color = userInfo?.color ?? colorFromSub(peer.sub);
-	const name = userInfo?.truncatedName ?? truncateName(peer.sub?.slice(-8));
-	const isFollowing = followingSub === peer.sub;
-	const selectedCount = peer.selection?.nodes?.length ?? 0;
+	const displayName =
+		collab.self && !identity.known ? t("you", "You") : identity.name;
+	const showYouBadge = collab.self && identity.known;
+	const layerLabel = activity.layerLabel ?? t("root", "Root");
+	const { editing, firstSelectedNodeId, typingInEditor, typingInChat, away } =
+		activity;
 
 	return (
-		<div className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted/30 transition-colors group">
+		<li
+			className="group flex items-start gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent focus-within:bg-accent"
+			onMouseEnter={highlight}
+			onMouseLeave={clearHighlight}
+			onFocus={highlight}
+			onBlur={handleBlur}
+		>
 			<Avatar
-				className={`h-6 w-6 shrink-0 transition-all ${isFollowing ? "ring-2" : "ring-1 ring-border/50"}`}
-				style={{
-					borderColor: color,
-					boxShadow: isFollowing ? `0 0 0 2px ${color}` : undefined,
-				}}
+				className={cn("size-7 shrink-0 rounded-md", away && "opacity-50")}
+				style={{ boxShadow: `0 0 0 2px ${identity.color}` }}
 			>
-				{userInfo?.avatarUrl && (
-					<AvatarImage src={userInfo.avatarUrl} className="object-cover" />
+				{identity.avatarUrl && (
+					<AvatarImage
+						src={identity.avatarUrl}
+						alt=""
+						className="object-cover"
+					/>
 				)}
 				<AvatarFallback
-					className="text-[10px] font-bold"
-					style={{
-						background: `linear-gradient(135deg, ${color}, ${color}dd)`,
-						color: "white",
-					}}
+					className="rounded-md text-[10px] font-semibold text-white"
+					style={{ background: identity.color }}
 				>
-					{name.charAt(0).toUpperCase()}
+					{displayName.charAt(0).toUpperCase()}
 				</AvatarFallback>
 			</Avatar>
-			<div className="flex-1 min-w-0">
-				<div className="text-xs font-medium truncate">{name}</div>
-				{selectedCount > 0 && (
-					<div className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-						<MousePointerClick className="h-2.5 w-2.5" />{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</div>
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5">
+					<span className="truncate font-medium" title={identity.name}>
+						{displayName}
+					</span>
+					{showYouBadge && (
+						<Badge
+							variant="outline"
+							className="shrink-0 px-1 py-0 text-[9px] leading-3.5"
+						>
+							{t("you", "You")}
+						</Badge>
+					)}
+					{collab.sessions > 1 && (
+						<span className="shrink-0 text-[11px] text-muted-foreground">
+							·{" "}
+							{t("countSessions", {
+								defaultValue_one: "{{count}} session",
+								defaultValue_other: "{{count}} sessions",
+								count: collab.sessions,
+							})}
+						</span>
+					)}
+				</div>
+				<div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-tight text-muted-foreground">
+					<ActivityChip
+						icon={<LayersIcon />}
+						title={
+							activity.sameLayer
+								? undefined
+								: t("jumpToLayer", "Go to this layer")
+						}
+						onClick={
+							activity.sameLayer
+								? undefined
+								: () => onJumpToLayer(activity.layerPath)
+						}
+					>
+						{activity.sameLayer ? t("presenceHere", "here") : layerLabel}
+					</ActivityChip>
+					{typingInEditor ? (
+						<ActivityChip
+							icon={
+								<PencilLineIcon className="animate-pulse motion-reduce:animate-none" />
+							}
+							className="text-primary"
+						>
+							{t("presenceTypingIn", "typing in {{file}}", {
+								file: activity.codeFileLabel ?? MAIN_FILE_LABEL,
+							})}
+						</ActivityChip>
+					) : (
+						<>
+							{activity.codeFileLabel && (
+								<ActivityChip icon={<FileCode2Icon />}>
+									{activity.codeFileLabel}
+								</ActivityChip>
+							)}
+							{editing && (
+								<ActivityChip icon={<PencilLineIcon />}>
+									{t("presenceEditing", "editing {{name}}", {
+										name: editing.label,
+									})}
+								</ActivityChip>
+							)}
+						</>
+					)}
+					{typingInChat && (
+						<ActivityChip
+							icon={
+								<MessageCircleIcon className="animate-pulse motion-reduce:animate-none" />
+							}
+							className="text-primary"
+						>
+							{t("presenceTypingInChat", "typing in chat")}
+						</ActivityChip>
+					)}
+					{activity.selectedCount > 0 && (
+						<ActivityChip
+							icon={<MousePointerClickIcon />}
+							title={
+								onFocusNode ? t("revealOnBoard", "Reveal on board") : undefined
+							}
+							onClick={
+								onFocusNode && firstSelectedNodeId
+									? () => onFocusNode(firstSelectedNodeId)
+									: undefined
+							}
+						>
+							{t("selectedcountSelected", "{{selectedCount}} selected", {
+								selectedCount: activity.selectedCount,
+							})}
+						</ActivityChip>
+					)}
+					{activity.running && (
+						<ActivityChip
+							icon={
+								<PlayIcon className="animate-pulse motion-reduce:animate-none" />
+							}
+							className="text-primary"
+						>
+							{t("presenceRunning", "running")}
+						</ActivityChip>
+					)}
+					{activity.idleMinutes !== undefined && (
+						<span className="text-muted-foreground/70">
+							{away
+								? t("presenceAway", "away {{minutes}}m", {
+										minutes: activity.idleMinutes,
+									})
+								: t("presenceIdleMinutes", "idle {{minutes}}m", {
+										minutes: activity.idleMinutes,
+									})}
+						</span>
+					)}
+				</div>
+				{(activity.lastEdit || activity.lastRun) && (
+					<div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-tight text-muted-foreground/70">
+						{activity.lastEdit && (
+							<ActivityChip icon={<HistoryIcon />}>
+								<LastEditLabel edit={activity.lastEdit} />
+							</ActivityChip>
+						)}
+						{activity.lastRun && (
+							<ActivityChip
+								icon={<PlayIcon />}
+								className={
+									activity.lastRun.status === "error"
+										? "text-destructive"
+										: undefined
+								}
+							>
+								<LastRunLabel run={activity.lastRun} />
+							</ActivityChip>
+						)}
+					</div>
 				)}
 			</div>
-			<div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-				<TooltipProvider delayDuration={100}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								type="button"
-								onClick={() => peer.sub && onJumpToUser(peer.sub)}
-								className="p-1 rounded hover:bg-muted/60 transition-colors cursor-pointer"
-							>
-								<Navigation className="h-3 w-3 text-muted-foreground" />
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="left" className="text-xs">
-							{t('jumpToUser', 'Jump to user')}
-						</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								type="button"
-								onClick={() => peer.sub && onToggleFollow(peer.sub)}
-								className={`p-1 rounded transition-colors cursor-pointer ${isFollowing ? "bg-primary/10" : "hover:bg-muted/60"}`}
-							>
-								<Eye
-									className={`h-3 w-3 ${isFollowing ? "text-primary" : "text-muted-foreground"}`}
-								/>
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="left" className="text-xs">
-							{isFollowing ? t('stopFollowing', 'Stop following') : t('follow', 'Follow')}
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+			<div
+				className={cn(
+					"flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+					isFollowing && "opacity-100",
+				)}
+			>
+				{!collab.self && (
+					<RowAction
+						label={
+							isFollowing
+								? t("stopFollowing", "Stop following")
+								: t("follow", "Follow")
+						}
+						active={isFollowing}
+						onClick={() => onToggleFollow(collab.sub)}
+					>
+						{isFollowing ? <EyeOffIcon /> : <EyeIcon />}
+					</RowAction>
+				)}
+				<RowAction
+					label={t("jumpToUser", "Jump to user")}
+					onClick={() => onJumpToUser(collab.sub)}
+				>
+					<NavigationIcon />
+				</RowAction>
+				{onOpenInCode && editing && (
+					<RowAction
+						label={t("presenceOpenInCode", "Open in code")}
+						onClick={() => onOpenInCode(editing.anchorId)}
+					>
+						<FileCode2Icon />
+					</RowAction>
+				)}
+				{onJoinScope && scopeNodeIds && scopeNodeIds.length > 0 && (
+					<RowAction
+						label={t("flowscriptJoinScope", "Join code scope")}
+						onClick={() => onJoinScope(scopeNodeIds)}
+					>
+						<BracesIcon />
+					</RowAction>
+				)}
 			</div>
-		</div>
+		</li>
 	);
 });
+
+type Translate = ReturnType<typeof useTranslation>["t"];
+
+/** Literal keys per verb so the extractor and the typed `t` both see them. */
+function editVerbLabel(t: Translate, verb: EditVerb, count: number): string {
+	switch (verb) {
+		case "added":
+			return t("presenceEditAdded", {
+				defaultValue_one: "added {{count}}",
+				defaultValue_other: "added {{count}}",
+				count,
+			});
+		case "moved":
+			return t("presenceEditMoved", {
+				defaultValue_one: "moved {{count}}",
+				defaultValue_other: "moved {{count}}",
+				count,
+			});
+		case "connected":
+			return t("presenceEditConnected", {
+				defaultValue_one: "connected {{count}}",
+				defaultValue_other: "connected {{count}}",
+				count,
+			});
+		case "disconnected":
+			return t("presenceEditDisconnected", {
+				defaultValue_one: "disconnected {{count}}",
+				defaultValue_other: "disconnected {{count}}",
+				count,
+			});
+		case "removed":
+			return t("presenceEditRemoved", {
+				defaultValue_one: "removed {{count}}",
+				defaultValue_other: "removed {{count}}",
+				count,
+			});
+		case "updated":
+			return t("presenceEditUpdated", {
+				defaultValue_one: "updated {{count}}",
+				defaultValue_other: "updated {{count}}",
+				count,
+			});
+		case "commented":
+			return t("presenceEditCommented", {
+				defaultValue_one: "commented {{count}}",
+				defaultValue_other: "commented {{count}}",
+				count,
+			});
+		case "layered":
+			return t("presenceEditLayered", {
+				defaultValue_one: "changed {{count}} layer",
+				defaultValue_other: "changed {{count}} layers",
+				count,
+			});
+		case "variables":
+			return t("presenceEditVariables", {
+				defaultValue_one: "changed {{count}} variable",
+				defaultValue_other: "changed {{count}} variables",
+				count,
+			});
+	}
+}
+
+/** "moved 3 · 2m ago": one verb per command kind in the batch, then its age. */
+function LastEditLabel({ edit }: Readonly<{ edit: PresenceLastEdit }>) {
+	const { t } = useTranslation("flow");
+	const parts = edit.verbs.map((verb) => editVerbLabel(t, verb, edit.count));
+	parts.push(agoLabel(t, edit.agoMinutes));
+	return <>{parts.join(" · ")}</>;
+}
+
+/** "run ok · 12 nodes · 5m ago", in `text-destructive` when the run failed. */
+function LastRunLabel({ run }: Readonly<{ run: PresenceLastRun }>) {
+	const { t } = useTranslation("flow");
+	const outcome =
+		run.status === "ok"
+			? t("presenceRunOk", {
+					defaultValue_one: "run ok · {{count}} node",
+					defaultValue_other: "run ok · {{count}} nodes",
+					count: run.executed,
+				})
+			: t("presenceRunFailed", {
+					defaultValue_one: "run failed · {{count}} node",
+					defaultValue_other: "run failed · {{count}} nodes",
+					count: run.executed,
+				});
+	return <>{[outcome, agoLabel(t, run.agoMinutes)].join(" · ")}</>;
+}
+
+function agoLabel(
+	t: ReturnType<typeof useTranslation>["t"],
+	minutes: number,
+): string {
+	return minutes === 0
+		? t("presenceJustNow", "just now")
+		: t("presenceAgoMinutes", "{{minutes}}m ago", { minutes });
+}
+
+function ActivityChip({
+	icon,
+	title,
+	onClick,
+	className,
+	children,
+}: Readonly<{
+	icon: ReactNode;
+	title?: string;
+	onClick?: () => void;
+	className?: string;
+	children: ReactNode;
+}>) {
+	const classes = cn(
+		"inline-flex min-w-0 items-center gap-1 [&>svg]:size-3 [&>svg]:shrink-0",
+		className,
+	);
+	if (!onClick) {
+		return (
+			<span className={classes} title={title}>
+				{icon}
+				<span className="truncate">{children}</span>
+			</span>
+		);
+	}
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={title}
+			className={cn(
+				classes,
+				"rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+			)}
+		>
+			{icon}
+			<span className="truncate">{children}</span>
+		</button>
+	);
+}
+
+function RowAction({
+	label,
+	active,
+	onClick,
+	children,
+}: Readonly<{
+	label: string;
+	active?: boolean;
+	onClick: () => void;
+	children: ReactNode;
+}>) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={label}
+			aria-label={label}
+			aria-pressed={active}
+			className={cn(
+				"rounded-sm p-1 text-muted-foreground hover:bg-background/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring [&>svg]:size-3.5",
+				active && "text-primary",
+			)}
+		>
+			{children}
+		</button>
+	);
+}

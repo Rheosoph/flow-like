@@ -1,5 +1,6 @@
 import type React from "react";
 import type { IBoard, ILogMetadata } from "../../../lib";
+import type { FlowScriptApplyOrigin } from "../../../lib/flowscript-apply-failure";
 import type { FlowIrCommitToken } from "../../../lib/schema/copilot";
 import type {
 	BoardCommand,
@@ -45,6 +46,15 @@ export interface FlowScriptApplyResultLike {
 export interface FlowScriptApplyOptions {
 	allowDeletions?: boolean;
 	suppressBlockedToast?: boolean;
+	/** Who authored the source. Defaults to the editor; FlowPilot's own applies pass "agent". */
+	origin?: FlowScriptApplyOrigin;
+	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
+	scopeAnchors?: string[];
+	/**
+	 * The virtual file this text is: `"main"` or a module layer id. Set by a per-file editor;
+	 * the host turns it into the apply's `currentLayer` and its `module` identity.
+	 */
+	file?: string;
 }
 
 export interface FlowCopilotProps {

@@ -61,7 +61,12 @@ export function VideoElementStatic(
 							)}
 						/>
 					) : (
-						<ReactPlayer src={resolvedUrl} width="100%" height="100%" controls />
+						<ReactPlayer
+							src={resolvedUrl}
+							width="100%"
+							height="100%"
+							controls
+						/>
 					)}
 					{caption && <figcaption>{NodeApi.string(caption[0])}</figcaption>}
 				</figure>

@@ -617,6 +617,7 @@ pub async fn suggest_assessment(
     let usage_context = Some(flow_like::models::llm::ModelUsageContext {
         app_id: Some(app_id.clone()),
         run_id: None,
+        api_base_url: None,
     });
 
     let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
@@ -642,4 +643,5 @@ pub async fn suggest_assessment(
 pub use questionnaire::classify as classify_assessment;
 #[allow(unused_imports)]
 pub use signals::Signals as AiActSignals;
+#[allow(dead_code)] // completes the classify/Signals/Classification re-export façade above
 pub type AiActClassification = Classification;

@@ -515,7 +515,11 @@
 											"label": "Duplicate the widget per page so each copy can target its own flow"
 										}
 									],
-									"correct": ["define-named-event", "widget-event-action", "bind-at-instance"]
+									"correct": [
+										"define-named-event",
+										"widget-event-action",
+										"bind-at-instance"
+									]
 								}
 							}
 						],
@@ -892,7 +896,11 @@
 											"label": "Numbered versions absorb draft edits automatically"
 										}
 									],
-									"correct": ["pin-numbered", "edit-draft-freely", "repoint-friday"]
+									"correct": [
+										"pin-numbered",
+										"edit-draft-freely",
+										"repoint-friday"
+									]
 								}
 							},
 							{
@@ -954,7 +962,12 @@
 											"label": "Routes cover their subpaths, so /chat also answers /chat/history"
 										}
 									],
-									"correct": ["one-model", "chat-configured", "route-resolution", "behavior-at-page"]
+									"correct": [
+										"one-model",
+										"chat-configured",
+										"route-resolution",
+										"behavior-at-page"
+									]
 								}
 							}
 						],

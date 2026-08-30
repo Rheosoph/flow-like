@@ -74,6 +74,7 @@ impl NodeLogic for UpdateGraph {
             "Update the nodes, edges or label styles of a graph",
             "UI/Elements/Graph",
         );
+        node.set_flowscript_name("ui", "updateGraph");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

@@ -1,0 +1,11 @@
+use log::{ info }
+
+interface Incident {
+    report: string;
+}
+
+eventsGeneric inspectIncidents(payload: Struct, incidents: Incident[]) {
+    for (const incident of incidents) {
+        info({ message: incident.report, toast: false })
+    }
+}

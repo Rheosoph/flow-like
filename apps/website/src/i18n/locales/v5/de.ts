@@ -294,6 +294,25 @@ export default {
 	"v5.control.item3": "Bereitschaft für den EU AI Act",
 	"v5.control.item4": "Durchgängige Observability",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "DER OFFENE LEITFADEN FÜR ENTWICKLER",
+	"v5.book.title":
+		"Ein Entwicklerleitfaden vom Vorfall bis zur Implementierung.",
+	"v5.book.body":
+		"FlowBook richtet sich an Entwickler, die mit Flow-Like entwickeln. Begleite einen ausführbaren Workflow durch seinen typisierten FlowScript-Quellcode, den visuellen Canvas und die Laufzeitnachweise, die bei Erfolg oder Fehlschlag entstehen.",
+	"v5.book.meta": "Offene Ausgabe · 2026 · Englisch",
+	"v5.book.read": "FlowBook online lesen",
+	"v5.book.download": "PDF herunterladen",
+	"v5.book.note": "Kostenlos lesbar. Keine Anmeldung erforderlich.",
+	"v5.book.generalLabel": "ALLGEMEINE ANLEITUNGEN",
+	"v5.book.generalBody":
+		"Für Produkteinführungen und Schritt-für-Schritt-Tutorials empfehlen wir die Dokumentation oder den YouTube-Kanal von Flow-Like.",
+	"v5.book.docs": "Dokumentation ansehen",
+	"v5.book.youtube": "Auf YouTube ansehen",
+	"v5.book.coverCta": "Offene Ausgabe herunterladen",
+	"v5.book.aria":
+		"FlowBook „Ein Entwicklerleitfaden für Flow-Like“ als PDF herunterladen",
+
 	"v5.footer.notes.kicker": "Notizen aus dem Maschinenraum",
 	"v5.footer.notes.title": "Was wir bauen und was wir gelernt haben.",
 	"v5.footer.notes.all": "Alle Notizen →",

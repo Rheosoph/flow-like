@@ -24,7 +24,10 @@ impl NodeLogic for StringStartsWithNode {
             "Checks if a string starts with a specific string",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "startsWith");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
+        node.set_version(1);
 
         node.add_input_pin("string", "String", "Input String", VariableType::String);
         node.add_input_pin(
@@ -33,6 +36,14 @@ impl NodeLogic for StringStartsWithNode {
             "String to check against",
             VariableType::String,
         );
+
+        node.add_input_pin(
+            "ignore_case",
+            "Ignore Case",
+            "Compare without regard to upper/lower case",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "starts_with",
@@ -47,8 +58,13 @@ impl NodeLogic for StringStartsWithNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let string: String = context.evaluate_pin("string").await?;
         let prefix: String = context.evaluate_pin("prefix").await?;
+        let ignore_case: bool = context.evaluate_pin("ignore_case").await?;
 
-        let starts_with = string.starts_with(&prefix);
+        let starts_with = if ignore_case {
+            string.to_lowercase().starts_with(&prefix.to_lowercase())
+        } else {
+            string.starts_with(&prefix)
+        };
 
         context
             .set_pin_value("starts_with", json!(starts_with))

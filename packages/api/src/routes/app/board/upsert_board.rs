@@ -1,5 +1,5 @@
 use crate::{
-    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::board::secrets::filter_board_secrets, state::AppState,
 };
@@ -7,10 +7,14 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::flow::{
-    board::{Board, ExecutionMode, ExecutionStage},
-    execution::LogLevel,
+use flow_like::{
+    a2ui::widget::Page,
+    flow::{
+        board::{Board, ExecutionMode, ExecutionStage},
+        execution::LogLevel,
+    },
 };
+use sea_orm::{ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use utoipa::ToSchema;
@@ -38,6 +42,42 @@ pub struct UpsertBoardResponse {
     /// server-generated node and pin IDs without instantiating the template a second time.
     #[schema(value_type = Option<Object>)]
     pub board: Option<Board>,
+}
+
+/// Register the pages a template instantiation just wrote to storage.
+///
+/// Instantiated pages are minted inside the core board path, so no page-upload call ever describes
+/// them. Without a row each, `GET /apps/{app_id}/pages` cannot see them and a later fork — which is
+/// driven off the `Page` table — drops them silently.
+async fn persist_instantiated_pages(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    pages: &[Page],
+) -> Result<(), ApiError> {
+    if pages.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().naive_utc();
+    let rows = pages
+        .iter()
+        .map(|page| page::ActiveModel {
+            id: Set(page.id.clone()),
+            name: Set(page.name.clone()),
+            description: Set(page.title.clone()),
+            app_id: Set(app_id.to_string()),
+            board_id: Set(Some(board_id.to_string())),
+            version: Set(page
+                .version
+                .map(|version| format!("{}.{}.{}", version.0, version.1, version.2))),
+            created_at: Set(now),
+            updated_at: Set(now),
+        })
+        .collect::<Vec<_>>();
+
+    page::Entity::insert_many(rows).exec(&state.db).await?;
+    Ok(())
 }
 
 #[utoipa::path(
@@ -77,10 +117,12 @@ pub async fn upsert_board(
         // Instantiate through the same core path as offline boards. Besides remapping node/pin
         // IDs, this runs catalog schema migrations and keeps compact schema refs resolvable before
         // the first board snapshot is saved.
-        id = app
+        let created = app
             .create_board(Some(board_id.clone()), params.template)
             .await?;
         app.save().await?;
+        id = created.board_id;
+        persist_instantiated_pages(&state, &app_id, &id, &created.pages).await?;
     }
 
     let board = app.open_board(id, Some(false), None).await?;

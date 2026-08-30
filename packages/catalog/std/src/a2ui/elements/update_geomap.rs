@@ -38,6 +38,7 @@ impl NodeLogic for UpdateGeoMap {
             "Update markers, routes, or viewport of a map",
             "UI/Elements/GeoMap",
         );
+        node.set_flowscript_name("ui", "updateGeomap");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);

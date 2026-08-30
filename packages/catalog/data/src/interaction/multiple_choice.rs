@@ -25,6 +25,7 @@ impl NodeLogic for MultipleChoiceInteraction {
             "Request the user to pick one or more options. Pauses execution until a response or timeout.",
             "Events/Chat/Interaction",
         );
+        node.set_flowscript_name("chat", "askMultipleChoice");
         node.add_icon("/flow/icons/interaction.svg");
         node.set_version(1);
 
@@ -168,7 +169,7 @@ impl NodeLogic for MultipleChoiceInteraction {
             expires_at: now + ttl_seconds,
             run_id: None,
             app_id: None,
-            responder_jwt: None,
+            channel: None,
         };
 
         let result = wait_for_interaction_response(context, request, ttl_seconds).await?;

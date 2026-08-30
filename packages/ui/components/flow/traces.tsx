@@ -24,17 +24,20 @@ import {
 import { AutoSizer } from "react-virtualized";
 import "react-virtualized/styles.css";
 import { QuestionMarkCircledIcon } from "@radix-ui/react-icons";
+import { createPortal } from "react-dom";
 import { VariableSizeList as List, type VariableSizeList } from "react-window";
 import { toast } from "sonner";
 import { type IBoard, type ILog, useBackend, useInfiniteInvoke } from "../..";
 import { parseTimespan } from "../../lib/date";
 import { logLevelToNumber } from "../../lib/log-level";
 import { ILogLevel, type ILogMessage } from "../../lib/schema/flow/run";
+import { cn } from "../../lib/utils";
 import { useLogAggregation } from "../../state/log-aggregation-state";
 import { DynamicImage, EmptyState } from "../ui";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { usePanelToolbarSlot } from "./shell/board-panes";
 
 interface IEnrichedLogMessage extends ILogMessage {
 	node_id: string;
@@ -47,6 +50,7 @@ export function Traces({
 	onFocusNode,
 	nodeIdFilter,
 	onClearNodeIdFilter,
+	variant = "card",
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -54,6 +58,8 @@ export function Traces({
 	onFocusNode: (nodeId: string) => void;
 	nodeIdFilter?: string;
 	onClearNodeIdFilter?: () => void;
+	/** `panel` drops the card chrome — the shell's panel already frames it. */
+	variant?: "card" | "panel";
 }>) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
@@ -174,7 +180,7 @@ export function Traces({
 							}}
 							disabled={isFetchingNextPage}
 						>
-							{t('loadMoreLogs', 'Load more logs')}
+							{t("loadMoreLogs", "Load more logs")}
 						</Button>
 					</div>
 				);
@@ -214,72 +220,108 @@ export function Traces({
 		rowHeights.current = rowHeights.current.set(index, height);
 	}
 
+	const panel = variant === "panel";
+	const toolbarSlot = usePanelToolbarSlot();
+	// In the panel the controls live in the tab strip, so the rows below are all list.
+	const hoisted = panel && toolbarSlot !== null;
+
+	const toolbar = (
+		<div
+			className={cn(
+				"w-full flex flex-row items-center justify-between flex-wrap gap-2",
+				hoisted && "w-auto flex-nowrap gap-1.5",
+				!panel && "my-1 px-2",
+				panel && !hoisted && "px-2 py-1.5 border-b",
+			)}
+		>
+			<div className="flex flex-row items-center gap-1 flex-wrap">
+				<LogFilterBadge
+					level={ILogLevel.Debug}
+					label="Debug"
+					logFilter={logFilter}
+					toggleLogFilter={toggleLogFilter}
+				/>
+				<LogFilterBadge
+					level={ILogLevel.Info}
+					label="Info"
+					logFilter={logFilter}
+					toggleLogFilter={toggleLogFilter}
+				/>
+				<LogFilterBadge
+					level={ILogLevel.Warn}
+					label="Warning"
+					logFilter={logFilter}
+					toggleLogFilter={toggleLogFilter}
+				/>
+				<LogFilterBadge
+					level={ILogLevel.Error}
+					label="Error"
+					logFilter={logFilter}
+					toggleLogFilter={toggleLogFilter}
+				/>
+				<LogFilterBadge
+					level={ILogLevel.Fatal}
+					label="Fatal"
+					logFilter={logFilter}
+					toggleLogFilter={toggleLogFilter}
+				/>
+				{nodeIdFilter && (
+					<Badge
+						className="cursor-pointer gap-1"
+						variant="secondary"
+						onClick={onClearNodeIdFilter}
+					>
+						{t("node", "Node:")}{" "}
+						{board.current?.nodes[nodeIdFilter]?.friendly_name ??
+							nodeIdFilter.slice(0, 8)}
+						<XIcon className="w-3 h-3" />
+					</Badge>
+				)}
+			</div>
+
+			<div className="flex flex-row items-center gap-2">
+				<Input
+					value={search}
+					onChange={(e) => setSearch(e.target.value)}
+					placeholder={t("search", "Search")}
+					className={cn("w-32 md:w-48", hoisted && "h-6 w-36 text-xs md:w-40")}
+				/>
+			</div>
+		</div>
+	);
+
 	return (
 		<div className="h-full w-full">
-			<div className="transition-all h-full z-10 bg-background border rounded-lg flex flex-col w-full overflow-hidden">
-				<div className="flex flex-col h-full p-2">
-					<div className="w-full flex flex-row items-center justify-between my-1 px-2 flex-wrap gap-2">
-						<div className="flex flex-row items-center gap-1 flex-wrap">
-							<LogFilterBadge
-								level={ILogLevel.Debug}
-								label="Debug"
-								logFilter={logFilter}
-								toggleLogFilter={toggleLogFilter}
-							/>
-							<LogFilterBadge
-								level={ILogLevel.Info}
-								label="Info"
-								logFilter={logFilter}
-								toggleLogFilter={toggleLogFilter}
-							/>
-							<LogFilterBadge
-								level={ILogLevel.Warn}
-								label="Warning"
-								logFilter={logFilter}
-								toggleLogFilter={toggleLogFilter}
-							/>
-							<LogFilterBadge
-								level={ILogLevel.Error}
-								label="Error"
-								logFilter={logFilter}
-								toggleLogFilter={toggleLogFilter}
-							/>
-							<LogFilterBadge
-								level={ILogLevel.Fatal}
-								label="Fatal"
-								logFilter={logFilter}
-								toggleLogFilter={toggleLogFilter}
-							/>
-							{nodeIdFilter && (
-								<Badge
-									className="cursor-pointer gap-1"
-									variant="secondary"
-									onClick={onClearNodeIdFilter}
-								>
-									{t('node', 'Node:')}{" "}
-									{board.current?.nodes[nodeIdFilter]?.friendly_name ??
-										nodeIdFilter.slice(0, 8)}
-									<XIcon className="w-3 h-3" />
-								</Badge>
-							)}
-						</div>
-
-						<div className="flex flex-row items-center gap-2">
-							<Input
-								value={search}
-								onChange={(e) => setSearch(e.target.value)}
-								placeholder="Search..."
-								className="w-32 md:w-48"
-							/>
-						</div>
-					</div>
+			<div
+				className={cn(
+					"transition-all h-full z-10 bg-background flex flex-col w-full overflow-hidden",
+					!panel && "border rounded-lg",
+				)}
+			>
+				<div className={cn("flex flex-col h-full", panel ? "p-0" : "p-2")}>
+					{hoisted ? createPortal(toolbar, toolbarSlot) : toolbar}
 					<div className="flex flex-col w-full gap-1 overflow-x-auto flex-1 min-h-0 px-2">
-						{(messages?.length ?? 0) === 0 && (
+						{(messages?.length ?? 0) === 0 && panel && (
+							<div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+								<ScrollIcon className="size-5 text-muted-foreground/60" />
+								<p className="text-sm font-medium">{t("noLogs", "No Logs")}</p>
+								<p className="text-xs text-muted-foreground">
+									{t(
+										"noLogsFoundYetStartAnEventToSeeYourResultsHere",
+										"No logs found yet, start an event to see your results here!",
+									)}
+								</p>
+							</div>
+						)}
+						{(messages?.length ?? 0) === 0 && !panel && (
 							<EmptyState
 								className="h-full w-full max-w-full"
 								icons={[LogsIcon, ScrollIcon, CheckCircle2Icon]}
-								description={t('noLogsFoundYetStartAnEventToSeeYourResultsHere', 'No logs found yet, start an event to see your results here!')}
-								title={t('noLogs', 'No Logs')}
+								description={t(
+									"noLogsFoundYetStartAnEventToSeeYourResultsHere",
+									"No logs found yet, start an event to see your results here!",
+								)}
+								title={t("noLogs", "No Logs")}
 							/>
 						)}
 						{(messages?.length ?? 0) > 0 && (
@@ -416,12 +458,12 @@ const LogMessage = memo(function LogMessage({
 							</small>
 							{log?.stats?.token_out && (
 								<small className="text-xs">
-									{t('tokenOut', 'Token Out:')} {log.stats?.token_out}
+									{t("tokenOut", "Token Out:")} {log.stats?.token_out}
 								</small>
 							)}
 							{log?.stats?.token_in && (
 								<small className="text-xs">
-									{t('tokenIn', 'Token In:')} {log.stats?.token_in}
+									{t("tokenIn", "Token In:")} {log.stats?.token_in}
 								</small>
 							)}
 						</div>
@@ -441,7 +483,7 @@ const LogMessage = memo(function LogMessage({
 							) : (
 								<span className="flex flex-row items-center gap-2">
 									<QuestionMarkCircledIcon className="w-4 h-4 size-4" />
-									{t('unknownNode', 'Unknown Node')}
+									{t("unknownNode", "Unknown Node")}
 								</span>
 							)}
 						</div>
@@ -507,6 +549,13 @@ function LogIndicator({ logLevel }: Readonly<{ logLevel: ILogLevel }>) {
 	}
 }
 
+/** Severity, not selection, decides a level's colour — five identical pills read as noise. */
+const LEVEL_TONE: Partial<Record<ILogLevel, string>> = {
+	[ILogLevel.Warn]: "text-amber-500 border-amber-500/40 bg-amber-500/10",
+	[ILogLevel.Error]: "text-destructive border-destructive/40 bg-destructive/10",
+	[ILogLevel.Fatal]: "text-destructive border-destructive/60 bg-destructive/15",
+};
+
 function LogFilterBadge({
 	level,
 	label,
@@ -518,13 +567,21 @@ function LogFilterBadge({
 	logFilter: Set<ILogLevel>;
 	toggleLogFilter: (level: ILogLevel) => void;
 }>) {
+	const active = logFilter.has(level);
 	return (
-		<Badge
-			className="cursor-pointer"
-			variant={logFilter.has(level) ? "default" : "outline"}
+		<button
+			type="button"
+			aria-pressed={active}
 			onClick={() => toggleLogFilter(level)}
+			className={cn(
+				"cursor-pointer rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
+				active
+					? (LEVEL_TONE[level] ??
+							"border-border bg-secondary text-secondary-foreground")
+					: "border-transparent text-muted-foreground/60 hover:text-muted-foreground",
+			)}
 		>
 			{label}
-		</Badge>
+		</button>
 	);
 }

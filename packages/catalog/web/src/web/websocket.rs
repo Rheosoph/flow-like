@@ -1,3 +1,4 @@
+#[cfg(feature = "execute")]
 use flow_like::flow::execution::context::ExecutionContext;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

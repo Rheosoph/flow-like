@@ -108,6 +108,12 @@ export interface IChatProps {
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
 	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
 	inlinePrompt?: React.ReactNode;
+	/**
+	 * Live content that belongs in the conversation flow, after the latest message. Global
+	 * FlowPilot uses this for app pages and chats so they scroll with the transcript instead of
+	 * taking a second, nested viewport above it.
+	 */
+	inlineContent?: React.ReactNode;
 	/** App id owning the chat — needed to render + trigger embedded widgets. */
 	appId?: string;
 	/** Board id of the chat event — target for widget action workflows. */
@@ -147,6 +153,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			activeInteractions,
 			onRespondToInteraction,
 			inlinePrompt,
+			inlineContent,
 			appId,
 			boardId,
 			eventId,
@@ -400,6 +407,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		}, [
 			localMessages,
 			currentMessages,
+			inlineContent,
 			shouldAutoScroll,
 			hasInitiallyScrolled,
 			scrollToBottom,
@@ -598,7 +606,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										}}
 									>
 										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-											{i18next.t('asked', 'Asked')}
+											{i18next.t("asked", "Asked")}
 										</span>
 										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 											{sendingContent}
@@ -633,6 +641,17 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								/>
 							</div>
 						))}
+						{inlineContent && (
+							<div
+								className="w-full px-1 sm:px-4"
+								data-fl-chat-inline-content
+								style={{
+									maxWidth: "var(--fl-chat-content-width, 64rem)",
+								}}
+							>
+								{inlineContent}
+							</div>
+						)}
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div
@@ -708,9 +727,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								sendDisabled={concurrency ? false : isSending || isStreamActive}
 								sendHint={
 									concurrency?.atCapacity
-										? i18next.t('queueThisMessage', 'Queue this message')
+										? i18next.t("queueThisMessage", "Queue this message")
 										: concurrency && concurrency.runs.length > 0
-											? i18next.t('startAnotherResponse', 'Start another response')
+											? i18next.t(
+													"startAnotherResponse",
+													"Start another response",
+												)
 											: undefined
 								}
 								onSteer={

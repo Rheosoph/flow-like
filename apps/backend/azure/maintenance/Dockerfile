@@ -13,10 +13,9 @@ COPY . .
 
 ENV CARGO_BUILD_JOBS=2
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
-    --mount=type=cache,target=/app/target,id=cargo-target-azure-maintenance \
-    cargo build --locked --release --package azure-maintenance \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-azure-maintenance,sharing=locked \
+    CARGO_HOME=/cargo-home cargo build --locked --release --package azure-maintenance \
     && strip -s /app/target/release/azure-maintenance \
     && cp /app/target/release/azure-maintenance /tmp/azure-maintenance
 

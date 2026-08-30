@@ -2,6 +2,7 @@
 //!
 //! This module provides a unified `UnifiedCopilot` struct that delegates to either
 //! the flow `Copilot` or A2UI `A2UICopilot` based on the requested scope.
+#![allow(clippy::too_many_arguments)]
 
 use std::sync::Arc;
 
@@ -931,6 +932,7 @@ mod tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -961,6 +963,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
             NodeMetadata {
                 name: "string_format".to_string(),
@@ -972,6 +977,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
         ]
     }

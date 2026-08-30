@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like platform map</title>
+  <desc id="desc">Studio edits an App and its persisted Flow Boards. A local or remote Rust runtime executes a selected Board version, calls existing systems through typed nodes and packages, and returns run evidence to Studio.</desc>
+  <defs>
+    <marker id="arrow-map" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1 L 11 6 L 1 11 z" fill="#9d311f"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, Arial, sans-serif; }
+      .eyebrow { font-size: 27px; font-weight: 760; letter-spacing: 3px; }
+      .title { font-size: 40px; font-weight: 740; letter-spacing: -0.8px; }
+      .body { font-size: 30px; font-weight: 600; }
+      .small { font-size: 25px; font-weight: 500; }
+      .micro { font-size: 22px; font-weight: 620; }
+      .arrow { fill: none; stroke: #9d311f; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-map); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" rx="30" fill="#fbfaf8"/>
+
+  <rect x="40" y="36" width="1520" height="600" rx="28" fill="#ffffff" stroke="#cfc7c0" stroke-width="3"/>
+  <rect x="72" y="36" width="230" height="9" rx="4.5" fill="#e95335"/>
+  <text x="74" y="94" class="sans eyebrow" fill="#9d311f">FLOW-LIKE PLATFORM</text>
+
+  <rect x="74" y="126" width="372" height="398" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="108" y="181" class="sans eyebrow" fill="#625e66">STUDIO</text>
+  <text x="108" y="223" class="sans small" fill="#625e66">Complete desktop application</text>
+  <rect x="108" y="266" width="324" height="92" rx="16" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="270" y="323" text-anchor="middle" class="sans body" fill="#18171b">Canvas editor</text>
+  <rect x="108" y="382" width="324" height="92" rx="16" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="270" y="439" text-anchor="middle" class="sans body" fill="#18171b">FlowScript editor</text>
+
+  <rect x="566" y="126" width="500" height="398" rx="22" fill="#ffffff" stroke="#bdb6b0" stroke-width="3"/>
+  <text x="600" y="181" class="sans eyebrow" fill="#625e66">APP</text>
+  <text x="600" y="223" class="sans small" fill="#625e66">Project boundary for one or more Flows</text>
+  <rect x="600" y="260" width="432" height="178" rx="18" fill="#f7f3ef" stroke="#9d311f" stroke-width="3"/>
+  <text x="632" y="310" class="sans eyebrow" fill="#9d311f">FLOW</text>
+  <text x="632" y="348" class="sans small" fill="#625e66">One executable process</text>
+  <rect x="632" y="370" width="368" height="48" rx="12" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="816" y="402" text-anchor="middle" class="sans micro" fill="#18171b">PERSISTED BOARD</text>
+  <text x="816" y="478" text-anchor="middle" class="sans small" fill="#625e66">App Events  |  data  |  permissions  |  versions</text>
+
+  <rect x="1170" y="126" width="356" height="398" rx="22" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="1204" y="181" class="sans eyebrow" fill="#625e66">RUN AND OPERATE</text>
+  <text x="1204" y="246" class="sans title" fill="#18171b">Rust runtime</text>
+  <rect x="1204" y="282" width="132" height="54" rx="27" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1270" y="317" text-anchor="middle" class="sans micro" fill="#3f3b40">LOCAL</text>
+  <rect x="1354" y="282" width="138" height="54" rx="27" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1423" y="317" text-anchor="middle" class="sans micro" fill="#3f3b40">REMOTE</text>
+  <text x="1204" y="386" class="sans small" fill="#3f3b40">Executes a selected</text>
+  <text x="1204" y="422" class="sans small" fill="#3f3b40">Board version</text>
+  <text x="1204" y="474" class="sans small" fill="#3f3b40">Records run evidence</text>
+
+  <path d="M 446 270 L 552 270" class="arrow"/>
+  <text x="499" y="249" text-anchor="middle" class="sans micro" fill="#9d311f">APPLY</text>
+  <path d="M 566 348 L 460 348" class="arrow"/>
+  <text x="513" y="381" text-anchor="middle" class="sans micro" fill="#9d311f">RENDER</text>
+
+  <path d="M 1066 306 L 1156 306" class="arrow"/>
+
+  <path d="M 1260 524 L 1260 574 L 270 574 L 270 524" class="arrow"/>
+  <rect x="660" y="550" width="212" height="48" rx="24" fill="#ffffff"/>
+  <text x="766" y="582" text-anchor="middle" class="sans micro" fill="#9d311f">RUN EVIDENCE</text>
+
+  <rect x="174" y="720" width="1188" height="228" rx="24" fill="#f4f0ec" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="214" y="776" class="sans eyebrow" fill="#625e66">EXISTING ESTATE</text>
+  <text x="214" y="829" class="sans title" fill="#18171b">Systems of record stay in place</text>
+  <rect x="214" y="864" width="286" height="52" rx="26" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="357" y="898" text-anchor="middle" class="sans micro" fill="#3f3b40">APIs AND SERVICES</text>
+  <rect x="524" y="864" width="286" height="52" rx="26" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="667" y="898" text-anchor="middle" class="sans micro" fill="#3f3b40">DATABASES AND FILES</text>
+  <rect x="834" y="864" width="286" height="52" rx="26" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="977" y="898" text-anchor="middle" class="sans micro" fill="#3f3b40">SAAS AND DEVICES</text>
+
+  <path d="M 1300 524 L 1300 720" fill="none" stroke="#9d311f" stroke-width="5" stroke-linecap="round" marker-start="url(#arrow-map)" marker-end="url(#arrow-map)"/>
+  <text x="1270" y="667" text-anchor="end" class="sans micro" fill="#9d311f">TYPED NODES</text>
+  <text x="1270" y="698" text-anchor="end" class="sans micro" fill="#9d311f">AND PACKAGES</text>
+</svg>

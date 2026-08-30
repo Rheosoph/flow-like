@@ -31,6 +31,8 @@ impl NodeLogic for UdpCloseNode {
             "Closes a bound UDP socket and releases resources",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "close");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

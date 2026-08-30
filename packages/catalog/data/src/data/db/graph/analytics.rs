@@ -29,6 +29,8 @@ impl NodeLogic for GraphAnalyticsNode {
             "Computes degree, PageRank, and connected components over a graph overlay",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "analytics");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -71,7 +73,8 @@ impl NodeLogic for GraphAnalyticsNode {
             "Analytics Payload",
             "Metrics: counts, components, top objects by degree and PageRank",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

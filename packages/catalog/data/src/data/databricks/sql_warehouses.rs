@@ -77,6 +77,7 @@ impl NodeLogic for ListDatabricksSqlWarehousesNode {
             "List all SQL warehouses in the Databricks workspace",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "listSqlWarehouses");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin(
@@ -237,6 +238,7 @@ impl NodeLogic for StartDatabricksSqlWarehouseNode {
             "Start a stopped SQL warehouse",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "startSqlWarehouse");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -375,6 +377,7 @@ impl NodeLogic for StopDatabricksSqlWarehouseNode {
             "Stop a running SQL warehouse",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "stopSqlWarehouse");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

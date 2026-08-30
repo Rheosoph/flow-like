@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"docs:screenshot": "bun apps/desktop/scripts/doc-screenshot.ts",
+		"workflow:screenshot": "bun apps/desktop/scripts/workflow-screenshot.ts",
 		"docs:nodes": "cargo run -p flow-like-catalog --bin generate_node_docs",
 		"flowpilot:e2e": "bun apps/desktop/scripts/flowpilot-e2e.ts",
 		"university": "bun apps/desktop/scripts/university.ts",
@@ -20,12 +21,12 @@
 		"examples/*/widgets/*"
 	],
 	"overrides": {
-		"@astrojs/cloudflare": "13.5.1",
+		"@astrojs/cloudflare": "14.2.1",
 		"@hono/node-server": "1.19.13",
 		"@protobufjs/utf8": "1.1.1",
 		"@sentry/nextjs": "^10.38.0",
 		"ajv": "6.15.0",
-		"astro": "6.3.3",
+		"astro": "7.2.2",
 		"basic-ftp": "5.3.1",
 		"brace-expansion": "1.1.14",
 		"d3-color": "3.1.0",
@@ -47,27 +48,27 @@
 		"i18next-http-backend": "3.0.6",
 		"ip-address": "10.2.0",
 		"js-video-url-parser": "workspace:*",
-		"js-yaml": "4.1.1",
+		"js-yaml": "4.3.1",
 		"langsmith": "0.6.3",
 		"lodash": "4.18.1",
 		"lodash-es": "4.18.1",
 		"mdast-util-to-hast": "13.2.1",
 		"minimatch": "3.1.5",
-		"next": "16.2.6",
+		"next": "16.3.3",
 		"path-to-regexp": "8.4.2",
 		"picomatch": "4.0.4",
-		"postcss": "8.5.14",
+		"postcss": "8.5.26",
 		"preact": "10.29.1",
 		"protobufjs": "7.5.8",
 		"protocol-buffers-schema": "3.6.1",
 		"rollup": "4.60.3",
 		"serialize-javascript": "7.0.5",
+		"sharp": "0.35.3",
 		"smol-toml": "1.6.1",
 		"svgo": "4.0.1",
 		"undici": "7.25.0",
 		"uuid": "11.1.1",
 		"validator": "13.15.35",
-		"vite": "7.3.5",
 		"vitest": "3.2.6",
 		"webpack": "5.106.2",
 		"yaml": "2.9.0"
@@ -77,7 +78,7 @@
 		"@biomejs/biome": "1.9.4",
 		"dotenv-cli": "8.0.0",
 		"express": "5.2.1",
-		"sharp": "0.33.5",
+		"sharp": "0.35.3",
 		"webpack": "5.106.2",
 		"wrangler": "4.90.0"
 	},
@@ -85,6 +86,7 @@
 		"@cloudflare/vite-plugin": "1.30.1"
 	},
 	"patchedDependencies": {
+		"@astrojs/starlight@0.41.7": "patches/@astrojs%2Fstarlight@0.41.7.patch",
 		"next-themes@0.4.6": "patches/next-themes@0.4.6.patch",
 		"indexeddbshim@17.0.0": "patches/indexeddbshim@17.0.0.patch"
 	}

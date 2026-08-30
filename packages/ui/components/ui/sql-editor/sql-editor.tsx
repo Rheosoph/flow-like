@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../../lib/monaco-key-guard";
 import {
 	SQL_DIAGNOSTIC_OWNER,
 	type SqlCatalog,
@@ -94,6 +95,7 @@ export function SqlEditor({
 	return (
 		<Editor
 			height={height}
+			className={FLOW_KEY_OPT_OUT_CLASS}
 			language="sql"
 			value={value}
 			onChange={(next) => onChange(next ?? "")}
@@ -101,7 +103,7 @@ export function SqlEditor({
 			onMount={handleMount}
 			options={{
 				readOnly,
-				ariaLabel: t('sqlQueryEditor', 'SQL query editor'),
+				ariaLabel: t("sqlQueryEditor", "SQL query editor"),
 				minimap: { enabled: false },
 				fontSize: 13,
 				fontFamily:

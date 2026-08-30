@@ -100,45 +100,6 @@ describe("Model3D Scale Normalization", () => {
 });
 
 // ============================================================================
-// URL VALIDATION TESTS (for useAssetUrl)
-// ============================================================================
-
-describe("Asset URL Validation", () => {
-	function isValidUrl(url: string): boolean {
-		return (
-			url.startsWith("http://") ||
-			url.startsWith("https://") ||
-			url.startsWith("data:")
-		);
-	}
-
-	function isStoragePath(path: string): boolean {
-		return !isValidUrl(path);
-	}
-
-	test("http/https URLs are recognized as valid", () => {
-		expect(isValidUrl("http://example.com/model.glb")).toBe(true);
-		expect(isValidUrl("https://example.com/model.glb")).toBe(true);
-		expect(isValidUrl("https://cdn.example.com/path/to/model.gltf")).toBe(true);
-	});
-
-	test("data URLs are recognized as valid", () => {
-		expect(isValidUrl("data:application/octet-stream;base64,abc")).toBe(true);
-	});
-
-	test("storage paths are recognized correctly", () => {
-		expect(isStoragePath("models/character.glb")).toBe(true);
-		expect(isStoragePath("storage://models/character.glb")).toBe(true);
-		expect(isStoragePath("assets/3d/scene.gltf")).toBe(true);
-	});
-
-	test("storage paths are not valid URLs", () => {
-		expect(isValidUrl("models/character.glb")).toBe(false);
-		expect(isValidUrl("storage://models/character.glb")).toBe(false);
-	});
-});
-
-// ============================================================================
 // DEFAULT VALUE TESTS
 // ============================================================================
 

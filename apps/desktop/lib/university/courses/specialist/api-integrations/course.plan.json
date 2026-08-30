@@ -357,7 +357,11 @@
 											"label": "Relying on API Call's built-in automatic retries"
 										}
 									],
-									"correct": ["bounded-attempts", "delay-backoff", "branch-status"]
+									"correct": [
+										"bounded-attempts",
+										"delay-backoff",
+										"branch-status"
+									]
 								}
 							},
 							{

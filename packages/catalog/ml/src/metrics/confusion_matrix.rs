@@ -14,7 +14,9 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-use flow_like_types::{Result, Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
 
@@ -37,6 +39,7 @@ impl NodeLogic for ConfusionMatrixNode {
             "Build confusion matrix and calculate precision, recall, and F1 score",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "evalConfusionMatrix");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -194,15 +197,15 @@ impl NodeLogic for ConfusionMatrixNode {
         let mut recalls: Vec<f64> = Vec::with_capacity(n_classes);
         let mut supports: Vec<usize> = Vec::with_capacity(n_classes);
 
-        for class_idx in 0..n_classes {
-            let true_positive = matrix[class_idx][class_idx];
+        for (class_idx, row) in matrix.iter().enumerate() {
+            let true_positive = row[class_idx];
             let false_positive: usize = (0..n_classes)
                 .filter(|&i| i != class_idx)
                 .map(|i| matrix[i][class_idx])
                 .sum();
             let false_negative: usize = (0..n_classes)
                 .filter(|&j| j != class_idx)
-                .map(|j| matrix[class_idx][j])
+                .map(|j| row[j])
                 .sum();
 
             let precision = if true_positive + false_positive > 0 {
@@ -217,7 +220,7 @@ impl NodeLogic for ConfusionMatrixNode {
                 0.0
             };
 
-            let support: usize = matrix[class_idx].iter().sum();
+            let support: usize = row.iter().sum();
 
             precisions.push(precision);
             recalls.push(recall);

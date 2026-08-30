@@ -17,6 +17,9 @@ use flow_like::{
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
+/// Search hits paired with their localized metadata, when any exists.
+pub type AppSearchResults = Vec<(App, Option<Metadata>)>;
+
 #[utoipa::path(
     get,
     path = "/apps/search",
@@ -42,7 +45,7 @@ pub async fn search_apps(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<AppSearchQuery>,
-) -> Result<Json<Vec<(App, Option<Metadata>)>>, ApiError> {
+) -> Result<Json<AppSearchResults>, ApiError> {
     if !state.platform_config.features.unauthorized_read {
         user.sub()?;
     }

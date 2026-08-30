@@ -103,8 +103,12 @@ export function WidgetActionProvider({
 	const backend = useBackend();
 	const pathname = usePathname();
 	const runtimeActionContext = useActionContext();
-	const collectInputValues = useEventRelevantValues();
-	const collectElements = useCollectEventElements();
+	const collectInputValues = useEventRelevantValues({
+		instanceId: instance.instanceId,
+	});
+	const collectElements = useCollectEventElements({
+		instanceId: instance.instanceId,
+	});
 	const markComponentTriggering = useMarkComponentTriggering();
 
 	const getBinding = useCallback(

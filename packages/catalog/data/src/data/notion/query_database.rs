@@ -47,6 +47,7 @@ impl NodeLogic for QueryNotionDatabaseNode {
             "Queries a Notion database and returns matching pages",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "queryDatabase");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

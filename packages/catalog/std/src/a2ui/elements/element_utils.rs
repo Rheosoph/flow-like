@@ -3,7 +3,6 @@ use flow_like::flow::{
     pin::PinType,
 };
 use flow_like_types::Value;
-use flow_like_types::json::Map;
 
 /// Signature of a dynamic pin: (name, friendly_name, is_input).
 pub type DynamicPinSig = (&'static str, &'static str, bool);
@@ -37,33 +36,6 @@ pub fn count_matching_pins(node: &Node, sig: &DynamicPinSig) -> usize {
             p.name == sig.0 && p.friendly_name == sig.1 && (p.pin_type == PinType::Input) == sig.2
         })
         .count()
-}
-
-/// Finds an element in the elements map by ID.
-///
-/// Supports:
-/// - Exact match: "surfaceId/componentId"
-/// - Component ID suffix match: "componentId" (matches any "*/componentId")
-pub fn find_element<'a>(
-    elements: &'a Map<String, Value>,
-    element_id: &str,
-) -> Option<(&'a String, &'a Value)> {
-    // First try exact match
-    if let Some(val) = elements.get(element_id) {
-        return Some((elements.keys().find(|k| *k == element_id).unwrap(), val));
-    }
-
-    // If no exact match and element_id doesn't contain "/", try suffix matching
-    if !element_id.contains('/') {
-        let suffix = format!("/{}", element_id);
-        for (key, val) in elements.iter() {
-            if key.ends_with(&suffix) {
-                return Some((key, val));
-            }
-        }
-    }
-
-    None
 }
 
 /// Extracts element ID from either a string or an element object with __element_id field.

@@ -18,7 +18,9 @@ impl BoolEqual {
 #[async_trait]
 impl NodeLogic for BoolEqual {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("bool_equal", "==", "Boolean Equal", "Utils/Bool");
+        let mut node = Node::new("bool_equal", "== (Bool)", "Boolean Equal", "Utils/Bool");
+        node.set_flowscript_name("bool", "equal");
+        node.set_receiver("boolean");
         node.add_icon("/flow/icons/bool.svg");
 
         node.add_input_pin(

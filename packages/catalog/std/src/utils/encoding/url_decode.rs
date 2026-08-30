@@ -24,6 +24,8 @@ impl NodeLogic for UrlDecodeNode {
             "Decodes a percent-encoded URL string back to plain text",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "urlDecode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "URL-encoded string", VariableType::String);

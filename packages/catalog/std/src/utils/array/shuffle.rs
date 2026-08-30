@@ -32,6 +32,8 @@ impl NodeLogic for ShuffleArrayNode {
             "Shuffle Array Items",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "shuffle");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("array_in", "Array", "Your Array", VariableType::Generic)

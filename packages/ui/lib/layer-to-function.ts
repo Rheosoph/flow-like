@@ -87,6 +87,29 @@ function isWithinLayer(
 	return false;
 }
 
+/**
+ * Walk a layer's parent chain to find the Module that owns it.
+ *
+ * Modules only ever nest under other modules, so the first ancestor of
+ * `startLayerId` that is itself a Module is the layer's owning module.
+ * Returns null when the chain reaches the board root (or a cycle) without
+ * finding one — the layer is global.
+ */
+export function owningModuleId(
+	layers: IBoard["layers"] | undefined,
+	startLayerId: string,
+): string | null {
+	let current = layers?.[startLayerId]?.parent_id ?? undefined;
+	let guard = 0;
+	while (current && guard < 64) {
+		const layer = layers?.[current];
+		if (layer?.type === ILayerType.Module) return current;
+		current = layer?.parent_id ?? undefined;
+		guard += 1;
+	}
+	return null;
+}
+
 function sortedBoundaryPins(layer: ILayer, pinType: IPinType): IPin[] {
 	return Object.values(layer.pins ?? {})
 		.filter((pin) => pin.pin_type === pinType)
@@ -246,7 +269,7 @@ export function planLayerToFunction({
 	const functionLayer: ILayer = {
 		...layer,
 		type: ILayerType.Function,
-		parent_id: null,
+		parent_id: owningModuleId(board.layers, layer.id),
 		pins: Object.fromEntries(
 			[...inputs, ...outputs].map((pin) => [pin.id, pin]),
 		),

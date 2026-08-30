@@ -1,7 +1,7 @@
 use crate::config::CompilerConfig;
 use crate::error::CompilerError;
 use crate::jwt::{verify_jwt_async, CompilerClaims};
-use flow_like_types::dispatch::{
+use flow_like_types_contracts::dispatch::{
     compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
     CompilationStorageProvider,
 };
@@ -667,7 +667,7 @@ fn bounded_terminal_error(error: &CompilerError) -> String {
             .find(|index| message.is_char_boundary(*index))
             .unwrap_or(0);
         message.truncate(boundary);
-        message.push_str("…");
+        message.push('…');
     }
     message
 }
@@ -810,7 +810,7 @@ async fn extract_nodes(
     let loaded = engine.load_auto(wasm_bytes).await.map_err(|e| {
         CompilerError::Compilation(format!("Failed to load WASM for node extraction: {e}"))
     })?;
-    let security = WasmSecurityConfig::restrictive();
+    let security = WasmSecurityConfig::restrictive().for_metadata();
     let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
         CompilerError::Compilation(format!(
             "Failed to instantiate WASM for node extraction: {e}"
@@ -879,7 +879,7 @@ async fn send_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::dispatch::{compilation_job_payload_hash, CompilationTarget};
+    use flow_like_types_contracts::dispatch::{compilation_job_payload_hash, CompilationTarget};
 
     fn azure_config() -> CompilerConfig {
         CompilerConfig {

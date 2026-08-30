@@ -33,6 +33,9 @@ Optional settings:
   it is unset, and a value that cannot initialise the exporter is a startup
   error rather than a silently disabled exporter.
 - `RUST_LOG` (image default `info`).
+- `API_BASE_URL`: fallback Flow-Like API URL for model calls created without a
+  run context. Normal executions use the signed callback URL carried in their
+  execution JWT. Hosted-provider credentials stay on the API service.
 
 The root's shared worker environment (`AZURE_STORAGE_ACCOUNT_NAME`, the
 container names, `COSMOS_*`, `AZURE_QUEUE_STORAGE_ACCOUNT_NAME`,
@@ -60,10 +63,10 @@ Security and delivery behavior:
   client secrets and endpoint overrides from the environment. That is why a
   process-wide credential is refused rather than merely unused: anything in
   the environment is exfiltrable by any node.
-- The feature set is the queue worker's (`server-execute`, `remote-ml`,
-  `remote`; `all-server-execute` on the executor package), not the Kubernetes
-  executor's `all-execute` + `local-ml`. No ONNX Runtime and no desktop
-  automation nodes are linked, matching the Azure supply-chain posture.
+- The catalog and executor both use the remote-only `server` bundle. ONNX
+  metadata, ONNX Runtime, local model weights and desktop automation nodes are
+  excluded. Text embedding models with remote execution configuration call the
+  authenticated API proxy.
 - `/metrics` is served only on `METRICS_PORT`, never on the ingress port. It
   carries `http_requests_total` / `http_request_duration_seconds` labelled by
   matched route (not raw URI, so an unauthenticated scanner cannot grow the

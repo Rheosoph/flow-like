@@ -18,6 +18,7 @@ import {
 	ClockIcon,
 	CloudCog,
 	DatabaseIcon,
+	FlaskConicalIcon,
 	MonitorIcon,
 	PlayCircleIcon,
 	ScrollTextIcon,
@@ -38,19 +39,20 @@ import {
 import PuffLoader from "react-spinners/PuffLoader";
 import { useLogAggregation } from "../..";
 import { useInvalidateInvoke } from "../../hooks";
-import { type PeerUserInfo, colorFromSub } from "../../hooks/use-peer-users";
+import type { PeerUserInfo } from "../../hooks/use-peer-users";
 import {
 	getActivityColorClasses,
 	useRunActivity,
 } from "../../hooks/use-run-activity";
 import {
-	IExecutionMode,
+	type IExecutionMode,
 	type IGenericCommand,
 	ILogLevel,
 	IPinType,
 	IValueType,
 	cacheIndicatorLabel,
 	formatCacheTtl,
+	isTestEventNode,
 	moveNodeCommand,
 	removeNodeCommand,
 	updateNodeCommand,
@@ -59,6 +61,7 @@ import {
 } from "../../lib";
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { toastError } from "../../lib/messages";
 import { isWebkitLite } from "../../lib/platform";
 import type {
 	IBoard,
@@ -84,18 +87,28 @@ import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
+import {
+	FlowNodeEditMenu,
+	type INodeEditTarget,
+	resolveNodeEditTarget,
+} from "./flow-node/flow-node-edit-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
+import { deriveRunCapabilities } from "./flow-run-capabilities";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
+import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
+import { NodePresenceChips, mergePresenceParticipants } from "./node-presence";
 import { typeToColor } from "./utils";
 
 export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
 	sub?: string;
+	/** Another session of the local user. */
+	self?: boolean;
 	/** Whether this user just actively clicked this node */
 	isActive?: boolean;
 }
@@ -115,6 +128,12 @@ export type FlowNode = Node<
 		transparent?: boolean;
 		boardRef: RefObject<IBoard | undefined>;
 		boardDataVersion?: string;
+		/**
+		 * The variables/refs/layers slice of the board, without node membership.
+		 * A node's own hash does not move when a variable it reads is renamed or
+		 * retyped, so both memo comparators below watch this instead.
+		 */
+		boardContentVersion?: string;
 		fnRefsHash?: string;
 		version?: [number, number, number];
 		onExecute: (node: INode, payload?: object) => Promise<void>;
@@ -122,6 +141,8 @@ export type FlowNode = Node<
 		isOffline?: boolean;
 		onCopy: () => Promise<void>;
 		remoteSelections?: RemoteSelectionParticipant[];
+		/** Peers whose FlowScript editor cursor/claims sit on this node. */
+		remoteEditors?: RemoteEditorParticipant[];
 		peerUsers?: Map<string, PeerUserInfo>;
 		onOpenInfo?: (node: INode) => void;
 		onExplain?: (nodeIds: string[]) => void;
@@ -129,6 +150,8 @@ export type FlowNode = Node<
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
 		functionLayerId?: string;
+		/** Navigates the canvas into a layer — absent on read-only previews. */
+		pushLayer?: (layer: ILayer) => Promise<void>;
 		/** Set only when the referenced function caches its results. */
 		functionCache?: ILayerCache;
 		currentLayerId?: string;
@@ -173,6 +196,21 @@ function scheduleNodeInternalsUpdate(store: FlowStoreApi, nodeId: string) {
 			updateNodeInternals(updates, { triggerFitView: false });
 		}
 	});
+}
+
+/**
+ * The cache badge is driven by the function a call node points at, not by the
+ * node itself: its own hash does not move when that function's caching changes.
+ * Both comparators have to look at it, or the outer one bails and the inner one
+ * never sees the new value.
+ */
+function sameFunctionCache(a?: ILayerCache, b?: ILayerCache) {
+	return (
+		a?.enabled === b?.enabled &&
+		a?.ttl_seconds === b?.ttl_seconds &&
+		a?.scope === b?.scope &&
+		a?.prefix === b?.prefix
+	);
 }
 
 const FlowNodeInner = memo(
@@ -221,13 +259,14 @@ const FlowNodeInner = memo(
 		const reactFlow = useReactFlow();
 		const { getNode } = useReactFlow();
 		const flowStore = useStoreApi();
-		const remoteSelections = props.data.remoteSelections ?? [];
-		const displayedRemoteSelections = useMemo(
-			() => remoteSelections.slice(0, 3),
-			[remoteSelections],
+		const presence = useMemo(
+			() =>
+				mergePresenceParticipants(
+					props.data.remoteSelections,
+					props.data.remoteEditors,
+				),
+			[props.data.remoteSelections, props.data.remoteEditors],
 		);
-		const extraRemoteSelections =
-			remoteSelections.length - displayedRemoteSelections.length;
 		const [executed, severity] = useMemo(() => {
 			const severity = ILogLevel.Debug;
 
@@ -260,6 +299,11 @@ const FlowNodeInner = memo(
 		const isReroute = useMemo(() => {
 			return props.data.node.name === "reroute";
 		}, [props.data.node.name]);
+
+		const isTestEvent = useMemo(
+			() => isTestEventNode(props.data.node),
+			[props.data.node],
+		);
 
 		const isWasmNode = useMemo(
 			() => Boolean(props.data.node.wasm?.package_id),
@@ -758,17 +802,14 @@ const FlowNodeInner = memo(
 		const playNode = useMemo(() => {
 			if (!props.data.node.start) return null;
 
-			const executionMode = props.data.executionMode ?? IExecutionMode.Hybrid;
-			const canRemoteExecuteBase =
-				!props.data.isOffline && props.data.onRemoteExecute !== undefined;
-
-			// Apply execution mode restrictions
-			// only_offline nodes can never run remotely
-			const canLocalExecute = executionMode !== IExecutionMode.Remote;
-			const canRemoteExecute =
-				canRemoteExecuteBase &&
-				executionMode !== IExecutionMode.Local &&
-				!props.data.node.only_offline;
+			// Execution mode restrictions; only_offline nodes can never run remotely.
+			// Shared with the FlowScript run lenses — see flow-run-capabilities.ts.
+			const { canLocalExecute, canRemoteExecute } = deriveRunCapabilities({
+				executionMode: props.data.executionMode,
+				isOffline: props.data.isOffline,
+				hasRemoteExecute: props.data.onRemoteExecute !== undefined,
+				onlyOffline: props.data.node.only_offline,
+			});
 
 			if (executionStatus === "done" || executing)
 				return (
@@ -806,7 +847,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								onClick={() => handleLocalExecute()}
-								title={i18next.t('executeLocally', 'Execute locally')}
+								title={i18next.t("executeLocally", "Execute locally")}
 							>
 								<PlayCircleIcon className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -815,7 +856,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1 relative"
 								onClick={() => handleRemoteExecute()}
-								title={i18next.t('executeOnServer', 'Execute on server')}
+								title={i18next.t("executeOnServer", "Execute on server")}
 							>
 								<CloudCog className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -833,7 +874,9 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								title={
-									canLocalExecute ? "Execute locally" : i18next.t('executeOnServer', 'Execute on server')
+									canLocalExecute
+										? "Execute locally"
+										: i18next.t("executeOnServer", "Execute on server")
 								}
 							>
 								{canLocalExecute ? (
@@ -846,9 +889,18 @@ const FlowNodeInner = memo(
 					</DialogTrigger>
 					<DialogContent className="max-w-lg">
 						<DialogHeader>
-							<DialogTitle>{i18next.t('executeFriendly_name', 'Execute {{friendly_name}}', { friendly_name: props.data.node.friendly_name })}</DialogTitle>
+							<DialogTitle>
+								{i18next.t(
+									"executeFriendly_name",
+									"Execute {{friendly_name}}",
+									{ friendly_name: props.data.node.friendly_name },
+								)}
+							</DialogTitle>
 							<DialogDescription>
-								{i18next.t('provideInputValuesForTheEventPayload', 'Provide input values for the event payload.')}
+								{i18next.t(
+									"provideInputValuesForTheEventPayload",
+									"Provide input values for the event payload.",
+								)}
 							</DialogDescription>
 						</DialogHeader>
 						<EventPayloadForm
@@ -891,65 +943,17 @@ const FlowNodeInner = memo(
 									boxShadow:
 										"0 0 12px 2px rgba(59, 130, 246, 0.5), 0 0 4px 1px rgba(59, 130, 246, 0.3)",
 								}
-							: remoteSelections.length > 0
+							: presence.ring
 								? {
-										boxShadow: `0 0 0 2px ${colorFromSub(remoteSelections[0]?.sub)}40, 0 0 12px 0 ${colorFromSub(remoteSelections[0]?.sub)}25`,
+										boxShadow: `0 0 0 2px ${presence.ring.color}${presence.ring.active ? "" : "70"}, 0 0 12px 0 ${presence.ring.color}30`,
 									}
 								: {}
 				}
 			>
-				{remoteSelections.length > 0 && (
-					<div className="pointer-events-none absolute -top-5 left-0 flex items-center gap-0.5 z-10">
-						<div className="flex items-center -space-x-1.5">
-							{displayedRemoteSelections.map((participant) => {
-								const color = colorFromSub(participant.sub);
-								const userInfo = participant.sub
-									? props.data.peerUsers?.get(participant.sub)
-									: undefined;
-								const name = userInfo?.truncatedName ?? "User";
-								return (
-									<div
-										key={`${participant.clientId}-${participant.sub ?? "unknown"}`}
-										className={`flex items-center gap-1 rounded-full border-2 bg-background/95 px-1 py-0.5 text-[0.5625rem] leading-none shadow-md backdrop-blur-sm transition-all duration-200 ${participant.isActive ? "animate-pulse scale-110 ring-2 ring-offset-1" : ""}`}
-										style={{
-											borderColor: color,
-											...(participant.isActive ? { ringColor: color } : {}),
-										}}
-										title={name}
-									>
-										{userInfo?.avatarUrl ? (
-											<img
-												src={userInfo.avatarUrl}
-												alt={name}
-												className="h-3.5 w-3.5 rounded-full object-cover"
-											/>
-										) : (
-											<span
-												className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white"
-												style={{
-													background: `linear-gradient(135deg, ${color}, ${color}dd)`,
-												}}
-											>
-												{name.charAt(0).toUpperCase()}
-											</span>
-										)}
-										{displayedRemoteSelections.length <= 2 && (
-											<span
-												className="font-semibold max-w-14 truncate pr-0.5"
-												style={{ color }}
-											>
-												{name}
-											</span>
-										)}
-									</div>
-								);
-							})}
-						</div>
-						{extraRemoteSelections > 0 && (
-							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${extraRemoteSelections}`}</div>
-						)}
-					</div>
-				)}
+				<NodePresenceChips
+					participants={presence.list}
+					peerUsers={props.data.peerUsers}
+				/>
 				{props.data.remoteExecuting && (
 					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
 				)}
@@ -962,7 +966,10 @@ const FlowNodeInner = memo(
 				{props.data.node.only_offline && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
-						title={i18next.t('thisNodeCanOnlyRunLocally', 'This node can only run locally')}
+						title={i18next.t(
+							"thisNodeCanOnlyRunLocally",
+							"This node can only run locally",
+						)}
 					>
 						<MonitorIcon className="w-2 h-2 text-blue-500" />
 					</div>
@@ -970,7 +977,11 @@ const FlowNodeInner = memo(
 				{isWasmNode && !isReroute && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full"
-						title={i18next.t('wasmSandboxNodePackageVal', 'WASM sandbox node — package: {{val}}', { val: props.data.node.wasm?.package_id })}
+						title={i18next.t(
+							"wasmSandboxNodePackageVal",
+							"WASM sandbox node — package: {{val}}",
+							{ val: props.data.node.wasm?.package_id },
+						)}
 					>
 						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
@@ -978,7 +989,10 @@ const FlowNodeInner = memo(
 				{props.data.isUnavailable && !isReroute && (
 					<div
 						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-1/2 text-center bg-destructive rounded-full p-0.5"
-						title={i18next.t('thisNodesPackageIsNoLongerAvailable', 'This node\'s package is no longer available')}
+						title={i18next.t(
+							"thisNodesPackageIsNoLongerAvailable",
+							"This node's package is no longer available",
+						)}
 					>
 						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
@@ -1008,18 +1022,19 @@ const FlowNodeInner = memo(
 						/>
 						<div
 							className="absolute bottom-0 left-0 z-10 flex translate-y-[calc(50%)] translate-x-[calc(-30%)] items-center gap-1"
-							title={i18next.t('countRunsVisitedThisNode', {
-								defaultValue_one: '{{count}} run visited this Node{{errors}}',
-								defaultValue_other: '{{count}} runs visited this Node{{errors}}',
+							title={i18next.t("countRunsVisitedThisNode", {
+								defaultValue_one: "{{count}} run visited this Node{{errors}}",
+								defaultValue_other:
+									"{{count}} runs visited this Node{{errors}}",
 								count: nodeHeat.visits,
 								errors:
 									nodeHeat.errors > 0
-										? ` · ${i18next.t('countRunsWithErrors', {
-												defaultValue_one: '{{count}} with an error',
-												defaultValue_other: '{{count}} with errors',
+										? ` · ${i18next.t("countRunsWithErrors", {
+												defaultValue_one: "{{count}} with an error",
+												defaultValue_other: "{{count}} with errors",
 												count: nodeHeat.errors,
 											})}`
-										: '',
+										: "",
 							})}
 						>
 							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">{`${nodeHeat.visits}×`}</span>
@@ -1060,10 +1075,12 @@ const FlowNodeInner = memo(
 				{renderFnRefOutputs}
 				{!isReroute && (
 					<div
-						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && "bg-linear-to-r  from-card via-primary/50 to-primary"} ${isReroute && "w-6"}`}
+						className={`header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-between rounded-md rounded-b-none bg-card ${props.data.functionLayerId && "bg-linear-to-r from-card via-violet-500/50 to-violet-500"} ${props.data.node.event_callback && "bg-linear-to-l  from-card via-primary/50 to-primary"} ${!isExec && !props.data.functionLayerId && "bg-linear-to-r  from-card via-tertiary/50 to-tertiary"} ${props.data.node.start && (isTestEvent ? "bg-linear-to-r  from-card via-cyan-500/50 to-cyan-500" : "bg-linear-to-r  from-card via-primary/50 to-primary")} ${isReroute && "w-6"}`}
 					>
 						<div className={"flex flex-row items-center gap-1 min-w-0"}>
-							{props.data.node?.icon ? (
+							{isTestEvent ? (
+								<FlaskConicalIcon className="w-2 h-2 shrink-0" />
+							) : props.data.node?.icon ? (
 								<DynamicImage
 									className="w-2 h-2 bg-foreground shrink-0"
 									url={props.data.node.icon}
@@ -1129,19 +1146,16 @@ const FlowNodeInner = memo(
 		prev.props.data.hash === next.props.data.hash &&
 		prev.props.selected === next.props.selected &&
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
-		// The node's own hash does not move when the function it calls changes its
-		// caching, so the indicator needs its own comparison.
-		prev.props.data.functionCache?.enabled ===
-			next.props.data.functionCache?.enabled &&
-		prev.props.data.functionCache?.ttl_seconds ===
-			next.props.data.functionCache?.ttl_seconds &&
-		prev.props.data.functionCache?.scope ===
-			next.props.data.functionCache?.scope &&
-		prev.props.data.functionCache?.prefix ===
-			next.props.data.functionCache?.prefix &&
+		sameFunctionCache(
+			prev.props.data.functionCache,
+			next.props.data.functionCache,
+		) &&
+		prev.props.data.boardContentVersion ===
+			next.props.data.boardContentVersion &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
 		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
+		prev.props.data.remoteEditors === next.props.data.remoteEditors &&
 		prev.props.data.peerUsers === next.props.data.peerUsers &&
 		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
@@ -1151,6 +1165,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 	const [commentMenu, setCommentMenu] = useState(false);
 	const [renameMenu, setRenameMenu] = useState(false);
 	const [editingMenu, setEditingMenu] = useState(false);
+	const [editTarget, setEditTarget] = useState<INodeEditTarget | undefined>();
 	const flow = useReactFlow();
 	const { pushCommand, pushCommands } = useUndoRedo(
 		props.data.appId,
@@ -1212,7 +1227,11 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const newPin: IPin = {
 			name: "auto_handle_error",
-			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
+			description: i18next.t(
+				"handlesNodeErrorsForYou",
+				"Handles Node Errors for you.",
+				{ ns: "flow" },
+			),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.Execution,
@@ -1226,7 +1245,11 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const stringPin: IPin = {
 			name: "auto_handle_error_string",
-			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
+			description: i18next.t(
+				"handlesNodeErrorsForYou",
+				"Handles Node Errors for you.",
+				{ ns: "flow" },
+			),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.String,
@@ -1482,7 +1505,37 @@ function FlowNode(props: NodeProps<FlowNode>) {
 	// re-render every time this node re-renders (e.g. after a drag/drop).
 	const handleOpenComment = useCallback(() => setCommentMenu(true), []);
 	const handleOpenRename = useCallback(() => setRenameMenu(true), []);
-	const handleOpenEdit = useCallback(() => setEditingMenu(true), []);
+	// Resolved on open rather than on render: the comparator below does not react
+	// to board data, so anything memoized here would go stale after a rename.
+	const handleOpenEdit = useCallback(() => {
+		if (props.data.node.name === "events_generic") {
+			setEditTarget(undefined);
+			setEditingMenu(true);
+			return;
+		}
+		const target = resolveNodeEditTarget(
+			props.data.node,
+			props.data.boardRef?.current,
+			props.data.currentLayerId,
+		);
+		if (!target) {
+			toastError(
+				i18next.t(
+					"flow:thisNodePointsAtSomethingThatNoLongerExists",
+					"This node points at something that no longer exists.",
+				),
+				<CircleXIcon />,
+			);
+			return;
+		}
+		setEditTarget(target);
+		setEditingMenu(true);
+	}, [props.data.node, props.data.boardRef, props.data.currentLayerId]);
+
+	const handleEditOpenChange = useCallback((open: boolean) => {
+		setEditingMenu(open);
+		if (!open) setEditTarget(undefined);
+	}, []);
 
 	return (
 		<>
@@ -1502,6 +1555,17 @@ function FlowNode(props: NodeProps<FlowNode>) {
 					node={props.data.node}
 					open={renameMenu}
 					onOpenChange={(open) => setRenameMenu(open)}
+				/>
+			)}
+			{editingMenu && editTarget && (
+				<FlowNodeEditMenu
+					target={editTarget}
+					appId={props.data.appId}
+					boardId={props.data.boardId}
+					boardRef={props.data.boardRef}
+					open={editingMenu}
+					onOpenChange={handleEditOpenChange}
+					onOpenLayer={props.data.pushLayer}
 				/>
 			)}
 			{editingMenu && props.data.node.name === "events_generic" && (
@@ -1582,8 +1646,11 @@ function flowNodeAreEqual(
 		prev.data.hash === next.data.hash &&
 		prev.selected === next.selected &&
 		prev.data.fnRefsHash === next.data.fnRefsHash &&
+		prev.data.boardContentVersion === next.data.boardContentVersion &&
+		sameFunctionCache(prev.data.functionCache, next.data.functionCache) &&
 		prev.data.isUnavailable === next.data.isUnavailable &&
 		prev.data.remoteSelections === next.data.remoteSelections &&
+		prev.data.remoteEditors === next.data.remoteEditors &&
 		prev.data.peerUsers === next.data.peerUsers &&
 		prev.data.remoteExecuting === next.data.remoteExecuting &&
 		prev.data.currentLayerId === next.data.currentLayerId &&

@@ -30,8 +30,8 @@ pub struct OnlineForkBody {
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct OnlineForkResponse {
-    /// The destination app id. The fork is fully materialized (storage
-    /// + DB rows) under the calling user's account with `Private`
+    /// The destination app id. The fork is fully materialized (storage +
+    /// DB rows) under the calling user's account with `Private`
     /// visibility — the caller can immediately load it like any other
     /// app they own.
     pub new_app_id: String,

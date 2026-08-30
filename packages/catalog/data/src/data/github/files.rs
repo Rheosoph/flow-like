@@ -59,6 +59,7 @@ impl NodeLogic for GetGitHubFileContentsNode {
             "Get the contents of a file from a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getFileContents");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -277,6 +278,7 @@ impl NodeLogic for CreateOrUpdateGitHubFileNode {
             "Create or update a file in a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createOrUpdateFile");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -575,6 +577,7 @@ impl NodeLogic for DeleteGitHubFileNode {
             "Delete a file from a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "deleteFile");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -835,6 +838,7 @@ impl NodeLogic for DownloadGitHubFileNode {
             "Download raw file content from a repository (for large files)",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "downloadFile");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(2);
 

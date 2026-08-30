@@ -348,7 +348,7 @@ fn apply_pii_mask(
     }
 
     // Sort by start position descending so we replace from end to start
-    all_matches.sort_by(|a, b| b.0.cmp(&a.0));
+    all_matches.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
 
     // Remove overlapping matches (keep the longest one)
     let mut filtered_matches: Vec<(usize, usize, &str)> = Vec::new();
@@ -382,6 +382,20 @@ fn apply_pii_mask(
     (result, detections)
 }
 
+/// One masked span, as written to the `detections` pin.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct PiiDetection {
+    /// Which detector matched, for example "email" or "iban".
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Byte offset the match started at in the original text.
+    pub start: usize,
+    /// Byte offset just past the match in the original text.
+    pub end: usize,
+    /// Length of the text that was replaced.
+    pub original_length: usize,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct PiiMaskRegexNode {}
@@ -401,6 +415,7 @@ impl NodeLogic for PiiMaskRegexNode {
             "Masks Personally Identifiable Information using regex patterns. Detects emails, phones, SSNs, credit cards, IBANs, addresses (US/DE/UK), and more. For names or contextual PII, use the AI-based node.",
             "Processing/Privacy",
         );
+        node.set_flowscript_name("ai.processing", "maskPiiRegex");
         node.add_icon("/flow/icons/shield.svg");
 
         node.set_scores(
@@ -557,7 +572,8 @@ impl NodeLogic for PiiMaskRegexNode {
             "Detections",
             "JSON array with detection details (type, position, length)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::pii::pii_mask_regex::PiiDetection>();
 
         node
     }

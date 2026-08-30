@@ -5,11 +5,11 @@ edition = "2024"
 description = "Flow-Like Docker Compose API Service"
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["app-runtime"] }
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "gcp", "r2", "smtp", "sendgrid"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+flow-like-catalog = { workspace = true, features = ["executor-local-metadata"] }
 mimalloc.workspace = true
 axum.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
@@ -30,11 +30,3 @@ tracing-opentelemetry.workspace = true
 tokio = { version = "1", features = ["full"] }
 reqwest.workspace = true
 url = "2"
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

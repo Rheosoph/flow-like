@@ -105,22 +105,34 @@ export function ForkAppCard({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2">
 						<GitForkIcon className="w-4 h-4" />
-						{t('createAFork', 'Create a fork')}
+						{t("createAFork", "Create a fork")}
 					</CardTitle>
 					<CardDescription>
 						{targetOptions.length > 1
-							? t('chooseWhereToCreateAPersonalCopyOfThisApp', 'Choose where to create a personal copy of this app.')
+							? t(
+									"chooseWhereToCreateAPersonalCopyOfThisApp",
+									"Choose where to create a personal copy of this app.",
+								)
 							: selectedTarget === "offline"
-								? t('makeALocalCopyOfThisAppOnThisDevice', 'Make a local copy of this app on this device.')
-								: t('makeAPersonalCopyOfThisAppOnYourAccount', 'Make a personal copy of this app on your account.')}{" "}
-						{t('secretsAreStrippedAndOauthBindingsAreClearedSoTheForkNeverCarriesTheSourcesCredentials', "Secrets are stripped and OAuth bindings are cleared so the fork never carries the source's credentials.")}
+								? t(
+										"makeALocalCopyOfThisAppOnThisDevice",
+										"Make a local copy of this app on this device.",
+									)
+								: t(
+										"makeAPersonalCopyOfThisAppOnYourAccount",
+										"Make a personal copy of this app on your account.",
+									)}{" "}
+						{t(
+							"secretsAreStrippedAndOauthBindingsAreClearedSoTheForkNeverCarriesTheSourcesCredentials",
+							"Secrets are stripped and OAuth bindings are cleared so the fork never carries the source's credentials.",
+						)}
 					</CardDescription>
 				</div>
 			</CardHeader>
 			<CardContent>
 				<Button onClick={() => setOpen(true)} className="gap-2">
 					<GitForkIcon className="w-4 h-4" />
-					{t('previewFork', 'Preview & fork')}
+					{t("previewFork", "Preview & fork")}
 				</Button>
 				<ForkAppDialog
 					appId={appId}

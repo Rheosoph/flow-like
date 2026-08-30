@@ -7,6 +7,7 @@ use flow_like_storage::object_store::{
 };
 use std::sync::Arc;
 
+#[allow(dead_code)] // deployment storage surface: content/meta stores are resolved by the API crate itself
 pub fn create_content_store(config: &Config) -> Result<FlowLikeStore, StorageError> {
     let bucket = config.storage_config.content_bucket();
     match &config.storage_config {
@@ -18,6 +19,7 @@ pub fn create_content_store(config: &Config) -> Result<FlowLikeStore, StorageErr
     }
 }
 
+#[allow(dead_code)]
 pub fn create_meta_store(config: &Config) -> Result<FlowLikeStore, StorageError> {
     let bucket = config.storage_config.meta_bucket();
     match &config.storage_config {

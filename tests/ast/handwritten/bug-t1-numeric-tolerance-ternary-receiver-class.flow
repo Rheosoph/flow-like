@@ -1,0 +1,17 @@
+eventsSimple ternaryReceiverClass() {
+    const { result: quotient, success: even } = int::div(10, 3)
+    const bumped = quotient.increment(1)
+    const direct = bumped.clamp(1, 512)
+    const picked = even ? quotient : bumped
+    const throughTernary = picked.clamp(1, 512)
+    log::info({ message: `${direct} ${throughTernary}`, toast: false })
+}
+
+eventsSimple ternaryReceiverClassFloatArms() {
+    const low = float::add(1.0, 2.0)
+    const high = float::add(3.0, 4.0)
+    const bigger = float::greaterThan(high, low)
+    const winner = bigger ? high : low
+    const scaled = winner.multiply(2.0)
+    log::info({ message: `${scaled}`, toast: false })
+}

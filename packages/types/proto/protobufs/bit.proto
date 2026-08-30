@@ -1,0 +1,3 @@
+syntax = "proto3";
+
+package flow_like_types;

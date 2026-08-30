@@ -46,7 +46,7 @@ export function FlowBreadCrumb({
 							}}
 							className="cursor-pointer"
 						>
-							{t('board', 'Board')}
+							{t("board", "Board")}
 						</BreadcrumbLink>
 					</BreadcrumbItem>
 					{segments.map((segment, index, array) => {

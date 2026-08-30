@@ -108,11 +108,17 @@ struct SampledEdgeRows {
     more_rows: bool,
 }
 
+/// Containment children that a sibling overlay maps, keyed by
+/// `(overlay id, child label, id-column override)` and holding one
+/// `(parent key, child id, edge)` entry per discovered child.
+type ExternalChildren =
+    HashMap<(String, String, Option<String>), Vec<(String, Value, SubgraphEdge)>>;
+
 impl LanceGraphStore {
-    async fn open_table_cached<'a>(
+    async fn open_table_cached(
         &self,
         name: &str,
-        cache: &'a mut HashMap<String, lancedb::Table>,
+        cache: &mut HashMap<String, lancedb::Table>,
     ) -> Result<lancedb::Table> {
         if let Some(table) = cache.get(name) {
             return Ok(table.clone());
@@ -1148,10 +1154,7 @@ impl LanceGraphStore {
 
         // Children mapped by a sibling overlay, grouped by (overlay, child label,
         // optional id-column override). Hydrated separately from self.overlay.
-        let mut external: HashMap<
-            (String, String, Option<String>),
-            Vec<(String, Value, SubgraphEdge)>,
-        > = HashMap::new();
+        let mut external: ExternalChildren = HashMap::new();
         let mut emitted = 0usize;
 
         for edge in &self.overlay.edges {
@@ -1327,7 +1330,7 @@ impl LanceGraphStore {
     /// sibling overlay rather than `self.overlay`.
     async fn hydrate_external_children(
         &self,
-        external: HashMap<(String, String, Option<String>), Vec<(String, Value, SubgraphEdge)>>,
+        external: ExternalChildren,
         table_cache: &mut HashMap<String, lancedb::Table>,
         schema_cache: &mut HashMap<String, Vec<String>>,
     ) -> (Vec<SubgraphNode>, Vec<SubgraphEdge>, Vec<String>) {

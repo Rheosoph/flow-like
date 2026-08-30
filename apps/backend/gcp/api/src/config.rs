@@ -143,6 +143,7 @@ impl Config {
         validate_secret_prefix(&secret_prefix)?;
 
         validate_mail_settings()?;
+        validate_channel_settings()?;
 
         let cors_allowed_origins = parse_allowed_origins(&required_env("CORS_ALLOWED_ORIGINS")?)?;
 
@@ -502,6 +503,61 @@ fn parse_allowed_origins(value: &str) -> Result<Vec<HeaderValue>, ConfigError> {
     Ok(origins)
 }
 
+/// `CHANNEL_TRANSPORT` may only name a transport this image carries, and the Realtime Database
+/// transport needs its database and Web API key up front. The signing service account lives in
+/// Secret Manager (`CHANNEL_FIREBASE_SERVICE_ACCOUNT`) and is checked once the secret store is
+/// up (see `validate_security_prerequisites` in main.rs).
+fn validate_channel_settings() -> Result<(), ConfigError> {
+    let transport = optional_nonempty_env("CHANNEL_TRANSPORT")?;
+    let backend =
+        flow_like_api::channel::ChannelBackend::parse(transport.as_deref()).map_err(|_| {
+            ConfigError::invalid(
+                "CHANNEL_TRANSPORT",
+                "must be 'http' or 'gcp_firebase_rtdb' on the GCP API image",
+            )
+        })?;
+    if backend.is_http() {
+        return Ok(());
+    }
+
+    let database_url = required_env("CHANNEL_FIREBASE_DATABASE_URL")?;
+    validate_firebase_database_url(&database_url)?;
+    required_env("CHANNEL_FIREBASE_API_KEY")?;
+    if let Some(project_id) = optional_nonempty_env("CHANNEL_FIREBASE_PROJECT_ID")? {
+        validate_project_id(&project_id)?;
+    }
+
+    Ok(())
+}
+
+fn validate_firebase_database_url(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value).map_err(|_| {
+        ConfigError::invalid("CHANNEL_FIREBASE_DATABASE_URL", "must be a valid URL")
+    })?;
+    let valid_host = url.host_str().is_some_and(|host| {
+        let host = host.to_ascii_lowercase();
+        host.ends_with(".firebasedatabase.app") || host.ends_with(".firebaseio.com")
+    });
+    let valid_path = url.path().is_empty() || url.path() == "/";
+
+    if url.scheme() != "https"
+        || !valid_host
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !valid_path
+    {
+        return Err(ConfigError::invalid(
+            "CHANNEL_FIREBASE_DATABASE_URL",
+            "must be a Firebase Realtime Database HTTPS origin without credentials, port, path, query, or fragment",
+        ));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     MissingVar(&'static str),
@@ -548,6 +604,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn validates_firebase_database_url() {
+        assert!(
+            validate_firebase_database_url(
+                "https://demo-default-rtdb.europe-west1.firebasedatabase.app"
+            )
+            .is_ok()
+        );
+        assert!(validate_firebase_database_url("https://demo.firebaseio.com/").is_ok());
+        assert!(validate_firebase_database_url("http://demo.firebaseio.com").is_err());
+        assert!(validate_firebase_database_url("https://firebaseio.com.attacker.example").is_err());
+        assert!(validate_firebase_database_url("https://demo.firebaseio.com/channels").is_err());
+    }
+
+    #[test]
     fn accepts_valid_gcp_names() {
         assert!(validate_project_id("flow-like-dev").is_ok());
         assert!(validate_bucket_name("TEST", "flowlike-dev-content").is_ok());
@@ -576,7 +646,9 @@ mod tests {
         assert!(is_forbidden_endpoint_override(
             "CLOUDSDK_API_ENDPOINT_OVERRIDES_SECRETMANAGER"
         ));
-        assert!(is_forbidden_endpoint_override("GOOGLE_STORAGE_CUSTOM_ENDPOINT"));
+        assert!(is_forbidden_endpoint_override(
+            "GOOGLE_STORAGE_CUSTOM_ENDPOINT"
+        ));
         assert!(!is_forbidden_endpoint_override("GOOGLE_PROJECT_ID"));
         assert!(!is_forbidden_endpoint_override("CUSTOM_ENDPOINT"));
     }

@@ -26,6 +26,7 @@ impl NodeLogic for ExtractInputValue {
             "Extracts a component's current value from the input values payload by component ID",
             "Events/Widget",
         );
+        node.set_flowscript_name("events", "extractInputValue");
         node.add_icon("/flow/icons/event.svg");
 
         node.add_input_pin(

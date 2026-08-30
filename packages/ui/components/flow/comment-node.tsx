@@ -28,6 +28,8 @@ export type CommentNode = Node<
 	{
 		comment: IComment;
 		onUpsert: (comment: IComment) => Promise<void>;
+		/** Present when the comment is anchored to a node (`node_id`) — reveals it in FlowScript. */
+		onOpenInCode?: () => void;
 		boardId: string;
 		appId: string;
 		hash: string;
@@ -142,6 +144,7 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 						onMoveUp={() => onMoveLayer(1)}
 						onMoveDown={() => onMoveLayer(-1)}
 						onToggleLock={toggleLock}
+						onGoToCode={props.data.onOpenInCode}
 					/>
 				)}
 				<div
@@ -192,9 +195,12 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 					>
 						<DialogContent className="max-w-(--breakpoint-xl) min-w-[95dvw] w-full min-h-[90vh] max-h-[90vh] overflow-hidden flex flex-col">
 							<DialogHeader>
-								<DialogTitle>{t('editComment', 'Edit Comment')}</DialogTitle>
+								<DialogTitle>{t("editComment", "Edit Comment")}</DialogTitle>
 								<DialogDescription>
-									{t('editTheTextContentOfTheComment', 'Edit the text content of the comment.')}
+									{t(
+										"editTheTextContentOfTheComment",
+										"Edit the text content of the comment.",
+									)}
 								</DialogDescription>
 							</DialogHeader>
 							<div className="flex flex-col grow max-h-full overflow-auto relative">

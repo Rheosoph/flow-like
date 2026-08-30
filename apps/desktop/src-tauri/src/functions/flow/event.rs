@@ -68,6 +68,7 @@ pub async fn get_events(
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_event(
     handler: AppHandle,
     app_id: String,

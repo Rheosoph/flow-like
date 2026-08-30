@@ -1,0 +1,23 @@
+// Minimal repro: `Generic` is the wildcard pin type. Wiring a Generic output into a typed input
+// is accepted everywhere else — the `int::lessThan` call below reconciles with zero diagnostics
+// off exactly the same `struct::get` output — but the binary-operator lowering compares operand
+// types as if `Generic` were a concrete type and refuses:
+//     diag: binary operator `<` has incompatible operand types `Generic` and `Integer`
+//     diag: argument `condition` on `controlBranch` is not a literal or resolvable node output
+// `Integer` and `Generic` (operands the other way round) fails identically, and so does
+// `Generic` vs `Generic`, which reports `binary operator `<` for `Generic` has no suitable
+// two-input catalog node`. Since every read out of a Struct or a Map yields Generic, no
+// comparison against a struct field can be written with an operator.
+use log::{ info }
+
+eventsGeneric compareReplicas(payload: Struct) {
+    const replicas = struct::get({ struct: payload, field: "replicas" }).value
+
+    if (int::lessThan({ integer1: replicas, integer2: 3 })) {
+        info({ message: "under floor (node form, clean)", toast: false })
+    }
+
+    if (replicas < 3) {
+        info({ message: "under floor (operator form, rejected)", toast: false })
+    }
+}

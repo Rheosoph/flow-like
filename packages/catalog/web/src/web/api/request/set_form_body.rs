@@ -28,6 +28,8 @@ impl NodeLogic for SetFormBodyNode {
             "Sets the body of a http request to form-encoded data",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setFormBody");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(
@@ -45,7 +47,8 @@ impl NodeLogic for SetFormBodyNode {
             "Form fields to encode",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_input_pin(
             "set_content_type",

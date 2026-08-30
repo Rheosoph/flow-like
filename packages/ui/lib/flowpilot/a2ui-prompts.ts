@@ -786,7 +786,7 @@ export function parseA2UIResponse(response: string): {
 	dataModel: unknown[];
 } | null {
 	try {
-		const jsonMatch = response.match(/```json\s*([\s\S]*?)```/);
+		const jsonMatch = response.match(/```json([\s\S]*?)```/);
 		const jsonStr = jsonMatch ? jsonMatch[1] : response;
 
 		const parsed = JSON.parse(jsonStr.trim());

@@ -1,0 +1,30 @@
+---
+title: "Aggregate Node Catalog"
+description: "Math/Float/Aggregate Flow-Like node category with 8 generated node references."
+sidebar:
+  order: 0
+  label: "Aggregate"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Aggregate nodes, Math/Float/Aggregate, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Math/Float/Aggregate"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Aggregate Node Catalog\",\"description\":\"Math/Float/Aggregate Flow-Like node category with 8 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/math/float/aggregate/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Math/Float/Aggregate\",\"keywords\":\"Aggregate nodes, Math/Float/Aggregate, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Math/Float/Aggregate"}
+	label="Aggregate"
+	nodes={nodesByCategory["Math/Float/Aggregate"] ?? []}
+	client:load
+/>

@@ -26,6 +26,7 @@ impl NodeLogic for ClearChildren {
             "Removes all children from a container element",
             "UI/Elements/Containers",
         );
+        node.set_flowscript_name("ui", "clearChildren");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

@@ -34,6 +34,8 @@ impl NodeLogic for FilterArrayFieldNode {
             "Removes a specific field from every struct in an array. Elements without the field are kept unchanged. Returns the filtered array and count of removed fields.",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "filterField");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);
@@ -44,7 +46,8 @@ impl NodeLogic for FilterArrayFieldNode {
             "Array of structs to filter",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_input_pin(
             "field",
@@ -61,7 +64,8 @@ impl NodeLogic for FilterArrayFieldNode {
             "Array with the field removed from each struct",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "removed_count",

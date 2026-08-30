@@ -24,6 +24,7 @@ impl NodeLogic for CompactCellsNode {
             "Compacts a set of H3 cells by replacing groups of cells with their parent when all children are present. Reduces the number of cells while covering the same area.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "compactCells");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

@@ -146,6 +146,21 @@ export interface IAppState {
 		body: UpsertAppCommentRequest,
 	): Promise<UpsertAppCommentResponse>;
 	deleteAppComment(appId: string, commentId: string): Promise<void>;
+	/**
+	 * Record what an app's visibility already is, for backends that keep a
+	 * local visibility cache. Purely local bookkeeping — unlike
+	 * {@link changeAppVisibility} it never asks the server to change anything.
+	 *
+	 * Callers that make an app appear on this device without opening it (fork,
+	 * acquire) must call this. A device that has not learned an app's
+	 * visibility falls back to guessing, and the desktop's guess is
+	 * "offline" — which routes every board and data read at the local store
+	 * and away from the hub the app actually lives on.
+	 */
+	recordLocalAppVisibility?(
+		appId: string,
+		visibility: IAppVisibility,
+	): Promise<void>;
 	listPackages?(appId: string): Promise<Record<string, string>>;
 	addPackage?(appId: string, packageId: string, version: string): Promise<void>;
 	removePackage?(appId: string, packageId: string): Promise<void>;

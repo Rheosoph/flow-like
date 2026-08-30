@@ -16,11 +16,7 @@ pub struct LinkedInProvider {
 
 impl LinkedInProvider {
     pub fn api_url(&self, path: &str) -> String {
-        let path = if path.starts_with('/') {
-            &path[1..]
-        } else {
-            path
-        };
+        let path = path.strip_prefix('/').unwrap_or(path);
         format!("https://api.linkedin.com/v2/{}", path)
     }
 
@@ -48,6 +44,7 @@ impl NodeLogic for LinkedInOAuthProviderNode {
             "Connect to LinkedIn using OAuth 2.0. Requires OAuth provider configuration in flow-like.config.json.",
             "Data/LinkedIn",
         );
+        node.set_flowscript_name("linkedin", "providerOauth");
         node.add_icon("/flow/icons/linkedin.svg");
 
         node.add_output_pin(

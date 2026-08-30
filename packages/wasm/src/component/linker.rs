@@ -129,6 +129,9 @@ impl ComponentStoreData {
         builder.inherit_output();
         configure_guest_network(&mut builder, security);
         builder.args(&["flow-like-wasm-node"]);
+        if security.deterministic {
+            builder.make_deterministic();
+        }
 
         Self::with_host_state(
             HostState::new(security.capabilities),
@@ -185,60 +188,6 @@ fn allows_standard_wasi_http(security: &WasmSecurityConfig) -> bool {
     // per-method capabilities or host allowlist. Only expose it when every HTTP
     // method is granted and no host restriction needs to be enforced.
     security.capabilities.contains(WasmCapabilities::HTTP_ALL) && security.allowed_hosts.is_none()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wasmtime_wasi::cli::WasiCliView;
-    use wasmtime_wasi::p2::bindings::cli::environment::Host;
-
-    fn guest_environment(security: &WasmSecurityConfig) -> Vec<(String, String)> {
-        let mut data = ComponentStoreData::new(security);
-        let mut cli = data.cli();
-        Host::get_environment(&mut cli).expect("WASI environment should be readable")
-    }
-
-    #[test]
-    fn host_environment_is_not_visible_to_component_guests() {
-        let sentinel_value = std::env::var("PATH").expect("test host should define PATH");
-        assert!(
-            !sentinel_value.is_empty(),
-            "test host PATH should not be empty"
-        );
-
-        for (name, security) in [
-            ("restrictive", WasmSecurityConfig::restrictive()),
-            ("permissive", WasmSecurityConfig::permissive()),
-        ] {
-            let environment = guest_environment(&security);
-            assert!(
-                environment.is_empty(),
-                "{name} component guest inherited host environment, including the PATH sentinel"
-            );
-        }
-    }
-
-    #[test]
-    fn standard_http_requires_an_http_capability_without_an_allowlist() {
-        assert!(!allows_standard_wasi_http(
-            &WasmSecurityConfig::restrictive()
-        ));
-        assert!(!allows_standard_wasi_http(
-            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::TCP)
-        ));
-        assert!(allows_standard_wasi_http(
-            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL)
-        ));
-        assert!(!allows_standard_wasi_http(
-            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_GET)
-        ));
-        assert!(!allows_standard_wasi_http(
-            &WasmSecurityConfig::default()
-                .with_capabilities(WasmCapabilities::HTTP_GET)
-                .with_allowed_hosts(vec!["example.com".to_string()])
-        ));
-    }
 }
 
 pub fn register_component_host_functions(
@@ -950,23 +899,9 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     #[cfg(feature = "model")]
                     {
                         let mut factory = app_state.embedding_factory.lock().await;
-                        let embedding_provider = bit.try_to_embedding();
-                        let use_proxy = access_token.is_some()
-                            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
-                            && embedding_provider
-                                .as_ref()
-                                .is_some_and(|provider| provider.supports_remote());
-                        let model_result = if use_proxy {
-                            factory
-                                .build_text_proxy(
-                                    &bit,
-                                    access_token.expect("proxy mode requires an access token"),
-                                    usage_context,
-                                )
-                                .await
-                        } else {
-                            factory.build_text(&bit, app_state.clone()).await
-                        };
+                        let model_result = factory
+                            .build_text_routed(&bit, app_state.clone(), access_token, usage_context)
+                            .await;
                         let model = match model_result {
                             Ok(m) => m,
                             Err(_) => return Ok((None,)),
@@ -1489,6 +1424,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         #[serde(default)]
                         output_schema: Option<Value>,
                         #[serde(default)]
+                        #[allow(dead_code)] // wire contract: SDK sends additional_params (libs/wasm-sdk/wasm-sdk-rust/src/rig_provider.rs:413); parsed for parity with llm_prompt, not yet forwarded to History
                         additional_params: Option<Value>,
                     }
 
@@ -2150,4 +2086,58 @@ fn rand_float() -> f64 {
             .as_nanos() as u64,
     );
     (hasher.finish() as f64) / (u64::MAX as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime_wasi::cli::WasiCliView;
+    use wasmtime_wasi::p2::bindings::cli::environment::Host;
+
+    fn guest_environment(security: &WasmSecurityConfig) -> Vec<(String, String)> {
+        let mut data = ComponentStoreData::new(security);
+        let mut cli = data.cli();
+        Host::get_environment(&mut cli).expect("WASI environment should be readable")
+    }
+
+    #[test]
+    fn host_environment_is_not_visible_to_component_guests() {
+        let sentinel_value = std::env::var("PATH").expect("test host should define PATH");
+        assert!(
+            !sentinel_value.is_empty(),
+            "test host PATH should not be empty"
+        );
+
+        for (name, security) in [
+            ("restrictive", WasmSecurityConfig::restrictive()),
+            ("permissive", WasmSecurityConfig::permissive()),
+        ] {
+            let environment = guest_environment(&security);
+            assert!(
+                environment.is_empty(),
+                "{name} component guest inherited host environment, including the PATH sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn standard_http_requires_an_http_capability_without_an_allowlist() {
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::restrictive()
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::TCP)
+        ));
+        assert!(allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL)
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_GET)
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default()
+                .with_capabilities(WasmCapabilities::HTTP_GET)
+                .with_allowed_hosts(vec!["example.com".to_string()])
+        ));
+    }
 }

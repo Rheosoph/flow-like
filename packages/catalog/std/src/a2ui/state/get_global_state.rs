@@ -29,6 +29,7 @@ impl NodeLogic for GetGlobalState {
             "Gets a value from global state by key",
             "UI/State",
         );
+        node.set_flowscript_name("ui", "getGlobalState");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

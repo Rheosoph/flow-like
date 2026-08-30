@@ -26,6 +26,8 @@ impl NodeLogic for RawPathNode {
             "Gets the raw path string",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "rawPath");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin("path", "Path", "FlowPath", VariableType::Struct)

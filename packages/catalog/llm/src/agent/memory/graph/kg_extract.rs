@@ -5,7 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeGraphConnection;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 /// # KG Extract
 /// Uses an LLM to extract entities and relationships from text,
@@ -29,6 +31,8 @@ impl NodeLogic for KgExtractNode {
             "Extracts entities (nodes) and relationships (edges) from text using an LLM, returning structured arrays ready for graph insertion",
             "AI/Memory/Graph",
         );
+        node.set_flowscript_name("ai.memory", "kgExtract");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 
@@ -101,7 +105,8 @@ impl NodeLogic for KgExtractNode {
             "Array of extracted entity objects with label, id, and properties",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "extracted_edges",
@@ -109,7 +114,8 @@ impl NodeLogic for KgExtractNode {
             "Array of extracted relationship objects with label, source, target, and properties",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "entity_count",

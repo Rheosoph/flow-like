@@ -1,0 +1,28 @@
+// BUG: a local seeded from a CONCRETELY typed array pin loses its Array container the moment it
+// is reassigned inside a nested block (while body, for body, or if arm). The emitted
+// `variable_get` for `lines` comes back as `String/Normal` instead of `String/Array`, so every
+// array node downstream refuses the wire:
+//     argument `array` on `length` has incompatible pin types or schemas:
+//       source `variable_get.value_ref` is `String/Normal`,
+//       but input `array` requires `Generic/Array`
+//     node `length` is missing required inputs: array
+//
+// `string::lines` is declared `-> lines: string[]` and `array::removeIndex` is declared
+// `(arrayIn: any[], index: int) -> arrayOut: any[]`, so both ends of the assignment agree that
+// `lines` is an array — only the inferred variable type disagrees.
+//
+// Not an authoring mistake:
+//   * the same assignment at the TOP level of the event is accepted (the variable stays an array);
+//   * seeding the same loop from `array::make()` (whose output pin is Generic/Array rather than
+//     String/Array) is accepted too.
+// So the collapse is specific to a concretely typed array element being re-inferred through a
+// nested-block assignment.
+use log::{ info }
+
+eventsSimple bugWhileMutatedTypedArray() {
+    let lines = string::lines({ string: "alpha\nbeta", skipEmpty: true })
+    while (array::length({ array: lines }) > 0) {
+        lines = array::removeIndex({ arrayIn: lines, index: 0 })
+    }
+    info({ message: "drained", toast: false })
+}

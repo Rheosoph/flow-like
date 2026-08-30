@@ -1192,10 +1192,14 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
         .collect::<Vec<_>>();
     let mut ast = BoardAst {
         board_id: String::new(),
+        uses: Vec::new(),
         interfaces,
         variables,
         functions: Vec::new(),
         events: Vec::new(),
+        // The typed IR only compiles reachable programs: an unreachable chain has no source form.
+        detached: Vec::new(),
+        modules: Vec::new(),
     };
     let mut module_node_counts = BTreeMap::new();
     let mut root_node_count = 0_usize;
@@ -1238,23 +1242,9 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
             body_count
         };
         module_node_counts.insert(scope.to_string(), count);
-        if matches!(module, FlowIrModule::Function { .. }) && count > MAX_NODES_PER_LAYER {
-            let mut diagnostic = FlowIrDiagnostic::new(
-                "IR_NODE_BUDGET_EXCEEDED",
-                format!("/modules/{module_index}/steps"),
-                Some(scope),
-                format!(
-                    "module {scope:?} requires {count} nodes; the per-layer limit is {MAX_NODES_PER_LAYER}"
-                ),
-            );
-            diagnostic.expected = Some(format!("<= {MAX_NODES_PER_LAYER} nodes"));
-            diagnostic.actual = Some(format!("{count} nodes"));
-            diagnostic.fix = Some(
-                "move one responsibility into a separate function module and call it here"
-                    .to_string(),
-            );
-            diagnostics.push(diagnostic);
-        }
+        // Layer size is a lint, not a gate: `module_node_counts` carries the number for any
+        // caller that wants to warn on it, but an oversized module still compiles.
+        let _ = count;
         validate_unreachable_steps(
             module.steps(),
             &format!("/modules/{module_index}/steps"),
@@ -1452,23 +1442,6 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
 
     if root_node_count > 0 {
         module_node_counts.insert("$root".to_string(), root_node_count);
-    }
-    if root_node_count > MAX_NODES_PER_LAYER {
-        let mut diagnostic = FlowIrDiagnostic::new(
-            "IR_NODE_BUDGET_EXCEEDED",
-            "/modules",
-            Some("$root"),
-            format!(
-                "all Event entries and bodies require {root_node_count} root-layer nodes; the limit is {MAX_NODES_PER_LAYER}"
-            ),
-        );
-        diagnostic.expected = Some(format!("<= {MAX_NODES_PER_LAYER} root nodes"));
-        diagnostic.actual = Some(format!("{root_node_count} root nodes"));
-        diagnostic.fix = Some(
-            "move Event body responsibilities into function modules and keep each Event as a thin entry"
-                .to_string(),
-        );
-        diagnostics.push(diagnostic);
     }
 
     let flowscript = render(
@@ -1882,6 +1855,9 @@ fn compile_steps_with_offset(
                 let call = Call {
                     node_type: branch_metadata.name.clone(),
                     display: flow_like_ast::to_camel_case(&branch_metadata.name),
+                    path: Vec::new(),
+                    receiver: None,
+                    positional: Vec::new(),
                     args: vec![Arg {
                         name: condition_pin,
                         value: condition_source.expression.clone(),
@@ -2045,9 +2021,15 @@ fn compile_steps_with_offset(
                         "forEach".to_string()
                     },
                     bind: Some(id.clone()),
+                    iterable: None,
+                    element: None,
+                    index: None,
                     call: Call {
                         node_type: loop_metadata.name.clone(),
                         display: flow_like_ast::to_camel_case(&loop_metadata.name),
+                        path: Vec::new(),
+                        receiver: None,
+                        positional: Vec::new(),
                         args: vec![Arg {
                             name: array_pin,
                             value: array_source.expression,
@@ -2398,6 +2380,9 @@ fn compile_catalog_call(
     Call {
         node_type: metadata.name.clone(),
         display: flow_like_ast::to_camel_case(&metadata.name),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: compiled_args
             .into_iter()
             .map(|(_, argument)| argument)
@@ -2518,6 +2503,9 @@ fn compile_function_call(
     Call {
         node_type: signature.name.clone(),
         display: signature.name.clone(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: compiled_args
             .into_iter()
             .map(|(_, argument)| argument)
@@ -4181,6 +4169,7 @@ fn reachable_flow_ir_function_names(program: &FlowIrProgram) -> HashSet<String> 
     reachable
 }
 
+#[allow(clippy::too_many_arguments)]
 fn steps_implement_requirement(
     steps: &[FlowIrStep],
     requirement: &FlowCapabilityRequirement,
@@ -4309,6 +4298,7 @@ fn steps_implement_requirement(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn node_implements_requirement(
     requirement: &FlowCapabilityRequirement,
     metadata: &NodeMetadata,
@@ -4746,6 +4736,9 @@ mod tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 

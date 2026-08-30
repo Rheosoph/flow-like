@@ -27,6 +27,7 @@ impl NodeLogic for GetIframeSrc {
             "Gets the src URL of an iframe element",
             "UI/Elements/Get",
         );
+        node.set_flowscript_name("ui", "getIframeSrc");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -52,19 +53,8 @@ impl NodeLogic for GetIframeSrc {
         let element_value: Value = context.evaluate_pin("element_ref").await?;
         let element_id = extract_element_id_from_pin(element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
-        let elements = context.get_frontend_elements().await?;
 
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("src")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            return Ok(());
-        };
-
-        let Some(element) = elements_map.get(&element_id) else {
+        let Some((_, element)) = context.read_element(&element_id).await? else {
             context.log_message(
                 &format!("Element not found: {}", element_id),
                 LogLevel::Warn,

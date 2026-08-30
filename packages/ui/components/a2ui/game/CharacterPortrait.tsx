@@ -4,6 +4,7 @@ import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, CharacterPortraitComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -28,7 +29,7 @@ export function A2UICharacterPortrait({
 	component,
 	style,
 }: ComponentProps<CharacterPortraitComponent>) {
-	const image = useResolved<string>(component.image);
+	const { url: image } = useAssetUrl(useResolved<string>(component.image));
 	const expression = useResolved<string>(component.expression);
 	const size = useResolved<string>(component.size) ?? "medium";
 	const position = useResolved<string>(component.position) ?? "center";

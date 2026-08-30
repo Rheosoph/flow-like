@@ -30,10 +30,10 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
-import { normalizeGeoMapViewport } from "./apply-a2ui-message";
-import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
-import { applyMediaSourceUpdate } from "./media-source";
-import { applyStyleUpdate } from "./style-updates";
+import { applyA2UIMessage } from "./apply-a2ui-message";
+import { collectRunElements } from "./collect-run-elements";
+import type { ElementSource } from "./element-materializer";
+import { handleElementsRequestMessage } from "./elements-request-handler";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
 
@@ -312,289 +312,9 @@ function RouteDialogRenderer({
 
 	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
 		console.log("[RouteDialog] Server message:", message);
-
-		if (message.type === "setCanvasSettings") {
-			setSurface((prevSurface) => {
-				if (!prevSurface || message.surfaceId !== prevSurface.id) {
-					return prevSurface;
-				}
-
-				// Filter null/undefined values to avoid overwriting existing settings
-				// (Rust serializes Option::None as null)
-				const filtered = Object.fromEntries(
-					Object.entries(message.canvasSettings).filter(([, v]) => v != null),
-				);
-
-				return {
-					...prevSurface,
-					canvasSettings: {
-						...prevSurface.canvasSettings,
-						...filtered,
-					},
-				};
-			});
-			return;
-		}
-
-		if (message.type === "dataModelUpdate") {
-			setSurface((prevSurface) => {
-				if (!prevSurface || message.surfaceId !== prevSurface.id) {
-					return prevSurface;
-				}
-
-				const entries = new Map(
-					(prevSurface.dataModel ?? []).map((entry) => [entry.path, entry]),
-				);
-				for (const entry of message.contents) {
-					entries.set(entry.path, entry);
-				}
-
-				return {
-					...prevSurface,
-					dataModel: Array.from(entries.values()),
-				};
-			});
-			return;
-		}
-
-		if (message.type !== "upsertElement") return;
-
-		setSurface((prevSurface) => {
-			if (!prevSurface) return prevSurface;
-
-			const { element_id: elementId, value } = message;
-			if (!elementId) return prevSurface;
-
-			const [surfaceId, componentId] = elementId.includes("/")
-				? elementId.split("/", 2)
-				: [prevSurface.id, elementId];
-
-			if (surfaceId !== prevSurface.id) return prevSurface;
-
-			const component = prevSurface.components[componentId];
-			if (!component) return prevSurface;
-
-			const updateValue = value as Record<string, unknown>;
-			const updateType = updateValue?.type as string;
-
-			let updatedComponent: SurfaceComponent = { ...component };
-
-			if (updateType === "setText") {
-				const text = updateValue.text as string;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						text,
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "setStyle") {
-				updatedComponent = {
-					...component,
-					style: applyStyleUpdate(component.style, updateValue.style),
-				};
-			} else if (updateType === "setVisibility") {
-				const visible = updateValue.visible as boolean;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						hidden: { literalBool: !visible },
-					} as unknown as SurfaceComponent["component"],
-					style: visible
-						? applyStyleUpdate(component.style, { opacity: null })
-						: component.style,
-				};
-			} else if (updateType === "setMediaSource") {
-				updatedComponent = applyMediaSourceUpdate(component, updateValue);
-			} else if (updateType === "setGeoMapViewport") {
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						viewport: normalizeGeoMapViewport(updateValue.viewport),
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "setProps") {
-				const props = updateValue.props as Record<string, unknown>;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						...props,
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (
-				updateType === "setChartData" ||
-				updateType === "setNivoData"
-			) {
-				const data = updateValue.data;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						data: { literalJson: JSON.stringify(data) },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (
-				updateType === "setChartLayout" ||
-				updateType === "setNivoConfig"
-			) {
-				const configOrLayout = updateValue.layout ?? updateValue.config;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						...(updateValue.layout !== undefined && {
-							layout: { literalJson: JSON.stringify(configOrLayout) },
-						}),
-						...(updateValue.config !== undefined && {
-							config: { literalJson: JSON.stringify(configOrLayout) },
-						}),
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (
-				updateType === "setOverlayBoxes" ||
-				updateType === "setLabelerBoxes"
-			) {
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (
-				updateType === `addOverlayBox` ||
-				updateType === `addLabelerBox`
-			) {
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				const existing = resolveBoxesField(componentData.boxes);
-				const added = normalizeBoxes([updateValue.box]);
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						boxes: { literalOptions: [...existing, ...added] },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "clearOverlayBoxes") {
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						boxes: { literalOptions: [] },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "removeLabelerBox") {
-				const boxId = updateValue.boxId as string;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				const remaining = resolveBoxesField(componentData.boxes).filter(
-					(box) => box.id !== boxId,
-				);
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						boxes: { literalOptions: remaining },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "updateLabelerBoxLabel") {
-				const boxId = updateValue.boxId as string;
-				const label = updateValue.label as string;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				const updated = resolveBoxesField(componentData.boxes).map((box) =>
-					box.id === boxId ? { ...box, label } : box,
-				);
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						boxes: { literalOptions: updated },
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else if (updateType === "setLabelerImage") {
-				const src = updateValue.src as string;
-				const alt = updateValue.alt as string | undefined;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						src: { literalString: src },
-						...(alt !== undefined ? { alt: { literalString: alt } } : {}),
-					} as unknown as SurfaceComponent["component"],
-				};
-			} else {
-				// Same default as applyElementUpdate: property-shaped updates
-				// (setGraphNodes, setGeoMapMarkers, ...) land verbatim on the
-				// component. Without it a dialog silently drops them.
-				const { type: _type, ...rest } = updateValue;
-				const componentData = component.component as unknown as Record<
-					string,
-					unknown
-				>;
-				updatedComponent = {
-					...component,
-					component: {
-						...componentData,
-						...rest,
-					} as unknown as SurfaceComponent["component"],
-				};
-			}
-
-			return {
-				...prevSurface,
-				components: {
-					...prevSurface.components,
-					[componentId]: updatedComponent,
-				},
-			};
-		});
+		setSurface((prevSurface) =>
+			prevSurface ? applyA2UIMessage(prevSurface, message) : prevSurface,
+		);
 	}, []);
 
 	// Use ref to access current surface without creating dependency cycles
@@ -603,23 +323,15 @@ function RouteDialogRenderer({
 		surfaceRef.current = surface;
 	}, [surface]);
 
-	// Build elements from surface components for the workflow payload
-	// Uses ref to avoid dependency on surface changing
-	const getElementsFromSurface = useCallback(() => {
+	const elementSource = useCallback((): ElementSource | null => {
 		const currentSurface = surfaceRef.current;
-		if (!currentSurface) return {};
-		const elements: Record<string, unknown> = {};
-		for (const [componentId, surfaceComponent] of Object.entries(
-			currentSurface.components,
-		)) {
-			const elementId = `${currentSurface.id}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
-	}, []); // No dependencies - uses ref
+		if (!currentSurface) return null;
+		return {
+			surfaceId: currentSurface.id,
+			components: currentSurface.components,
+			storedValues: {},
+		};
+	}, []);
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
@@ -646,14 +358,25 @@ function RouteDialogRenderer({
 			setIsLoadEventRunning(true);
 
 			try {
-				// Get component data from surface (for GetElement to work)
-				const surfaceElements = getElementsFromSurface();
+				const currentSurface = surfaceRef.current;
+				const surfaceElements = currentSurface
+					? await collectRunElements({
+							backend,
+							appId,
+							boardId,
+							boardVersion: pageExecutionVersion,
+							surfaceId: currentSurface.id,
+							components: currentSurface.components,
+							storedValues: {},
+						})
+					: {};
 
 				const payload = withBoardVersion(
 					{
 						id: page.onLoadEventId,
 						payload: {
 							_elements: surfaceElements,
+							_elements_mode: "demand",
 							_route: dialog.route,
 							_query_params: dialog.queryParams || {},
 							_page_id: page.id,
@@ -670,6 +393,9 @@ function RouteDialogRenderer({
 					for (const event of events) {
 						if (event.event_type === "a2ui") {
 							if (handleWidgetQueryMessage(event.payload)) {
+								continue;
+							}
+							if (handleElementsRequestMessage(event.payload, elementSource)) {
 								continue;
 							}
 							handleServerMessage(event.payload as A2UIServerMessage);
@@ -693,10 +419,10 @@ function RouteDialogRenderer({
 		pageExecutionVersion,
 		dialog,
 		isLoading,
-		backend.boardState,
+		backend,
 		executionService,
 		handleServerMessage,
-		getElementsFromSurface,
+		elementSource,
 	]);
 
 	const activeSurface =
@@ -758,7 +484,7 @@ function buildSurfaceFromPage(page: IPage, surfaceId: string): Surface | null {
 		{} as Record<string, SurfaceComponent>,
 	);
 
-	const rootComponentId = componentsRecord["root"]
+	const rootComponentId = componentsRecord.root
 		? "root"
 		: page.components[0]?.id || "";
 

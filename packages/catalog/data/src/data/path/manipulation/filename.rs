@@ -26,6 +26,8 @@ impl NodeLogic for FilenameNode {
             "Gets the filename from a path",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "filename");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin("path", "Path", "FlowPath", VariableType::Struct)
@@ -85,6 +87,8 @@ impl NodeLogic for SetFilenameNode {
             "Renames a file path, keeping the original extension when the new name has none",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "setFilename");
+        node.set_receiver("in_path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin("in_path", "Path", "FlowPath", VariableType::Struct)

@@ -10,6 +10,7 @@ use lancedb::index::IndexConfig;
 use lancedb::index::scalar::BTreeIndexBuilder;
 use lancedb::index::scalar::BitmapIndexBuilder;
 use lancedb::index::scalar::LabelListIndexBuilder;
+use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::QueryExecutionOptions;
 use lancedb::table::AddColumnsResult;
 use lancedb::table::AlterColumnsResult;
@@ -33,7 +34,7 @@ use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
-use crate::databases::df_provider::zero_column_safe;
+use crate::databases::df_provider::zero_column_safe_writable;
 
 use super::VectorStore;
 
@@ -314,6 +315,10 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
+    /// The returned provider supports SELECT, INSERT INTO and (via
+    /// [`crate::databases::lance_dml`]) UPDATE/DELETE with a WHERE clause.
+    /// Read-only surfaces registering it must validate their SQL first
+    /// ([`crate::databases::sql_guard::validate_readonly_sql`]).
     pub async fn to_datafusion(&self) -> Result<Arc<dyn TableProvider>> {
         let table = self
             .table
@@ -322,7 +327,7 @@ impl LanceDBVectorStore {
         let df_table = table.base_table();
         let adapter =
             lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
-        Ok(zero_column_safe(Arc::new(adapter)))
+        Ok(zero_column_safe_writable(Arc::new(adapter), table))
     }
 
     pub async fn raw(&self) -> Result<Table> {
@@ -338,6 +343,7 @@ impl LanceDBVectorStore {
         table_name: &str,
         sql: &str,
     ) -> Result<datafusion::dataframe::DataFrame> {
+        crate::databases::sql_guard::validate_lance_dml_sql(sql)?;
         let table = self.to_datafusion().await?;
         let ctx = SessionContext::new();
         ctx.register_table(table_name, table)?;
@@ -454,6 +460,30 @@ fn is_vector_data_type(data_type: &DataType) -> bool {
         }
         _ => false,
     }
+}
+
+fn cosine_vector_index() -> Index {
+    Index::IvfPq(IvfPqIndexBuilder::default().distance_type(lancedb::DistanceType::Cosine))
+}
+
+fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> {
+    let mut actions = vec![
+        lancedb::table::OptimizeAction::Compact {
+            options: CompactionOptions::default(),
+            remap_options: None,
+        },
+        lancedb::table::OptimizeAction::Index(OptimizeOptions::new()),
+    ];
+
+    if !keep_versions {
+        actions.push(lancedb::table::OptimizeAction::Prune {
+            older_than: Some(Duration::try_days(7).expect("seven days is a valid duration")),
+            delete_unverified: Some(false),
+            error_if_tagged_old_versions: Some(true),
+        });
+    }
+
+    actions
 }
 
 fn split_hybrid_fields(
@@ -731,34 +761,11 @@ impl VectorStore for LanceDBVectorStore {
     async fn optimize(&self, keep_versions: bool) -> Result<()> {
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
 
-        let older_than = if keep_versions {
-            None
-        } else {
-            Some(Duration::milliseconds(1))
-        };
+        for action in optimize_actions(keep_versions) {
+            table.optimize(action).await?;
+        }
 
-        table
-            .optimize(lancedb::table::OptimizeAction::Prune {
-                delete_unverified: Some(true),
-                error_if_tagged_old_versions: Some(true),
-                older_than,
-            })
-            .await?;
-
-        table
-            .optimize(lancedb::table::OptimizeAction::Compact {
-                options: CompactionOptions {
-                    ..Default::default()
-                },
-                remap_options: None,
-            })
-            .await?;
-
-        table
-            .optimize(lancedb::table::OptimizeAction::Index(OptimizeOptions::new()))
-            .await?;
-
-        return Ok(());
+        Ok(())
     }
 
     async fn list(
@@ -791,6 +798,16 @@ impl VectorStore for LanceDBVectorStore {
             "BTREE" => Index::BTree(BTreeIndexBuilder::default()),
             "BITMAP" => Index::Bitmap(BitmapIndexBuilder::default()),
             "LABEL LIST" => Index::LabelList(LabelListIndexBuilder::default()),
+            "VECTOR" => cosine_vector_index(),
+            "AUTO" => {
+                let schema = table.schema().await?;
+                let field = schema.field_with_name(column)?;
+                if lancedb::utils::supported_vector_data_type(field.data_type()) {
+                    cosine_vector_index()
+                } else {
+                    Index::Auto
+                }
+            }
             _ => Index::Auto,
         };
 
@@ -826,6 +843,7 @@ mod tests {
     use crate::databases::vector::buffered::{
         BufferedVectorStore, BufferedWriteError, BufferedWriteKind, BufferedWriteOrigin,
     };
+    use arrow_array::{FixedSizeListArray, Float32Array, Int64Array};
     use arrow_schema::{Field, TimeUnit};
     use flow_like_types::{
         create_id,
@@ -853,6 +871,157 @@ mod tests {
         name: String,
         #[serde(default)]
         tag: Option<String>,
+    }
+
+    #[test]
+    fn regression_lance_optimize_plan_retains_versions_unless_cleanup_is_explicit() {
+        let retain_actions = optimize_actions(true);
+        assert_eq!(retain_actions.len(), 2);
+        assert!(matches!(
+            &retain_actions[0],
+            lancedb::table::OptimizeAction::Compact { .. }
+        ));
+        assert!(matches!(
+            &retain_actions[1],
+            lancedb::table::OptimizeAction::Index(_)
+        ));
+
+        let cleanup_actions = optimize_actions(false);
+        assert_eq!(cleanup_actions.len(), 3);
+        assert!(matches!(
+            &cleanup_actions[0],
+            lancedb::table::OptimizeAction::Compact { .. }
+        ));
+        assert!(matches!(
+            &cleanup_actions[1],
+            lancedb::table::OptimizeAction::Index(_)
+        ));
+        match &cleanup_actions[2] {
+            lancedb::table::OptimizeAction::Prune {
+                older_than,
+                delete_unverified,
+                error_if_tagged_old_versions,
+            } => {
+                assert_eq!(
+                    older_than.as_ref(),
+                    Some(&Duration::try_days(7).expect("seven days is a valid duration"))
+                );
+                assert_eq!(*delete_unverified, Some(false));
+                assert_eq!(*error_if_tagged_old_versions, Some(true));
+            }
+            _ => panic!("cleanup must prune only after compaction and index maintenance"),
+        }
+    }
+
+    #[tokio::test]
+    async fn regression_lance_vector_and_auto_indices_match_cosine_searches() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "cosine_indices".to_string())
+                .await?;
+
+        let dimension = 16;
+        let item = Arc::new(Field::new("item", DataType::Float32, true));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(item.clone(), dimension),
+                false,
+            ),
+        ]));
+        let ids = Arc::new(Int64Array::from_iter_values(0..512));
+        let values = (0..512 * dimension as usize)
+            .map(|value| {
+                let pseudo_random = (value as u64)
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                (pseudo_random & 0xffff) as f32 / u16::MAX as f32
+            })
+            .collect::<Vec<_>>();
+        let vectors = Arc::new(FixedSizeListArray::try_new(
+            item,
+            dimension,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )?);
+        db.insert_record_batch(RecordBatch::try_new(schema, vec![ids, vectors])?)
+            .await?;
+
+        for selection in ["VECTOR", "AUTO"] {
+            db.index("vector", Some(selection)).await?;
+            let table = db.raw().await?;
+            let config = table
+                .list_indices()
+                .await?
+                .into_iter()
+                .find(|index| index.columns.len() == 1 && index.columns[0] == "vector")
+                .expect("vector index should exist");
+            assert_eq!(config.index_type, lancedb::index::IndexType::IvfPq);
+            let stats = table
+                .index_stats(&config.name)
+                .await?
+                .expect("vector index statistics should exist");
+            assert_eq!(stats.index_type, lancedb::index::IndexType::IvfPq);
+            assert_eq!(stats.distance_type, Some(lancedb::DistanceType::Cosine));
+        }
+
+        db.index("id", Some("AUTO")).await?;
+        let table = db.raw().await?;
+        let scalar_config = table
+            .list_indices()
+            .await?
+            .into_iter()
+            .find(|index| index.columns.len() == 1 && index.columns[0] == "id")
+            .expect("scalar index should exist");
+        assert_eq!(scalar_config.index_type, lancedb::index::IndexType::BTree);
+        let scalar_stats = table
+            .index_stats(&scalar_config.name)
+            .await?
+            .expect("scalar index statistics should exist");
+        assert_eq!(scalar_stats.distance_type, None);
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn regression_lance_explicit_cleanup_retains_recent_versions() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "recent_versions".to_string())
+                .await?;
+        db.insert(vec![json!({ "id": 1 })]).await?;
+        db.insert(vec![json!({ "id": 2 })]).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let table = db.raw().await?;
+        let versions_before = table
+            .list_versions()
+            .await?
+            .into_iter()
+            .map(|version| version.version)
+            .collect::<Vec<_>>();
+        db.optimize(false).await?;
+        let versions_after = table
+            .list_versions()
+            .await?
+            .into_iter()
+            .map(|version| version.version)
+            .collect::<Vec<_>>();
+
+        assert!(
+            versions_before
+                .iter()
+                .all(|version| versions_after.contains(version)),
+            "cleanup removed a version newer than the seven-day retention window"
+        );
+        assert_eq!(db.count(None).await?, 2);
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1045,6 +1214,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_round_trips_rows_read_back_with_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "round_trip".to_string()).await?;
+        db.insert(vec![json!({
+            "id": "a",
+            "first_seen_at": "2026-08-16T12:00:00.000Z",
+            "hits": 1
+        })])
+        .await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        let first_seen_at = row["first_seen_at"]
+            .as_i64()
+            .expect("timestamps are read back as native-unit integers");
+        row["hits"] = json!(2);
+
+        db.upsert(vec![row], "id".to_string()).await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(first_seen_at));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn buffered_upsert_persists_rows_carrying_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let inner =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "buffered_round_trip".to_string())
+                .await?;
+        let mut db = BufferedVectorStore::new(inner, 2);
+        db.upsert(
+            vec![json!({ "id": "a", "first_seen_at": "2026-08-16T12:00:00.000Z", "hits": 1 })],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        row["hits"] = json!(2);
+
+        let origin = BufferedWriteOrigin::new(Arc::from("writer"), Some("operation".to_string()));
+        db.upsert_with_origin(vec![row], "id".to_string(), origin)
+            .await?;
+        db.flush().await?;
+
+        assert!(!db.has_write_failures());
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(1_786_881_600_000));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn sql_supports_queries_that_project_no_columns() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
@@ -1084,6 +1317,184 @@ mod tests {
             .collect::<Result<Vec<_>>>()?
             .concat();
         assert_eq!(rows[0]["cnt"], json!(2));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dml_statements_flow_through_a_registered_datafusion_table() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": 1, "name": "a" }),
+            json!({ "id": 2, "name": "b" }),
+            json!({ "id": 3, "name": "c" }),
+        ])
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("people", db.to_datafusion().await?)?;
+
+        let count = |ctx: SessionContext| async move {
+            let batches = ctx
+                .sql("SELECT COUNT(*) AS cnt FROM people")
+                .await?
+                .collect()
+                .await?;
+            let rows: Vec<Value> = batches
+                .iter()
+                .map(record_batch_to_value)
+                .collect::<Result<Vec<_>>>()?
+                .concat();
+            Ok::<Value, flow_like_types::Error>(rows[0]["cnt"].clone())
+        };
+
+        // EXPLAIN builds the DML plan without executing the mutation.
+        ctx.sql("EXPLAIN DELETE FROM people WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(count(ctx.clone()).await?, json!(3));
+
+        let batches = ctx
+            .sql("UPDATE people SET name = 'z' WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+
+        // The mutation is visible through the provider registered before it ran.
+        let batches = ctx
+            .sql("SELECT name FROM people WHERE id = 1")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["name"], json!("z"));
+
+        let batches = ctx
+            .sql("DELETE FROM people WHERE id = 3")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // No effective WHERE clause (missing, constant-true or constant-false —
+        // indistinguishable after optimization) must refuse, not write the table.
+        assert!(
+            ctx.sql("DELETE FROM people")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert!(
+            ctx.sql("DELETE FROM people WHERE false")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert!(
+            ctx.sql("UPDATE people SET name = 'q'")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // Subquery DML shapes are refused before planning — DataFusion would
+        // only forward the subquery's inner filters to the table, silently
+        // mutating the wrong rows.
+        assert!(
+            db.sql(
+                "people",
+                "DELETE FROM people WHERE id IN (SELECT id FROM people WHERE name = 'z')",
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
+        // INSERT keeps working through the same provider.
+        ctx.sql("INSERT INTO people (id, name) VALUES (4, 'd')")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(count(ctx.clone()).await?, json!(3));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dml_translates_temporal_predicates() -> Result<()> {
+        use arrow_array::{Int64Array, RecordBatch, TimestampMicrosecondArray};
+        use arrow_schema::{DataType, Schema as ArrowSchema};
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "events".to_string()).await?;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1_609_459_200_000_000, // 2021-01-01
+                    1_640_995_200_000_000, // 2022-01-01
+                ])),
+            ],
+        )?;
+        db.insert_record_batch(batch).await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("events", db.to_datafusion().await?)?;
+
+        let batches = ctx
+            .sql("DELETE FROM events WHERE ts < '2021-06-01T00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["count"], json!(1));
+
+        let batches = ctx.sql("SELECT id FROM events").await?.collect().await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], json!(2));
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
@@ -1822,6 +2233,60 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&test_path).unwrap();
+        Ok(())
+    }
+
+    /// The end of the parameter path: a value bound into an `only_if` predicate reaches the
+    /// row it names, and a value that tries to close its own literal reaches none — proved
+    /// against a real table rather than against the string this module produces.
+    #[tokio::test]
+    async fn bound_filter_values_stay_inside_their_literal() -> Result<()> {
+        use crate::databases::lance_filter_params::{bind_filter_params, resolve_filter_params};
+
+        fn bind(filter: &str, supplied: Value) -> Result<String> {
+            bind_filter_params(filter, &resolve_filter_params(filter, &supplied)?)
+        }
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "bound_filter".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": "a", "name": "first" }),
+            json!({ "id": "o'brien", "name": "second" }),
+            json!({ "id": "c", "name": "third" }),
+        ])
+        .await?;
+
+        let quoted = bind("id = $id", json!({ "id": "o'brien" }))?;
+        let rows = db.filter(&quoted, None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "second");
+
+        for attempt in [
+            "' OR id != '",
+            "a' OR 'a' = 'a",
+            // The backslash case: this dialect does not read `\'` as an escape, so the
+            // doubled quote is what keeps the tail inside the literal.
+            "x\\' OR true --",
+        ] {
+            let filter = bind("id = $id", json!({ "id": attempt }))?;
+            assert!(
+                db.filter(&filter, None, 10, 0).await?.is_empty(),
+                "matched rows for {attempt}: {filter}"
+            );
+        }
+
+        let in_list = bind("id IN ($ids)", json!({ "ids": ["a", "c"] }))?;
+        assert_eq!(db.filter(&in_list, None, 10, 0).await?.len(), 2);
+        let empty_list = bind("id IN ($ids)", json!({ "ids": [] }))?;
+        assert!(db.filter(&empty_list, None, 10, 0).await?.is_empty());
+
+        // The delete predicate goes through the same parser as the query one.
+        db.delete(&quoted).await?;
+        assert_eq!(db.count(None).await?, 2);
+
+        std::fs::remove_dir_all(&test_path)?;
         Ok(())
     }
 }

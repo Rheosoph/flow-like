@@ -18,7 +18,14 @@ impl AddFloatNode {
 #[async_trait]
 impl NodeLogic for AddFloatNode {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("float_add", "+", "Adds two floats together", "Math/Float");
+        let mut node = Node::new(
+            "float_add",
+            "+ (Float)",
+            "Adds two floats together",
+            "Math/Float",
+        );
+        node.set_flowscript_name("float", "add");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

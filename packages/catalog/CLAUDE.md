@@ -19,6 +19,7 @@ For abstract memory (thread handles, DB connections), use the context cache with
 - Use `Options` to offer enum dropdowns; set a JSON Schema for struct pins.
 - Use `JsonSchema` structs (with their schema in Pin Options) for typed interactions.
 - Multiple pins with the same name within one direction let users add more of that type.
+- Name the node for FlowScript right after `Node::new`: `node.set_flowscript_name("<namespace>", "<alias>")` (dotted namespace for nesting, camelCase alias) and `node.set_receiver("<pin>")` when it should be callable as a method on that input (`""` keeps it static-only). `lint_catalog::flowscript_names_are_explicit_on_first_party_nodes` fails without them.
 
 ## Example: Pure Node
 

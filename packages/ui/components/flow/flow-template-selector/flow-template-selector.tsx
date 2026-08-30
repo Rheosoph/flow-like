@@ -189,7 +189,7 @@ export function FlowTemplateSelector({
 					<div className="flex items-center gap-3">
 						<Loader2 className="h-5 w-5 animate-spin text-primary" />
 						<p className="text-sm text-muted-foreground">
-							{t('loadingTemplates', 'Loading templates...')}
+							{t("loadingTemplates", "Loading templates...")}
 						</p>
 					</div>
 				</div>
@@ -206,10 +206,10 @@ export function FlowTemplateSelector({
 							<LayoutTemplate className="h-6 w-6 text-destructive/50" />
 						</div>
 						<p className="text-sm font-medium text-foreground mb-1">
-							{t('failedToLoadTemplates', 'Failed to load templates')}
+							{t("failedToLoadTemplates", "Failed to load templates")}
 						</p>
 						<p className="text-xs text-muted-foreground mb-4">
-							{t('pleaseTryAgain', 'Please try again')}
+							{t("pleaseTryAgain", "Please try again")}
 						</p>
 						<Button
 							variant="outline"
@@ -220,7 +220,7 @@ export function FlowTemplateSelector({
 							}}
 							className="w-full"
 						>
-							{t('retry', 'Retry')}
+							{t("retry", "Retry")}
 						</Button>
 					</div>
 				</div>
@@ -237,7 +237,7 @@ export function FlowTemplateSelector({
 							<LayoutTemplate className="h-6 w-6 text-muted-foreground/50" />
 						</div>
 						<p className="text-sm font-medium text-foreground mb-1">
-							{t('noTemplatesYet', 'No templates yet')}
+							{t("noTemplatesYet", "No templates yet")}
 						</p>
 						<p className="text-xs text-muted-foreground mb-4">
 							{`Start building from scratch`}
@@ -250,7 +250,7 @@ export function FlowTemplateSelector({
 								className="w-full"
 							>
 								<Sparkles className="h-4 w-4 mr-2" />
-								{t('startBuilding', 'Start building')}
+								{t("startBuilding", "Start building")}
 							</Button>
 						)}
 					</div>
@@ -286,7 +286,7 @@ export function FlowTemplateSelector({
 							{/* Header */}
 							<div className="flex items-center justify-between px-4 pt-4 pb-2 shrink-0">
 								<h3 className="text-sm font-semibold text-foreground">
-									{t('startWithATemplate', 'Start with a template')}
+									{t("startWithATemplate", "Start with a template")}
 								</h3>
 								{onDismiss && (
 									<button
@@ -326,7 +326,7 @@ export function FlowTemplateSelector({
 								>
 									<span className="flex items-center gap-2">
 										<Grid3X3 className="h-4 w-4" />
-										{t('browseAllTemplates', 'Browse all templates')}
+										{t("browseAllTemplates", "Browse all templates")}
 									</span>
 									<ArrowRight className="h-4 w-4 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all md:opacity-0" />
 								</button>
@@ -354,14 +354,14 @@ export function FlowTemplateSelector({
 							{/* Header */}
 							<div className="p-3 md:p-4 md:border-b border-border/50 shrink-0">
 								<h2 className="text-base md:text-lg font-semibold mb-2 md:mb-3">
-									{t('templates', 'Templates')}
+									{t("templates", "Templates")}
 								</h2>
 								<div className="relative">
 									<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 									<Input
 										value={searchQuery}
 										onChange={(e) => setSearchQuery(e.target.value)}
-										placeholder={t('searchTemplates', 'Search templates...')}
+										placeholder={t("searchTemplates", "Search templates...")}
 										className="pl-9 h-9 text-sm bg-background"
 									/>
 								</div>
@@ -380,7 +380,7 @@ export function FlowTemplateSelector({
 										}`}
 									>
 										<div className="flex items-center gap-2 md:justify-between">
-											<span>{t('all', 'All')}</span>
+											<span>{t("all", "All")}</span>
 											<span
 												className={`text-xs ${selectedCategory === null ? "text-primary-foreground/70" : "text-muted-foreground"}`}
 											>
@@ -426,9 +426,14 @@ export function FlowTemplateSelector({
 											? (appsWithTemplates.find(
 													(a) => a.app.id === selectedCategory,
 												)?.appMetadata?.name ?? "Templates")
-											: t('allTemplates', 'All templates')}
+											: t("allTemplates", "All templates")}
 									</h3>
-									<p className="text-xs text-muted-foreground mt-0.5">{t('countTemplates', { defaultValue_one: '{{count}} template', defaultValue_other: '{{count}} templates', count: filteredTemplates.length })}
+									<p className="text-xs text-muted-foreground mt-0.5">
+										{t("countTemplates", {
+											defaultValue_one: "{{count}} template",
+											defaultValue_other: "{{count}} templates",
+											count: filteredTemplates.length,
+										})}
 									</p>
 								</div>
 								<div className="flex items-center gap-2">
@@ -509,10 +514,13 @@ export function FlowTemplateSelector({
 									<div className="flex flex-col items-center justify-center py-16 text-center">
 										<Search className="h-12 w-12 text-muted-foreground/30 mb-4" />
 										<p className="text-sm font-medium text-foreground mb-1">
-											{t('noTemplatesFound', 'No templates found')}
+											{t("noTemplatesFound", "No templates found")}
 										</p>
 										<p className="text-xs text-muted-foreground">
-											{t('tryADifferentSearchTermOrCategory', 'Try a different search term or category')}
+											{t(
+												"tryADifferentSearchTermOrCategory",
+												"Try a different search term or category",
+											)}
 										</p>
 									</div>
 								)}
@@ -611,7 +619,7 @@ function InlineTemplatePreview({
 				) : (
 					<div className="w-full h-full flex items-center justify-center">
 						<p className="text-xs text-muted-foreground">
-							{t('previewNotAvailable', 'Preview not available')}
+							{t("previewNotAvailable", "Preview not available")}
 						</p>
 					</div>
 				)}
@@ -668,13 +676,17 @@ function InlineTemplatePreview({
 						<div className="text-lg font-semibold text-foreground">
 							{templateBoard.isLoading ? "..." : nodeCount}
 						</div>
-						<div className="text-xs text-muted-foreground">{t('nodes', 'Nodes')}</div>
+						<div className="text-xs text-muted-foreground">
+							{t("nodes", "Nodes")}
+						</div>
 					</div>
 					<div className="flex-1 p-2 rounded-lg bg-muted/30 border border-border/50 text-center">
 						<div className="text-lg font-semibold text-foreground">
 							{templateBoard.isLoading ? "..." : commentCount}
 						</div>
-						<div className="text-xs text-muted-foreground">{t('comments', 'Comments')}</div>
+						<div className="text-xs text-muted-foreground">
+							{t("comments", "Comments")}
+						</div>
 					</div>
 				</div>
 			</div>
@@ -695,7 +707,7 @@ function InlineTemplatePreview({
 					) : (
 						<>
 							<Sparkles className="h-3.5 w-3.5 mr-1.5" />
-							{t('useTemplate', 'Use template')}
+							{t("useTemplate", "Use template")}
 						</>
 					)}
 				</Button>
@@ -798,7 +810,9 @@ function BrowserPreviewPane({
 		<div className="flex flex-col h-full">
 			{/* Header with close button */}
 			<div className="flex items-center justify-between p-4 border-b border-border/50 shrink-0">
-				<h3 className="font-semibold text-foreground truncate">{t('preview', 'Preview')}</h3>
+				<h3 className="font-semibold text-foreground truncate">
+					{t("preview", "Preview")}
+				</h3>
 				<button
 					type="button"
 					onClick={onClose}
@@ -824,7 +838,7 @@ function BrowserPreviewPane({
 				) : (
 					<div className="w-full h-full flex items-center justify-center">
 						<p className="text-xs text-muted-foreground">
-							{t('previewNotAvailable', 'Preview not available')}
+							{t("previewNotAvailable", "Preview not available")}
 						</p>
 					</div>
 				)}
@@ -885,19 +899,27 @@ function BrowserPreviewPane({
 							<div className="text-xl font-semibold text-foreground">
 								{templateBoard.isLoading ? "..." : nodeCount}
 							</div>
-							<div className="text-xs text-muted-foreground">{t('nodes', 'Nodes')}</div>
+							<div className="text-xs text-muted-foreground">
+								{t("nodes", "Nodes")}
+							</div>
 						</div>
 						<div className="p-3 rounded-lg bg-muted/30 border border-border/50 text-center">
 							<div className="text-xl font-semibold text-foreground">
 								{templateBoard.isLoading ? "..." : commentCount}
 							</div>
-							<div className="text-xs text-muted-foreground">{t('comments', 'Comments')}</div>
+							<div className="text-xs text-muted-foreground">
+								{t("comments", "Comments")}
+							</div>
 						</div>
 					</div>
 
 					{/* Author */}
 					{template.metadata?.author && (
-						<p className="text-xs text-muted-foreground">{t('byAuthor', 'By {{author}}', { author: template.metadata.author })}</p>
+						<p className="text-xs text-muted-foreground">
+							{t("byAuthor", "By {{author}}", {
+								author: template.metadata.author,
+							})}
+						</p>
 					)}
 				</div>
 			</ScrollArea>
@@ -913,7 +935,7 @@ function BrowserPreviewPane({
 					) : (
 						<>
 							<Sparkles className="h-4 w-4 mr-2" />
-							{t('useTemplate', 'Use template')}
+							{t("useTemplate", "Use template")}
 						</>
 					)}
 				</Button>

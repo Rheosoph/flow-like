@@ -221,6 +221,25 @@ describe("processChatEvents", () => {
 		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(1);
 	});
 
+	test("instance prefixes isolate widgets that share the same child id", () => {
+		const widgetA = widgetPushEvent("inst-a").payload.widgets[0];
+		const widgetB = widgetPushEvent("inst-b").payload.widgets[0];
+		const pushBoth = {
+			...widgetPushEvent("inst-a"),
+			payload: {
+				...widgetPushEvent("inst-a").payload,
+				widgets: [widgetA, widgetB],
+			},
+		};
+		const result = processChatEvents(
+			[pushBoth, upsertEvent("inst-b/map-1")],
+			baseState(baseMessage()),
+		);
+
+		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(0);
+		expect(result.responseMessage.widgets?.[1]?.updates).toHaveLength(1);
+	});
+
 	test("chat_out re-send never regresses live-appended updates", () => {
 		const message = baseMessage();
 		processChatEvents(

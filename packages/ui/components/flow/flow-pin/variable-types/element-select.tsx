@@ -89,9 +89,13 @@ export function ElementSelect({
 				</PopoverTrigger>
 				<PopoverContent className="w-60 p-0" align="start">
 					<Command>
-						<CommandInput placeholder={t('searchElements', 'Search elements...')} />
+						<CommandInput
+							placeholder={t("searchElements", "Search elements...")}
+						/>
 						<CommandList>
-							<CommandEmpty>{t('noElementsFound', 'No elements found.')}</CommandEmpty>
+							<CommandEmpty>
+								{t("noElementsFound", "No elements found.")}
+							</CommandEmpty>
 							<CommandGroup heading={pin.friendly_name}>
 								{elements.map((element) => (
 									<CommandItem

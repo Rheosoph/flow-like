@@ -64,6 +64,7 @@ impl A2UICopilot {
     }
 
     /// Main entry point - generate or modify A2UI surfaces via structured output
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat<F>(
         &self,
         current_surface: Option<&Vec<SurfaceComponent>>,
@@ -465,19 +466,20 @@ impl A2UICopilot {
         token: Option<String>,
     ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
         let bit = if let Some(profile) = &self.profile {
-            if let Some(id) = model_id {
-                profile
-                    .find_bit(&id, self.state.http_client.clone())
-                    .await?
-            } else {
-                let preference = BitModelPreference {
-                    reasoning_weight: Some(1.0),
-                    ..Default::default()
-                };
-                profile
-                    .get_best_model(&preference, false, true, self.state.http_client.clone())
-                    .await?
-            }
+            let preference = BitModelPreference {
+                reasoning_weight: Some(1.0),
+                ..Default::default()
+            };
+            let capabilities = FlowLikeState::completion_model_capabilities(&self.state).await;
+            profile
+                .resolve_completion_model(
+                    model_id.as_deref(),
+                    &preference,
+                    false,
+                    capabilities,
+                    self.state.http_client.clone(),
+                )
+                .await?
         } else {
             Bit {
                 id: "gpt-4o".to_string(),

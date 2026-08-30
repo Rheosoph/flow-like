@@ -24,6 +24,7 @@ export class FlowPilotGenerationMetricsRun {
 	private awaitingReview = false;
 	private finalized = false;
 	private finalBoardNodeCount: number | undefined;
+	private failure: { code?: unknown; message?: unknown } | undefined;
 
 	constructor(runKey: string, startedAtMs = Date.now()) {
 		this.runKey = runKey;
@@ -45,11 +46,13 @@ export class FlowPilotGenerationMetricsRun {
 		outcome: AgentDebugOutcome,
 		awaitingReview = false,
 		finalBoardNodeCount?: number,
+		failure?: { code?: unknown; message?: unknown },
 	) {
 		if (this.finalized) return;
 		this.recorder.flush();
 		this.outcome = outcome;
 		this.awaitingReview = awaitingReview;
+		this.failure = failure ?? this.failure;
 		this.observeFinalBoardNodeCount(finalBoardNodeCount);
 		if (!awaitingReview) this.finalize();
 	}
@@ -59,6 +62,7 @@ export class FlowPilotGenerationMetricsRun {
 		disposition: AgentGenerationReviewDisposition,
 		token?: FlowIrCommitToken,
 		finalBoardNodeCount?: number,
+		reason?: unknown,
 	) {
 		if (this.finalized) return;
 		if (disposition === "error" && this.outcome === "ok") {
@@ -72,6 +76,7 @@ export class FlowPilotGenerationMetricsRun {
 				draftId: token?.draft_id,
 				revision: token?.revision,
 				claimId: token?.claim_id,
+				reason,
 			}),
 		);
 		this.awaitingReview = false;
@@ -87,11 +92,11 @@ export class FlowPilotGenerationMetricsRun {
 	}
 
 	/** Fail closed if a surface disappears before its review can be resolved. */
-	abandon(outcome: AgentDebugOutcome = "cancelled") {
+	abandon(outcome: AgentDebugOutcome = "cancelled", reason?: unknown) {
 		if (this.finalized) return;
 		this.outcome = outcome;
 		if (this.awaitingReview) {
-			this.disposeReview("stale");
+			this.disposeReview("stale", undefined, undefined, reason);
 			return;
 		}
 		this.finalize();
@@ -103,6 +108,7 @@ export class FlowPilotGenerationMetricsRun {
 		finalizeAgentGenerationMetrics(this.runKey, this.outcome, {
 			publish: !FLOWPILOT_DEBUG_ENABLED,
 			finalBoardNodeCount: this.finalBoardNodeCount,
+			failure: this.failure,
 		});
 	}
 }

@@ -140,6 +140,7 @@ impl NodeLogic for FeatureExtractionNode {
             "Extract feature vectors from images using ONNX models",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "featureExtraction");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
@@ -291,6 +292,7 @@ impl NodeLogic for FeatureSimilarityNode {
             "Compare two feature vectors using cosine similarity or L2 distance",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "featureSimilarity");
 
         node.add_icon("/flow/icons/find_model.svg");
 

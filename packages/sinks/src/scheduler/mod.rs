@@ -32,7 +32,7 @@ pub enum SchedulerProvider {
 
 impl SchedulerProvider {
     /// Parse from string
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_env_value(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "aws" | "eventbridge" => Self::Aws,
             "kubernetes" | "k8s" => Self::Kubernetes,

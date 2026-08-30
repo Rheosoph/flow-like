@@ -66,6 +66,21 @@ fn parse_review(review: &Value) -> Option<GitHubPullRequestReview> {
 // Get Pull Request Node
 // =============================================================================
 
+/// A single inline review comment, in the shape GitHub's review API expects.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ReviewComment {
+    /// File the comment belongs to, relative to the repository root.
+    pub path: String,
+    /// The comment text.
+    pub body: String,
+    /// Line in the diff the comment is anchored to.
+    pub line: Option<i64>,
+    /// First line, when the comment spans a range.
+    pub start_line: Option<i64>,
+    /// Which side of the diff: LEFT for the old file, RIGHT for the new one.
+    pub side: Option<String>,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct GetGitHubPullRequestNode {}
@@ -85,6 +100,7 @@ impl NodeLogic for GetGitHubPullRequestNode {
             "Get details about a specific pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getPullRequest");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -262,6 +278,7 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             "Create a new pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createPullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -516,6 +533,7 @@ impl NodeLogic for UpdateGitHubPullRequestNode {
             "Update an existing pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "updatePullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -731,6 +749,7 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             "Merge a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "mergePullRequest");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -962,6 +981,7 @@ impl NodeLogic for ListGitHubPullRequestFilesNode {
             "List files changed in a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listPrFiles");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1158,6 +1178,7 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
             "List reviews on a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listPrReviews");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -1334,6 +1355,7 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             "Create a review on a pull request",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createPrReview");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -1379,7 +1401,8 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             "Inline review comments with path, position or line, and body",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_schema::<crate::data::github::pull_requests::ReviewComment>();
 
         node.add_input_pin("event", "Event", "Review event type", VariableType::String)
             .set_default_value(Some(json!("COMMENT")))

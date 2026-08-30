@@ -129,6 +129,18 @@ function appPathFromNotificationLink(link: string): string | null {
 	return null;
 }
 
+/**
+ * A Tauri command the running build never registered: the plugin ships in the
+ * JS bundle for every platform, but its native half only exists on mobile.
+ */
+function isMissingPluginCommand(error: unknown): boolean {
+	const message = typeof error === "string" ? error : (error as Error)?.message;
+	return (
+		typeof message === "string" &&
+		(message.includes("not allowed") || message.includes("Command not found"))
+	);
+}
+
 interface NotificationProviderProps {
 	appId?: string;
 }
@@ -382,10 +394,22 @@ export default function NotificationProvider({
 						});
 					console.log("[NotificationProvider] tap listener registered");
 				} catch (error) {
-					console.warn(
-						"[NotificationProvider] Failed to register tap listener:",
-						error,
-					);
+					// The JS module imports on every platform, so a missing native
+					// command is the first proof the plugin is not actually there
+					// (desktop dev builds). Drop the handle so later runs of this
+					// effect stop retrying a command that cannot exist.
+					if (isMissingPluginCommand(error)) {
+						remotePushApi.current = null;
+						setRemotePushPluginState("unavailable");
+						console.log(
+							"[NotificationProvider] Remote push plugin not registered on this platform",
+						);
+					} else {
+						console.warn(
+							"[NotificationProvider] Failed to register tap listener:",
+							error,
+						);
+					}
 				}
 			}
 

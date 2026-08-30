@@ -39,6 +39,7 @@ impl NodeLogic for AddModelHeadersNode {
             "Adds custom HTTP headers to a model for use with custom API endpoints",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "addHeaders");
         node.add_icon("/flow/icons/settings.svg");
         node.set_version(3);
 

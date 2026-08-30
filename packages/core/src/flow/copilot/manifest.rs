@@ -114,6 +114,12 @@ pub struct ManifestCatalogNode {
     pub required_inputs: Vec<String>,
     pub companion_nodes: Vec<String>,
     pub capability_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
 }
 
 impl From<&NodeMetadata> for ManifestCatalogNode {
@@ -148,6 +154,9 @@ impl From<&NodeMetadata> for ManifestCatalogNode {
             required_inputs,
             companion_nodes,
             capability_tags,
+            namespace: node.namespace.clone(),
+            alias: node.alias.clone(),
+            receiver: node.receiver.clone(),
         }
     }
 }
@@ -778,6 +787,9 @@ mod tests {
             required_inputs: vec![input_name.to_string()],
             companion_nodes: vec![],
             capability_tags: vec!["write".to_string(), "read".to_string()],
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 

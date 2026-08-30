@@ -1299,28 +1299,7 @@ pub(crate) async fn open_table_adapter(
     Ok(zero_column_safe(Arc::new(adapter)))
 }
 
-pub(crate) fn validate_readonly_sql(query: &str) -> Result<()> {
-    use datafusion::sql::parser::{DFParser, Statement as DFStatement};
-
-    let statements =
-        DFParser::parse_sql(query).map_err(|e| anyhow!("Failed to parse SQL query: {}", e))?;
-    if statements.len() != 1 {
-        return Err(anyhow!("Exactly one SQL statement is allowed per query"));
-    }
-    match statements.front() {
-        Some(DFStatement::Statement(inner))
-            if matches!(
-                inner.as_ref(),
-                datafusion::sql::sqlparser::ast::Statement::Query(_)
-            ) =>
-        {
-            Ok(())
-        }
-        _ => Err(anyhow!(
-            "Only read-only SELECT queries are allowed on the graph SQL surface"
-        )),
-    }
-}
+pub(crate) use crate::databases::sql_guard::validate_readonly_sql;
 
 /// Quotes an identifier for a DataFusion `ctx.sql()` string, where `"col"` is a
 /// delimited identifier.
@@ -2725,20 +2704,6 @@ mod tests {
         assert!(preflight_cypher(bounded.ast(), &safety()).is_ok());
         let plain = parse("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b LIMIT 10");
         assert!(preflight_cypher(plain.ast(), &safety()).is_ok());
-    }
-
-    #[test]
-    fn readonly_sql_accepts_selects_only() {
-        assert!(validate_readonly_sql("SELECT * FROM people LIMIT 5").is_ok());
-        assert!(validate_readonly_sql("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
-        assert!(validate_readonly_sql("DROP TABLE people").is_err());
-        assert!(validate_readonly_sql("COPY people TO '/tmp/out.csv'").is_err());
-        assert!(
-            validate_readonly_sql("CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/etc/passwd'")
-                .is_err()
-        );
-        assert!(validate_readonly_sql("SELECT 1; SELECT 2").is_err());
-        assert!(validate_readonly_sql("INSERT INTO people VALUES (1)").is_err());
     }
 
     #[test]

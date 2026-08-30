@@ -35,6 +35,7 @@ impl NodeLogic for RowLoopNode {
             "Loops over all rows of a table",
             "Control",
         );
+        node.set_flowscript_name("control", "forEachRow");
         node.add_icon("/flow/icons/for-each.svg");
 
         // Exec in
@@ -52,7 +53,8 @@ impl NodeLogic for RowLoopNode {
             "Executes the current row",
             VariableType::Execution,
         );
-        node.add_output_pin("value", "Row", "Current row object", VariableType::Struct);
+        node.add_output_pin("value", "Row", "Current row object", VariableType::Struct)
+            .set_open_schema();
         node.add_output_pin(
             "index",
             "Index",

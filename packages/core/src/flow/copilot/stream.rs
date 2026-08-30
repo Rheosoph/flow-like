@@ -5,6 +5,7 @@
 //! payload tags (`<commands>`, `<components>`, …) emitted by the callers. The frontend parser
 //! (`copilot-stream-parser.ts`) consumes exactly this grammar.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
@@ -935,7 +936,7 @@ fn apply_preview_shrink_budget(
         shrink_protected,
         &mut candidates,
     );
-    candidates.sort_by(|a, b| b.savings.cmp(&a.savings));
+    candidates.sort_by_key(|candidate| Reverse(candidate.savings));
     let mut remaining = overshoot;
     for candidate in candidates {
         if remaining == 0 {

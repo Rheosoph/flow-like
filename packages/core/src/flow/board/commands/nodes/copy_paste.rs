@@ -1,10 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     flow::{
-        board::{Board, Comment, Layer, commands::Command},
+        board::{Board, Comment, Layer, LayerType, commands::Command},
         node::Node,
-        pin::PinType,
+        pin::{Pin, PinType},
         variable::Variable,
     },
     state::FlowLikeState,
@@ -33,6 +36,15 @@ pub struct CopyPasteCommand {
     pub current_layer: Option<String>,
     pub old_mouse: Option<(f32, f32, f32)>,
     pub offset: (f32, f32, f32),
+    /// Source id → minted id for every node, pin and layer this paste created.
+    ///
+    /// Payloads that live outside the board graph — a page hook naming an `events_simple` node, a
+    /// widget binding naming a workflow — have no other way to follow the copy. Kept out of the
+    /// wire format on purpose: the map describes ids this machine minted, and a replay elsewhere
+    /// mints its own, so shipping it would only invite a consumer to trust foreign ids. Replaying
+    /// a pre-computed paste (`new_nodes` already populated) therefore leaves it empty.
+    #[serde(skip)]
+    pub translated_ids: HashMap<String, String>,
 }
 
 impl CopyPasteCommand {
@@ -56,6 +68,7 @@ impl CopyPasteCommand {
             new_layers: vec![],
             added_refs: vec![],
             added_variables: vec![],
+            translated_ids: HashMap::new(),
         }
     }
 
@@ -71,6 +84,97 @@ impl CopyPasteCommand {
         }
         Ok(())
     }
+
+    /// Restore references that are genuinely missing from the pasted node's destination scope.
+    ///
+    /// Function locals live on their owning layer rather than in `board.variables`. Checking only
+    /// the board map turns a valid local reference into a new global with the same id. Resolve the
+    /// nearest enclosing function first, matching execution and editor behavior, before falling
+    /// back to the historical global-variable recovery path.
+    fn restore_missing_variables(&mut self, board: &mut Board) {
+        self.added_variables.clear();
+
+        for (index, node) in self.new_nodes.iter().enumerate() {
+            for pin in node.pins.values() {
+                if pin.name != "var_ref" {
+                    continue;
+                }
+                let Some(var_ref) = pin.default_value.as_deref() else {
+                    continue;
+                };
+                let Ok(var_ref) = from_slice::<String>(var_ref) else {
+                    continue;
+                };
+                if variable_resolves_for_node(board, node, &var_ref) {
+                    continue;
+                }
+
+                let variable = self
+                    .original_variables
+                    .iter()
+                    .find(|variable| variable.id == var_ref)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let source_node = self.original_nodes.get(index).unwrap_or(node);
+                        fallback_variable(source_node, node, pin, &var_ref)
+                    });
+
+                board.variables.insert(var_ref.clone(), variable);
+                self.added_variables.push(var_ref);
+            }
+        }
+    }
+}
+
+fn variable_resolves_for_node(board: &Board, node: &Node, variable_id: &str) -> bool {
+    let mut current_layer = node.layer.as_deref();
+    let mut seen = HashSet::new();
+    while let Some(layer_id) = current_layer {
+        if !seen.insert(layer_id) {
+            break;
+        }
+        let Some(layer) = board.layers.get(layer_id) else {
+            break;
+        };
+        if matches!(layer.r#type, LayerType::Function) {
+            if layer.variables.contains_key(variable_id) {
+                return true;
+            }
+            break;
+        }
+        current_layer = layer.parent_id.as_deref();
+    }
+
+    board.variables.contains_key(variable_id)
+}
+
+fn fallback_variable(source_node: &Node, node: &Node, pin: &Pin, id: &str) -> Variable {
+    let var_name = if source_node.friendly_name.starts_with("Get ") {
+        source_node.friendly_name.replace("Get ", "")
+    } else if source_node.friendly_name.starts_with("Set ") {
+        source_node.friendly_name.replace("Set ", "")
+    } else {
+        source_node.friendly_name.clone()
+    };
+    let value_ref_pin = node
+        .pins
+        .values()
+        .find(|candidate| candidate.name == "value_ref");
+    let mut variable = Variable::new(
+        &var_name,
+        value_ref_pin
+            .map(|candidate| candidate.data_type.clone())
+            .unwrap_or_else(|| pin.data_type.clone()),
+        value_ref_pin
+            .map(|candidate| candidate.value_type.clone())
+            .unwrap_or_else(|| pin.value_type.clone()),
+    );
+    variable.id = id.to_string();
+    if let Some(value_ref_pin) = value_ref_pin {
+        variable.default_value = value_ref_pin.default_value.clone();
+        variable.schema = value_ref_pin.schema.clone();
+    }
+    variable
 }
 
 #[async_trait]
@@ -99,26 +203,15 @@ impl Command for CopyPasteCommand {
                 board.comments.insert(comment.id.clone(), comment.clone());
             }
 
-            self.added_variables.clear();
             for node in &self.new_nodes {
                 board.nodes.insert(node.id.clone(), node.clone());
-
-                for pin in node.pins.values() {
-                    if pin.name == "var_ref"
-                        && let Some(var_ref) = pin.default_value.as_ref()
-                        && let Ok(var_ref) = from_slice::<String>(var_ref)
-                        && !board.variables.contains_key(&var_ref)
-                        && let Some(orig) = self.original_variables.iter().find(|v| v.id == var_ref)
-                    {
-                        board.variables.insert(var_ref.clone(), orig.clone());
-                        self.added_variables.push(var_ref);
-                    }
-                }
             }
 
             for layer in &self.new_layers {
                 board.layers.insert(layer.id.clone(), layer.clone());
             }
+
+            self.restore_missing_variables(board);
 
             self.added_refs.clear();
             for (key, value) in &self.original_refs {
@@ -299,54 +392,6 @@ impl Command for CopyPasteCommand {
                     pin.id = new_pin_id.clone();
                     pin.description = blueprint_pin.description.clone();
 
-                    if pin.name == "var_ref"
-                        && let Some(var_ref) = pin.default_value.as_ref()
-                    {
-                        let var_ref = from_slice::<String>(var_ref);
-                        if let Ok(var_ref) = var_ref {
-                            let variable_ref = board.variables.get(&var_ref);
-                            if variable_ref.is_none() {
-                                // Try to find the original variable from the template/copy source
-                                let original_var =
-                                    self.original_variables.iter().find(|v| v.id == var_ref);
-
-                                if let Some(orig) = original_var {
-                                    let mut new_var = orig.clone();
-                                    new_var.id = var_ref.clone();
-                                    self.added_variables.push(var_ref.clone());
-                                    board.variables.insert(var_ref.clone(), new_var);
-                                } else {
-                                    // Fallback: create a variable with as much info as possible
-                                    let var_name = if new_node.friendly_name.starts_with("Get ") {
-                                        new_node.friendly_name.replace("Get ", "")
-                                    } else if new_node.friendly_name.starts_with("Set ") {
-                                        new_node.friendly_name.replace("Set ", "")
-                                    } else {
-                                        new_node.friendly_name.clone()
-                                    };
-                                    let value_ref_pin =
-                                        new_node.pins.values().find(|p| p.name == "value_ref");
-                                    let mut new_var = Variable::new(
-                                        &var_name,
-                                        value_ref_pin
-                                            .map(|p| p.data_type.clone())
-                                            .unwrap_or(pin.data_type.clone()),
-                                        value_ref_pin
-                                            .map(|p| p.value_type.clone())
-                                            .unwrap_or(pin.value_type.clone()),
-                                    );
-                                    new_var.id = var_ref.clone();
-                                    if let Some(vr) = value_ref_pin {
-                                        new_var.default_value = vr.default_value.clone();
-                                        new_var.schema = vr.schema.clone();
-                                    }
-                                    self.added_variables.push(var_ref.clone());
-                                    board.variables.insert(var_ref.clone(), new_var);
-                                }
-                            }
-                        }
-                    }
-
                     // Translate function_layer_id when pasting CallFunction nodes
                     if pin.name == "function_layer_id"
                         && let Some(ref_bytes) = pin.default_value.as_ref()
@@ -445,6 +490,8 @@ impl Command for CopyPasteCommand {
             self.new_layers.push(new_layer);
         }
 
+        self.restore_missing_variables(board);
+
         // Restore referenced schemas/refs that don't already exist in the board
         self.added_refs.clear();
         for (key, value) in &self.original_refs {
@@ -453,6 +500,8 @@ impl Command for CopyPasteCommand {
                 self.added_refs.push(key.clone());
             }
         }
+
+        self.translated_ids = translated_connection;
 
         Ok(())
     }
@@ -490,6 +539,42 @@ impl Command for CopyPasteCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        flow::{
+            pin::ValueType,
+            variable::{Variable, VariableType},
+        },
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_storage::Path;
+
+    fn state() -> Arc<FlowLikeState> {
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    fn local_variable(id: &str) -> Variable {
+        let mut variable = Variable::new("Local", VariableType::String, ValueType::Normal);
+        variable.id = id.to_string();
+        variable
+    }
+
+    fn variable_get(variable_id: &str, layer: Option<String>) -> Node {
+        let mut node = Node::new("variable_get", "Get Local", "", "Variables");
+        node.layer = layer;
+        node.add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(flow_like_types::json::to_vec(variable_id).unwrap());
+        node
+    }
+
+    fn variable_ref(node: &Node) -> Option<String> {
+        node.get_pin_by_name("var_ref")
+            .and_then(|pin| pin.default_value.as_deref())
+            .and_then(|value| from_slice::<String>(value).ok())
+    }
 
     #[test]
     fn rejects_internal_refs_from_copy_paste_payloads() {
@@ -524,5 +609,112 @@ mod tests {
         command
             .validate_original_refs()
             .expect("ordinary board refs must remain copyable");
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn paste_reuses_enclosing_function_local_on_execute_and_redo() {
+        let mut board = Board::new_detached(Some("board".into()), Path::default());
+        let mut function = Layer::new("function".into(), "Function".into(), LayerType::Function);
+        let local = local_variable("local");
+        function.variables.insert(local.id.clone(), local.clone());
+
+        let mut group = Layer::new("group".into(), "Group".into(), LayerType::Collapsed);
+        group.parent_id = Some(function.id.clone());
+        board.layers.insert(function.id.clone(), function);
+        board.layers.insert(group.id.clone(), group.clone());
+
+        // The clipboard omits a node's layer when it is copied from the open layer. The paste
+        // command places it into `current_layer`, which can itself be nested in the function.
+        let source = variable_get("local", None);
+        let mut command =
+            CopyPasteCommand::new(vec![source], Vec::new(), Vec::new(), (0.0, 0.0, 0.0));
+        command.current_layer = Some(group.id.clone());
+        // Replays receive the executed command, including copied variable metadata. Keeping this
+        // here makes the second execute independently cover the precomputed-command branch.
+        command.original_variables.push(local);
+
+        command
+            .execute(&mut board, state())
+            .await
+            .expect("initial paste");
+
+        assert!(!board.variables.contains_key("local"));
+        assert!(board.layers["function"].variables.contains_key("local"));
+        assert!(command.added_variables.is_empty());
+        let pasted_id = command.new_nodes[0].id.clone();
+        assert_eq!(board.nodes[&pasted_id].layer.as_deref(), Some("group"));
+        assert_eq!(
+            variable_ref(&board.nodes[&pasted_id]).as_deref(),
+            Some("local")
+        );
+
+        command.undo(&mut board, state()).await.expect("undo paste");
+        assert!(!board.nodes.contains_key(&pasted_id));
+        assert!(!board.variables.contains_key("local"));
+        assert!(board.layers["function"].variables.contains_key("local"));
+
+        command
+            .execute(&mut board, state())
+            .await
+            .expect("redo paste");
+
+        assert!(board.nodes.contains_key(&pasted_id));
+        assert_eq!(board.nodes[&pasted_id].layer.as_deref(), Some("group"));
+        assert_eq!(
+            variable_ref(&board.nodes[&pasted_id]).as_deref(),
+            Some("local")
+        );
+        assert!(!board.variables.contains_key("local"));
+        assert!(board.layers["function"].variables.contains_key("local"));
+        assert!(command.added_variables.is_empty());
+    }
+
+    #[test]
+    fn a_local_in_another_function_does_not_resolve_for_the_pasted_node() {
+        let mut board = Board::new_detached(Some("board".into()), Path::default());
+        let mut first = Layer::new("first".into(), "First".into(), LayerType::Function);
+        let local = local_variable("local");
+        first.variables.insert(local.id.clone(), local);
+        let second = Layer::new("second".into(), "Second".into(), LayerType::Function);
+        board.layers.insert(first.id.clone(), first);
+        board.layers.insert(second.id.clone(), second);
+
+        let node = variable_get("local", Some("second".into()));
+
+        assert!(!variable_resolves_for_node(&board, &node, "local"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn pasting_a_function_uses_the_local_on_its_copied_layer() {
+        let mut board = Board::new_detached(Some("board".into()), Path::default());
+        let mut function = Layer::new("source".into(), "Function".into(), LayerType::Function);
+        let local = local_variable("local");
+        function.variables.insert(local.id.clone(), local);
+        let source = variable_get("local", Some(function.id.clone()));
+        let mut command =
+            CopyPasteCommand::new(vec![source], Vec::new(), vec![function], (0.0, 0.0, 0.0));
+
+        command
+            .execute(&mut board, state())
+            .await
+            .expect("paste function");
+
+        assert!(!board.variables.contains_key("local"));
+        assert!(command.added_variables.is_empty());
+        let copied_function = &command.new_layers[0];
+        assert!(copied_function.variables.contains_key("local"));
+        assert_eq!(
+            command.new_nodes[0].layer.as_deref(),
+            Some(copied_function.id.as_str())
+        );
+        assert!(
+            board.layers[&copied_function.id]
+                .variables
+                .contains_key("local")
+        );
+        assert_eq!(
+            board.nodes[&command.new_nodes[0].id].layer.as_deref(),
+            Some(copied_function.id.as_str())
+        );
     }
 }

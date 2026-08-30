@@ -1,12 +1,106 @@
-import type { IStorageItem, IStorageState } from "@flow-like/flow-like-ui";
+import {
+	BulkUploadAbortError,
+	type BulkUploadProgressCallback,
+	type IBulkUploadResult,
+	type IStorageItem,
+	type IStorageState,
+	type IStorageUploadOptions,
+	assertBulkUploadSucceeded,
+	requestPrefixesInBatches,
+	runBulkUpload,
+	toUploadTasks,
+	uploadToSignedUrl,
+} from "@flow-like/flow-like-ui";
 import { stabilizeSignedUrls } from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { invoke } from "@tauri-apps/api/core";
-import { dirname, join, resolve } from "@tauri-apps/api/path";
+import { dirname, resolve } from "@tauri-apps/api/path";
 import { save } from "@tauri-apps/plugin-dialog";
-import { mkdir, open } from "@tauri-apps/plugin-fs";
-import { fetcher, put } from "../../lib/api";
+import { mkdir, open, remove } from "@tauri-apps/plugin-fs";
+import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+type StorageScope = "app" | "user";
+
+/**
+ * Local writes go through Tauri IPC to the filesystem, so they do not benefit
+ * from the connection parallelism a remote upload does. Kept low deliberately.
+ */
+const LOCAL_WRITE_CONCURRENCY = 4;
+
+/** Files at or above this size stream instead of being buffered whole. */
+const LOCAL_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
+function isLocalAssetUrl(url: string): boolean {
+	return (
+		url.startsWith("asset://") || url.startsWith("http://asset.localhost/")
+	);
+}
+
+/**
+ * Write one file to the path behind an `asset://` URL, streaming anything large
+ * enough that buffering it would spike memory.
+ */
+async function writeLocalFile(
+	url: string,
+	file: File,
+	onBytes: (loaded: number) => void,
+	signal: AbortSignal,
+): Promise<void> {
+	const rawPath = decodeURIComponent(
+		url
+			.replace("http://asset.localhost/", "")
+			.replaceAll("asset://localhost/", ""),
+	);
+
+	const parentDir = await dirname(rawPath);
+	await mkdir(parentDir, { recursive: true });
+
+	const resolvedPath = await resolve(rawPath);
+	const fileHandle = await open(resolvedPath, {
+		append: false,
+		create: true,
+		write: true,
+		truncate: true,
+	});
+	if (!fileHandle) {
+		throw new Error(`Could not open ${rawPath} for writing`);
+	}
+
+	let complete = false;
+	try {
+		if (file.size < LOCAL_STREAM_THRESHOLD_BYTES) {
+			await fileHandle.write(new Uint8Array(await file.arrayBuffer()));
+			onBytes(file.size);
+			complete = true;
+			return;
+		}
+
+		const reader = file.stream().getReader();
+		let bytesWritten = 0;
+		try {
+			for (;;) {
+				if (signal.aborted) throw new BulkUploadAbortError();
+				const { done, value } = await reader.read();
+				if (done) break;
+				await fileHandle.write(value);
+				bytesWritten += value.length;
+				onBytes(bytesWritten);
+			}
+		} finally {
+			reader.releaseLock();
+		}
+		complete = true;
+	} finally {
+		await fileHandle.close();
+		// `truncate` already emptied any file that was here, so abandoning the
+		// write halfway would leave a partial file in place of the original
+		// and list it as a normal storage item.
+		if (!complete) {
+			await remove(resolvedPath).catch(() => {});
+		}
+	}
+}
 
 export class StorageState implements IStorageState {
 	constructor(private readonly backend: TauriBackend) {}
@@ -164,19 +258,26 @@ export class StorageState implements IStorageState {
 				throw new Error("Backend is not properly initialized for deletion.");
 			}
 
-			const files = await fetcher<IStorageItemActionResult[]>(
-				this.backend.profile,
-				`apps/${appId}/data/download`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						prefixes: prefixes,
-					}),
-				},
-				this.backend.auth,
+			const profile = this.backend.profile;
+			const auth = this.backend.auth;
+			// The route caps a request at MAX_PREFIXES and rejects anything
+			// larger, so a large selection goes over in batches.
+			return requestPrefixesInBatches(
+				prefixes,
+				async (batch) =>
+					stabilizeSignedUrls(
+						await fetcher<IStorageItemActionResult[]>(
+							profile,
+							`apps/${appId}/data/download`,
+							{
+								method: "POST",
+								body: JSON.stringify({ prefixes: batch }),
+							},
+							auth,
+						),
+					),
+				{ errorMessage: "Download failed" },
 			);
-
-			return stabilizeSignedUrls(files);
 		}
 
 		console.dir({
@@ -209,19 +310,26 @@ export class StorageState implements IStorageState {
 				throw new Error("Backend is not properly initialized for deletion.");
 			}
 
-			const files = await fetcher<IStorageItemActionResult[]>(
-				this.backend.profile,
-				`apps/${appId}/data/user/download`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						prefixes: prefixes,
-					}),
-				},
-				this.backend.auth,
+			const profile = this.backend.profile;
+			const auth = this.backend.auth;
+			// The route caps a request at MAX_PREFIXES and rejects anything
+			// larger, so a large selection goes over in batches.
+			return requestPrefixesInBatches(
+				prefixes,
+				async (batch) =>
+					stabilizeSignedUrls(
+						await fetcher<IStorageItemActionResult[]>(
+							profile,
+							`apps/${appId}/data/user/download`,
+							{
+								method: "POST",
+								body: JSON.stringify({ prefixes: batch }),
+							},
+							auth,
+						),
+					),
+				{ errorMessage: "Download failed" },
 			);
-
-			return stabilizeSignedUrls(files);
 		}
 
 		const items = await invoke<IStorageItemActionResult[]>("storage_user_get", {
@@ -235,416 +343,163 @@ export class StorageState implements IStorageState {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
-		let totalFiles = files.length;
-		let completedFiles = 0;
-		console.dir(files);
-		console.log(prefix);
-
-		const yieldControl = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-		const batchSize = 2;
-		const batches = [];
-		for (let i = 0; i < files.length; i += batchSize) {
-			batches.push(files.slice(i, i + batchSize));
-		}
-
-		const isOffline = await this.backend.isOffline(appId);
-		const promises = [] as Promise<void>[];
-
-		if (!isOffline) {
-			if (
-				!this.backend.profile ||
-				!this.backend.auth ||
-				!this.backend.queryClient
-			) {
-				throw new Error("Backend is not properly initialized for deletion.");
-			}
-
-			totalFiles = files.length * 2;
-			const fileLookup = new Map(
-				files.map((file) => {
-					const path =
-						(file.webkitRelativePath ?? "") === ""
-							? file.name
-							: file.webkitRelativePath;
-					const filePath = `${prefix}/${path}`;
-					return [filePath, file];
-				}),
-			);
-			const urls: IStorageItemActionResult[] = await put(
-				this.backend.profile,
-				`apps/${appId}/data`,
-				{
-					prefixes: files.map((file) => {
-						const path =
-							(file.webkitRelativePath ?? "") === ""
-								? file.name
-								: file.webkitRelativePath;
-						return `${prefix}/${path}`;
-					}),
-				},
-				this.backend.auth,
-			);
-
-			for (const url of urls) {
-				const file = fileLookup.get(url.prefix);
-				if (!file) {
-					console.warn(`File not found for URL: ${url.prefix}`);
-					continue;
-				}
-
-				console.group("Uploading file to storage");
-				console.dir({
-					appId: appId,
-					prefix: url.prefix,
-					size: file.size,
-				});
-				console.groupEnd();
-
-				if (url.url)
-					promises.push(
-						this.backend.uploadSignedUrl(
-							url.url,
-							file,
-							completedFiles,
-							totalFiles,
-							onProgress,
-						),
-					);
-			}
-
-			await Promise.all(promises);
-			return;
-		}
-
-		for (const batch of batches) {
-			await Promise.all(
-				batch.map(async (file) => {
-					let filePath = file.name;
-
-					if (file.webkitRelativePath && file.webkitRelativePath !== "") {
-						filePath = file.webkitRelativePath;
-					}
-
-					filePath = await join(prefix, filePath);
-
-					console.group("Uploading file to storage");
-					console.dir({
-						appId: appId,
-						prefix: filePath,
-						size: file.size,
-					});
-					console.groupEnd();
-
-					const url = await invoke<string>("storage_add", {
-						appId: appId,
-						prefix: filePath,
-					});
-
-					if (
-						url.startsWith("asset://") ||
-						url.startsWith("http://asset.localhost/")
-					) {
-						const rawPath = decodeURIComponent(
-							url
-								.replace("http://asset.localhost/", "")
-								.replaceAll("asset://localhost/", ""),
-						);
-
-						const parentDir = await dirname(rawPath);
-						await mkdir(parentDir, { recursive: true });
-						let fileHandle;
-
-						fileHandle = await open(await resolve(rawPath), {
-							append: false,
-							create: true,
-							write: true,
-							truncate: true,
-						});
-
-						if (!fileHandle) {
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							return;
-						}
-
-						const chunkSize = 8 * 1024 * 1024;
-						if (file.size < chunkSize) {
-							const bytes = new Uint8Array(await file.arrayBuffer());
-							await fileHandle.write(bytes);
-							await fileHandle.close();
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							return;
-						}
-
-						const stream = file.stream();
-						const reader = stream.getReader();
-						let bytesWritten = 0;
-						let chunkCount = 0;
-
-						try {
-							while (true) {
-								const { done, value } = await reader.read();
-
-								if (done) {
-									break;
-								}
-
-								await fileHandle.write(value);
-								bytesWritten += value.length;
-								chunkCount++;
-
-								// Update progress and yield control every few chunks
-								if (chunkCount % 5 === 0) {
-									const fileProgress = bytesWritten / file.size;
-									const totalProgress =
-										((completedFiles + fileProgress) / totalFiles) * 100;
-									onProgress?.(totalProgress);
-
-									await yieldControl();
-								}
-							}
-
-							// Final progress update
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-						} finally {
-							reader.releaseLock();
-							await fileHandle.close();
-						}
-					} else {
-						try {
-							await this.backend.uploadSignedUrl(
-								url,
-								file,
-								completedFiles,
-								totalFiles,
-								onProgress,
-							);
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-						} catch (error) {
-							console.error(`Failed to upload file ${filePath}:`, error);
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							throw error;
-						}
-					}
-				}),
-			);
-
-			await yieldControl();
-		}
+		await this.uploadInternal(appId, prefix, files, "app", onProgress, options);
 	}
 
 	async uploadStorageItemsUser(
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
-		let totalFiles = files.length;
-		let completedFiles = 0;
-		console.dir(files);
-		console.log(prefix);
+		await this.uploadInternal(
+			appId,
+			prefix,
+			files,
+			"user",
+			onProgress,
+			options,
+		);
+	}
 
-		const yieldControl = () => new Promise((resolve) => setTimeout(resolve, 0));
+	/**
+	 * Offline apps write straight to disk through the Tauri storage commands;
+	 * hosted apps go through presigned URLs the API mints in capped batches.
+	 * Both feed the same orchestrator, so retries, bounded concurrency and
+	 * byte-weighted progress behave identically either way — only resolving a
+	 * destination and moving the bytes differ.
+	 */
+	private async uploadInternal(
+		appId: string,
+		prefix: string,
+		files: File[],
+		scope: StorageScope,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
+	): Promise<void> {
+		const isOffline = await this.backend.isOffline(appId);
+		const result = isOffline
+			? await this.uploadOffline(
+					appId,
+					prefix,
+					files,
+					scope,
+					onProgress,
+					options,
+				)
+			: await this.uploadSigned(
+					appId,
+					prefix,
+					files,
+					scope,
+					onProgress,
+					options,
+				);
 
-		const batchSize = 2;
-		const batches = [];
-		for (let i = 0; i < files.length; i += batchSize) {
-			batches.push(files.slice(i, i + batchSize));
+		assertBulkUploadSucceeded(result);
+	}
+
+	private async uploadSigned(
+		appId: string,
+		prefix: string,
+		files: File[],
+		scope: StorageScope,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
+	): Promise<IBulkUploadResult> {
+		const { profile, auth, queryClient } = this.backend;
+		if (!profile || !auth || !queryClient) {
+			throw new Error("Backend is not properly initialized for uploading.");
 		}
 
-		const isOffline = await this.backend.isOffline(appId);
-		const promises = [] as Promise<void>[];
+		const endpoint =
+			scope === "user" ? `apps/${appId}/data/user` : `apps/${appId}/data`;
 
-		if (!isOffline) {
-			if (
-				!this.backend.profile ||
-				!this.backend.auth ||
-				!this.backend.queryClient
-			) {
-				throw new Error("Backend is not properly initialized for deletion.");
-			}
-
-			totalFiles = files.length * 2;
-			const fileLookup = new Map(
-				files.map((file) => {
-					const path =
-						(file.webkitRelativePath ?? "") === ""
-							? file.name
-							: file.webkitRelativePath;
-					const filePath = prefix ? `${prefix}/${path}` : path;
-					return [filePath, file];
-				}),
-			);
-			const urls: IStorageItemActionResult[] = await put(
-				this.backend.profile,
-				`apps/${appId}/data/user`,
-				{
-					prefixes: files.map((file) => {
-						const path =
-							(file.webkitRelativePath ?? "") === ""
-								? file.name
-								: file.webkitRelativePath;
-						return prefix ? `${prefix}/${path}` : path;
-					}),
+		return runBulkUpload<string>(
+			toUploadTasks(prefix, files),
+			{
+				prepare: async (paths, signal) => {
+					const signed = await fetcher<IStorageItemActionResult[]>(
+						profile,
+						endpoint,
+						{
+							method: "PUT",
+							body: JSON.stringify({ prefixes: paths }),
+							signal,
+						},
+						auth,
+					);
+					const targets = new Map<string, string>();
+					for (const entry of signed) {
+						if (entry.url) targets.set(entry.prefix, entry.url);
+						else if (entry.error) {
+							console.warn(
+								`Failed to sign upload for ${entry.prefix}: ${entry.error}`,
+							);
+						}
+					}
+					return targets;
 				},
-				this.backend.auth,
-			);
+				send: (signedUrl, task, onBytes, signal) =>
+					uploadToSignedUrl(signedUrl, task.file, { onBytes, signal }),
+			},
+			{ onProgress, signal: options?.signal },
+		);
+	}
 
-			for (const url of urls) {
-				const file = fileLookup.get(url.prefix);
-				if (!file) {
-					console.warn(`File not found for URL: ${url.prefix}`);
-					continue;
-				}
+	private async uploadOffline(
+		appId: string,
+		prefix: string,
+		files: File[],
+		scope: StorageScope,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
+	): Promise<IBulkUploadResult> {
+		const command = scope === "user" ? "storage_user_add" : "storage_add";
 
-				console.group("Uploading file to user storage");
-				console.dir({
-					appId: appId,
-					prefix: url.prefix,
-					size: file.size,
-				});
-				console.groupEnd();
-
-				if (url.url)
-					promises.push(
-						this.backend.uploadSignedUrl(
-							url.url,
-							file,
-							completedFiles,
-							totalFiles,
-							onProgress,
+		// Forward slashes, not the platform separator. `storage_add` hands the
+		// prefix to `construct_upload`, which splits on '/' alone
+		// (packages/storage/src/files/store.rs), so a Windows `join` result
+		// would arrive as one long segment and flatten the folder structure.
+		// Sharing the online path's helper also drops one IPC round trip per
+		// file, which is what used to stall a large folder before its first
+		// byte reached disk.
+		return runBulkUpload<string>(
+			toUploadTasks(prefix, files),
+			{
+				prepare: async (paths) => {
+					const resolved = await Promise.all(
+						paths.map(
+							async (path) =>
+								[
+									path,
+									await invoke<string>(command, { appId, prefix: path }),
+								] as const,
 						),
 					);
-			}
-
-			await Promise.all(promises);
-			return;
-		}
-
-		for (const batch of batches) {
-			await Promise.all(
-				batch.map(async (file) => {
-					let filePath = file.name;
-
-					if (file.webkitRelativePath && file.webkitRelativePath !== "") {
-						filePath = file.webkitRelativePath;
+					return new Map(resolved);
+				},
+				send: async (url, task, onBytes, signal) => {
+					if (isLocalAssetUrl(url)) {
+						await writeLocalFile(url, task.file, onBytes, signal);
+						return;
 					}
-
-					filePath = await join(prefix, filePath);
-
-					console.group("Uploading file to user storage");
-					console.dir({
-						appId: appId,
-						prefix: filePath,
-						size: file.size,
-					});
-					console.groupEnd();
-
-					const url = await invoke<string>("storage_user_add", {
-						appId: appId,
-						prefix: filePath,
-					});
-
-					if (
-						url.startsWith("asset://") ||
-						url.startsWith("http://asset.localhost/")
-					) {
-						const rawPath = decodeURIComponent(
-							url
-								.replace("http://asset.localhost/", "")
-								.replaceAll("asset://localhost/", ""),
-						);
-
-						const parentDir = await dirname(rawPath);
-						await mkdir(parentDir, { recursive: true });
-						let fileHandle;
-
-						fileHandle = await open(await resolve(rawPath), {
-							append: false,
-							create: true,
-							write: true,
-							truncate: true,
-						});
-
-						if (!fileHandle) {
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							return;
-						}
-
-						const chunkSize = 8 * 1024 * 1024;
-						if (file.size < chunkSize) {
-							const bytes = new Uint8Array(await file.arrayBuffer());
-							await fileHandle.write(bytes);
-							await fileHandle.close();
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							return;
-						}
-
-						const stream = file.stream();
-						const reader = stream.getReader();
-						let bytesWritten = 0;
-						let chunkCount = 0;
-
-						try {
-							while (true) {
-								const { done, value } = await reader.read();
-
-								if (done) {
-									break;
-								}
-
-								await fileHandle.write(value);
-								bytesWritten += value.length;
-								chunkCount++;
-
-								if (chunkCount % 5 === 0) {
-									const fileProgress = bytesWritten / file.size;
-									const totalProgress =
-										((completedFiles + fileProgress) / totalFiles) * 100;
-									onProgress?.(totalProgress);
-
-									await yieldControl();
-								}
-							}
-
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-						} finally {
-							reader.releaseLock();
-							await fileHandle.close();
-						}
-					} else {
-						try {
-							await this.backend.uploadSignedUrl(
-								url,
-								file,
-								completedFiles,
-								totalFiles,
-								onProgress,
-							);
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-						} catch (error) {
-							console.error(`Failed to upload file ${filePath}:`, error);
-							completedFiles++;
-							onProgress?.((completedFiles / totalFiles) * 100);
-							throw error;
-						}
-					}
-				}),
-			);
-
-			await yieldControl();
-		}
+					await uploadToSignedUrl(url, task.file, { onBytes, signal });
+				},
+			},
+			{
+				onProgress,
+				signal: options?.signal,
+				concurrency: LOCAL_WRITE_CONCURRENCY,
+				// One destination per `invoke`, so a batch buys nothing here and
+				// a smaller one starts the first write sooner.
+				batchSize: LOCAL_WRITE_CONCURRENCY * 4,
+			},
+		);
 	}
 
 	async writeStorageItems(items: IStorageItemActionResult[]) {

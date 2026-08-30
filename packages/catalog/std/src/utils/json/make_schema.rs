@@ -24,6 +24,7 @@ impl NodeLogic for SchemaFromExample {
             "Generate Tool Definitions for Tool Calls",
             "Utils/JSON",
         );
+        node.set_flowscript_name("json", "makeSchema");
         node.add_icon("/flow/icons/repair.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);
@@ -47,7 +48,8 @@ impl NodeLogic for SchemaFromExample {
             "Schema",
             "Generated JSON Schema / Tool Definition",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

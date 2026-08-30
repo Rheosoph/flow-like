@@ -1,0 +1,29 @@
+// BUG: an object literal is only resolvable when EVERY member value is a literal. As soon as one
+// member reads a variable, a node output or any other expression, the whole literal becomes
+// "not a resolvable value" and nothing downstream is wired.
+//
+// Both spellings fail:
+//   activeRun = { opened_at: stampSource }      -> assignment to variable `var_activeRun` is not a resolvable value
+//   const run = { opened_at: stampSource }      -> local alias `run` is not a literal or resolvable node output; skipped
+//                                                  argument `message` on `info` is not a literal or resolvable node output
+//
+// Replacing `stampSource` with the string literal "x" makes the identical statement reconcile
+// cleanly, so this is the computed member, not the object syntax.
+//
+// This shape is what board -> text EMITS: `tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow` renders
+// `userConfiguration = { general: userConfiguration.general, sources: elements }` out of a real
+// board, and that line cannot be applied back. The only workaround is to assign a literal-only
+// object first and then write each computed member with a separate `target.field = value`
+// statement (which does lower to `struct::set`).
+use log::{ info }
+
+@category("Probe")
+const activeRun: Struct = {}
+@category("Probe")
+let stampSource = "2026-08-25T09:00:00"
+
+eventsSimple computedObjectLiteral() {
+    activeRun = { opened_at: stampSource, pr_number: 7 }
+    const run = { opened_at: stampSource, pr_number: 7 }
+    info({ message: run.opened_at, toast: false })
+}

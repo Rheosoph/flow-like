@@ -7,7 +7,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::a2ui::widget::Widget;
-use flow_like_types::anyhow;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -55,13 +54,14 @@ pub async fn get_widget(
         let parts = ver_str
             .split('_')
             .map(str::parse::<u32>)
-            .collect::<Result<Vec<u32>, _>>()?;
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(|_| ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format"))?;
         match parts.as_slice() {
             [maj, min, pat] => Some((*maj, *min, *pat)),
             _ => {
-                return Err(ApiError::internal_error(anyhow!(
-                    "version must be in MAJOR_MINOR_PATCH format"
-                )));
+                return Err(ApiError::bad_request(
+                    "version must be in MAJOR_MINOR_PATCH format",
+                ));
             }
         }
     } else {

@@ -1,0 +1,30 @@
+use log::{ info }
+use string::{ contains }
+
+interface IncidentResult {
+    severity: string;
+    team: string;
+}
+
+@description("Incident report supplied by the App")
+let report = "Production is on hold"
+@description("Business impact supplied by the App")
+let impact = "production-stopped"
+
+function decideIncident(report: string, impact: string): (result: IncidentResult) {
+    const productionStopped = report.contains({ substring: "production is on hold", ignoreCase: true })
+    const customerFacing = report.contains({ substring: "customer-facing", ignoreCase: true })
+    let severity = "SEV-2"
+    if (productionStopped || customerFacing) {
+        severity = "SEV-1"
+    }
+    if (impact == "production-stopped") {
+        severity = "SEV-1"
+    }
+    return { severity: severity, team: "incident-command" }
+}
+
+eventsSimple triageQuickAction() {
+    const result = decideIncident(report, impact)
+    info({ message: `Route as ${result.severity}`, toast: false })
+}

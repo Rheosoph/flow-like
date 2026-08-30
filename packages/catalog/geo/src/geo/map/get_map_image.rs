@@ -28,6 +28,7 @@ impl NodeLogic for GetMapImageNode {
             "Fetches a static map image for the given coordinates using OpenStreetMap tiles. Returns a satellite/standard map image centered on the location.",
             "Web/Geo/Map",
         );
+        node.set_flowscript_name("geo", "getMapImage");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(
@@ -234,6 +235,7 @@ impl NodeLogic for GetMapImageNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn lat_lon_to_tile(lat: f64, lon: f64, zoom: u32) -> (u32, u32, u32, u32) {
     let n = 2.0_f64.powi(zoom as i32);
     let x = (lon + 180.0) / 360.0 * n;

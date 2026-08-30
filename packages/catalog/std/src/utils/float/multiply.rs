@@ -20,10 +20,12 @@ impl NodeLogic for MultiplyFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_multiply",
-            "*",
+            "* (Float)",
             "Multiplies two floats together",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "multiply");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

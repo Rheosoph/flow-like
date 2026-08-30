@@ -20,10 +20,12 @@ impl NodeLogic for EqualIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_equal",
-            "==",
+            "== (Int)",
             "Checks if two integers are equal",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "equal");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

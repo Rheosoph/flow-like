@@ -310,7 +310,9 @@ storage:
 # =============================================================================
 # LLM Provider Configuration
 # =============================================================================
-# Configure API keys for LLM providers used by the executor
+# Configure upstream credentials for the API's authenticated hosted-model
+# proxy. Credentials are mounted only into API pods. Executors receive
+# API_BASE_URL and call the proxy, so they never receive provider credentials.
 # IMPORTANT: Do NOT commit credentials here! Use values-secrets.yaml or --set
 #
 llm:
@@ -319,13 +321,52 @@ llm:
     enabled: true
     apiKey: ""
     endpoint: "https://openrouter.ai/api"
+    # Existing Secret keys: OPENROUTER_API_KEY and optional OPENROUTER_ENDPOINT
     existingSecret: ""
 
-  # OpenAI Configuration
+  # Hosted OpenAI Configuration
   openai:
     enabled: false
     apiKey: ""
-    endpoint: "https://api.openai.com/v1"
+    endpoint: "https://api.openai.com"
+    # Existing Secret keys: HOSTED_OPENAI_API_KEY and optional
+    # HOSTED_OPENAI_ENDPOINT
+    existingSecret: ""
+
+  # Hosted Anthropic Configuration
+  anthropic:
+    enabled: false
+    apiKey: ""
+    endpoint: "https://api.anthropic.com"
+    # Existing Secret keys: HOSTED_ANTHROPIC_API_KEY and optional
+    # HOSTED_ANTHROPIC_ENDPOINT
+    existingSecret: ""
+
+  # Hosted Azure OpenAI-compatible Configuration
+  azure:
+    enabled: false
+    apiKey: ""
+    # Required when apiKey is set. Existing Secrets must contain this endpoint.
+    endpoint: ""
+    # Existing Secret keys: HOSTED_AZURE_API_KEY and HOSTED_AZURE_ENDPOINT
+    existingSecret: ""
+
+  # Hosted Bedrock OpenAI-compatible Configuration
+  bedrock:
+    enabled: false
+    apiKey: ""
+    # Required when apiKey is set. Existing Secrets must contain this endpoint.
+    endpoint: ""
+    # Existing Secret keys: HOSTED_BEDROCK_API_KEY and HOSTED_BEDROCK_ENDPOINT
+    existingSecret: ""
+
+  # Hosted Vertex OpenAI-compatible Configuration
+  vertex:
+    enabled: false
+    apiKey: ""
+    # Required when apiKey is set. Existing Secrets must contain this endpoint.
+    endpoint: ""
+    # Existing Secret keys: HOSTED_VERTEX_API_KEY and HOSTED_VERTEX_ENDPOINT
     existingSecret: ""
 
 # =============================================================================

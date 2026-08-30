@@ -72,6 +72,7 @@ impl NodeLogic for GetGitHubUserNode {
             "Get information about a GitHub user, or the authenticated user if no username provided",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getUser");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

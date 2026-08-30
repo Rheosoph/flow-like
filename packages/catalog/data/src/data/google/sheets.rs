@@ -80,6 +80,7 @@ impl NodeLogic for CreateGoogleSpreadsheetNode {
             "Create a new Google Spreadsheet",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "create");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -187,6 +188,7 @@ impl NodeLogic for GetGoogleSpreadsheetNode {
             "Get Google Spreadsheet metadata and sheet list",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "get");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -296,6 +298,7 @@ impl NodeLogic for ReadGoogleSheetsRangeNode {
             "Read data from a Google Sheets range",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "readRange");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -424,6 +427,7 @@ impl NodeLogic for WriteGoogleSheetsRangeNode {
             "Write data to a Google Sheets range",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "writeRange");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -555,6 +559,7 @@ impl NodeLogic for AppendGoogleSheetsRowsNode {
             "Append rows to the end of a Google Sheets range",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "appendRows");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -691,6 +696,7 @@ impl NodeLogic for ClearGoogleSheetsRangeNode {
             "Clear values from a Google Sheets range",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "clearRange");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -793,6 +799,7 @@ impl NodeLogic for AddGoogleSheetNode {
             "Add a new sheet to a Google Spreadsheet",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "addSheet");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -904,6 +911,7 @@ impl NodeLogic for DeleteGoogleSheetNode {
             "Delete a sheet from a Google Spreadsheet",
             "Data/Google/Sheets",
         );
+        node.set_flowscript_name("google.sheets", "deleteSheet");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

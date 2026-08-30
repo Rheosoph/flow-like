@@ -28,6 +28,9 @@ export class EmptyUserState implements IUserState {
 	lookupUser(userId: string): Promise<IUserLookup> {
 		throw new Error("Method not implemented.");
 	}
+	lookupUsers(userIds: string[]): Promise<IUserLookup[]> {
+		throw new Error("Method not implemented.");
+	}
 	searchUsers(query: string): Promise<IUserLookup[]> {
 		throw new Error("Method not implemented.");
 	}

@@ -81,6 +81,7 @@ impl NodeLogic for GetAttachmentsNode {
             "Get all attachments for a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getAttachments");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -211,6 +212,7 @@ impl NodeLogic for UploadAttachmentNode {
             "Upload a file attachment to a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "uploadAttachment");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -367,6 +369,7 @@ impl NodeLogic for DownloadAttachmentNode {
             "Download the content of an attachment",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "downloadAttachment");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -494,6 +497,7 @@ impl NodeLogic for DeleteAttachmentNode {
             "Delete an attachment from an issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "deleteAttachment");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

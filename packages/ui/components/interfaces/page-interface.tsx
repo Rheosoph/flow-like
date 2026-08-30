@@ -13,6 +13,7 @@ import {
 	useState,
 } from "react";
 import { useAuth } from "react-oidc-context";
+import { useAssetSource } from "../../hooks/use-asset-source";
 import { boardReadinessKey, whenBoardReady } from "../../lib/board-readiness";
 import {
 	type PageSurfaceIdentity,
@@ -20,7 +21,6 @@ import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
-import { presignPageContent } from "../../lib/presign-assets";
 import {
 	resolveEventBoardVersion,
 	withBoardVersion,
@@ -30,7 +30,6 @@ import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
-import type { IStorageState } from "../../state/backend-state/storage-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 // By module path, not through the a2ui barrel: the barrel re-exports every component in the
 // registry, which would pull the 3D scene and the mapping stack into every page load.
@@ -42,6 +41,13 @@ import {
 	useRouteDialog,
 } from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
+import { collectRunElements } from "../a2ui/collect-run-elements";
+import type { ElementSource } from "../a2ui/element-materializer";
+import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
+import {
+	type A2UINavigationMessageInterceptor,
+	interceptA2UINavigationMessage,
+} from "../a2ui/navigation-message";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -72,41 +78,12 @@ export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
 	route?: string;
 	page?: IPage;
-}
-
-/**
- * Signs every storage-backed asset the page renders in one request.
- *
- * A failure here is cosmetic — the unsigned paths simply do not resolve — so it must never
- * stop the page from rendering the rest of its content.
- */
-async function presignPage(
-	appId: string,
-	page: IPage,
-	storageState: IStorageState,
-): Promise<IPage> {
-	try {
-		const { components, backgroundImage } = await presignPageContent(
-			appId,
-			page.components ?? [],
-			page.canvasSettings,
-			storageState,
-		);
-
-		return {
-			...page,
-			components,
-			canvasSettings: page.canvasSettings
-				? { ...page.canvasSettings, backgroundImage }
-				: page.canvasSettings,
-		};
-	} catch (presignError) {
-		console.warn(
-			"[PageInterface] Failed to presign page assets:",
-			presignError,
-		);
-		return page;
-	}
+	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
+	queryParams?: Record<string, string>;
+	/** Consume page-owned route and query changes inside an embedded runtime. */
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
+	/** False while an embedded runtime keeps this page mounted off screen. */
+	active?: boolean;
 }
 
 function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
@@ -159,12 +136,34 @@ function PageInterfaceInner({
 	config,
 	route,
 	page: providedPage,
+	queryParams: providedQueryParams,
+	onNavigationMessage,
+	active = true,
 }: PageInterfaceProps) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const router = useRouter();
-	const search = useSearchParams().toString();
+	const hostSearch = useSearchParams().toString();
+	const runtimeQueryParams = useMemo(() => {
+		if (providedQueryParams) return { ...providedQueryParams };
+		const result: Record<string, string> = {};
+		new URLSearchParams(hostSearch).forEach((value, key) => {
+			result[key] = value;
+		});
+		return result;
+	}, [hostSearch, providedQueryParams]);
+	const search = useMemo(() => {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(runtimeQueryParams).toSorted(
+			([left], [right]) => left.localeCompare(right),
+		)) {
+			params.set(key, value);
+		}
+		return params.toString();
+	}, [runtimeQueryParams]);
+	const runtimeQueryParamsRef = useRef(runtimeQueryParams);
+	runtimeQueryParamsRef.current = runtimeQueryParams;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
@@ -216,11 +215,8 @@ function PageInterfaceInner({
 
 	useEffect(() => {
 		if (providedPage) {
-			const presignProvidedPage = async () => {
-				setPage(await presignPage(appId, providedPage, backend.storageState));
-				setIsLoading(false);
-			};
-			presignProvidedPage();
+			setPage(providedPage);
+			setIsLoading(false);
 			return;
 		}
 
@@ -262,7 +258,7 @@ function PageInterfaceInner({
 						eventData.board_id || undefined,
 					);
 					if (pageResult) {
-						setPage(await presignPage(appId, pageResult, backend.storageState));
+						setPage(pageResult);
 					} else {
 						setError(`Page not found: ${eventData.default_page_id}`);
 					}
@@ -286,7 +282,6 @@ function PageInterfaceInner({
 		backend.routeState,
 		backend.pageState,
 		backend.eventState,
-		backend.storageState,
 	]);
 
 	// Every page keeps its last rendered surface, not only those that opt in: the alternative
@@ -329,6 +324,20 @@ function PageInterfaceInner({
 		appId,
 	);
 
+	// Use ref to access current surface without creating dependency cycles
+	const surfaceRef = useRef(surface);
+	surfaceRef.current = surface;
+
+	const elementSource = useCallback((): ElementSource | null => {
+		const currentSurface = surfaceRef.current;
+		if (!currentSurface) return null;
+		return {
+			surfaceId: currentSurface.id,
+			components: currentSurface.components,
+			storedValues: {},
+		};
+	}, []);
+
 	// Written only once the run that produced it has finished, so a half-built surface is never
 	// what the next visit replays.
 	useEffect(() => {
@@ -343,6 +352,14 @@ function PageInterfaceInner({
 			console.log("[PageInterface] A2UI message:", message.type, message);
 
 			if (handleWidgetQueryMessage(message)) {
+				return;
+			}
+
+			if (handleElementsRequestMessage(message, elementSource)) {
+				return;
+			}
+
+			if (interceptA2UINavigationMessage(message, onNavigationMessage)) {
 				return;
 			}
 
@@ -451,31 +468,18 @@ function PageInterfaceInner({
 			// Handle element updates
 			handleServerMessage(message);
 		},
-		[appId, router, openDialog, closeDialog, handleServerMessage],
+		[
+			appId,
+			router,
+			openDialog,
+			closeDialog,
+			handleServerMessage,
+			onNavigationMessage,
+			elementSource,
+		],
 	);
 
-	// Use ref to access current surface without creating dependency cycles
-	const surfaceRef = useRef(surface);
-	surfaceRef.current = surface;
 	const pageContainerRef = useRef<HTMLDivElement | null>(null);
-
-	// Build elements from surface components for the workflow payload
-	// Uses ref to avoid dependency on surface changing
-	const getElementsFromSurface = useCallback(() => {
-		const currentSurface = surfaceRef.current;
-		if (!currentSurface) return {};
-		const elements: Record<string, unknown> = {};
-		for (const [componentId, surfaceComponent] of Object.entries(
-			currentSurface.components,
-		)) {
-			const elementId = `${currentSurface.id}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
-	}, []); // No dependencies - uses ref
 
 	const prepareLocalWidgetDefinitions = useCallback(async () => {
 		if (!appId || !backend.capabilities().canExecuteLocally) return;
@@ -543,24 +547,41 @@ function PageInterfaceInner({
 			}
 
 			try {
-				// Get component data from surface (for GetElement to work)
-				const surfaceElements = getElementsFromSurface();
+				// The render no longer waits for the board refresh, so the run does: a device
+				// that has only ever synced the board manifest must not execute the stale copy,
+				// nor read the element demand of the copy it replaces.
+				await Promise.all([
+					whenBoardReady(
+						boardReadinessKey(
+							appId,
+							boardId,
+							pageExecutionVersion ?? undefined,
+						),
+					),
+					prepareLocalWidgetDefinitions(),
+				]);
 
-				const queryParams: Record<string, string> = {};
-				if (typeof window !== "undefined") {
-					const searchParams = new URLSearchParams(window.location.search);
-					searchParams.forEach((value, key) => {
-						queryParams[key] = value;
-					});
-				}
+				const currentSurface = surfaceRef.current;
+				const surfaceElements = currentSurface
+					? await collectRunElements({
+							backend,
+							appId,
+							boardId,
+							boardVersion: pageExecutionVersion,
+							surfaceId: currentSurface.id,
+							components: currentSurface.components,
+							storedValues: {},
+						})
+					: {};
 
 				const payload = withBoardVersion(
 					{
 						id: eventNodeId,
 						payload: {
 							_elements: surfaceElements,
+							_elements_mode: "demand",
 							_route: pageRoute || "/",
-							_query_params: queryParams,
+							_query_params: { ...runtimeQueryParamsRef.current },
 							_page_id: page.id,
 							_event_type: eventName,
 							...extraPayload,
@@ -572,18 +593,6 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
-				// The render no longer waits for the board refresh, so the run does: a device
-				// that has only ever synced the board manifest must not execute the stale copy.
-				await Promise.all([
-					whenBoardReady(
-						boardReadinessKey(
-							appId,
-							boardId,
-							pageExecutionVersion ?? undefined,
-						),
-					),
-					prepareLocalWidgetDefinitions(),
-				]);
 				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
@@ -604,10 +613,9 @@ function PageInterfaceInner({
 			pageExecutionBoardId,
 			pageExecutionVersion,
 			pageRoute,
-			backend.boardState,
+			backend,
 			executionService,
 			handleA2UIMessage,
-			getElementsFromSurface,
 			prepareLocalWidgetDefinitions,
 		],
 	);
@@ -666,6 +674,7 @@ function PageInterfaceInner({
 	}, [page?.onUnloadEventId, executePageEvent]);
 
 	// Execute onInterval event at configured time intervals
+	const lastIntervalTickRef = useRef(0);
 	useEffect(() => {
 		if (
 			!page?.onIntervalEventId ||
@@ -673,17 +682,32 @@ function PageInterfaceInner({
 			page.onIntervalSeconds <= 0
 		)
 			return;
+		// An embedded runtime parks its host instead of unmounting, so a page nobody is
+		// looking at is still mounted and would otherwise keep spending a board run every
+		// tick, forever, invisibly.
+		if (!active) return;
 
 		const intervalMs = page.onIntervalSeconds * 1000;
-
-		const intervalId = setInterval(() => {
+		const tick = () => {
+			lastIntervalTickRef.current = Date.now();
 			executePageEvent(page.onIntervalEventId, "onInterval", {
 				_interval_seconds: page.onIntervalSeconds,
 			});
-		}, intervalMs);
+		};
 
+		// Coming back on screen after more than a full period should show current data
+		// rather than whatever was on the page when it parked.
+		const sinceLastTick = Date.now() - lastIntervalTickRef.current;
+		if (lastIntervalTickRef.current > 0 && sinceLastTick >= intervalMs) tick();
+
+		const intervalId = setInterval(tick, intervalMs);
 		return () => clearInterval(intervalId);
-	}, [page?.onIntervalEventId, page?.onIntervalSeconds, executePageEvent]);
+	}, [
+		page?.onIntervalEventId,
+		page?.onIntervalSeconds,
+		executePageEvent,
+		active,
+	]);
 
 	// Strip canvasSettings from the surface for A2UIRenderer — this component
 	// already handles CSS injection and canvas styling at the outer level.
@@ -696,6 +720,14 @@ function PageInterfaceInner({
 
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
+
+	const runtimeCanvasSettings =
+		activeSurface?.canvasSettings ?? page?.canvasSettings;
+	// The background is the one asset with no component of its own to resolve it.
+	const { src: backgroundImage } = useAssetSource(
+		appId,
+		runtimeCanvasSettings?.backgroundImage,
+	);
 
 	// The IndexedDB read is short and its result decides between real content and a skeleton,
 	// so it is worth waiting for rather than flashing a placeholder it would have replaced.
@@ -763,8 +795,6 @@ function PageInterfaceInner({
 		);
 	}
 
-	const runtimeCanvasSettings =
-		activeSurface?.canvasSettings ?? page?.canvasSettings;
 	const backgroundClass = isBackgroundClass(
 		runtimeCanvasSettings?.backgroundColor,
 	)
@@ -776,15 +806,9 @@ function PageInterfaceInner({
 			? undefined
 			: runtimeCanvasSettings?.backgroundColor,
 		padding: runtimeCanvasSettings?.padding,
-		backgroundImage: runtimeCanvasSettings?.backgroundImage
-			? `url(${runtimeCanvasSettings.backgroundImage})`
-			: undefined,
-		backgroundSize: runtimeCanvasSettings?.backgroundImage
-			? "cover"
-			: undefined,
-		backgroundPosition: runtimeCanvasSettings?.backgroundImage
-			? "center"
-			: undefined,
+		backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
+		backgroundSize: backgroundImage ? "cover" : undefined,
+		backgroundPosition: backgroundImage ? "center" : undefined,
 	};
 
 	const customCss = runtimeCanvasSettings?.customCss;
@@ -813,6 +837,7 @@ function PageInterfaceInner({
 						boardVersion={pageExecutionVersion}
 						eventId={activePageEvent?.id}
 						onA2UIMessage={handleA2UIMessage}
+						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}
 						closeDialog={closeDialog}

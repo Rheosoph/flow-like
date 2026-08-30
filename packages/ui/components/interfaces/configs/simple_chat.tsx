@@ -160,14 +160,17 @@ export function SimpleChatConfig({
 				<>
 					<section className="space-y-5 rounded-lg border border-border p-4">
 						<div className="space-y-1">
-							<h3 className="font-medium">{t('appearance', 'Appearance')}</h3>
+							<h3 className="font-medium">{t("appearance", "Appearance")}</h3>
 							<p className="text-sm text-muted-foreground">
-								{t('brandTheChatWithoutChangingTheRestOfYourApp', 'Brand the chat without changing the rest of your app.')}
+								{t(
+									"brandTheChatWithoutChangingTheRestOfYourApp",
+									"Brand the chat without changing the rest of your app.",
+								)}
 							</p>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="chat_theme_preset">{t('theme', 'Theme')}</Label>
+							<Label htmlFor="chat_theme_preset">{t("theme", "Theme")}</Label>
 							<Select
 								disabled={!isEditing}
 								value={selectedThemeValue}
@@ -220,9 +223,14 @@ export function SimpleChatConfig({
 										<span className="flex min-w-0 items-center gap-3">
 											<ThemeSwatch />
 											<span className="min-w-0">
-												<span className="font-medium">{t('custom', 'Custom')}</span>
+												<span className="font-medium">
+													{t("custom", "Custom")}
+												</span>
 												<span className="block truncate text-xs text-muted-foreground">
-													{t('shownAutomaticallyAfterYouEditAPreset', 'Shown automatically after you edit a preset.')}
+													{t(
+														"shownAutomaticallyAfterYouEditAPreset",
+														"Shown automatically after you edit a preset.",
+													)}
 												</span>
 											</span>
 										</span>
@@ -231,13 +239,19 @@ export function SimpleChatConfig({
 							</Select>
 							<p className="text-sm text-muted-foreground">
 								{selectedTheme?.description ??
-									t('thisCssNoLongerMatchesAPreset', 'This CSS no longer matches a preset.')}{" "}
-								{t('presetsFollowTheAppModeAndCopyTheirFullSourceIntoTheEditorBelow', "Presets follow the app mode and copy their full source into the editor below.")}
+									t(
+										"thisCssNoLongerMatchesAPreset",
+										"This CSS no longer matches a preset.",
+									)}{" "}
+								{t(
+									"presetsFollowTheAppModeAndCopyTheirFullSourceIntoTheEditorBelow",
+									"Presets follow the app mode and copy their full source into the editor below.",
+								)}
 							</p>
 						</div>
 
 						<div className="space-y-2">
-							<Label>{t('backgroundImage', 'Background Image')}</Label>
+							<Label>{t("backgroundImage", "Background Image")}</Label>
 							<AssetPicker
 								accept="image"
 								appId={appId}
@@ -252,7 +266,7 @@ export function SimpleChatConfig({
 						</div>
 
 						<div className="space-y-2">
-							<Label>{t('emptyChatMark', 'Empty Chat Mark')}</Label>
+							<Label>{t("emptyChatMark", "Empty Chat Mark")}</Label>
 							<Select
 								disabled={!isEditing}
 								value={placeholderVisual}
@@ -280,7 +294,7 @@ export function SimpleChatConfig({
 
 						{placeholderVisual === "bubble" && (
 							<div className="space-y-2">
-								<Label>{t('bubbleState', 'Bubble State')}</Label>
+								<Label>{t("bubbleState", "Bubble State")}</Label>
 								<Select
 									disabled={!isEditing}
 									value={placeholderBubbleState}
@@ -305,7 +319,10 @@ export function SimpleChatConfig({
 											(option) => option.value === placeholderBubbleState,
 										)?.description
 									}{" "}
-									{t('theOrbHoldsThisPoseItDoesNotFollowWhatTheAssistantIsActuallyDoing', "The orb holds this pose — it does not follow what the assistant is actually doing.")}
+									{t(
+										"theOrbHoldsThisPoseItDoesNotFollowWhatTheAssistantIsActuallyDoing",
+										"The orb holds this pose — it does not follow what the assistant is actually doing.",
+									)}
 								</p>
 							</div>
 						)}
@@ -322,18 +339,21 @@ export function SimpleChatConfig({
 										}
 									/>
 									<Label htmlFor="placeholder_typing_motion">
-										{t('reactWhileTyping', 'React While Typing')}
+										{t("reactWhileTyping", "React While Typing")}
 									</Label>
 								</div>
 								<p className="text-sm text-muted-foreground">
-									{t('theMarkAnswersTheComposerItPerksUpAsWritingStartsLeansTowardTheDraftAndStirsInProportionToHowFastTheUserTypesThenSettlesWhenTheyStopOffByDefaultAndAlwaysStillForAnyoneWhoseSystemAsksForReducedMotion', "The mark answers the composer: it perks up as writing starts, leans toward the draft and stirs in proportion to how fast the user types, then settles when they stop. Off by default, and always still for anyone whose system asks for reduced motion.")}
+									{t(
+										"theMarkAnswersTheComposerItPerksUpAsWritingStartsLeansTowardTheDraftAndStirsInProportionToHowFastTheUserTypesThenSettlesWhenTheyStopOffByDefaultAndAlwaysStillForAnyoneWhoseSystemAsksForReducedMotion",
+										"The mark answers the composer: it perks up as writing starts, leans toward the draft and stirs in proportion to how fast the user types, then settles when they stop. Off by default, and always still for anyone whose system asks for reduced motion.",
+									)}
 								</p>
 							</div>
 						)}
 
 						{placeholderVisual === "image" && (
 							<div className="space-y-2">
-								<Label>{t('placeholderImage', 'Placeholder Image')}</Label>
+								<Label>{t("placeholderImage", "Placeholder Image")}</Label>
 								<AssetPicker
 									accept="image"
 									appId={appId}
@@ -343,13 +363,18 @@ export function SimpleChatConfig({
 									onChange={(value) => setValue("placeholder_image", value)}
 								/>
 								<p className="text-sm text-muted-foreground">
-									{t('shownAsACircleSoASquareImageWorksBestStorageImagesAreSecurelyResolvedWheneverTheChatOpens', "Shown as a circle, so a square image works best. Storage images are securely resolved whenever the chat opens.")}
+									{t(
+										"shownAsACircleSoASquareImageWorksBestStorageImagesAreSecurelyResolvedWheneverTheChatOpens",
+										"Shown as a circle, so a square image works best. Storage images are securely resolved whenever the chat opens.",
+									)}
 								</p>
 							</div>
 						)}
 
 						<div className="space-y-2">
-							<Label htmlFor="chat_ai_disclosure">{t('aiDisclosure', 'AI Disclosure')}</Label>
+							<Label htmlFor="chat_ai_disclosure">
+								{t("aiDisclosure", "AI Disclosure")}
+							</Label>
 							<Textarea
 								disabled={!isEditing}
 								id="chat_ai_disclosure"
@@ -360,22 +385,43 @@ export function SimpleChatConfig({
 								}
 							/>
 							<p className="text-sm text-muted-foreground">
-								{t('alwaysShownBelowTheComposerSoPeopleKnowAnAiIsOnTheOtherSideLeavingThisEmptyUsesTheFriendlyDefault', "Always shown below the composer so people know an AI is on the other side. Leaving this empty uses the friendly default.")}
+								{t(
+									"alwaysShownBelowTheComposerSoPeopleKnowAnAiIsOnTheOtherSideLeavingThisEmptyUsesTheFriendlyDefault",
+									"Always shown below the composer so people know an AI is on the other side. Leaving this empty uses the friendly default.",
+								)}
 							</p>
 						</div>
 
 						<div className="space-y-2">
-							<Label>{t('customCss', 'Custom CSS')}</Label>
+							<Label>{t("customCss", "Custom CSS")}</Label>
 							<p className="text-sm text-muted-foreground">
-								{t('cssIsSanitizedAndScopedToThisChatUse', 'CSS is sanitized and scoped to this chat. Use')}{" "}<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05rootcodeToOverrideThemeTokensSuchAs"><code className="rounded bg-muted px-1 py-0.5">:root</code> to
-								override theme tokens such as</Trans>{" "}<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05primarycode"><code className="rounded bg-muted px-1 py-0.5">--primary</code>,</Trans>{" "}<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05BackgroundCodeAndTheNew"><code className="rounded bg-muted px-1 py-0.5">
-									--background
-								</code>
-								, and the new</Trans>{" "}
+								{t(
+									"cssIsSanitizedAndScopedToThisChatUse",
+									"CSS is sanitized and scoped to this chat. Use",
+								)}{" "}
+								<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05rootcodeToOverrideThemeTokensSuchAs">
+									<code className="rounded bg-muted px-1 py-0.5">:root</code> to
+									override theme tokens such as
+								</Trans>{" "}
+								<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05primarycode">
+									<code className="rounded bg-muted px-1 py-0.5">
+										--primary
+									</code>
+									,
+								</Trans>{" "}
+								<Trans i18nKey="codeClassnameroundedBgmutedPx1Py05BackgroundCodeAndTheNew">
+									<code className="rounded bg-muted px-1 py-0.5">
+										--background
+									</code>
+									, and the new
+								</Trans>{" "}
 								<code className="rounded bg-muted px-1 py-0.5">
-									{t('flchat', '--fl-chat-*')}
+									{t("flchat", "--fl-chat-*")}
 								</code>{" "}
-								{t('tokensEditingAnyCharacterSwitchesTheThemeToCustom', 'tokens. Editing any character switches the theme to Custom.')}
+								{t(
+									"tokensEditingAnyCharacterSwitchesTheThemeToCustom",
+									"tokens. Editing any character switches the theme to Custom.",
+								)}
 							</p>
 							<MonacoCodeEditor
 								allowFullscreen
@@ -389,24 +435,27 @@ export function SimpleChatConfig({
 								}
 							/>
 							<p className="text-xs text-muted-foreground">
-								{t('chatTokensFlchatcontentwidthFlchatmessageradiusFlchatsurfacebackgroundFlchatcomposerbackgroundFlchatusermessagebackgroundFlchataimessagebackgroundAndFlchatdisclosurebackgroundImageOverlaysFlchatbackgroundoverlayAndFlchatbackgroundoverlaystrong', "Chat tokens: --fl-chat-content-width, --fl-chat-message-radius, --fl-chat-surface-background, --fl-chat-composer-background, --fl-chat-user-message-background, --fl-chat-ai-message-background, and --fl-chat-disclosure-background. Image overlays: --fl-chat-background-overlay and --fl-chat-background-overlay-strong.")}
+								{t(
+									"chatTokensFlchatcontentwidthFlchatmessageradiusFlchatsurfacebackgroundFlchatcomposerbackgroundFlchatusermessagebackgroundFlchataimessagebackgroundAndFlchatdisclosurebackgroundImageOverlaysFlchatbackgroundoverlayAndFlchatbackgroundoverlaystrong",
+									"Chat tokens: --fl-chat-content-width, --fl-chat-message-radius, --fl-chat-surface-background, --fl-chat-composer-background, --fl-chat-user-message-background, --fl-chat-ai-message-background, and --fl-chat-disclosure-background. Image overlays: --fl-chat-background-overlay and --fl-chat-background-overlay-strong.",
+								)}
 							</p>
 						</div>
 					</section>
 
 					<div className="space-y-3">
-						<Label>{t('navigateTo', 'Navigate To')}</Label>
+						<Label>{t("navigateTo", "Navigate To")}</Label>
 						{isEditing ? (
 							<div className="rounded-md border border-input bg-background">
 								<ScrollArea className="max-h-48">
 									<div className="p-2 space-y-1">
 										{routesQuery.isLoading ? (
 											<div className="px-2 py-2 text-sm text-muted-foreground">
-												{t('loadingRoutes', 'Loading routes…')}
+												{t("loadingRoutes", "Loading routes…")}
 											</div>
 										) : routes.length === 0 ? (
 											<div className="px-2 py-2 text-sm text-muted-foreground">
-												{t('noRoutesConfigured', 'No routes configured.')}
+												{t("noRoutesConfigured", "No routes configured.")}
 											</div>
 										) : (
 											routes
@@ -453,7 +502,7 @@ export function SimpleChatConfig({
 										className="text-xs text-muted-foreground hover:text-foreground"
 										onClick={() => setValue("navigate_to_routes", null)}
 									>
-										{t('clearSelection', 'Clear selection')}
+										{t("clearSelection", "Clear selection")}
 									</button>
 								</div>
 							</div>
@@ -461,11 +510,14 @@ export function SimpleChatConfig({
 							<div className="flex min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
 								{selectedRoutes.length > 0
 									? selectedRoutes.join(", ")
-									: t('noDestinations', 'No destinations')}
+									: t("noDestinations", "No destinations")}
 							</div>
 						)}
 						<p className="text-sm text-muted-foreground">
-							{t('optionalRouteDestinationsThisChatCanNavigateTo', 'Optional route destinations this chat can navigate to.')}
+							{t(
+								"optionalRouteDestinationsThisChatCanNavigateTo",
+								"Optional route destinations this chat can navigate to.",
+							)}
 						</p>
 					</div>
 				</>
@@ -483,10 +535,15 @@ export function SimpleChatConfig({
 									setValue("allow_file_upload", checked);
 								}}
 							/>
-							<Label htmlFor="allow_file_upload">{t('allowFileUpload', 'Allow File Upload')}</Label>
+							<Label htmlFor="allow_file_upload">
+								{t("allowFileUpload", "Allow File Upload")}
+							</Label>
 						</div>
 						<p className="text-sm text-muted-foreground">
-							{t('enableUsersToUploadFilesDuringChatConversations', 'Enable users to upload files during chat conversations')}
+							{t(
+								"enableUsersToUploadFilesDuringChatConversations",
+								"Enable users to upload files during chat conversations",
+							)}
 						</p>
 					</div>
 
@@ -500,10 +557,15 @@ export function SimpleChatConfig({
 									setValue("attach_widget_snapshots", checked);
 								}}
 							/>
-							<Label htmlFor="attach_widget_snapshots">{t('widgetSnapshots', 'Widget Snapshots')}</Label>
+							<Label htmlFor="attach_widget_snapshots">
+								{t("widgetSnapshots", "Widget Snapshots")}
+							</Label>
 						</div>
 						<p className="text-sm text-muted-foreground">
-							{t('attachImagesOfEmbeddedWidgetsToTheModelapossContextSoVisioncapableModelsCanReactToTheRenderedUi', "Attach images of embedded widgets to the model's context so vision-capable models can react to the rendered UI")}
+							{t(
+								"attachImagesOfEmbeddedWidgetsToTheModelapossContextSoVisioncapableModelsCanReactToTheRenderedUi",
+								"Attach images of embedded widgets to the model's context so vision-capable models can react to the rendered UI",
+							)}
 						</p>
 					</div>
 				</>
@@ -512,22 +574,34 @@ export function SimpleChatConfig({
 			{shows("voice") && (
 				<div className="space-y-4">
 					<div className="space-y-3">
-						<Label htmlFor="voice_mode">{t('voiceInput', 'Voice Input')}</Label>
+						<Label htmlFor="voice_mode">{t("voiceInput", "Voice Input")}</Label>
 						{renderVoiceSelect(
 							"voice_mode",
 							voiceMode,
 							(v) => setVoice("mode", v),
 							[
-								{ value: "disabled", label: t('disabled', 'Disabled') },
-								{ value: "record", label: t('recordAudioSendRecording', 'Record audio (send recording)') },
+								{ value: "disabled", label: t("disabled", "Disabled") },
+								{
+									value: "record",
+									label: t(
+										"recordAudioSendRecording",
+										"Record audio (send recording)",
+									),
+								},
 								{
 									value: "stt",
-									label: t('platformSpeechtotextSendText', 'Platform speech-to-text (send text)'),
+									label: t(
+										"platformSpeechtotextSendText",
+										"Platform speech-to-text (send text)",
+									),
 								},
 							],
 						)}
 						<p className="text-sm text-muted-foreground">
-							{t('howUsersSpeakToTheChatSpeechtotextUsesTheBrowserEngineWhenAvailableAndFallsBackToRecording', "How users speak to the chat. Speech-to-text uses the browser engine when available and falls back to recording.")}
+							{t(
+								"howUsersSpeakToTheChatSpeechtotextUsesTheBrowserEngineWhenAvailableAndFallsBackToRecording",
+								"How users speak to the chat. Speech-to-text uses the browser engine when available and falls back to recording.",
+							)}
 						</p>
 					</div>
 
@@ -535,33 +609,54 @@ export function SimpleChatConfig({
 						<div className="space-y-4">
 							<div className="grid gap-4 md:grid-cols-2">
 								<div className="space-y-2">
-									<Label htmlFor="voice_invoke">{t('invokeMode', 'Invoke Mode')}</Label>
+									<Label htmlFor="voice_invoke">
+										{t("invokeMode", "Invoke Mode")}
+									</Label>
 									{renderVoiceSelect(
 										"voice_invoke",
 										voice.invoke ?? "manual",
 										(v) => setVoice("invoke", v),
 										[
-											{ value: "manual", label: t('manualTapToStartstop', 'Manual (tap to start/stop)') },
-											{ value: "hold", label: t('holdToRecord', 'Hold to record') },
-											{ value: "auto", label: t('automaticPauseDetection', 'Automatic (pause detection)') },
+											{
+												value: "manual",
+												label: t(
+													"manualTapToStartstop",
+													"Manual (tap to start/stop)",
+												),
+											},
+											{
+												value: "hold",
+												label: t("holdToRecord", "Hold to record"),
+											},
+											{
+												value: "auto",
+												label: t(
+													"automaticPauseDetection",
+													"Automatic (pause detection)",
+												),
+											},
 										],
 									)}
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="voice_playback">{t('answerPlayback', 'Answer Playback')}</Label>
+									<Label htmlFor="voice_playback">
+										{t("answerPlayback", "Answer Playback")}
+									</Label>
 									{renderVoiceSelect(
 										"voice_playback",
 										voice.playback ?? "text",
 										(v) => setVoice("playback", v),
 										[
-											{ value: "text", label: t('textOnly', 'Text only') },
-											{ value: "audio", label: t('audioOnly', 'Audio only') },
-											{ value: "both", label: t('textAudio', 'Text + audio') },
+											{ value: "text", label: t("textOnly", "Text only") },
+											{ value: "audio", label: t("audioOnly", "Audio only") },
+											{ value: "both", label: t("textAudio", "Text + audio") },
 										],
 									)}
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="voice_variant">{t('visualStyle', 'Visual Style')}</Label>
+									<Label htmlFor="voice_variant">
+										{t("visualStyle", "Visual Style")}
+									</Label>
 									{renderVoiceSelect(
 										"voice_variant",
 										voice.variant ?? "conservative",
@@ -569,25 +664,28 @@ export function SimpleChatConfig({
 										[
 											{
 												value: "conservative",
-												label: t('conservativeMicIcon', 'Conservative (mic icon)'),
+												label: t(
+													"conservativeMicIcon",
+													"Conservative (mic icon)",
+												),
 											},
-											{ value: "waveform", label: t('waveform', 'Waveform') },
-											{ value: "orb", label: t('orb', 'Orb') },
-											{ value: "vortex", label: t('vortex', 'Vortex') },
-											{ value: "shader", label: t('shader', 'Shader') },
+											{ value: "waveform", label: t("waveform", "Waveform") },
+											{ value: "orb", label: t("orb", "Orb") },
+											{ value: "vortex", label: t("vortex", "Vortex") },
+											{ value: "shader", label: t("shader", "Shader") },
 										],
 									)}
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="voice_size">{t('size', 'Size')}</Label>
+									<Label htmlFor="voice_size">{t("size", "Size")}</Label>
 									{renderVoiceSelect(
 										"voice_size",
 										voice.size ?? "md",
 										(v) => setVoice("size", v),
 										[
-											{ value: "sm", label: t('small', 'Small') },
-											{ value: "md", label: t('medium', 'Medium') },
-											{ value: "lg", label: t('large', 'Large') },
+											{ value: "sm", label: t("small", "Small") },
+											{ value: "md", label: t("medium", "Medium") },
+											{ value: "lg", label: t("large", "Large") },
 										],
 									)}
 								</div>
@@ -595,7 +693,9 @@ export function SimpleChatConfig({
 
 							<div className="grid gap-4 md:grid-cols-2">
 								<div className="space-y-2">
-									<Label htmlFor="voice_color">{t('accentColor', 'Accent Color')}</Label>
+									<Label htmlFor="voice_color">
+										{t("accentColor", "Accent Color")}
+									</Label>
 									<Input
 										id="voice_color"
 										type="color"
@@ -605,7 +705,9 @@ export function SimpleChatConfig({
 									/>
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="voice_recording_color">{t('recordingColor', 'Recording Color')}</Label>
+									<Label htmlFor="voice_recording_color">
+										{t("recordingColor", "Recording Color")}
+									</Label>
 									<Input
 										id="voice_recording_color"
 										type="color"
@@ -620,7 +722,7 @@ export function SimpleChatConfig({
 
 							<div className="space-y-2">
 								<Label htmlFor="voice_max_duration">
-									{t('maxDurationSeconds', 'Max Duration (seconds)')}
+									{t("maxDurationSeconds", "Max Duration (seconds)")}
 								</Label>
 								<Input
 									id="voice_max_duration"
@@ -644,7 +746,9 @@ export function SimpleChatConfig({
 									checked={voice.auto_stop ?? false}
 									onCheckedChange={(checked) => setVoice("auto_stop", checked)}
 								/>
-								<Label htmlFor="voice_auto_stop">{t('autostopOnSilence', 'Auto-stop on silence')}</Label>
+								<Label htmlFor="voice_auto_stop">
+									{t("autostopOnSilence", "Auto-stop on silence")}
+								</Label>
 							</div>
 						</div>
 					)}
@@ -653,7 +757,9 @@ export function SimpleChatConfig({
 
 			{shows("capabilities") && (
 				<div className="space-y-3">
-					<Label htmlFor="history_elements">{t('historyElements', 'History Elements')}</Label>
+					<Label htmlFor="history_elements">
+						{t("historyElements", "History Elements")}
+					</Label>
 					{isEditing ? (
 						<Input
 							value={config?.history_elements ?? 5}
@@ -675,7 +781,10 @@ export function SimpleChatConfig({
 						</div>
 					)}
 					<p className="text-sm text-muted-foreground">
-						{t('numberOfPreviousMessagesToIncludeInChatContext', 'Number of previous messages to include in chat context')}
+						{t(
+							"numberOfPreviousMessagesToIncludeInChatContext",
+							"Number of previous messages to include in chat context",
+						)}
 					</p>
 				</div>
 			)}
@@ -683,7 +792,9 @@ export function SimpleChatConfig({
 			{shows("tools") && (
 				<>
 					<div className="space-y-3">
-						<Label htmlFor="tools">{t('availableTools', 'Available Tools')}</Label>
+						<Label htmlFor="tools">
+							{t("availableTools", "Available Tools")}
+						</Label>
 						{isEditing ? (
 							<div className="space-y-2">
 								<div className="flex flex-wrap gap-2">
@@ -708,7 +819,10 @@ export function SimpleChatConfig({
 									))}
 								</div>
 								<Input
-									placeholder={t('typeAToolNameAndPressEnter', 'Type a tool name and press Enter')}
+									placeholder={t(
+										"typeAToolNameAndPressEnter",
+										"Type a tool name and press Enter",
+									)}
 									onKeyDown={(e) => {
 										if (e.key === "Enter" && e.currentTarget.value.trim()) {
 											e.preventDefault();
@@ -737,7 +851,7 @@ export function SimpleChatConfig({
 									</div>
 								) : (
 									<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-										{t('noToolsConfigured', 'No tools configured')}
+										{t("noToolsConfigured", "No tools configured")}
 									</div>
 								)}
 							</div>
@@ -748,7 +862,9 @@ export function SimpleChatConfig({
 					</div>
 
 					<div className="space-y-3">
-						<Label htmlFor="default_tools">{t('defaultTools', 'Default Tools')}</Label>
+						<Label htmlFor="default_tools">
+							{t("defaultTools", "Default Tools")}
+						</Label>
 						{isEditing ? (
 							<div className="space-y-2">
 								<div className="flex flex-wrap gap-2">
@@ -773,7 +889,10 @@ export function SimpleChatConfig({
 									))}
 								</div>
 								<Input
-									placeholder={t('typeAToolNameAndPressEnter', 'Type a tool name and press Enter')}
+									placeholder={t(
+										"typeAToolNameAndPressEnter",
+										"Type a tool name and press Enter",
+									)}
 									onKeyDown={(e) => {
 										if (e.key === "Enter" && e.currentTarget.value.trim()) {
 											e.preventDefault();
@@ -802,7 +921,7 @@ export function SimpleChatConfig({
 									</div>
 								) : (
 									<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-										{t('noDefaultTools', 'No default tools')}
+										{t("noDefaultTools", "No default tools")}
 									</div>
 								)}
 							</div>
@@ -813,7 +932,9 @@ export function SimpleChatConfig({
 					</div>
 
 					<div className="space-y-3">
-						<Label htmlFor="example_messages">{t('exampleMessages', 'Example Messages')}</Label>
+						<Label htmlFor="example_messages">
+							{t("exampleMessages", "Example Messages")}
+						</Label>
 						{isEditing ? (
 							<div className="space-y-2">
 								<div className="flex flex-wrap gap-2">
@@ -840,7 +961,10 @@ export function SimpleChatConfig({
 									))}
 								</div>
 								<Input
-									placeholder={t('typeAnExampleMessageAndPressEnter', 'Type an example message and press Enter')}
+									placeholder={t(
+										"typeAnExampleMessageAndPressEnter",
+										"Type an example message and press Enter",
+									)}
 									onKeyDown={(e) => {
 										if (e.key === "Enter" && e.currentTarget.value.trim()) {
 											e.preventDefault();
@@ -881,7 +1005,10 @@ export function SimpleChatConfig({
 							<div className="space-y-2 rounded-md border border-dashed border-input p-3">
 								<div className="flex flex-wrap items-center gap-2">
 									<span className="text-sm font-medium">
-										{t('currentlyShowingTheBuiltinExamples', 'Currently showing the built-in examples')}
+										{t(
+											"currentlyShowingTheBuiltinExamples",
+											"Currently showing the built-in examples",
+										)}
 									</span>
 									{isEditing && (
 										<button
@@ -908,7 +1035,10 @@ export function SimpleChatConfig({
 									))}
 								</div>
 								<p className="text-xs text-muted-foreground">
-									{t('theseAreGenericAddingYourOwnReplacesThemEntirely', 'These are generic. Adding your own replaces them entirely.')}
+									{t(
+										"theseAreGenericAddingYourOwnReplacesThemEntirely",
+										"These are generic. Adding your own replaces them entirely.",
+									)}
 								</p>
 							</div>
 						)}

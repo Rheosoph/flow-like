@@ -45,6 +45,8 @@ impl NodeLogic for RegisterBigQueryNode {
             "Register a Google BigQuery table or query result into a DataFusion session. Takes a GcpProvider for authentication — pair it with the GCP Provider node.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerBigquery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -164,6 +166,7 @@ impl NodeLogic for RegisterBigQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -280,12 +283,20 @@ impl NodeLogic for RegisterBigQueryNode {
         }
     }
 
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
+
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let registration_mode = get_pin_string_value(node, "registration_mode");
         sync_registration_mode_pins(node, &registration_mode);
     }
 }
 
+#[cfg(any(feature = "execute", test))]
 fn build_sql(
     registration_mode: &str,
     project_id: &str,

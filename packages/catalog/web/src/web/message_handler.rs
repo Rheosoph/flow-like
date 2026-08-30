@@ -52,12 +52,12 @@ pub async fn create_message_handler_context(
     let mut has_payload_pin = false;
     let mut typed_pin_count: usize = 0;
 
-    for pin in reference_function.pins.values() {
+    for pin in reference_function.pins.iter() {
         if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
             continue;
         }
 
-        if pin.name == "payload" {
+        if pin.name.as_ref() == "payload" {
             has_payload_pin = true;
             continue;
         }
@@ -203,10 +203,8 @@ async fn reset_handler_output_pins(context: &ExecutionContext) {
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {
@@ -220,8 +218,8 @@ async fn set_named_output_pin(context: &ExecutionContext, name: &str, value: Val
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| pin.pin_type == PinType::Output && pin.name == name)
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.name.as_ref() == name)
+        .map(|pin| (*pin).clone())
         .collect();
 
     let matched = !pins.is_empty();
@@ -243,13 +241,13 @@ async fn set_first_typed_output_pin(
         .node
         .pins
         .iter()
-        .find(|(_, pin)| {
+        .find(|pin| {
             pin.pin_type == PinType::Output
                 && pin.data_type == data_type
-                && pin.name != "payload"
+                && pin.name.as_ref() != "payload"
                 && !metadata_pin_names.contains(&normalize_pin_key(&pin.name))
         })
-        .map(|(_, pin)| pin.clone());
+        .map(|pin| (*pin).clone());
 
     if let Some(pin) = pin {
         pin.set_value(value).await;
@@ -269,13 +267,13 @@ async fn map_object_to_output_pins(
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
+        .filter(|pin| {
             pin.pin_type == PinType::Output
                 && pin.data_type != VariableType::Execution
-                && pin.name != "payload"
+                && pin.name.as_ref() != "payload"
                 && !metadata_pin_names.contains(&normalize_pin_key(&pin.name))
         })
-        .map(|(_, pin)| (pin.name.clone(), pin.clone()))
+        .map(|pin| (pin.name.to_string(), (*pin).clone()))
         .collect();
 
     let mut matched = false;
@@ -451,7 +449,7 @@ mod tests {
             name_cache,
         ));
 
-        for pin in internal.pins.values() {
+        for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
             pin.init_connected_to(Vec::new());
             pin.init_depends_on(Vec::new());
@@ -496,6 +494,7 @@ mod tests {
             None,
             None,
             Arc::new(AHashMap::new()),
+            None,
         )
         .await
     }

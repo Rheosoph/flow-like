@@ -495,7 +495,7 @@ impl PyodideRuntime {
             .await
             .with_context(|| format!("read WASM binary from {path:?}"))?;
 
-        let hash = blake3::hash(&bytes).to_hex().to_string();
+        let hash = flow_like_storage::blake3::hash(&bytes).to_hex().to_string();
         let wasmtime_engine = self.engine.engine();
 
         let module = if let Some(aot) = &self.aot_cache {

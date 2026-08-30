@@ -9,6 +9,7 @@ use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::event::Event;
+use flow_like::flow::execution::rejection::RejectionStage;
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
@@ -198,7 +199,7 @@ async fn execute_inner(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = execution_environment;
 
-    let mut registry = crate::execute::PREPARED_REGISTRY.clone();
+    let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
 
     // Load WASM packages from presigned URLs if any are specified
@@ -218,10 +219,7 @@ async fn execute_inner(
                         "Loaded WASM nodes for streaming execution"
                     );
                     failed_wasm_package_ids = report.failed_package_ids;
-                    for logic in report.nodes {
-                        let node = logic.get_node();
-                        registry.insert(node, logic);
-                    }
+                    wasm_nodes = report.nodes;
                 }
                 Err(e) => {
                     return Err(e);
@@ -230,24 +228,59 @@ async fn execute_inner(
         }
     }
 
-    state.node_registry.write().await.node_registry = Arc::new(registry);
+    state.node_registry.write().await.node_registry = crate::execute::request_registry(wasm_nodes);
 
     let state = Arc::new(state);
 
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Arc::new(crate::execute::resolve_board(&state, request, &storage_root).await?);
+    let template = match crate::execute::resolve_run_template(&state, request)
+        .await
+        .map_err(|e| match e {
+            ExecutorError::BoardLoad(msg) if !failed_wasm_package_ids.is_empty() => {
+                let failed: Vec<&str> =
+                    failed_wasm_package_ids.iter().map(String::as_str).collect();
+                ExecutorError::BoardLoad(format!(
+                    "{} (WASM packages failed to load: {})",
+                    msg,
+                    failed.join(", ")
+                ))
+            }
+            other => other,
+        }) {
+        Ok(template) => template,
+        Err(error) => {
+            crate::execute::record_executor_rejection(
+                &state,
+                request,
+                run_id,
+                RejectionStage::Resolution,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
-        &board,
+        template.board.as_ref(),
         request.wasm_packages.as_ref(),
         &failed_wasm_package_ids,
     );
     if !unavailable_wasm_packages.is_empty() {
-        return Err(ExecutorError::Execution(format!(
+        let error = ExecutorError::Execution(format!(
             "Missing WASM package artifacts for board {}: {}",
             board_id,
             unavailable_wasm_packages.join(", ")
-        )));
+        ));
+        crate::execute::record_executor_rejection(
+            &state,
+            request,
+            run_id,
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .await;
+        return Err(error);
     }
 
     emit_event(
@@ -336,9 +369,18 @@ async fn execute_inner(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
-    let mut run = InternalRun::new_with_run_id(
+    let channel = crate::channel::build_run_channel(
+        request.channel.as_ref(),
+        run_id,
+        callback_url,
+        context_token.as_deref(),
+    )
+    .await
+    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
+    let mut run = InternalRun::from_template(
         &request.app_id,
-        board.clone(),
+        template.clone(),
         event,
         &state,
         &profile,
@@ -349,6 +391,7 @@ async fn execute_inner(
         context_token,
         oauth_tokens,
         Some(run_id.to_string()),
+        Some(channel.clone()),
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
@@ -369,6 +412,7 @@ async fn execute_inner(
         run.execute(state.clone()).await
     })
     .await;
+    channel.close().await;
 
     // Flush any remaining buffered events
     tracing::debug!("Flushing remaining buffered intercom events");

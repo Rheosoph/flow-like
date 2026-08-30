@@ -5,6 +5,7 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type * as React from "react";
 
 import { cn } from "../../lib/utils";
+import { usePortalContainer } from "./portal-container";
 
 function Select({
 	...props
@@ -61,8 +62,9 @@ function SelectContent({
 	position = "popper",
 	...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+	const portalContainer = usePortalContainer();
 	return (
-		<SelectPrimitive.Portal>
+		<SelectPrimitive.Portal container={portalContainer}>
 			<SelectPrimitive.Content
 				data-slot="select-content"
 				className={cn(

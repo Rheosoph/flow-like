@@ -24,6 +24,8 @@ impl NodeLogic for PowerFloatNode {
             "Calculates the power of a float",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "power");
+        node.set_receiver("base");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("base", "Base", "Base float", VariableType::Float);

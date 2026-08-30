@@ -125,9 +125,15 @@ export function QueryResultChart({
 	const canRender =
 		rows.length > 0 && xKey && (single ? yKeys[0] : yKeys.length > 0);
 
-	const summary = t('typeChartOfValByVal2', '{{type}} chart of {{val}} by {{val2}}', { type: config.type, val: yKeys
-		.map(humanizeIdentifier)
-		.join(", "), val2: humanizeIdentifier(xKey) });
+	const summary = t(
+		"typeChartOfValByVal2",
+		"{{type}} chart of {{val}} by {{val2}}",
+		{
+			type: config.type,
+			val: yKeys.map(humanizeIdentifier).join(", "),
+			val2: humanizeIdentifier(xKey),
+		},
+	);
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col">
@@ -135,19 +141,23 @@ export function QueryResultChart({
 				<Popover>
 					<PopoverTrigger asChild>
 						<Button variant="outline" size="sm" className="h-8 gap-1.5">
-							<Settings2 className="h-3.5 w-3.5" /> {t('configure', 'Configure')}
+							<Settings2 className="h-3.5 w-3.5" />{" "}
+							{t("configure", "Configure")}
 						</Button>
 					</PopoverTrigger>
 					<PopoverContent align="end" className="w-72 space-y-3">
 						<div className="grid gap-1.5">
 							<Label className="text-xs text-muted-foreground">
-								{t('chartType', 'Chart type')}
+								{t("chartType", "Chart type")}
 							</Label>
 							<Select
 								value={config.type}
 								onValueChange={(value) => update({ type: value as ChartType })}
 							>
-								<SelectTrigger className="h-8" aria-label={t('chartType', 'Chart type')}>
+								<SelectTrigger
+									className="h-8"
+									aria-label={t("chartType", "Chart type")}
+								>
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
@@ -161,7 +171,9 @@ export function QueryResultChart({
 						</div>
 						<div className="grid gap-1.5">
 							<Label className="text-xs text-muted-foreground">
-								{config.type === "pie" ? "Label" : t('xCategory', 'X / Category')}
+								{config.type === "pie"
+									? "Label"
+									: t("xCategory", "X / Category")}
 							</Label>
 							<Select
 								value={xKey}
@@ -169,7 +181,7 @@ export function QueryResultChart({
 							>
 								<SelectTrigger
 									className="h-8"
-									aria-label={t('xOrCategoryColumn', 'X or category column')}
+									aria-label={t("xOrCategoryColumn", "X or category column")}
 								>
 									<SelectValue />
 								</SelectTrigger>
@@ -189,7 +201,7 @@ export function QueryResultChart({
 							<div className="flex flex-wrap gap-1.5">
 								{numericColumns.length === 0 && (
 									<span className="text-xs text-muted-foreground">
-										{t('noNumericColumns', 'No numeric columns')}
+										{t("noNumericColumns", "No numeric columns")}
 									</span>
 								)}
 								{numericColumns.map((column) => {
@@ -226,7 +238,10 @@ export function QueryResultChart({
 
 			{!canRender ? (
 				<div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-					{t('pickACategoryAndAtLeastOneValueColumnToChart', 'Pick a category and at least one value column to chart.')}
+					{t(
+						"pickACategoryAndAtLeastOneValueColumnToChart",
+						"Pick a category and at least one value column to chart.",
+					)}
 				</div>
 			) : (
 				<ChartContainer

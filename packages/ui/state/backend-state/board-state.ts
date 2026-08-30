@@ -18,6 +18,7 @@ import type {
 	IVersionType,
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
+import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type {
 	BoardEditJob,
 	BoardEditJobDeliveryClaim,
@@ -38,6 +39,7 @@ import type {
 	IBoardVariables,
 } from "../../lib/schema/flow/board-summary";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
+import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type { IPrerunBoardResponse } from "./types";
 
 export interface IApplyFlowScriptResponse {
@@ -74,8 +76,17 @@ export interface ICheckFlowScriptReconcileResponse {
 	reconcile_valid: boolean;
 	idempotent: boolean;
 	command_count: number;
+	/** The reconciled command plan (apply-preview UI); empty when parse/compile failed. */
+	board_commands?: BoardCommand[];
 	corrections: string[];
 	diagnostics: string[];
+}
+
+/** A selection-scoped FlowScript render plus the anchors a scoped apply must be limited to. */
+export interface IScopedFlowScriptResponse {
+	flowscript: string;
+	/** Anchors (event entry node id / function layer id) of the rendered events/functions. */
+	scope_anchors: string[];
 }
 
 /** One queued batch, described well enough for a user to decide whether to discard it. */
@@ -202,12 +213,6 @@ export interface IBoardState {
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined>;
 
-	/** Deliver a live micro-widget query result to the run awaiting it. */
-	respondWidgetQuery?(
-		requestId: string,
-		response: { ok: boolean; value?: unknown; error?: string },
-	): Promise<boolean>;
-
 	executeBoardRemote?(
 		appId: string,
 		boardId: string,
@@ -275,6 +280,14 @@ export interface IBoardState {
 		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]>;
 
+	/**
+	 * Apply FlowScript source back onto the board.
+	 *
+	 * Applying a **module file** (see {@link IBoardState.getFlowScriptFile}) is a three-part
+	 * contract, and all three must agree or the reconcile diff deletes what the file never
+	 * rendered: pass that file's `scopeAnchors`, `currentLayer` = the module layer id, and
+	 * `module` = the same layer id. `main` passes neither `module` nor a module `currentLayer`.
+	 */
 	applyFlowScript(
 		appId: string,
 		boardId: string,
@@ -282,6 +295,20 @@ export interface IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions?: boolean,
+		/** Defaults to "editor"; FlowPilot's own applies must pass "agent". */
+		origin?: FlowScriptApplyOrigin,
+		/**
+		 * Anchors from a scoped `getFlowScriptScoped` render, or from the rendered file of a
+		 * `getFlowScriptFile` call. When set, board events/functions outside these anchors are
+		 * invisible to the reconcile diff, so the partial document never deletes what it did
+		 * not render.
+		 */
+		scopeAnchors?: string[],
+		/**
+		 * Identity of the file being applied: the module layer id whose file this text is.
+		 * Omitted (or undefined) for `main`, which is the board root.
+		 */
+		module?: string,
 	): Promise<IApplyFlowScriptResponse>;
 
 	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
@@ -289,6 +316,52 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
+	/**
+	 * Render exactly one virtual FlowScript file of the board: `"main"` (the root — globals,
+	 * interfaces and every root-level event/function, module bodies excluded) or a module layer
+	 * id (that module's own sections, unwrapped and without the variable block; globals stay in
+	 * `main`). Interfaces are repeated in every file, and calls into another module are rendered
+	 * qualified (`checkout::payments::helper(…)`).
+	 *
+	 * Apply the edited text back through `applyFlowScript` with the returned `scope_anchors`,
+	 * `currentLayer` = the module layer id and `module` = the same id, so everything the file
+	 * did not render stays untouched. Optional — present where the backend renders per file;
+	 * without it the panel silently stays on the whole-board render.
+	 */
+	getFlowScriptFile?(
+		appId: string,
+		boardId: string,
+		/** `"main"` or a module layer id. */
+		file: string,
+		anchors?: boolean,
+	): Promise<IScopedFlowScriptResponse>;
+
+	/**
+	 * Render only the board slice containing `nodeIds`: the events/functions holding the
+	 * selection, every function they reference, and all variables/interfaces. Apply the edited
+	 * text back through `applyFlowScript` with the returned `scope_anchors` so the unrendered
+	 * rest of the board is never treated as deleted. Optional — present where the backend
+	 * supports selection-scoped editing.
+	 */
+	getFlowScriptScoped?(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors?: boolean,
+	): Promise<IScopedFlowScriptResponse>;
+
+	/**
+	 * Canonically format FlowScript text (`render(parse(text))`). Pure and non-mutating; rejects
+	 * on a parse error so the editor keeps the unformatted source. Optional — present where a
+	 * native/remote formatter exists.
+	 */
+	formatFlowScript?(
+		appId: string,
+		boardId: string,
+		flowscript: string,
 		anchors?: boolean,
 	): Promise<string>;
 
@@ -308,6 +381,10 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		flowscript: string,
+		/** Anchors from a scoped render; limits the compile diff exactly like a scoped apply. */
+		scopeAnchors?: string[],
+		/** The module layer id this text is the file of; undefined for `main`. Mirrors apply. */
+		module?: string,
 	): Promise<ICheckFlowScriptReconcileResponse>;
 
 	getExecutionElements(
@@ -317,6 +394,16 @@ export interface IBoardState {
 		wildcard?: boolean,
 		version?: [number, number, number],
 	): Promise<Record<string, unknown>>;
+
+	/**
+	 * The element selectors a board reads, from its prerun manifest. Rejects when the demand
+	 * cannot be fetched; callers then fall back to sending the full element map.
+	 */
+	getElementDemand?(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand>;
 
 	/** Unified copilot chat that can handle board, UI, or both */
 	copilot_chat(

@@ -1,25 +1,36 @@
-use super::board::{ExecutionStage, LayerType};
+use super::board::ExecutionStage;
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
+use crate::a2ui::ElementCache;
 use crate::app::AppVisibility;
 use crate::credentials::SharedCredentials;
-use crate::flow::execution::internal_node::ExecutionTarget;
+use crate::flow::compiled::CompiledRunTemplate;
+use crate::flow::execution::internal_node::{ExecutionTarget, NodeMeta};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
 use context::ExecutionContext;
+use flow_like_storage::Path;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_schema::{FieldRef, SchemaRef};
 use flow_like_storage::files::store::FlowLikeStore;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::Connection;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::index::scalar::BitmapIndexBuilder;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::serde_arrow;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
-use flow_like_storage::{Path, serde_arrow};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use flow_like_types::channel::{Channel, InProcessChannel, MAX_TTL};
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
+#[cfg(feature = "flow-runtime")]
 use flow_like_types::json::to_vec;
 use flow_like_types::sync::{Mutex, RwLock};
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -32,16 +43,14 @@ use internal_node::InternalNode;
 use internal_pin::InternalPin;
 use log::LogMessage;
 use num_cpus;
+#[cfg(feature = "flow-runtime")]
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::hash::Hasher;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use std::{
-    sync::{Arc, Weak},
-    time::SystemTime,
-};
+use std::{sync::Arc, time::SystemTime};
 use trace::Trace;
 
 pub mod context;
@@ -49,15 +58,17 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+pub mod rejection;
 pub mod trace;
 pub mod user_context;
 
-pub use user_context::{LOCAL_USER_SUB, RoleContext, UserExecutionContext};
+pub use user_context::{ExecutionPrincipal, LOCAL_USER_SUB, RoleContext, UserExecutionContext};
 
 const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DEFAULT_RUN_LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 pub const DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD: usize = 500;
+#[cfg(feature = "flow-runtime")]
 static STORED_META_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     Vec::<FieldRef>::from_type::<StoredLogMeta>(
         TracingOptions::default()
@@ -373,13 +384,15 @@ pub struct LogMeta {
 }
 
 impl LogMeta {
-    fn into_arrow(&self) -> flow_like_types::Result<RecordBatch> {
+    #[cfg(feature = "flow-runtime")]
+    fn to_arrow(&self) -> flow_like_types::Result<RecordBatch> {
         let fields = &*STORED_META_FIELDS;
         let stored: StoredLogMeta = self.into();
         let batch = serde_arrow::to_record_batch(fields, &vec![stored])?;
         Ok(batch)
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub fn into_duckdb_types() -> String {
         let fields = &*STORED_META_FIELDS;
         let mut types = vec![];
@@ -398,12 +411,13 @@ impl LogMeta {
         types.join(", ")
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub async fn flush(
         &self,
         db: Connection,
         write_options: Option<&flow_like_storage::lancedb::table::WriteOptions>,
     ) -> flow_like_types::Result<()> {
-        let arrow_batch = self.into_arrow()?;
+        let arrow_batch = self.to_arrow()?;
         let schema = arrow_batch.schema();
 
         let make_iter = || -> Box<dyn RecordBatchReader + Send> {
@@ -448,6 +462,7 @@ impl LogMeta {
         Ok(())
     }
 
+    #[cfg(feature = "flow-runtime")]
     async fn create_runs_indexes(table: &flow_like_storage::lancedb::Table) {
         let _ = table
             .create_index(
@@ -496,6 +511,8 @@ pub struct Run {
     pub board: Arc<Board>,
     pub log_level: LogLevel,
     pub payload: Arc<RunPayload>,
+    /// `payload._elements`, shared by every node of the run instead of cloned per read.
+    pub elements: Arc<RwLock<ElementCache>>,
     pub sub: String,
     pub highest_log_level: LogLevel,
     pub log_initialized: bool,
@@ -509,9 +526,11 @@ pub struct Run {
 
     pub visited_nodes: AHashMap<String, LogLevel>,
     pub log_store: Option<FlowLikeStore>,
+    #[cfg(feature = "flow-runtime")]
     pub log_db: Option<
         Arc<dyn Fn(Path) -> flow_like_storage::lancedb::connection::ConnectBuilder + Send + Sync>,
     >,
+    #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
 }
 
@@ -552,6 +571,7 @@ impl Run {
         self.push_trace(trace);
     }
 
+    #[cfg(feature = "flow-runtime")]
     pub(crate) fn prepare_flush(
         &mut self,
         finalize: bool,
@@ -675,6 +695,17 @@ impl Run {
     }
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+impl Run {
+    pub(crate) fn prepare_flush(
+        &mut self,
+        _finalize: bool,
+    ) -> flow_like_types::Result<Option<PreparedFlush>> {
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "flow-runtime")]
 pub(crate) struct PreparedFlush {
     db_fn:
         Arc<dyn Fn(Path) -> flow_like_storage::lancedb::connection::ConnectBuilder + Send + Sync>,
@@ -687,11 +718,15 @@ pub(crate) struct PreparedFlush {
     write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+pub(crate) struct PreparedFlush;
+
 pub(crate) struct FlushResult {
     pub created_table: bool,
     pub meta: Option<LogMeta>,
 }
 
+#[cfg(feature = "flow-runtime")]
 impl PreparedFlush {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_BACKOFF_MS: u64 = 100;
@@ -790,6 +825,16 @@ impl PreparedFlush {
     }
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+impl PreparedFlush {
+    pub async fn write(self) -> flow_like_types::Result<FlushResult> {
+        Ok(FlushResult {
+            created_table: false,
+            meta: None,
+        })
+    }
+}
+
 #[derive(Clone)]
 struct RunStack {
     stack: Vec<ExecutionTarget>,
@@ -850,6 +895,7 @@ pub struct RunMeta {
     pub log_spill_threshold: usize,
     pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
+    pub elements: Arc<RwLock<ElementCache>>,
 }
 
 impl RunMeta {
@@ -901,7 +947,8 @@ pub struct InternalRun {
     pub run: Arc<Mutex<Run>>,
     pub nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
     pub dependencies: AHashMap<String, Vec<Arc<InternalNode>>>,
-    pub pins: AHashMap<String, Arc<InternalPin>>,
+    /// All pin instances of this run, in template arena order.
+    pub pins: Vec<Arc<InternalPin>>,
     pub variables: Arc<Mutex<AHashMap<String, Variable>>>,
     pub cache: Arc<RwLock<AHashMap<String, Arc<dyn Cacheable>>>>,
     pub profile: Arc<Profile>,
@@ -911,6 +958,8 @@ pub struct InternalRun {
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     /// User context for this execution
     pub user_context: Option<UserExecutionContext>,
+    /// Reply conduit to the run's client, shared by every context of this run.
+    pub channel: Arc<dyn Channel>,
 
     stack: Arc<RunStack>,
     concurrency_limit: u64,
@@ -980,6 +1029,7 @@ fn resolve_variable_override<'a>(
 }
 
 impl InternalRun {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         app_id: &str,
         board: Arc<Board>,
@@ -1010,6 +1060,7 @@ impl InternalRun {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_with_run_id(
         app_id: &str,
         board: Arc<Board>,
@@ -1024,13 +1075,59 @@ impl InternalRun {
         oauth_tokens: std::collections::HashMap<String, OAuthToken>,
         run_id: Option<String>,
     ) -> flow_like_types::Result<Self> {
-        // Convert to AHashMap for internal use
+        let registry = handler.node_registry.read().await.node_registry.clone();
+        let template = Arc::new(CompiledRunTemplate::from_board(board, registry.as_ref())?);
+        Self::from_template(
+            app_id,
+            template,
+            event,
+            handler,
+            profile,
+            payload,
+            stream_state,
+            callback,
+            credentials,
+            token,
+            oauth_tokens,
+            run_id,
+            None,
+        )
+        .await
+    }
+
+    /// Construct a run from a shared compiled template. Topology, node logic,
+    /// pin lookups and parsed defaults are reused from the template; only
+    /// per-run state (pin values, variables, stack) is allocated here.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn from_template(
+        app_id: &str,
+        template: Arc<CompiledRunTemplate>,
+        event: Option<Event>,
+        handler: &Arc<FlowLikeState>,
+        profile: &Profile,
+        payload: &RunPayload,
+        stream_state: bool,
+        callback: InterComCallback,
+        credentials: Option<SharedCredentials>,
+        token: Option<String>,
+        oauth_tokens: std::collections::HashMap<String, OAuthToken>,
+        run_id: Option<String>,
+        channel: Option<Arc<dyn Channel>>,
+    ) -> flow_like_types::Result<Self> {
+        let board = template.board.clone();
         let oauth_tokens: AHashMap<String, OAuthToken> = oauth_tokens.into_iter().collect();
 
         let before = Instant::now();
         let run_id = run_id.unwrap_or_else(create_id);
+        // Local hosts (desktop, tests) answer in-process; remote executors pass the transport
+        // channel built from their grant.
+        let channel: Arc<dyn Channel> = match channel {
+            Some(channel) => channel,
+            None => InProcessChannel::register(run_id.clone(), MAX_TTL).await,
+        };
         let execution_mode = ExecutionMode::from_event(event.as_ref());
 
+        #[cfg(feature = "flow-runtime")]
         let (log_store, db, lance_write_options) = {
             let guard = handler.config.read().await;
             let log_store = guard.stores.log_store.clone();
@@ -1043,6 +1140,8 @@ impl InternalRun {
             );
             (log_store, db, write_opts)
         };
+        #[cfg(not(feature = "flow-runtime"))]
+        let log_store = handler.config.read().await.stores.log_store.clone();
 
         // derive sub from token (JWT) or default to the local placeholder
         let sub_value = token
@@ -1051,6 +1150,9 @@ impl InternalRun {
             .unwrap_or_else(|| LOCAL_USER_SUB.to_string());
 
         let nodes_executed = Arc::new(AtomicU64::new(0));
+        let elements = Arc::new(RwLock::new(ElementCache::from_payload(
+            payload.payload.as_ref(),
+        )));
         let run = Run {
             id: run_id.clone(),
             app_id: app_id.to_string(),
@@ -1062,6 +1164,7 @@ impl InternalRun {
             log_level: board.log_level,
             board: board.clone(),
             payload: Arc::new(payload.clone()),
+            elements: elements.clone(),
             sub: sub_value.clone(),
             highest_log_level: LogLevel::Debug,
             log_initialized: false,
@@ -1078,13 +1181,15 @@ impl InternalRun {
 
             visited_nodes: AHashMap::with_capacity(board.nodes.len()),
             log_store,
+            #[cfg(feature = "flow-runtime")]
             log_db: db,
+            #[cfg(feature = "flow-runtime")]
             lance_write_options,
         };
 
         let run = Arc::new(Mutex::new(run));
 
-        let mut dependencies = AHashMap::with_capacity(board.nodes.len());
+        let dependencies = AHashMap::with_capacity(board.nodes.len());
 
         let event_variables = event
             .as_ref()
@@ -1096,237 +1201,92 @@ impl InternalRun {
         let filter_secrets = payload.filter_secrets.unwrap_or(true);
 
         let variables = Arc::new(Mutex::new({
-            let mut map = AHashMap::with_capacity(board.variables.len());
-            for (variable_id, board_variable) in &board.variables {
+            let mut map = AHashMap::with_capacity(template.variables.len());
+            for tv in template.variables.iter() {
                 let variable = resolve_variable_override(
-                    variable_id,
-                    board_variable,
+                    &tv.variable.id,
+                    &tv.variable,
                     &runtime_variables,
                     &event_variables,
                     filter_secrets,
                 );
 
-                let value = match &variable.default_value {
-                    Some(bytes) => {
-                        flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                // The board default was parsed once at template build; only
+                // caller/event overrides still need a JSON parse.
+                let value = if std::ptr::eq(variable, &tv.variable) {
+                    tv.parsed_default.as_deref().cloned().unwrap_or(Value::Null)
+                } else {
+                    match &variable.default_value {
+                        Some(bytes) => {
+                            flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                        }
+                        None => Value::Null,
                     }
-                    None => Value::Null,
                 };
 
                 let mut var = variable.clone();
                 var.value = Arc::new(Mutex::new(value));
-                map.insert(variable_id.clone(), var);
+                map.insert(tv.variable.id.clone(), var);
             }
             map
         }));
 
-        let mut pin_to_node = AHashMap::with_capacity(board.nodes.len() * 3);
-        let mut pins: AHashMap<String, Arc<InternalPin>> =
-            AHashMap::with_capacity(board.nodes.len() * 3);
-
-        // Phase 1: Create all pins without connections
-        for (node_id, node) in &board.nodes {
-            for (pin_id, pin) in &node.pins {
-                let internal_pin = InternalPin::new(pin, false);
-                pin_to_node.insert(pin_id, (node_id, node.is_pure()));
-                pins.insert(pin.id.clone(), Arc::new(internal_pin));
-            }
+        // Per-run pin instances: cheap Arc clones of template metadata, then
+        // wiring resolved from pre-computed arena indices — no string probing.
+        let pins: Vec<Arc<InternalPin>> = template
+            .pins
+            .iter()
+            .map(|tp| Arc::new(InternalPin::from_template(tp)))
+            .collect();
+        for (tp, pin) in template.pins.iter().zip(pins.iter()) {
+            pin.init_connected_to(
+                tp.connected_to
+                    .iter()
+                    .map(|&target| Arc::downgrade(&pins[target as usize]))
+                    .collect(),
+            );
+            pin.init_depends_on(
+                tp.depends_on
+                    .iter()
+                    .map(|&target| Arc::downgrade(&pins[target as usize]))
+                    .collect(),
+            );
         }
 
-        // Also create pins for nodes inside function layers
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for (node_id, node) in &layer.nodes {
-                for (pin_id, pin) in &node.pins {
-                    let internal_pin = InternalPin::new(pin, false);
-                    pin_to_node.insert(pin_id, (node_id, node.is_pure()));
-                    pins.insert(pin.id.clone(), Arc::new(internal_pin));
-                }
-            }
-        }
-
-        for layer in board.layers.values() {
-            for (pin_id, pin) in &layer.pins {
-                if pins.contains_key(pin_id) {
-                    // this is the old layer format, where we just relayed the connected pin to the layers pin.
-                    continue;
-                }
-
-                let internal_pin = InternalPin::new(pin, true);
-                pins.insert(pin.id.clone(), Arc::new(internal_pin));
-            }
-        }
-
-        // Phase 2: Wire up connections using OnceLock init methods
-        for node in board.nodes.values() {
-            for pin in node.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    // Build connected_to list
-                    let connected: Vec<Weak<InternalPin>> = pin
-                        .connected_to
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_connected_to(connected);
-
-                    // Build depends_on list
-                    let depends: Vec<Weak<InternalPin>> = pin
-                        .depends_on
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_depends_on(depends);
-                }
-            }
-        }
-
-        // Wire connections for function layer nodes
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for node in layer.nodes.values() {
-                for pin in node.pins.values() {
-                    if let Some(internal_pin) = pins.get(&pin.id) {
-                        let connected: Vec<Weak<InternalPin>> = pin
-                            .connected_to
-                            .iter()
-                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                            .collect();
-                        internal_pin.init_connected_to(connected);
-
-                        let depends: Vec<Weak<InternalPin>> = pin
-                            .depends_on
-                            .iter()
-                            .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                            .collect();
-                        internal_pin.init_depends_on(depends);
-                    }
-                }
-            }
-        }
-
-        // Also wire connections for layer pins
-        for layer in board.layers.values() {
-            for pin in layer.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    let connected: Vec<Weak<InternalPin>> = pin
-                        .connected_to
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_connected_to(connected);
-
-                    let depends: Vec<Weak<InternalPin>> = pin
-                        .depends_on
-                        .iter()
-                        .filter_map(|id| pins.get(id).map(Arc::downgrade))
-                        .collect();
-                    internal_pin.init_depends_on(depends);
-                }
-            }
-        }
-
-        let mut dependency_map = AHashMap::with_capacity(board.nodes.len());
-        let mut nodes = AHashMap::with_capacity(board.nodes.len());
+        let mut nodes = AHashMap::with_capacity(template.nodes.len());
         let mut stack = RunStack::with_capacity(1);
 
-        let registry = handler.node_registry.read().await.node_registry.clone();
-        for (node_id, node) in &board.nodes {
-            let logic = registry.instantiate(node)?;
-            let mut node_pins = AHashMap::new();
-            let mut pin_cache = AHashMap::new();
-
-            for pin in node.pins.values() {
-                if let Some(internal_pin) = pins.get(&pin.id) {
-                    node_pins.insert(pin.id.clone(), internal_pin.clone());
-                    let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
-                    cached_array.push(internal_pin.clone());
-                }
-
-                if USE_DEPENDENCY_GRAPH {
-                    for dependency_pin_id in &pin.depends_on {
-                        if let Some((dependency_node_id, is_pure)) =
-                            pin_to_node.get(dependency_pin_id)
-                        {
-                            dependency_map
-                                .entry(node_id)
-                                .or_insert(vec![])
-                                .push((*dependency_node_id, is_pure));
-                        }
-                    }
-                }
-            }
-
-            let internal_node = Arc::new(InternalNode::new(
-                node.clone(),
-                node_pins.clone(),
-                logic,
-                pin_cache.clone(),
+        for tn in template.nodes.iter() {
+            let node_pins: Box<[Arc<InternalPin>]> = tn
+                .pins
+                .iter()
+                .map(|&arena_idx| pins[arena_idx as usize].clone())
+                .collect();
+            let meta = NodeMeta {
+                id: tn.id.clone(),
+                name: tn.name.clone(),
+                is_pure: tn.is_pure,
+            };
+            let internal_node = Arc::new(InternalNode::from_parts(
+                tn.node.clone(),
+                meta,
+                node_pins,
+                tn.lookup.clone(),
+                tn.logic.clone(),
             ));
 
-            // Set node reference on all pins using OnceLock init method
-            for internal_pin in node_pins.values() {
+            for internal_pin in internal_node.pins.iter() {
                 internal_pin.init_node(Arc::downgrade(&internal_node));
             }
 
-            if payload.id == node.id {
-                let target = ExecutionTarget {
+            if !tn.in_layer_body && payload.id.as_str() == tn.id.as_ref() {
+                stack.push(ExecutionTarget {
                     node: internal_node.clone(),
                     through_pins: vec![],
-                };
-                stack.push(target);
+                });
             }
 
-            nodes.insert(node_id.clone(), internal_node);
-        }
-
-        // Instantiate nodes inside function layers so they are available during execution
-        for layer in board.layers.values() {
-            if !matches!(layer.r#type, LayerType::Function) {
-                continue;
-            }
-            for (node_id, node) in &layer.nodes {
-                let logic = registry.instantiate(node)?;
-                let mut node_pins = AHashMap::new();
-                let mut pin_cache = AHashMap::new();
-
-                for pin in node.pins.values() {
-                    if let Some(internal_pin) = pins.get(&pin.id) {
-                        node_pins.insert(pin.id.clone(), internal_pin.clone());
-                        let cached_array = pin_cache.entry(pin.name.clone()).or_insert(vec![]);
-                        cached_array.push(internal_pin.clone());
-                    }
-                }
-
-                let internal_node = Arc::new(InternalNode::new(
-                    node.clone(),
-                    node_pins.clone(),
-                    logic,
-                    pin_cache.clone(),
-                ));
-
-                for internal_pin in node_pins.values() {
-                    internal_pin.init_node(Arc::downgrade(&internal_node));
-                }
-
-                nodes.insert(node_id.clone(), internal_node);
-            }
-        }
-
-        if USE_DEPENDENCY_GRAPH {
-            let mut recursion_filter: AHashSet<String> = AHashSet::new();
-            for node_id in board.nodes.keys() {
-                let deps = recursive_get_deps(
-                    node_id.to_string(),
-                    &dependency_map,
-                    &nodes,
-                    &mut recursion_filter,
-                );
-                dependencies.insert(node_id.clone(), deps);
-            }
+            nodes.insert(tn.id.to_string(), internal_node);
         }
 
         tracing::debug!(
@@ -1367,6 +1327,7 @@ impl InternalRun {
             profile: Arc::new(profile.clone()),
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
+            channel,
             has_node_errors: Arc::new(AtomicBool::new(false)),
             log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
             cancellation_token: None,
@@ -1390,6 +1351,7 @@ impl InternalRun {
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed,
+                elements,
             },
             board: board.clone(),
         })
@@ -1464,13 +1426,35 @@ impl InternalRun {
         self.user_context = Some(UserExecutionContext::offline());
     }
 
-    /// Set the user execution context for a trusted local run, adopting the
-    /// run's subject. Signed-in runs keep the caller's identity; unauthenticated
-    /// ones fall back to the offline placeholder. Call after any subject
-    /// override so the context matches the run.
+    /// Set the user execution context for a run with no server-side role to
+    /// consult — an offline app, or a signed-out session — adopting the run's
+    /// subject. Those runs are owner-equivalent. Signed-in runs keep the
+    /// caller's identity; unauthenticated ones fall back to the offline
+    /// placeholder. Call after any subject override so the context matches the
+    /// run.
     pub async fn set_local_user_context(&mut self) {
         let sub = self.run.lock().await.sub.clone();
         self.user_context = Some(UserExecutionContext::local(sub));
+    }
+
+    /// Set the context for a hosted app whose role could not be resolved. The
+    /// run keeps its subject but carries no permissions, so a permission gate
+    /// fails closed instead of silently passing as owner.
+    pub async fn set_unresolved_user_context(&mut self) {
+        let sub = self.run.lock().await.sub.clone();
+        self.user_context = Some(UserExecutionContext::new(sub));
+    }
+
+    /// Adopt an identity resolved against the hub. Sets the run subject as well
+    /// as the context so the two identity channels agree: storage paths, WASM
+    /// nodes and `Get Executing User` all name the same subject. Used by local
+    /// runs of hosted apps, where the role has to come from the server rather
+    /// than being assumed.
+    pub async fn set_resolved_user_context(&mut self, user_context: UserExecutionContext) {
+        if !user_context.sub.is_empty() {
+            self.set_execution_sub(user_context.sub.clone()).await;
+        }
+        self.user_context = Some(user_context);
     }
 
     /// Get the user execution context if available
@@ -1509,7 +1493,7 @@ impl InternalRun {
             run.end = SystemTime::now();
         }
         for node in self.nodes.values() {
-            for pin in node.pins.values() {
+            for pin in node.pins.iter() {
                 // Reset is async but pin access is lock-free
                 pin.reset().await;
             }
@@ -1559,6 +1543,7 @@ impl InternalRun {
                 let token = self.token.clone();
                 let nodes = self.nodes.clone();
                 let oauth_tokens = self.oauth_tokens.clone();
+                let channel = self.channel.clone();
                 let user_context = user_context.clone();
                 let has_node_errors = has_node_errors.clone();
                 let cancellation_token = cancellation_token.clone();
@@ -1583,6 +1568,7 @@ impl InternalRun {
                         credentials,
                         token,
                         oauth_tokens,
+                        channel,
                         user_context,
                         cancellation_token,
                         cancellation_log_level,
@@ -1648,6 +1634,7 @@ impl InternalRun {
             self.credentials.clone(),
             self.token.clone(),
             self.oauth_tokens.clone(),
+            self.channel.clone(),
             self.user_context.clone(),
             self.cancellation_token.clone(),
             self.cancellation_log_level,
@@ -2029,45 +2016,6 @@ impl InternalRun {
     }
 }
 
-fn recursive_get_deps(
-    node_id: String,
-    dependencies: &AHashMap<&String, Vec<(&String, &bool)>>,
-    lookup: &AHashMap<String, Arc<InternalNode>>,
-    recursion_filter: &mut AHashSet<String>,
-) -> Vec<Arc<InternalNode>> {
-    if recursion_filter.contains(&node_id) {
-        return vec![];
-    }
-
-    recursion_filter.insert(node_id.clone());
-
-    if !dependencies.contains_key(&node_id) {
-        return vec![];
-    }
-
-    let deps = dependencies.get(&node_id).unwrap();
-    let mut found_dependencies = Vec::with_capacity(deps.len());
-
-    for (dep_id, is_pure) in deps {
-        if !**is_pure {
-            continue;
-        }
-
-        if let Some(dep) = lookup.get(*dep_id) {
-            found_dependencies.push(dep.clone());
-        }
-
-        found_dependencies.extend(recursive_get_deps(
-            dep_id.to_string(),
-            dependencies,
-            lookup,
-            recursion_filter,
-        ));
-    }
-
-    found_dependencies
-}
-
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub enum RunStatus {
     Running,
@@ -2076,6 +2024,7 @@ pub enum RunStatus {
     Stopped,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn step_core(
     nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
     target: ExecutionTarget,
@@ -2094,6 +2043,7 @@ async fn step_core(
     credentials: Option<Arc<SharedCredentials>>,
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
+    channel: Arc<dyn Channel>,
     user_context: Option<UserExecutionContext>,
     cancellation_token: Option<CancellationToken>,
     cancellation_log_level: LogLevel,
@@ -2126,6 +2076,7 @@ async fn step_core(
         credentials,
         token,
         oauth_tokens,
+        Some(channel),
     )
     .await;
     context.user_context = user_context;

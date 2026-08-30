@@ -1,0 +1,7 @@
+// An object literal whose field value is a node output is not resolvable as an argument.
+// The same literal with only constant fields resolves fine, and a struct::set chain that
+// grafts the dynamic value onto a constant literal also resolves fine.
+eventsSimple chartConfigLiteral() {
+    const { groups } = array::groupBy({ arrayIn: [], key: "depot" })
+    ui::setNivoConfig({ elementRef: ui::getElement({ elementRef: "s/chart" }).element, config: { data: groups, indexBy: "key", keys: ["count"] }, chartType: "bar", colors: "nivo", height: "320px" })
+}

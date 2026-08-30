@@ -77,7 +77,7 @@ export function EventSectionRail({
 	return (
 		<nav
 			ref={navRef}
-			aria-label={t('eventSettingsSections', 'Event settings sections')}
+			aria-label={t("eventSettingsSections", "Event settings sections")}
 			// Below lg the rail would stack ten full-width rows on top of the form,
 			// pushing the actual fields a screen and a half down. There it becomes a
 			// horizontally scrollable chip strip instead.
@@ -96,7 +96,7 @@ export function EventSectionRail({
 					>
 						{index === 1 && (
 							<p className="hidden px-2.5 pb-1.5 pt-3 text-[10px] font-semibold uppercase tracking-[0.13em] text-muted-foreground lg:block">
-								{t('everyEvent', 'Every event')}
+								{t("everyEvent", "Every event")}
 							</p>
 						)}
 						<button

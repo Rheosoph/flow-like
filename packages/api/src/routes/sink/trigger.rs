@@ -13,8 +13,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType, collect_generic_result,
-        collect_generic_result_bytes, is_jwt_configured, resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
+        collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
+        resolve_wasm_packages, sign_execution_jwt,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -598,6 +599,44 @@ pub struct TriggerResponse {
     pub message: String,
 }
 
+/// Record a fire that never became a run.
+///
+/// Cron schedules and bot services are unattended: the HTTP status they get
+/// back is discarded, so without this the only trace of a dead schedule is a
+/// log line in a process nobody is watching. Resolving the event row directly
+/// is deliberate — the common failures here (orphaned schedule, sink-type
+/// mismatch, expired PAT) are exactly the ones where the sink is unusable but
+/// the event still knows which board the user meant.
+async fn record_trigger_rejection(
+    state: &AppState,
+    event_id: &str,
+    stage: rejection::RejectionStage,
+    reason: &str,
+    payload: Option<serde_json::Value>,
+    run_id: Option<String>,
+    actor_user_id: Option<String>,
+) -> Option<String> {
+    let Some(context) =
+        rejection::context_for_event(state, event_id, stage, reason.to_string()).await
+    else {
+        tracing::warn!(
+            event_id = %event_id,
+            reason = %reason,
+            "Trigger rejected for an event that no longer exists; nothing to record"
+        );
+        return None;
+    };
+
+    let mut context = context
+        .with_payload(payload)
+        .with_actor(actor_user_id, None);
+    if let Some(run_id) = run_id {
+        context = context.with_run_id(run_id);
+    }
+
+    Some(rejection::record(state, context).await)
+}
+
 /// Utility function to trigger an event programmatically.
 ///
 /// Use this in Lambda handlers, SQS processors, cron job workers, etc.
@@ -732,6 +771,9 @@ pub async fn trigger_event(
         user_context: None, // Sink triggers don't have user context
         profile: hydrated_sink_profile(state, &sink).await,
         wasm_packages,
+        channel: None,
+        // Programmatic trigger: cron workers, Lambda handlers, queue processors.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1038,6 +1080,9 @@ pub async fn trigger_http(
         user_context: None, // HTTP sink triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
+        // Inbound webhook.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1440,6 +1485,9 @@ pub async fn trigger_telegram(
         user_context: None, // Telegram webhook triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
+        // Telegram bot service.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -1777,6 +1825,9 @@ pub async fn trigger_discord(
         user_context: None, // Discord webhook triggers don't have user context
         profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
+        channel: None,
+        // Discord bot service.
+        trigger: DispatchTrigger::System,
     };
 
     // Create run record
@@ -2036,13 +2087,25 @@ pub async fn trigger_service(
         .filter(event_sink::Column::Active.eq(true))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?
-        .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "No active sink found for event {}",
-                request.event_id
-            ))
-        })?;
+        .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
+
+    let sink = match sink {
+        Some(sink) => sink,
+        None => {
+            let reason = format!("No active sink found for event {}", request.event_id);
+            let _ = record_trigger_rejection(
+                &state,
+                &request.event_id,
+                rejection::RejectionStage::Trigger,
+                &reason,
+                request.payload.clone(),
+                None,
+                None,
+            )
+            .await;
+            return Err(ApiError::not_found(reason));
+        }
+    };
 
     // Verify sink type matches
     if sink.sink_type != request.sink_type {
@@ -2052,10 +2115,21 @@ pub async fn trigger_service(
             requested_type = %request.sink_type,
             "Sink type mismatch"
         );
-        return Err(ApiError::bad_request(format!(
+        let reason = format!(
             "Sink type mismatch: event {} is of type {}, not {}",
             request.event_id, sink.sink_type, request.sink_type
-        )));
+        );
+        let _ = record_trigger_rejection(
+            &state,
+            &request.event_id,
+            rejection::RejectionStage::Trigger,
+            &reason,
+            request.payload.clone(),
+            None,
+            None,
+        )
+        .await;
+        return Err(ApiError::bad_request(reason));
     }
 
     // Check app_id restriction if present in token
@@ -2096,26 +2170,54 @@ pub async fn trigger_service(
         &state,
         TriggerEventInput {
             event_id: request.event_id.clone(),
-            payload: merged_payload,
+            payload: merged_payload.clone(),
         },
     )
     .await
     {
-        Ok(result) => ServiceTriggerResponse {
-            success: result.triggered,
+        Ok(result) if result.triggered => ServiceTriggerResponse {
+            success: true,
             run_id: result.run_id,
-            error: if result.triggered {
-                None
-            } else {
-                Some(result.message)
-            },
+            error: None,
         },
-        Err(e) => {
-            tracing::error!(error = %e, "Service trigger failed");
+        // The run row already exists but was never dispatched; finalize it with
+        // the reason instead of leaving it Pending until the sweeper times it
+        // out with no explanation.
+        Ok(result) => {
+            tracing::error!(message = %result.message, "Service trigger was not dispatched");
+            let _ = record_trigger_rejection(
+                &state,
+                &request.event_id,
+                rejection::RejectionStage::Dispatch,
+                &result.message,
+                merged_payload,
+                result.run_id.clone(),
+                None,
+            )
+            .await;
             ServiceTriggerResponse {
                 success: false,
-                run_id: None,
-                error: Some(e.to_string()),
+                run_id: result.run_id,
+                error: Some(result.message),
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Service trigger failed");
+            let reason = e.to_string();
+            let run_id = record_trigger_rejection(
+                &state,
+                &request.event_id,
+                rejection::RejectionStage::Trigger,
+                &reason,
+                merged_payload,
+                None,
+                None,
+            )
+            .await;
+            ServiceTriggerResponse {
+                success: false,
+                run_id,
+                error: Some(reason),
             }
         }
     };

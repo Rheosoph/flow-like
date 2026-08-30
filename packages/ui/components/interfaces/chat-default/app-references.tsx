@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowUpRightIcon, LayersIcon } from "lucide-react";
+import ArrowUpRightIcon from "lucide-react/dist/esm/icons/arrow-up-right.js";
+import LayersIcon from "lucide-react/dist/esm/icons/layers.js";
 import { useRouter } from "next/navigation";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useBackend } from "../../../state/backend-state";

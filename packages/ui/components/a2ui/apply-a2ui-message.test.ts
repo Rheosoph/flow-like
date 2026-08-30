@@ -5,11 +5,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+	applyA2UIMessage,
 	applyElementUpdate,
 	applyMicroWidgetPropsPatch,
 	normalizeGeoMapViewport,
 } from "./apply-a2ui-message";
-import type { SurfaceComponent } from "./types";
+import type { Surface, SurfaceComponent } from "./types";
 
 const geoMapComponent = (): SurfaceComponent =>
 	({
@@ -252,5 +253,189 @@ describe("value writes", () => {
 		);
 
 		expect(dataOf(updated).valueRevision).toBe(4);
+	});
+});
+
+describe("applyA2UIMessage widget instance routing", () => {
+	const widgetHost = (hostId: string, instanceId: string, text: string) =>
+		({
+			id: hostId,
+			component: {
+				type: "widgetInstance",
+				instanceId,
+				widgetId: "shared-widget",
+				inlineWidgetDef: {
+					rootComponentId: "shared-child",
+					components: [
+						{
+							id: "shared-child",
+							component: { type: "text", text },
+						},
+					],
+				},
+			},
+		}) as unknown as SurfaceComponent;
+
+	const surface = (): Surface => ({
+		id: "page-1",
+		rootComponentId: "root",
+		components: {
+			root: {
+				id: "root",
+				component: { type: "text", text: "Root" },
+			} as unknown as SurfaceComponent,
+			"host-a": widgetHost("host-a", "instance-a", "First"),
+			"host-b": widgetHost("host-b", "instance-b", "Second"),
+		},
+	});
+
+	const childText = (value: Surface, hostId: string) => {
+		const host = value.components[hostId].component as unknown as Record<
+			string,
+			unknown
+		>;
+		const inlineDef = host.inlineWidgetDef as {
+			components: Array<{ component: Record<string, unknown> }>;
+		};
+		return inlineDef.components[0].component.text;
+	};
+
+	test("routes instanceId/childId to only the matching widget host", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "instance-b/shared-child",
+			value: { type: "setText", text: "Updated" },
+		});
+
+		expect(childText(updated, "host-a")).toBe("First");
+		expect(childText(updated, "host-b")).toBe("Updated");
+	});
+
+	test("preserves slashes inside the widget child id", () => {
+		const original = surface();
+		const host = original.components["host-b"].component as unknown as Record<
+			string,
+			unknown
+		>;
+		const inlineDef = host.inlineWidgetDef as {
+			rootComponentId: string;
+			components: Array<{ id: string; component: Record<string, unknown> }>;
+		};
+		inlineDef.rootComponentId = "section/shared-child";
+		inlineDef.components[0].id = "section/shared-child";
+
+		const updated = applyA2UIMessage(original, {
+			type: "upsertElement",
+			element_id: "instance-b/section/shared-child",
+			value: { type: "setText", text: "Nested update" },
+		});
+
+		expect(childText(updated, "host-a")).toBe("First");
+		expect(childText(updated, "host-b")).toBe("Nested update");
+	});
+
+	test("retargets a foreign page prefix to this surface's component of the same name", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "other-page/root",
+			value: { type: "setText", text: "Retargeted root" },
+		});
+
+		const root = updated.components.root.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(root.text).toBe("Retargeted root");
+		expect(childText(updated, "host-a")).toBe("First");
+		expect(childText(updated, "host-b")).toBe("Second");
+	});
+
+	test("never retargets a prefix that names a widget instance on this surface", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "instance-b/root",
+			value: { type: "setText", text: "Must not land on the page root" },
+		});
+
+		const root = updated.components.root.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(root.text).not.toBe("Must not land on the page root");
+	});
+
+	test("keeps surfaceId/componentId routing for top-level components", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "page-1/root",
+			value: { type: "setText", text: "Updated root" },
+		});
+
+		const root = updated.components.root.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(root.text).toBe("Updated root");
+	});
+
+	test("keeps bare child ids as the legacy first-match lookup", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "shared-child",
+			value: { type: "setText", text: "Legacy update" },
+		});
+
+		expect(childText(updated, "host-a")).toBe("Legacy update");
+		expect(childText(updated, "host-b")).toBe("Second");
+	});
+
+	test("does not fall back when the widget instance does not exist", () => {
+		const original = surface();
+		const updated = applyA2UIMessage(original, {
+			type: "upsertElement",
+			element_id: "missing-instance/shared-child",
+			value: { type: "setText", text: "Wrong target" },
+		});
+
+		expect(updated).toBe(original);
+	});
+
+	test("queues ordered child updates on a host whose definition is external", () => {
+		const original = surface();
+		original.components["host-b"] = {
+			id: "host-b",
+			component: {
+				type: "widgetInstance",
+				instanceId: "instance-b",
+				widgetId: "external-widget",
+			},
+		} as unknown as SurfaceComponent;
+
+		const withText = applyA2UIMessage(original, {
+			type: "upsertElement",
+			element_id: "instance-b/shared-child",
+			value: { type: "setText", text: "Updated" },
+		});
+		const updated = applyA2UIMessage(withText, {
+			type: "upsertElement",
+			element_id: "instance-b/shared-child",
+			value: { type: "setVisibility", visible: false },
+		});
+
+		const hostA = updated.components["host-a"].component as unknown as Record<
+			string,
+			unknown
+		>;
+		const hostB = updated.components["host-b"].component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(hostA.runtimeChildUpdates).toBeUndefined();
+		expect(hostB.runtimeChildUpdates).toEqual({
+			"shared-child": [
+				{ type: "setText", text: "Updated" },
+				{ type: "setVisibility", visible: false },
+			],
+		});
 	});
 });

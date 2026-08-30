@@ -30,6 +30,7 @@ impl NodeLogic for GetWidgetElement {
             "Resolves an element inside a widget instance (from Instantiate Widget). The output plugs into any element node (Set Element Value, Update GeoMap, Push CSV To Chart, …).",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "widgetGetElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -37,7 +38,8 @@ impl NodeLogic for GetWidgetElement {
             "Widget",
             "Widget instance reference (from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "element_id",
@@ -51,7 +53,8 @@ impl NodeLogic for GetWidgetElement {
             "Element",
             "The element reference (connect to element nodes)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::A2UIElement>();
 
         node.add_output_pin(
             "exists",

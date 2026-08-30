@@ -1,13 +1,6 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
-import {
-	ArrowUpRight,
-	CalendarDays,
-	IdCard,
-	Mail,
-	UserRound,
-} from "lucide-react";
+import { UserRound } from "lucide-react";
 import { useMemo } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import {
@@ -21,10 +14,9 @@ import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IUserLookup } from "../../state/backend-state/types";
 import { resolveAccountId } from "../../state/backend-state/user-state";
-import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
-import { RelativeTime } from "./relative-time";
 import { Skeleton } from "./skeleton";
+import { UserAvatar, UserProfileHoverContent } from "./user-identity";
 
 export interface UserProfileLinkProps {
 	userId?: string | null;
@@ -76,7 +68,6 @@ export function UserProfileLink({
 	compact = false,
 	muted = false,
 }: Readonly<UserProfileLinkProps>) {
-	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const lookup = useInvoke(
 		backend.userState.lookupUser,
@@ -129,10 +120,13 @@ export function UserProfileLink({
 	const triggerContent = (
 		<>
 			{showAvatar && (
-				<Avatar className={cn("h-4 w-4", avatarClassName)}>
-					<AvatarImage src={resolvedAvatar} alt={label} />
-					<AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
-				</Avatar>
+				<UserAvatar
+					avatarUrl={resolvedAvatar}
+					initials={initials}
+					label={label}
+					size="xs"
+					className={cn("h-4 w-4", avatarClassName)}
+				/>
 			)}
 			{lookup.isLoading ? (
 				<Skeleton className="h-3 w-16" />
@@ -157,83 +151,17 @@ export function UserProfileLink({
 				)}
 			</HoverCardTrigger>
 			<HoverCardContent align="start" className="w-80 p-0">
-				<div className="border-b bg-muted/30 p-4">
-					<div className="flex items-start gap-3">
-						<Avatar className="h-12 w-12">
-							<AvatarImage src={resolvedAvatar} alt={label} />
-							<AvatarFallback>{initials}</AvatarFallback>
-						</Avatar>
-						<div className="min-w-0 flex-1">
-							<div className="truncate font-semibold">{label}</div>
-							{subtitle && (
-								<div className="truncate text-xs text-muted-foreground">
-									{subtitle}
-								</div>
-							)}
-							{resolvedUserId && (
-								<a
-									href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
-									className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-								>
-									{t('viewProfile', 'View profile')}
-									<ArrowUpRight className="h-3 w-3" />
-								</a>
-							)}
-						</div>
-					</div>
-				</div>
-				<div className="grid gap-3 p-4 text-sm">
-					{lookup.isLoading && (
-						<div className="space-y-2">
-							<Skeleton className="h-4 w-3/4" />
-							<Skeleton className="h-4 w-1/2" />
-							<Skeleton className="h-4 w-2/3" />
-						</div>
-					)}
-					{!lookup.isLoading && (
-						<>
-							{email || lookup.data?.email ? (
-								<div className="flex items-center justify-between gap-3">
-									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
-										<Mail className="h-3.5 w-3.5" />
-										{t('email', 'Email')}
-									</span>
-									<span className="truncate text-right">
-										{lookup.data?.email ?? email}
-									</span>
-								</div>
-							) : null}
-							{resolvedCreatedAt ? (
-								<div className="flex items-center justify-between gap-3">
-									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
-										<CalendarDays className="h-3.5 w-3.5" />
-										{t('joined', 'Joined')}
-									</span>
-									<RelativeTime
-										value={resolvedCreatedAt}
-										className="text-right"
-									/>
-								</div>
-							) : null}
-							{resolvedUserId ? (
-								<div className="flex items-center justify-between gap-3">
-									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
-										<IdCard className="h-3.5 w-3.5" />
-										{t('userId', 'User ID')}
-									</span>
-									<code className="max-w-44 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-										{resolvedUserId}
-									</code>
-								</div>
-							) : null}
-							{resolvedDescription ? (
-								<p className="rounded-md bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-									{resolvedDescription}
-								</p>
-							) : null}
-						</>
-					)}
-				</div>
+				<UserProfileHoverContent
+					userId={resolvedUserId}
+					label={label}
+					subtitle={subtitle}
+					avatarUrl={resolvedAvatar}
+					initials={initials}
+					description={resolvedDescription}
+					createdAt={resolvedCreatedAt}
+					email={lookup.data?.email ?? email}
+					isLoading={lookup.isLoading}
+				/>
 			</HoverCardContent>
 		</HoverCard>
 	);

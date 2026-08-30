@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use flow_like::a2ui::components::TextFieldProps;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -30,6 +30,7 @@ impl NodeLogic for GetElementValue {
             "Gets the value of an input element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "getElementValue");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -66,8 +67,7 @@ impl NodeLogic for GetElementValue {
             )
         })?;
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         let value_pin = context.get_pin_by_name("value").await?;
         let exists_pin = context.get_pin_by_name("exists").await?;

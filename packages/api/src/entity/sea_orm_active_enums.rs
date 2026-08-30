@@ -248,6 +248,28 @@ pub enum ChallengeKind {
     ExecuteNode,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "ChannelMessageKind")]
+pub enum ChannelMessageKind {
+    #[sea_orm(string_value = "REQUEST")]
+    Request,
+    #[sea_orm(string_value = "INBOUND")]
+    Inbound,
+    #[sea_orm(string_value = "CANCEL")]
+    Cancel,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "ChannelMessageStatus"
+)]
+pub enum ChannelMessageStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "RESPONDED")]
+    Responded,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "CourseAppPurpose")]
 pub enum CourseAppPurpose {
     #[sea_orm(string_value = "SHARED_TEMPLATE")]
@@ -326,14 +348,6 @@ pub enum ExecutionStatus {
     Error,
     #[sea_orm(string_value = "FATAL")]
     Fatal,
-}
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "InteractionStatus")]
-pub enum InteractionStatus {
-    #[sea_orm(string_value = "PENDING")]
-    Pending,
-    #[sea_orm(string_value = "RESPONDED")]
-    Responded,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "InvitationStatus")]

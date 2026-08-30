@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -47,6 +46,8 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -539,7 +540,7 @@ export default function Id({
 					size="sm"
 					className="md:hidden"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label={t('openMenu', 'Open menu')}
+					aria-label={t("openMenu", "Open menu")}
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>
@@ -605,16 +606,20 @@ export default function Id({
 					size="sm"
 					className="md:hidden"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label={t('openMenu', 'Open menu')}
+					aria-label={t("openMenu", "Open menu")}
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>,
 				...(canUseApp
 					? [
 							<Link key={"use-app"} href={useAppHref} className="md:hidden">
-								<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
+								<Button
+									variant="default"
+									size="sm"
+									aria-label={t("useApp", "Use App")}
+								>
 									<SparklesIcon className="w-4 h-4" />
-									{t('useApp', 'Use App')}
+									{t("useApp", "Use App")}
 								</Button>
 							</Link>,
 						]
@@ -638,9 +643,8 @@ export default function Id({
 
 	const handleExport = useCallback(async () => {
 		// Export not supported in web mode - apps are stored remotely
-		toast.info(t('exportNotAvailable', 'Export not available'), {
-			description:
-				`App export is only available in the desktop app. Your app is automatically synced to the cloud.`,
+		toast.info(t("exportNotAvailable", "Export not available"), {
+			description: `App export is only available in the desktop app. Your app is automatically synced to the cloud.`,
 		});
 	}, []);
 
@@ -656,15 +660,14 @@ export default function Id({
 		);
 		if (!runMeta) {
 			toastError(
-				t('failedToExecuteBoard', 'Failed to execute board'),
+				t("failedToExecuteBoard", "Failed to execute board"),
 				<PlayCircleIcon className="w-4 h-4" />,
 			);
 		}
 	}
 
 	// Storage and Data Studio own their vertical space; every other section scrolls.
-	const contentFillsHeight =
-		currentRoute?.includes("/storage") || currentRoute?.includes("/explore");
+	const contentFillsHeight = configRouteFillsHeight(currentRoute);
 
 	// Rendered exactly once — a second copy for mobile would mount the whole page
 	// twice, duplicating its effects, URL writes and IndexedDB persistence.
@@ -698,7 +701,7 @@ export default function Id({
 											className="flex items-center gap-1"
 										>
 											<LayoutGridIcon className="w-3 h-3" />
-											{t('home', 'Home')}
+											{t("home", "Home")}
 										</BreadcrumbLink>
 									</BreadcrumbItem>
 									<BreadcrumbSeparator />
@@ -727,7 +730,9 @@ export default function Id({
 												className="flex items-center gap-2 w-full rounded-full px-4"
 											>
 												<SparklesIcon className="w-4 h-4" />
-												<h4 className="text-sm font-medium">{t('useApp', 'Use App')}</h4>
+												<h4 className="text-sm font-medium">
+													{t("useApp", "Use App")}
+												</h4>
 											</Button>
 										</Link>
 									</div>
@@ -736,9 +741,13 @@ export default function Id({
 								{/* Mobile "Use App" quick action */}
 								{useAppHref && (
 									<Link href={useAppHref} className="md:hidden">
-										<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
+										<Button
+											variant="default"
+											size="sm"
+											aria-label={t("useApp", "Use App")}
+										>
 											<SparklesIcon className="w-4 h-4" />
-											{t('useApp', 'Use App')}
+											{t("useApp", "Use App")}
 										</Button>
 									</Link>
 								)}
@@ -748,7 +757,7 @@ export default function Id({
 									size="sm"
 									className="md:hidden"
 									onClick={() => setMobileNavOpen(true)}
-									aria-label={t('openMenu', 'Open menu')}
+									aria-label={t("openMenu", "Open menu")}
 								>
 									<MenuIcon className="w-4 h-4" />
 								</Button>
@@ -761,9 +770,12 @@ export default function Id({
 				<Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
 					<DialogContent className="sm:max-w-[480px] p-0 overflow-hidden">
 						<div className="p-4 border-b">
-							<DialogTitle>{t('navigation', 'Navigation')}</DialogTitle>
+							<DialogTitle>{t("navigation", "Navigation")}</DialogTitle>
 							<DialogDescription>
-								{t('quicklyJumpToSettingsSections', 'Quickly jump to settings sections')}
+								{t(
+									"quicklyJumpToSettingsSections",
+									"Quickly jump to settings sections",
+								)}
 							</DialogDescription>
 						</div>
 						<ScrollArea className="max-h-[70vh]">
@@ -781,7 +793,11 @@ export default function Id({
 												aria-disabled="true"
 											>
 												<Icon className="w-4 h-4 flex-shrink-0" />
-												<span className="truncate">{t('labelSoon', '{{label}} (soon)', { label: item.label })}</span>
+												<span className="truncate">
+													{t("labelSoon", "{{label}} (soon)", {
+														label: item.label,
+													})}
+												</span>
 											</div>
 										);
 									}
@@ -827,7 +843,9 @@ export default function Id({
 										}}
 									>
 										<DownloadIcon className="w-4 h-4 flex-shrink-0" />
-										<span className="truncate">{t('exportApp', 'Export App')}</span>
+										<span className="truncate">
+											{t("exportApp", "Export App")}
+										</span>
 									</Button>
 								)}
 							</nav>
@@ -855,7 +873,9 @@ export default function Id({
 				<Dialog open={exportOpen} onOpenChange={setExportOpen}>
 					<DialogContent className="sm:max-w-[520px]">
 						<DialogHeader>
-							<DialogTitle>{t('exportApplication', 'Export Application')}</DialogTitle>
+							<DialogTitle>
+								{t("exportApplication", "Export Application")}
+							</DialogTitle>
 							<DialogDescription>
 								{`Choose how you want to export your app.`}
 							</DialogDescription>
@@ -881,7 +901,9 @@ export default function Id({
 									</div>
 								</div>
 								<div className="flex items-center gap-2">
-									<span className="text-xs text-muted-foreground">{t('encrypt', 'Encrypt')}</span>
+									<span className="text-xs text-muted-foreground">
+										{t("encrypt", "Encrypt")}
+									</span>
 									<Switch checked={encrypt} onCheckedChange={setEncrypt} />
 								</div>
 							</div>
@@ -890,7 +912,7 @@ export default function Id({
 								<div className="space-y-3">
 									<div className="grid gap-2">
 										<Label htmlFor="export-password" className="text-xs">
-											{t('password', 'Password')}
+											{t("password", "Password")}
 										</Label>
 										<div className="relative">
 											<Input
@@ -898,7 +920,10 @@ export default function Id({
 												type={showPassword ? "text" : "password"}
 												value={password}
 												onChange={(e) => setPassword(e.target.value)}
-												placeholder={t('enterAStrongPassword', 'Enter a strong password')}
+												placeholder={t(
+													"enterAStrongPassword",
+													"Enter a strong password",
+												)}
 												autoFocus
 											/>
 											<Button
@@ -925,14 +950,14 @@ export default function Id({
 											htmlFor="export-password-confirm"
 											className="text-xs"
 										>
-											{t('confirmPassword', 'Confirm password')}
+											{t("confirmPassword", "Confirm password")}
 										</Label>
 										<Input
 											id="export-password-confirm"
 											type={showPassword ? "text" : "password"}
 											value={confirmPassword}
 											onChange={(e) => setConfirmPassword(e.target.value)}
-											placeholder={t('reenterPassword', 'Re-enter password')}
+											placeholder={t("reenterPassword", "Re-enter password")}
 										/>
 									</div>
 
@@ -958,7 +983,10 @@ export default function Id({
 
 									{!passValid && (
 										<p className="text-xs text-destructive">
-											{t('passwordsMustMatchAndBeAtLeast8Characters', 'Passwords must match and be at least 8 characters.')}
+											{t(
+												"passwordsMustMatchAndBeAtLeast8Characters",
+												"Passwords must match and be at least 8 characters.",
+											)}
 										</p>
 									)}
 								</div>
@@ -971,7 +999,7 @@ export default function Id({
 								onClick={() => setExportOpen(false)}
 								disabled={exporting}
 							>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button
 								onClick={handleExport}
@@ -1026,7 +1054,13 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">{t('labelComingSoon', '{{label}} (Coming soon!)', { label: item.label })}</p>
+																	<p className="font-bold">
+																		{t(
+																			"labelComingSoon",
+																			"{{label}} (Coming soon!)",
+																			{ label: item.label },
+																		)}
+																	</p>
 																	<p className="text-xs mt-1">
 																		{item.description}
 																	</p>
@@ -1051,7 +1085,11 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">{t('labelLocked', '{{label}} (locked)', { label: item.label })}</p>
+																	<p className="font-bold">
+																		{t("labelLocked", "{{label}} (locked)", {
+																			label: item.label,
+																		})}
+																	</p>
 																	<p className="text-xs mt-1">
 																		{item.lockedReason ?? item.description}
 																	</p>
@@ -1104,13 +1142,20 @@ export default function Id({
 														onClick={() => setExportOpen(true)}
 													>
 														<DownloadIcon className="w-4 h-4 flex-shrink-0" />
-														<span className="truncate">{t('exportApp', 'Export App')}</span>
+														<span className="truncate">
+															{t("exportApp", "Export App")}
+														</span>
 													</Button>
 												</TooltipTrigger>
 												<TooltipContent side="right" className="max-w-xs">
-													<p className="font-bold">{t('exportApplication', 'Export Application')}</p>
+													<p className="font-bold">
+														{t("exportApplication", "Export Application")}
+													</p>
 													<p className="text-xs mt-1">
-														{t('exportTheApplicationToAFileForBackupOrSharing', "Export the application to a file for backup or sharing.")}
+														{t(
+															"exportTheApplicationToAFileForBackupOrSharing",
+															"Export the application to a file for backup or sharing.",
+														)}
 													</p>
 												</TooltipContent>
 											</Tooltip>
@@ -1122,7 +1167,9 @@ export default function Id({
 									<div className="px-3">
 										<div className="flex items-center gap-2 mb-3">
 											<ZapIcon className="w-4 h-4 text-primary" />
-											<h4 className="text-sm font-medium">{t('quickActions', 'Quick Actions')}</h4>
+											<h4 className="text-sm font-medium">
+												{t("quickActions", "Quick Actions")}
+											</h4>
 										</div>
 										<div className="flex flex-col gap-2 pb-4">
 											{events.data &&
@@ -1170,7 +1217,10 @@ export default function Id({
 													))
 											) : (
 												<p className="text-xs text-muted-foreground py-2">
-													{t('noQuickActionsAvailable', 'No quick actions available')}
+													{t(
+														"noQuickActionsAvailable",
+														"No quick actions available",
+													)}
 												</p>
 											)}
 										</div>

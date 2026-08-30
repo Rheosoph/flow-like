@@ -7,13 +7,11 @@ description = "Flow-Like GCP synchronous HTTP executor (Cloud Run service, serve
 [dependencies]
 axum.workspace = true
 base64.workspace = true
-# The feature set is the Azure/GCP queue-worker's, not the Kubernetes
-# executor's `all-execute` + `local-ml`. `local-ml` compiles the ONNX runtime
-# and local model weights into the image; on Azure and GCP every ML node reaches
-# a remote endpoint (`remote-ml`), and the supply-chain posture of both ports is
-# that no inference runtime ships in a serving image.
-flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
-flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+# The remote-only server bundle matches the Azure and GCP queue workers. It
+# excludes ONNX metadata, ONNX Runtime and local model weights. Remote-capable
+# text model nodes reach the authenticated API proxy.
+flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
+flow-like-executor = { workspace = true, features = ["server", "channel-gcp"] }
 # Only `metadata::ensure_no_forbidden_credential_env` is used. The executor
 # holds no Google credential of its own, but a keyless `credentials` block in a
 # request falls through to object_store's credential chain and the metadata
@@ -32,15 +30,21 @@ opentelemetry_sdk.workspace = true
 # `tls-roots` compiles TLS with the image's ca-certificates bundle into the
 # tonic channel; telemetry.googleapis.com is https-only, and without a tls
 # feature the exporter fails every flush with HttpsUriWithoutTlsSupport.
-opentelemetry-otlp = { workspace = true, features = ["tls-roots"] }
+# `tls-ring` names the rustls crypto provider: since tonic 0.13 the roots
+# feature no longer implies one, and a channel built without a provider panics
+# unless the process installed a rustls default.
+opentelemetry-otlp = { workspace = true, features = ["tls-roots", "tls-ring"] }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full", "signal"] }
 # Direct on purpose, pinned to the exact version the workspace already carries
 # transitively through opentelemetry-otlp: the OTLP auth interceptor in
 # telemetry.rs names tonic's Interceptor, Status and ClientTlsConfig types,
-# which the otlp crate does not re-export. Default features off — only the
-# tls-roots surface the exporter's channel needs is compiled in.
-tonic = { version = "0.12.3", default-features = false, features = ["tls-roots"] }
+# which the otlp crate does not re-export. Default features off — only the TLS
+# surface the exporter's channel needs is compiled in.
+tonic = { version = "0.14.5", default-features = false, features = [
+    "tls-native-roots",
+    "tls-ring",
+] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

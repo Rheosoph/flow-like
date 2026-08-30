@@ -27,6 +27,7 @@ impl NodeLogic for EmbedImageNode {
             "Embeds an image using a loaded model",
             "AI/Embedding",
         );
+        node.set_flowscript_name("ai.embedding", "embedImage");
 
         node.set_long_running(true);
         node.add_icon("/flow/icons/bot-invoke.svg");

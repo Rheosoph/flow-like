@@ -1,7 +1,9 @@
 use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
 use crate::data::path::FlowPath;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -30,6 +32,7 @@ impl NodeLogic for CloneGitHubRepoNode {
             "Clone a GitHub repository. Works with any FlowPath store type (local, S3, memory, etc.). For non-local stores, clones to a temp directory first, then copies files into the target store.",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "cloneRepo");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -245,6 +248,7 @@ impl NodeLogic for CloneGitHubRepoNode {
     }
 }
 
+#[cfg(feature = "execute")]
 fn build_repo_subpath(base: &str, repo: &str) -> String {
     if base.is_empty() {
         repo.to_string()

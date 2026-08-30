@@ -693,7 +693,7 @@
 		},
 		"LayerType": {
 			"type": "string",
-			"enum": ["Function", "Macro", "Collapsed"]
+			"enum": ["Function", "Macro", "Collapsed", "Module"]
 		},
 		"RunPayload": {
 			"type": "object",

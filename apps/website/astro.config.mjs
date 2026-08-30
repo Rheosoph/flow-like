@@ -2,7 +2,6 @@ import { fileURLToPath } from "node:url";
 import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
-import compressor from "astro-compressor";
 import { defineConfig } from "astro/config";
 
 import mdx from "@astrojs/mdx";
@@ -13,6 +12,14 @@ import sitemap from "@astrojs/sitemap";
 export default defineConfig({
 	site: "https://flow-like.com",
 	adapter: cloudflare(),
+	// CSSO previously rewrote generated CSS after Vite assigned its content hash.
+	// Use a new asset namespace once so clients cannot reuse those immutable URLs.
+	build: {
+		assets: "_astro-v2",
+	},
+	// Astro 7 defaults to 'jsx', which drops the space between adjacent inline
+	// elements. Keep HTML-aware whitespace so prose spacing stays unchanged.
+	compressHTML: true,
 	i18n: {
 		defaultLocale: "en",
 		locales: ["en", "de", "es", "fr", "zh", "ja", "ko", "pt", "it", "nl", "sv"],
@@ -39,8 +46,12 @@ export default defineConfig({
 			remarkRehype: { footnoteLabel: "Footnotes" },
 			gfm: true,
 		}),
-		(await import("@playform/compress")).default(),
-		compressor(),
+		// Vite already minifies generated CSS and JavaScript. This integration runs
+		// after asset hashes are assigned, so it must not rewrite hashed assets.
+		(await import("@playform/compress")).default({
+			CSS: false,
+			Exclude: (file) => /\/_astro(?:-[^/]+)?\//.test(file),
+		}),
 	],
 	vite: {
 		// React's jsx-dev-runtime is conditional on NODE_ENV. Keep Vite's client,

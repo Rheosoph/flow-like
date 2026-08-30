@@ -67,7 +67,7 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 						) : (
 							<div className="flex h-7 w-full items-center gap-2 text-sm whitespace-nowrap text-muted-foreground">
 								<RadicalIcon className="size-6 text-muted-foreground/80" />
-								<div>{t('addATexEquation', 'Add a Tex equation')}</div>
+								<div>{t("addATexEquation", "Add a Tex equation")}</div>
 							</div>
 						)}
 					</div>
@@ -151,7 +151,7 @@ export function InlineEquationElement(
 						{element.texExpression.length === 0 && (
 							<span>
 								<RadicalIcon className="mr-1 inline-block h-[19px] w-4 py-[1.5px] align-text-bottom" />
-								{t('newEquation', 'New equation')}
+								{t("newEquation", "New equation")}
 							</span>
 						)}
 					</div>
@@ -227,7 +227,7 @@ const EquationPopoverContent = ({
 			/>
 
 			<Button variant="secondary" className="px-3" onClick={onClose}>
-				{t('done', 'Done')} <CornerDownLeftIcon className="size-3.5" />
+				{t("done", "Done")} <CornerDownLeftIcon className="size-3.5" />
 			</Button>
 		</PopoverContent>
 	);

@@ -26,6 +26,7 @@ impl NodeLogic for PathExistsNode {
             "Checks if a path exists",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "exists");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

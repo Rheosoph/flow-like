@@ -25,6 +25,7 @@ import {
 import PuffLoader from "react-spinners/PuffLoader";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../hooks";
+import type { PeerUserInfo } from "../../hooks/use-peer-users";
 import type { IBoard, INode } from "../../lib";
 import {
 	CALL_FUNCTION_NODE_NAME,
@@ -45,11 +46,14 @@ import { useRunExecutionStore } from "../../state/run-execution-state";
 import { AutoResizeText } from "./auto-resize-text";
 import { CommentDialog } from "./comment-dialog";
 import { useUndoRedo } from "./flow-history";
+import type { RemoteSelectionParticipant } from "./flow-node";
 import { FlowPin } from "./flow-pin";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
+import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { LayerNodeToolbar } from "./layer-node/layer-node-toolbar";
 import { NameDialog } from "./name-dialog";
+import { NodePresenceChips, mergePresenceParticipants } from "./node-presence";
 
 export type LayerNode = Node<
 	{
@@ -67,6 +71,11 @@ export type LayerNode = Node<
 		onLayerUpdate(layer: ILayer): Promise<void>;
 		onLayerRemove(layer: ILayer, preserve_nodes: boolean): Promise<void>;
 		onExplain?: (nodeIds: string[]) => void;
+		/** Peers with this layer chip selected on the canvas. */
+		remoteSelections?: RemoteSelectionParticipant[];
+		/** Peers whose FlowScript cursor/selection/claims sit on this layer. */
+		remoteEditors?: RemoteEditorParticipant[];
+		peerUsers?: Map<string, PeerUserInfo>;
 	},
 	"layerNode"
 >;
@@ -82,6 +91,14 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 	const { resolvedTheme } = useTheme();
 	const invalidate = useInvalidateInvoke();
 	const { pushCommands } = useUndoRedo(props.data.appId, props.data.boardId);
+	const presence = useMemo(
+		() =>
+			mergePresenceParticipants(
+				props.data.remoteSelections,
+				props.data.remoteEditors,
+			),
+		[props.data.remoteSelections, props.data.remoteEditors],
+	);
 
 	const currentMetadata = useLogAggregation((s) => s.currentMetadata);
 
@@ -234,13 +251,28 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 			]);
 			toastSuccess(
 				plan.plan.renamedPins > 0
-					? t('nameIsNowAFunctionDuplicatePinNamesWereRenamed', { defaultValue_one: '\'{{name}}\' is now a function — {{count}} duplicate pin name was renamed', defaultValue_other: '\'{{name}}\' is now a function — {{count}} duplicate pin names were renamed', name: props.data.layer.name, count: plan.plan.renamedPins })
-					: t('nameIsNowAFunction', '\'{{name}}\' is now a function', { name: props.data.layer.name }),
+					? t("nameIsNowAFunctionDuplicatePinNamesWereRenamed", {
+							defaultValue_one:
+								"'{{name}}' is now a function — {{count}} duplicate pin name was renamed",
+							defaultValue_other:
+								"'{{name}}' is now a function — {{count}} duplicate pin names were renamed",
+							name: props.data.layer.name,
+							count: plan.plan.renamedPins,
+						})
+					: t("nameIsNowAFunction", "'{{name}}' is now a function", {
+							name: props.data.layer.name,
+						}),
 				<CheckIcon />,
 			);
 		} catch (error) {
 			console.error("Failed to convert layer to function:", error);
-			toastError(t('failedToConvertTheLayerIntoAFunction', 'Failed to convert the layer into a function'), <XIcon />);
+			toastError(
+				t(
+					"failedToConvertTheLayerIntoAFunction",
+					"Failed to convert the layer into a function",
+				),
+				<XIcon />,
+			);
 		}
 	}, [
 		props.data.appId,
@@ -312,7 +344,18 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 					ref={divRef}
 					key={`${props.data.hash}__node`}
 					className={`p-1 flex flex-col justify-center items-center react-flow__node-default selectable focus:ring-2 relative bg-card! border-border! rounded-md! group ${executionState === "done" ? "opacity-60" : "opacity-100"} ${props.selected && "border-primary! border-2"}`}
+					style={
+						presence.ring
+							? {
+									boxShadow: `0 0 0 2px ${presence.ring.color}${presence.ring.active ? "" : "70"}, 0 0 12px 0 ${presence.ring.color}30`,
+								}
+							: undefined
+					}
 				>
+					<NodePresenceChips
+						participants={presence.list}
+						peerUsers={props.data.peerUsers}
+					/>
 					{props.data.layer.comment && props.data.layer.comment !== "" && (
 						<div className="absolute top-0 translate-y-[calc(-100%-0.5rem)] left-3 right-3 mb-2 text-center bg-foreground/70 text-background p-1 rounded-md">
 							<small className="font-normal text-extra-small leading-extra-small">

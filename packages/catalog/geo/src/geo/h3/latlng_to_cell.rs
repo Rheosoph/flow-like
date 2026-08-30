@@ -27,6 +27,7 @@ impl NodeLogic for LatLngToCellNode {
             "Converts a geographic coordinate to an H3 cell index at the specified resolution. H3 is a hierarchical hexagonal grid system.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "latlngToCell");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

@@ -1,0 +1,376 @@
+---
+title: "8. Calling the Node Library"
+description: Discover and call Flow-Like catalog nodes with qualified names, imports, method syntax, named output pins, generated declarations, and typed search.
+seo:
+  title: "Flow-Like FlowScript Node Library: Calls, Methods & Outputs"
+  topics:
+    - Flow-Like node catalog
+    - FlowScript imports
+    - method calls
+    - output pins
+    - .flow.d declarations
+sidebar:
+  order: 8
+  badge:
+    text: Draft
+    variant: caution
+---
+
+import WorkflowFigure from '../../../components/WorkflowFigure.astro';
+import triageTrim from '../../../assets/workflows/incident-triage--focus-trim.webp';
+
+FlowScript keeps its syntax small and puts most capabilities in the node catalog. Text, HTTP,
+files, databases, documents, models, and UI arrive as typed operations. Built-in and packaged
+nodes share one call surface: boxes with pins on the canvas, function or method calls in
+FlowScript, and named operations at runtime.
+
+Every call resolves to a catalog declaration that the Board and run evidence can identify. This
+chapter shows how to find a compatible node for a known value and task.
+
+> **Release check:** Qualified calls, all four `use` forms, receiver dispatch, name-based output
+> destructuring, generated declarations, editor completion, and context-sensitive search are
+> implemented in the current repository. Ranking by safety, trust, permission, performance, or
+> cost remains product direction. Section 8.5 records a migration gap: the general schema
+> synchronizer can remove stale pins or detach changed-type pins without retaining a node error.
+
+## 8.1 Qualified calls
+
+The most reliable way to read a node call is the fully qualified form:
+
+```flow
+namespace::operation({ pinName: value })
+```
+
+The path identifies a catalog namespace and member. The object maps values to input pins:
+
+```flow
+const normalized = string::trim({ string: report })
+```
+
+The first `string` is the namespace, `trim` aliases the Trim String node, and the object key names
+its input pin. `normalized` receives the sole data output. Reconciliation finds the live catalog
+declaration, plans that node, and wires `report` to it.
+
+Catalog pins often use snake_case internally and render in camelCase, so `ignore_case` becomes
+`ignoreCase`. Completion inserts the projected name. Apply reports unknown, missing, or duplicated
+arguments and calls that match no declaration.
+
+Use named arguments as the default model, even where positional forms are accepted. They expose
+the pin mapping:
+
+<WorkflowFigure
+  src={triageTrim}
+  alt="Triage Incident report output connected to the String input of Trim String, whose Trimmed String output feeds Contains."
+  caption="The named string argument becomes the visible input pin on Trim String; its result remains an ordinary typed output wire."
+/>
+
+For long signatures, the pin name also explains each value during review.
+
+Generated declarations mark inputs with catalog defaults as optional. Required inputs need a
+literal, expression, or wire-producing binding. Only declared pins are valid arguments.
+
+`::` joins namespace segments, as in `ai::ml::read`. A dot selects from or invokes on a value. The
+reconciler can correct some `string.trim(...)` mistakes, but source should use `::` for namespaces
+and `.` for receivers or outputs.
+
+This Incident example uses several equivalent call forms:
+
+```flow
+use log::{ info, warn }
+use string as text
+
+eventsGeneric catalogIncident(payload: Struct, report: string) {
+    const normalized = text::trim({ string: report })
+    const { before: system, after: detail, found } = normalized.splitOnce({ separator: ":", fromEnd: false })
+    if (found) {
+        info({ message: detail, toast: false })
+    } else {
+        warn({ message: normalized, toast: false })
+    }
+}
+```
+
+The Flow trims a report such as `orders: production is on hold`, splits the system name from the
+detail, and logs whether the expected structure was found. Trim, Split Once, Branch, and both log
+operations remain visible nodes.
+
+A qualified call resolves only against the catalog available to the App and release. It cannot
+install a package or grant permission. If the package is absent, Apply reports an unknown
+namespace, member, or declaration.
+
+## 8.2 Imports and aliases
+
+Top-level `use` declarations shorten repeated namespace paths within one FlowScript document. The
+resolved Board nodes stay the same.
+
+FlowScript supports four forms:
+
+```flow
+use ai::response
+use string::*
+use string as text
+use log::{ info, warn }
+```
+
+Each form opens a different scope:
+
+| Form | Meaning | Example call |
+| --- | --- | --- |
+| `use ai::response` | Bring the final namespace segment into scope | `response::make({ ... })` |
+| `use string::*` | Make every member of one namespace callable bare | `trim({ string: report })` |
+| `use string as text` | Give the namespace a local alias | `text::trim({ string: report })` |
+| `use log::{ info, warn }` | Make only selected members callable bare | `warn({ message: report })` |
+
+Our example aliases `string` as `text` and imports two logging members. `text::trim` and
+`string::trim` resolve to the same node type; bare `warn(...)` resolves through its selected import.
+
+Unknown namespaces, missing members, keyword aliases, and collisions produce diagnostics. An
+unused valid import produces a non-blocking correction. If two namespaces expose the same member,
+argument shape may select one; a remaining tie requires a qualified name.
+
+Arrays and strings can both offer `contains`. Named inputs may resolve a bare call;
+`string::contains(...)` removes any doubt. User functions can also shadow bare catalog members or
+method aliases, which produces a diagnostic rather than changing the selected operation silently.
+
+Imports are derived from resolved calls rather than stored as Board entities. Current lowering
+uses `use ns::*` for at least two static calls when no used member collides with a Function,
+another node's flat name, or an already opened member. Method calls do not count; a single call
+normally stays qualified.
+
+After Apply, source may render with an equivalent import style. The Board stores node identity,
+not an author-written alias such as `text`, so canonical output may choose `string::trim` or
+`use string::*`.
+
+For predictable source:
+
+- begin with qualified calls when learning or resolving ambiguity;
+- accept autocomplete's import edit when a repeated namespace becomes noisy;
+- let canonical rendering decide whether the final Board still earns that import.
+
+## 8.3 Method form
+
+Some catalog nodes designate one data input as a receiver. Their generated declaration contains a
+`this:` parameter. Split Once currently declares its contract in this shape:
+
+```flow
+function splitOnce(
+    this: string,
+    { string: string, separator: string, fromEnd?: bool }
+): { before: string, after: string, found: bool };
+```
+
+The `this: string` marker allows the value left of a dot to supply the `string` input. These calls
+resolve to the same node:
+
+```flow
+const split = string::splitOnce({
+    string: normalized,
+    separator: ":",
+    fromEnd: false,
+})
+
+const splitAgain = normalized.splitOnce({
+    separator: ":",
+    fromEnd: false,
+})
+```
+
+Method form already binds the receiver pin, so supplying `string: normalized` again is an error.
+One remaining required input may be positional, as in `normalized.splitOnce(":")`. Use a named
+object when several inputs or options remain.
+
+Method syntax adds nothing to a JavaScript prototype. The call still becomes a Split Once node
+with a String input wire, so duration, failure, permissions, and outputs remain attributable to it.
+
+Receiver contracts power completion. After a `string`, the editor offers string and universal
+operations. Arrays get array operations; a titled Struct can get schema-specific and general
+Struct methods. Available packages participate through the active catalog.
+
+An unknown receiver broadens completion. On `any`, `.contains(...)` might target a string, array,
+or package node. FlowScript uses argument shape and opened namespaces, then requires a qualified
+call if candidates remain tied.
+
+Receiver metadata decides whether a node supports method form. A hash operation may declare a text
+or byte receiver even though its static name lives under `hash`; an author may also opt out. Check
+the generated declaration.
+
+FlowScript Functions may use their first parameter as a receiver too. The call still targets a
+visible Function layer. In every method call, the dot binds one declared input pin.
+
+## 8.4 Single and multiple outputs
+
+FlowScript handles zero, one, or several data outputs by pin name rather than pin position.
+
+A node with one data output behaves like a value-producing function:
+
+```flow
+const normalized = text::trim({ string: report })
+```
+
+`normalized` refers to Trim's only data output. A logger has no data output and renders as a
+statement:
+
+```flow
+warn({ message: normalized, toast: false })
+```
+
+For several outputs, select pins by name:
+
+```flow
+const { before: system, after: detail, found } = normalized.splitOnce({
+    separator: ":",
+    fromEnd: false,
+})
+```
+
+Before each colon is the output pin; after it is the local binding. `before` becomes `system`,
+`after` becomes `detail`, and `found` keeps its name. If a release renames a pin, reconciliation
+reports the missing output instead of binding by position.
+
+The alternative is to retain a name for the call and select outputs as fields:
+
+```flow
+const split = normalized.splitOnce({ separator: ":", fromEnd: false })
+if (split.found) {
+    warn({ message: split.after, toast: false })
+}
+```
+
+Here `.found` and `.after` select Split Once output pins. Resolution checks declared node outputs
+before treating the expression as a Struct field read. Chapter 9 follows that distinction.
+
+With several outputs, FlowScript looks for a conventional default named `result`, `value`,
+`output`, `out`, or `batch`. For a method-form transformation, it can instead select the output
+that matches the receiver stem, such as `map_in` to `map_out` or `array_in` to `array_out`. Other
+pins remain selectable. Split Once has no default among `before`, `after`, and `found`, so
+consumers must name an output.
+
+Array destructuring is intentionally unsupported:
+
+```flow
+// Rejected: output meaning must not depend on pin position.
+const [system, detail, found] = normalized.splitOnce(":")
+```
+
+Pin order is presentation metadata; pin names are the contract. Object destructuring survives
+reordering and maps visibly to data wires.
+
+When one output has several consumers, every use resolves to the same output pin and the Board
+records the fan-out. The local name introduces no hidden state.
+
+## 8.5 Generated `.flow.d` declarations
+
+Flow-Like generates `.flow.d` files from node metadata so editor assistance matches the catalog
+used for reconciliation and execution.
+
+An abbreviated declaration for Contains looks like this:
+
+```flow
+declare namespace string {
+    /**
+     * @node string_contains @receiver string @alias stringContains
+     * @param string
+     * @param substring
+     * @param ignoreCase (optional)
+     * @returns contains
+     */
+    function contains(
+        this: string,
+        { string: string, substring: string, ignoreCase?: bool }
+    ): bool;
+}
+```
+
+The declaration records:
+
+- the namespace and member provide the qualified spelling;
+- the object lists the static call's complete data-input shape;
+- `?` records an optional input;
+- `this:` and `@receiver` identify method binding;
+- the return type describes one output or an object of named outputs;
+- `@node` preserves the internal catalog identity;
+- `@alias` preserves the legacy flat camelCase spelling; and
+- `@impure`, when present, records that the node has Execution pins.
+
+Node, pin, and output descriptions become hover documentation. Struct schemas live in a sidecar so
+tools can resolve fields without expanding JSON Schema in every signature. `names.json` maps node
+types, qualified names, aliases, receivers, receiver classes, and categories.
+
+Files are grouped by top-level domain and source package. Studio's FlowScript editor uses the
+active catalog for completion, hover, signatures, and diagnostics. The VS Code extension reads
+the declarations, and FlowPilot queries the same index before writing source. All use the same pin
+names.
+
+A declaration snapshot must match the App's catalog. Packages can add names or collisions, and
+upgrades can change pins. The parser does not bind calls from `.flow.d`; reconciliation uses the
+live catalog. Book examples therefore need catalog-aware reconciliation as well as parsing.
+
+Nodes carry a schema version for migration. When the catalog is newer, synchronization matches pins
+by name, preserves IDs and wires for compatible types and shapes, adds pins, refreshes catalog
+metadata, and lets dynamic nodes rebuild derived pins. Widening a data pin to Generic preserves a
+compatible wire.
+
+The intended rule is to migrate proven-safe changes and leave unsafe ones visible for repair. The
+node remains on the Board today, but the general synchronizer applies that rule unevenly. On an
+ordinary node it removes a pin absent from the new catalog. A type or collection-shape change
+clears connections and resets the default, then clears the node error. Some schema-driven nodes
+already retain wired stale pins and report an error, but this is not yet universal.
+
+If a package or node type disappears, Studio keeps the node on the Board and marks it with an
+unavailable-package warning. This preserves its location and identity, but does not cover a
+pin-level breaking change in an installed package.
+
+Until migration applies the intended rule everywhere, inspect package updates and affected Boards
+before treating an upgrade as automatic. Unsafe changes should stay visible for repair and must
+never alter a program silently.
+
+## 8.6 A large library without a memory test
+
+Catalog search should work even when the function name is unknown.
+
+The checked-in declarations contain 1,668 node entries at revision `839395640`; packages and
+releases change that count. Type and intent metadata make the library searchable in context.
+
+In Studio, opening Actions on empty canvas space supports browsing and text search across node
+names, friendly names, categories, descriptions, and pin names. Search supports prefixes and
+limited fuzzy matching. Without a query, results are primarily alphabetical.
+
+Dragging a wire into empty space enables **Context Sensitive** mode by default. It keeps nodes with
+an opposite-direction pin compatible with the carried value, then search narrows the set. Choosing
+a result connects the matching pin.
+
+The filter considers direction, data type, collection shape, Generic specialization, schema
+enforcement, and schema-adopting Struct boundaries. Board validation still checks the connection.
+Turn Context Sensitive off to explore the full catalog.
+
+FlowScript uses the same context at the cursor. After `normalized.` it offers String receiver
+nodes; after `string::` it lists namespace members. A bare call can offer an unopened member and
+insert the needed `use` line. Hover shows signatures, argument completion shows remaining pins,
+and constrained pins can offer allowed values. FlowPilot queries the same declarations by intent
+and returns exact live call forms.
+
+Current visual search ranks textual relevance across names, categories, pins, and descriptions. It
+does not rank compatible nodes by package trust, permission breadth, quality, performance, or cost.
+
+The planned direction is policy-aware ranking after compatibility. When several nodes fit,
+Flow-Like could prefer one that matches the organization's trust, permissions, performance, and
+cost policy, while explaining the ranking and keeping alternatives visible. Weighting, overrides,
+and provenance remain governance work.
+
+Discovery follows the same loop on the canvas and in FlowScript:
+
+```text
+Start with a typed value or required pin
+    → filter to compatible operations
+    → search by the task you mean
+    → inspect the declaration and tradeoffs
+    → place or call the node
+    → let reconciliation verify the exact contract
+```
+
+When no node expresses the intent, compose lower-level nodes or add a reviewed package with a
+typed, capability-scoped contract. Later chapters show how WASM extensions enter an App and join
+the same catalog.
+
+The next chapter shows how operators, templates, ternaries, and field access lower to catalog
+operations and visible wiring.

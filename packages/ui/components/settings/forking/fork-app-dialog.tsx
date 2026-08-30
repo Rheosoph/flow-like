@@ -162,7 +162,9 @@ export function ForkAppDialog({
 			.catch((err: unknown) => {
 				if (cancelled) return;
 				setError(
-					err instanceof Error ? err.message : t('couldntLoadForkPreview', 'Couldn\'t load fork preview'),
+					err instanceof Error
+						? err.message
+						: t("couldntLoadForkPreview", "Couldn't load fork preview"),
 				);
 				setStage("error");
 			});
@@ -215,14 +217,23 @@ export function ForkAppDialog({
 			onForkStarted?.(res);
 			if (isOfflineForkResponse(res)) {
 				toast.success(
-					t('forkReadyLengthMetaArtifactvalInlineContentPulledViaSignedPrefix', 'Fork ready — {{length}} meta artifact{{val}} inline, content pulled via signed prefix', { length: res.meta_blobs.length, val: res.meta_blobs.length === 1 ? "" : "s" }),
+					t(
+						"forkReadyLengthMetaArtifactvalInlineContentPulledViaSignedPrefix",
+						"Fork ready — {{length}} meta artifact{{val}} inline, content pulled via signed prefix",
+						{
+							length: res.meta_blobs.length,
+							val: res.meta_blobs.length === 1 ? "" : "s",
+						},
+					),
 				);
 			} else {
 				toast.success("Fork created on your account");
 			}
 		} catch (err) {
 			const message =
-				err instanceof Error ? err.message : t('failedToStartFork', 'Failed to start fork');
+				err instanceof Error
+					? err.message
+					: t("failedToStartFork", "Failed to start fork");
 			setError(message);
 			setStage("preview");
 			toast.error(message);
@@ -234,16 +245,26 @@ export function ForkAppDialog({
 			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
-						<GitForkIcon className="w-4 h-4" />{t('forkAppname', 'Fork {{appName}}', { appName })}</DialogTitle>
+						<GitForkIcon className="w-4 h-4" />
+						{t("forkAppname", "Fork {{appName}}", { appName })}
+					</DialogTitle>
 					<DialogDescription>
-						{t('aFreshSecretstrippedCopyWillBeCreated', 'A fresh, secret-stripped copy will be created')}{" "}
-						{target === "offline" ? t('onThisDevice', 'on this device') : t('onYourAccount', 'on your account')}{`. Variables marked \`secret\` are cleared and OAuth bindings will need to be re-authenticated on the new app.`}
+						{t(
+							"aFreshSecretstrippedCopyWillBeCreated",
+							"A fresh, secret-stripped copy will be created",
+						)}{" "}
+						{target === "offline"
+							? t("onThisDevice", "on this device")
+							: t("onYourAccount", "on your account")}
+						{`. Variables marked \`secret\` are cleared and OAuth bindings will need to be re-authenticated on the new app.`}
 					</DialogDescription>
 				</DialogHeader>
 
 				{options.length > 1 && stage !== "done" && (
 					<div className="space-y-2">
-						<Label className="text-sm font-medium">{t('forkDestination', 'Fork destination')}</Label>
+						<Label className="text-sm font-medium">
+							{t("forkDestination", "Fork destination")}
+						</Label>
 						<Select
 							value={target}
 							onValueChange={handleTargetChange}
@@ -269,14 +290,16 @@ export function ForkAppDialog({
 				{stage === "loading" && (
 					<div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
 						<Loader2Icon className="w-4 h-4 animate-spin" />
-						{t('loadingPreview', 'Loading preview…')}
+						{t("loadingPreview", "Loading preview…")}
 					</div>
 				)}
 
 				{stage === "error" && (
 					<Alert variant="destructive">
 						<AlertTriangleIcon className="w-4 h-4" />
-						<AlertTitle>{t('couldntLoadPreview', 'Couldn\'t load preview')}</AlertTitle>
+						<AlertTitle>
+							{t("couldntLoadPreview", "Couldn't load preview")}
+						</AlertTitle>
 						<AlertDescription>{error}</AlertDescription>
 					</Alert>
 				)}
@@ -290,28 +313,49 @@ export function ForkAppDialog({
 						{!preview.allow_forking && (
 							<Alert variant="destructive">
 								<ShieldAlertIcon className="w-4 h-4" />
-								<AlertTitle>{t('forkingIsDisabledOnThisApp', 'Forking is disabled on this app')}</AlertTitle>
+								<AlertTitle>
+									{t(
+										"forkingIsDisabledOnThisApp",
+										"Forking is disabled on this app",
+									)}
+								</AlertTitle>
 								<AlertDescription>
-									{t('theOwnerHasNotOptedInToForkingYetAskThemToEnableTheToggleInAppSettings', "The owner has not opted in to forking yet. Ask them to enable the toggle in app settings.")}
+									{t(
+										"theOwnerHasNotOptedInToForkingYetAskThemToEnableTheToggleInAppSettings",
+										"The owner has not opted in to forking yet. Ask them to enable the toggle in app settings.",
+									)}
 								</AlertDescription>
 							</Alert>
 						)}
 						{preview.allow_forking && !preview.user_can_fork && (
 							<Alert variant="destructive">
 								<ShieldAlertIcon className="w-4 h-4" />
-								<AlertTitle>{t('youCantForkThisApp', 'You can\'t fork this app')}</AlertTitle>
+								<AlertTitle>
+									{t("youCantForkThisApp", "You can't fork this app")}
+								</AlertTitle>
 								<AlertDescription>
 									{preview.disallow_reason ||
-										t('youDontHaveTheRequiredReadPermissionsOnTheSourceApp', 'You don\'t have the required read permissions on the source app.')}
+										t(
+											"youDontHaveTheRequiredReadPermissionsOnTheSourceApp",
+											"You don't have the required read permissions on the source app.",
+										)}
 								</AlertDescription>
 							</Alert>
 						)}
 						{!preview.within_limits && (
 							<Alert variant="destructive">
 								<AlertTriangleIcon className="w-4 h-4" />
-								<AlertTitle>{t('sourceExceedsTheForkSizeCap', 'Source exceeds the fork size cap')}</AlertTitle>
+								<AlertTitle>
+									{t(
+										"sourceExceedsTheForkSizeCap",
+										"Source exceeds the fork size cap",
+									)}
+								</AlertTitle>
 								<AlertDescription>
-									{t('thisDeploymentCapsForksAt', 'This deployment caps forks at')}{" "}
+									{t(
+										"thisDeploymentCapsForksAt",
+										"This deployment caps forks at",
+									)}{" "}
 									{formatBytes(preview.max_size_bytes)} /{" "}
 									{preview.max_file_count.toLocaleString()} files.
 								</AlertDescription>
@@ -321,19 +365,21 @@ export function ForkAppDialog({
 						{tokenRequired && (
 							<div className="space-y-2">
 								<Label className="text-sm font-medium">
-									{t('remoteeventToken', 'Remote-event token')}
+									{t("remoteeventToken", "Remote-event token")}
 								</Label>
 								{token ? (
 									<div className="flex items-center gap-2 rounded-md border p-2">
 										<KeyRoundIcon className="w-4 h-4 text-green-600 dark:text-green-400" />
-										<span className="text-sm flex-1">{t('tokenSelected', 'Token selected')}</span>
+										<span className="text-sm flex-1">
+											{t("tokenSelected", "Token selected")}
+										</span>
 										<Button
 											variant="ghost"
 											size="sm"
 											onClick={() => setShowPatSelector(true)}
 											disabled={stage === "submitting"}
 										>
-											{t('change', 'Change')}
+											{t("change", "Change")}
 										</Button>
 									</div>
 								) : (
@@ -344,19 +390,46 @@ export function ForkAppDialog({
 										className="w-full justify-start gap-2"
 									>
 										<KeyRoundIcon className="w-4 h-4" />
-										{t('selectOrCreateToken', 'Select or create token')}
+										{t("selectOrCreateToken", "Select or create token")}
 									</Button>
 								)}
-								<p className="text-xs text-muted-foreground">{t('willBeReusedAtLength', 'Will be reused at {{length}}', { length: replaceableSites.length })}{" "}{t('sitesHttpAuth_tokenPatOauthBindingsCantBeSubstitutedWithATokenYoullNeedToReauthOnTheFork', { defaultValue_one: "site (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.", defaultValue_other: "sites (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.", count: replaceableSites.length })}</p>
+								<p className="text-xs text-muted-foreground">
+									{t("willBeReusedAtLength", "Will be reused at {{length}}", {
+										length: replaceableSites.length,
+									})}{" "}
+									{t(
+										"sitesHttpAuth_tokenPatOauthBindingsCantBeSubstitutedWithATokenYoullNeedToReauthOnTheFork",
+										{
+											defaultValue_one:
+												"site (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
+											defaultValue_other:
+												"sites (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
+											count: replaceableSites.length,
+										},
+									)}
+								</p>
 							</div>
 						)}
 
 						{reauthSites.length > 0 && (
 							<Alert>
 								<ShieldAlertIcon className="w-4 h-4" />
-								<AlertTitle>{t('oauthReauthRequired', 'OAuth re-auth required')}</AlertTitle>
+								<AlertTitle>
+									{t("oauthReauthRequired", "OAuth re-auth required")}
+								</AlertTitle>
 								<AlertDescription>
-									{reauthSites.length}{" "}{t('eventsUseOauthAndWillBeClearedAfterTheForkIsCreatedRelinkTheProvidersUnderThoseEvents', { defaultValue_one: "event use OAuth and will be cleared. After the fork is created, re-link the providers under those events.", defaultValue_other: "events use OAuth and will be cleared. After the fork is created, re-link the providers under those events.", count: reauthSites.length })}</AlertDescription>
+									{reauthSites.length}{" "}
+									{t(
+										"eventsUseOauthAndWillBeClearedAfterTheForkIsCreatedRelinkTheProvidersUnderThoseEvents",
+										{
+											defaultValue_one:
+												"event use OAuth and will be cleared. After the fork is created, re-link the providers under those events.",
+											defaultValue_other:
+												"events use OAuth and will be cleared. After the fork is created, re-link the providers under those events.",
+											count: reauthSites.length,
+										},
+									)}
+								</AlertDescription>
 							</Alert>
 						)}
 					</div>
@@ -365,21 +438,24 @@ export function ForkAppDialog({
 				{stage === "done" && response && (
 					<Alert>
 						<CheckCircle2Icon className="w-4 h-4" />
-						<AlertTitle>{t('forkCreated', 'Fork created')}</AlertTitle>
+						<AlertTitle>{t("forkCreated", "Fork created")}</AlertTitle>
 						<AlertDescription className="space-y-1">
 							<p>
-								{t('newAppId', 'New app id:')}{" "}
+								{t("newAppId", "New app id:")}{" "}
 								<code className="text-xs">{response.new_app_id}</code>
 							</p>
 							{isOfflineForkResponse(response) && (
 								<p>
 									{response.meta_blobs.length}{" "}
 									{response.meta_blobs.length === 1 ? "artifact" : "artifacts"}{" "}
-									{t('shippedInlineContentPulledFrom', 'shipped inline, content pulled from')}{" "}
+									{t(
+										"shippedInlineContentPulledFrom",
+										"shipped inline, content pulled from",
+									)}{" "}
 									<code className="text-xs">
 										{response.source_content_prefix}
 									</code>
-									{t('credentialsExpireAt', '. Credentials expire at')}{" "}
+									{t("credentialsExpireAt", ". Credentials expire at")}{" "}
 									<code className="text-xs">
 										{response.expires_at ?? "soon"}
 									</code>
@@ -387,13 +463,40 @@ export function ForkAppDialog({
 								</p>
 							)}
 							{response.report.skipped.length > 0 && (
-								<p>
-									{t('countItemsWereSkippedSeeTheDestinationAppForDetails', {
-										defaultValue_one: '{{count}} item was skipped — see the destination App for details.',
-										defaultValue_other: '{{count}} items were skipped — see the destination App for details.',
-										count: response.report.skipped.length,
-									})}
-								</p>
+								<div className="space-y-1">
+									<p>
+										{t("countItemsWereSkippedSeeTheDestinationAppForDetails", {
+											defaultValue_one:
+												"{{count}} item was skipped — see the destination App for details.",
+											defaultValue_other:
+												"{{count}} items were skipped — see the destination App for details.",
+											count: response.report.skipped.length,
+										})}
+									</p>
+									{/* Reasons are server-authored English; the dialog is the only
+									    place they are ever shown, so they are listed verbatim
+									    rather than summarised away. */}
+									{/* Ids and reasons come from the source app's payload, so they
+									    can be arbitrarily long and are wrapped rather than allowed
+									    to stretch the dialog. */}
+									<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground wrap-break-word">
+										{response.report.skipped.map((item, index) => (
+											<li key={`${index}:${item.source_id}`}>
+												<code className="text-[10px] break-all">
+													{item.source_id}
+												</code>{" "}
+												{item.reason}
+											</li>
+										))}
+									</ul>
+								</div>
+							)}
+							{response.report.warnings.length > 0 && (
+								<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground">
+									{response.report.warnings.map((warning, index) => (
+										<li key={`${index}:${warning}`}>{warning}</li>
+									))}
+								</ul>
 							)}
 						</AlertDescription>
 					</Alert>
@@ -401,7 +504,9 @@ export function ForkAppDialog({
 
 				<DialogFooter>
 					{stage === "done" ? (
-						<Button onClick={() => onOpenChange(false)}>{t('close', 'Close')}</Button>
+						<Button onClick={() => onOpenChange(false)}>
+							{t("close", "Close")}
+						</Button>
 					) : (
 						<>
 							<Button
@@ -409,7 +514,7 @@ export function ForkAppDialog({
 								onClick={() => onOpenChange(false)}
 								disabled={stage === "submitting"}
 							>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button
 								onClick={handleFork}
@@ -418,10 +523,12 @@ export function ForkAppDialog({
 								{stage === "submitting" ? (
 									<>
 										<Loader2Icon className="w-4 h-4 animate-spin mr-2" />
-										{t('forking', 'Forking…')}
+										{t("forking", "Forking…")}
 									</>
 								) : (
-									t('forkToVal', 'Fork to {{val}}', { val: target === "offline" ? "this device" : "my account" })
+									t("forkToVal", "Fork to {{val}}", {
+										val: target === "offline" ? "this device" : "my account",
+									})
 								)}
 							</Button>
 						</>
@@ -435,7 +542,7 @@ export function ForkAppDialog({
 					setToken(pat);
 					setShowPatSelector(false);
 				}}
-				title={t('selectOrCreateForkToken', 'Select or Create Fork Token')}
+				title={t("selectOrCreateForkToken", "Select or Create Fork Token")}
 				description={`Choose an existing token or create a new one. It will replace HTTP auth tokens and PATs at remote-event sites in your fork.`}
 			/>
 		</Dialog>
@@ -451,7 +558,7 @@ function ForkPreviewSummary({
 		<div className="grid grid-cols-2 gap-3 rounded-md border p-4 text-sm">
 			<div className="flex items-center gap-2">
 				<HardDriveIcon className="w-4 h-4 text-muted-foreground" />
-				<span className="text-muted-foreground">{t('size', 'Size')}</span>
+				<span className="text-muted-foreground">{t("size", "Size")}</span>
 			</div>
 			<div className="text-right font-medium">
 				{formatBytes(preview.selected_size_bytes)}
@@ -461,18 +568,20 @@ function ForkPreviewSummary({
 					</div>
 				)}
 			</div>
-			<div className="text-muted-foreground">{t('files', 'Files')}</div>
+			<div className="text-muted-foreground">{t("files", "Files")}</div>
 			<div className="text-right font-medium">
 				{preview.selected_object_count.toLocaleString()}
 			</div>
-			<div className="text-muted-foreground">{t('cap', 'Cap')}</div>
+			<div className="text-muted-foreground">{t("cap", "Cap")}</div>
 			<div className="text-right text-xs text-muted-foreground">
 				{formatBytes(preview.max_size_bytes)} /{" "}
 				{preview.max_file_count.toLocaleString()} files
 			</div>
 			{preview.remote_token_sites.length > 0 && (
 				<>
-					<div className="text-muted-foreground">{t('tokenSites', 'Token sites')}</div>
+					<div className="text-muted-foreground">
+						{t("tokenSites", "Token sites")}
+					</div>
 					<div className="text-right">
 						{preview.remote_token_sites.length}
 						<div className="text-xs text-muted-foreground">
@@ -486,7 +595,7 @@ function ForkPreviewSummary({
 				</>
 			)}
 			<div className="text-muted-foreground col-span-2 text-xs pt-2 border-t">
-				{t('source', 'Source:')} <code className="text-xs">{appId}</code>
+				{t("source", "Source:")} <code className="text-xs">{appId}</code>
 			</div>
 		</div>
 	);
@@ -506,38 +615,51 @@ function ForkContentsSummary({
 		policy.databases === "with_data" ? sizeHint(sizes.databases) : undefined;
 	const databaseDetail =
 		policy.databases === "with_data"
-			? [t('tablesAndData', 'Tables and data'), databaseSize].filter(Boolean).join(" · ")
-			: t('tablesOnlyNoData', 'Tables only, no data');
+			? [t("tablesAndData", "Tables and data"), databaseSize]
+					.filter(Boolean)
+					.join(" · ")
+			: t("tablesOnlyNoData", "Tables only, no data");
 
 	const rows: readonly {
 		label: string;
 		included: boolean;
 		detail?: string;
 	}[] = [
-		{ label: t('flows', 'Flows'), included: policy.flows, detail: sizeHint(sizes.flows) },
-		{ label: t('files', 'Files'), included: policy.files, detail: sizeHint(sizes.files) },
 		{
-			label: t('databases', 'Databases'),
+			label: t("flows", "Flows"),
+			included: policy.flows,
+			detail: sizeHint(sizes.flows),
+		},
+		{
+			label: t("files", "Files"),
+			included: policy.files,
+			detail: sizeHint(sizes.files),
+		},
+		{
+			label: t("databases", "Databases"),
 			included: policy.databases !== "none",
 			detail: databaseDetail,
 		},
 		{
-			label: t('widgets', 'Widgets'),
+			label: t("widgets", "Widgets"),
 			included: policy.widgets,
 			detail: sizeHint(sizes.widgets),
 		},
 		{
-			label: t('templates', 'Templates'),
+			label: t("templates", "Templates"),
 			included: policy.templates,
 			detail: sizeHint(sizes.templates),
 		},
-		{ label: t('roles', 'Roles'), included: policy.roles },
+		{ label: t("roles", "Roles"), included: policy.roles },
 	];
 
 	return (
 		<div className="rounded-md border p-4 space-y-2">
 			<p className="text-xs text-muted-foreground">
-				{t('theAppOwnerDecidesWhatAForkIncludes', 'The app owner decides what a fork includes.')}
+				{t(
+					"theAppOwnerDecidesWhatAForkIncludes",
+					"The app owner decides what a fork includes.",
+				)}
 			</p>
 			<ul className="space-y-1.5">
 				{rows.map((row) => (
@@ -562,14 +684,17 @@ function ForkContentsSummary({
 							</span>
 						</span>
 						<span className="text-xs text-muted-foreground">
-							{row.included ? row.detail : t('notIncluded', 'Not included')}
+							{row.included ? row.detail : t("notIncluded", "Not included")}
 						</span>
 					</li>
 				))}
 			</ul>
 			{!policy.flows && (
 				<p className="text-xs text-muted-foreground border-t pt-2">
-					{t('withoutFlowsThisCopyHasNoRunnableLogicItsEventsAndPagesComeWithTheBoardsSoTheyArentIncludedEither', "Without flows this copy has no runnable logic — its events and pages come with the boards, so they aren't included either.")}
+					{t(
+						"withoutFlowsThisCopyHasNoRunnableLogicItsEventsAndPagesComeWithTheBoardsSoTheyArentIncludedEither",
+						"Without flows this copy has no runnable logic — its events and pages come with the boards, so they aren't included either.",
+					)}
 				</p>
 			)}
 		</div>

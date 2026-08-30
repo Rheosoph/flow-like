@@ -5,7 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 #[cfg(feature = "execute")]
 use crate::document::openxml::{read_zip, write_zip};
@@ -84,6 +86,7 @@ impl NodeLogic for PptxMergeNode {
             "Combine slides from multiple PPTX files into one. The base file's theme and masters are preserved.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "merge");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

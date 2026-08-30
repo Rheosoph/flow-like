@@ -34,6 +34,8 @@ impl NodeLogic for UdpSendToNode {
             "Sends a datagram to a target address through a bound UDP socket",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "sendTo");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

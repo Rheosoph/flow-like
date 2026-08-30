@@ -51,6 +51,7 @@ impl NodeLogic for ReverseGeocodeNode {
             "Converts geographic coordinates to a human-readable address using the Nominatim service (OpenStreetMap).",
             "Web/Geo/Search",
         );
+        node.set_flowscript_name("geo", "reverseGeocode");
         node.add_icon("/flow/icons/map.svg");
 
         node.add_input_pin(
@@ -192,6 +193,7 @@ impl NodeLogic for ReverseGeocodeNode {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimReverseResult {
     display_name: String,
@@ -202,6 +204,7 @@ struct NominatimReverseResult {
     osm_type: Option<String>,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Deserialize)]
 struct NominatimAddress {
     house_number: Option<String>,

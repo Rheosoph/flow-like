@@ -1,6 +1,7 @@
 // A2UI runtime JSON definitions. Deprecated fields keep older Rust payloads readable.
 
 import type { WidgetContract } from "@flow-like/widget-sdk";
+import type { IChannelHandle } from "../../lib/schema/channel";
 
 export interface SelectOption {
 	value: string;
@@ -676,6 +677,8 @@ export interface FileInputComponent extends ComponentBase {
 	helperText?: BoundValue;
 	accept?: BoundValue;
 	multiple?: BoundValue;
+	/** Offer picking a whole folder; implies `multiple`. */
+	directory?: BoundValue;
 	maxSize?: BoundValue;
 	maxFiles?: BoundValue;
 	disabled?: BoundValue;
@@ -1725,6 +1728,8 @@ export interface WidgetInstanceComponent extends ComponentBase {
 	exposedPropValues?: Record<string, unknown>;
 	/** Bindings from widget actions to page workflows */
 	actionBindings?: Record<string, unknown>;
+	/** Instance-local element updates awaiting replay against the resolved definition. */
+	runtimeChildUpdates?: Record<string, Record<string, unknown>[]>;
 	/** Style overrides for the widget instance */
 	styleOverride?: Style;
 	style?: Style;
@@ -1889,7 +1894,11 @@ export type A2UIServerMessage =
 	  }
 	| {
 			type: "requestElements";
-			elementIds: string[];
+			requestId: string;
+			selectors: string[];
+			timeoutMs: number;
+			/** Where the answer goes (snake_case on the wire). */
+			channel?: IChannelHandle | null;
 	  }
 	| {
 			type: "widgetQuery";
@@ -1898,6 +1907,8 @@ export type A2UIServerMessage =
 			query: string;
 			args?: unknown;
 			timeoutMs: number;
+			/** Where the answer goes (snake_case on the wire). */
+			channel?: IChannelHandle;
 	  }
 	| {
 			type: "showScreen";

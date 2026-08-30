@@ -27,6 +27,7 @@ impl NodeLogic for TransitionJiraIssueNode {
             "Change the status of a Jira issue by applying a transition",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "transitionIssue");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

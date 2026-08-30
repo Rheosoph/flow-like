@@ -28,6 +28,7 @@ impl NodeLogic for SetIcon {
             "Sets the icon name of an icon element",
             "UI/Elements/Display",
         );
+        node.set_flowscript_name("ui", "setIcon");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

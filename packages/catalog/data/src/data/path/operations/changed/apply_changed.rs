@@ -29,6 +29,7 @@ impl NodeLogic for WriteManifestNode {
             "Commits all or selected paths from a directory diff session to its manifest, so the next diff only reports uncommitted changes",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "writeManifest");
         node.set_version(1);
         node.add_icon("/flow/icons/path.svg");
 
@@ -132,11 +133,11 @@ async fn evaluate_committed_paths(
     let has_override = context
         .context_pin_overrides
         .as_ref()
-        .is_some_and(|overrides| overrides.contains_key(&pin.id));
+        .is_some_and(|overrides| overrides.contains_key(pin.id.as_ref()));
     let provided = has_override
         || !pin.depends_on().is_empty()
         || pin.has_value().await
-        || has_selected_default(pin.default_value.as_ref());
+        || has_selected_default(pin.default_value.as_deref());
 
     if !provided {
         return Ok(None);

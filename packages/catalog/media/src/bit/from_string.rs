@@ -27,6 +27,7 @@ impl NodeLogic for BitFromStringNode {
             "Loads a Bit from a string ID",
             "Bit",
         );
+        node.set_flowscript_name("ai", "loadBit");
         node.add_icon("/flow/icons/bit.svg");
         node.set_version(3);
 

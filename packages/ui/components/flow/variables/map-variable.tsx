@@ -113,7 +113,9 @@ function PathValueInput({
 		>
 			<FileIcon className="mr-2 h-4 w-4 shrink-0" />
 			<span className="truncate">
-				{path ? (path.split("/").pop() ?? path) : t('chooseFile', 'Choose file...')}
+				{path
+					? (path.split("/").pop() ?? path)
+					: t("chooseFile", "Choose file...")}
 			</span>
 		</Button>
 	);
@@ -306,7 +308,7 @@ function MapValueInput({
 					value={value}
 					onChange={onChange}
 					disabled={disabled}
-					placeholder={t('jsonValue', 'JSON value...')}
+					placeholder={t("jsonValue", "JSON value...")}
 				/>
 			);
 		default:

@@ -26,6 +26,8 @@ impl NodeLogic for GetSystemPromptNode {
             "Extracts the first system-level message from a chat history for downstream use",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "getSystemPrompt");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

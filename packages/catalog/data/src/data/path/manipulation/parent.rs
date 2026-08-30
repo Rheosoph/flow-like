@@ -27,6 +27,8 @@ impl NodeLogic for ParentNode {
             "Gets the parent path from a path",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "parent");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

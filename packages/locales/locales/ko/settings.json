@@ -1489,6 +1489,8 @@
 	"user": "사용자",
 	"userCount": "사용자 수",
 	"userScoped": "사용자 범위",
+	"userSearchFailed": "",
+	"userSearchFailedHint": "",
 	"userTables": "사용자 테이블",
 	"userType": "사용자 유형",
 	"uses": "사용",

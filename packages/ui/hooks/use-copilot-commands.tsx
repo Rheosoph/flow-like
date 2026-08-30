@@ -11,6 +11,7 @@ import {
 	connectPinsCommand,
 	disconnectPinsCommand,
 	moveNodeCommand,
+	moveToLayerCommand,
 	removeCommentCommand,
 	removeNodeCommand,
 	removeVariableCommand,
@@ -43,6 +44,11 @@ import type { ILayer } from "../lib/schema/flow/run";
 import { convertJsonToUint8Array } from "../lib/uint8";
 
 const MAX_COPILOT_BATCH_COMMANDS = 100;
+
+/// A pin write that cannot be applied YET because the node's own `on_update` has not minted its
+/// target pin — the config value that creates it is still queued in this same batch. Distinct from
+/// a genuine failure so the write is retried on a later pass instead of being discarded.
+const DEFER_PIN_UPDATE = Symbol("defer-pin-update");
 const MAX_COPILOT_BATCH_BYTES = 4 * 1024 * 1024;
 const DEFAULT_OUTPUT_PIN_ALIASES = new Set([
 	"result",
@@ -92,6 +98,8 @@ function layerTypeFromCommand(value?: string): ILayerType {
 			return ILayerType.Function;
 		case "Macro":
 			return ILayerType.Macro;
+		case "Module":
+			return ILayerType.Module;
 		default:
 			return ILayerType.Collapsed;
 	}
@@ -280,11 +288,16 @@ function addPinLookup(
 	}
 }
 
-function pinMatchesRef(pin: IPin, pinRef: string): boolean {
+/// How closely a pin answers to `pinRef`: 0 when its own name matches, 1 when only its friendly
+/// name does, undefined when neither. A pin's own name must win — `string_format`'s config pin is
+/// named `format_string` but presented as "Input", so an `{input}` placeholder would otherwise
+/// resolve to the format string itself and overwrite the template with the placeholder's value.
+function pinRefMatchRank(pin: IPin, pinRef: string): number | undefined {
 	const requestedKeys = new Set(pinLookupKeys(pinRef));
-	return [...pinLookupKeys(pin.name), ...pinLookupKeys(pin.friendly_name)].some(
-		(key) => requestedKeys.has(key),
-	);
+	if (pinLookupKeys(pin.name).some((key) => requestedKeys.has(key))) return 0;
+	if (pinLookupKeys(pin.friendly_name).some((key) => requestedKeys.has(key)))
+		return 1;
+	return undefined;
 }
 
 function pinMatchesDirection(
@@ -383,8 +396,13 @@ export function useCopilotCommands({
 			const buildPinMapping = (nodeRef: string, node: INode) => {
 				if (ambiguousNodeRefs.has(nodeRef)) return;
 				const pinMap = new Map<string, string>();
+				// Two passes, names first: `addPinLookup` is first-writer-wins, so registering a
+				// pin's friendly name in the same pass lets it claim a key another pin owns by
+				// its real name. See `pinRefMatchRank`.
 				for (const pin of Object.values(node.pins ?? {})) {
 					addPinLookup(pinMap, pin.name, pin.id);
+				}
+				for (const pin of Object.values(node.pins ?? {})) {
 					addPinLookup(pinMap, pin.friendly_name, pin.id);
 				}
 
@@ -493,14 +511,12 @@ export function useCopilotCommands({
 				const pinById = node.pins[pinRef];
 				if (pinMatchesDirection(pinById, effectivePinType)) return pinRef;
 
-				for (const pin of Object.values(node.pins)) {
-					if (
-						pinMatchesDirection(pin, effectivePinType) &&
-						pinMatchesRef(pin, pinRef)
-					) {
-						return pin.id;
-					}
-				}
+				const ranked = Object.values(node.pins)
+					.filter((pin) => pinMatchesDirection(pin, effectivePinType))
+					.map((pin) => ({ pin, rank: pinRefMatchRank(pin, pinRef) }))
+					.filter((entry) => entry.rank !== undefined)
+					.sort((left, right) => (left.rank ?? 0) - (right.rank ?? 0));
+				if (ranked.length > 0) return ranked[0].pin.id;
 
 				if (
 					effectivePinType !== IPinType.Input &&
@@ -597,6 +613,79 @@ export function useCopilotCommands({
 								removeMappedNode(command.layer.id);
 							}
 							break;
+						case "MoveToLayer": {
+							const moveIds = command.ids ?? [];
+							const moveTarget = command.target ?? undefined;
+							if (moveIds.length === 0) break;
+
+							const targetsAModule = moveTarget
+								? latestBoardLayers[moveTarget]?.type === ILayerType.Module
+								: true;
+							if (!targetsAModule) {
+								console.warn(
+									`[FlowPilot] MoveToLayer target ${moveTarget} is not an existing Module layer, skipping the move`,
+								);
+								break;
+							}
+
+							const isLayerAncestor = (
+								ancestorId: string,
+								descendantId: string,
+							): boolean => {
+								let current =
+									latestBoardLayers[descendantId]?.parent_id ?? undefined;
+								const seen = new Set<string>();
+								while (current) {
+									if (current === ancestorId) return true;
+									if (seen.has(current)) return false;
+									seen.add(current);
+									current = latestBoardLayers[current]?.parent_id ?? undefined;
+								}
+								return false;
+							};
+
+							for (const id of moveIds) {
+								const node = latestBoardNodes[id];
+								if (node) {
+									const movedNode = { ...node, layer: moveTarget ?? null };
+									latestBoardNodes[id] = movedNode;
+									replaceMappedNode(movedNode);
+									continue;
+								}
+
+								const comment = latestBoardComments[id];
+								if (comment) {
+									latestBoardComments[id] = {
+										...comment,
+										layer: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								const layer = latestBoardLayers[id];
+								if (layer) {
+									if (
+										moveTarget &&
+										(moveTarget === id || isLayerAncestor(id, moveTarget))
+									) {
+										console.warn(
+											`[FlowPilot] MoveToLayer skipping layer ${id} — moving it under ${moveTarget} would create a cycle`,
+										);
+										continue;
+									}
+									latestBoardLayers[id] = {
+										...layer,
+										parent_id: moveTarget ?? null,
+									};
+									continue;
+								}
+
+								console.warn(
+									`[FlowPilot] MoveToLayer skipping unknown id ${id}`,
+								);
+							}
+							break;
+						}
 						case "UpsertVariable":
 							if (command.variable) {
 								latestBoardVariables[command.variable.id] = command.variable;
@@ -704,7 +793,13 @@ export function useCopilotCommands({
 						x: baseX + (nodeIndex % 3) * 300,
 						y: baseY + Math.floor(nodeIndex / 3) * 200,
 					};
-					const targetLayer = resolveLayerId(cmd.target_layer) ?? currentLayer;
+					// A module without an explicit parent is a ROOT module — never implicitly
+					// nested under whatever layer the user is currently standing in (a module
+					// may only nest inside another module).
+					const targetLayer =
+						layerType === ILayerType.Module
+							? resolveLayerId(cmd.target_layer)
+							: (resolveLayerId(cmd.target_layer) ?? currentLayer);
 					const layer: ILayer = {
 						id: layerId,
 						name: cmd.name,
@@ -902,7 +997,8 @@ export function useCopilotCommands({
 
 			const buildUpdateNodePinCommand = (
 				cmd: UpdateNodePinCommand,
-			): IGenericCommand | null => {
+				{ deferrable }: { deferrable: boolean },
+			): IGenericCommand | null | typeof DEFER_PIN_UPDATE => {
 				const nodeId = resolveNodeId(cmd.node_id);
 				const node = latestBoardNodes[nodeId] ?? resolveNode(cmd.node_id);
 
@@ -927,6 +1023,12 @@ export function useCopilotCommands({
 				const pin = pinId ? node.pins[pinId] : undefined;
 
 				if (!pin || !pinId) {
+					if (deferrable) {
+						// Dynamic pins (a `string_format` placeholder, a `$param`) exist only after the
+						// config write in this same batch reaches the board and `on_update` runs. Hold
+						// the write for a later pass rather than dropping it.
+						return DEFER_PIN_UPDATE;
+					}
 					console.error(
 						`[UpdateNodePin] FAILED - Pin not found: ${cmd.pin_id} in ${node.friendly_name}`,
 						{
@@ -1007,7 +1109,13 @@ export function useCopilotCommands({
 					const nodeId = resolveNodeId(cmd.node_id);
 					if (usedNodeIds.has(nodeId)) continue;
 
-					const genericCommand = buildUpdateNodePinCommand(cmd);
+					const genericCommand = buildUpdateNodePinCommand(cmd, {
+						deferrable: true,
+					});
+					// A deferred write neither leaves the queue nor claims this node's slot in the
+					// pass, so the config write that mints its pin — usually the node's very next
+					// command — can still land now and resolve it on the following pass.
+					if (genericCommand === DEFER_PIN_UPDATE) continue;
 					consumedIndexes.add(index);
 					if (!genericCommand) continue;
 
@@ -1016,6 +1124,11 @@ export function useCopilotCommands({
 				}
 
 				if (consumedIndexes.size === 0) {
+					// No pass can make further progress, so the remaining writes are not waiting on
+					// anything: surface them as failures instead of discarding them silently.
+					for (const deferred of remainingPinUpdates) {
+						buildUpdateNodePinCommand(deferred, { deferrable: false });
+					}
 					break;
 				}
 
@@ -1330,8 +1443,12 @@ export function useCopilotCommands({
 							);
 							break;
 						}
+						// A module without an explicit parent is a ROOT module — mirror of the
+						// setup-path rule above.
 						const targetLayer =
-							resolveLayerId(cmd.target_layer) ?? currentLayer;
+							layerType === ILayerType.Module
+								? resolveLayerId(cmd.target_layer)
+								: (resolveLayerId(cmd.target_layer) ?? currentLayer);
 						const nodeIds = resolveNodeIds(cmd.node_ids || []);
 						const position = cmd.position ?? { x: baseX, y: baseY };
 
@@ -1466,6 +1583,96 @@ export function useCopilotCommands({
 							}),
 						);
 						latestBoardLayers[layerToUpdate.id] = updatedLayer;
+						break;
+					}
+
+					case "RenameLayer": {
+						const layerToRename = resolveLayer(cmd.layer_id);
+						if (!layerToRename) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot rename layer: "${cmd.layer_id}" was not found`,
+							);
+							break;
+						}
+						const renamedLayer: ILayer = {
+							...layerToRename,
+							name: cmd.name,
+						};
+						remainingGenericCommands.push(
+							upsertLayerCommand({
+								layer: renamedLayer,
+								node_ids: [],
+								current_layer: layerToRename.parent_id ?? null,
+								old_layer: layerToRename,
+							}),
+						);
+						latestBoardLayers[layerToRename.id] = renamedLayer;
+						registerNodeRefs([cmd.name], layerAsNode(renamedLayer));
+						flowPilotDebugLog(
+							`[RenameLayer] Queued "${layerToRename.name}" -> "${cmd.name}"`,
+						);
+						break;
+					}
+
+					case "MoveToLayer": {
+						const moveTarget = resolveLayerId(cmd.target_layer);
+						if (cmd.target_layer && !moveTarget) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move to layer: "${cmd.target_layer}" was not found`,
+							);
+							break;
+						}
+						if (
+							moveTarget &&
+							latestBoardLayers[moveTarget]?.type !== ILayerType.Module
+						) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move to layer: "${cmd.target_layer}" is not a Module layer`,
+							);
+							break;
+						}
+						const moveIds = [
+							...new Set((cmd.ids ?? []).map((id) => resolveNodeId(id))),
+						];
+						if (moveIds.length === 0) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								"MoveToLayer requires at least one id to move",
+							);
+							break;
+						}
+						remainingGenericCommands.push(
+							moveToLayerCommand({
+								ids: moveIds,
+								target: moveTarget ?? null,
+							}),
+						);
+						for (const id of moveIds) {
+							const movedNode = latestBoardNodes[id];
+							if (movedNode) {
+								const updated = { ...movedNode, layer: moveTarget ?? null };
+								latestBoardNodes[id] = updated;
+								replaceMappedNode(updated);
+								continue;
+							}
+							const movedLayer = latestBoardLayers[id];
+							if (movedLayer) {
+								latestBoardLayers[id] = {
+									...movedLayer,
+									parent_id: moveTarget ?? null,
+								};
+							}
+						}
+						flowPilotDebugLog(
+							`[MoveToLayer] Queued ${moveIds.length} ids -> ${moveTarget ?? "root"}`,
+						);
 						break;
 					}
 				}

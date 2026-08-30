@@ -1,16 +1,24 @@
+#[cfg(feature = "execute")]
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-use crate::data::datafusion::params;
-use crate::data::datafusion::query::{QueryRow, batches_to_csv_table};
+#[cfg(any(feature = "execute", test))]
+use crate::data::datafusion::query::QueryRow;
+#[cfg(feature = "execute")]
+use crate::data::datafusion::query::batches_to_csv_table;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
     board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(any(feature = "execute", test))]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
 
 const SCOPE_APP: &str = "App";
 const SCOPE_USER: &str = "User";
@@ -42,6 +50,7 @@ impl CachedSqlQueryNode {
 /// omitted, one placeholder value's result would be served for every other value, which is
 /// the whole point of the parameter. They arrive ordered by first appearance in the
 /// statement, so the key does not depend on how the values were assembled.
+#[cfg(any(feature = "execute", test))]
 fn result_cache_key(
     node_id: &str,
     session: &DataFusionSession,
@@ -69,6 +78,7 @@ fn result_cache_key(
 
 /// Row objects rebuilt from the columnar table, so the `rows` output is identical
 /// whether the result came from the engine or from the cache.
+#[cfg(any(feature = "execute", test))]
 fn table_to_rows(table: &CSVTable) -> Vec<QueryRow> {
     let headers = table.headers();
     table
@@ -84,9 +94,11 @@ impl NodeLogic for CachedSqlQueryNode {
         let mut node = Node::new(
             "df_sql_query_cached",
             "Cached SQL Query",
-            "Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
+            "Execute a read-only SQL query against a DataFusion session, remembering the result in the app's cache. Writing statements (INSERT/UPDATE/DELETE) are rejected — a cache hit would skip them; use the SQL Query node for writes. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "sqlQueryCached");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 
@@ -113,7 +125,7 @@ impl NodeLogic for CachedSqlQueryNode {
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_input_pin(
             "scope",
@@ -165,7 +177,8 @@ impl NodeLogic for CachedSqlQueryNode {
             "Query results as array of row structs with Flow-Like-compatible values. Rows derive from the Table representation so cached and fresh runs are identical: date-like strings are normalized to ISO form and unsigned values beyond the signed 64-bit range become strings.",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "row_count",
@@ -195,15 +208,26 @@ impl NodeLogic for CachedSqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+
+        // A cache hit skips execution entirely, so a writing statement would silently
+        // do nothing whenever a live result exists. Writes belong on the SQL Query node.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&query).map_err(|error| {
+        flow_like_types::anyhow!(
+            "Cached SQL Query only runs read-only SELECT statements (a cache hit would skip the write); use the SQL Query node for INSERT/UPDATE/DELETE: {error}"
+        )
+    })?;
+
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let scope: String = context.evaluate_pin("scope").await?;
         let namespace: String = context.evaluate_pin("namespace").await?;
         let ttl_seconds: i64 = context.evaluate_pin("ttl_seconds").await?;
@@ -291,6 +315,13 @@ impl NodeLogic for CachedSqlQueryNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 

@@ -24,6 +24,8 @@ impl NodeLogic for PowerIntegerNode {
             "Calculates the power of an integer",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "power");
+        node.set_receiver("base");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("base", "Base", "Base integer", VariableType::Integer);

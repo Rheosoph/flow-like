@@ -1,0 +1,10 @@
+use log::*
+
+eventsGeneric triageIncident(payload: Struct, report: string) {
+    const normalized = report.trim()
+    if (normalized.contains({ substring: "production is on hold", ignoreCase: true })) {
+        error({ message: normalized, toast: false })
+    } else {
+        info({ message: normalized, toast: false })
+    }
+}

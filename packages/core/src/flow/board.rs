@@ -5,9 +5,13 @@ use super::{
     variable::{Variable, VariableType},
 };
 use crate::{
-    a2ui::widget::Page,
+    a2ui::{
+        id_refs::IdRef,
+        page_remap::{IdTranslators, remap_page_refs},
+        widget::Page,
+    },
     app::App,
-    state::FlowLikeState,
+    state::{FlowLikeState, FlowNodeRegistry},
     utils::compression::{
         ConditionalRead, compress_to_file, compress_to_file_create, compress_to_file_update,
         from_compressed, from_compressed_if_changed, from_compressed_json,
@@ -16,6 +20,7 @@ use crate::{
 };
 use commands::GenericCommand;
 use commands::nodes::update_node::UpdateNodeCommand;
+use dirty::{DirtyIndex, Touched};
 use flow_like_storage::object_store::{self, ObjectStore, PutResult, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
@@ -24,7 +29,7 @@ use highway::{HighwayHash, HighwayHasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Weak},
     time::SystemTime,
 };
@@ -32,6 +37,7 @@ use tracing::instrument;
 
 pub mod cleanup;
 pub mod commands;
+pub mod dirty;
 pub mod summary;
 pub mod sync;
 
@@ -40,8 +46,67 @@ pub mod sync;
 /// context. Values under this prefix are opaque to the workflow engine.
 pub const INTERNAL_BOARD_REF_PREFIX: &str = "__flow_like_internal_v1/";
 
+/// How many times a node may be re-derived before the sweep gives up.
+///
+/// A pass exists because one node's `on_update` can retype a pin its neighbour reads, so
+/// derivations settle by iteration. The scoped sweep spends the same total budget, just spread over
+/// a queue instead of whole-board passes.
+const MAX_UPDATE_PASSES: usize = 10;
+
+/// How many patch slots a publication may skip before it gives up.
+///
+/// Slots are skipped when another publisher owns them, which is rare and bounded in practice.
+/// Every attempt writes a full board plus its pages, so an unbounded scan turns a systematic
+/// validation failure into thousands of orphan snapshots instead of one error.
+const MAX_PATCH_SLOT_SCAN: u32 = 64;
+
+/// How often a publication re-attempts after a racing draft save.
+///
+/// Every attempt writes a full board plus its pages, so this stays small: the
+/// retry exists to survive one editor save landing mid-publication, not to
+/// grind against a draft that is being typed into.
+const MAX_PUBLISH_RACE_RETRIES: usize = 2;
+
 pub fn is_internal_board_ref(key: &str) -> bool {
     key.starts_with(INTERNAL_BOARD_REF_PREFIX)
+}
+
+/// A publication that wrote its immutable objects but lost the final check
+/// against the floating draft: another writer saved the draft while the
+/// snapshot was being copied.
+///
+/// The written version is an inert orphan - nothing points at it - so the
+/// operation is safe to retry from the reloaded draft at a fresh patch. Typed
+/// rather than a bare message so callers can tell this transient race apart
+/// from a genuine storage failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoardDraftChanged {
+    pub version: (u32, u32, u32),
+}
+
+impl std::fmt::Display for BoardDraftChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Board draft changed while publishing immutable version {}.{}.{}",
+            self.version.0, self.version.1, self.version.2
+        )
+    }
+}
+
+impl std::error::Error for BoardDraftChanged {}
+
+/// Whether `error` is the retryable [`BoardDraftChanged`] publication race,
+/// including when it was propagated through a patch-slot scan.
+pub fn is_board_draft_race(error: &flow_like_types::Error) -> bool {
+    error.downcast_ref::<BoardDraftChanged>().is_some()
+}
+
+/// Whether the persisted draft demonstrably changed between two revision
+/// readings. Missing revision tokens prove nothing, so they answer `false`:
+/// re-publishing on a hunch writes another full snapshot.
+fn draft_was_replaced(before: &Option<String>, after: &Option<String>) -> bool {
+    matches!((before, after), (Some(before), Some(after)) if before != after)
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +159,10 @@ pub enum LayerType {
     Function,
     Macro,
     Collapsed,
+    /// Purely organizational grouping — a "virtual file" for flow organization. Has no
+    /// boundary pins, no cache and no runtime effect. May only be nested inside another
+    /// `Module`.
+    Module,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
@@ -249,7 +318,7 @@ impl Layer {
         let mut sorted_pins: Vec<_> = self.pins.iter().collect();
         sorted_pins.sort_by_key(|(id, _)| *id);
         for (_id, pin) in sorted_pins {
-            pin.hash(&mut hasher);
+            pin.hash_into(&mut hasher);
         }
 
         hasher.append(&self.coordinates.0.to_le_bytes());
@@ -326,6 +395,23 @@ pub struct Board {
 
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
+
+    /// Pin id to owning container, populated only while [`Board::node_updates`] runs.
+    ///
+    /// `on_update` receives an immutable board, so within a pass only the node currently being
+    /// updated can change its pins; the index is refreshed as each node is written back. Outside
+    /// `node_updates` this stays `None` and [`Board::get_pin_by_id`] scans, so no mutation path
+    /// has to maintain it.
+    #[serde(skip)]
+    pub(crate) pin_index: Option<HashMap<String, PinOwner>>,
+}
+
+/// Which container owns a pin, as recorded by [`Board::pin_index`].
+#[derive(Clone)]
+pub(crate) enum PinOwner {
+    Node(String),
+    LayerPin(String),
+    LayerNode { layer: String, node: String },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
@@ -432,6 +518,7 @@ impl Board {
             board_dir,
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         };
         board.hash();
         board
@@ -688,6 +775,16 @@ impl Board {
     }
 
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
+        self.node_updates_scoped(state, None).await;
+    }
+
+    /// Re-derive nodes through their `on_update` until the board settles.
+    ///
+    /// `dirty` narrows the sweep to what a command batch could have reached. `None` re-derives
+    /// every node, which is what board load, undo/redo and a registry swap need — and what the
+    /// narrowed sweep is checked against. See [`dirty`] for the propagation channels and why
+    /// restricting the sweep is sound.
+    async fn node_updates_scoped(&mut self, state: Arc<FlowLikeState>, dirty: Option<&Touched>) {
         let registry = state.node_registry().clone();
         let registry = registry.read().await;
 
@@ -709,91 +806,18 @@ impl Board {
             }
         }
 
-        const MAX_PASSES: usize = 10;
-        for _ in 0..MAX_PASSES {
-            let mut changed = false;
+        // `get_pin_by_id` scans the whole board, and the `on_update` of variable, struct and widget
+        // nodes calls it once per connection — the dominant cost of this sweep on large boards.
+        // Index the pins for its duration: `on_update` takes an immutable board, so only the node
+        // being updated can change, and refreshing its entries on write-back keeps the index exact.
+        self.pin_index = Some(self.build_pin_index());
 
-            let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
-            for node_id in node_ids {
-                let Some(mut node) = self.nodes.remove(&node_id) else {
-                    continue;
-                };
-                let old_hash = node.hash;
-
-                let node_logic = match self.logic_nodes.get(&node.name) {
-                    Some(logic) => Arc::clone(logic),
-                    None => match registry.instantiate(&node) {
-                        Ok(new_logic) => {
-                            self.logic_nodes
-                                .insert(node.name.clone(), Arc::clone(&new_logic));
-                            Arc::clone(&new_logic)
-                        }
-                        Err(_) => {
-                            self.nodes.insert(node_id, node);
-                            continue;
-                        }
-                    },
-                };
-                node_logic.on_update(&mut node, self).await;
-
-                node.hash();
-                if node.hash != old_hash {
-                    changed = true;
-                }
-
-                self.nodes.insert(node_id, node);
-            }
-
-            let layer_ids: Vec<String> = self.layers.keys().cloned().collect();
-            for layer_id in layer_ids {
-                let layer_node_ids: Vec<String> = match self.layers.get(&layer_id) {
-                    Some(layer) => layer.nodes.keys().cloned().collect(),
-                    None => continue,
-                };
-
-                for node_id in layer_node_ids {
-                    let Some(mut node) = self
-                        .layers
-                        .get_mut(&layer_id)
-                        .and_then(|layer| layer.nodes.remove(&node_id))
-                    else {
-                        continue;
-                    };
-                    let old_hash = node.hash;
-
-                    let node_logic = match self.logic_nodes.get(&node.name) {
-                        Some(logic) => Arc::clone(logic),
-                        None => match registry.instantiate(&node) {
-                            Ok(new_logic) => {
-                                self.logic_nodes
-                                    .insert(node.name.clone(), Arc::clone(&new_logic));
-                                Arc::clone(&new_logic)
-                            }
-                            Err(_) => {
-                                if let Some(layer) = self.layers.get_mut(&layer_id) {
-                                    layer.nodes.insert(node_id, node);
-                                }
-                                continue;
-                            }
-                        },
-                    };
-                    node_logic.on_update(&mut node, self).await;
-
-                    node.hash();
-                    if node.hash != old_hash {
-                        changed = true;
-                    }
-
-                    if let Some(layer) = self.layers.get_mut(&layer_id) {
-                        layer.nodes.insert(node_id, node);
-                    }
-                }
-            }
-
-            if !changed {
-                break;
-            }
+        match dirty.and_then(|touched| self.dirty_queue(touched)) {
+            Some((index, queue)) => self.settle_dirty_nodes(&registry, &index, queue).await,
+            None => self.settle_every_node(&registry).await,
         }
+
+        self.pin_index = None;
 
         for layer in self.layers.values_mut() {
             layer.hash();
@@ -806,6 +830,167 @@ impl Board {
         for comment in self.comments.values_mut() {
             comment.hash();
         }
+    }
+
+    /// Re-run every node until a pass changes nothing.
+    ///
+    /// This is the reference behaviour a dirty sweep is measured against, so it stays exhaustive:
+    /// any node whose `on_update` moved forces another pass over the whole board.
+    async fn settle_every_node(&mut self, registry: &FlowNodeRegistry) {
+        for _ in 0..MAX_UPDATE_PASSES {
+            let mut changed = false;
+
+            let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
+            for node_id in node_ids {
+                let Some(node) = self.nodes.remove(&node_id) else {
+                    continue;
+                };
+                let owner = PinOwner::Node(node_id.clone());
+                let (node, node_changed) = self.update_node(registry, node, owner).await;
+                changed |= node_changed;
+                self.nodes.insert(node_id, node);
+            }
+
+            let layer_ids: Vec<String> = self.layers.keys().cloned().collect();
+            for layer_id in layer_ids {
+                let layer_node_ids: Vec<String> = match self.layers.get(&layer_id) {
+                    Some(layer) => layer.nodes.keys().cloned().collect(),
+                    None => continue,
+                };
+
+                for node_id in layer_node_ids {
+                    let Some(node) = self
+                        .layers
+                        .get_mut(&layer_id)
+                        .and_then(|layer| layer.nodes.remove(&node_id))
+                    else {
+                        continue;
+                    };
+                    let owner = PinOwner::LayerNode {
+                        layer: layer_id.clone(),
+                        node: node_id.clone(),
+                    };
+                    let (node, node_changed) = self.update_node(registry, node, owner).await;
+                    changed |= node_changed;
+                    if let Some(layer) = self.layers.get_mut(&layer_id) {
+                        layer.nodes.insert(node_id, node);
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Re-run only the queued nodes, following each change to whatever reads it.
+    ///
+    /// A node re-enters the queue only when its own `on_update` moved it, so the work is bounded by
+    /// the edit instead of by the board. Anything a command changed *without* running `on_update`
+    /// is already accounted for: [`DirtyIndex::seed`] queues the wired neighbours of every node the
+    /// batch wrote.
+    async fn settle_dirty_nodes(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        index: &DirtyIndex,
+        mut queue: VecDeque<String>,
+    ) {
+        let mut queued: HashSet<String> = queue.iter().cloned().collect();
+        // The same budget the full sweep has, so a pathological chain degrades to the old cost
+        // rather than spinning.
+        let budget = self.nodes.len().saturating_mul(MAX_UPDATE_PASSES);
+        let mut visits = 0usize;
+
+        while let Some(node_id) = queue.pop_front() {
+            queued.remove(&node_id);
+            visits += 1;
+            if visits > budget {
+                tracing::warn!(
+                    board = %self.id,
+                    "scoped node update did not settle within its budget; falling back to a full sweep"
+                );
+                self.settle_every_node(registry).await;
+                return;
+            }
+
+            let Some(node) = self.nodes.remove(&node_id) else {
+                continue;
+            };
+            let owner = PinOwner::Node(node_id.clone());
+            let (node, changed) = self.update_node(registry, node, owner).await;
+            self.nodes.insert(node_id.clone(), node);
+
+            if !changed {
+                continue;
+            }
+            let mut dependents = HashSet::new();
+            index.wired_neighbours(self, &node_id, &mut dependents);
+            for dependent in dependents {
+                if queued.insert(dependent.clone()) {
+                    queue.push_back(dependent);
+                }
+            }
+        }
+    }
+
+    /// Run one node's `on_update`, returning it with whether it changed itself.
+    ///
+    /// The node is detached from the board across the call because `on_update` receives the board
+    /// immutably, so a lookup of its own pins answers `None` while it runs — the same answer the
+    /// pre-index scan gave for a detached node.
+    async fn update_node(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        mut node: Node,
+        owner: PinOwner,
+    ) -> (Node, bool) {
+        let old_hash = node.hash;
+        let Some(node_logic) = self.node_logic(registry, &node) else {
+            return (node, false);
+        };
+        let previous_pins: Vec<String> = node.pins.keys().cloned().collect();
+        node_logic.on_update(&mut node, self).await;
+
+        node.hash();
+        let changed = node.hash != old_hash;
+        if changed {
+            self.reindex_node_pins(owner, &previous_pins, &node);
+        }
+        (node, changed)
+    }
+
+    /// The logic for a node's type, instantiated once and memoized on the board.
+    fn node_logic(
+        &mut self,
+        registry: &FlowNodeRegistry,
+        node: &Node,
+    ) -> Option<Arc<dyn NodeLogic>> {
+        if let Some(logic) = self.logic_nodes.get(&node.name) {
+            return Some(Arc::clone(logic));
+        }
+        let logic = registry.instantiate(node).ok()?;
+        self.logic_nodes
+            .insert(node.name.clone(), Arc::clone(&logic));
+        Some(logic)
+    }
+
+    /// The index and starting queue for a scoped sweep, or `None` when it cannot be bounded.
+    fn dirty_queue(&self, touched: &Touched) -> Option<(DirtyIndex, VecDeque<String>)> {
+        // Nodes parked inside a layer are a legacy shape none of the propagation channels describe.
+        // Every board written since keeps its nodes in `self.nodes` with a `layer` tag, so bounding
+        // this case would buy nothing and risk a great deal.
+        if self.layers.values().any(|layer| !layer.nodes.is_empty()) {
+            return None;
+        }
+        let index = DirtyIndex::build(self);
+        let queue = index.seed(self, touched).into_iter().collect();
+        Some((index, queue))
+    }
+
+    /// The container that owns `pin_id`, while [`Self::pin_index`] is live.
+    pub(crate) fn pin_owner(&self, pin_id: &str) -> Option<&PinOwner> {
+        self.pin_index.as_ref()?.get(pin_id)
     }
 
     async fn rollback_commands(
@@ -867,7 +1052,9 @@ impl Board {
             return Err(error);
         }
         tracing::debug!("Board command executed successfully");
-        self.node_updates(state).await;
+        let mut touched = Touched::default();
+        command.touched(&mut touched);
+        self.node_updates_scoped(state, Some(&touched)).await;
         self.cleanup();
         self.mark_changed();
         Ok(command)
@@ -982,7 +1169,11 @@ impl Board {
                 });
             }
         }
-        self.node_updates(state).await;
+        let mut touched = Touched::default();
+        for command in &commands {
+            command.touched(&mut touched);
+        }
+        self.node_updates_scoped(state, Some(&touched)).await;
         self.cleanup();
         self.mark_changed();
         let derived = self.derived_node_state_commands(&nodes_before, &commands);
@@ -1073,6 +1264,10 @@ impl Board {
     }
 
     pub fn get_pin_by_id(&self, pin_id: &str) -> Option<&Pin> {
+        if self.pin_index.is_some() {
+            return self.indexed_pin(pin_id);
+        }
+
         for node in self.nodes.values() {
             if let Some(pin) = node.pins.get(pin_id) {
                 return Some(pin);
@@ -1091,6 +1286,61 @@ impl Board {
         }
 
         None
+    }
+
+    /// A node is removed from its map while its own `on_update` runs, so an index entry that no
+    /// longer resolves yields `None` — the same answer the scan gives for a detached node.
+    fn indexed_pin(&self, pin_id: &str) -> Option<&Pin> {
+        match self.pin_index.as_ref()?.get(pin_id)? {
+            PinOwner::Node(node) => self.nodes.get(node)?.pins.get(pin_id),
+            PinOwner::LayerPin(layer) => self.layers.get(layer)?.pins.get(pin_id),
+            PinOwner::LayerNode { layer, node } => {
+                self.layers.get(layer)?.nodes.get(node)?.pins.get(pin_id)
+            }
+        }
+    }
+
+    /// Layer entries are written first so a pin id present in both a node and a layer resolves to
+    /// the node, matching the scan order of the fallback in [`Self::get_pin_by_id`].
+    fn build_pin_index(&self) -> HashMap<String, PinOwner> {
+        let mut index = HashMap::new();
+        for (layer_id, layer) in &self.layers {
+            for pin_id in layer.pins.keys() {
+                index.insert(pin_id.clone(), PinOwner::LayerPin(layer_id.clone()));
+            }
+            for (node_id, node) in &layer.nodes {
+                for pin_id in node.pins.keys() {
+                    index.insert(
+                        pin_id.clone(),
+                        PinOwner::LayerNode {
+                            layer: layer_id.clone(),
+                            node: node_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        for (node_id, node) in &self.nodes {
+            for pin_id in node.pins.keys() {
+                index.insert(pin_id.clone(), PinOwner::Node(node_id.clone()));
+            }
+        }
+        index
+    }
+
+    /// Re-point the index at `node`'s pins after its `on_update`, dropping the ids it gave up.
+    fn reindex_node_pins(&mut self, owner: PinOwner, previous: &[String], node: &Node) {
+        let Some(index) = self.pin_index.as_mut() else {
+            return;
+        };
+        for pin_id in previous {
+            if !node.pins.contains_key(pin_id) {
+                index.remove(pin_id);
+            }
+        }
+        for pin_id in node.pins.keys() {
+            index.insert(pin_id.clone(), owner.clone());
+        }
     }
 
     pub fn get_dependent_nodes(&self, node_id: &str) -> Vec<&Node> {
@@ -1238,12 +1488,7 @@ impl Board {
             .snapshot_matches_persisted_draft(version, Some(store))
             .await?
         {
-            return Err(flow_like_types::anyhow!(
-                "Board draft changed while publishing immutable version {}.{}.{}",
-                version.0,
-                version.1,
-                version.2
-            ));
+            return Err(BoardDraftChanged { version }.into());
         }
 
         Ok(())
@@ -1329,9 +1574,14 @@ impl Board {
         )
         .await?;
         let snapshot = Self::from_proto(proto);
-        let mut current = self.clone();
+        // Compare what persistence keeps, not what the draft holds in memory. Protobuf stores
+        // several `Option<bool>` / `Option<f64>` fields as bare proto3 scalars, so an explicit
+        // `Some(false)` or `Some(0.0)` (a2ui element pins carry `enforce_schema: Some(false)`)
+        // is indistinguishable from unset and reads back as `None`. Hashing the live draft
+        // directly would report every such board as different from the snapshot just written
+        // from it, and the publisher would never recognize its own output.
+        let mut current = Self::from_proto(self.to_proto());
         current.version = version;
-        current.hash();
         if snapshot.content_hash() != current.content_hash() {
             return Ok(false);
         }
@@ -1366,18 +1616,132 @@ impl Board {
             Err(error) => return Err(error.into()),
         }
 
+        // Read the draft exactly as it is stored. Re-deriving it through `from_loaded_proto`
+        // would run a full `node_updates` sweep, which settles schema propagation further than
+        // the scoped sweep an interactive edit performs — an unedited board would then look
+        // "changed" on every publish. The question here is only whether another writer replaced
+        // the draft, and that shows up in the stored bytes.
         let proto: proto::Board = from_compressed(store.clone(), floating_path).await?;
-        let mut floating = if let Some(app_state) = self.app_state.clone() {
-            Self::from_loaded_proto(proto, self.board_dir.clone(), app_state).await
-        } else {
-            let mut floating = Self::from_proto(proto);
-            floating.board_dir = self.board_dir.clone();
-            floating
-        };
+        let mut floating = Self::from_proto(proto);
+        floating.board_dir = self.board_dir.clone();
         floating.app_state = self.app_state.clone();
         floating
             .snapshot_matches_current(version, Some(store))
             .await
+    }
+
+    /// Storage revision of the persisted floating draft.
+    ///
+    /// Publishers compare this across a failed publication to tell a racing
+    /// writer apart from a snapshot comparison that can never succeed. `None`
+    /// when the draft is absent or the backend offers no revision token, which
+    /// callers must read as "cannot prove a race".
+    pub async fn persisted_draft_revision(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Option<String>> {
+        let store = self.get_store(store).await?;
+        let floating_path = Self::proto_path(&self.board_dir, &self.id, None);
+        match store.head(&floating_path).await {
+            Ok(meta) => Ok(meta.e_tag.clone().or_else(|| meta.version.clone())),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Read the authoritative floating draft as its own board, exactly as
+    /// stored - `from_loaded_proto` would re-derive it and settle schema
+    /// propagation further than an interactive edit, which is the difference
+    /// that makes an unedited board look changed.
+    async fn reloaded_persisted_draft(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Self> {
+        let store = self.get_store(store).await?;
+        let floating_path = Self::proto_path(&self.board_dir, &self.id, None);
+        let proto: proto::Board = from_compressed(store, floating_path).await?;
+        let mut floating = Self::from_proto(proto);
+        floating.board_dir = self.board_dir.clone();
+        floating.app_state = self.app_state.clone();
+        Ok(floating)
+    }
+
+    /// Prepare a fresh immutable patch snapshot, recovering from an editor save
+    /// that lands mid-publication.
+    ///
+    /// Only a publication the draft actually moved under is retried: the
+    /// persisted revision is compared across the failure, so a
+    /// [`BoardDraftChanged`] that no writer caused - a snapshot comparison that
+    /// cannot succeed for this board - fails immediately instead of writing one
+    /// orphan snapshot per attempt.
+    pub async fn prepare_snapshot_recovering_from_races(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<PreparedBoardSnapshot> {
+        let store = self.get_store(store).await?;
+        let mut reloaded: Option<Self> = None;
+        let mut attempt = 0;
+        loop {
+            let (result, before, after) = {
+                let publisher = reloaded.as_ref().unwrap_or(self);
+                let before = publisher
+                    .persisted_draft_revision(Some(store.clone()))
+                    .await?;
+                let result = publisher
+                    .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
+                    .await;
+                let after = match result {
+                    Ok(_) => None,
+                    Err(_) => {
+                        publisher
+                            .persisted_draft_revision(Some(store.clone()))
+                            .await?
+                    }
+                };
+                (result, before, after)
+            };
+            let error = match result {
+                Ok(prepared) => return Ok(prepared),
+                Err(error) => error,
+            };
+            if attempt >= MAX_PUBLISH_RACE_RETRIES
+                || !is_board_draft_race(&error)
+                || !draft_was_replaced(&before, &after)
+            {
+                return Err(error);
+            }
+            reloaded = Some(self.reloaded_persisted_draft(Some(store.clone())).await?);
+            attempt += 1;
+        }
+    }
+
+    /// Publish the draft into `version`'s slot, moving to a fresh patch when an
+    /// editor save invalidates it mid-publication. `None` means the requested
+    /// version was published; `Some` carries the fresh snapshot the publication
+    /// had to move to, which the caller must re-pin.
+    pub async fn snapshot_at_version_recovering_from_races(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Option<PreparedBoardSnapshot>> {
+        let store = self.get_store(store).await?;
+        let before = self.persisted_draft_revision(Some(store.clone())).await?;
+        let error = match self.snapshot_at_version(version, Some(store.clone())).await {
+            Ok(()) => return Ok(None),
+            Err(error) => error,
+        };
+        if !is_board_draft_race(&error) {
+            return Err(error);
+        }
+        let after = self.persisted_draft_revision(Some(store.clone())).await?;
+        if !draft_was_replaced(&before, &after) {
+            return Err(error);
+        }
+        self.reloaded_persisted_draft(Some(store.clone()))
+            .await?
+            .prepare_snapshot_recovering_from_races(Some(store))
+            .await
+            .map(Some)
     }
 
     /// Validate an already-created snapshot as the current draft's prepared
@@ -1412,7 +1776,7 @@ impl Board {
             .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
         let mut next = (self.version.0, self.version.1, first_patch);
 
-        loop {
+        for _ in 0..MAX_PATCH_SLOT_SCAN {
             if self
                 .snapshot_version_slot_is_compatible_with_store(next, store.clone())
                 .await?
@@ -1441,6 +1805,17 @@ impl Board {
                 .checked_add(1)
                 .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
         }
+
+        Err(flow_like_types::anyhow!(
+            "Board {} found no free patch slot in {} attempts starting at {}.{}.{}; every attempt \
+             published an immutable snapshot that then failed to validate, so the scan was \
+             stopped instead of filling the version store",
+            self.id,
+            MAX_PATCH_SLOT_SCAN,
+            self.version.0,
+            self.version.1,
+            first_patch
+        ))
     }
 
     /// Advance the floating board to a prepared immutable snapshot after the
@@ -1558,6 +1933,20 @@ impl Board {
         version_type: VersionType,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<(u32, u32, u32)> {
+        self.create_version_returning_published(version_type, store)
+            .await
+            .map(|(new_version, _published)| new_version)
+    }
+
+    /// Like [`Self::create_version`], but also returns the version the
+    /// immutable snapshot was published under (the pre-bump version). Callers
+    /// that derive per-version artifacts (e.g. compiled-board warm-up) need
+    /// the snapshot's version, not the bumped draft version.
+    pub async fn create_version_returning_published(
+        &mut self,
+        version_type: VersionType,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<((u32, u32, u32), (u32, u32, u32))> {
         let store = self.get_store(store).await?;
         let existing = self.get_versions(Some(store.clone())).await?;
         let mut published = self.version;
@@ -1610,7 +1999,7 @@ impl Board {
         self.version = new_version;
         self.mark_changed();
         self.save(Some(store)).await?;
-        Ok(new_version)
+        Ok((new_version, published))
     }
 
     pub async fn get_versions(
@@ -1670,6 +2059,11 @@ impl Board {
 
             version_list.push(version);
         }
+
+        // Newest first. Store listings are ordered by object key, which sorts
+        // 0_0_10 ahead of 0_0_5 and otherwise carries no version meaning, so a
+        // consumer rendering this list would show a jumbled order.
+        version_list.sort_unstable_by(|a, b| b.cmp(a));
         Ok(version_list)
     }
 
@@ -1829,8 +2223,17 @@ impl Board {
 
     // PAGE FUNCTIONS
 
+    /// Where the pages of an arbitrary board on this app's store live.
+    ///
+    /// Template writers need this: by the time a board has been cloned into a template its `id` is
+    /// already the template id, so the pages it is copying from can only be addressed by the id of
+    /// the board they came from.
+    fn board_pages_dir(&self, board_id: &str) -> Path {
+        self.board_dir.child(format!("_{}", board_id))
+    }
+
     fn pages_dir(&self) -> Path {
-        self.board_dir.child(format!("_{}", self.id))
+        self.board_pages_dir(&self.id)
     }
 
     fn page_path(&self, page_id: &str) -> Path {
@@ -1849,20 +2252,39 @@ impl Board {
             .child(format!("{}.page", page_id))
     }
 
-    fn template_pages_dir(&self, template_id: &str) -> Path {
-        self.board_dir.child(format!("_template_{}", template_id))
+    /// `apps/{app_id}/_template_{template_id}` — where a template's page payloads live. Taken as
+    /// a free-standing path so callers that never open the template board (`App::delete_template`,
+    /// the fork's storage sweep) still get the layout from one place.
+    pub fn template_pages_dir(board_dir: &Path, template_id: &str) -> Path {
+        board_dir.child(format!("_template_{}", template_id))
     }
 
     fn template_page_path(&self, template_id: &str, page_id: &str) -> Path {
-        self.template_pages_dir(template_id)
-            .child(format!("{}.page", page_id))
+        Self::template_pages_dir(&self.board_dir, template_id).child(format!("{}.page", page_id))
     }
 
-    fn versioned_template_pages_dir(&self, template_id: &str, version: (u32, u32, u32)) -> Path {
-        self.board_dir
+    /// Root of a template's version archive. Keyed on the **template** id, never the board the
+    /// template was cut from: listing, versioned reads and template deletion all look here.
+    fn versioned_template_dir(board_dir: &Path, template_id: &str) -> Path {
+        board_dir
             .child("templates")
             .child("versions")
             .child(template_id)
+    }
+
+    fn versioned_template_path(
+        board_dir: &Path,
+        template_id: &str,
+        version: (u32, u32, u32),
+    ) -> Path {
+        Self::versioned_template_dir(board_dir, template_id).child(format!(
+            "{}_{}_{}.template",
+            version.0, version.1, version.2
+        ))
+    }
+
+    fn versioned_template_pages_dir(&self, template_id: &str, version: (u32, u32, u32)) -> Path {
+        Self::versioned_template_dir(&self.board_dir, template_id)
             .child(format!("{}_{}_{}", version.0, version.1, version.2))
     }
 
@@ -2090,29 +2512,17 @@ impl Board {
             }
         } else {
             let required_ids = self.get_required_element_ids();
-            let component_ids: std::collections::HashSet<String> = required_ids
-                .iter()
-                .filter_map(|id| {
-                    if id.starts_with(&format!("{}/", page_id)) {
-                        Some(
-                            id.strip_prefix(&format!("{}/", page_id))
-                                .unwrap()
-                                .to_string(),
-                        )
-                    } else if !id.contains('/') {
-                        Some(id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
 
+            // A ref prefixed with another page's id still ships this page's component of the
+            // same name, so flows written against one page resolve on every page that has
+            // the element.
             for component in &page.components {
-                if component_ids.contains(&component.id) {
-                    let full_id = format!("{}/{}", page_id, component.id);
-                    if let Ok(value) = flow_like_types::json::to_value(component) {
-                        elements.insert(full_id, value);
-                    }
+                let suffix = format!("/{}", component.id);
+                let required = required_ids
+                    .iter()
+                    .any(|id| *id == component.id || id.ends_with(&suffix));
+                if required && let Ok(value) = flow_like_types::json::to_value(component) {
+                    elements.insert(format!("{}/{}", page_id, component.id), value);
                 }
             }
         }
@@ -2122,8 +2532,51 @@ impl Board {
 
     // TEMPLATE FUNCTIONS
 
+    /// Copy the listed pages verbatim from one page directory to another.
+    ///
+    /// A page a board lists can legitimately have no file behind it — a board synced from a remote
+    /// arrives before its payloads do, and a template that only ever existed as a record has none
+    /// at all. The record these pages belong to has already been written by the time this runs, so
+    /// aborting on the first miss would throw away a template save the user believes happened for
+    /// the sake of one page. Misses are logged and skipped, the same trade `load_all_pages` makes.
+    /// A failed *write* still propagates: that is the destination store breaking, not missing data.
+    async fn copy_pages_between(
+        store: &Arc<dyn ObjectStore>,
+        page_ids: &[String],
+        src_dir: &Path,
+        dst_dir: &Path,
+    ) -> flow_like_types::Result<()> {
+        for page_id in page_ids {
+            let src_path = src_dir.child(format!("{}.page", page_id));
+            let page_proto: proto::Page =
+                match from_compressed(store.clone(), src_path.clone()).await {
+                    Ok(page) => page,
+                    Err(error) => {
+                        tracing::warn!(
+                            "skipping page {}: reading {} failed: {}",
+                            page_id,
+                            src_path,
+                            error
+                        );
+                        continue;
+                    }
+                };
+            let dst_path = dst_dir.child(format!("{}.page", page_id));
+            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        }
+        Ok(())
+    }
+
+    /// Persist this board as the template `self.id`.
+    ///
+    /// `source_board_id` names the board whose page files back `self.page_ids`. It has to be
+    /// passed in because `self.id` is already the *template* id by the time a caller gets here,
+    /// so the pages are no longer reachable from this board's own paths. `None` marks a
+    /// record-only write: a template cached from a remote carries page ids but no payloads on
+    /// this store, and there is nothing to copy.
     pub async fn save_as_template(
         &self,
+        source_board_id: Option<&str>,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let to = self.board_dir.child(format!("{}.template", self.id));
@@ -2134,43 +2587,36 @@ impl Board {
         let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
-        for page_id in &self.page_ids {
-            let src_path = self.page_path(page_id);
-            let dst_path = self.template_page_path(&self.id, page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        if let Some(source_board_id) = source_board_id {
+            let src_dir = self.board_pages_dir(source_board_id);
+            let dst_dir = Self::template_pages_dir(&self.board_dir, &self.id);
+            Self::copy_pages_between(&store, &self.page_ids, &src_dir, &dst_dir).await?;
         }
 
         Ok(())
     }
 
+    /// Overwrite an already-published template version in place. `source_board_id` carries the
+    /// same meaning as in [`Self::save_as_template`].
     pub async fn overwrite_template_version(
         &mut self,
         version: (u32, u32, u32),
+        source_board_id: Option<&str>,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
 
-        let to = self
-            .board_dir
-            .child("templates")
-            .child("versions")
-            .child(self.id.clone())
-            .child(format!(
-                "{}_{}_{}.template",
-                version.0, version.1, version.2
-            ));
+        let to = Self::versioned_template_path(&self.board_dir, &self.id, version);
 
         let mut template = self.clone();
         template.clear_internal_refs();
         let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
-        for page_id in &self.page_ids {
-            let src_path = self.page_path(page_id);
-            let dst_path = self.versioned_template_page_path(&self.id, version, page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+        if let Some(source_board_id) = source_board_id {
+            let src_dir = self.board_pages_dir(source_board_id);
+            let dst_dir = self.versioned_template_pages_dir(&self.id, version);
+            Self::copy_pages_between(&store, &self.page_ids, &src_dir, &dst_dir).await?;
         }
 
         Ok(())
@@ -2192,26 +2638,19 @@ impl Board {
 
         let mut new_version = (0, 0, 0);
 
+        // The archive of the outgoing version is keyed on the template id, matching every reader:
+        // `load_template`, `get_template_versions` and `App::delete_template`. Archives written
+        // before this fix live under the source board's id instead and are unreachable — they were
+        // already invisible to all three, so there is nothing to migrate, only orphans to ignore.
         if let Some(old_template) = &old_template {
-            let to = self
-                .board_dir
-                .child("templates")
-                .child("versions")
-                .child(self.id.clone())
-                .child(format!(
-                    "{}_{}_{}.template",
-                    version.0, version.1, version.2
-                ));
+            let to = Self::versioned_template_path(&self.board_dir, &template_id, version);
             let mut old_template = old_template.clone();
             old_template.clear_internal_refs();
             compress_to_file(store.clone(), to, &old_template.to_proto()).await?;
 
-            for page_id in &old_template.page_ids {
-                let src_path = old_template.template_page_path(&old_template.id, page_id);
-                let dst_path = self.versioned_template_page_path(&self.id, version, page_id);
-                let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-                compress_to_file(store.clone(), dst_path, &page_proto).await?;
-            }
+            let src_dir = Self::template_pages_dir(&old_template.board_dir, &old_template.id);
+            let dst_dir = self.versioned_template_pages_dir(&template_id, version);
+            Self::copy_pages_between(&store, &old_template.page_ids, &src_dir, &dst_dir).await?;
 
             new_version = match version_type {
                 VersionType::Major => (version.0 + 1, 0, 0),
@@ -2220,6 +2659,7 @@ impl Board {
             }
         }
 
+        let source_board_id = self.id.clone();
         let mut template = self.clone();
         template.id = template_id;
         template.version = new_version;
@@ -2231,7 +2671,9 @@ impl Board {
         }
 
         template.mark_changed();
-        template.save_as_template(Some(store)).await?;
+        template
+            .save_as_template(Some(source_board_id.as_str()), Some(store))
+            .await?;
         Ok(new_version)
     }
 
@@ -2252,16 +2694,9 @@ impl Board {
             .as_generic();
 
         let board_dir = path.clone();
-        let path = if let Some(version) = version {
-            path.child("templates")
-                .child("versions")
-                .child(template_id)
-                .child(format!(
-                    "{}_{}_{}.template",
-                    version.0, version.1, version.2
-                ))
-        } else {
-            path.child(format!("{}.template", template_id))
+        let path = match version {
+            Some(version) => Self::versioned_template_path(&board_dir, template_id, version),
+            None => path.child(format!("{}.template", template_id)),
         };
 
         let board: flow_like_types::proto::Board = from_compressed(store, path).await?;
@@ -2277,6 +2712,29 @@ impl Board {
         Ok(board)
     }
 
+    fn template_page_source(
+        &self,
+        template_id: &str,
+        version: Option<(u32, u32, u32)>,
+        page_id: &str,
+    ) -> Path {
+        match version {
+            Some(version) => self.versioned_template_page_path(template_id, version, page_id),
+            None => self.template_page_path(template_id, page_id),
+        }
+    }
+
+    async fn load_template_page_proto(
+        &self,
+        template_id: &str,
+        page_id: &str,
+        version: Option<(u32, u32, u32)>,
+        store: &Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<proto::Page> {
+        let path = self.template_page_source(template_id, version, page_id);
+        from_compressed(store.clone(), path).await
+    }
+
     pub async fn load_template_page(
         &self,
         template_id: &str,
@@ -2285,17 +2743,15 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Page> {
         let store = self.get_store(store).await?;
-
-        let path = if let Some(v) = version {
-            self.versioned_template_page_path(template_id, v, page_id)
-        } else {
-            self.template_page_path(template_id, page_id)
-        };
-
-        let page_proto: proto::Page = from_compressed(store, path).await?;
-        Ok(page_proto.into())
+        Ok(self
+            .load_template_page_proto(template_id, page_id, version, &store)
+            .await?
+            .into())
     }
 
+    /// Read every page this template lists. A page whose payload is missing is skipped with a
+    /// warning rather than failing the read, so one absent file never hides the rest of the
+    /// template — the same contract [`Self::load_all_pages`] holds for a board.
     pub async fn load_all_template_pages(
         &self,
         template_id: &str,
@@ -2304,50 +2760,181 @@ impl Board {
     ) -> flow_like_types::Result<HashMap<String, Page>> {
         let store = self.get_store(store).await?;
 
-        let mut pages = HashMap::new();
+        let mut pages = HashMap::with_capacity(self.page_ids.len());
         for page_id in &self.page_ids {
-            let path = if let Some(v) = version {
-                self.versioned_template_page_path(template_id, v, page_id)
-            } else {
-                self.template_page_path(template_id, page_id)
-            };
-            let page_proto: proto::Page = from_compressed(store.clone(), path).await?;
-            pages.insert(page_id.clone(), page_proto.into());
+            match self
+                .load_template_page_proto(template_id, page_id, version, &store)
+                .await
+            {
+                Ok(page) => {
+                    pages.insert(page_id.clone(), page.into());
+                }
+                Err(error) => tracing::warn!(
+                    "skipping page {} of template {}: {}",
+                    page_id,
+                    template_id,
+                    error
+                ),
+            }
         }
         Ok(pages)
     }
 
-    pub async fn copy_template_pages_to_board(
-        &self,
-        template_id: &str,
-        version: Option<(u32, u32, u32)>,
+    /// Copy `template`'s pages onto this board under freshly minted ids.
+    ///
+    /// `Page.id` is a global primary key, so an instantiated page can never keep the template's
+    /// id — the copy would collide with the original the moment either is persisted. Once the ids
+    /// move, everything naming them has to move too: `node_translation` is the source→minted map
+    /// the accompanying [`commands::nodes::copy_paste::CopyPasteCommand`] produced for the graph,
+    /// and `app_translation` names the source and destination apps when the template came from a
+    /// different one.
+    ///
+    /// A page the template lists but has no payload for is skipped with a warning: a template that
+    /// crossed a serialization boundary carries ids without files, and one missing page must not
+    /// cost the caller the whole board.
+    pub async fn instantiate_template_pages(
+        &mut self,
+        template: &Board,
+        node_translation: &HashMap<String, String>,
+        app_translation: Option<(&str, &str)>,
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<()> {
-        let store = self.get_store(store).await?;
-
-        for page_id in &self.page_ids {
-            let src_path = if let Some(v) = version {
-                self.versioned_template_page_path(template_id, v, page_id)
-            } else {
-                self.template_page_path(template_id, page_id)
-            };
-            let dst_path = self.page_path(page_id);
-            let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+    ) -> flow_like_types::Result<Vec<Page>> {
+        if template.page_ids.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(())
+
+        let store = self.get_store(store).await?;
+        let page_translation = template
+            .page_ids
+            .iter()
+            .map(|page_id| (page_id.clone(), create_id()))
+            .collect::<HashMap<String, String>>();
+
+        let board_id = self.id.clone();
+        let template_id = template.id.clone();
+        let mut instantiated = Vec::with_capacity(template.page_ids.len());
+
+        for page_id in &template.page_ids {
+            let mut page_proto = match template
+                .load_template_page_proto(&template_id, page_id, None, &store)
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    tracing::warn!(
+                        "skipping page {} of template {}: {}",
+                        page_id,
+                        template_id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            let Some(new_page_id) = page_translation.get(page_id) else {
+                continue;
+            };
+
+            let mut translate = |kind: IdRef, id: &str| match kind {
+                IdRef::Node => node_translation.get(id).cloned(),
+                IdRef::Page => page_translation.get(id).cloned(),
+                IdRef::Board => (id == template_id.as_str()).then(|| board_id.clone()),
+                IdRef::App => {
+                    app_translation.and_then(|(from, to)| (id == from).then(|| to.to_string()))
+                }
+                IdRef::Widget | IdRef::Event => None,
+            };
+            // Payloads that decode to a bare literal — a prop default, a customization value —
+            // carry no field name to key off, so every id this instantiation minted is matched
+            // directly instead.
+            let mut translate_literal = |id: &str| {
+                node_translation
+                    .get(id)
+                    .or_else(|| page_translation.get(id))
+                    .cloned()
+                    .or_else(|| (id == template_id.as_str()).then(|| board_id.clone()))
+                    .or_else(|| {
+                        app_translation.and_then(|(from, to)| (id == from).then(|| to.to_string()))
+                    })
+                    // An element reference is composite — `{page_id}/{component_id}` — so
+                    // whole-string matching never sees it. The fork translates these the same
+                    // way; the two passes have to agree or a copy behaves differently
+                    // depending on which one made it.
+                    .or_else(|| {
+                        let (page_id, component_id) = id.split_once('/')?;
+                        if component_id.is_empty() {
+                            return None;
+                        }
+                        Some(format!(
+                            "{}/{}",
+                            page_translation.get(page_id)?,
+                            component_id
+                        ))
+                    })
+            };
+
+            Self::remap_instantiated_page(
+                &mut page_proto,
+                new_page_id,
+                &board_id,
+                &mut translate,
+                &mut translate_literal,
+            );
+
+            // Written as a proto instead of through `save_page`: the round trip through the
+            // in-memory `Page` drops `PageContent`'s grid placement and region and
+            // `SurfaceComponent::event_relevant`, and a copy has no business losing them.
+            let dst_path = self.page_path(new_page_id);
+            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+
+            if !self.page_ids.contains(new_page_id) {
+                self.page_ids.push(new_page_id.clone());
+            }
+            instantiated.push(Page::from(page_proto));
+        }
+
+        self.mark_changed();
+        Ok(instantiated)
+    }
+
+    /// Move one page payload into this board's id space.
+    ///
+    /// Coverage lives in [`crate::a2ui::page_remap`], shared with the fork: both operations move a
+    /// page across an id boundary and have to rewrite the same references, and keeping two
+    /// inventories in step is what failed last time. This function owns only the policy — the
+    /// page's new identity and which id maps to what.
+    fn remap_instantiated_page(
+        page: &mut proto::Page,
+        new_page_id: &str,
+        board_id: &str,
+        translate: &mut dyn FnMut(IdRef, &str) -> Option<String>,
+        translate_literal: &mut dyn FnMut(&str) -> Option<String>,
+    ) {
+        page.id = new_page_id.to_string();
+        page.board_id = Some(board_id.to_string());
+
+        let mut translators = IdTranslators {
+            by_field: translate,
+            by_literal: translate_literal,
+        };
+        let unrewritten = remap_page_refs(page, &mut translators);
+        if !unrewritten.is_empty() {
+            // The page is still written: a component whose JSON will not parse is already broken,
+            // and dropping the whole page would take the working ones with it.
+            tracing::warn!(
+                page_id = %new_page_id,
+                board_id = %board_id,
+                "instantiated page kept {} payload(s) the template copy could not rewrite: {}",
+                unrewritten.len(),
+                unrewritten.join("; ")
+            );
+        }
     }
 
     pub async fn get_template_versions(
         &self,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Vec<(u32, u32, u32)>> {
-        let versions_dir = self
-            .board_dir
-            .clone()
-            .child("templates")
-            .child("versions")
-            .child(self.id.clone());
+        let versions_dir = Self::versioned_template_dir(&self.board_dir, &self.id);
 
         let store = self.get_store(store).await?;
 
@@ -2381,6 +2968,8 @@ impl Board {
 
             version_list.push(version);
         }
+
+        version_list.sort_unstable_by(|a, b| b.cmp(a));
         Ok(version_list)
     }
 }
@@ -2407,6 +2996,11 @@ pub struct Comment {
     pub z_index: Option<i32>,
     pub hash: Option<u64>,
     pub is_locked: Option<bool>,
+    /// Soft reference to a board node this comment is attached to (e.g. the statement a
+    /// FlowScript thread anchors on). Presentation metadata only — dangling references are
+    /// legal (the node may be deleted later); consumers must treat a missing node as unanchored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 impl Comment {
@@ -2452,6 +3046,10 @@ impl Comment {
 
         if let Some(is_locked) = self.is_locked {
             hasher.append(&[is_locked as u8]);
+        }
+
+        if let Some(node_id) = &self.node_id {
+            hasher.append(node_id.as_bytes());
         }
 
         self.hash = Some(hasher.finalize64());
@@ -2526,6 +3124,328 @@ mod tests {
         assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
         assert_eq!(board.updated_at, updated_at);
         assert_eq!(board.hash, Some(0xdead_beef));
+    }
+
+    #[tokio::test]
+    async fn pin_index_answers_exactly_like_the_scan() {
+        use crate::flow::node::Node;
+        use crate::flow::variable::VariableType;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+
+        let mut node = Node::new("indexed_node", "Indexed Node", "", "test");
+        node.add_input_pin("in", "In", "", VariableType::String);
+        node.add_output_pin("out", "Out", "", VariableType::String);
+        let mut pin_ids: Vec<String> = node.pins.keys().cloned().collect();
+        board.nodes.insert(node.id.clone(), node);
+
+        let mut interface = Node::new("layer_interface", "Layer Interface", "", "test");
+        interface.add_input_pin("layer_in", "Layer In", "", VariableType::String);
+        pin_ids.extend(interface.pins.keys().cloned());
+
+        let mut nested = Node::new("nested_node", "Nested Node", "", "test");
+        nested.add_output_pin("nested_out", "Nested Out", "", VariableType::String);
+        pin_ids.extend(nested.pins.keys().cloned());
+
+        let mut layer = super::Layer::new(
+            "layer-1".to_string(),
+            "Layer".to_string(),
+            super::LayerType::Function,
+        );
+        layer.pins = interface.pins.clone();
+        layer.nodes.insert(nested.id.clone(), nested);
+        board.layers.insert(layer.id.clone(), layer);
+
+        pin_ids.push("pin-that-does-not-exist".to_string());
+
+        let scanned: Vec<Option<String>> = pin_ids
+            .iter()
+            .map(|id| board.get_pin_by_id(id).map(|pin| pin.id.clone()))
+            .collect();
+        assert_eq!(
+            scanned.iter().filter(|found| found.is_some()).count(),
+            pin_ids.len() - 1
+        );
+
+        board.pin_index = Some(board.build_pin_index());
+        let indexed: Vec<Option<String>> = pin_ids
+            .iter()
+            .map(|id| board.get_pin_by_id(id).map(|pin| pin.id.clone()))
+            .collect();
+
+        assert_eq!(scanned, indexed);
+    }
+
+    /// Mimics the `match_type` family: adopts the data type of whatever feeds its input, which is
+    /// how a retyped pin travels along a chain of wires.
+    struct TypeMirrorLogic;
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for TypeMirrorLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            use crate::flow::variable::VariableType;
+            let mut node =
+                crate::flow::node::Node::new("type_mirror_test", "Type Mirror", "", "test");
+            node.add_input_pin("in", "In", "", VariableType::Generic);
+            node.add_output_pin("out", "Out", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, board: &super::Board) {
+            let upstream = node
+                .get_pin_by_name("in")
+                .and_then(|pin| pin.depends_on.iter().next().cloned())
+                .and_then(|pin_id| board.get_pin_by_id(&pin_id))
+                .map(|pin| pin.data_type.clone());
+            let Some(data_type) = upstream else {
+                return;
+            };
+            for pin in node.pins.values_mut() {
+                pin.data_type = data_type.clone();
+            }
+        }
+    }
+
+    /// A scoped sweep must leave exactly the board a full sweep would.
+    ///
+    /// This is the check that makes narrowing the sweep defensible: if a propagation channel is
+    /// ever missed, a node keeps a stale derivation and the two boards diverge here. `node.error`
+    /// is compared separately because `Node::hash` does not cover it, so a divergence in validation
+    /// messages alone would otherwise pass unnoticed.
+    async fn assert_sweeps_agree(
+        board: &super::Board,
+        state: Arc<crate::state::FlowLikeState>,
+        commands: Vec<super::GenericCommand>,
+    ) {
+        use crate::flow::board::dirty::Touched;
+
+        let mut full = board.clone();
+        let mut scoped = board.clone();
+        for target in [&mut full, &mut scoped] {
+            for command in commands.clone().iter_mut() {
+                command.execute(target, state.clone()).await.expect("apply");
+            }
+        }
+
+        let mut touched = Touched::default();
+        for command in &commands {
+            command.touched(&mut touched);
+        }
+
+        full.node_updates_scoped(state.clone(), None).await;
+        full.cleanup();
+        full.mark_changed();
+
+        scoped
+            .node_updates_scoped(state.clone(), Some(&touched))
+            .await;
+        scoped.cleanup();
+        scoped.mark_changed();
+
+        for (node_id, expected) in &full.nodes {
+            let actual = scoped.nodes.get(node_id).expect("node present after sweep");
+            assert_eq!(
+                expected.hash, actual.hash,
+                "node {node_id} ({}) settled differently",
+                expected.name
+            );
+            assert_eq!(
+                expected.error, actual.error,
+                "node {node_id} ({}) reports a different error",
+                expected.name
+            );
+        }
+        assert_eq!(full.nodes.len(), scoped.nodes.len());
+        assert_eq!(full.hash, scoped.hash, "board hashes diverged");
+    }
+
+    /// A retyped pin has to travel the whole chain, not just to the first neighbour.
+    #[tokio::test]
+    async fn dirty_sweep_matches_full_sweep_along_a_wire_chain() {
+        use crate::flow::node::{Node, NodeLogic};
+        use crate::flow::variable::VariableType;
+
+        let state = flow_state().await;
+        let logic: Arc<dyn NodeLogic> = Arc::new(TypeMirrorLogic);
+        state.node_registry().write().await.push_node(logic.clone());
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+
+        // source -> a -> b -> c, so a change at the head has three hops to travel.
+        let mut source = Node::new("type_mirror_test", "Source", "", "test");
+        source.add_output_pin("out", "Out", "", VariableType::String);
+        let mut chain: Vec<Node> = vec![source];
+        for index in 0..3 {
+            let mut link = logic.get_node();
+            link.friendly_name = format!("Link {index}");
+            chain.push(link);
+        }
+
+        for window in 0..chain.len() - 1 {
+            let out_pin = chain[window]
+                .get_pin_by_name("out")
+                .expect("output pin")
+                .id
+                .clone();
+            let in_pin = chain[window + 1]
+                .get_pin_by_name("in")
+                .expect("input pin")
+                .id
+                .clone();
+            chain[window]
+                .get_pin_mut_by_name("out")
+                .expect("output pin")
+                .connected_to
+                .insert(in_pin.clone());
+            chain[window + 1]
+                .get_pin_mut_by_name("in")
+                .expect("input pin")
+                .depends_on
+                .insert(out_pin);
+        }
+
+        let head_id = chain[0].id.clone();
+        for node in chain {
+            board.nodes.insert(node.id.clone(), node);
+        }
+        board.node_updates(state.clone()).await;
+        board.cleanup();
+        board.mark_changed();
+
+        // Retype the head. Every link downstream has to adopt it.
+        let mut head = board.nodes.get(&head_id).expect("head node").clone();
+        head.get_pin_mut_by_name("out")
+            .expect("output pin")
+            .data_type = VariableType::Integer;
+        let command = super::GenericCommand::UpdateNode(
+            crate::flow::board::commands::nodes::update_node::UpdateNodeCommand {
+                node: head,
+                old_node: board.nodes.get(&head_id).cloned(),
+            },
+        );
+
+        assert_sweeps_agree(&board, state, vec![command]).await;
+    }
+
+    /// Where an apply actually spends its time on a large board, with a trivial `on_update` so the
+    /// numbers are the fixed per-node overhead rather than any one node type's work. Ignored: it
+    /// reports a measurement rather than asserting a threshold. Run with:
+    ///   cargo test -p flow-like --lib apply_phase_breakdown -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn apply_phase_breakdown() {
+        use crate::flow::node::NodeLogic;
+        use crate::flow::variable::VariableType;
+        use std::time::Instant;
+
+        const NODES: usize = 1097;
+
+        let state = flow_state().await;
+        let logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Scaling" });
+        state.node_registry().write().await.push_node(logic.clone());
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        for _ in 0..NODES {
+            let mut node = logic.get_node();
+            node.add_input_pin("in", "In", "", VariableType::String);
+            node.add_output_pin("out", "Out", "", VariableType::String);
+            board.nodes.insert(node.id.clone(), node);
+        }
+
+        let started = Instant::now();
+        board.node_updates(state.clone()).await;
+        let node_updates = started.elapsed();
+
+        let started = Instant::now();
+        board.cleanup();
+        let cleanup = started.elapsed();
+
+        let started = Instant::now();
+        board.mark_changed();
+        let mark_changed = started.elapsed();
+
+        let started = Instant::now();
+        let _nodes_before = board.nodes.clone();
+        let clone_nodes = started.elapsed();
+
+        println!(
+            "{NODES} nodes / {} pins: node_updates {node_updates:?}, cleanup {cleanup:?}, mark_changed {mark_changed:?}, nodes.clone() {clone_nodes:?}",
+            board
+                .nodes
+                .values()
+                .map(|node| node.pins.len())
+                .sum::<usize>(),
+        );
+    }
+
+    /// How the `node_updates` pin lookup scales with board size. Ignored: it reports a measurement
+    /// rather than asserting a threshold. Run with:
+    ///   cargo test -p flow-like --lib pin_lookup_scaling -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn pin_lookup_scaling() {
+        use crate::flow::node::Node;
+        use crate::flow::variable::VariableType;
+        use std::time::Instant;
+
+        const NODES: usize = 1097;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+
+        let mut pin_ids: Vec<String> = Vec::new();
+        for index in 0..NODES {
+            let mut node = Node::new("scaling_node", &format!("Node {index}"), "", "test");
+            node.add_input_pin("in", "In", "", VariableType::String);
+            node.add_output_pin("out", "Out", "", VariableType::String);
+            pin_ids.extend(node.pins.keys().cloned());
+            board.nodes.insert(node.id.clone(), node);
+        }
+
+        // Spread the sample over the map so neither mode wins on locality.
+        let lookups: Vec<&String> = pin_ids.iter().step_by(3).collect();
+
+        let started = Instant::now();
+        let scanned = lookups
+            .iter()
+            .filter(|pin_id| board.get_pin_by_id(pin_id).is_some())
+            .count();
+        let scan = started.elapsed();
+
+        board.pin_index = Some(board.build_pin_index());
+        let started = Instant::now();
+        let indexed_hits = lookups
+            .iter()
+            .filter(|pin_id| board.get_pin_by_id(pin_id).is_some())
+            .count();
+        let indexed = started.elapsed();
+
+        assert_eq!(scanned, indexed_hits);
+        println!(
+            "{NODES} nodes / {} pins, {} lookups: scan {scan:?} ({:?} each), indexed {indexed:?} ({:?} each)",
+            pin_ids.len(),
+            lookups.len(),
+            scan / lookups.len() as u32,
+            indexed / lookups.len() as u32,
+        );
+    }
+
+    /// The index is only exact while `node_updates` owns it; leaking it would let a later mutation
+    /// answer `get_pin_by_id` from stale entries.
+    #[tokio::test]
+    async fn node_updates_clears_the_pin_index() {
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        board.node_updates(state).await;
+        assert!(board.pin_index.is_none());
     }
 
     #[tokio::test]
@@ -2821,12 +3741,122 @@ mod tests {
             .await
             .expect_err("stale cached content must never become a publishable snapshot");
         assert!(error.to_string().contains("Board draft changed"));
+        // Publishers retry this race instead of failing the whole save, which
+        // only works while the error stays downcastable.
+        assert!(super::is_board_draft_race(&error));
         assert!(
             !stale
                 .snapshot_matches_persisted_draft(candidate, None)
                 .await
                 .unwrap(),
             "the immutable orphan must not be mistaken for the authoritative draft"
+        );
+    }
+
+    /// A board carrying pin options that protobuf cannot distinguish from unset.
+    ///
+    /// `enforce_schema: Some(false)` is what the ~100 a2ui element nodes declare, and proto3
+    /// writes it as the field default, so it reads back as `None`. Any publication check that
+    /// hashes the live draft rather than its persisted projection reports such a board as
+    /// different from the snapshot just written from it.
+    fn board_with_protobuf_flattened_pin_options(
+        state: Arc<crate::state::FlowLikeState>,
+        base_dir: Path,
+    ) -> super::Board {
+        use crate::flow::{node::Node, pin::PinOptions, variable::VariableType};
+
+        let mut board = super::Board::new(None, base_dir, state);
+        let mut node = Node::new("a2ui_set_element_text", "Set Element Text", "", "test");
+        node.add_input_pin("value_in", "Value", "", VariableType::Struct)
+            .set_options(
+                PinOptions::new()
+                    .set_enforce_schema(false)
+                    .set_enforce_generic_value_type(false)
+                    .set_step(0.0)
+                    .build(),
+            );
+        board.nodes.insert(node.id.clone(), node);
+        board.mark_changed();
+        board
+    }
+
+    #[tokio::test]
+    async fn a_draft_recognizes_the_snapshot_written_from_it() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let version = board.version;
+
+        board.snapshot_at_version(version, None).await.unwrap();
+
+        assert!(
+            board.snapshot_matches_current(version, None).await.unwrap(),
+            "a draft must recognize the snapshot written from it"
+        );
+        assert!(
+            board
+                .snapshot_matches_persisted_draft(version, None)
+                .await
+                .unwrap(),
+            "an unedited draft must not read as changed during its own publication"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_patch_publication_advances_one_slot_at_a_time() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let first_published = board.version;
+
+        let after_first = board
+            .create_version(super::VersionType::Patch, None)
+            .await
+            .unwrap();
+        let after_second = board
+            .create_version(super::VersionType::Patch, None)
+            .await
+            .unwrap();
+
+        assert_eq!(after_first, (first_published.0, first_published.1, 2));
+        assert_eq!(after_second, (first_published.0, first_published.1, 3));
+
+        let mut versions = board.get_versions(None).await.unwrap();
+        versions.sort();
+        assert_eq!(
+            versions,
+            vec![
+                (first_published.0, first_published.1, 1),
+                (first_published.0, first_published.1, 2)
+            ],
+            "each publication must occupy exactly one version slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_versions_returns_newest_first_across_the_ten_boundary() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+
+        for _ in 0..11 {
+            board
+                .create_version(super::VersionType::Patch, None)
+                .await
+                .unwrap();
+        }
+
+        let versions = board.get_versions(None).await.unwrap();
+        assert!(
+            versions.iter().any(|version| version.2 >= 10),
+            "the fixture must cross the lexicographic 0_0_10 / 0_0_5 boundary, got {versions:?}"
+        );
+        assert!(
+            versions.windows(2).all(|pair| pair[0] > pair[1]),
+            "versions must be returned newest first, got {versions:?}"
         );
     }
 
@@ -2940,6 +3970,7 @@ mod tests {
             z_index: None,
             hash: None,
             is_locked: None,
+            node_id: None,
         };
 
         let commands = vec![
@@ -2969,5 +4000,98 @@ mod tests {
             board.comments.contains_key("comment-1"),
             "commands undone before the failure must be re-applied so the board is not left partially rolled back"
         );
+    }
+
+    #[test]
+    fn comment_node_id_roundtrips_serde_and_proto_and_changes_hash() {
+        use super::{Comment, CommentType};
+        use std::time::SystemTime;
+
+        let mut comment = Comment {
+            id: "comment-1".to_string(),
+            author: None,
+            content: "anchored".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::UNIX_EPOCH,
+            coordinates: (1.0, 2.0, 3.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+            node_id: Some("node-abc".to_string()),
+        };
+
+        let json = flow_like_types::json::to_string(&comment).unwrap();
+        let deser: Comment = flow_like_types::json::from_str(&json).unwrap();
+        assert_eq!(deser.node_id.as_deref(), Some("node-abc"));
+
+        let mut buf = Vec::new();
+        comment.to_proto().encode(&mut buf).unwrap();
+        let from_proto =
+            Comment::from_proto(flow_like_types::proto::Comment::decode(&buf[..]).unwrap());
+        assert_eq!(from_proto.node_id.as_deref(), Some("node-abc"));
+
+        comment.hash();
+        let anchored_hash = comment.hash;
+        comment.node_id = None;
+        comment.hash();
+        assert_ne!(
+            anchored_hash, comment.hash,
+            "hash must change when node_id changes so edits sync"
+        );
+
+        let unanchored_json = flow_like_types::json::to_string(&comment).unwrap();
+        assert!(
+            !unanchored_json.contains("node_id"),
+            "None node_id must be skipped so old payloads stay byte-identical"
+        );
+        let legacy: Comment = flow_like_types::json::from_str(&unanchored_json).unwrap();
+        assert_eq!(legacy.node_id, None);
+    }
+
+    #[tokio::test]
+    async fn upsert_comment_preserves_node_id_on_board() {
+        use crate::flow::board::{
+            Comment, CommentType,
+            commands::{GenericCommand, comments::upsert_comment::UpsertCommentCommand},
+        };
+        use std::time::SystemTime;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+
+        let comment = Comment {
+            id: "comment-anchored".to_string(),
+            author: None,
+            content: "bound to a statement".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::now(),
+            coordinates: (0.0, 0.0, 0.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+            node_id: Some("node-xyz".to_string()),
+        };
+
+        board
+            .execute_commands(
+                vec![GenericCommand::UpsertComment(UpsertCommentCommand::new(
+                    comment,
+                ))],
+                state,
+            )
+            .await
+            .unwrap();
+
+        let stored = board.comments.get("comment-anchored").unwrap();
+        assert_eq!(stored.node_id.as_deref(), Some("node-xyz"));
+        assert!(stored.hash.is_some());
     }
 }

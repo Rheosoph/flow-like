@@ -1,0 +1,564 @@
+use log::{ info, warn, error }
+use imap as mbox
+use smtp as relay
+use email as msg
+use pdf as scan
+use image as pic
+use onnx as ort
+use ai as llm
+use ai::processing as docai
+use ontology as onto
+use db::graph as kg
+use db as store
+use string as text
+use datetime as clock
+use ui as surface
+use notify as push
+use user as identity
+use array as list
+use struct as rec
+use files as fs
+use path as loc
+
+interface ReferralPacket {
+    referral_id: string;
+    channel: "fax" | "portal" | "email";
+    sender_email: string;
+    sender_name?: string = "";
+    received_at: string;
+    page_count?: int = 0;
+    attachment_name?: string | null;
+}
+
+interface OrderDraft {
+    referral_id: string;
+    patient_name: string;
+    date_of_birth: string;
+    member_id: string;
+    payer_name: string;
+    payer_slug: string;
+    plan_type: "commercial" | "medicare" | "medicaid" | "self_pay";
+    ordering_npi: string;
+    cpt_codes: string[];
+    state: "draft" | "clean" | "deficient" | "approved";
+    review_note?: string | null;
+}
+
+interface ChaseTicket {
+    referral_id: string;
+    sender_email: string;
+    missing_fields: string[];
+    attempts?: int = 0;
+    state: "chasing" | "answered" | "abandoned";
+    next_touch_at: string;
+}
+
+@description("Shared mailbox that receives referral faxes and portal exports")
+@category("Referral/Intake")
+const intakeMailbox = "referrals@northline-imaging.example"
+
+@description("Address the deficiency chaser writes from")
+@category("Referral/Chase")
+const chaserFrom = "intake-bot@northline-imaging.example"
+
+@description("Password of the shared referral mailbox")
+@secret
+const mailboxPassword: string
+
+@description("Password of the outbound relay the chaser sends through")
+@secret
+const relayPassword: string
+
+@description("Imaging site this intake worker runs for; injected by the runtime")
+@runtime
+const siteCode: string
+
+@description("Ontology that owns Referral, Order and Payer objects")
+@category("Referral/Ontology")
+let referralOntology = "referral-ops"
+
+@description("Graph overlay linking senders, payers and open chases")
+@category("Referral/Ontology")
+let chaseOverlay = "referral-chase-overlay"
+
+@description("Table holding one row per open deficiency chase")
+@category("Referral/Storage")
+let chaseTable = "referral_chases"
+
+@description("Table holding the redacted text of every packet that arrived")
+@category("Referral/Storage")
+let packetTable = "referral_packets"
+
+@description("Table holding one row per parsed order draft")
+@category("Referral/Storage")
+let orderTable = "referral_orders"
+
+@description("Fields an imaging order cannot go clean without")
+@category("Referral/Rules")
+let requiredFields: string[] = ["patient_name","date_of_birth","member_id","payer_name","ordering_npi"]
+
+@description("Shape the referral extractor is asked to fill in")
+@category("Referral/Rules")
+let orderSchema = "{\"patient_name\":\"string\",\"date_of_birth\":\"string\",\"member_id\":\"string\",\"payer_name\":\"string\",\"ordering_npi\":\"string\"}"
+
+@description("How many chase mails a referral gets before it is abandoned")
+@category("Referral/Rules")
+let maxChaseAttempts = 3
+
+@description("Extraction model resolved once per sweep and reused by every module")
+@category("Referral/Runtime")
+let intakeModel: Struct
+
+function referralKeyFor(senderEmail: string, subject: string, receivedAt: string): (referralId: string) {
+    const stem = text::slugify({ string: text::trim({ string: subject }), separator: "-", maxLength: 24 })
+    const digest = hash::blake3({ input: `${siteCode}:${senderEmail}:${receivedAt}` })
+    const shortDigest = text::substring({ string: digest, start: 0, length: 8 })
+    return `REF-${stem}-${shortDigest}`
+}
+
+function extractionModel(): (model: Struct) {
+    const preferences = llm::preferences::make({ multimodal: true })
+    const hinted = preferences.setModelHint({ modelHint: "document-understanding" })
+    const weighted = hinted.setWeight({ preferencesKey: "cost", weight: 0.35 })
+    return llm::findModel({ preferences: weighted })
+}
+
+function fileOrder(record: Struct, referralId: string, origin: string): (filed: bool) {
+    let filed = false
+    const objects = list::push({ arrayIn: list::make(), value: record })
+    const params = rec::make()
+    params.referral_id = referralId
+    params.source = origin
+    const order = onto::prepareAction({ ontologyId: referralOntology, actionId: "create_imaging_order", objects: objects, parameters: params })
+    order {
+        execOut: {
+            filed = true
+            info({ message: `${referralId} accepted by the ${referralOntology} ontology via ${origin}`, toast: false })
+        }
+        error: {
+            error({ message: `ontology refused ${referralId}: ${order.errorMessage}`, toast: true })
+        }
+    }
+    return filed
+}
+
+module intake {
+    function normalizeSubject(rawSubject: string): (subject: string, channel: string) {
+        const subject = text::normalizeWhitespace({ string: text::trim({ string: rawSubject }) })
+        let channel = "email"
+        if (text::contains({ string: subject, substring: "fax", ignoreCase: true })) {
+            channel = "fax"
+        } else if (text::contains({ string: subject, substring: "portal export", ignoreCase: true })) {
+            channel = "portal"
+        }
+        return subject, channel
+    }
+
+    function split(packetPath: Struct, maxPages: int): (pageTexts: string[], pageCount: int) {
+        const pageCount = scan::pageCount({ pdf: packetPath })
+        const workDir = fs::cacheDir({ nodeScope: true, userScope: false })
+        // BUG: the documented typed local `let pageTexts: string[] = []` lowers to a variable no
+        // expression can read back, so every accumulator here stays untyped.
+        let pageTexts = []
+        let cursor = 0
+        while (cursor < pageCount && cursor < maxPages) {
+            const pagePath = loc::child({ parentPath: workDir, childName: `page-${cursor}.pdf` })
+            const page = scan::split({ template: packetPath, startPage: cursor, endPage: cursor, output: pagePath })
+            const pageText = scan::extractText({ template: page })
+            pageTexts = list::push({ arrayIn: pageTexts, value: pageText })
+            cursor = cursor + 1
+        }
+        return pageTexts, pageCount
+    }
+
+    function ocrPage(packetPath: Struct, pageNumber: int, detector: Struct, recognizer: Struct): (text: string, regionCount: int) {
+        const rendered = scan::pageToImage({ pdf: packetPath, page: pageNumber, scale: 2.0, bgColor: "#ffffff" })
+        const normalized = pic::resize({ imageIn: rendered, useRef: false, mode: "Fit", filter: "Lanczos3", widthIn: 1700, heightIn: 2200 })
+        const { regions, count } = ort::textDetection({ model: detector, image: normalized, threshold: 0.35, inputSize: 736 })
+        const crops = ort::cropTextRegions({ image: normalized, regions: regions, padding: 4 })
+        let lines = []
+        for (const crop of crops) {
+            const { text: lineText } = ort::textRecognition({ model: recognizer, image: crop, charset: "en", inputHeight: 48 })
+            lines = list::push({ arrayIn: lines, value: lineText })
+        }
+        return text::join({ strings: lines, separator: " " }), count
+    }
+
+    function readFields(packetText: string, model: Struct, referralId: string): (record: OrderDraft, redacted: string) {
+        const { maskedText, detectionCount } = docai::maskPiiRegex({ text: packetText, detectSsn: true, detectCreditCard: true, detectIban: true, detectEmail: false, maskChar: "*", preserveLength: false, maskText: "[phi]" })
+        // BUG: `const extracted = llm::extract(...)` binds NO default output on a multi-output node,
+        // and the Generic `response` pin makes every consumer ambiguous; see
+        // bug-t4-referral-intake-multi-output-default-pin.flow. `.response` is the workaround.
+        const extracted = llm::extract({ model: model, schema: orderSchema, text: packetText, hint: "Outpatient imaging referral fax; leave a field empty when the packet does not state it." }).response
+        const { matches: cptCodes } = text::extract({ string: packetText, pattern: "7[0-9]{4}", unique: true })
+        const { value: rawPayer } = rec::get({ struct: extracted, field: "payer_name" })
+        const { slug: payerSlug } = payer::canonicalName(rawPayer)
+        const record = rec::make()
+        record.referral_id = referralId
+        record.patient_name = rec::get({ struct: extracted, field: "patient_name" })
+        record.date_of_birth = rec::get({ struct: extracted, field: "date_of_birth" })
+        record.member_id = rec::get({ struct: extracted, field: "member_id" })
+        record.payer_name = rawPayer
+        record.ordering_npi = rec::get({ struct: extracted, field: "ordering_npi" })
+        record.payer_slug = payerSlug
+        record.cpt_codes = cptCodes
+        record.state = "draft"
+        info({ message: `${referralId}: masked ${detectionCount} PHI span(s) before extraction`, toast: false })
+        return record, maskedText
+    }
+
+    function deficiencies(record: Struct): (blockers: string[], summary: string, clean: bool) {
+        let blockers = []
+        for (const field of requiredFields) {
+            const { value: cell, found } = rec::get({ struct: record, field: field })
+            const missing = !found || text::isEmpty({ string: cell, ignoreWhitespace: true })
+            if (missing) {
+                blockers = list::push({ arrayIn: blockers, value: field })
+            }
+        }
+        const summary = text::join({ strings: blockers, separator: ", " })
+        const clean = list::length({ array: blockers }) == 0
+        return blockers, summary, clean
+    }
+}
+
+module payer {
+    function canonicalName(rawPayer: string): (slug: string, family: string) {
+        const cleaned = text::normalizeWhitespace({ string: text::trim({ string: rawPayer }) })
+        let family = "commercial"
+        if (text::contains({ string: cleaned, substring: "medicare", ignoreCase: true })) {
+            family = "medicare"
+        } else if (text::contains({ string: cleaned, substring: "medicaid", ignoreCase: true })) {
+            family = "medicaid"
+        } else if (text::isEmpty({ string: cleaned, ignoreWhitespace: true })) {
+            family = "self_pay"
+        }
+        const slug = text::slugify({ string: cleaned, separator: "-", maxLength: 40 })
+        return slug, family
+    }
+
+    @cache({ namespace: "payer-eligibility-v4", ttlSeconds: 3600, scope: "app" })
+    function eligibility(memberId: string, payerSlug: string, serviceDate: string): (eligible: bool, planType: string, note: string) {
+        const directory = store::open({ name: "payer_directory", userScoped: false, batchSize: 256 })
+        // BUG: `params: { slug: payerSlug }` is dropped ("not a literal or resolvable node output")
+        // because an object literal with a computed field never resolves; build the bind struct.
+        const bind = rec::make()
+        bind.slug = payerSlug
+        const rows = store::filter({ database: directory, filter: "payer_slug = $slug AND accepts_referrals = true", params: bind, limit: 1, offset: 0 })
+        const hit = list::length({ array: rows }) > 0
+        const contract = list::get({ arrayIn: rows, index: 0 })
+        const { value: contractPlan } = rec::get({ struct: contract, field: "plan_type" })
+        const planType = hit ? `${contractPlan}` : "self_pay"
+        const masked = text::mask({ string: memberId, keepStart: 2, keepEnd: 2, maskCharacter: "*", fixedWidth: 0 })
+        const note = hit ? `${planType} contract verified for ${masked} as of ${serviceDate}` : `no active contract on file for ${payerSlug}`
+        return hit, planType, note
+    }
+
+    function link(payerSlug: string, referralId: string, senderEmail: string): (linked: bool) {
+        const { errorMessage: overlayError, graph } = kg::openOverlay({ overlayId: chaseOverlay, userScoped: false })
+        let linked = false
+        if (text::isEmpty({ string: overlayError, ignoreWhitespace: true })) {
+            const payerNode = rec::make()
+            payerNode.id = payerSlug
+            payerNode.label = payerSlug
+            payerNode.kind = "payer"
+            const upsert = kg::upsertNode({ graph: graph, label: "Payer", value: payerNode })
+            upsert {
+                execOut: {
+                    linked = true
+                    const edge = rec::make()
+                    edge.id = `${referralId}->${payerSlug}`
+                    edge.source = referralId
+                    edge.target = payerSlug
+                    edge.sender = senderEmail
+                    kg::upsertEdge({ graph: graph, label: "BILLED_TO", value: edge })
+                }
+                error: {
+                    warn({ message: `overlay refused payer ${payerSlug}: ${upsert.errorMessage}`, toast: false })
+                }
+            }
+        } else {
+            warn({ message: `chase overlay unavailable: ${overlayError}`, toast: false })
+        }
+        return linked
+    }
+}
+
+module chase {
+    function compose(record: Struct, senderName: string, attempt: int): (subject: string, body: string) {
+        const { value: referralId } = rec::get({ struct: record, field: "referral_id" })
+        const { value: patient } = rec::get({ struct: record, field: "patient_name" })
+        const { summary: missing } = intake::deficiencies(record)
+        const subject = `Action needed on referral ${referralId} (attempt ${attempt})`
+        const body = `Hello ${senderName}, we could not complete the imaging order for ${patient} (${referralId}). The following is missing or unreadable on the packet you sent: ${missing}. Reply with corrected pages and intake re-runs automatically. Northline Imaging Intake Desk (${siteCode}).`
+        return subject, body
+    }
+
+    function ticketFor(record: OrderDraft, blockers: string[], senderEmail: string, attempt: int, state: string): (ticket: ChaseTicket) {
+        const nextTouch = clock::addBusinessDays({ date: clock::now(), days: 2 })
+        const { value: referralId } = rec::get({ struct: record, field: "referral_id" })
+        const ticket = rec::make()
+        ticket.referral_id = referralId
+        ticket.sender_email = senderEmail
+        ticket.missing_fields = blockers
+        ticket.attempts = attempt
+        ticket.state = state
+        ticket.next_touch_at = clock::format({ date: nextTouch, format: "%Y-%m-%dT%H:%M:%S" })
+        return ticket
+    }
+
+    function openCount(): (open: int) {
+        const chases = store::open({ name: chaseTable, userScoped: false, batchSize: 128 })
+        return store::count({ database: chases, filter: "state = 'chasing'" })
+    }
+
+    function send(mailer: Struct, to: string, subject: string, body: string, referralId: string): (delivered: bool) {
+        let delivered = false
+        const outbound = relay::send({ connection: mailer, from: chaserFrom, to: to, cc: "", bcc: "", subject: subject, bodyText: body, bodyHtml: "", includeBccHeader: false })
+        outbound {
+            execOut: {
+                delivered = true
+                info({ message: `chase ${outbound.messageId} sent to ${to} for ${referralId}`, toast: false })
+            }
+        }
+        return delivered
+    }
+}
+
+function readPacket(mailItem: Struct, detector: Struct, recognizer: Struct, fallbackText: string): (packetText: string, pageCount: int, attachmentName: string) {
+    let packetText = ""
+    let pageCount = 0
+    let attachmentName = ""
+    const scanDir = fs::cacheDir({ nodeScope: true, userScope: false })
+    const attachments = msg::getAttachments({ email: mailItem })
+    for (const attachment of attachments) {
+        const { filename, contentType, data } = msg::attachmentToFields({ attachment: attachment })
+        if (text::contains({ string: contentType, substring: "pdf", ignoreCase: true })) {
+            const scanPath = loc::child({ parentPath: scanDir, childName: filename })
+            fs::put({ path: scanPath, bytes: data })
+            const { pageTexts, pageCount: pages } = intake::split(scanPath, 12)
+            const joined = text::join({ strings: pageTexts, separator: " " })
+            if (text::length({ string: joined, mode: "Characters" }) < 400) {
+                const { text: ocrText, regionCount } = intake::ocrPage(scanPath, 0, detector, recognizer)
+                packetText = ocrText
+                info({ message: `${filename}: born-digital text was too thin, OCR recovered ${regionCount} region(s)`, toast: false })
+            } else {
+                packetText = joined
+            }
+            pageCount = pages
+            attachmentName = filename
+        }
+    }
+    const resolved = text::isEmpty({ string: packetText, ignoreWhitespace: true }) ? fallbackText : packetText
+    return resolved, pageCount, attachmentName
+}
+
+function routeOrder(record: OrderDraft, senderEmail: string, senderName: string, receivedAt: string, mailer: Struct): (state: string) {
+    const { value: referralId } = rec::get({ struct: record, field: "referral_id" })
+    const { value: rawPayer } = rec::get({ struct: record, field: "payer_name" })
+    const { value: memberId } = rec::get({ struct: record, field: "member_id" })
+    const { slug: payerSlug, family } = payer::canonicalName(rawPayer)
+    const { eligible, planType, note } = payer::eligibility(memberId, payerSlug, receivedAt)
+    const { blockers, summary, clean } = intake::deficiencies(record)
+    const accepted = clean && eligible
+    let state = "deficient"
+    if (accepted) {
+        state = "clean"
+    }
+    record.state = state
+    record.plan_type = eligible ? planType : family
+    const orders = store::open({ name: orderTable, userScoped: false, batchSize: 64 })
+    store::upsert({ database: orders, idRow: "referral_id", value: record })
+    if (accepted) {
+        fileOrder(record, referralId, "mailbox_intake")
+        const linked = payer::link(payerSlug, referralId, senderEmail)
+        info({ message: `${referralId} is a clean order (${note}), payer graph linked=${linked}`, toast: false })
+    } else {
+        const { subject: chaseSubject, body: chaseBody } = chase::compose(record, senderName, 1)
+        const delivered = chase::send(mailer, senderEmail, chaseSubject, chaseBody, referralId)
+        const ticket = chase::ticketFor(record, blockers, senderEmail, 1, "chasing")
+        const chases = store::open({ name: chaseTable, userScoped: false, batchSize: 64 })
+        store::upsert({ database: chases, idRow: "referral_id", value: ticket })
+        warn({ message: `${referralId} is missing ${summary}; chase mail delivered=${delivered}`, toast: false })
+    }
+    return state
+}
+
+function archivePacket(packet: ReferralPacket): (stored: bool) {
+    const packets = store::open({ name: packetTable, userScoped: false, batchSize: 64 })
+    store::upsert({ database: packets, idRow: "referral_id", value: packet })
+    let stored = true
+    return stored
+}
+
+function handleReferral(reference: Struct, detector: Struct, recognizer: Struct, mailer: Struct, index: int): (referralId: string) {
+    const mailItem = mbox::fetchMail({ emailRef: reference })
+    const { subject: rawSubject, date: receivedAt, plain: bodyText } = msg::getContent({ email: mailItem })
+    // BUG: getHeaders().from is schema Nullable_MailAddress while addressToFields enforces
+    // MailAddress, so the catalog's own obvious pairing `address: from` is refused; the `sender`
+    // array carries the bare schema, so index it instead.
+    const { sender } = msg::getHeaders({ email: mailItem })
+    const { name: senderName, email: senderEmail } = msg::addressToFields({ address: sender[0] })
+    const { subject, channel } = intake::normalizeSubject(rawSubject)
+    const referralId = referralKeyFor(senderEmail, subject, receivedAt)
+    const { packetText, pageCount, attachmentName } = readPacket(mailItem, detector, recognizer, bodyText)
+
+    const packet = rec::make()
+    packet.referral_id = referralId
+    packet.channel = channel
+    packet.sender_email = senderEmail
+    packet.sender_name = senderName
+    packet.received_at = receivedAt
+    packet.page_count = pageCount
+    packet.attachment_name = attachmentName
+
+    const { record, redacted } = intake::readFields(packetText, intakeModel, referralId)
+    packet.redacted_text = redacted
+    archivePacket(packet)
+    routeOrder(record, senderEmail, senderName, receivedAt, mailer)
+    const handled = msg::toReference({ mail: mailItem })
+    mbox::markSeen({ email: handled, markAsSeen: true })
+    mbox::moveMessage({ email: handled, destination: "Referrals/Processed", createIfMissing: true, expungeMode: "Deferred" })
+    info({ message: `#${index} ${channel} packet ${referralId} handled from ${intakeMailbox}`, toast: false })
+    return referralId
+}
+
+function recheckTicket(ticket: ChaseTicket, mailer: Struct): (outcome: string) {
+    const { value: referralId } = rec::get({ struct: ticket, field: "referral_id" })
+    const { value: senderEmail } = rec::get({ struct: ticket, field: "sender_email" })
+    const { value: attemptsCell } = rec::get({ struct: ticket, field: "attempts" })
+    const attempts = text::toInt({ string: `${attemptsCell}`, fallback: 0 }).integer
+    const orders = store::open({ name: orderTable, userScoped: false, batchSize: 64 })
+    const chases = store::open({ name: chaseTable, userScoped: false, batchSize: 64 })
+    const bind = rec::make()
+    bind.ref = referralId
+    const rows = store::filter({ database: orders, filter: "referral_id = $ref", params: bind, limit: 1, offset: 0 })
+    let outcome = "chasing"
+    if (list::length({ array: rows }) == 0) {
+        outcome = "abandoned"
+        warn({ message: `chase ${referralId} has no order draft left; dropping it`, toast: false })
+    } else {
+        const record = list::get({ arrayIn: rows, index: 0 })
+        const { blockers, summary, clean } = intake::deficiencies(record)
+        if (clean) {
+            outcome = "answered"
+            const answered = chase::ticketFor(record, blockers, senderEmail, attempts, "answered")
+            store::upsert({ database: chases, idRow: "referral_id", value: answered })
+            fileOrder(record, referralId, "chase_recheck")
+        } else if (attempts < maxChaseAttempts) {
+            const nextAttempt = attempts + 1
+            const { subject: chaseSubject, body: chaseBody } = chase::compose(record, senderEmail, nextAttempt)
+            const delivered = chase::send(mailer, senderEmail, chaseSubject, chaseBody, referralId)
+            const renewed = chase::ticketFor(record, blockers, senderEmail, nextAttempt, "chasing")
+            store::upsert({ database: chases, idRow: "referral_id", value: renewed })
+            info({ message: `chase ${nextAttempt}/${maxChaseAttempts} for ${referralId} (${summary}) delivered=${delivered}`, toast: false })
+        } else {
+            outcome = "abandoned"
+            const dropped = chase::ticketFor(record, blockers, senderEmail, attempts, "abandoned")
+            store::upsert({ database: chases, idRow: "referral_id", value: dropped })
+            const icon = fs::storageDir({ nodeScope: false }).child("branding").child("referral.png")
+            push::user({ title: "Referral abandoned", description: `${referralId} still missing ${summary} after ${attempts} chases`, icon: icon, link: `/referrals/${referralId}`, showDesktop: true })
+        }
+    }
+    return outcome
+}
+
+function approveReferral(referralId: string, reviewNote: string, reasonField: Struct): (approved: bool) {
+    const orders = store::open({ name: orderTable, userScoped: false, batchSize: 32 })
+    const bind = rec::make()
+    bind.ref = referralId
+    const rows = store::filter({ database: orders, filter: "referral_id = $ref", params: bind, limit: 1, offset: 0 })
+    let approved = false
+    if (list::length({ array: rows }) == 0) {
+        surface::setTextfieldError({ elementRef: reasonField, error: `No order draft is on file for ${referralId}.` })
+    } else {
+        const record = list::get({ arrayIn: rows, index: 0 })
+        const stated = rec::set({ structIn: record, field: "state", value: "approved" }).structOut
+        const noted = rec::set({ structIn: stated, field: "review_note", value: reviewNote }).structOut
+        store::upsert({ database: orders, idRow: "referral_id", value: noted })
+        fileOrder(noted, referralId, "manual_approval")
+        surface::dataUpdate({ surfaceId: "referral-review", path: "referral.state", value: "approved" })
+        approved = true
+    }
+    return approved
+}
+
+function overrideDeficiency(referralId: string, reason: string, reasonField: Struct): (recorded: bool) {
+    const chases = store::open({ name: chaseTable, userScoped: false, batchSize: 32 })
+    const bind = rec::make()
+    bind.ref = referralId
+    const rows = store::filter({ database: chases, filter: "referral_id = $ref", params: bind, limit: 1, offset: 0 })
+    const ticket = list::get({ arrayIn: rows, index: 0 })
+    const answered = rec::set({ structIn: ticket, field: "state", value: "answered" }).structOut
+    const noted = rec::set({ structIn: answered, field: "override_reason", value: reason }).structOut
+    store::upsert({ database: chases, idRow: "referral_id", value: noted })
+    surface::setElementText({ elementRef: reasonField, text: `Override recorded: ${reason}` })
+    const reviewer = identity::getExecuting().userContext
+    const { value: reviewerId } = rec::get({ struct: reviewer, field: "sub" })
+    info({ message: `${referralId} deficiency overridden by ${reviewerId}`, toast: true })
+    let recorded = true
+    return recorded
+}
+
+detached {
+    const archiveConnection = mbox::connect({ host: "imap.northline.example", port: 993, username: "referrals-archive", password: mailboxPassword, encryption: "Tls" })
+    const { names } = mbox::listInboxes({ connection: archiveConnection })
+    warn({ message: `archive audit stub saw ${list::length({ array: names })} mailbox(es)`, toast: false })
+}
+
+eventsGeneric ingestReferral(payload: Struct, mailboxHost: string, mailboxUser: string, ocrRoot: Struct) {
+    const connection = mbox::connect({ host: mailboxHost, port: 993, username: mailboxUser, password: mailboxPassword, encryption: "Tls" })
+    const inbox = mbox::inbox({ connection: connection, inbox: "INBOX/Referrals" })
+    const references = mbox::listMails({ inbox: inbox, filter: "UNSEEN" })
+    const mailer = relay::connect({ host: "smtp.northline.example", port: 587, username: chaserFrom, password: relayPassword, encryption: "StartTls" })
+    const detector = ort::load({ path: loc::child({ parentPath: ocrRoot, childName: "dbnet-referral.onnx" }) })
+    const recognizer = ort::load({ path: loc::child({ parentPath: ocrRoot, childName: "crnn-referral.onnx" }) })
+    intakeModel = extractionModel()
+    for (const [index, reference] of references) {
+        handleReferral(reference, detector, recognizer, mailer, index)
+    }
+    ort::unload({ model: detector })
+    ort::unload({ model: recognizer })
+    return `referral sweep for ${siteCode} drained ${list::length({ array: references })} packet(s)`
+}
+
+eventsSimple recheckOpenChases() {
+    const mailer = relay::connect({ host: "smtp.northline.example", port: 587, username: chaserFrom, password: relayPassword, encryption: "StartTls" })
+    const chases = store::open({ name: chaseTable, userScoped: false, batchSize: 64 })
+    const bind = rec::make()
+    bind.cutoff = clock::format({ date: clock::now(), format: "%Y-%m-%dT%H:%M:%S" })
+    let passes = 0
+    let resolved = 0
+    while (chase::openCount() > 0 && passes < 24) {
+        passes = passes + 1
+        const due = store::filter({ database: chases, filter: "state = 'chasing' AND next_touch_at <= $cutoff", params: bind, limit: 20, offset: 0 })
+        if (list::length({ array: due }) == 0) {
+            passes = 24
+        }
+        for (const ticket of due) {
+            const outcome = recheckTicket(ticket, mailer)
+            if (outcome == "answered") {
+                resolved = resolved + 1
+            }
+        }
+    }
+    info({ message: `chase sweep for ${siteCode}: ${resolved} referral(s) resolved after ${passes} pass(es)`, toast: false })
+}
+
+eventsWidgetAction reviewReferral(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const { value: referralId, found: hasReferral } = rec::get({ struct: actionContext, field: "referral_id" })
+    const overrideReason = events::extractInputValue({ inputValues: inputValues, componentId: "override-reason" })
+    const canApprove = identity::hasPermission({ permission: "referral.approve" })
+    const reasonField = surface::getElement({ elementRef: "referral-review/override-reason" }).element
+    if (!hasReferral) {
+        warn({ message: `widget ${widgetInstanceId} raised ${eventName} without a referral id`, toast: true })
+    } else if (!canApprove) {
+        surface::setTextfieldError({ elementRef: reasonField, error: "Your role cannot approve or override referrals." })
+    } else if (eventName == "approveOrder") {
+        approveReferral(referralId, overrideReason, reasonField)
+    } else if (eventName == "overrideDeficiency") {
+        overrideDeficiency(referralId, overrideReason, reasonField)
+    } else {
+        warn({ message: `widget ${widgetInstanceId} raised an unhandled action ${eventName}`, toast: false })
+    }
+}

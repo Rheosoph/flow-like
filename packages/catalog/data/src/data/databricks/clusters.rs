@@ -76,6 +76,7 @@ impl NodeLogic for ListDatabricksClustersNode {
             "List all clusters in the Databricks workspace",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "listClusters");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin(
@@ -234,6 +235,7 @@ impl NodeLogic for GetDatabricksClusterNode {
             "Get details of a specific cluster by ID",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "getCluster");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -394,6 +396,7 @@ impl NodeLogic for StartDatabricksClusterNode {
             "Start a terminated cluster",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "startCluster");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -533,6 +536,7 @@ impl NodeLogic for StopDatabricksClusterNode {
             "Terminate a running cluster",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "stopCluster");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

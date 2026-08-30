@@ -64,7 +64,7 @@ export function FlowNodeCommentMenu({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>{t('comment', 'Comment')}</DialogTitle>
+					<DialogTitle>{t("comment", "Comment")}</DialogTitle>
 				</DialogHeader>
 				<DialogDescription>
 					<Textarea
@@ -82,7 +82,7 @@ export function FlowNodeCommentMenu({
 						}}
 						variant={"secondary"}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={async () => await saveComment()}>Save</Button>
 				</DialogFooter>

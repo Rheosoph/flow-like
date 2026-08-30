@@ -1,3 +1,4 @@
+#[cfg(feature = "execute")]
 use crate::generative::agent::{Agent, ContextManagementMode};
 /// # Simple Agent Node
 /// This is an LLM-controlled while loop over an arbitrary number of flow-leafes with back-propagation of leaf outputs into the agent.
@@ -121,6 +122,7 @@ impl NodeLogic for SimpleAgentNode {
             "LLM-driven control loop that repeatedly calls referenced Flow functions as tools until it decides to stop",
             "AI/Agents",
         );
+        node.set_flowscript_name("agent", "simple");
         node.add_icon("/flow/icons/for-each.svg");
         node.set_can_reference_fns(true);
         node.set_version(5);

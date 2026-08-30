@@ -10,9 +10,11 @@ use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedAdaBoost, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -21,9 +23,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -104,6 +107,7 @@ impl NodeLogic for FitAdaBoostNode {
             "Fit/Train an AdaBoost classifier using multi-class SAMME boosting over shallow Decision Trees. Each learner focuses on the rows its predecessors got wrong, so boosting usually beats a single tree on weak signal, but it is far more sensitive to label noise and outliers than Random Forest. Estimators is a maximum, not a guarantee: boosting stops early once a learner is no better than random guessing.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitAdaboost");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -370,7 +374,6 @@ impl NodeLogic for FitAdaBoostNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

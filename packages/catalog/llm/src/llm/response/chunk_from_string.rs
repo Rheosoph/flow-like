@@ -29,6 +29,7 @@ impl NodeLogic for ChunkFromStringNode {
             "Wraps an arbitrary string in a synthetic streaming chunk",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "chunkFromString");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

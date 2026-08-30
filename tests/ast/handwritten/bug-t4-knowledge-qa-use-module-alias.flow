@@ -1,0 +1,33 @@
+// BUG: `use <module path> as <alias>` cannot address a module layer, so the ONE documented way to
+// disambiguate several nested modules that export the same function name is unusable.
+//
+// FLOWSCRIPT.md documents module layers that may nest and states that "cross-module calls use
+// absolute paths from the root: ingest::pdfs::extract(path)" — i.e. a module path IS a call path.
+// It also documents `use <path> as <alias>`. Combining the two is rejected: `use` only resolves
+// CATALOG namespaces and never sees the module tree declared in the same document.
+//
+//     diag: `use ingest::pdfs as pdfIngest`: namespace `ingest::pdfs` is unknown;
+//           call `get_declarations` to list the available namespaces
+//     diag: namespace `pdfIngest` in call `pdfIngest::extract` is unknown; did you mean `pdf`?
+//
+// The absolute path `ingest::pdfs::extract(doc)` in the same event resolves fine, which proves the
+// module layer exists and is addressable — only the `use` alias for it is not.
+use log::{ info }
+use ingest::pdfs as pdfIngest
+
+eventsSimple bugUseModuleAlias() {
+    const doc = files::storageDir({ nodeScope: false }).child("handbook.pdf")
+    const { text: viaPath } = ingest::pdfs::extract(doc)
+    const { text: viaAlias } = pdfIngest::extract(doc)
+    info({ message: `${viaPath} / ${viaAlias}`, toast: false })
+}
+
+module ingest {
+    module pdfs {
+        function extract(source: Struct): (text: string, pages: int) {
+            const text = pdf::extractText({ template: source })
+            const pages = pdf::pageCount({ pdf: source })
+            return text, pages
+        }
+    }
+}

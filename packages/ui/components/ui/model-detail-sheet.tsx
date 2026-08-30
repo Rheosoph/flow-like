@@ -245,7 +245,11 @@ export function ModelDetailSheet({
 						})
 					) {
 						toast.error(
-							t('thisModelRequiresTheRequiredtierPlan', 'This model requires the {{requiredTier}} plan.', { requiredTier: tierInfo.requiredTier }),
+							t(
+								"thisModelRequiresTheRequiredtierPlan",
+								"This model requires the {{requiredTier}} plan.",
+								{ requiredTier: tierInfo.requiredTier },
+							),
 						);
 					}
 					return;
@@ -260,7 +264,9 @@ export function ModelDetailSheet({
 			console.error("Failed to update profile models:", error);
 			if (handleUpgradeRequiredError(error, "model-tier")) return;
 			toast.error(
-				error instanceof Error ? error.message : t('failedToUpdateProfile', 'Failed to update profile'),
+				error instanceof Error
+					? error.message
+					: t("failedToUpdateProfile", "Failed to update profile"),
 			);
 		}
 	}, [
@@ -323,7 +329,9 @@ export function ModelDetailSheet({
 							{isQueuedState ? (
 								<>
 									<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
-									<span className="text-sm">{t('queuedForDownload', 'Queued for download...')}</span>
+									<span className="text-sm">
+										{t("queuedForDownload", "Queued for download...")}
+									</span>
 								</>
 							) : (
 								<>
@@ -338,12 +346,12 @@ export function ModelDetailSheet({
 					<div className="flex flex-wrap gap-2">
 						{isHosted ? (
 							<Badge className="bg-sky-500/10 text-sky-600 border-sky-500/30">
-								{t('hosted', 'Hosted')}
+								{t("hosted", "Hosted")}
 							</Badge>
 						) : isInstalled.data ? (
 							<Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
 								<CheckIcon className="h-3 w-3 mr-1" />
-								{t('installed', 'Installed')}
+								{t("installed", "Installed")}
 							</Badge>
 						) : (
 							<Badge variant="outline">
@@ -358,22 +366,28 @@ export function ModelDetailSheet({
 						)}
 						{canRunRemotely && (
 							<Badge className="bg-cyan-500/10 text-cyan-700 border-cyan-500/30">
-								{t('remote', 'Remote')}
+								{t("remote", "Remote")}
 							</Badge>
 						)}
 						{isEmbeddingModel && !canRunRemotely && (
 							<Badge className="bg-zinc-500/10 text-zinc-600 border-zinc-500/30">
-								{t('localOnly', 'Local only')}
+								{t("localOnly", "Local only")}
 							</Badge>
 						)}
 						{tierInfo.isRestricted && tierInfo.requiredTier && (
-							<Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">{t('requiredtierRequired', '{{requiredTier}} Required', { requiredTier: tierInfo.requiredTier })}</Badge>
+							<Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">
+								{t("requiredtierRequired", "{{requiredTier}} Required", {
+									requiredTier: tierInfo.requiredTier,
+								})}
+							</Badge>
 						)}
 					</div>
 
 					{/* Description */}
 					<div>
-						<h4 className="text-sm font-medium mb-2">{t('description', 'Description')}</h4>
+						<h4 className="text-sm font-medium mb-2">
+							{t("description", "Description")}
+						</h4>
 						<p className="text-sm text-muted-foreground">{meta.description}</p>
 					</div>
 
@@ -392,15 +406,21 @@ export function ModelDetailSheet({
 					{/* Embedding Parameters */}
 					{embeddingParams?.vector_length && (
 						<div>
-							<h4 className="text-sm font-medium mb-2">{t('embeddingDetails', 'Embedding Details')}</h4>
+							<h4 className="text-sm font-medium mb-2">
+								{t("embeddingDetails", "Embedding Details")}
+							</h4>
 							<div className="grid grid-cols-2 gap-2 text-sm">
 								<div className="flex justify-between p-2 rounded bg-muted/50">
-									<span className="text-muted-foreground">{t('vectorLength', 'Vector Length')}</span>
+									<span className="text-muted-foreground">
+										{t("vectorLength", "Vector Length")}
+									</span>
 									<span>{embeddingParams.vector_length}</span>
 								</div>
 								{embeddingParams.input_length && (
 									<div className="flex justify-between p-2 rounded bg-muted/50">
-										<span className="text-muted-foreground">{t('maxInput', 'Max Input')}</span>
+										<span className="text-muted-foreground">
+											{t("maxInput", "Max Input")}
+										</span>
 										<span>{embeddingParams.input_length}</span>
 									</div>
 								)}
@@ -411,7 +431,7 @@ export function ModelDetailSheet({
 					{/* Tags */}
 					{meta.tags.length > 0 && (
 						<div>
-							<h4 className="text-sm font-medium mb-2">{t('tags', 'Tags')}</h4>
+							<h4 className="text-sm font-medium mb-2">{t("tags", "Tags")}</h4>
 							<div className="flex flex-wrap gap-1.5">
 								{meta.tags.map((tag) => (
 									<Badge key={tag} variant="outline" className="text-xs">
@@ -434,7 +454,7 @@ export function ModelDetailSheet({
 								{isInstalled.data ? (
 									<>
 										<TrashIcon className="h-4 w-4 mr-2" />
-										{t('removeDownload', 'Remove Download')}
+										{t("removeDownload", "Remove Download")}
 									</>
 								) : (
 									<>
@@ -457,7 +477,7 @@ export function ModelDetailSheet({
 							) : (
 								<>
 									<PlusIcon className="h-4 w-4 mr-2" />
-									{t('addToProfile', 'Add to Profile')}
+									{t("addToProfile", "Add to Profile")}
 								</>
 							)}
 						</Button>
@@ -470,7 +490,7 @@ export function ModelDetailSheet({
 								}
 							>
 								<ExternalLinkIcon className="h-4 w-4 mr-2" />
-								{t('viewRepository', 'View Repository')}
+								{t("viewRepository", "View Repository")}
 							</Button>
 						)}
 					</div>
@@ -506,7 +526,9 @@ function ModelCapabilities({
 
 	return (
 		<div>
-			<h4 className="text-sm font-medium mb-3">{t('capabilities', 'Capabilities')}</h4>
+			<h4 className="text-sm font-medium mb-3">
+				{t("capabilities", "Capabilities")}
+			</h4>
 			<div className="grid grid-cols-2 gap-x-4 gap-y-3">
 				{capabilities.map(([key, value]) => {
 					const { icon, label } = getCapabilityIcon(key);

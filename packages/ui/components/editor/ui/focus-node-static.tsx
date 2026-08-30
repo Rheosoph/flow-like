@@ -42,7 +42,10 @@ export function FocusNodeElementStatic(
 				"
 				attributes={{
 					...props.attributes,
-					title: t('nodeNotFoundInCurrentFlow', 'Node not found in current flow'),
+					title: t(
+						"nodeNotFoundInCurrentFlow",
+						"Node not found in current flow",
+					),
 				}}
 			>
 				<svg

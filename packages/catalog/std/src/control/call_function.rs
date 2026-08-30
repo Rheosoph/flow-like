@@ -130,7 +130,7 @@ impl CallFunctionNode {
     /// other's results.
     fn cache_key(layer_id: &str, inputs: &HashMap<String, Value>) -> String {
         let mut sorted: Vec<(&String, &Value)> = inputs.iter().collect();
-        sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+        sorted.sort_by_key(|(left, _)| *left);
 
         let mut hasher = blake3::Hasher::new();
         hasher.update(layer_id.as_bytes());
@@ -148,7 +148,7 @@ impl CallFunctionNode {
         context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
             })
@@ -160,11 +160,11 @@ impl CallFunctionNode {
         context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type == VariableType::Execution
             })
-            .map(|pin| pin.name.clone())
+            .map(|pin| pin.name.to_string())
             .collect()
     }
 
@@ -177,7 +177,7 @@ impl CallFunctionNode {
                 .evaluate_pin_ref::<Value>(pin.clone())
                 .await
                 .unwrap_or(Value::Null);
-            outputs.insert(pin.name.clone(), value);
+            outputs.insert(pin.name.to_string(), value);
         }
         Value::Object(outputs)
     }
@@ -194,7 +194,10 @@ impl CallFunctionNode {
         })?;
 
         for pin in Self::output_data_pins(context) {
-            let value = outputs.get(&pin.name).cloned().unwrap_or(Value::Null);
+            let value = outputs
+                .get(pin.name.as_ref())
+                .cloned()
+                .unwrap_or(Value::Null);
             context.set_pin_ref_value(&pin, value).await?;
         }
 
@@ -393,6 +396,7 @@ impl NodeLogic for CallFunctionNode {
             "Calls a function defined on this board",
             "Control/Functions",
         );
+        node.set_flowscript_name("control", "callFunction");
         node.add_icon("/flow/icons/workflow.svg");
 
         node.add_input_pin(
@@ -423,12 +427,12 @@ impl NodeLogic for CallFunctionNode {
 
         // Collect input values (non-exec, non-function_layer_id)
         let input_pins: Vec<_> = {
-            let pins: Vec<_> = context.node.pins.values().cloned().collect();
+            let pins: Vec<_> = context.node.pins.iter().cloned().collect();
             pins.into_iter()
                 .filter(|p| {
                     p.pin_type == PinType::Input
                         && p.data_type != VariableType::Execution
-                        && p.name != "function_layer_id"
+                        && p.name.as_ref() != "function_layer_id"
                 })
                 .collect()
         };
@@ -436,7 +440,7 @@ impl NodeLogic for CallFunctionNode {
         let mut input_values = std::collections::HashMap::new();
         for pin in &input_pins {
             if let Ok(value) = context.evaluate_pin_ref::<Value>(pin.clone()).await {
-                input_values.insert(pin.name.clone(), value);
+                input_values.insert(pin.name.to_string(), value);
             }
         }
 
@@ -759,13 +763,9 @@ impl NodeLogic for CallFunctionNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::{
-        board::{ExecutionMode, ExecutionStage},
-        execution::LogLevel,
-        pin::ValueType,
-    };
+    use flow_like::flow::pin::ValueType;
     use flow_like_types::json::json;
-    use std::{collections::BTreeSet, time::SystemTime};
+    use std::collections::BTreeSet;
 
     fn pin(name: &str, pin_type: PinType, data_type: VariableType, index: u16) -> Pin {
         Pin {

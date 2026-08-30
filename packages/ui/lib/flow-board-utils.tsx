@@ -24,6 +24,7 @@ import {
 	ICommentType,
 	IExecutionMode,
 	type ILayer,
+	type ILayerCache,
 	ILayerType,
 } from "./schema/flow/board";
 import { IVariableType } from "./schema/flow/node";
@@ -88,6 +89,65 @@ function boardDataVersion(board: IBoard): string {
 		identityToken(board.refs),
 		identityToken(board.layers),
 		membershipHash,
+	].join(":");
+}
+
+/**
+ * What a rendered node reads from a layer: where it sits in the tree, and the
+ * local variables its `var_ref` pins list.
+ *
+ * Coordinates are deliberately excluded. They are the field that moves most
+ * often, and nothing inside a node renders them — folding them in would repaint
+ * every node on the canvas on every layer drag. A layer's pins are excluded for
+ * the same reason: when a function's signature changes the backend rewrites each
+ * call node's own pins, so those nodes re-render on their own hash.
+ *
+ * Order-independent because serde HashMap serialization does not guarantee key
+ * order. Everything folded in is keyed by the layer it belongs to — a bare sum
+ * of per-variable hashes would be blind to a variable moving between layers,
+ * because the same addend just lands in a different term of the same total.
+ *
+ * Local variables carry their type alongside their name: `board.variables` is
+ * covered by an identity token, which moves on any edit, so a retype there
+ * already reaches the node. Hashing these by name alone would make the local
+ * scope the one place where a retype leaves a mounted node stale.
+ */
+function layersSignature(board: IBoard): number {
+	let total = 0;
+	for (const layer of Object.values(board.layers ?? {})) {
+		let digest = stringHash(
+			`${layer.id}\u0000${layer.name}\u0000${layer.type}\u0000${layer.parent_id ?? ""}`,
+		);
+		for (const variable of Object.values(layer.variables ?? {})) {
+			digest =
+				(digest +
+					stringHash(
+						`${layer.id}\u0000${variable.id}\u0000${variable.name}\u0000${variable.data_type}\u0000${variable.value_type}\u0000${variable.schema ?? ""}`,
+					)) |
+				0;
+		}
+		total = (total + digest) | 0;
+	}
+	return total;
+}
+
+/**
+ * The slice of the board a *mounted* node dereferences through boardRef, which
+ * both FlowNode memo comparators watch. Narrower than boardDataVersion on
+ * purpose — it is compared per node, so anything folded in here that changes
+ * during ordinary editing repaints the whole canvas.
+ *
+ * `board.refs` is not included: no mounted node reads it. The pin editor, the
+ * event payload form and the layer/function editors resolve hashed descriptions
+ * and schemas through it, but each is a dialog that snapshots when it opens, and
+ * refs churn every time a node type appears on the board for the first time.
+ */
+function boardContentVersion(board: IBoard): string {
+	return [
+		board.id,
+		board.version?.join(".") ?? "",
+		identityToken(board.variables),
+		layersSignature(board),
 	].join(":");
 }
 
@@ -196,6 +256,13 @@ function deserializeNode(node: ISerializedNode): INode {
 	};
 }
 
+// Monaco >= 0.52 edits through the EditContext API wherever the browser supports it: the focused
+// host is then a bare `div.native-edit-context`, which is neither a form control nor
+// contenteditable. Without these two tests the board's document-level copy/paste handlers win over
+// the editor's own and replace the clipboard with the selected nodes.
+const EDITABLE_CLIPBOARD_HOST_SELECTOR =
+	"[contenteditable='true'], [contenteditable=''], .monaco-editor";
+
 function isEditableClipboardTarget(
 	element: EventTarget | Element | null,
 ): boolean {
@@ -210,9 +277,10 @@ function isEditableClipboardTarget(
 	) {
 		return true;
 	}
-	return Boolean(
-		element.closest("[contenteditable='true'], [contenteditable='']"),
-	);
+	if ((element as { editContext?: unknown }).editContext) {
+		return true;
+	}
+	return Boolean(element.closest(EDITABLE_CLIPBOARD_HOST_SELECTOR));
 }
 
 function hasSelectedPageText(): boolean {
@@ -289,20 +357,32 @@ function stripCallFunctionRef(node: INode): {
 	return { node, functionLayerId };
 }
 
-/** Prefix for break struct field pins */
-const BREAK_STRUCT_PIN_PREFIX = "__break_struct_field__";
-/** Prefix for make struct field pins */
-const MAKE_STRUCT_PIN_PREFIX = "__make_struct_field__";
-
 /**
- * Check if a pin is a break/make struct field pin.
- * These pins have special connection rules for schema matching.
+ * The call-function bits of a node's render data.
+ *
+ * Surfaced on the call node so a cached function is recognizable without opening
+ * the function it points at. It has to be recomputed on every rebuild path: a
+ * call node's own hash does not move when the function it points at changes its
+ * caching, so a branch that carries the old value forward shows a stale badge.
  */
-function isStructFieldPin(pin: IPin): boolean {
-	return (
-		pin.name.startsWith(BREAK_STRUCT_PIN_PREFIX) ||
-		pin.name.startsWith(MAKE_STRUCT_PIN_PREFIX)
-	);
+function callFunctionData(
+	node: INode,
+	board: IBoard,
+): {
+	nodeForData: INode;
+	functionLayerId?: string;
+	functionCache?: ILayerCache;
+} {
+	if (node.name !== "control_call_function") return { nodeForData: node };
+	const { node: nodeForData, functionLayerId } = stripCallFunctionRef(node);
+	const cache = functionLayerId
+		? (board.layers[functionLayerId]?.cache ?? undefined)
+		: undefined;
+	return {
+		nodeForData,
+		functionLayerId,
+		functionCache: cache?.enabled ? cache : undefined,
+	};
 }
 
 /**
@@ -310,6 +390,32 @@ function isStructFieldPin(pin: IPin): boolean {
  */
 function isStructIOPin(pin: IPin): boolean {
 	return pin.name === "struct_in" || pin.name === "struct_out";
+}
+
+const OPEN_OBJECT_SCHEMA_KEYS = new Set(["type", "additionalProperties"]);
+
+/**
+ * Mirrors `flow_like::flow::pin::is_open_object_schema`.
+ *
+ * `{"type":"object","additionalProperties":true}` declares that a pin's shape is open, so it can
+ * never contradict a concrete schema and must never be the basis for rejecting a peer pin. The
+ * `includes` guard keeps the drag hot path from parsing multi-KB real schemas.
+ */
+export function isOpenObjectSchema(schema: string): boolean {
+	if (!schema.includes("additionalProperties")) return false;
+	try {
+		const parsed = JSON.parse(schema);
+		return (
+			parsed !== null &&
+			typeof parsed === "object" &&
+			!Array.isArray(parsed) &&
+			parsed.type === "object" &&
+			parsed.additionalProperties === true &&
+			Object.keys(parsed).every((key) => OPEN_OBJECT_SCHEMA_KEYS.has(key))
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function doPinsMatch(
@@ -357,17 +463,18 @@ export function doPinsMatch(
 		return false;
 	}
 
-	let schemaSource = sourcePin.schema;
-	if (schemaSource) {
-		schemaSource = refs[schemaSource] ?? schemaSource;
-	}
+	// An open-object schema declares that the shape is open, not a contract to match, so it
+	// resolves to "no schema" for every comparison below.
+	const resolveSchema = (pin: IPin) => {
+		if (!pin.schema) return undefined;
+		const resolved = refs[pin.schema] ?? pin.schema;
+		return isOpenObjectSchema(resolved) ? undefined : resolved;
+	};
 
-	let schemaTarget = targetPin.schema;
-	if (schemaTarget) {
-		schemaTarget = refs[schemaTarget] ?? schemaTarget;
-	}
+	const schemaSource = resolveSchema(sourcePin);
+	const schemaTarget = resolveSchema(targetPin);
 
-	if (sourcePin.schema && targetPin.schema) {
+	if (schemaSource && schemaTarget) {
 		if (
 			schemaSource !== schemaTarget &&
 			sourcePin.options?.enforce_schema !== false &&
@@ -404,7 +511,7 @@ export function doPinsMatch(
 		targetPin.data_type === IVariableType.Struct
 	) {
 		// Allow connection if one side has a schema (the break/make node will adopt it)
-		if (sourcePin.schema || targetPin.schema) {
+		if (schemaSource || schemaTarget) {
 			if (sourcePin.value_type !== targetPin.value_type) return false;
 			return true;
 		}
@@ -419,7 +526,7 @@ export function doPinsMatch(
 		sourcePin.data_type !== "Generic" &&
 		targetPin.data_type !== "Generic"
 	) {
-		if (!sourcePin.schema || !targetPin.schema) return false;
+		if (!schemaSource || !schemaTarget) return false;
 		if (schemaSource !== schemaTarget) return false;
 	}
 
@@ -453,6 +560,7 @@ export function parseBoard(
 	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
 	selectorDataRef?: FlowSelectorDataRef,
 	selectorDataVersion?: number,
+	onOpenCommentInCode?: (comment: IComment) => void,
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
@@ -461,6 +569,7 @@ export function parseBoard(
 	const oldEdgesMap = new Map<string, any>();
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
 	const boardVersionToken = boardDataVersion(board);
+	const boardContentToken = boardContentVersion(board);
 
 	// Hash only nodes that actually reference functions (sorted — serde HashMap
 	// order is unstable), so adding/removing unrelated nodes doesn't force every
@@ -480,12 +589,35 @@ export function parseBoard(
 	const fnRefsHash = fnRefEntries.sort().join(";");
 	const reduceEdgeMotion = isWebkitLite() || connectionCount > 150;
 
+	// Presence (peer selections/editors, identity cache) is injected into node
+	// data by awareness effects that only re-run when presence changes — a node
+	// rebuilt here after a re-hash (every drag) must carry it over by id, or
+	// the chips vanish until the next awareness event.
+	const oldNodesById = new Map<string, { data?: unknown }>();
 	for (const oldNode of oldNodes ?? []) {
+		if (typeof oldNode.id === "string") oldNodesById.set(oldNode.id, oldNode);
 		const hash = oldNode.data?.hash;
 		if (typeof oldNode.id === "string" && hash !== undefined && hash !== null) {
 			oldNodesMap.set(renderedNodeCacheKey(oldNode.id, hash), oldNode);
 		}
 	}
+	const carriedPresence = (id: string) => {
+		const data = oldNodesById.get(id)?.data as
+			| {
+					remoteSelections?: unknown;
+					remoteEditors?: unknown;
+					peerUsers?: unknown;
+			  }
+			| undefined;
+		if (!data) return {};
+		return {
+			...(data.remoteSelections
+				? { remoteSelections: data.remoteSelections }
+				: {}),
+			...(data.remoteEditors ? { remoteEditors: data.remoteEditors } : {}),
+			...(data.peerUsers ? { peerUsers: data.peerUsers } : {}),
+		};
+	};
 
 	for (const edge of oldEdges ?? []) {
 		oldEdgesMap.set(edge.id, edge);
@@ -538,10 +670,10 @@ export function parseBoard(
 			nodes.push(oldNode);
 		} else if (oldNode) {
 			// Hash matches but some derived state changed — shallow update
-			const nodeForData =
-				node.name === "control_call_function"
-					? stripCallFunctionRef(node).node
-					: node;
+			const { nodeForData, functionLayerId, functionCache } = callFunctionData(
+				node,
+				board,
+			);
 			nodes.push({
 				...oldNode,
 				data: {
@@ -551,26 +683,24 @@ export function parseBoard(
 					node: nodeForData,
 					boardRef,
 					boardDataVersion: boardVersionToken,
+					boardContentVersion: boardContentToken,
+					functionLayerId,
+					functionCache,
 					selectorDataRef,
 					selectorDataVersion,
 				},
 				selected: sel,
 			});
 		} else {
-			const isCallFunction = node.name === "control_call_function";
-			const { node: nodeForData, functionLayerId } = isCallFunction
-				? stripCallFunctionRef(node)
-				: { node, functionLayerId: undefined };
-
-			// Surfaced on the call node so a cached function is recognizable without
-			// opening the function it points at.
-			const functionCache = functionLayerId
-				? (board.layers[functionLayerId]?.cache ?? undefined)
-				: undefined;
+			const { nodeForData, functionLayerId, functionCache } = callFunctionData(
+				node,
+				board,
+			);
 
 			nodes.push({
 				id: node.id,
-				type: isCallFunction ? "callFunctionNode" : "node",
+				type:
+					node.name === "control_call_function" ? "callFunctionNode" : "node",
 				zIndex: 20,
 				position: {
 					x: node.coordinates?.[0] ?? 0,
@@ -580,6 +710,7 @@ export function parseBoard(
 					label: node.name,
 					boardRef: boardRef,
 					boardDataVersion: boardVersionToken,
+					boardContentVersion: boardContentToken,
 					selectorDataRef,
 					selectorDataVersion,
 					fnRefsHash: fnRefsHash,
@@ -590,8 +721,11 @@ export function parseBoard(
 					version: version,
 					isUnavailable,
 					functionLayerId,
-					functionCache: functionCache?.enabled ? functionCache : undefined,
+					functionCache,
 					currentLayerId: currentLayer,
+					pushLayer: async (layer: ILayer) => {
+						pushLayer(layer);
+					},
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
 					},
@@ -608,6 +742,7 @@ export function parseBoard(
 					onExplain: onExplain,
 					onFilterLogs: onFilterLogs,
 					executionMode: board.execution_mode,
+					...carriedPresence(node.id),
 				},
 				selected: selected.has(node.id),
 			});
@@ -617,6 +752,10 @@ export function parseBoard(
 	const activeLayer = new Set();
 	if (board.layers)
 		for (const layer of Object.values(board.layers)) {
+			// A module is a virtual file, not a place on the canvas: it is never drawn as a
+			// chip in its parent, and it has no boundary pins to draw when it is the layer
+			// being viewed — its nodes render as if they were at the root.
+			if (layer.type === ILayerType.Module) continue;
 			if (layer.type === ILayerType.Function && layer.id !== currentLayer)
 				continue;
 			const parentLayer =
@@ -668,8 +807,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});
@@ -715,8 +856,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});
@@ -767,6 +910,7 @@ export function parseBoard(
 					hash: layer.hash ?? -1,
 					version: version,
 					pinLookup: lookup,
+					...carriedPresence(layer.id),
 					pushLayer: async (layer: ILayer) => {
 						pushLayer(layer);
 					},
@@ -995,6 +1139,10 @@ export function parseBoard(
 					});
 					await executeCommand(command, false);
 				},
+				onOpenInCode:
+					comment.node_id && onOpenCommentInCode
+						? () => onOpenCommentInCode(comment)
+						: undefined,
 			},
 			selected: selected.has(comment.id),
 		});
@@ -1253,4 +1401,39 @@ export async function handlePaste(
 		await executeCommand(command);
 		return;
 	} catch (error) {}
+}
+
+/**
+ * Drop a ready-made group of nodes onto the canvas without going through the clipboard.
+ *
+ * The paste command is what knows how to re-id a fragment and re-base its coordinates, so
+ * a drag that mints nodes reuses it rather than growing a second, subtly different path.
+ * With no `old_mouse` the command re-bases on the first node, which is why the fragment's
+ * own coordinates only have to be right *relative to each other*.
+ */
+export async function placeNodeFragment({
+	nodes,
+	position,
+	currentLayer,
+	executeCommand,
+}: {
+	nodes: INode[];
+	position: { x: number; y: number };
+	currentLayer?: string;
+	executeCommand: (command: IGenericCommand, append?: boolean) => Promise<any>;
+}) {
+	if (nodes.length === 0) return;
+	const command = copyPasteCommand({
+		original_comments: [],
+		original_nodes: nodes,
+		original_layers: [],
+		original_variables: [],
+		original_refs: {},
+		new_comments: [],
+		new_nodes: [],
+		new_layers: [],
+		current_layer: currentLayer,
+		offset: [position.x, position.y, 0],
+	});
+	await executeCommand(command);
 }

@@ -75,6 +75,7 @@ impl NodeLogic for CreateGoogleSlidesNode {
             "Create a new Google Slides presentation",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "create");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -183,6 +184,7 @@ impl NodeLogic for GetGoogleSlidesNode {
             "Get a Google Slides presentation's metadata and slides",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "get");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -297,6 +299,7 @@ impl NodeLogic for AddGoogleSlideNode {
             "Add a new slide to a Google Slides presentation",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "addSlide");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -455,6 +458,7 @@ impl NodeLogic for DeleteGoogleSlideNode {
             "Delete a slide from a Google Slides presentation",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "deleteSlide");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -563,6 +567,7 @@ impl NodeLogic for AddTextToSlideNode {
             "Add a text box with text to a Google Slide",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "addText");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -723,6 +728,7 @@ impl NodeLogic for ExportGoogleSlidesNode {
             "Export a Google Slides presentation into a FlowPath",
             "Data/Google/Slides",
         );
+        node.set_flowscript_name("google.slides", "export");
         node.add_icon("/flow/icons/google.svg");
         node.set_version(2);
 

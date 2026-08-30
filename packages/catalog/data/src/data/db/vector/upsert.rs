@@ -1,10 +1,14 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::{Value, json::json};
 
 use super::NodeDBConnection;
 
@@ -27,6 +31,8 @@ impl NodeLogic for UpsertLocalDatabaseNode {
             "Inserts if the Item does not exist, Updates if it does",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "upsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -40,7 +46,8 @@ impl NodeLogic for UpsertLocalDatabaseNode {
         .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin("id_row", "ID Column", "The ID Column", VariableType::String);
 
-        node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct);
+        node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct)
+            .set_open_schema();
 
         node.add_output_pin(
             "exec_out",
@@ -60,6 +67,7 @@ impl NodeLogic for UpsertLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
@@ -85,6 +93,13 @@ impl NodeLogic for UpsertLocalDatabaseNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 #[crate::register_node]
@@ -106,6 +121,8 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
             "Inserts if the Item does not exist, Updates if it does",
             "Data/Database/Insert",
         );
+        node.set_flowscript_name("db", "batchUpsert");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -120,7 +137,8 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
         node.add_input_pin("id_row", "ID Column", "The ID Column", VariableType::String);
 
         node.add_input_pin("value", "Value", "Value to Insert", VariableType::Struct)
-            .set_value_type(ValueType::Array);
+            .set_value_type(ValueType::Array)
+            .set_open_schema();
 
         node.add_output_pin(
             "exec_out",
@@ -140,6 +158,7 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
@@ -166,5 +185,12 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
         }
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

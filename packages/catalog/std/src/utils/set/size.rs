@@ -27,6 +27,8 @@ impl NodeLogic for SetGetSizeNode {
             "Gets the size of the hash set (how many elements)",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "size");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

@@ -25,6 +25,7 @@ impl NodeLogic for TryCatchNode {
             "Catches errors from automation actions. WARNING: This node reads error_occurred as a plain boolean input -- it does not actually intercept panics or Result::Err from downstream nodes. True try/catch semantics require executor-level support.",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "tryCatch");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -124,6 +125,7 @@ impl NodeLogic for ErrorRecoveryNode {
             "Defines recovery actions for specific error types",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "errorRecovery");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

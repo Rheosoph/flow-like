@@ -24,6 +24,7 @@ impl NodeLogic for WithTimeoutNode {
             "Executes an action with a timeout constraint",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "withTimeout");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

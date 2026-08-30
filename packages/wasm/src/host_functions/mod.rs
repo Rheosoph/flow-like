@@ -189,18 +189,17 @@ impl StorageContext {
     }
 }
 
+/// Shared store of resolved model handles, keyed by the model's cache key.
+pub type ModelCacheHandle = Arc<
+    flow_like_types::sync::RwLock<ahash::AHashMap<String, Arc<dyn flow_like_types::Cacheable>>>,
+>;
+
 /// Model context for WASM modules — provides model access including auth tokens.
 #[derive(Clone)]
 pub struct ModelContext {
     pub app_state: Arc<flow_like::state::FlowLikeState>,
     pub token: Option<String>,
-    pub cache: Option<
-        Arc<
-            flow_like_types::sync::RwLock<
-                ahash::AHashMap<String, Arc<dyn flow_like_types::Cacheable>>,
-            >,
-        >,
-    >,
+    pub cache: Option<ModelCacheHandle>,
 }
 
 impl std::fmt::Debug for ModelContext {

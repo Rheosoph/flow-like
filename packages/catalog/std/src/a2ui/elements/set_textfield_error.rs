@@ -28,6 +28,7 @@ impl NodeLogic for SetTextFieldError {
             "Sets the error state or message of a text field",
             "UI/Elements/Input",
         );
+        node.set_flowscript_name("ui", "setTextfieldError");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

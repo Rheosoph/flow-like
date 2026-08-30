@@ -21,6 +21,7 @@ impl NodeLogic for FakeInteger {
             "Generates a random integer in a specified range for mocking data",
             "Utils/Faker/Number",
         );
+        node.set_flowscript_name("faker.number", "integer");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -80,6 +81,7 @@ impl NodeLogic for FakeFloat {
             "Generates a random float in a specified range for mocking data",
             "Utils/Faker/Number",
         );
+        node.set_flowscript_name("faker.number", "float");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -138,6 +140,7 @@ impl NodeLogic for FakeBoolean {
             "Generates a random boolean for mocking data",
             "Utils/Faker/Number",
         );
+        node.set_flowscript_name("faker.number", "boolean");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -188,6 +191,7 @@ impl NodeLogic for FakeDigit {
             "Generates a random digit (0-9) for mocking data",
             "Utils/Faker/Number",
         );
+        node.set_flowscript_name("faker.number", "digit");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

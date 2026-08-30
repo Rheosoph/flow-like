@@ -68,7 +68,7 @@ function ChainPulse({
 		return (
 			<span
 				className="inline-flex h-2 w-2 animate-pulse rounded-full bg-destructive shadow-[0_0_8px] shadow-destructive"
-				title={t('chainBroken', 'chain broken')}
+				title={t("chainBroken", "chain broken")}
 			/>
 		);
 	}
@@ -76,7 +76,7 @@ function ChainPulse({
 		return (
 			<span
 				className="inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px] shadow-emerald-500/60"
-				title={t('signedVerified', 'signed & verified')}
+				title={t("signedVerified", "signed & verified")}
 			/>
 		);
 	}
@@ -125,25 +125,25 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 	} else if (!data.signing_configured) {
 		healthBadge = {
 			tone: "warn",
-			label: t('unsigned', 'Unsigned'),
+			label: t("unsigned", "Unsigned"),
 			icon: <ShieldAlert className="h-4 w-4" />,
 		};
 	} else if (root?.valid === false) {
 		healthBadge = {
 			tone: "bad",
-			label: t('broken', 'Broken'),
+			label: t("broken", "Broken"),
 			icon: <ShieldAlert className="h-4 w-4" />,
 		};
 	} else if (root?.valid === true) {
 		healthBadge = {
 			tone: "good",
-			label: t('verified', 'Verified'),
+			label: t("verified", "Verified"),
 			icon: <ShieldCheck className="h-4 w-4" />,
 		};
 	} else {
 		healthBadge = {
 			tone: "muted",
-			label: t('idle', 'Idle'),
+			label: t("idle", "Idle"),
 			icon: <ShieldEllipsis className="h-4 w-4" />,
 		};
 	}
@@ -154,7 +154,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<Fingerprint className="h-4 w-4 text-emerald-500" />
-						{t('cryptographicLogs', 'Cryptographic Logs')}
+						{t("cryptographicLogs", "Cryptographic Logs")}
 						<Badge
 							variant={
 								healthBadge.tone === "good"
@@ -170,12 +170,15 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						{t('hashchainAuditTrailWithEs256ServerSignatures', 'Hash-chain audit trail with ES256 server signatures')}
+						{t(
+							"hashchainAuditTrailWithEs256ServerSignatures",
+							"Hash-chain audit trail with ES256 server signatures",
+						)}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/logs?tab=audit">
-						{t('inspectChain', 'Inspect chain')}
+						{t("inspectChain", "Inspect chain")}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -192,7 +195,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 						icon={<Link2 className="h-4 w-4" />}
 					/>
 					<MiniStat
-						label={t('last24h', 'Last 24h')}
+						label={t("last24h", "Last 24h")}
 						value={
 							status.isLoading
 								? "…"
@@ -220,7 +223,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 				<div className="rounded-lg border bg-card/50 p-3">
 					<div className="mb-2 flex items-center justify-between">
 						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							{t('signatureCoverage', 'Signature coverage')}
+							{t("signatureCoverage", "Signature coverage")}
 						</div>
 						<div className="text-xs tabular-nums text-muted-foreground">
 							{signedRatio == null ? "—" : `${signedRatio}%`}
@@ -247,7 +250,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 				<div className="rounded-lg border bg-card/50 p-3">
 					<div className="mb-2 flex items-center justify-between">
 						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							{t('rootChain', 'Root chain')}
+							{t("rootChain", "Root chain")}
 						</div>
 						<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
 							<ChainPulse
@@ -258,7 +261,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 							{root?.last_entry_at ? (
 								<RelativeTime value={root.last_entry_at} />
 							) : (
-								<span>{t('noEntries', 'no entries')}</span>
+								<span>{t("noEntries", "no entries")}</span>
 							)}
 						</div>
 					</div>
@@ -268,13 +271,15 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 						<div className="flex items-center justify-between gap-3 text-xs">
 							<div className="space-y-1">
 								<div className="text-muted-foreground">
-									{t('sequence', 'Sequence')}{" "}
+									{t("sequence", "Sequence")}{" "}
 									<span className="font-mono text-foreground">
 										#{root?.last_sequence ?? 0}
 									</span>
 								</div>
 								<div className="flex items-center gap-2">
-									<span className="text-muted-foreground">{t('tail', 'Tail')}</span>
+									<span className="text-muted-foreground">
+										{t("tail", "Tail")}
+									</span>
 									<HashChip hash={root?.last_entry_hash} />
 								</div>
 							</div>
@@ -299,7 +304,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 
 				<div>
 					<div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-						{t('recentBranchChains', 'Recent branch chains')}
+						{t("recentBranchChains", "Recent branch chains")}
 					</div>
 					{status.isLoading ? (
 						<div className="space-y-1.5">
@@ -309,7 +314,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 						</div>
 					) : (data?.recent_branches.length ?? 0) === 0 ? (
 						<div className="rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">
-							{t('onlyTheRootChainIsActive', 'Only the root chain is active.')}
+							{t("onlyTheRootChainIsActive", "Only the root chain is active.")}
 						</div>
 					) : (
 						<ul className="space-y-1">

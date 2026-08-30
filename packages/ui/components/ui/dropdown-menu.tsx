@@ -5,6 +5,7 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
 import type * as React from "react";
 
 import { cn } from "../../lib/utils";
+import { usePortalContainer } from "./portal-container";
 
 function DropdownMenu({
 	...props
@@ -13,10 +14,16 @@ function DropdownMenu({
 }
 
 function DropdownMenuPortal({
+	container,
 	...props
 }: Readonly<React.ComponentProps<typeof DropdownMenuPrimitive.Portal>>) {
+	const portalContainer = usePortalContainer();
 	return (
-		<DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />
+		<DropdownMenuPrimitive.Portal
+			data-slot="dropdown-menu-portal"
+			container={container ?? portalContainer}
+			{...props}
+		/>
 	);
 }
 
@@ -36,8 +43,9 @@ function DropdownMenuContent({
 	sideOffset = 4,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+	const portalContainer = usePortalContainer();
 	return (
-		<DropdownMenuPrimitive.Portal>
+		<DropdownMenuPrimitive.Portal container={portalContainer}>
 			<DropdownMenuPrimitive.Content
 				data-slot="dropdown-menu-content"
 				sideOffset={sideOffset}
@@ -226,8 +234,9 @@ function DropdownMenuSubContent({
 	className,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+	const portalContainer = usePortalContainer();
 	return (
-		<DropdownMenuPrimitive.Portal>
+		<DropdownMenuPrimitive.Portal container={portalContainer}>
 			<DropdownMenuPrimitive.SubContent
 				data-slot="dropdown-menu-sub-content"
 				className={cn(

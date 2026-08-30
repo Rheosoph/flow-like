@@ -4,7 +4,7 @@ use flow_like_types::create_id;
 
 use crate::flow::{
     board::{
-        Board, Layer,
+        Board, Layer, LayerType,
         cleanup::{BoardCleanupLogic, NodeOrLayer, NodeOrLayerRef, PinLookup},
     },
     pin::{Pin, PinType},
@@ -44,6 +44,8 @@ struct BridgePlan {
 pub struct BridgeLayersCleanup {
     /// Set of all layer IDs
     all_layers: HashSet<String>,
+    /// Modules are organizational only and never carry a boundary, so nothing bridges on them
+    module_layers: HashSet<String>,
     /// Maps a layer ID to its parent layer ID, if any
     layer_parents: HashMap<String, Option<String>>,
     /// Set of pin IDs that are layer boundary pins (already bridge pins)
@@ -61,6 +63,7 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
     {
         Self {
             all_layers: HashSet::with_capacity(10),
+            module_layers: HashSet::with_capacity(10),
             layer_parents: HashMap::with_capacity(10),
             layer_pin_ids: HashSet::with_capacity(50),
             pin_layer: HashMap::with_capacity((board.nodes.len() + board.layers.len()) * 4),
@@ -72,6 +75,10 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
         self.all_layers.insert(layer.id.clone());
         self.layer_parents
             .insert(layer.id.clone(), layer.parent_id.clone());
+
+        if matches!(layer.r#type, LayerType::Module) {
+            self.module_layers.insert(layer.id.clone());
+        }
     }
 
     fn initial_pin_iteration(&mut self, pin: &Pin, parent: NodeOrLayerRef) {
@@ -99,6 +106,12 @@ impl BoardCleanupLogic for BridgeLayersCleanup {
 
         // Only process pins inside layers (not top-level pins)
         if !self.all_layers.contains(&layer_id) {
+            return;
+        }
+
+        // A module is a virtual file, not a runtime boundary: wires cross it directly, and any
+        // bridge minted here would only be dropped again by the module cleanup.
+        if self.module_layers.contains(&layer_id) {
             return;
         }
 
@@ -339,10 +352,16 @@ impl BridgeLayersCleanup {
 
     fn is_pin_within_layer_scope(&self, pin_layer: Option<&String>, layer_id: &str) -> bool {
         let mut current_layer = pin_layer.cloned();
+        // A damaged `parent_id` chain can be cyclic; walking it unguarded hangs the cleanup.
+        let mut seen = HashSet::new();
 
         while let Some(current) = current_layer {
             if current == layer_id {
                 return true;
+            }
+
+            if !seen.insert(current.clone()) {
+                return false;
             }
 
             current_layer = self.layer_parents.get(&current).cloned().flatten();
@@ -361,15 +380,15 @@ fn get_pin_mut<'a>(
     pin_id: &str,
 ) -> Option<&'a mut Pin> {
     match pin_lookup.get(pin_id) {
-        Some((pin_meta, parent)) => match parent {
+        Some((_, parent)) => match parent {
             NodeOrLayer::Node(_) => board
                 .nodes
                 .get_mut(parent.id())
-                .and_then(|n| n.pins.get_mut(&pin_meta.id)),
+                .and_then(|n| n.pins.get_mut(pin_id)),
             NodeOrLayer::Layer(_) => board
                 .layers
                 .get_mut(parent.id())
-                .and_then(|l| l.pins.get_mut(&pin_meta.id)),
+                .and_then(|l| l.pins.get_mut(pin_id)),
         },
         None => None,
     }
@@ -379,7 +398,6 @@ fn get_pin_mut<'a>(
 mod tests {
     use std::{
         collections::{BTreeSet, HashMap},
-        sync::Arc,
         time::SystemTime,
     };
 
@@ -421,6 +439,7 @@ mod tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -502,7 +521,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
                     ),
                 );
@@ -520,7 +539,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
                     ),
                 );
@@ -598,6 +617,131 @@ mod tests {
     }
 
     #[test]
+    fn a_module_never_gets_bridge_pins() {
+        let mut board = test_board();
+        let module = Layer::new("mod".to_string(), "Mod".to_string(), LayerType::Module);
+        board.layers.insert(module.id.clone(), module);
+
+        let mut inside = Node::new("source", "Source", "", "test");
+        inside.id = "inside".to_string();
+        inside.layer = Some("mod".to_string());
+        let inside_pin = inside
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        let mut outside = Node::new("sink", "Sink", "", "test");
+        outside.id = "outside".to_string();
+        let outside_pin = outside
+            .add_input_pin("in", "In", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        board.nodes.insert(inside.id.clone(), inside);
+        board.nodes.insert(outside.id.clone(), outside);
+
+        crate::flow::board::commands::pins::connect_pins::connect_pins(
+            &mut board,
+            "inside",
+            &inside_pin,
+            "outside",
+            &outside_pin,
+        )
+        .unwrap();
+
+        board.cleanup();
+
+        assert!(board.layers["mod"].pins.is_empty());
+        assert!(
+            board.nodes["inside"].pins[&inside_pin]
+                .connected_to
+                .contains(&outside_pin),
+            "a wire out of a module must stay direct"
+        );
+        assert!(
+            board.nodes["outside"].pins[&outside_pin]
+                .depends_on
+                .contains(&inside_pin)
+        );
+    }
+
+    #[test]
+    fn collapsed_layer_under_module_still_bridges_to_the_module() {
+        let mut board = test_board();
+
+        let module = Layer::new("mod".to_string(), "Mod".to_string(), LayerType::Module);
+        let mut collapsed = Layer::new(
+            "collapsed".to_string(),
+            "Collapsed".to_string(),
+            LayerType::Collapsed,
+        );
+        collapsed.parent_id = Some(module.id.clone());
+
+        board.layers.insert(module.id.clone(), module.clone());
+        board.layers.insert(collapsed.id.clone(), collapsed.clone());
+
+        let mut inside = Node::new("source", "Source", "", "test");
+        inside.id = "inside".to_string();
+        inside.layer = Some(collapsed.id.clone());
+        let inside_pin = inside
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        let mut on_module = Node::new("sink", "Sink", "", "test");
+        on_module.id = "on-module".to_string();
+        on_module.layer = Some(module.id.clone());
+        let on_module_pin = on_module
+            .add_input_pin("in", "In", "", VariableType::String)
+            .set_value_type(ValueType::Normal)
+            .id
+            .clone();
+
+        board.nodes.insert(inside.id.clone(), inside);
+        board.nodes.insert(on_module.id.clone(), on_module);
+
+        crate::flow::board::commands::pins::connect_pins::connect_pins(
+            &mut board,
+            "inside",
+            &inside_pin,
+            "on-module",
+            &on_module_pin,
+        )
+        .unwrap();
+
+        board.cleanup();
+
+        assert!(
+            board.layers["mod"].pins.is_empty(),
+            "a module must never carry bridge pins"
+        );
+        assert_eq!(
+            board.layers["collapsed"].pins.len(),
+            1,
+            "the crossing relative to the collapsed layer must still be bridged"
+        );
+
+        let bridge = board.layers["collapsed"].pins.values().next().unwrap();
+        assert_eq!(bridge.pin_type, PinType::Output);
+        assert!(bridge.depends_on.contains(&inside_pin));
+        assert!(bridge.connected_to.contains(&on_module_pin));
+
+        assert!(
+            board.nodes["inside"].pins[&inside_pin]
+                .connected_to
+                .contains(&bridge.id)
+        );
+        assert!(
+            board.nodes["on-module"].pins[&on_module_pin]
+                .depends_on
+                .contains(&bridge.id)
+        );
+    }
+
+    #[test]
     fn ancestor_layer_boundary_pin_creates_child_exec_input_bridge() {
         let mut board = test_board();
 
@@ -658,7 +802,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Node(node.id.clone()),
                     ),
                 );
@@ -676,7 +820,7 @@ mod tests {
                 pins.insert(
                     pin.id.clone(),
                     (
-                        Arc::new(pin.clone()),
+                        crate::flow::board::cleanup::PinEdges::of(pin),
                         crate::flow::board::cleanup::NodeOrLayer::Layer(layer.id.clone()),
                     ),
                 );

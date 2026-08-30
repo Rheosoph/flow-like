@@ -23,6 +23,7 @@ impl NodeLogic for ListUsersWithAttributeNode {
             "List Users with Attribute",
             "Lists project users whose assigned role contains a custom attribute.",
         );
+        node.set_flowscript_name("user", "listWithAttribute");
         add_app_pin(&mut node);
         node.add_input_pin(
             "attribute",

@@ -40,7 +40,7 @@ export const FileElement = withHOC(
 						<CaptionTextarea
 							className="text-left"
 							readOnly={readOnly}
-							placeholder={t('writeACaption', 'Write a caption...')}
+							placeholder={t("writeACaption", "Write a caption...")}
 						/>
 					</Caption>
 				</a>

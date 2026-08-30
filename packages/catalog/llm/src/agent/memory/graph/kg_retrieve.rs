@@ -29,6 +29,8 @@ impl NodeLogic for KgRetrieveNode {
             "Retrieves context from a knowledge graph: embeds the query, finds matching nodes, then expands N hops to build structured context",
             "AI/Memory/Graph",
         );
+        node.set_flowscript_name("ai.memory", "kgRetrieve");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 
@@ -115,7 +117,8 @@ impl NodeLogic for KgRetrieveNode {
             "Context",
             "Structured subgraph context as JSON (nodes + edges + properties)",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "summary_text",
             "Summary Text",

@@ -1,18 +1,16 @@
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
-    collections::HashMap,
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
-    },
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter};
+use tokio::sync::oneshot;
 
+use flow_like_types::channel::{
+    Channel, ChannelHandle, ChannelOutcome, ChannelTicket, InProcessChannel, new_request_id,
+};
 use flow_like_types::tokio_util::sync::CancellationToken;
 
 /// Successful bridge dispatch/response traces are developer diagnostics. Terminal failures still
@@ -37,14 +35,6 @@ pub const FLOWPILOT_FRONTEND_TOOL_LIFECYCLE_EVENT: &str = "flowpilot://frontend-
 pub const FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT: &str = "flowpilot://frontend-tool-cancel";
 
 const FRONTEND_DISPATCH_TIMEOUT: Duration = Duration::from_secs(30);
-const EXPIRED_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
-const MAX_EXPIRED_REQUESTS: usize = 256;
-
-static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-static PENDING_RESPONSES: Lazy<Mutex<HashMap<String, PendingFrontendToolResponse>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static EXPIRED_REQUESTS: Lazy<Mutex<HashMap<String, ExpiredFrontendToolRequest>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
 struct ScopedToolExecution {
@@ -57,7 +47,7 @@ thread_local! {
     ///
     /// `copilot_sdk::ToolHandler` is synchronous and does not carry an async request context. The
     /// MCP adapter scopes the request token around the handler so a dropped HTTP/MCP request can
-    /// still interrupt this bridge's blocking `recv_timeout` instead of leaving an orphaned frontend
+    /// still interrupt this bridge's blocking channel wait instead of leaving an orphaned frontend
     /// mutation alive until its independent per-tool deadline.
     static SCOPED_TOOL_EXECUTIONS: RefCell<Vec<ScopedToolExecution>> = const { RefCell::new(Vec::new()) };
 }
@@ -99,9 +89,9 @@ pub(super) fn current_tool_execution_for_test() -> Option<(CancellationToken, Op
 
 /// Whether the synchronous tool currently running on this worker has lost its owning request.
 ///
-/// Most frontend-backed tools observe this through `recv_with_cancellation`. CPU-only handlers
-/// such as FlowScript reconciliation do not wait on that receiver, so they must check the same
-/// scoped token immediately before publishing commands or another durable result.
+/// Most frontend-backed tools observe this through the bridge's cancellable channel wait.
+/// CPU-only handlers such as FlowScript reconciliation do not wait on the channel, so they must
+/// check the same scoped token immediately before publishing commands or another durable result.
 pub(super) fn scoped_tool_execution_cancelled() -> bool {
     current_tool_execution().is_some_and(|execution| {
         execution.cancellation.is_cancelled()
@@ -111,55 +101,79 @@ pub(super) fn scoped_tool_execution_cancelled() -> bool {
     })
 }
 
+/// Drive a bridge future to completion from the synchronous tool-handler world without pinning
+/// the async runtime.
+///
+/// SDK/MCP tool handlers are synchronous and run either on a runtime worker (inside the caller's
+/// `block_in_place`) or on a blocking-pool thread (`spawn_blocking`). `block_in_place` hands this
+/// worker's other tasks to a sibling before `block_on` parks it, so the runtime keeps making
+/// progress — including the frontend round-trip this very wait depends on. Nested
+/// `block_in_place` calls and blocking-pool threads are both no-ops for the hand-off.
+fn block_on_bridge<F: std::future::Future>(future: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-enum CancelableReceive<T> {
-    Received(T),
+enum DispatchOutcome {
+    Emitted,
+    EmitFailed(String),
     Timeout,
     Disconnected,
     Cancelled,
 }
 
-/// `std::sync::mpsc::Receiver` cannot select on a cancellation token. Poll only while an owning
-/// agent/MCP execution scope exists; ordinary frontend calls keep the efficient single
-/// `recv_timeout` path.
-fn recv_with_cancellation<T>(
-    receiver: &Receiver<T>,
+/// Wait for the main-thread emission result, bounded by `max_wait` and the scoped cancellation.
+async fn await_dispatch(
+    event_rx: oneshot::Receiver<Result<(), String>>,
     max_wait: Duration,
     cancellation: Option<&CancellationToken>,
-) -> CancelableReceive<T> {
-    let Some(cancellation) = cancellation else {
-        return match receiver.recv_timeout(max_wait) {
-            Ok(value) => CancelableReceive::Received(value),
-            Err(RecvTimeoutError::Timeout) => CancelableReceive::Timeout,
-            Err(RecvTimeoutError::Disconnected) => CancelableReceive::Disconnected,
-        };
+) -> DispatchOutcome {
+    let cancelled = async {
+        match cancellation {
+            Some(cancellation) => cancellation.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
     };
-
-    let deadline = Instant::now() + max_wait;
-    loop {
-        if cancellation.is_cancelled() {
-            return CancelableReceive::Cancelled;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return CancelableReceive::Timeout;
-        }
-        match receiver.recv_timeout(remaining.min(Duration::from_millis(100))) {
-            Ok(value) => return CancelableReceive::Received(value),
-            Err(RecvTimeoutError::Disconnected) => {
-                return CancelableReceive::Disconnected;
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-        }
+    tokio::select! {
+        result = event_rx => match result {
+            Ok(Ok(())) => DispatchOutcome::Emitted,
+            Ok(Err(error)) => DispatchOutcome::EmitFailed(error),
+            Err(_) => DispatchOutcome::Disconnected,
+        },
+        _ = tokio::time::sleep(max_wait) => DispatchOutcome::Timeout,
+        _ = cancelled => DispatchOutcome::Cancelled,
     }
 }
 
-#[derive(Debug, Clone)]
+/// Bridges FlowPilot tool calls to the frontend over one Tauri event per request and an
+/// `InProcessChannel` for the reply.
+///
+/// The channel is registered under the owning run's id (the global chat run id, or the board /
+/// widget copilot run id) so the frontend answers every request through the single
+/// `channel_push` command with the `ChannelHandle` embedded in the request.
+#[derive(Clone)]
 pub struct FrontendToolBridge {
     app_handle: AppHandle,
+    #[allow(dead_code)]
+    // default deadline for FrontendToolBridge::call; live callers pass explicit timeouts
     timeout: Duration,
     event: String,
     context: Option<FrontendToolContext>,
+    channel: Arc<InProcessChannel>,
+}
+
+impl std::fmt::Debug for FrontendToolBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrontendToolBridge")
+            .field("timeout", &self.timeout)
+            .field("event", &self.event)
+            .field("context", &self.context)
+            .field("channel_id", &self.channel.channel_id())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -205,6 +219,9 @@ pub struct FrontendToolRequest {
     pub dispatched_at_ms: u64,
     pub deadline_at_ms: u64,
     pub timeout_ms: u64,
+    /// How to answer: `channel_push` with this handle's `channel_id`/`request_id`. The handle keeps
+    /// the wire contract's snake_case fields.
+    pub channel: ChannelHandle,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,12 +233,15 @@ pub struct FrontendToolApproval {
     pub session_key: String,
 }
 
+/// Reply value the frontend pushes for a tool request. A bare value without an `approved`
+/// boolean is treated as an approved result (see [`parse_frontend_tool_response`]).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendToolResponse {
-    pub request_id: String,
     pub approved: bool,
+    #[serde(default)]
     pub result: Option<Value>,
+    #[serde(default)]
     pub error: Option<String>,
 }
 
@@ -291,19 +311,6 @@ struct FrontendToolTrace {
     lifecycle: Vec<FrontendToolLifecycleStep>,
 }
 
-#[derive(Debug, Clone)]
-struct ExpiredFrontendToolRequest {
-    trace: FrontendToolTrace,
-    retain_until: Instant,
-    cancellation_emitted: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PendingFrontendToolResponse {
-    sender: Sender<FrontendToolResponse>,
-    trace: FrontendToolTrace,
-}
-
 impl FrontendToolTrace {
     fn new(
         request_id: String,
@@ -369,6 +376,13 @@ impl FrontendToolTrace {
         Duration::from_millis(self.configured_timeout_ms).saturating_sub(self.started.elapsed())
     }
 
+    /// The channel stops listening at whole-second granularity; never advertise a deadline the
+    /// frontend could still meet after the reply would already be reported as expired.
+    fn cap_deadline_to_channel(&mut self, expires_at_unix_seconds: i64) {
+        let channel_deadline_ms = (expires_at_unix_seconds.max(0) as u64).saturating_mul(1000);
+        self.deadline_at_ms = self.deadline_at_ms.min(channel_deadline_ms);
+    }
+
     #[cfg(debug_assertions)]
     fn report(
         &self,
@@ -426,6 +440,7 @@ impl FrontendToolApproval {
         }
     }
 
+    #[allow(dead_code)] // completes the none/mutating/execute trio; live
     pub fn execute(
         title: impl Into<String>,
         description: impl Into<String>,
@@ -440,20 +455,181 @@ impl FrontendToolApproval {
     }
 }
 
+/// Terminal result of one channel wait, mapped to the model-visible JSON the bridge has always
+/// returned plus the bookkeeping the lifecycle report and cancel event need.
+#[derive(Debug)]
+struct ResolvedOutcome {
+    result: Value,
+    outcome: String,
+    phase: &'static str,
+    /// Lifecycle phases to record, in order.
+    lifecycle: Vec<String>,
+    /// Set when the frontend handler may still be running and must be told to stop.
+    cancel_reason: Option<&'static str>,
+    note: Option<String>,
+}
+
+/// Interpret the value the frontend pushed for a tool request.
+///
+/// The frontend answers with `{ approved, result?, error? }` (the tool-result envelope it has
+/// always sent). A push whose value carries no `approved` boolean is
+/// taken as the approved result itself, so a handler can also push its result verbatim.
+fn parse_frontend_tool_response(value: Value) -> FrontendToolResponse {
+    let is_envelope = value
+        .as_object()
+        .is_some_and(|object| object.get("approved").is_some_and(Value::is_boolean));
+    if is_envelope {
+        return serde_json::from_value(value).unwrap_or_else(|error| FrontendToolResponse {
+            approved: true,
+            result: None,
+            error: Some(format!("Malformed frontend tool response: {error}")),
+        });
+    }
+    FrontendToolResponse {
+        approved: true,
+        result: (!value.is_null()).then_some(value),
+        error: None,
+    }
+}
+
+fn resolve_wait_outcome(
+    tool_name: &str,
+    outcome: ChannelOutcome,
+    scope_cancelled: bool,
+    trace: &FrontendToolTrace,
+) -> ResolvedOutcome {
+    match outcome {
+        ChannelOutcome::Responded(value) => {
+            let response = parse_frontend_tool_response(value);
+            flowpilot_debug_log!(
+                "[frontend-tool-bridge] '{tool_name}' answered (request {}, approved: {})",
+                trace.request_id,
+                response.approved
+            );
+            if !response.approved {
+                return ResolvedOutcome {
+                    result: json!({
+                        "status": "denied",
+                        "tool": tool_name,
+                        "message": response.error.unwrap_or_else(|| "User denied the frontend tool request.".to_string())
+                    }),
+                    outcome: "denied".to_string(),
+                    phase: "approval",
+                    lifecycle: vec![
+                        "frontend_response_received".to_string(),
+                        "request_denied".to_string(),
+                    ],
+                    cancel_reason: None,
+                    note: None,
+                };
+            }
+            if let Some(error) = response.error {
+                return ResolvedOutcome {
+                    result: json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "error": error
+                    }),
+                    outcome: "error".to_string(),
+                    phase: "frontend_handler",
+                    lifecycle: vec![
+                        "frontend_response_received".to_string(),
+                        "frontend_handler_error".to_string(),
+                    ],
+                    cancel_reason: None,
+                    note: None,
+                };
+            }
+            let normalized = normalize_tool_result(response.result);
+            let outcome = normalized
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("ok")
+                .to_string();
+            ResolvedOutcome {
+                lifecycle: vec![
+                    "frontend_response_received".to_string(),
+                    format!("completed_{outcome}"),
+                ],
+                result: normalized,
+                outcome,
+                phase: "completed",
+                cancel_reason: None,
+                note: None,
+            }
+        }
+        ChannelOutcome::Expired => ResolvedOutcome {
+            result: lost_frontend_response_result(
+                tool_name,
+                "timeout",
+                "Timed out waiting for the FlowPilot frontend tool response.",
+                trace,
+            ),
+            outcome: "timeout".to_string(),
+            phase: "frontend_response",
+            lifecycle: vec!["frontend_response_timeout".to_string()],
+            cancel_reason: Some("frontend_response_timeout"),
+            note: Some("The frontend handler may still be running; it must stop before any post-deadline side effect and return promptly.".to_string()),
+        },
+        ChannelOutcome::Closed => ResolvedOutcome {
+            result: lost_frontend_response_result(
+                tool_name,
+                "error",
+                "The FlowPilot frontend response channel disconnected.",
+                trace,
+            ),
+            outcome: "error".to_string(),
+            phase: "frontend_response",
+            lifecycle: vec!["response_channel_disconnected".to_string()],
+            cancel_reason: Some("response_channel_disconnected"),
+            note: Some("The frontend handler may still be running; it must stop before any post-deadline side effect and return promptly.".to_string()),
+        },
+        ChannelOutcome::Cancelled if scope_cancelled => ResolvedOutcome {
+            result: json!({
+                "status": "cancelled",
+                "tool": tool_name,
+                "message": "The owning MCP request disconnected; its frontend work was cancelled."
+            }),
+            outcome: "cancelled".to_string(),
+            phase: "frontend_response",
+            lifecycle: vec!["mcp_request_cancelled_while_waiting_for_frontend".to_string()],
+            cancel_reason: Some("mcp_request_cancelled_while_waiting_for_frontend"),
+            note: Some("Cancellation propagated from the dropped MCP request to the frontend handler.".to_string()),
+        },
+        ChannelOutcome::Cancelled => ResolvedOutcome {
+            result: json!({
+                "status": "cancelled",
+                "tool": tool_name,
+                "message": "The owning FlowPilot run was cancelled; its frontend work was cancelled."
+            }),
+            outcome: "cancelled".to_string(),
+            phase: "frontend_response",
+            lifecycle: vec!["run_cancelled_while_waiting_for_frontend".to_string()],
+            cancel_reason: Some("run_cancelled_while_waiting_for_frontend"),
+            note: Some("The run was cancelled through its channel while waiting for the frontend handler.".to_string()),
+        },
+    }
+}
+
 impl FrontendToolBridge {
-    pub fn new(app_handle: AppHandle) -> Self {
-        Self::new_with_event(app_handle, FLOWPILOT_FRONTEND_TOOL_EVENT)
+    pub fn new(app_handle: AppHandle, channel: Arc<InProcessChannel>) -> Self {
+        Self::new_with_event(app_handle, FLOWPILOT_FRONTEND_TOOL_EVENT, channel)
     }
 
     /// Build a bridge that emits its requests on a dedicated event channel. Used by the global
     /// FlowPilot assistant so its tool requests are handled by its own listener instead of the
-    /// board copilot's, while sharing the single `flowpilot_frontend_tool_result` response command.
-    pub fn new_with_event(app_handle: AppHandle, event: impl Into<String>) -> Self {
+    /// board copilot's, while every reply arrives through the single `channel_push` command.
+    pub fn new_with_event(
+        app_handle: AppHandle,
+        event: impl Into<String>,
+        channel: Arc<InProcessChannel>,
+    ) -> Self {
         Self {
             app_handle,
             timeout: Duration::from_secs(600),
             event: event.into(),
             context: None,
+            channel,
         }
     }
 
@@ -462,6 +638,12 @@ impl FrontendToolBridge {
         self
     }
 
+    /// The run's channel: steering text and cancel pushes land here as well.
+    pub fn channel(&self) -> &Arc<InProcessChannel> {
+        &self.channel
+    }
+
+    #[allow(dead_code)] // default-timeout entry point; all callers currently pass an explicit deadline
     pub fn call(
         &self,
         tool_name: impl Into<String>,
@@ -471,14 +653,16 @@ impl FrontendToolBridge {
         self.call_with_timeout(tool_name, arguments, approval, self.timeout)
     }
 
+    /// Synchronous entry point for SDK/MCP tool handlers. Blocks the calling thread (never the
+    /// runtime — see [`block_on_bridge`]) until the frontend answers, the deadline passes, or the
+    /// owning request/run is cancelled.
     pub fn call_with_timeout(
         &self,
         tool_name: impl Into<String>,
-        mut arguments: Value,
+        arguments: Value,
         approval: FrontendToolApproval,
         timeout: Duration,
     ) -> Value {
-        let tool_name = tool_name.into();
         let scoped_execution = current_tool_execution();
         let cancellation = scoped_execution
             .as_ref()
@@ -490,8 +674,49 @@ impl FrontendToolBridge {
             .and_then(|execution| execution.deadline)
             .map(|deadline| timeout.min(deadline.saturating_duration_since(Instant::now())))
             .unwrap_or(timeout);
+        block_on_bridge(self.dispatch(tool_name.into(), arguments, approval, timeout, cancellation))
+    }
+
+    async fn dispatch(
+        &self,
+        tool_name: String,
+        mut arguments: Value,
+        approval: FrontendToolApproval,
+        timeout: Duration,
+        cancellation: Option<CancellationToken>,
+    ) -> Value {
         apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
-        let request_id = next_request_id();
+
+        let ticket = match self.channel.open(timeout).await {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                let mut trace = FrontendToolTrace::new(
+                    new_request_id(),
+                    tool_name.clone(),
+                    self.event.clone(),
+                    &arguments,
+                    &approval,
+                    self.context.as_ref(),
+                    timeout,
+                );
+                trace.record("pending_response_registration_failed");
+                return finish_bridge_result(
+                    &self.app_handle,
+                    &trace,
+                    json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "error": "FlowPilot frontend tool bridge is unavailable."
+                    }),
+                    "error",
+                    "pending_registration",
+                    false,
+                    false,
+                    Some(format!("The run channel refused to register the request: {error}")),
+                );
+            }
+        };
+        let request_id = ticket.request_id.clone();
         let mut trace = FrontendToolTrace::new(
             request_id.clone(),
             tool_name.clone(),
@@ -501,34 +726,8 @@ impl FrontendToolBridge {
             self.context.as_ref(),
             timeout,
         );
-        let (tx, rx) = mpsc::channel();
-
-        if let Ok(mut pending) = PENDING_RESPONSES.lock() {
-            trace.record("pending_response_registered");
-            pending.insert(
-                request_id.clone(),
-                PendingFrontendToolResponse {
-                    sender: tx,
-                    trace: trace.clone(),
-                },
-            );
-        } else {
-            trace.record("pending_response_registration_failed");
-            return finish_bridge_result(
-                &self.app_handle,
-                &trace,
-                json!({
-                    "status": "error",
-                    "tool": tool_name,
-                    "error": "FlowPilot frontend tool bridge is unavailable."
-                }),
-                "error",
-                "pending_registration",
-                false,
-                false,
-                Some("The pending-response registry lock was unavailable.".to_string()),
-            );
-        }
+        trace.cap_deadline_to_channel(ticket.expires_at);
+        trace.record("pending_response_registered");
 
         // The source prompt is request ownership, not debug metadata. Forward it only to the
         // in-process frontend handler; `trace.context` intentionally keeps identifiers alone so
@@ -554,20 +753,20 @@ impl FrontendToolBridge {
             dispatched_at_ms: trace.dispatched_at_ms,
             deadline_at_ms: trace.deadline_at_ms,
             timeout_ms: trace.configured_timeout_ms,
+            channel: ticket.handle.clone(),
         };
 
-        let (event_tx, event_rx) = mpsc::channel();
+        let (event_tx, event_rx) = oneshot::channel();
         let emit_handle = self.app_handle.clone();
-        let emit_request = request.clone();
         let event_name = self.event.clone();
 
         if let Err(error) = self.app_handle.run_on_main_thread(move || {
             let result = emit_handle
-                .emit(&event_name, &emit_request)
+                .emit(&event_name, &request)
                 .map_err(|error| error.to_string());
             let _ = event_tx.send(result);
         }) {
-            let removed = remove_pending_response(&request_id).is_some();
+            self.channel.abandon(&ticket).await;
             trace.record("main_thread_dispatch_failed");
             return finish_bridge_result(
                 &self.app_handle,
@@ -579,27 +778,29 @@ impl FrontendToolBridge {
                 }),
                 "error",
                 "main_thread_dispatch",
-                removed,
+                true,
                 false,
                 Some("The request could not be scheduled on the Tauri main thread.".to_string()),
             );
         }
         trace.record("main_thread_dispatch_scheduled");
 
-        match recv_with_cancellation(
-            &event_rx,
+        match await_dispatch(
+            event_rx,
             FRONTEND_DISPATCH_TIMEOUT.min(trace.remaining()),
             cancellation.as_ref(),
-        ) {
-            CancelableReceive::Received(Ok(())) => {
+        )
+        .await
+        {
+            DispatchOutcome::Emitted => {
                 trace.record("frontend_event_emitted");
                 flowpilot_debug_log!(
                     "[frontend-tool-bridge] '{tool_name}' dispatched (request {request_id}); waiting up to {:?} for the frontend",
                     trace.remaining()
                 );
             }
-            CancelableReceive::Received(Err(error)) => {
-                let removed = remove_pending_response(&request_id).is_some();
+            DispatchOutcome::EmitFailed(error) => {
+                self.channel.abandon(&ticket).await;
                 trace.record("frontend_event_emit_failed");
                 eprintln!(
                     "[frontend-tool-bridge] '{tool_name}' emit failed (request {request_id}): {error}"
@@ -614,22 +815,21 @@ impl FrontendToolBridge {
                     }),
                     "error",
                     "frontend_event_emit",
-                    removed,
+                    true,
                     false,
                     Some("Tauri failed to emit the frontend tool request event.".to_string()),
                 );
             }
-            outcome @ (CancelableReceive::Timeout | CancelableReceive::Disconnected) => {
-                let timed_out = matches!(outcome, CancelableReceive::Timeout);
+            outcome @ (DispatchOutcome::Timeout | DispatchOutcome::Disconnected) => {
+                let timed_out = matches!(outcome, DispatchOutcome::Timeout);
                 let reason = if timed_out {
                     "dispatch_timeout"
                 } else {
                     "dispatch_channel_disconnected"
                 };
+                self.channel.abandon(&ticket).await;
                 trace.record(reason);
                 let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, reason);
-                remember_expired_request(trace.clone(), cancellation_emitted);
-                let removed = remove_pending_response(&request_id).is_some();
                 eprintln!(
                     "[frontend-tool-bridge] '{tool_name}' {reason} (request {request_id}) — main thread busy?"
                 );
@@ -643,7 +843,7 @@ impl FrontendToolBridge {
                     }),
                     if timed_out { "timeout" } else { "error" },
                     "main_thread_dispatch",
-                    removed,
+                    true,
                     cancellation_emitted,
                     Some(
                         "The frontend must ignore this request if it arrives after deadlineAtMs."
@@ -651,151 +851,75 @@ impl FrontendToolBridge {
                     ),
                 );
             }
-            CancelableReceive::Cancelled => {
+            DispatchOutcome::Cancelled => {
                 const REASON: &str = "mcp_request_cancelled_during_dispatch";
+                self.channel.abandon(&ticket).await;
                 trace.record(REASON);
                 let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, REASON);
-                remember_expired_request(trace.clone(), cancellation_emitted);
-                let removed = remove_pending_response(&request_id).is_some();
                 return finish_bridge_result(
-					&self.app_handle,
-					&trace,
-					json!({
-						"status": "cancelled",
-						"tool": tool_name,
-						"message": "The owning MCP request disconnected before frontend dispatch completed."
-					}),
-					"cancelled",
-					"main_thread_dispatch",
-					removed,
-					cancellation_emitted,
-					Some("The orphaned frontend handler was cancelled instead of waiting for its independent deadline.".to_string()),
-				);
-            }
-        }
-
-        match recv_with_cancellation(&rx, trace.remaining(), cancellation.as_ref()) {
-            CancelableReceive::Received(response) => {
-                trace.record("frontend_response_received");
-                flowpilot_debug_log!(
-                    "[frontend-tool-bridge] '{tool_name}' answered (request {request_id}, approved: {})",
-                    response.approved
-                );
-                if !response.approved {
-                    trace.record("request_denied");
-                    return finish_bridge_result(
-                        &self.app_handle,
-                        &trace,
-                        json!({
-                            "status": "denied",
-                            "tool": tool_name,
-                            "message": response.error.unwrap_or_else(|| "User denied the frontend tool request.".to_string())
-                        }),
-                        "denied",
-                        "approval",
-                        true,
-                        false,
-                        None,
-                    );
-                }
-
-                if let Some(error) = response.error {
-                    trace.record("frontend_handler_error");
-                    return finish_bridge_result(
-                        &self.app_handle,
-                        &trace,
-                        json!({
-                            "status": "error",
-                            "tool": tool_name,
-                            "error": error
-                        }),
-                        "error",
-                        "frontend_handler",
-                        true,
-                        false,
-                        None,
-                    );
-                }
-
-                let normalized = normalize_tool_result(response.result);
-                let outcome = normalized
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("ok")
-                    .to_string();
-                trace.record(format!("completed_{outcome}"));
-                finish_bridge_result(
                     &self.app_handle,
                     &trace,
-                    normalized,
-                    &outcome,
-                    "completed",
+                    json!({
+                        "status": "cancelled",
+                        "tool": tool_name,
+                        "message": "The owning MCP request disconnected before frontend dispatch completed."
+                    }),
+                    "cancelled",
+                    "main_thread_dispatch",
                     true,
-                    false,
-                    None,
-                )
-            }
-            outcome @ (CancelableReceive::Timeout | CancelableReceive::Disconnected) => {
-                // Record expiry before removing the sender, closing the race in which a response
-                // arrives just after the deadline and would otherwise be indistinguishable from an
-                // unknown request. The late result is never accepted or applied by Rust.
-                let timed_out = matches!(outcome, CancelableReceive::Timeout);
-                let (status, outcome, reason, message) = if timed_out {
-                    (
-                        "timeout",
-                        "timeout",
-                        "frontend_response_timeout",
-                        "Timed out waiting for the FlowPilot frontend tool response.",
-                    )
-                } else {
-                    (
-                        "error",
-                        "error",
-                        "response_channel_disconnected",
-                        "The FlowPilot frontend response channel disconnected.",
-                    )
-                };
-                trace.record(reason);
-                let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, reason);
-                remember_expired_request(trace.clone(), cancellation_emitted);
-                let removed = remove_pending_response(&request_id).is_some();
-                eprintln!(
-                    "[frontend-tool-bridge] '{tool_name}' {reason} after {:?} (request {request_id}) — no frontend response",
-                    trace.started.elapsed()
-                );
-                finish_bridge_result(
-                    &self.app_handle,
-                    &trace,
-                    lost_frontend_response_result(&tool_name, status, message, &trace),
-                    outcome,
-                    "frontend_response",
-                    removed,
                     cancellation_emitted,
-                    Some("The frontend handler may still be running; it must stop before any post-deadline side effect and return promptly.".to_string()),
-                )
-            }
-            CancelableReceive::Cancelled => {
-                const REASON: &str = "mcp_request_cancelled_while_waiting_for_frontend";
-                trace.record(REASON);
-                let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, REASON);
-                remember_expired_request(trace.clone(), cancellation_emitted);
-                let removed = remove_pending_response(&request_id).is_some();
-                finish_bridge_result(
-					&self.app_handle,
-					&trace,
-					json!({
-						"status": "cancelled",
-						"tool": tool_name,
-						"message": "The owning MCP request disconnected; its frontend work was cancelled."
-					}),
-					"cancelled",
-					"frontend_response",
-					removed,
-					cancellation_emitted,
-					Some("Cancellation propagated from the dropped MCP request to the frontend handler.".to_string()),
-				)
+                    Some("The orphaned frontend handler was cancelled instead of waiting for its independent deadline.".to_string()),
+                );
             }
         }
+
+        self.wait_for_response(&ticket, tool_name, cancellation, trace)
+            .await
+    }
+
+    async fn wait_for_response(
+        &self,
+        ticket: &ChannelTicket,
+        tool_name: String,
+        cancellation: Option<CancellationToken>,
+        mut trace: FrontendToolTrace,
+    ) -> Value {
+        let outcome = match self.channel.wait(ticket, cancellation.clone()).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                eprintln!(
+                    "[frontend-tool-bridge] '{tool_name}' channel wait failed (request {}): {error}",
+                    ticket.request_id
+                );
+                ChannelOutcome::Closed
+            }
+        };
+        let scope_cancelled = cancellation.is_some_and(|cancellation| cancellation.is_cancelled());
+        let resolved = resolve_wait_outcome(&tool_name, outcome, scope_cancelled, &trace);
+        for phase in &resolved.lifecycle {
+            trace.record(phase.clone());
+        }
+        let cancellation_emitted = match resolved.cancel_reason {
+            Some(reason) => {
+                eprintln!(
+                    "[frontend-tool-bridge] '{tool_name}' {reason} after {:?} (request {}) — no frontend response",
+                    trace.started.elapsed(),
+                    ticket.request_id
+                );
+                emit_cancellation(&self.app_handle, &trace, reason)
+            }
+            None => false,
+        };
+        finish_bridge_result(
+            &self.app_handle,
+            &trace,
+            resolved.result,
+            &resolved.outcome,
+            resolved.phase,
+            true,
+            cancellation_emitted,
+            resolved.note,
+        )
     }
 }
 
@@ -1135,6 +1259,7 @@ fn emit_lifecycle_report(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_bridge_result(
     app_handle: &AppHandle,
     trace: &FrontendToolTrace,
@@ -1192,101 +1317,6 @@ fn emit_cancellation(app_handle: &AppHandle, trace: &FrontendToolTrace, reason: 
     }
 }
 
-fn remember_expired_request(trace: FrontendToolTrace, cancellation_emitted: bool) {
-    let Ok(mut expired) = EXPIRED_REQUESTS.lock() else {
-        return;
-    };
-    let now = Instant::now();
-    expired.retain(|_, request| request.retain_until > now);
-    if expired.len() >= MAX_EXPIRED_REQUESTS
-        && let Some(oldest) = expired
-            .iter()
-            .min_by_key(|(_, request)| request.retain_until)
-            .map(|(request_id, _)| request_id.clone())
-    {
-        expired.remove(&oldest);
-    }
-    expired.insert(
-        trace.request_id.clone(),
-        ExpiredFrontendToolRequest {
-            trace,
-            retain_until: now + EXPIRED_REQUEST_TTL,
-            cancellation_emitted,
-        },
-    );
-}
-
-fn take_expired_request(request_id: &str) -> Option<ExpiredFrontendToolRequest> {
-    let mut expired = EXPIRED_REQUESTS.lock().ok()?;
-    let now = Instant::now();
-    expired.retain(|_, request| request.retain_until > now);
-    expired.remove(request_id)
-}
-
-#[tauri::command]
-pub fn flowpilot_frontend_tool_result(
-    app_handle: AppHandle,
-    response: FrontendToolResponse,
-) -> Result<(), String> {
-    let request_id = response.request_id.clone();
-    let Some(pending) = pending_response_sender(&request_id) else {
-        return report_late_or_unknown_response(&app_handle, &request_id);
-    };
-    if unix_time_ms() >= pending.trace.deadline_at_ms {
-        let mut trace = pending.trace;
-        trace.record("frontend_response_rejected_after_deadline");
-        let cancellation_emitted = emit_cancellation(
-            &app_handle,
-            &trace,
-            "frontend_response_arrived_after_deadline",
-        );
-        remember_expired_request(trace, cancellation_emitted);
-        remove_pending_response(&request_id);
-        return report_late_or_unknown_response(&app_handle, &request_id);
-    }
-    if pending.sender.send(response).is_err() {
-        let mut trace = pending.trace;
-        trace.record("frontend_response_send_failed");
-        let cancellation_emitted =
-            emit_cancellation(&app_handle, &trace, "response_channel_disconnected");
-        remember_expired_request(trace, cancellation_emitted);
-        remove_pending_response(&request_id);
-        return report_late_or_unknown_response(&app_handle, &request_id);
-    }
-
-    // Remove only after sending. If the backend deadline won the race it has already removed the
-    // registry entry and stored an expiry trace; surface that as late even if `send` briefly
-    // succeeded while the timed-out receiver was still being dropped.
-    if remove_pending_response(&request_id).is_none() || has_expired_request(&request_id) {
-        return report_late_or_unknown_response(&app_handle, &request_id);
-    }
-    Ok(())
-}
-
-fn report_late_or_unknown_response(app_handle: &AppHandle, request_id: &str) -> Result<(), String> {
-    if let Some(mut expired) = take_expired_request(request_id) {
-        expired.trace.record("late_frontend_response_ignored");
-        emit_lifecycle_report(
-            app_handle,
-            &expired.trace,
-            "late_response_ignored",
-            "frontend_response",
-            false,
-            expired.cancellation_emitted,
-            Some(
-                "A frontend response arrived after the backend deadline. Its payload was ignored; post-deadline mutations must not be applied."
-                    .to_string(),
-            ),
-        );
-        return Err(format!(
-            "FlowPilot frontend tool response '{request_id}' arrived after its deadline and was ignored"
-        ));
-    }
-    Err(format!(
-        "No pending FlowPilot frontend tool request '{request_id}'"
-    ))
-}
-
 fn normalize_tool_result(result: Option<Value>) -> Value {
     match result {
         Some(Value::Object(mut object)) => {
@@ -1303,43 +1333,27 @@ fn normalize_tool_result(result: Option<Value>) -> Value {
     }
 }
 
-fn remove_pending_response(request_id: &str) -> Option<PendingFrontendToolResponse> {
-    PENDING_RESPONSES
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(request_id))
-}
-
-fn pending_response_sender(request_id: &str) -> Option<PendingFrontendToolResponse> {
-    PENDING_RESPONSES
-        .lock()
-        .ok()
-        .and_then(|pending| pending.get(request_id).cloned())
-}
-
-fn has_expired_request(request_id: &str) -> bool {
-    EXPIRED_REQUESTS
-        .lock()
-        .ok()
-        .is_some_and(|expired| expired.contains_key(request_id))
-}
-
-fn next_request_id() -> String {
-    let counter = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("flowpilot-tool-{millis}-{counter}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like_types::channel::{ChannelClientDescriptor, ChannelPush, ChannelPushKind};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
+        mpsc,
     };
+
+    fn test_trace(tool_name: &str) -> FrontendToolTrace {
+        FrontendToolTrace::new(
+            "request-1".to_string(),
+            tool_name.to_string(),
+            GLOBAL_FRONTEND_TOOL_EVENT.to_string(),
+            &json!({ "operation": "list" }),
+            &FrontendToolApproval::none(),
+            None,
+            Duration::from_secs(120),
+        )
+    }
 
     #[test]
     fn terminal_frontend_emits_are_queued_without_running_on_the_worker() {
@@ -1380,28 +1394,62 @@ mod tests {
         assert_eq!(result.get("result").and_then(Value::as_str), Some("hello"));
     }
 
-    #[test]
-    fn scoped_mcp_cancellation_interrupts_blocking_receive() {
+    #[tokio::test]
+    async fn scoped_mcp_cancellation_interrupts_dispatch_wait() {
         let cancellation = CancellationToken::new();
         let cancel_from_peer = cancellation.clone();
-        let (_sender, receiver) = mpsc::channel::<()>();
-        let canceller = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(25));
+        let (_event_tx, event_rx) = oneshot::channel::<Result<(), String>>();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
             cancel_from_peer.cancel();
         });
         let started = Instant::now();
-        let outcome = with_frontend_tool_execution_scope(cancellation, None, || {
-            let scoped = current_tool_execution().expect("scope must be visible to bridge");
-            recv_with_cancellation(
-                &receiver,
-                Duration::from_secs(5),
-                Some(&scoped.cancellation),
-            )
-        });
-        canceller.join().unwrap();
+        let outcome = await_dispatch(event_rx, Duration::from_secs(5), Some(&cancellation)).await;
 
-        assert_eq!(outcome, CancelableReceive::Cancelled);
+        assert_eq!(outcome, DispatchOutcome::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn dispatch_wait_reports_emit_result_and_loss() {
+        let (event_tx, event_rx) = oneshot::channel();
+        event_tx.send(Ok(())).unwrap();
+        assert_eq!(
+            await_dispatch(event_rx, Duration::from_secs(1), None).await,
+            DispatchOutcome::Emitted
+        );
+
+        let (event_tx, event_rx) = oneshot::channel();
+        event_tx.send(Err("boom".to_string())).unwrap();
+        assert_eq!(
+            await_dispatch(event_rx, Duration::from_secs(1), None).await,
+            DispatchOutcome::EmitFailed("boom".to_string())
+        );
+
+        let (event_tx, event_rx) = oneshot::channel::<Result<(), String>>();
+        drop(event_tx);
+        assert_eq!(
+            await_dispatch(event_rx, Duration::from_secs(1), None).await,
+            DispatchOutcome::Disconnected
+        );
+
+        let (_event_tx, event_rx) = oneshot::channel::<Result<(), String>>();
+        assert_eq!(
+            await_dispatch(event_rx, Duration::from_millis(10), None).await,
+            DispatchOutcome::Timeout
+        );
+    }
+
+    #[test]
+    fn scoped_execution_scope_is_visible_and_restored() {
+        let cancellation = CancellationToken::new();
+        with_frontend_tool_execution_scope(cancellation.clone(), None, || {
+            let scoped = current_tool_execution().expect("scope must be visible to bridge");
+            assert!(!scoped_tool_execution_cancelled());
+            scoped.cancellation.cancel();
+            assert!(scoped_tool_execution_cancelled());
+        });
+        assert!(cancellation.is_cancelled());
         assert!(current_tool_execution().is_none());
     }
 
@@ -1430,6 +1478,218 @@ mod tests {
             );
         });
         assert!(current_tool_execution().is_none());
+    }
+
+    #[test]
+    fn responded_envelope_maps_to_ok_denied_and_error_results() {
+        let trace = test_trace("database_tool");
+
+        let ok = resolve_wait_outcome(
+            "database_tool",
+            ChannelOutcome::Responded(json!({
+                "requestId": "request-1",
+                "approved": true,
+                "result": { "rows": 3 }
+            })),
+            false,
+            &trace,
+        );
+        assert_eq!(ok.result.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(ok.result.get("rows").and_then(Value::as_u64), Some(3));
+        assert_eq!(ok.outcome, "ok");
+        assert_eq!(ok.phase, "completed");
+        assert!(ok.cancel_reason.is_none());
+        assert_eq!(ok.lifecycle.last().map(String::as_str), Some("completed_ok"));
+
+        let denied = resolve_wait_outcome(
+            "database_tool",
+            ChannelOutcome::Responded(json!({ "approved": false, "error": "nope" })),
+            false,
+            &trace,
+        );
+        assert_eq!(
+            denied.result.get("status").and_then(Value::as_str),
+            Some("denied")
+        );
+        assert_eq!(
+            denied.result.get("message").and_then(Value::as_str),
+            Some("nope")
+        );
+        assert_eq!(denied.outcome, "denied");
+
+        let default_denied = resolve_wait_outcome(
+            "database_tool",
+            ChannelOutcome::Responded(json!({ "approved": false })),
+            false,
+            &trace,
+        );
+        assert_eq!(
+            default_denied.result.get("message").and_then(Value::as_str),
+            Some("User denied the frontend tool request.")
+        );
+
+        let failed = resolve_wait_outcome(
+            "database_tool",
+            ChannelOutcome::Responded(json!({ "approved": true, "error": "handler blew up" })),
+            false,
+            &trace,
+        );
+        assert_eq!(
+            failed.result.get("status").and_then(Value::as_str),
+            Some("error")
+        );
+        assert_eq!(
+            failed.result.get("error").and_then(Value::as_str),
+            Some("handler blew up")
+        );
+        assert_eq!(failed.phase, "frontend_handler");
+    }
+
+    #[test]
+    fn bare_reply_values_are_treated_as_approved_results() {
+        let trace = test_trace("list_apps");
+        let object = resolve_wait_outcome(
+            "list_apps",
+            ChannelOutcome::Responded(json!({ "apps": [] })),
+            false,
+            &trace,
+        );
+        assert_eq!(
+            object.result.get("status").and_then(Value::as_str),
+            Some("ok")
+        );
+        assert!(object.result.get("apps").is_some());
+
+        let scalar = resolve_wait_outcome(
+            "list_apps",
+            ChannelOutcome::Responded(json!("text")),
+            false,
+            &trace,
+        );
+        assert_eq!(
+            scalar.result.get("result").and_then(Value::as_str),
+            Some("text")
+        );
+
+        let empty = resolve_wait_outcome(
+            "list_apps",
+            ChannelOutcome::Responded(Value::Null),
+            false,
+            &trace,
+        );
+        assert_eq!(empty.result, json!({ "status": "ok" }));
+
+        let malformed = parse_frontend_tool_response(json!({ "approved": true, "error": 7 }));
+        assert!(malformed.approved);
+        assert!(
+            malformed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("Malformed frontend tool response"))
+        );
+    }
+
+    #[test]
+    fn expired_closed_and_cancelled_outcomes_keep_their_result_shapes() {
+        let trace = test_trace("execute_node");
+
+        let expired = resolve_wait_outcome("execute_node", ChannelOutcome::Expired, false, &trace);
+        assert_eq!(
+            expired.result.get("status").and_then(Value::as_str),
+            Some("timeout")
+        );
+        assert_eq!(
+            expired.result.get("message").and_then(Value::as_str),
+            Some("Timed out waiting for the FlowPilot frontend tool response.")
+        );
+        assert_eq!(
+            expired.result.get("outcome_known").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(expired.cancel_reason, Some("frontend_response_timeout"));
+        assert_eq!(expired.phase, "frontend_response");
+
+        let closed = resolve_wait_outcome("execute_node", ChannelOutcome::Closed, false, &trace);
+        assert_eq!(
+            closed.result.get("status").and_then(Value::as_str),
+            Some("error")
+        );
+        assert_eq!(
+            closed.result.get("message").and_then(Value::as_str),
+            Some("The FlowPilot frontend response channel disconnected.")
+        );
+        assert_eq!(closed.cancel_reason, Some("response_channel_disconnected"));
+
+        let scope_cancelled =
+            resolve_wait_outcome("execute_node", ChannelOutcome::Cancelled, true, &trace);
+        assert_eq!(
+            scope_cancelled.result.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            scope_cancelled.result.get("message").and_then(Value::as_str),
+            Some("The owning MCP request disconnected; its frontend work was cancelled.")
+        );
+        assert_eq!(
+            scope_cancelled.cancel_reason,
+            Some("mcp_request_cancelled_while_waiting_for_frontend")
+        );
+
+        let run_cancelled =
+            resolve_wait_outcome("execute_node", ChannelOutcome::Cancelled, false, &trace);
+        assert_eq!(
+            run_cancelled.result.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            run_cancelled.cancel_reason,
+            Some("run_cancelled_while_waiting_for_frontend")
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_reply_resolves_the_wait_and_late_replies_are_rejected() {
+        let channel = InProcessChannel::register("bridge-run-test", Duration::from_secs(60)).await;
+        let ticket = channel.open(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(ticket.handle.channel_id, "bridge-run-test");
+        assert_eq!(ticket.handle.request_id.as_deref(), Some(ticket.request_id.as_str()));
+        assert_eq!(ticket.handle.transport, ChannelClientDescriptor::InProcess {});
+
+        let waiter = {
+            let channel = channel.clone();
+            let ticket = ticket.clone();
+            tokio::spawn(async move { channel.wait(&ticket, None).await.unwrap() })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let push = ChannelPush {
+            channel_id: "bridge-run-test".to_string(),
+            request_id: Some(ticket.request_id.clone()),
+            kind: ChannelPushKind::Reply,
+            value: json!({ "approved": true, "result": { "status": "queued" } }),
+        };
+        InProcessChannel::deliver(push.clone()).await;
+        let outcome = waiter.await.unwrap();
+        let resolved = resolve_wait_outcome("flowpilot_board", outcome, false, &test_trace("flowpilot_board"));
+        assert_eq!(
+            resolved.result.get("status").and_then(Value::as_str),
+            Some("queued")
+        );
+        assert_eq!(resolved.outcome, "queued");
+        assert_eq!(
+            InProcessChannel::deliver(push).await,
+            flow_like_types::channel::InProcessPushResult::UnknownRequest
+        );
+        channel.close().await;
+    }
+
+    #[test]
+    fn deadline_is_capped_to_the_channel_expiry() {
+        let mut trace = test_trace("database_tool");
+        let original = trace.deadline_at_ms;
+        trace.cap_deadline_to_channel(i64::MAX);
+        assert_eq!(trace.deadline_at_ms, original);
+        trace.cap_deadline_to_channel(1_000);
+        assert_eq!(trace.deadline_at_ms, 1_000_000);
     }
 
     #[test]
@@ -1653,7 +1913,7 @@ mod tests {
     }
 
     #[test]
-    fn emitted_request_preserves_owner_run_context_and_deadline() {
+    fn emitted_request_preserves_owner_run_context_deadline_and_channel_handle() {
         let arguments = json!({ "operation": "list_tables" });
         let approval = FrontendToolApproval::none();
         let context = FrontendToolContext {
@@ -1682,6 +1942,13 @@ mod tests {
             dispatched_at_ms: trace.dispatched_at_ms,
             deadline_at_ms: trace.deadline_at_ms,
             timeout_ms: trace.configured_timeout_ms,
+            channel: ChannelHandle {
+                channel_id: "owning-run".to_string(),
+                request_id: Some("child".to_string()),
+                expires_at: 1_700_000_000,
+                transport: ChannelClientDescriptor::InProcess {},
+                fallback: None,
+            },
         };
         let serialized = serde_json::to_value(request).unwrap();
 
@@ -1703,39 +1970,25 @@ mod tests {
             serialized.pointer("/context/runId").and_then(Value::as_str),
             Some("owning-run")
         );
-    }
-
-    #[test]
-    fn pending_sender_is_removed_only_after_the_response_is_sent() {
-        let request_id = next_request_id();
-        let (sender, receiver) = mpsc::channel();
-        let trace = FrontendToolTrace::new(
-            request_id.clone(),
-            "database_tool".to_string(),
-            GLOBAL_FRONTEND_TOOL_EVENT.to_string(),
-            &json!({ "operation": "list" }),
-            &FrontendToolApproval::none(),
-            None,
-            Duration::from_secs(120),
+        assert_eq!(
+            serialized
+                .pointer("/channel/channel_id")
+                .and_then(Value::as_str),
+            Some("owning-run")
         );
-        PENDING_RESPONSES.lock().unwrap().insert(
-            request_id.clone(),
-            PendingFrontendToolResponse { sender, trace },
+        assert_eq!(
+            serialized
+                .pointer("/channel/request_id")
+                .and_then(Value::as_str),
+            Some("child")
         );
-
-        let cloned = pending_response_sender(&request_id).expect("registered sender");
-        cloned
-            .sender
-            .send(FrontendToolResponse {
-                request_id: request_id.clone(),
-                approved: true,
-                result: Some(json!({ "status": "ok" })),
-                error: None,
-            })
-            .unwrap();
-        assert!(pending_response_sender(&request_id).is_some());
-        assert!(remove_pending_response(&request_id).is_some());
-        assert!(receiver.recv().unwrap().approved);
+        assert_eq!(
+            serialized
+                .pointer("/channel/transport/type")
+                .and_then(Value::as_str),
+            Some("in_process")
+        );
+        assert!(serialized.pointer("/channel/fallback").is_none());
     }
 
     #[test]

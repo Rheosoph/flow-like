@@ -30,6 +30,7 @@ impl NodeLogic for ReadImageFromUrlNode {
             "Read image from path",
             "Image/Content",
         );
+        node.set_flowscript_name("image", "readUrl");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

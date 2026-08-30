@@ -217,6 +217,7 @@ impl NodeLogic for GcpProviderNode {
             "Build a Google Cloud credential struct. Supports application default credentials, service account JSON, service account key file (FlowPath), workload identity and static access tokens. Emits a GcpProvider that any GCP-aware node (BigQuery, GCS, ...) can consume.",
             "Data/Providers",
         );
+        node.set_flowscript_name("data", "gcpProvider");
         node.add_icon("/flow/icons/cloud.svg");
 
         node.add_input_pin(

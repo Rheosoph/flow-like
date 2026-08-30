@@ -24,6 +24,7 @@ impl NodeLogic for BranchNode {
             "Branches the flow based on a condition",
             "Control",
         );
+        node.set_flowscript_name("control", "branch");
         node.add_icon("/flow/icons/split.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

@@ -23,6 +23,7 @@ impl NodeLogic for GetUserRolesNode {
             "Get User Roles",
             "Gets the project role assigned to a user.",
         );
+        node.set_flowscript_name("user", "getRoles");
         add_app_pin(&mut node);
         add_user_id_pin(&mut node);
         node.add_output_pin(

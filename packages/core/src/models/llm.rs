@@ -6,12 +6,13 @@ use crate::{bit::Bit, state::FlowLikeState};
 use flow_like_model_provider::llm::{
     ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
     deepseek::DeepseekModel, galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel,
-    huggingface::HuggingfaceModel, hyperbolic::HyperbolicModel, lmstudio::LMStudioModel,
-    mira::MiraModel, mistral::MistralModel, moonshot::MoonshotModel, mozilla::MozillaModel,
-    ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
+    huggingface::HuggingfaceModel, hyperbolic::HyperbolicModel, llamacpp::LlamaCppModel,
+    lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel, moonshot::MoonshotModel,
+    mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
     perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
     voyageai::VoyageAIModel, xai::XAIModel,
 };
+use flow_like_model_provider::provider::is_hosted_provider_name;
 use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
 use mlx::MlxModel;
@@ -56,6 +57,7 @@ pub struct ModelFactory {
 pub struct ModelUsageContext {
     pub app_id: Option<String>,
     pub run_id: Option<String>,
+    pub api_base_url: Option<String>,
 }
 
 /// `custom:vertex` falls back to Google application-default credentials when
@@ -86,13 +88,13 @@ fn ensure_no_ambient_model_credentials(
     if has_explicit {
         return Ok(());
     }
-    #[cfg(feature = "flow")]
+    #[cfg(feature = "flow-metadata")]
     {
         app_state
             .execution_environment
             .ensure_no_ambient_credentials(provider, "application_default")
     }
-    #[cfg(not(feature = "flow"))]
+    #[cfg(not(feature = "flow-metadata"))]
     {
         let _ = app_state;
         Ok(())
@@ -103,18 +105,10 @@ fn insert_usage_headers(
     params: &mut HashMap<String, flow_like_types::Value>,
     usage_context: Option<&ModelUsageContext>,
 ) {
-    let mut headers = params
-        .get("headers")
-        .and_then(|value| value.as_object())
-        .cloned()
-        .unwrap_or_else(json::Map::new);
-
-    // Internal attribution headers must come only from the trusted execution
-    // context, never from stale or user-configured Bit provider parameters.
-    headers.retain(|name, _| {
-        !name.eq_ignore_ascii_case("x-flow-like-app-id")
-            && !name.eq_ignore_ascii_case("x-flow-like-run-id")
-    });
+    // Hosted proxy headers must come only from the trusted execution context.
+    // Bit metadata is admin-controlled and must not override Authorization or
+    // inject other headers into the authenticated proxy request.
+    let mut headers = json::Map::new();
 
     if let Some(usage_context) = usage_context {
         if let Some(app_id) = usage_context
@@ -150,6 +144,22 @@ fn insert_usage_headers(
             flow_like_types::Value::Object(headers),
         );
     }
+}
+
+fn ensure_hosted_proxy_endpoint(
+    params: &mut HashMap<String, flow_like_types::Value>,
+    api_base_url: &str,
+) {
+    let api_base_url = api_base_url.trim().trim_end_matches('/');
+    let endpoint = if api_base_url.ends_with("/api/v1") {
+        api_base_url.to_string()
+    } else {
+        format!("{api_base_url}/api/v1")
+    };
+    params.insert(
+        "endpoint".to_string(),
+        flow_like_types::Value::String(endpoint),
+    );
 }
 
 impl Default for ModelFactory {
@@ -202,6 +212,10 @@ impl ModelFactory {
             "openrouter" => Arc::new(OpenRouterModel::new(model_provider, provider_config).await?),
             "voyageai" => Arc::new(VoyageAIModel::new(model_provider, provider_config).await?),
             "ollama" => Arc::new(OllamaModel::new(model_provider, provider_config).await?),
+            "lmstudio" => Arc::new(LMStudioModel::from_provider(model_provider).await?),
+            "llama.cpp" | "llamacpp" => {
+                Arc::new(LlamaCppModel::from_provider(model_provider).await?)
+            }
             "hyperbolic" => Arc::new(HyperbolicModel::new(model_provider, provider_config).await?),
             "moonshot" => Arc::new(MoonshotModel::new(model_provider, provider_config).await?),
             "galadriel" => Arc::new(GaladrielModel::new(model_provider, provider_config).await?),
@@ -287,9 +301,26 @@ impl ModelFactory {
             return Err(flow_like_types::anyhow!("Model type not supported"));
         }
 
-        let model_provider =
+        let mut model_provider =
             provider.ok_or(flow_like_types::anyhow!("Model type not supported"))?;
-        let provider = model_provider.provider_name.clone();
+        let provider = model_provider.provider_name.trim().to_ascii_lowercase();
+        model_provider.provider_name = provider.clone();
+
+        if bit.is_mlx_model() || provider.eq_ignore_ascii_case("local") {
+            let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
+            if bit.is_mlx_model() && !capabilities.mlx {
+                return Err(flow_like_types::anyhow!(
+                    "MLX model {} cannot execute on this host; it requires local ML, a local Bit store, and supported Apple-silicon hardware",
+                    bit.id
+                ));
+            }
+            if provider.eq_ignore_ascii_case("local") && !capabilities.local_server {
+                return Err(flow_like_types::anyhow!(
+                    "Model {} cannot execute on this host; local llama-server models require local ML, a local Bit store, and a non-mobile target",
+                    bit.id
+                ));
+            }
+        }
 
         if bit.is_mlx_model() {
             let cache_key = bit.mlx_runtime_model_cache_key()?;
@@ -305,7 +336,7 @@ impl ModelFactory {
             return Ok(mlx_model);
         }
 
-        if provider == "Local" {
+        if provider.eq_ignore_ascii_case("local") {
             let cache_key = bit.runtime_model_cache_key();
             if let Some(model) = self.cached_models.get(&cache_key) {
                 self.ttl_list.insert(cache_key.clone(), SystemTime::now());
@@ -326,33 +357,39 @@ impl ModelFactory {
                 .await;
         }
 
-        if provider.to_lowercase() == "hosted" || provider.to_lowercase().starts_with("hosted:") {
+        if is_hosted_provider_name(&provider) {
             // Never serve hosted models from cache — the user's JWT (used as
             // api_key) is ephemeral and will expire. A cached model would carry
             // a stale token, causing "Unauthorized" errors on the API proxy.
             self.cached_models.remove(&bit.id);
             self.ttl_list.remove(&bit.id);
 
-            let has_token = access_token.is_some();
-            let token_len = access_token.as_ref().map(|t| t.len()).unwrap_or(0);
+            let access_token = access_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Hosted model {} requires an access token for the API proxy",
+                        bit.id
+                    )
+                })?
+                .to_string();
             tracing::debug!(
                 bit_id = %bit.id,
                 provider = %provider,
-                has_token = has_token,
-                token_len = token_len,
                 "Building hosted model (no-cache)"
             );
 
             let mut model_provider = model_provider.clone();
-            let mut params = model_provider.params.clone().unwrap_or_default();
-
-            if access_token.is_none() {
-                tracing::warn!(bit_id = %bit.id, "Hosted model built with NO access token — API proxy will reject");
-            }
+            // Only fields required by the trusted Flow-Like proxy are passed to
+            // the OpenAI-compatible client. Provider params stored on a Bit are
+            // catalog metadata and are never forwarded as request options.
+            let mut params = HashMap::new();
 
             params.insert(
                 "api_key".into(),
-                flow_like_types::Value::String(access_token.clone().unwrap_or_default()),
+                flow_like_types::Value::String(access_token),
             );
 
             params.insert(
@@ -360,6 +397,15 @@ impl ModelFactory {
                 flow_like_types::Value::String(bit.id.clone()),
             );
             insert_usage_headers(&mut params, usage_context.as_ref());
+            let api_base_url = usage_context
+                .as_ref()
+                .and_then(|context| context.api_base_url.as_deref())
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(flow_like_model_provider::embedding::proxy_config::api_base_url);
+            ensure_hosted_proxy_endpoint(&mut params, &api_base_url);
+            params.remove("is_azure");
 
             model_provider.model_id = Some(bit.id.clone());
             model_provider.params = Some(params.clone());
@@ -375,47 +421,55 @@ impl ModelFactory {
                 "Hosted model endpoint resolved"
             );
 
-            let hosted_type = if provider.contains(':') {
-                provider.split(':').nth(1).unwrap_or("openrouter")
-            } else {
-                "openrouter"
-            };
+            let normalized_provider = provider.trim().to_ascii_lowercase();
+            let hosted_type = normalized_provider
+                .strip_prefix("hosted:")
+                .unwrap_or("openrouter");
 
-            let model: Arc<dyn ModelLogic> = match hosted_type.to_lowercase().as_str() {
+            let model: Arc<dyn ModelLogic> = match hosted_type {
                 "openrouter" => Arc::new(
                     OpenRouterModel::from_provider(&model_provider)
                         .await
                         .map_err(|e| {
                             flow_like_types::anyhow!(
-                                "Failed to create hosted:openrouter model: {}",
+                                "Failed to create hosted:openrouter proxy model: {}",
                                 e
                             )
                         })?,
                 ),
-                "openai" => Arc::new(OpenAIModel::from_provider(&model_provider).await.map_err(
-                    |e| flow_like_types::anyhow!("Failed to create hosted:openai model: {}", e),
-                )?),
-                "anthropic" => Arc::new(
-                    AnthropicModel::from_provider(&model_provider)
+                "openai" => Arc::new(
+                    OpenAIModel::from_provider_chat_completions(&model_provider)
                         .await
                         .map_err(|e| {
                             flow_like_types::anyhow!(
-                                "Failed to create hosted:anthropic model: {}",
+                                "Failed to create hosted:openai proxy model: {}",
                                 e
                             )
                         })?,
                 ),
-                "azure" => Arc::new(OpenAIModel::from_provider(&model_provider).await.map_err(
-                    |e| flow_like_types::anyhow!("Failed to create hosted:azure model: {}", e),
-                )?),
-                "bedrock" => {
+                "anthropic" => {
                     return Err(flow_like_types::anyhow!(
-                        "hosted:bedrock is not supported in local model factory"
+                        "hosted:anthropic requires a native Messages API proxy adapter; the Flow-Like API currently exposes only /chat/completions"
                     ));
                 }
-                "vertex" => Arc::new(GeminiModel::from_provider(&model_provider).await.map_err(
-                    |e| flow_like_types::anyhow!("Failed to create hosted:vertex model: {}", e),
+                "azure" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:azure requires a native Azure deployment proxy adapter; the Flow-Like API currently exposes only /chat/completions"
+                    ));
+                }
+                "bedrock" => Arc::new(BedrockModel::from_proxy(&model_provider).await.map_err(
+                    |e| {
+                        flow_like_types::anyhow!(
+                            "Failed to create hosted:bedrock proxy model: {}",
+                            e
+                        )
+                    },
                 )?),
+                "vertex" => {
+                    return Err(flow_like_types::anyhow!(
+                        "hosted:vertex requires a native Vertex proxy adapter; Rig's Vertex client cannot target the Flow-Like HTTP proxy"
+                    ));
+                }
                 _ => {
                     return Err(flow_like_types::anyhow!(
                         "Unsupported hosted provider type: {}",
@@ -465,7 +519,109 @@ pub async fn start_gc(state: Arc<Mutex<ModelFactory>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::str;
+
     use super::*;
+    use crate::{
+        bit::{BitModelClassification, BitTypes, LLMParameters},
+        state::FlowLikeConfig,
+    };
+    use flow_like_model_provider::history::{History, HistoryMessage, Role};
+    use flow_like_model_provider::llm::{LLMCallback, UsageReportingMode};
+    use flow_like_model_provider::provider::{
+        ModelProvider, ModelProviderConfiguration, OllamaConfig,
+    };
+    use flow_like_storage::files::store::FlowLikeStore;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    struct CapturedRequest {
+        request_line: String,
+        headers: String,
+        body: flow_like_types::Value,
+    }
+
+    async fn capture_one_http_request(listener: TcpListener) -> CapturedRequest {
+        let (mut stream, _) = listener.accept().await.expect("accept proxy request");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+
+        let (header_end, content_length) = loop {
+            let read = stream.read(&mut buffer).await.expect("read proxy request");
+            assert!(read > 0, "connection closed before request headers");
+            bytes.extend_from_slice(&buffer[..read]);
+
+            let Some(header_end) = bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            else {
+                continue;
+            };
+            let headers = str::from_utf8(&bytes[..header_end]).expect("UTF-8 request headers");
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| {
+                        value
+                            .trim()
+                            .parse::<usize>()
+                            .expect("numeric content length")
+                    })
+                })
+                .unwrap_or_default();
+            break (header_end, content_length);
+        };
+
+        while bytes.len() < header_end + content_length {
+            let read = stream.read(&mut buffer).await.expect("read request body");
+            assert!(read > 0, "connection closed before request body");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+
+        let headers = str::from_utf8(&bytes[..header_end])
+            .expect("UTF-8 request headers")
+            .to_string();
+        let request_line = headers.lines().next().expect("request line").to_string();
+        let body =
+            flow_like_types::json::from_slice(&bytes[header_end..header_end + content_length])
+                .expect("JSON request body");
+
+        stream
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nstop",
+            )
+            .await
+            .expect("write mock response");
+
+        CapturedRequest {
+            request_line,
+            headers,
+            body,
+        }
+    }
+
+    fn completion_bit(id: &str, provider_name: &str) -> Bit {
+        Bit {
+            id: id.to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: flow_like_types::json::to_value(LLMParameters {
+                context_length: 20_000,
+                model_classification: BitModelClassification::default(),
+                provider: ModelProvider {
+                    provider_name: provider_name.to_string(),
+                    model_id: Some(id.to_string()),
+                    version: None,
+                    params: None,
+                },
+            })
+            .unwrap(),
+            ..Bit::default()
+        }
+    }
 
     fn usage_headers(
         usage_context: Option<ModelUsageContext>,
@@ -473,7 +629,8 @@ mod tests {
         let mut params = HashMap::from([(
             "headers".to_string(),
             flow_like_types::json::json!({
-                "x-existing-header": "preserved",
+                "Authorization": "Bearer admin-controlled-token",
+                "x-existing-header": "discarded",
                 "X-Flow-Like-App-Id": "stale-app",
                 "X-FLOW-LIKE-RUN-ID": "stale-run"
             }),
@@ -487,6 +644,7 @@ mod tests {
         let params = usage_headers(Some(ModelUsageContext {
             app_id: None,
             run_id: Some("run-1".to_string()),
+            api_base_url: None,
         }));
         let headers = params["headers"].as_object().expect("headers object");
 
@@ -496,7 +654,7 @@ mod tests {
                 .any(|name| name.eq_ignore_ascii_case("x-flow-like-app-id"))
         );
         assert_eq!(headers["x-flow-like-run-id"], "run-1");
-        assert_eq!(headers["x-existing-header"], "preserved");
+        assert_eq!(headers.len(), 1);
     }
 
     #[test]
@@ -504,20 +662,303 @@ mod tests {
         let params = usage_headers(Some(ModelUsageContext {
             app_id: Some("app-1".to_string()),
             run_id: Some("run-1".to_string()),
+            api_base_url: None,
         }));
         let headers = params["headers"].as_object().expect("headers object");
 
         assert_eq!(headers["x-flow-like-app-id"], "app-1");
         assert_eq!(headers["x-flow-like-run-id"], "run-1");
-        assert_eq!(headers["x-existing-header"], "preserved");
+        assert_eq!(headers.len(), 2);
     }
 
     #[test]
-    fn missing_usage_context_scrubs_internal_headers() {
+    fn missing_usage_context_discards_all_bit_supplied_headers() {
         let params = usage_headers(None);
-        let headers = params["headers"].as_object().expect("headers object");
+        assert!(!params.contains_key("headers"));
+    }
 
-        assert_eq!(headers.len(), 1);
-        assert_eq!(headers["x-existing-header"], "preserved");
+    #[test]
+    fn hosted_proxy_endpoint_uses_the_trusted_api_base() {
+        let mut params = HashMap::new();
+        ensure_hosted_proxy_endpoint(&mut params, "https://api.example.test/");
+        assert_eq!(params["endpoint"], "https://api.example.test/api/v1");
+
+        let mut versioned = HashMap::new();
+        ensure_hosted_proxy_endpoint(&mut versioned, "https://api.example.test/api/v1");
+        assert_eq!(versioned["endpoint"], "https://api.example.test/api/v1");
+
+        let mut overridden = HashMap::from([(
+            "endpoint".to_string(),
+            flow_like_types::Value::String("https://proxy.example.test/v1".to_string()),
+        )]);
+        ensure_hosted_proxy_endpoint(&mut overridden, "https://api.example.test");
+        assert_eq!(overridden["endpoint"], "https://api.example.test/api/v1");
+    }
+
+    #[tokio::test]
+    async fn factory_rejects_local_and_mlx_models_for_object_backed_bits() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        for (id, provider) in [
+            ("local-model", "Local"),
+            ("lowercase-local-model", "local"),
+            ("mlx-model", "mlx"),
+        ] {
+            let result = factory
+                .build(&completion_bit(id, provider), state.clone(), None, None)
+                .await;
+            let error = match result {
+                Ok(_) => panic!("{provider} model should be rejected"),
+                Err(error) => error,
+            };
+            let message = error.to_string();
+            assert!(message.contains(id));
+            assert!(message.contains("cannot execute on this host"));
+            assert!(message.contains("local Bit store"));
+            if provider.eq_ignore_ascii_case("local") {
+                assert!(message.contains("non-mobile target"));
+            } else {
+                assert!(message.contains("supported Apple-silicon hardware"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_accepts_endpoint_backed_legacy_local_providers() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let model_provider_config = ModelProviderConfiguration {
+            ollama_config: vec![OllamaConfig { endpoint: None }],
+            ..ModelProviderConfiguration::default()
+        };
+        let state = Arc::new(FlowLikeState::new_with_model_config(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+            model_provider_config,
+        ));
+        let mut factory = ModelFactory::new();
+
+        for provider in [
+            "Ollama",
+            "LMStudio",
+            "Llama.cpp",
+            "LLAMACPP",
+            "Custom:Ollama",
+            "CUSTOM:LMSTUDIO",
+        ] {
+            let result = factory
+                .build(
+                    &completion_bit(provider, provider),
+                    state.clone(),
+                    None,
+                    None,
+                )
+                .await;
+            assert!(result.is_ok(), "{provider} should build an endpoint client");
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_routes_openrouter_hosted_labels_to_the_openrouter_client() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        for provider in ["Premium", "Internal", "Hosted", "hosted:openrouter"] {
+            let model = factory
+                .build(
+                    &completion_bit(provider, provider),
+                    state.clone(),
+                    Some("token".to_string()),
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{provider} should use OpenRouter: {error}"));
+            assert_eq!(
+                model.usage_reporting(),
+                UsageReportingMode::OpenRouterUsageInclude,
+                "{provider} should use the Rig OpenRouter client"
+            );
+            assert_eq!(model.default_model().await.as_deref(), Some(provider));
+            assert!(!factory.cached_models.contains_key(provider));
+        }
+    }
+
+    #[tokio::test]
+    async fn hosted_openrouter_streams_to_chat_completions_with_the_bit_id_and_current_token() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock proxy");
+        let proxy_url = format!("http://{}", listener.local_addr().expect("proxy address"));
+        let capture = tokio::spawn(capture_one_http_request(listener));
+
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+        let model = factory
+            .build(
+                &completion_bit("bit_opaque_123", "hosted:openrouter"),
+                state,
+                Some("current-jwt".to_string()),
+                Some(ModelUsageContext {
+                    app_id: Some("app-123".to_string()),
+                    run_id: Some("run-456".to_string()),
+                    api_base_url: Some(proxy_url),
+                }),
+            )
+            .await
+            .expect("build hosted OpenRouter model");
+
+        let mut history = History::new(
+            "ignored-upstream-model".to_string(),
+            vec![HistoryMessage::from_string(Role::User, "hello")],
+        );
+        history.set_stream(true);
+        let callback: LLMCallback = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let result = model.invoke(&history, Some(callback)).await;
+        assert!(result.is_err(), "mock proxy deliberately returns HTTP 400");
+
+        let request = capture.await.expect("capture task");
+        assert_eq!(
+            request.request_line,
+            "POST /api/v1/chat/completions HTTP/1.1"
+        );
+        let headers = request.headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer current-jwt\r\n"));
+        assert!(headers.contains("x-flow-like-app-id: app-123\r\n"));
+        assert!(headers.contains("x-flow-like-run-id: run-456\r\n"));
+        assert_eq!(request.body["model"], "bit_opaque_123");
+        assert_eq!(request.body["usage"]["include"], true);
+        assert_eq!(request.body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn factory_routes_hosted_openai_to_chat_completions() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        let model = factory
+            .build(
+                &completion_bit("openai-bit", "hosted:openai"),
+                state,
+                Some("token".to_string()),
+                None,
+            )
+            .await
+            .expect("hosted:openai should use Rig's OpenAI Chat Completions client");
+
+        assert_eq!(
+            model.usage_reporting(),
+            UsageReportingMode::OpenAIStreamOptions
+        );
+        assert_eq!(model.default_model().await.as_deref(), Some("openai-bit"));
+        assert!(!factory.cached_models.contains_key("openai-bit"));
+    }
+
+    #[tokio::test]
+    async fn factory_routes_hosted_bedrock_to_its_chat_completions_wrapper() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        let model = factory
+            .build(
+                &completion_bit("bedrock-bit", "hosted:bedrock"),
+                state,
+                Some("token".to_string()),
+                None,
+            )
+            .await
+            .expect("hosted:bedrock should use its OpenAI-compatible Chat Completions wrapper");
+
+        assert_eq!(
+            model.usage_reporting(),
+            UsageReportingMode::OpenAIStreamOptions
+        );
+        assert_eq!(model.default_model().await.as_deref(), Some("bedrock-bit"));
+        assert!(!factory.cached_models.contains_key("bedrock-bit"));
+    }
+
+    #[tokio::test]
+    async fn factory_rejects_hosted_providers_without_native_proxy_adapters() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        for provider in ["hosted:anthropic", "hosted:azure", "hosted:vertex"] {
+            let error = match factory
+                .build(
+                    &completion_bit(provider, provider),
+                    state.clone(),
+                    Some("token".to_string()),
+                    None,
+                )
+                .await
+            {
+                Ok(_) => panic!("{provider} should require a native proxy adapter"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error.to_string().contains("proxy adapter"),
+                "unexpected error for {provider}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_rejects_hosted_models_without_an_access_token() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        let error = match factory
+            .build(&completion_bit("hosted-model", "Hosted"), state, None, None)
+            .await
+        {
+            Ok(_) => panic!("hosted model without a token should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("requires an access token"));
     }
 }

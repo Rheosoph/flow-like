@@ -24,6 +24,7 @@ impl NodeLogic for GridDiskNode {
             "Returns all H3 cells within k steps of the origin cell (a filled disk of hexagons). Useful for proximity searches and area coverage.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "gridDisk");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin("cell", "Cell", "Origin H3 cell index", VariableType::String)

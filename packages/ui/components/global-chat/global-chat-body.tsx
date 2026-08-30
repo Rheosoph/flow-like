@@ -26,8 +26,9 @@ import { toast } from "sonner";
 import {
 	IBitTypes,
 	IRole,
-	filterHostableLlmModels,
 	isFreeLlmModel,
+	isHostedLlmModel,
+	selectProfileLlmModels,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
@@ -204,10 +205,6 @@ const GLOBAL_CHAT_CONFIG = {
 const GLOBAL_CHAT_TYPING_MOTION = resolveChatPlaceholderTypingMotion(
 	GLOBAL_CHAT_CONFIG.placeholder_typing_motion,
 );
-
-// FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
-// conversation column is wide enough for a useful embedded desktop surface.
-const INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH = 1280;
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -412,30 +409,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[settingsProfile.data?.hub_profile.id],
 	);
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
-	const bitsModels = useMemo(() => {
-		const profileBits = settingsProfile.data?.hub_profile.bits;
-		if (!llmBits.data || !profileBits) return [];
-		const ids = new Set(profileBits);
-		const profileModels = llmBits.data.filter((bit) =>
-			ids.has(`${bit.hub}:${bit.id}`),
-		);
-		const seen = new Set(profileModels.map((bit) => bit.id));
-		const ownModels = (customBits.data ?? []).filter(
-			(bit) =>
-				!seen.has(bit.id) &&
-				(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm),
-		);
-		return filterHostableLlmModels([...ownModels, ...profileModels], {
+	const bitsModels = useMemo(
+		() =>
+			selectProfileLlmModels(
+				llmBits.data,
+				customBits.data,
+				settingsProfile.data?.hub_profile.bits,
+				{ canHostLlamaCPP, canHostMLX },
+			),
+		[
+			llmBits.data,
+			customBits.data,
+			settingsProfile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
-		});
-	}, [
-		llmBits.data,
-		customBits.data,
-		settingsProfile.data?.hub_profile.bits,
-		canHostLlamaCPP,
-		canHostMLX,
-	]);
+		],
+	);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);
@@ -490,9 +479,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
-			const hosted = bitsModels.find(
-				(bit) => bit.parameters?.provider?.provider_name === "Hosted",
-			);
+			const hosted = bitsModels.find(isHostedLlmModel);
 			setSelectedModelId((hosted ?? bitsModels[0]).id);
 		}
 	}, [
@@ -698,7 +685,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				: undefined;
 
 			// Forward the open Data Studio page (if any) so the assistant resolves "this data" to the
-			// right app/overlay without overriding Event-first routing.
+			// right app/overlay instead of asking which app.
 			const dataStudio = useAssistantSurface.getState().dataStudioSurface;
 			const dataStudioContext = dataStudio
 				? {
@@ -897,8 +884,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[backend.apiState],
 	);
 
-	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
-	// workflow (respond_to_interaction / hub API) while the outer tool call is still awaiting.
+	// Answer an app-chat dialog raised during a call_app_chat run. Replying on the interaction's
+	// channel unblocks the app's workflow while the outer tool call is still awaiting.
 	const handleRespondToInteraction = useCallback(
 		async (interactionId: string, value: unknown) => {
 			const interaction = useGlobalChatStore
@@ -906,7 +893,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				.activeInteractions.find((i) => i.id === interactionId);
 			if (!interaction) return;
 			try {
-				await submitInteractionResponse(interaction, value, backend.profile);
+				await submitInteractionResponse(interaction, value);
 				setInteractionResponded(interactionId, value);
 			} catch (error) {
 				toast.error(
@@ -916,7 +903,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				);
 			}
 		},
-		[backend.profile, setInteractionResponded],
+		[setInteractionResponded],
 	);
 
 	// Queue drain. Installed as a module-level hook (not just an effect) because the run that frees
@@ -1065,12 +1052,48 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		inlineAppPages.length > 0 ||
 		inlineAppSurfaces.length > 0 ||
 		pendingComponents !== null;
-	const splitWorkspaceBelowInlineArtifacts =
-		sideBySideWorkspace &&
-		hasInlineArtifacts &&
-		layoutWidth < INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH;
-	const fullHeightConversationColumn =
-		sideBySideWorkspace && !splitWorkspaceBelowInlineArtifacts;
+	const inlineArtifacts = useMemo(
+		() =>
+			hasInlineArtifacts ? (
+				<div className="flex w-full flex-col gap-3 py-1">
+					<PendingComponentsCard />
+					{inlineAppPages.map((page) => (
+						<InlineAppPageCard
+							key={page.id}
+							page={page}
+							onClose={removeInlineAppPage}
+							compact={compact}
+						/>
+					))}
+					{inlineAppSurfaces.map((surface) => (
+						<InlineAppSurfaceCard
+							key={surface.id}
+							surface={surface}
+							onClose={removeInlineAppSurface}
+							compact={compact}
+						/>
+					))}
+					{inlineAppChats.map((chat) => (
+						<InlineAppChatCard
+							key={chat.id}
+							chat={chat}
+							onClose={removeInlineAppChat}
+							compact={compact}
+						/>
+					))}
+				</div>
+			) : undefined,
+		[
+			compact,
+			hasInlineArtifacts,
+			inlineAppChats,
+			inlineAppPages,
+			inlineAppSurfaces,
+			removeInlineAppChat,
+			removeInlineAppPage,
+			removeInlineAppSurface,
+		],
+	);
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo<ProviderModelPickerModel[]>(
@@ -1501,70 +1524,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			<div
 				ref={layoutRef}
 				className={`min-h-0 min-w-0 flex-1 overflow-hidden ${
-					fullHeightConversationColumn
-						? "flex flex-row"
-						: splitWorkspaceBelowInlineArtifacts
-							? "grid grid-cols-[minmax(0,1fr)_clamp(420px,48%,660px)] grid-rows-[auto_minmax(0,1fr)]"
-							: "flex flex-col"
+					sideBySideWorkspace ? "flex flex-row" : "flex flex-col"
 				}`}
 			>
-				<div
-					// On a roomy desktop surface, app previews belong to the conversation column so
-					// FlowScript can use the full height beside them. `contents` lets narrower split
-					// and stacked layouts position the same mounted children without losing app state.
-					className={
-						fullHeightConversationColumn
-							? "relative flex min-h-0 min-w-0 flex-1 flex-col"
-							: "contents"
-					}
-				>
-					{hasInlineArtifacts && (
-						<div
-							className={`min-w-0 shrink-0 max-h-[60vh] overflow-y-auto pt-2 ${
-								splitWorkspaceBelowInlineArtifacts
-									? "col-span-2 row-start-1"
-									: ""
-							}`}
-						>
-							<PendingComponentsCard />
-							{inlineAppPages.map((page) => (
-								<InlineAppPageCard
-									key={page.id}
-									page={page}
-									onClose={removeInlineAppPage}
-									compact={compact}
-								/>
-							))}
-							{inlineAppSurfaces.map((surface) => (
-								<InlineAppSurfaceCard
-									key={surface.id}
-									surface={surface}
-									onClose={removeInlineAppSurface}
-									compact={compact}
-								/>
-							))}
-							{inlineAppChats.map((chat) => (
-								<InlineAppChatCard
-									key={chat.id}
-									chat={chat}
-									onClose={removeInlineAppChat}
-									compact={compact}
-								/>
-							))}
-						</div>
-					)}
-
+				<div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
 					{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and
 					    without a flex parent its height collapses to content size, breaking the
 					    internal scroll area. In a narrow dock the workspace replaces the chat rather
 					    than squeezing beside it, so hide (don't unmount) the chat to keep its
 					    scroll/stream state alive underneath. */}
 					<div
-						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${
-							splitWorkspaceBelowInlineArtifacts
-								? "col-start-1 row-start-2"
-								: ""
-						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
+						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
 					>
 						{emptyStateMounted && (
 							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center overflow-hidden px-6">
@@ -1598,6 +1568,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								onRespondToInteraction={handleRespondToInteraction}
 								onMessageUpdate={handleMessageUpdate}
 								showAiDisclosure
+								inlineContent={inlineArtifacts}
 								inlinePrompt={
 									toolPrompt ? (
 										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
@@ -1607,25 +1578,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						</ChatWidgetExecutionProvider>
 					</div>
 				</div>
-				{showWorkspace &&
-					flowscriptWorkspace &&
-					(splitWorkspaceBelowInlineArtifacts ? (
-						<div className="col-start-2 row-start-2 flex min-h-0 min-w-0 overflow-hidden border-l border-border/30">
-							<FlowScriptWorkspacePanel
-								source={flowscriptWorkspace.source}
-								status={flowscriptWorkspace.status}
-								fill
-								onClose={() => setFlowscriptHidden(true)}
-							/>
-						</div>
-					) : (
-						<FlowScriptWorkspacePanel
-							source={flowscriptWorkspace.source}
-							status={flowscriptWorkspace.status}
-							fill={!canSideBySide}
-							onClose={() => setFlowscriptHidden(true)}
-						/>
-					))}
+				{showWorkspace && flowscriptWorkspace && (
+					<FlowScriptWorkspacePanel
+						source={flowscriptWorkspace.source}
+						status={flowscriptWorkspace.status}
+						fill={!canSideBySide}
+						onClose={() => setFlowscriptHidden(true)}
+					/>
+				)}
 			</div>
 
 			{profileId && (

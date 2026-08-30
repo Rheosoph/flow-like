@@ -190,6 +190,25 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
 fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
+    if spec.name == "interact_app_page" {
+        let app_id = spec_arg_str(args, "app_id", "appId");
+        let event_id = spec_arg_str(args, "event_id", "eventId");
+        let page_id = spec_arg_str(args, "page_id", "pageId");
+        let app_scope = if app_id.is_empty() {
+            "current-app"
+        } else {
+            app_id
+        };
+        if !event_id.is_empty() {
+            return format!("interact_app_page:{app_scope}:event:{event_id}");
+        }
+        let page_scope = if page_id.is_empty() {
+            "current-page"
+        } else {
+            page_id
+        };
+        return format!("interact_app_page:{app_scope}:page:{page_scope}");
+    }
     if spec.name != "database_tool" {
         return spec.name.to_string();
     }
@@ -454,13 +473,71 @@ fn call_app_event_message(args: &Value) -> String {
 
 fn interact_app_page_message(args: &Value) -> String {
     let app_id = spec_arg_str(args, "app_id", "appId");
-    if app_id.is_empty() {
-        "FlowPilot wants to use an app page (fill inputs / press buttons) and run the workflows behind it.".to_string()
+    let event_id = spec_arg_str(args, "event_id", "eventId");
+    let page_id = spec_arg_str(args, "page_id", "pageId");
+    let app = if app_id.is_empty() {
+        "the current app".to_string()
     } else {
-        format!(
-            "FlowPilot wants to use a page of app '{app_id}' (fill inputs / press buttons) and run the workflows behind it."
-        )
+        format!("app '{}'", approval_label(app_id))
+    };
+    let page = if !event_id.is_empty() {
+        format!("event '{}'", approval_label(event_id))
+    } else if !page_id.is_empty() {
+        format!("page '{}'", approval_label(page_id))
+    } else {
+        "the current rendered page".to_string()
+    };
+
+    let actions = args
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|actions| {
+            let mut summaries = actions
+                .iter()
+                .take(4)
+                .map(|action| {
+                    let name = spec_arg_str(action, "action", "action");
+                    let component =
+                        approval_label(spec_arg_str(action, "component_id", "componentId"));
+                    match name {
+                        "set_value" => format!("set component '{component}'"),
+                        "trigger" => {
+                            let event = spec_arg_str(action, "event", "event");
+                            let event = if event.is_empty() {
+                                "click".to_string()
+                            } else {
+                                approval_label(event)
+                            };
+                            format!("trigger '{event}' on component '{component}'")
+                        }
+                        _ => format!("use component '{component}'"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            if actions.len() > 4 {
+                summaries.push(format!("{} more action(s)", actions.len() - 4));
+            }
+            summaries.join("; ")
+        })
+        .filter(|summary| !summary.is_empty());
+
+    match actions {
+        Some(actions) => format!(
+            "FlowPilot wants to interact with {app}, {page}: {actions}. This may run workflows connected to those controls."
+        ),
+        None => format!(
+            "FlowPilot wants to interact with {app}, {page}. This may run workflows connected to its controls."
+        ),
     }
+}
+
+fn approval_label(value: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let mut label = value.chars().take(MAX_CHARS).collect::<String>();
+    if value.chars().count() > MAX_CHARS {
+        label.push('…');
+    }
+    label.replace(['\n', '\r', '\t'], " ")
 }
 
 fn execute_event_message(args: &Value) -> String {
@@ -558,6 +635,30 @@ fn global_query_execution_logs_schema() -> Value {
     let mut schema = scoped_query_execution_logs_schema();
     schema["required"] = json!(["app_id", "board_id", "run_id"]);
     schema
+}
+
+fn run_board_tests_message(args: &Value) -> String {
+    let board_id = spec_arg_str(args, "board_id", "boardId");
+    if board_id.is_empty() {
+        "FlowPilot wants to run the board's test events and inspect their logs.".to_string()
+    } else {
+        format!(
+            "FlowPilot wants to run the test events of board '{board_id}' and inspect their logs."
+        )
+    }
+}
+
+fn run_board_tests_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "app_id": { "type": "string", "description": "App id. Optional when the current board runtime already supplies it." },
+            "board_id": { "type": "string", "description": "Persisted board id whose `test*` events should run." },
+            "filter": { "type": "string", "description": "Optional substring filter on test event names; only matching tests run." },
+            "max_tests": { "type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum test events to execute. Defaults to 20 (the cap)." }
+        },
+        "required": ["board_id"]
+    })
 }
 
 fn workflow_database_context_schema() -> Value {
@@ -684,6 +785,21 @@ the workflow ran correctly."#,
             approval: ToolApprovalSpec::None,
             timeout_secs: 120,
         },
+        PlatformToolSpec {
+            name: "run_board_tests",
+            description: r#"Run every `test*` event on the PERSISTED board and return one verdict per test:
+pass/fail, `ASSERT_OK`/`ASSERT_FAIL` marker counts from `test::assert`, and bounded error logs. A
+board test is a simple event whose name starts with `test`. Use this after an edit is applied to
+verify behavior; a merely `queued` FlowScript draft has no tests to run yet. At most 20 tests run
+per call; tests share live app state."#,
+            schema: run_board_tests_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve board test run",
+                message: run_board_tests_message,
+                timing: ToolApprovalTiming::BeforeExecution,
+            },
+            timeout_secs: 600,
+        },
     ]
 }
 
@@ -738,10 +854,12 @@ pub fn interact_app_page_tool_spec() -> PlatformToolSpec {
         description: r#"USE a live rendered app page like a user: set input values, trigger component events
 (default `click`), then observe the outcome. Each trigger executes the workflows wired to that
 component and awaits them. The result lists every applied action, the runs they started (`runs[]`
-with run ids — use query_execution_logs for full logs), the post-run element state with
-`configured_events`, and page screenshots. The global assistant embeds the page inline first when
-needed; a board/widget session needs the page already rendered. End-to-end proof for UI-driven
-workflows: fill inputs, press the button, check runs, logs, and screenshots."#,
+with run ids; use query_execution_logs for full logs), a semantic element inventory, and page
+screenshots. Use `element_ref` from `open_app_page` or a prior interaction result to address the
+exact control. The global assistant embeds the page inline first when needed; a board/widget
+session needs the page already rendered. The user approves interaction before values are changed
+or events are triggered. For end-to-end proof, fill inputs, press the control, then check runs,
+logs, semantic state, and screenshots."#,
         schema: || {
             json!({
                 "type": "object",
@@ -756,7 +874,7 @@ workflows: fill inputs, press the button, check runs, logs, and screenshots."#,
                             "type": "object",
                             "properties": {
                                 "action": { "type": "string", "enum": ["set_value", "trigger"], "description": "set_value writes an input's value; trigger fires a component event and awaits its workflows." },
-                                "component_id": { "type": "string", "description": "Component id on the page (from ui_inspect or a prior result)." },
+                                "component_id": { "type": "string", "description": "Component id or page-scoped element_ref from semantic page inspection or a prior result." },
                                 "value": { "description": "New value for set_value (string, number, boolean, or JSON)." },
                                 "event": { "type": "string", "description": "Event name for trigger (default \"click\")." }
                             },
@@ -867,14 +985,16 @@ conversation. Non-destructive UI change."#,
             name: "open_app_page",
             description: r#"Embed an app's UI page/interface inline in the conversation (like an artifact), so the
 USER can see and use the app's frontend without leaving the chat. After the page finishes loading,
-the result also includes one or more ordered screenshots of its full rendered content as image
-attachments for YOU to inspect. Use it when the user asks to show an app page OR asks about
-information displayed in that page; read the returned images before answering. Check
-`screenshot_count` and `screenshot_complete`, and never claim to have read content that was not
-captured. Works ONLY for events with kind "page" in `list_apps` — NOT for "chat" events (use
-`open_app_chat`/`call_app_chat`) or "headless" events (use `call_app_event`). Non-destructive UI
-change. Pass the page Event's `id` as `event_id`, never its `page_id`. A structured failure supersedes
-older inventory: do not guess another Event or route; relist at most once only when `relist_required`."#,
+the result includes a bounded semantic inventory of rendered elements plus ordered screenshots as
+image attachments for YOU to inspect. Elements expose labels, text, current state, available events,
+and an `element_ref` accepted by `interact_app_page`; password values are redacted. Use this tool when
+the user asks to show an app page or asks about information displayed in it. Check `status`,
+`semantic_inspection_complete`, `screenshot_count`, and `screenshot_complete`. Inspect every attached
+image before answering and never claim to have read uncaptured regions. This works only for events
+with kind "page" in `list_apps`. Use `open_app_chat` or `call_app_chat` for chat events and
+`call_app_event` for headless events. Pass the page Event's `id` as `event_id`, never its `page_id`.
+A structured failure supersedes older inventory: do not guess another Event or route; relist at most
+once only when `relist_required`."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -983,7 +1103,8 @@ Edit results identify the exact app/board, summary, persisted `event_nodes`, pro
                         "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists. With create_new_board=true you may choose a new id here so flowpilot_board and flowpilot_widget can share the exact board contract." },
                         "board_name": { "type": "string", "description": "Name for the board if one has to be created. Optional." },
                         "create_new_board": { "type": "boolean", "description": "Create or ensure an ADDITIONAL board instead of editing the app's first board. Use it for any workflow with its own trigger event, and by default for EACH page: a page's load logic and action handlers belong on that page's own board. Boards of one app cannot call each other, so a connected chain stays in a single board, and pages share a board only when they share helpers or read the same data. When board_id is supplied, that exact caller-chosen id is created/ensured." },
-                        "idempotency_key": { "type": "string", "description": "Stable caller-chosen retry key for this exact app/board creation target. Reuse it only for retries of the same target." }
+                        "idempotency_key": { "type": "string", "description": "Stable caller-chosen retry key for this exact app/board creation target. Reuse it only for retries of the same target." },
+                        "repair_scope": { "type": "string", "enum": ["foundation", "inputs_and_access", "domain_logic", "outputs_and_review", "observability"], "description": "Which part of the build this edit targets. Each scope has its own zero-progress retry budget, so a failing graph build no longer blocks an unrelated repair on the same board. Set it to the module the instruction actually addresses and keep it stable across retries of that module; switching it to keep retrying the SAME failing work is a misuse that only burns the board-wide ceiling. Omit for an ordinary whole-board edit." }
                     },
                     "required": ["instruction", "app_id"]
                 })
@@ -1226,25 +1347,20 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
         },
         PlatformToolSpec {
             name: "data_studio_agent",
-            description: r#"The data specialist for creating, inspecting, updating, querying, or dropping app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It does not edit workflow boards or UI.
+            description: r#"The data specialist for app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It reads AND changes data — create, insert, update, correct, migrate, seed, index, or drop — on apps that already exist as well as during BUILD. It does not edit workflow boards or UI.
 
-For DIRECT/COMPLEX app use, configured active Events are primary and this is the raw-data fallback. Outside BUILD, call it only after `list_apps` completed in an earlier assistant round and the user explicitly requested raw schema/table/ontology/SQL/DataFusion work, no suitable Event exists, or a successfully called Event explicitly lacks the required operation or fidelity. Never put it in the same wave as `list_apps`, and never bypass a failed, declined, timed-out, or approval-blocked suitable Event.
+Call it directly for any work item about the data itself: schema, ad-hoc queries, analytics, corrections, migrations, ontologies, or data setup for a build. It needs no preflight; pass `app_id` from context or `list_apps`. Choose a configured active Event instead when one already performs exactly what was asked — a routing preference, not a restriction on this tool. A failed, declined, timed-out, or approval-blocked Event is a stop to report, not work to redo through raw data.
 
-Give one complete question/change with the exact app and optional overlay from context, plus the exact `routing_reason`. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
+Give one complete question/change with the exact app and optional overlay from context. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations). State the intended change in full for a mutation." },
                         "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
-                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." },
-                        "routing_reason": {
-                            "type": "string",
-                            "enum": ["build", "explicit_raw_data", "no_suitable_event", "event_insufficient"],
-                            "description": "Why direct data access is allowed: BUILD data work; the user explicitly requested raw data/SQL/DataFusion; a complete list_apps inventory had no suitable Event; or a successfully called Event explicitly could not provide the required operation/fidelity."
-                        }
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
                     },
-                    "required": ["instruction", "routing_reason"]
+                    "required": ["instruction"]
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -1951,7 +2067,10 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
             },
             "index_name": { "type": "string" },
             "optimize": { "type": "boolean" },
-            "keep_versions": { "type": "boolean" },
+            "keep_versions": {
+                "type": "boolean",
+                "description": "Defaults to true. False prunes versions older than seven days after compaction and index maintenance."
+            },
             "nullable": { "type": "boolean" },
             "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
         },
@@ -2555,38 +2674,75 @@ mod tests {
     }
 
     #[test]
-    fn direct_data_tool_requires_an_event_first_routing_reason() {
+    fn app_page_interaction_approval_is_page_scoped_and_never_repeats_values() {
+        let spec = find_global_tool_spec("interact_app_page").expect("interact_app_page spec");
+        let event_args = json!({
+            "app_id": "orders",
+            "event_id": "checkout-page",
+            "actions": [
+                {
+                    "action": "set_value",
+                    "component_id": "customer-email",
+                    "value": "secret@example.com"
+                },
+                {
+                    "action": "trigger",
+                    "component_id": "submit-order",
+                    "event": "submit"
+                }
+            ]
+        });
+        let approval = resolve_tool_approval(&spec, &event_args);
+
+        assert_eq!(
+            approval.session_key,
+            "interact_app_page:orders:event:checkout-page"
+        );
+        assert!(approval.description.contains("app 'orders'"));
+        assert!(approval.description.contains("event 'checkout-page'"));
+        assert!(approval.description.contains("customer-email"));
+        assert!(approval.description.contains("submit-order"));
+        assert!(approval.description.contains("trigger 'submit'"));
+        assert!(!approval.description.contains("secret@example.com"));
+
+        let other_event = resolve_tool_approval(
+            &spec,
+            &json!({ "app_id": "orders", "event_id": "returns-page", "actions": [] }),
+        );
+        let other_app = resolve_tool_approval(
+            &spec,
+            &json!({ "app_id": "inventory", "event_id": "checkout-page", "actions": [] }),
+        );
+        let direct_page = resolve_tool_approval(
+            &spec,
+            &json!({ "app_id": "orders", "page_id": "checkout-surface", "actions": [] }),
+        );
+        assert_ne!(approval.session_key, other_event.session_key);
+        assert_ne!(approval.session_key, other_app.session_key);
+        assert_eq!(
+            direct_page.session_key,
+            "interact_app_page:orders:page:checkout-surface"
+        );
+    }
+
+    #[test]
+    fn direct_data_tool_is_callable_without_a_preflight() {
         let inventory = find_global_tool_spec("list_apps").expect("list_apps spec");
         assert!(inventory.description.contains("active Event"));
         assert!(inventory.description.contains("exact `consumer_tool`"));
 
         let data = find_global_tool_spec("data_studio_agent").expect("data studio spec");
-        assert!(
-            data.description
-                .contains("configured active Events are primary")
-        );
-        assert!(data.description.contains("raw-data fallback"));
-        assert!(
-            data.description
-                .contains("completed in an earlier assistant round")
-        );
-        assert!(data.description.contains("never bypass a failed, declined"));
+        // Adjusting the data of an app that already exists is a first-class use of this tool, not
+        // a fallback that has to be justified. The Event preference stays, as a preference.
+        assert!(data.description.contains("apps that already exist"));
+        assert!(data.description.contains("needs no preflight"));
+        assert!(data.description.contains("not a restriction on this tool"));
 
         let schema = (data.schema)();
+        assert!(schema["properties"]["routing_reason"].is_null());
         assert_eq!(
-            schema["properties"]["routing_reason"]["enum"],
-            json!([
-                "build",
-                "explicit_raw_data",
-                "no_suitable_event",
-                "event_insufficient"
-            ])
-        );
-        assert!(
-            schema["required"]
-                .as_array()
-                .expect("required fields")
-                .contains(&json!("routing_reason"))
+            schema["required"].as_array().expect("required fields"),
+            &vec![json!("instruction")]
         );
     }
 
@@ -2657,7 +2813,10 @@ mod tests {
         // +0.2 KB the same day for the stylesheet-budget clause on `flowpilot_widget`: without the
         // real 40k figure the orchestrator invents a smaller one and instructs the specialist to
         // trim CSS it never needed to trim.
-        for (memory_enabled, budget) in [(false, 33_200usize), (true, 35_200usize)] {
+        // Reviewed 2026-08-25: +~0.2 KB of accumulated description drift since 2026-08-22 pushed
+        // the memory-off payload to 33,375; re-based just above the measurement (memory-on
+        // measured 34,119, still inside its budget).
+        for (memory_enabled, budget) in [(false, 33_400usize), (true, 35_200usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()
@@ -2680,7 +2839,19 @@ mod tests {
         let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
         assert_eq!(
             names,
-            vec!["execute_event", "execute_node", "query_execution_logs"]
+            vec![
+                "execute_event",
+                "execute_node",
+                "query_execution_logs",
+                "run_board_tests"
+            ]
+        );
+
+        let run_board_tests = find_runtime_execution_tool_spec("run_board_tests").unwrap();
+        assert_eq!((run_board_tests.schema)()["required"], json!(["board_id"]));
+        assert_eq!(
+            resolve_tool_approval(&run_board_tests, &json!({"board_id":"board"})).kind,
+            "execute"
         );
 
         let execute_node = find_runtime_execution_tool_spec("execute_node").unwrap();

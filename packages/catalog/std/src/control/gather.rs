@@ -24,6 +24,7 @@ impl NodeLogic for GatherExecutionNode {
             "Gather all execution states",
             "Control/Parallel",
         );
+        node.set_flowscript_name("control", "gather");
         node.add_icon("/flow/icons/par_execution.svg");
 
         node.add_input_pin("exec_in", "Input", "Input Pin", VariableType::Execution);

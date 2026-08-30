@@ -27,6 +27,8 @@ impl NodeLogic for InvalidateNamespaceNode {
             "Removes every entry in the cache handle's namespace in one call — including entries with no lifetime. The handle must carry a namespace; per-key removal is the Delete Cache node's job.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "invalidateNamespace");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 

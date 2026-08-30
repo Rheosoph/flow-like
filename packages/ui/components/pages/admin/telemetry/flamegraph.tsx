@@ -182,7 +182,7 @@ function SpanTooltip({
 					{node.span.status}
 				</span>
 				<span className="tabular-nums">
-					+{formatDurationMs(node.start)} {t('inTrace', 'in trace')}
+					+{formatDurationMs(node.start)} {t("inTrace", "in trace")}
 				</span>
 			</div>
 			{attributes.length > 0 ? (
@@ -330,7 +330,7 @@ export function TraceFlamegraph({
 		<div ref={rootRef} className={`relative ${className ?? ""}`}>
 			<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
 				<nav
-					aria-label={t('flamegraphZoomPath', 'Flamegraph zoom path')}
+					aria-label={t("flamegraphZoomPath", "Flamegraph zoom path")}
 					className="flex min-w-0 flex-wrap items-center gap-1 text-xs"
 				>
 					<Button
@@ -339,7 +339,7 @@ export function TraceFlamegraph({
 						className="h-6 px-2 text-xs"
 						onClick={() => setFocusKey(null)}
 					>
-						{t('fullTrace', 'Full trace')}
+						{t("fullTrace", "Full trace")}
 					</Button>
 					{breadcrumb.map((node, index) => (
 						<span key={node.key} className="flex min-w-0 items-center gap-1">
@@ -365,7 +365,7 @@ export function TraceFlamegraph({
 						onClick={() => setView("flame")}
 					>
 						<Flame className="mr-1 h-3 w-3" />
-						{t('flame', 'Flame')}
+						{t("flame", "Flame")}
 					</Button>
 					<Button
 						variant={view === "list" ? "secondary" : "ghost"}
@@ -374,7 +374,7 @@ export function TraceFlamegraph({
 						onClick={() => setView("list")}
 					>
 						<List className="mr-1 h-3 w-3" />
-						{t('list', 'List')}
+						{t("list", "List")}
 					</Button>
 				</div>
 			</div>
@@ -481,7 +481,10 @@ export function TraceFlamegraph({
 			)}
 
 			<p className="mt-2 text-[11px] text-muted-foreground">
-				{t('barWidthIsTheSpanDurationColourIntensityItsShareOfTheSlowestSpanInViewSelectASpanToZoomIntoItsSubtree', "Bar width is the span duration, colour intensity its share of the slowest span in view. Select a span to zoom into its subtree.")}
+				{t(
+					"barWidthIsTheSpanDurationColourIntensityItsShareOfTheSlowestSpanInViewSelectASpanToZoomIntoItsSubtree",
+					"Bar width is the span duration, colour intensity its share of the slowest span in view. Select a span to zoom into its subtree.",
+				)}
 			</p>
 
 			{hovered ? (

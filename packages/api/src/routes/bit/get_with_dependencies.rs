@@ -240,7 +240,6 @@ async fn insert_bit_cache(
             created_at: Set(chrono::Utc::now().naive_utc()),
             updated_at: Set(chrono::Utc::now().naive_utc()),
             bit_id: Set(None),
-            ..Default::default()
         };
 
         if bit.hub == domain {

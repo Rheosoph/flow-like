@@ -5,24 +5,40 @@
 //! resolved through the same `EmbeddingFactory` the rest of the app uses. All of this is reachable
 //! without a flow `ExecutionContext`, so it plugs directly into the context-free `PlatformCopilot`.
 
+#[cfg(feature = "flow-runtime")]
+use std::cmp::Reverse;
+#[cfg(feature = "flow-runtime")]
 use std::collections::hash_map::DefaultHasher;
+#[cfg(feature = "flow-runtime")]
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+#[cfg(feature = "flow-runtime")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "flow-runtime")]
 use flow_like_model_provider::embedding::EmbeddingModelLogic;
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
+#[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store::path::Path;
+#[cfg(feature = "flow-runtime")]
 use flow_like_types::json::json;
+#[cfg(feature = "flow-runtime")]
 use flow_like_types::tokio::sync::RwLock;
-use flow_like_types::{Result, anyhow, bail, create_id};
+use flow_like_types::{Result, bail};
+#[cfg(feature = "flow-runtime")]
+use flow_like_types::{anyhow, create_id};
 
 use crate::bit::Bit;
+use crate::models::llm::ModelUsageContext;
 use crate::state::FlowLikeState;
 
+#[cfg(feature = "flow-runtime")]
 const MAX_RECALLED_MEMORY_ITEM_CHARS: usize = 500;
+#[cfg(feature = "flow-runtime")]
 const MAX_RECALLED_MEMORY_PROMPT_CHARS: usize = 2_400;
 
+#[cfg(any(feature = "flow-runtime", test))]
 fn bounded_memory_text(value: &str, max_chars: usize) -> String {
     let value = value.trim();
     if value.chars().count() <= max_chars {
@@ -52,12 +68,17 @@ pub struct MemoryEntry {
 }
 
 /// Semantic memory store for one profile. Cheap to hold across the chat loop (async-locked store).
+#[cfg(feature = "flow-runtime")]
 pub struct AssistantMemory {
     store: RwLock<LanceDBVectorStore>,
     embedding: Arc<dyn EmbeddingModelLogic>,
     embedding_model_id: String,
 }
 
+#[cfg(not(feature = "flow-runtime"))]
+pub struct AssistantMemory;
+
+#[cfg(feature = "flow-runtime")]
 impl AssistantMemory {
     /// Open the per-profile LanceDB store (no embedding model). Lazily created on first write.
     ///
@@ -102,18 +123,22 @@ impl AssistantMemory {
     }
 
     /// Open (or lazily create on first write) the memory table for `profile_id`, embedding with the
-    /// given bit. See [`open_store`](Self::open_store) for how `owner` scopes the table.
+    /// given bit. `access_token` and `usage_context` let a cloud host route a remote-capable Bit
+    /// through the authenticated embedding proxy. See [`open_store`](Self::open_store) for how
+    /// `owner` scopes the table.
     pub async fn open(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
         profile_id: &str,
         embedding_bit: &Bit,
+        access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
     ) -> Result<Self> {
         let embedding = state
             .embedding_factory
             .lock()
             .await
-            .build_text(embedding_bit, state.clone())
+            .build_text_routed(embedding_bit, state.clone(), access_token, usage_context)
             .await?;
         let store = Self::open_store(&state, owner, profile_id).await?;
 
@@ -207,7 +232,7 @@ impl AssistantMemory {
                 })
             })
             .collect();
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        entries.sort_by_key(|entry| Reverse(entry.timestamp));
         Ok(entries)
     }
 
@@ -333,6 +358,69 @@ impl AssistantMemory {
                     .map(str::to_string)
             })
             .collect())
+    }
+}
+
+#[cfg(not(feature = "flow-runtime"))]
+impl AssistantMemory {
+    fn unavailable<T>() -> Result<T> {
+        bail!("Assistant memory requires the `flow-runtime` feature")
+    }
+
+    pub async fn open(
+        _state: Arc<FlowLikeState>,
+        _owner: Option<&str>,
+        _profile_id: &str,
+        _embedding_bit: &Bit,
+        _access_token: Option<String>,
+        _usage_context: Option<ModelUsageContext>,
+    ) -> Result<Self> {
+        Self::unavailable()
+    }
+
+    pub async fn status(
+        _state: Arc<FlowLikeState>,
+        _owner: Option<&str>,
+        _profile_id: &str,
+    ) -> Result<MemoryStatus> {
+        Self::unavailable()
+    }
+
+    pub async fn clear(
+        _state: Arc<FlowLikeState>,
+        _owner: Option<&str>,
+        _profile_id: &str,
+    ) -> Result<()> {
+        Self::unavailable()
+    }
+
+    pub async fn list(
+        _state: Arc<FlowLikeState>,
+        _owner: Option<&str>,
+        _profile_id: &str,
+    ) -> Result<Vec<MemoryEntry>> {
+        Self::unavailable()
+    }
+
+    pub async fn delete_entry(
+        _state: Arc<FlowLikeState>,
+        _owner: Option<&str>,
+        _profile_id: &str,
+        _id: &str,
+    ) -> Result<()> {
+        Self::unavailable()
+    }
+
+    pub async fn store(&self, _role: &str, _content: &str) -> Result<usize> {
+        Self::unavailable()
+    }
+
+    pub async fn prompt_sections(&self, _user_prompt: &str) -> String {
+        String::new()
+    }
+
+    pub async fn search(&self, _query: &str, _top_k: usize) -> Result<Vec<String>> {
+        Self::unavailable()
     }
 }
 

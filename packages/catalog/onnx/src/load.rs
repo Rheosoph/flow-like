@@ -332,9 +332,7 @@ fn fixed_input_size(input: &Outlet, fallback: u32, layout: InputLayout) -> (u32,
 
 #[cfg(feature = "execute")]
 fn static_input_size(input: &Outlet, layout: InputLayout) -> Option<(u32, u32)> {
-    let Some(shape) = input_shape(input) else {
-        return None;
-    };
+    let shape = input_shape(input)?;
 
     match layout {
         InputLayout::Nchw if shape.len() == 4 => {
@@ -590,6 +588,7 @@ impl NodeLogic for LoadOnnxNode {
             "Load ONNX Model from Path",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "load");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

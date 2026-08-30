@@ -475,18 +475,64 @@ export function boardEditRecoveryKey(appId: string, boardId: string) {
 }
 
 /**
- * Deterministic owner+board guard for the zero-progress retry policy.
+ * Host-owned repair vocabulary, mirroring the FlowScript module templates the board specialist
+ * already plans segments against. The set is closed on purpose: the retry budget is the only thing
+ * stopping a reworded instruction from being redispatched forever, so a caller must not be able to
+ * mint unlimited budgets by inventing scope labels.
+ */
+export const FLOW_PILOT_BOARD_REPAIR_SCOPES = [
+	"foundation",
+	"inputs_and_access",
+	"domain_logic",
+	"outputs_and_review",
+	"observability",
+] as const;
+
+export type FlowPilotBoardRepairScope =
+	(typeof FLOW_PILOT_BOARD_REPAIR_SCOPES)[number];
+
+/**
+ * Runs that declare no scope — every caller from before the argument existed — share one bucket,
+ * which is exactly the previous whole-board behaviour.
+ */
+export const DEFAULT_BOARD_REPAIR_SCOPE = "whole_board";
+
+export function normalizeBoardRepairScope(value: string | undefined): string {
+	const candidate = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[\s-]+/g, "_");
+	return (FLOW_PILOT_BOARD_REPAIR_SCOPES as readonly string[]).includes(
+		candidate,
+	)
+		? candidate
+		: DEFAULT_BOARD_REPAIR_SCOPE;
+}
+
+/** Scope suffix separator; the closed vocabulary above never contains it. */
+const REPAIR_SCOPE_SEPARATOR = "::";
+
+/**
+ * Deterministic owner+board+scope guard for the zero-progress retry policy.
  *
- * A board specialist that returns no source, checks, or commit may be retried once with a
- * materially different strategy. A third run in the same assistant turn cannot add evidence and
- * used to burn another full nested deadline, so the frontend refuses it before dispatch.
+ * A board specialist that returns no source, checks, or commit may be retried with a materially
+ * different strategy. Once a scope has burned its budget, a further run against it cannot add
+ * evidence and would only spend another full nested deadline, so the frontend refuses it before
+ * dispatch.
+ *
+ * The budget is per repair scope because a board-wide counter cannot tell a reworded retry of the
+ * same failing build apart from a genuinely different repair, and so blocked both. A second
+ * per-board ceiling still bounds the total, so a caller cycling through every scope cannot turn the
+ * per-scope budgets into an unbounded number of dispatches.
  */
 export class BoardZeroProgressRetryGuard {
 	private readonly failures = new Map<string, number>();
+	private readonly boardFailures = new Map<string, number>();
 	private readonly recordedRuns = new Map<string, true>();
 
 	constructor(
-		private readonly maxRuns = 2,
+		private readonly maxRuns = 3,
+		private readonly maxRunsPerBoard = 6,
 		private readonly maxEntries = 512,
 	) {}
 
@@ -498,22 +544,48 @@ export class BoardZeroProgressRetryGuard {
 		return `${this.key(ownerId, boardKey)}\u0000${requestId}`;
 	}
 
-	canStart(ownerId: string, boardKey: string): boolean {
-		return (this.failures.get(this.key(ownerId, boardKey)) ?? 0) < this.maxRuns;
+	private scopeKey(ownerId: string, boardKey: string, scope: string) {
+		return `${this.key(ownerId, boardKey)}${REPAIR_SCOPE_SEPARATOR}${scope}`;
 	}
 
-	recordZeroProgress(ownerId: string, boardKey: string): number {
-		const key = this.key(ownerId, boardKey);
-		const failures = (this.failures.get(key) ?? 0) + 1;
-		// Refresh insertion order so the bounded map retains the most recently active owners.
-		this.failures.delete(key);
-		this.failures.set(key, failures);
-		while (this.failures.size > this.maxEntries) {
-			const oldest = this.failures.keys().next().value;
+	/** Refresh insertion order so a bounded map retains the most recently active owners. */
+	private bump(map: Map<string, number>, key: string): number {
+		const failures = (map.get(key) ?? 0) + 1;
+		map.delete(key);
+		map.set(key, failures);
+		while (map.size > this.maxEntries) {
+			const oldest = map.keys().next().value;
 			if (typeof oldest !== "string") break;
-			this.failures.delete(oldest);
+			map.delete(oldest);
 		}
 		return failures;
+	}
+
+	canStart(
+		ownerId: string,
+		boardKey: string,
+		scope: string = DEFAULT_BOARD_REPAIR_SCOPE,
+	): boolean {
+		const normalized = normalizeBoardRepairScope(scope);
+		return (
+			(this.failures.get(this.scopeKey(ownerId, boardKey, normalized)) ?? 0) <
+				this.maxRuns &&
+			(this.boardFailures.get(this.key(ownerId, boardKey)) ?? 0) <
+				this.maxRunsPerBoard
+		);
+	}
+
+	recordZeroProgress(
+		ownerId: string,
+		boardKey: string,
+		scope: string = DEFAULT_BOARD_REPAIR_SCOPE,
+	): number {
+		const normalized = normalizeBoardRepairScope(scope);
+		this.bump(this.boardFailures, this.key(ownerId, boardKey));
+		return this.bump(
+			this.failures,
+			this.scopeKey(ownerId, boardKey, normalized),
+		);
 	}
 
 	/**
@@ -525,7 +597,9 @@ export class BoardZeroProgressRetryGuard {
 		boardKey: string,
 		requestId: string,
 		madeRecoverableProgress: boolean,
+		scope: string = DEFAULT_BOARD_REPAIR_SCOPE,
 	): number {
+		const normalized = normalizeBoardRepairScope(scope);
 		const runKey = this.runKey(ownerId, boardKey, requestId);
 		if (this.recordedRuns.has(runKey)) {
 			// A deadline can report zero progress just before the cancelled execution exposes a
@@ -535,7 +609,9 @@ export class BoardZeroProgressRetryGuard {
 				this.clear(ownerId, boardKey);
 				return 0;
 			}
-			return this.failures.get(this.key(ownerId, boardKey)) ?? 0;
+			return (
+				this.failures.get(this.scopeKey(ownerId, boardKey, normalized)) ?? 0
+			);
 		}
 		this.recordedRuns.set(runKey, true);
 		while (this.recordedRuns.size > this.maxEntries) {
@@ -548,11 +624,20 @@ export class BoardZeroProgressRetryGuard {
 			this.clear(ownerId, boardKey);
 			return 0;
 		}
-		return this.recordZeroProgress(ownerId, boardKey);
+		return this.recordZeroProgress(ownerId, boardKey, normalized);
 	}
 
+	/**
+	 * Retained progress anywhere on the board proves the board is workable again, so it releases the
+	 * whole board — every scope bucket and the board ceiling — not only the scope that scored.
+	 */
 	clear(ownerId: string, boardKey: string): void {
-		this.failures.delete(this.key(ownerId, boardKey));
+		const owner = this.key(ownerId, boardKey);
+		this.boardFailures.delete(owner);
+		const prefix = `${owner}${REPAIR_SCOPE_SEPARATOR}`;
+		for (const key of [...this.failures.keys()]) {
+			if (key.startsWith(prefix)) this.failures.delete(key);
+		}
 	}
 }
 

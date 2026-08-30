@@ -24,6 +24,7 @@ const CHART_TYPE_OPTIONS: &[&str] = &[
     "auto", "bar", "line", "pie", "radar", "heatmap", "scatter", "funnel",
 ];
 
+#[cfg(feature = "execute")]
 fn get_chart_format_description(chart_type: &str) -> &'static str {
     match chart_type {
         "bar" | "auto" => {
@@ -59,6 +60,7 @@ Example: [{"id":"visits","label":"Visits","value":10000},{"id":"signups","label"
     }
 }
 
+#[cfg(feature = "execute")]
 fn build_system_prompt(chart_type: &str, schema_desc: &str, description: &str) -> String {
     let fmt = get_chart_format_description(chart_type);
     format!(
@@ -119,6 +121,7 @@ impl NodeLogic for ChartDataAgent {
             "Uses an LLM to write and run SQL against a DataFusion session, returning chart-ready struct data.",
             "UI/Elements/Charts/Agent",
         );
+        node.set_flowscript_name("ui", "chartDataAgent");
         node.set_version(5);
         node.add_icon("/flow/icons/a2ui.svg");
 
@@ -202,7 +205,8 @@ impl NodeLogic for ChartDataAgent {
             "Query results as an array of row structs (chart-ready)",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL query", VariableType::String);
 
@@ -304,6 +308,14 @@ impl NodeLogic for ChartDataAgent {
                 raw
             ));
         }
+
+        // Model-authored SQL over a session whose Lance tables accept DML —
+        // this surface only ever charts data, so enforce read-only.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql).map_err(|error| {
+            flow_like_types::anyhow!(
+                "Chart Data Agent generated a non-SELECT statement and refused to run it: {error}"
+            )
+        })?;
 
         let data_df = cached_session.ctx.sql(&sql).await?;
         let data_batches = data_df.collect().await?;

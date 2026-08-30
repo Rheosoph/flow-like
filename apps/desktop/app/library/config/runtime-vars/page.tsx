@@ -1,6 +1,5 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -16,6 +15,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	CheckCircle2Icon,
@@ -96,14 +96,23 @@ export default function RuntimeVariablesPage() {
 						<ShieldCheckIcon className="w-10 h-10 text-emerald-500" />
 					</div>
 					<div className="space-y-2">
-						<h2 className="text-2xl font-semibold">{t('allSet', 'All Set!')}</h2>
+						<h2 className="text-2xl font-semibold">
+							{t("allSet", "All Set!")}
+						</h2>
 						<p className="text-muted-foreground">
-							{t('thisAppDoesnapostRequireAnyRuntimeVariablesOrSecrets', "This app doesn't require any runtime variables or secrets.")}
+							{t(
+								"thisAppDoesnapostRequireAnyRuntimeVariablesOrSecrets",
+								"This app doesn't require any runtime variables or secrets.",
+							)}
 						</p>
 					</div>
-					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground"><Trans i18nKey="strongtipstrongMarkVariablesAsQuotruntimeConfiguredquotOrQuotsecretquotInTheFlowEditorToManageThemHere"><strong>Tip:</strong> Mark variables as &quot;Runtime
-						Configured&quot; or &quot;Secret&quot; in the Flow Editor to manage
-						them here.</Trans></div>
+					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground">
+						<Trans i18nKey="strongtipstrongMarkVariablesAsQuotruntimeConfiguredquotOrQuotsecretquotInTheFlowEditorToManageThemHere">
+							<strong>Tip:</strong> Mark variables as &quot;Runtime
+							Configured&quot; or &quot;Secret&quot; in the Flow Editor to
+							manage them here.
+						</Trans>
+					</div>
 				</div>
 			</main>
 		);
@@ -117,10 +126,13 @@ export default function RuntimeVariablesPage() {
 					<div className="flex items-start justify-between gap-4">
 						<div className="space-y-1">
 							<h1 className="text-2xl font-semibold tracking-tight">
-								{t('runtimeVariables', 'Runtime Variables')}
+								{t("runtimeVariables", "Runtime Variables")}
 							</h1>
 							<p className="text-sm text-muted-foreground">
-								{t('setSecretsAndUserspecificValuesThatYourFlowsNeedAtRuntime', "Set secrets and user-specific values that your flows need at runtime")}
+								{t(
+									"setSecretsAndUserspecificValuesThatYourFlowsNeedAtRuntime",
+									"Set secrets and user-specific values that your flows need at runtime",
+								)}
 							</p>
 						</div>
 						<StatusBadge
@@ -131,7 +143,13 @@ export default function RuntimeVariablesPage() {
 					</div>
 					<div className="space-y-2">
 						<Progress value={progressPercent} className="h-2" />
-						<p className="text-xs text-muted-foreground">{t('configuredcountOfTotalvariablesConfigured', '{{configuredCount}} of {{totalVariables}} configured', { configuredCount, totalVariables })}</p>
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"configuredcountOfTotalvariablesConfigured",
+								"{{configuredCount}} of {{totalVariables}} configured",
+								{ configuredCount, totalVariables },
+							)}
+						</p>
 					</div>
 				</div>
 			</header>
@@ -154,9 +172,14 @@ export default function RuntimeVariablesPage() {
 			<footer className="mt-auto p-4 rounded-xl border bg-muted/30 flex items-start gap-3">
 				<ShieldCheckIcon className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
 				<div className="space-y-1">
-					<p className="text-sm font-medium">{t('securityNotice', 'Security Notice')}</p>
+					<p className="text-sm font-medium">
+						{t("securityNotice", "Security Notice")}
+					</p>
 					<p className="text-xs text-muted-foreground">
-						{t('runtimeVariablesAreStoredLocallyOnYourDeviceAndAreNeverUploadedToTheServerForRemoteExecutionOnlyNonsecretRuntimeVariablesWillBeSent', "Runtime variables are stored locally on your device and are never uploaded to the server. For remote execution, only non-secret runtime variables will be sent.")}
+						{t(
+							"runtimeVariablesAreStoredLocallyOnYourDeviceAndAreNeverUploadedToTheServerForRemoteExecutionOnlyNonsecretRuntimeVariablesWillBeSent",
+							"Runtime variables are stored locally on your device and are never uploaded to the server. For remote execution, only non-secret runtime variables will be sent.",
+						)}
 					</p>
 				</div>
 			</footer>
@@ -174,13 +197,15 @@ function StatusBadge({
 		return (
 			<Badge className="gap-1.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20">
 				<CheckCircle2Icon className="w-3.5 h-3.5" />
-				{t('allConfigured', 'All Configured')}
+				{t("allConfigured", "All Configured")}
 			</Badge>
 		);
 	}
 	return (
 		<Badge variant="secondary" className="gap-1.5">
-			<CircleDotIcon className="w-3.5 h-3.5" />{`${configured}/${total}`}</Badge>
+			<CircleDotIcon className="w-3.5 h-3.5" />
+			{`${configured}/${total}`}
+		</Badge>
 	);
 }
 
@@ -225,13 +250,19 @@ function BoardSection({
 					</div>
 					<div className="text-left">
 						<h3 className="font-medium">{board.board_name}</h3>
-						<p className="text-sm text-muted-foreground">{t('configuredcountOfLengthConfigured', '{{configuredCount}} of {{length}} configured', { configuredCount, length: variables.length })}</p>
+						<p className="text-sm text-muted-foreground">
+							{t(
+								"configuredcountOfLengthConfigured",
+								"{{configuredCount}} of {{length}} configured",
+								{ configuredCount, length: variables.length },
+							)}
+						</p>
 					</div>
 				</div>
 				<div className="flex items-center gap-3">
 					{isComplete && (
 						<Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
-							{t('complete', 'Complete')}
+							{t("complete", "Complete")}
 						</Badge>
 					)}
 					<ChevronDownIcon
@@ -371,16 +402,19 @@ function VariableRow({
 											className="gap-1 text-xs shrink-0"
 										>
 											<KeyRoundIcon className="w-3 h-3" />
-											{t('secret', 'Secret')}
+											{t("secret", "Secret")}
 										</Badge>
 									</TooltipTrigger>
 									<TooltipContent>
-										{t('thisValueIsEncryptedAndNeverSentToRemoteServers', 'This value is encrypted and never sent to remote servers')}
+										{t(
+											"thisValueIsEncryptedAndNeverSentToRemoteServers",
+											"This value is encrypted and never sent to remote servers",
+										)}
 									</TooltipContent>
 								</Tooltip>
 							) : (
 								<Badge variant="outline" className="text-xs shrink-0">
-									{t('runtime', 'Runtime')}
+									{t("runtime", "Runtime")}
 								</Badge>
 							)}
 						</div>
@@ -406,7 +440,7 @@ function VariableRow({
 								<SaveIcon className="w-4 h-4" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>{t('save', 'Save')}</TooltipContent>
+						<TooltipContent>{t("save", "Save")}</TooltipContent>
 					</Tooltip>
 
 					{isConfigured && (
@@ -421,7 +455,7 @@ function VariableRow({
 									<Trash2Icon className="w-4 h-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>{t('delete', 'Delete')}</TooltipContent>
+							<TooltipContent>{t("delete", "Delete")}</TooltipContent>
 						</Tooltip>
 					)}
 				</div>

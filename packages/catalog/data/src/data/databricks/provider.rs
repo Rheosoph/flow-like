@@ -60,6 +60,7 @@ impl NodeLogic for DatabricksPatProviderNode {
             "Connect to Databricks using a Personal Access Token. Generate one in your Databricks workspace under User Settings > Developer > Access tokens.",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "providerPat");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin(
@@ -151,6 +152,7 @@ impl NodeLogic for DatabricksTokenProviderNode {
             "Connect to Databricks using an externally managed access token. Use this for tokens obtained from OAuth flows or service principals.",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "providerToken");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin(
@@ -238,6 +240,7 @@ impl NodeLogic for DatabricksServicePrincipalProviderNode {
             "Connect to Databricks using OAuth M2M (Machine-to-Machine) authentication with a service principal. Ideal for automated workflows and CI/CD pipelines.",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "providerServicePrincipal");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -442,6 +445,7 @@ impl NodeLogic for DatabricksOAuthProviderNode {
             "Connect to Databricks using OAuth. The workspace URL determines the OAuth endpoints.",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "providerOauth");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin(

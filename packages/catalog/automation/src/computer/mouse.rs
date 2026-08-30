@@ -26,6 +26,7 @@ impl NodeLogic for ComputerMouseMoveNode {
             "Moves the mouse cursor to the specified screen coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -160,6 +161,7 @@ impl NodeLogic for ComputerNaturalMouseMoveNode {
             "Moves the mouse cursor naturally using curved paths with variable speed to avoid bot detection",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "naturalMouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -302,6 +304,7 @@ fn try_template_match(template_bytes: &[u8], min_confidence: f32) -> Option<Temp
 ///
 /// Emits log messages for every step so the user can diagnose failures.
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn resolve_click_target(
     context: &mut ExecutionContext,
     _session: &AutomationSession,
@@ -493,7 +496,7 @@ fn perform_natural_move(
         return Ok(());
     }
 
-    let steps = ((distance / 10.0) as i32).max(10).min(100);
+    let steps = ((distance / 10.0) as i32).clamp(10, 100);
     let step_delay_ms = (duration_ms as f64 / steps as f64) as u64;
 
     // Generate random control points for bezier curve
@@ -596,6 +599,7 @@ impl NodeLogic for ComputerMouseClickNode {
             "Clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseClick");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -846,6 +850,7 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
             "Double-clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseDoubleClick");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -1071,6 +1076,7 @@ impl NodeLogic for ComputerMouseDragNode {
             "Drags the mouse from one position to another",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "mouseDrag");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -1210,6 +1216,7 @@ impl NodeLogic for ComputerScrollNode {
             "Scrolls the mouse wheel",
             "Automation/Computer/Mouse",
         );
+        node.set_flowscript_name("computer", "scroll");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

@@ -27,7 +27,7 @@ export function GraphControls({
 				size="icon"
 				className="h-8 w-8"
 				onClick={onZoomIn}
-				title={t('zoomIn', 'Zoom in')}
+				title={t("zoomIn", "Zoom in")}
 			>
 				<ZoomIn className="h-4 w-4" />
 			</Button>
@@ -36,7 +36,7 @@ export function GraphControls({
 				size="icon"
 				className="h-8 w-8"
 				onClick={onZoomOut}
-				title={t('zoomOut', 'Zoom out')}
+				title={t("zoomOut", "Zoom out")}
 			>
 				<ZoomOut className="h-4 w-4" />
 			</Button>
@@ -45,7 +45,7 @@ export function GraphControls({
 				size="icon"
 				className="h-8 w-8"
 				onClick={onFitView}
-				title={t('fitToView', 'Fit to view')}
+				title={t("fitToView", "Fit to view")}
 			>
 				<Maximize className="h-4 w-4" />
 			</Button>
@@ -55,7 +55,7 @@ export function GraphControls({
 					size="icon"
 					className="h-8 w-8"
 					onClick={onResetLayout}
-					title={t('resetLayout', 'Reset layout')}
+					title={t("resetLayout", "Reset layout")}
 				>
 					<RotateCcw className="h-4 w-4" />
 				</Button>

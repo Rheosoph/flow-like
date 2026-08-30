@@ -116,22 +116,28 @@ export function InviteUserDialog({
 						<UserPlus2Icon className="h-6 w-6 text-primary" />
 					</div>
 					<DialogTitle className="text-center text-xl">
-						{t('inviteNewMember', 'Invite New Member')}
+						{t("inviteNewMember", "Invite New Member")}
 					</DialogTitle>
 					<DialogDescription className="text-center">
-						{t('searchForUsersAndSendThemAnInvitationToJoinYourTeam', 'Search for users and send them an invitation to join your team')}
+						{t(
+							"searchForUsersAndSendThemAnInvitationToJoinYourTeam",
+							"Search for users and send them an invitation to join your team",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
 						<Label htmlFor="usernameOrEmail" className="text-sm font-medium">
-							{t('nameHandleOrEmail', 'Name, handle or email')}
+							{t("nameHandleOrEmail", "Name, handle or email")}
 						</Label>
 						<div className="relative">
 							<Input
 								id="usernameOrEmail"
-								placeholder={t('searchByNameHandleEmailOrUserId', 'Search by name, handle, email or user ID...')}
+								placeholder={t(
+									"searchByNameHandleEmailOrUserId",
+									"Search by name, handle, email or user ID...",
+								)}
 								value={invitee}
 								onChange={(e) => setInvitee(e.target.value)}
 								className="pl-10"
@@ -142,11 +148,14 @@ export function InviteUserDialog({
 
 					<div className="space-y-2">
 						<Label htmlFor="inviteMessage" className="text-sm font-medium">
-							{t('personalMessage', 'Personal Message')}
+							{t("personalMessage", "Personal Message")}
 						</Label>
 						<Textarea
 							id="inviteMessage"
-							placeholder={t('addAPersonalMessageToYourInvitationOptional', 'Add a personal message to your invitation (optional)')}
+							placeholder={t(
+								"addAPersonalMessageToYourInvitationOptional",
+								"Add a personal message to your invitation (optional)",
+							)}
 							value={message}
 							onChange={(e) => setMessage(e.target.value)}
 							className="min-h-20 resize-none"
@@ -160,7 +169,9 @@ export function InviteUserDialog({
 							{userSearch.isFetching && (
 								<div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
 									<RefreshCw className="h-4 w-4 animate-spin" />
-									<span className="text-sm">{t('searchingForUsers', 'Searching for users...')}</span>
+									<span className="text-sm">
+										{t("searchingForUsers", "Searching for users...")}
+									</span>
 								</div>
 							)}
 
@@ -169,7 +180,7 @@ export function InviteUserDialog({
 								userSearch.data.length > 0 && (
 									<div className="space-y-2">
 										<h4 className="text-sm font-medium text-foreground">
-											{t('searchResults', 'Search Results')}
+											{t("searchResults", "Search Results")}
 										</h4>
 										<div className="max-h-48 space-y-2 overflow-y-auto pr-2">
 											{userSearch.data.map((user) => {
@@ -235,7 +246,7 @@ export function InviteUserDialog({
 															className="h-8 shrink-0 gap-1.5 text-xs"
 														>
 															<Mail className="h-3 w-3" />
-															{t('invite', 'Invite')}
+															{t("invite", "Invite")}
 														</Button>
 													</div>
 												);
@@ -244,16 +255,53 @@ export function InviteUserDialog({
 									</div>
 								)}
 
+							{!userSearch.isFetching && userSearch.isError && (
+								<div className="flex flex-col items-center gap-3 py-8 text-center">
+									<div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+										<UserX className="h-6 w-6 text-destructive" />
+									</div>
+									<div className="space-y-1">
+										<p className="text-sm font-medium">
+											{t("userSearchFailed", "Could not search for users")}
+										</p>
+										<p className="text-xs text-muted-foreground">
+											{apiErrorMessage(
+												userSearch.error,
+												t(
+													"userSearchFailedHint",
+													"The directory is unreachable right now. Try again in a moment.",
+												),
+											)}
+										</p>
+									</div>
+									<Button
+										size="sm"
+										variant="outline"
+										className="h-8 gap-1.5 text-xs"
+										onClick={() => userSearch.refetch()}
+									>
+										<RefreshCw className="h-3 w-3" />
+										{t("retry", "Retry")}
+									</Button>
+								</div>
+							)}
+
 							{!userSearch.isFetching &&
+								!userSearch.isError &&
 								(!userSearch.data || userSearch.data.length === 0) && (
 									<div className="flex flex-col items-center gap-2 py-8 text-center">
 										<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
 											<UserX className="h-6 w-6 text-muted-foreground" />
 										</div>
 										<div className="space-y-1">
-											<p className="text-sm font-medium">{t('noUsersFound', 'No users found')}</p>
+											<p className="text-sm font-medium">
+												{t("noUsersFound", "No users found")}
+											</p>
 											<p className="text-xs text-muted-foreground">
-												{t('searchByNameHandleEmailOrUserId2', 'Search by name, handle, email or user ID')}
+												{t(
+													"searchByNameHandleEmailOrUserId2",
+													"Search by name, handle, email or user ID",
+												)}
 											</p>
 										</div>
 									</div>
@@ -265,7 +313,11 @@ export function InviteUserDialog({
 						<div className="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
 							<Users className="h-8 w-8" />
 							<p className="text-sm">
-								{t('keepTypingAtLeast2Characters', { defaultValue_zero: 'Start typing to search for users', defaultValue_other: 'Keep typing — at least 2 characters', count: inviteeSearch.length })}
+								{t("keepTypingAtLeast2Characters", {
+									defaultValue_zero: "Start typing to search for users",
+									defaultValue_other: "Keep typing — at least 2 characters",
+									count: inviteeSearch.length,
+								})}
 							</p>
 						</div>
 					)}
@@ -342,31 +394,40 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 			<TeamSection>
 				<SectionHeading
 					icon={UserPlusIcon}
-					title={t('inviteSomeoneDirectly', 'Invite someone directly')}
-					description={t('searchAFlowlikeAccountAndSendItAnInvitationWithANote', 'Search a Flow-Like account and send it an invitation with a note.')}
+					title={t("inviteSomeoneDirectly", "Invite someone directly")}
+					description={t(
+						"searchAFlowlikeAccountAndSendItAnInvitationWithANote",
+						"Search a Flow-Like account and send it an invitation with a note.",
+					)}
 					actions={
 						<InviteUserDialog
 							appId={appId}
 							trigger={
 								<Button size="sm" className={TEAM_ACTION_GRADIENT}>
 									<UserPlusIcon className="size-4" />
-									{t('invitePeople', 'Invite people')}
+									{t("invitePeople", "Invite people")}
 								</Button>
 							}
 						/>
 					}
 				/>
 				<TeamCallout icon={SearchIcon}>
-					{t('matchingAccountsShowUpAsYouTypeAUsernameOrEmailPickTheRightOneAndItGetsTheInvitationStraightAwayAddAPersonalMessageAndItTravelsWithTheInvite', "Matching accounts show up as you type a username or email — pick the right one and it gets the invitation straight away. Add a personal message and it travels with the invite.")}
+					{t(
+						"matchingAccountsShowUpAsYouTypeAUsernameOrEmailPickTheRightOneAndItGetsTheInvitationStraightAwayAddAPersonalMessageAndItTravelsWithTheInvite",
+						"Matching accounts show up as you type a username or email — pick the right one and it gets the invitation straight away. Add a personal message and it travels with the invite.",
+					)}
 				</TeamCallout>
 			</TeamSection>
 
 			<TeamSection>
 				<SectionHeading
 					icon={LinkIcon}
-					title={t('inviteLinks', 'Invite links')}
+					title={t("inviteLinks", "Invite links")}
 					count={links.data?.length ?? 0}
-					description={t('shareableLinksThatAddWhoeverOpensThemCapTheUsesOrLeaveThemOpen', 'Shareable links that add whoever opens them. Cap the uses, or leave them open.')}
+					description={t(
+						"shareableLinksThatAddWhoeverOpensThemCapTheUsesOrLeaveThemOpen",
+						"Shareable links that add whoever opens them. Cap the uses, or leave them open.",
+					)}
 					actions={
 						<Dialog
 							open={showCreateLinkDialog}
@@ -375,7 +436,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 							<DialogTrigger asChild>
 								<Button variant="outline" size="sm">
 									<PlusIcon className="size-4" />
-									{t('newLink', 'New link')}
+									{t("newLink", "New link")}
 								</Button>
 							</DialogTrigger>
 							<DialogContent className="sm:max-w-md">
@@ -384,22 +445,28 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 										<Link className="h-6 w-6 text-primary" />
 									</div>
 									<DialogTitle className="text-center text-xl">
-										{t('createInviteLink', 'Create Invite Link')}
+										{t("createInviteLink", "Create Invite Link")}
 									</DialogTitle>
 									<DialogDescription className="text-center">
-										{t('generateAShareableLinkWithOptionalUsageLimitsForYourTeam', "Generate a shareable link with optional usage limits for your team")}
+										{t(
+											"generateAShareableLinkWithOptionalUsageLimitsForYourTeam",
+											"Generate a shareable link with optional usage limits for your team",
+										)}
 									</DialogDescription>
 								</DialogHeader>
 
 								<div className="space-y-4 py-4">
 									<div className="space-y-2">
 										<Label htmlFor="linkName" className="text-sm font-medium">
-											{t('linkName', 'Link Name')}
+											{t("linkName", "Link Name")}
 										</Label>
 										<div className="relative">
 											<Input
 												id="linkName"
-												placeholder={t('egMarketingTeamBetaUsers', 'e.g., Marketing Team, Beta Users')}
+												placeholder={t(
+													"egMarketingTeamBetaUsers",
+													"e.g., Marketing Team, Beta Users",
+												)}
 												value={newLinkName}
 												onChange={(e) => setNewLinkName(e.target.value)}
 												className="pl-10"
@@ -410,13 +477,16 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 
 									<div className="space-y-2">
 										<Label htmlFor="maxUses" className="text-sm font-medium">
-											{t('maximumUses', 'Maximum Uses')}
+											{t("maximumUses", "Maximum Uses")}
 										</Label>
 										<div className="relative">
 											<Input
 												id="maxUses"
 												type="number"
-												placeholder={t('leaveEmptyForUnlimitedUses', 'Leave empty for unlimited uses')}
+												placeholder={t(
+													"leaveEmptyForUnlimitedUses",
+													"Leave empty for unlimited uses",
+												)}
 												value={newLinkMaxUses}
 												onChange={(e) => setNewLinkMaxUses(e.target.value)}
 												className="pl-10"
@@ -424,30 +494,44 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 											<Users className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 										</div>
 										<p className="text-xs text-muted-foreground">
-											{t('setALimitOnHowManyPeopleCanUseThisLinkLeaveEmptyForUnlimitedAccess', "Set a limit on how many people can use this link. Leave empty for unlimited access.")}
+											{t(
+												"setALimitOnHowManyPeopleCanUseThisLinkLeaveEmptyForUnlimitedAccess",
+												"Set a limit on how many people can use this link. Leave empty for unlimited access.",
+											)}
 										</p>
 									</div>
 
 									<div className="space-y-2">
 										<Label htmlFor="linkExpiry" className="text-sm font-medium">
-											{t('expiresAfter', 'Expires After')}
+											{t("expiresAfter", "Expires After")}
 										</Label>
 										<Select
 											value={newLinkExpiry}
 											onValueChange={setNewLinkExpiry}
 										>
 											<SelectTrigger id="linkExpiry">
-												<SelectValue placeholder={t('selectExpiry', 'Select expiry')} />
+												<SelectValue
+													placeholder={t("selectExpiry", "Select expiry")}
+												/>
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="24">{t('1Day', '1 day')}</SelectItem>
-												<SelectItem value="168">{t('7Days', '7 days')}</SelectItem>
-												<SelectItem value="720">{t('30Days', '30 days')}</SelectItem>
-												<SelectItem value="never">{t('never', 'Never')}</SelectItem>
+												<SelectItem value="24">{t("1Day", "1 day")}</SelectItem>
+												<SelectItem value="168">
+													{t("7Days", "7 days")}
+												</SelectItem>
+												<SelectItem value="720">
+													{t("30Days", "30 days")}
+												</SelectItem>
+												<SelectItem value="never">
+													{t("never", "Never")}
+												</SelectItem>
 											</SelectContent>
 										</Select>
 										<p className="text-xs text-muted-foreground">
-											{t('expiredLinksStopWorkingButStayListedUntilYouDeleteThem', "Expired links stop working but stay listed until you delete them.")}
+											{t(
+												"expiredLinksStopWorkingButStayListedUntilYouDeleteThem",
+												"Expired links stop working but stay listed until you delete them.",
+											)}
 										</p>
 									</div>
 								</div>
@@ -462,13 +546,13 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 											setNewLinkExpiry("168");
 										}}
 									>
-										{t('cancel', 'Cancel')}
+										{t("cancel", "Cancel")}
 									</Button>
 									<Button
 										onClick={createInviteLink}
 										disabled={!newLinkName.trim()}
 									>
-										{t('createLink', 'Create Link')}
+										{t("createLink", "Create Link")}
 									</Button>
 								</DialogFooter>
 							</DialogContent>
@@ -479,8 +563,11 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 				{(links.data?.length ?? 0) === 0 ? (
 					<EmptyState
 						className="max-w-full"
-						title={t('noInviteLinks', 'No Invite Links')}
-						description={t('createInviteLinksToShareYourProject', 'Create Invite Links to share your project')}
+						title={t("noInviteLinks", "No Invite Links")}
+						description={t(
+							"createInviteLinksToShareYourProject",
+							"Create Invite Links to share your project",
+						)}
 						icons={[UsersIcon, LinkIcon, MailIcon]}
 					/>
 				) : (
@@ -492,9 +579,17 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 									<div className={TEAM_ROW_TITLE}>{link.name}</div>
 									<div className={TEAM_ROW_META}>
 										<span className="flex items-center gap-1">
-											<UserCheckIcon className="size-3.5" />{t('count_joinedJoined', '{{count_joined}} joined', { count_joined: link.count_joined })}</span>
+											<UserCheckIcon className="size-3.5" />
+											{t("count_joinedJoined", "{{count_joined}} joined", {
+												count_joined: link.count_joined,
+											})}
+										</span>
 										<span>
-											{link.max_uses > 0 ? t('ofMax_uses', 'of {{max_uses}}', { max_uses: link.max_uses }) : t('noLimit', 'no limit')}
+											{link.max_uses > 0
+												? t("ofMax_uses", "of {{max_uses}}", {
+														max_uses: link.max_uses,
+													})
+												: t("noLimit", "no limit")}
 										</span>
 										<span className="flex items-center gap-1">
 											<ClockIcon className="size-3.5" />
@@ -533,7 +628,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 												variant="outline"
 												size="icon"
 												className="size-8"
-												aria-label={t('copyInviteLink', 'Copy invite link')}
+												aria-label={t("copyInviteLink", "Copy invite link")}
 											>
 												<CopyIcon className="size-4" />
 											</Button>
@@ -543,7 +638,10 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 														variant="ghost"
 														size="icon"
 														className="size-8"
-														aria-label={t('inviteLinkOptions', 'Invite link options')}
+														aria-label={t(
+															"inviteLinkOptions",
+															"Invite link options",
+														)}
 													>
 														<MoreVerticalIcon className="size-4" />
 													</Button>
@@ -553,7 +651,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 														onClick={() => copyInviteLink(webLink(link.token))}
 													>
 														<ExternalLinkIcon className="size-4" />
-														{t('copyWebLink', 'Copy Web Link')}
+														{t("copyWebLink", "Copy Web Link")}
 													</DropdownMenuItem>
 													<DropdownMenuItem
 														onClick={() =>
@@ -563,7 +661,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 														}
 													>
 														<CopyIcon className="size-4" />
-														{t('copyDesktopLink', 'Copy Desktop Link')}
+														{t("copyDesktopLink", "Copy Desktop Link")}
 													</DropdownMenuItem>
 													<AlertDialog>
 														<AlertDialogTrigger asChild>
@@ -572,13 +670,13 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 																onSelect={(e) => e.preventDefault()}
 															>
 																<Trash2Icon className="size-4" />
-																{t('delete', 'Delete')}
+																{t("delete", "Delete")}
 															</DropdownMenuItem>
 														</AlertDialogTrigger>
 														<AlertDialogContent>
 															<AlertDialogHeader>
 																<AlertDialogTitle>
-																	{t('deleteInviteLink', 'Delete Invite Link')}
+																	{t("deleteInviteLink", "Delete Invite Link")}
 																</AlertDialogTitle>
 																<AlertDialogDescription>
 																	Are you sure you want to delete &quot;
@@ -588,12 +686,14 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 																</AlertDialogDescription>
 															</AlertDialogHeader>
 															<AlertDialogFooter>
-																<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+																<AlertDialogCancel>
+																	{t("cancel", "Cancel")}
+																</AlertDialogCancel>
 																<AlertDialogAction
 																	onClick={() => deleteInviteLink(link.id)}
 																	className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 																>
-																	{t('delete', 'Delete')}
+																	{t("delete", "Delete")}
 																</AlertDialogAction>
 															</AlertDialogFooter>
 														</AlertDialogContent>
@@ -609,7 +709,10 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 				)}
 
 				<TeamHint>
-					{t('everyLinkCopiesEitherAsAWebAddressOrAsAFlowlikeLinkThatOpensStraightInTheDesktopApp', "Every link copies either as a web address or as a flow-like:// link that opens straight in the desktop app.")}
+					{t(
+						"everyLinkCopiesEitherAsAWebAddressOrAsAFlowlikeLinkThatOpensStraightInTheDesktopApp",
+						"Every link copies either as a web address or as a flow-like:// link that opens straight in the desktop app.",
+					)}
 				</TeamHint>
 			</TeamSection>
 		</div>

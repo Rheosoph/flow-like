@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id, find_element};
+use super::element_utils::extract_element_id;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -36,6 +36,7 @@ impl NodeLogic for UpdateToggle {
             "Set or toggle checkbox/switch checked state",
             "UI/Elements/Checkbox",
         );
+        node.set_flowscript_name("ui", "updateToggle");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);
@@ -46,7 +47,8 @@ impl NodeLogic for UpdateToggle {
             "Reference to checkbox or switch element",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "operation",
@@ -101,9 +103,9 @@ impl NodeLogic for UpdateToggle {
                 context.set_pin_value("state", json!(checked)).await?;
             }
             "Toggle" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let current = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("checked").or_else(|| c.get("value")))
@@ -118,9 +120,9 @@ impl NodeLogic for UpdateToggle {
                 context.set_pin_value("state", json!(new_state)).await?;
             }
             "Get" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let checked = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("checked").or_else(|| c.get("value")))

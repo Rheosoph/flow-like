@@ -28,6 +28,7 @@ impl NodeLogic for PushStatsNode {
             "Pushes multiple LLM usage stats to the chat at once",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushStats");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

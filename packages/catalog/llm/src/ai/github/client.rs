@@ -6,7 +6,9 @@
 //! - **Local Client**: Uses stdio connection to local Copilot CLI (desktop/local execution)
 //! - **Server Client**: Uses TCP connection to remote Copilot endpoint (server/distributed execution)
 
-use super::{COPILOT_CLIENT_PREFIX, CopilotClientHandle, CopilotLogLevel};
+#[cfg(feature = "execute")]
+use super::COPILOT_CLIENT_PREFIX;
+use super::{CopilotClientHandle, CopilotLogLevel};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -52,6 +54,7 @@ impl NodeLogic for CopilotLocalClientBuilderNode {
             "Builds a local Copilot client configuration (stdio-based). Requires 'copilot' CLI to be installed and in PATH, or specify the CLI path explicitly.",
             "AI/GitHub/Copilot/Client",
         );
+        node.set_flowscript_name("github.copilot", "localClientConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -148,6 +151,7 @@ impl NodeLogic for CopilotServerClientBuilderNode {
             "Builds a server/remote Copilot client configuration (TCP-based)",
             "AI/GitHub/Copilot/Client",
         );
+        node.set_flowscript_name("github.copilot", "serverClientConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -235,6 +239,7 @@ impl NodeLogic for CopilotLocalClientStartNode {
             "Starts a local Copilot client using stdio. Requires 'copilot' CLI installed.",
             "AI/GitHub/Copilot/Client",
         );
+        node.set_flowscript_name("github.copilot", "startLocalClient");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -391,6 +396,7 @@ impl NodeLogic for CopilotServerClientStartNode {
             "Starts a server/remote Copilot client using TCP",
             "AI/GitHub/Copilot/Client",
         );
+        node.set_flowscript_name("github.copilot", "startServerClient");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -548,6 +554,8 @@ impl NodeLogic for CopilotClientStopNode {
             "Gracefully stops a running Copilot client (local or server)",
             "AI/GitHub/Copilot/Client",
         );
+        node.set_flowscript_name("github.copilot", "stop");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

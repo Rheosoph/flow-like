@@ -26,6 +26,7 @@ impl NodeLogic for ExtractActionContextField {
             "Extracts a field value from an action context payload by field name",
             "Events/Widget",
         );
+        node.set_flowscript_name("events", "extractActionContext");
         node.add_icon("/flow/icons/event.svg");
 
         node.add_input_pin(

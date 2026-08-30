@@ -46,7 +46,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `switch` - Toggle switch (on/off setting)
 - `radioGroup` - Radio buttons (single choice among few visible options)
 - `dateTimeInput` - Date/time picker (`mode`: date | time | datetime)
-- `fileInput` - File upload (`accept`, `multiple`, `maxSize`, `maxFiles`)
+- `fileInput` - File upload (`accept`, `multiple`, `maxSize`, `maxFiles`, `directory` for whole-folder uploads - implies `multiple`)
 - `imageInput` - Image upload with preview (`aspectRatio`, `showPreview`)
 - `voiceInput` - Microphone recording / dictation - THE component for every record-audio, voice-note, speech or push-to-talk request (full docs in the Voice Input section)
 - `feedback` - Rating input: thumbs up/down (default) or a numeric 0-5 button scale (`mode`: "rating"/"scale" with `positiveRating`/`negativeRating`), optional comment dialog - the only rating component (no star rating exists)

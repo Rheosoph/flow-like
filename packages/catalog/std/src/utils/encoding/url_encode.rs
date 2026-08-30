@@ -24,6 +24,8 @@ impl NodeLogic for UrlEncodeNode {
             "Percent-encodes a string for safe use in URLs (RFC 3986)",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "urlEncode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "String to encode", VariableType::String);

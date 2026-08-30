@@ -4,10 +4,24 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_storage::databases::vector::lancedb::IndexConfigDto;
-use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{
+    JsonSchema, async_trait,
+    json::{Deserialize, Serialize},
+};
 
 use super::NodeDBConnection;
+
+/// Stable metadata shape for Lance index descriptions. The execution result
+/// uses the storage DTO with the same serialized fields, while metadata builds
+/// avoid compiling the LanceDB implementation merely to describe this pin.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+struct IndexConfigMetadata {
+    name: String,
+    index_type: String,
+    columns: Vec<String>,
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -28,6 +42,8 @@ impl NodeLogic for ListIndicesNode {
             "Lists all indices on a database table",
             "Data/Database/Meta",
         );
+        node.set_flowscript_name("db", "listIndices");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -54,11 +70,12 @@ impl NodeLogic for ListIndicesNode {
             VariableType::Struct,
         )
         .set_value_type(ValueType::Array)
-        .set_schema::<IndexConfigDto>();
+        .set_schema::<IndexConfigMetadata>();
 
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -72,5 +89,12 @@ impl NodeLogic for ListIndicesNode {
         context.set_pin_value("indices", json!(indices)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

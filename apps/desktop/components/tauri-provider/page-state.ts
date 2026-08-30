@@ -107,10 +107,18 @@ export class PageState implements IPageState {
 				// Native get_page opens the board manifest for the requested view. Ensure
 				// that exact local storage view exists before retrying the lookup.
 				await this.backend.boardState.getBoard(appId, boardId, version, true);
-			} catch {
+			} catch (repairError) {
 				// Preserve the authoritative native storage failure when repair itself
-				// is unavailable (offline, unauthenticated, or a real storage error).
-				throw localError;
+				// is unavailable (offline, unauthenticated, or a real storage error) — but
+				// never lose why the repair failed. Without it every cause, from a stale
+				// offline flag to a server 404, reads as "the file is missing".
+				console.error(
+					`[PageState] Board ${boardId} could not be repaired for page ${pageId}:`,
+					repairError,
+				);
+				throw new Error(nativeErrorMessage(localError) ?? String(localError), {
+					cause: repairError,
+				});
 			}
 
 			return invoke<IPage>("get_page", {
@@ -134,8 +142,12 @@ export class PageState implements IPageState {
 		const page = remotePage.boardId
 			? remotePage
 			: { ...remotePage, boardId: boardId };
-		await invoke("update_page", { appId, page }).catch(() => {});
-		return page;
+		// `update_page` returns the page as stored — it rewrites workflow targets that name
+		// another app — so the caller renders what is on disk rather than what arrived.
+		const stored = await invoke<IPage>("update_page", { appId, page }).catch(
+			() => undefined,
+		);
+		return stored ?? page;
 	}
 
 	private async pushPageToServer(appId: string, page: IPage): Promise<void> {
@@ -161,8 +173,10 @@ export class PageState implements IPageState {
 		version?: [number, number, number],
 		ifNoneMatch?: string,
 	): Promise<{ page: IPage | null; notModified: boolean; etag?: string }> {
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) {
+		// Gate on explicit local-only, not on `isOffline`: an app whose visibility this device
+		// has not learned yet would otherwise be denied the very fallback that repairs it.
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
 			return { page: null, notModified: false };
 		}
 
@@ -253,8 +267,11 @@ export class PageState implements IPageState {
 			...remotePage,
 			boardId: remotePage.boardId || localPage.boardId,
 		};
-		await invoke("update_page", { appId, page: merged }).catch(() => {});
-		return merged;
+		const stored = await invoke<IPage>("update_page", {
+			appId,
+			page: merged,
+		}).catch(() => undefined);
+		return stored ?? merged;
 	}
 
 	async getPages(appId: string, boardId?: string): Promise<PageListItem[]> {
@@ -404,7 +421,12 @@ export class PageState implements IPageState {
 			const nativeMiss = isNativePageNotFoundError(localError);
 			const contentUnavailable =
 				isNativePageContentUnavailableError(localError);
-			if (!nativeMiss && !contentUnavailable) {
+			// A board this device never downloaded is recoverable too: rendering needs the
+			// page payload, which the server holds and serves, and reaching here already
+			// means `getNativePage`'s own board repair failed. Refusing to ask would leave
+			// the interface dark over a file that rendering does not read.
+			const boardUnavailable = isNativePageBoardUnavailableError(localError);
+			if (!nativeMiss && !contentUnavailable && !boardUnavailable) {
 				throw localError;
 			}
 
@@ -480,10 +502,15 @@ export class PageState implements IPageState {
 
 	async updatePage(appId: string, page: IPage): Promise<void> {
 		const normalizedPage = normalizePageForPersistence(page);
-		await invoke("update_page", { appId, page: normalizedPage });
+		// The server is sent what was actually stored locally, so a page whose workflow targets
+		// were rewritten does not re-send the foreign ids on every save.
+		const stored = await invoke<IPage>("update_page", {
+			appId,
+			page: normalizedPage,
+		});
 
 		try {
-			await this.pushPageToServer(appId, normalizedPage);
+			await this.pushPageToServer(appId, stored ?? normalizedPage);
 		} catch (error) {
 			console.error("Failed to sync page update to server:", error);
 			throw error;

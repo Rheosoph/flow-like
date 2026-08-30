@@ -6,6 +6,7 @@ import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, Hotspot, ImageHotspotComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -25,7 +26,7 @@ export function A2UIImageHotspot({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
-	const src = useResolved<string>(component.src);
+	const { url: src } = useAssetUrl(useResolved<string>(component.src));
 	const alt = useResolved<string>(component.alt) ?? "Interactive image";
 	const rawHotspots = useResolved<Hotspot[]>(component.hotspots) ?? [];
 	const showMarkers = useResolved<boolean>(component.showMarkers) ?? true;

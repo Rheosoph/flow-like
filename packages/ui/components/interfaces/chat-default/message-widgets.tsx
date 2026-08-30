@@ -1,9 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Maximize2 } from "lucide-react";
+import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
 import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
 import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
@@ -15,7 +15,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../../a2ui/types";
-import { Dialog, DialogContent, DialogTitle } from "../../ui";
+import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import type { IChatWidget } from "./chat-db";
 
 function buildSurface(widget: IChatWidget): Surface {
@@ -122,7 +122,7 @@ function MessageWidget({
 
 			<Dialog open={maximized} onOpenChange={setMaximized}>
 				<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]! flex flex-col">
-					<DialogTitle className="sr-only">{t('widget', 'Widget')}</DialogTitle>
+					<DialogTitle className="sr-only">{t("widget", "Widget")}</DialogTitle>
 					<div className="flex-1 overflow-auto p-4">{renderer}</div>
 				</DialogContent>
 			</Dialog>

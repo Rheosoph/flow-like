@@ -81,8 +81,11 @@ function formatDuration(seconds: number): string {
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
-	return i18next.t('valMb', '{{val}} MB', { val: (bytes / (1024 * 1024)).toFixed(1) });
+	if (bytes < 1024 * 1024)
+		return i18next.t("valKb", "{{val}} KB", { val: (bytes / 1024).toFixed(1) });
+	return i18next.t("valMb", "{{val}} MB", {
+		val: (bytes / (1024 * 1024)).toFixed(1),
+	});
 }
 
 function errorName(error: unknown): string | undefined {
@@ -105,20 +108,35 @@ function voiceCaptureErrorMessage(error: unknown): string {
 		case "SecurityError":
 			return MICROPHONE_BLOCKED_MESSAGE;
 		case "NotFoundError":
-			return i18next.t('noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain', 'No microphone was found. Connect or enable a microphone and try again.');
+			return i18next.t(
+				"noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain",
+				"No microphone was found. Connect or enable a microphone and try again.",
+			);
 		case "NotReadableError":
 		case "AbortError":
-			return i18next.t('theMicrophoneIsUnavailableCloseOtherAppsUsingItAndTryAgain', 'The microphone is unavailable. Close other apps using it and try again.');
+			return i18next.t(
+				"theMicrophoneIsUnavailableCloseOtherAppsUsingItAndTryAgain",
+				"The microphone is unavailable. Close other apps using it and try again.",
+			);
 		default:
-			return i18next.t('microphoneAccessFailedCheckYourBrowserAndSystemPermissionsThenTryAgain', 'Microphone access failed. Check your browser and system permissions, then try again.');
+			return i18next.t(
+				"microphoneAccessFailedCheckYourBrowserAndSystemPermissionsThenTryAgain",
+				"Microphone access failed. Check your browser and system permissions, then try again.",
+			);
 	}
 }
 
 function unsupportedVoiceCaptureMessage(): string {
 	if (typeof window !== "undefined" && window.isSecureContext === false) {
-		return i18next.t('voiceRecordingRequiresHttpsOrLocalhost', 'Voice recording requires HTTPS or localhost.');
+		return i18next.t(
+			"voiceRecordingRequiresHttpsOrLocalhost",
+			"Voice recording requires HTTPS or localhost.",
+		);
 	}
-	return i18next.t('voiceRecordingIsNotSupportedInThisBrowserOrEmbeddedPage', 'Voice recording is not supported in this browser or embedded page.');
+	return i18next.t(
+		"voiceRecordingIsNotSupportedInThisBrowserOrEmbeddedPage",
+		"Voice recording is not supported in this browser or embedded page.",
+	);
 }
 
 export function A2UIVoiceInput({
@@ -283,7 +301,7 @@ export function A2UIVoiceInput({
 				setLocalVoice({
 					...voiceData,
 					uploading: false,
-					uploadError: t('uploadFailed', 'Upload failed'),
+					uploadError: t("uploadFailed", "Upload failed"),
 				});
 				setIsUploading(false);
 			}
@@ -379,15 +397,24 @@ export function A2UIVoiceInput({
 			}
 			if (code === "audio-capture") {
 				setCaptureError(
-					t('noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain', 'No microphone was found. Connect or enable a microphone and try again.'),
+					t(
+						"noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain",
+						"No microphone was found. Connect or enable a microphone and try again.",
+					),
 				);
 				return;
 			}
 			setSpeechFailed(true);
 			setCaptureError(
 				recorder.isSupported
-					? t('speechRecognitionIsUnavailableTapAgainToRecordAudioInstead', 'Speech recognition is unavailable. Tap again to record audio instead.')
-					: t('speechRecognitionIsUnavailableAndThisBrowserCannotRecordAudio', 'Speech recognition is unavailable, and this browser cannot record audio.'),
+					? t(
+							"speechRecognitionIsUnavailableTapAgainToRecordAudioInstead",
+							"Speech recognition is unavailable. Tap again to record audio instead.",
+						)
+					: t(
+							"speechRecognitionIsUnavailableAndThisBrowserCannotRecordAudio",
+							"Speech recognition is unavailable, and this browser cannot record audio.",
+						),
 			);
 		},
 	});
@@ -418,7 +445,10 @@ export function A2UIVoiceInput({
 			console.warn(
 				"[voiceInput] STT requested but the Web Speech API is unavailable here " +
 					"(common in desktop/Tauri webviews); falling back to audio recording. " +
-					t('transcribeTheRecordingInTheFlowInstead', 'Transcribe the recording in the flow instead.'),
+					t(
+						"transcribeTheRecordingInTheFlowInstead",
+						"Transcribe the recording in the flow instead.",
+					),
 			);
 		}
 	}, [mounted, mode, speech.isSupported]);
@@ -593,7 +623,9 @@ export function A2UIVoiceInput({
 				};
 
 	const recordAgainHint =
-		invoke === "hold" ? t('holdToRecordAgain', 'Hold to record again') : t('tapToRecordAgain', 'Tap to record again');
+		invoke === "hold"
+			? t("holdToRecordAgain", "Hold to record again")
+			: t("tapToRecordAgain", "Tap to record again");
 
 	const hint = arming
 		? "Starting…"
@@ -602,12 +634,15 @@ export function A2UIVoiceInput({
 				? speech.transcript || "Listening…"
 				: formatDuration(recorder.recordingTime)
 			: invoke === "hold"
-				? t('holdToRecord', 'Hold to record')
+				? t("holdToRecord", "Hold to record")
 				: effectiveMode === "stt"
-					? t('tapToDictate', 'Tap to dictate')
+					? t("tapToDictate", "Tap to dictate")
 					: invoke === "auto"
-						? t('tapToStartStopsWhenYouPause', 'Tap to start — stops when you pause')
-						: t('tapToStartRecording', 'Tap to start recording');
+						? t(
+								"tapToStartStopsWhenYouPause",
+								"Tap to start — stops when you pause",
+							)
+						: t("tapToStartRecording", "Tap to start recording");
 
 	const containerStyle = resolveStyle(style);
 	const inlineStyle = resolveInlineStyle(style);
@@ -657,7 +692,7 @@ export function A2UIVoiceInput({
 								/>
 							</div>
 							<p className="animate-pulse text-sm text-muted-foreground">
-								{t('processing', 'Processing…')}
+								{t("processing", "Processing…")}
 							</p>
 							<div className="flex items-center gap-3">
 								{!blocked && (

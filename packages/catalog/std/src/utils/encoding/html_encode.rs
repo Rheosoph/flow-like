@@ -24,6 +24,8 @@ impl NodeLogic for HtmlEncodeNode {
             "Encodes special characters as HTML entities (&amp; &lt; &gt; &quot; &#39;)",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("encoding", "htmlEncode");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "String to encode", VariableType::String);

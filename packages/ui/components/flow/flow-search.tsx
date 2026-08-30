@@ -268,7 +268,11 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			nodeId: variable.id,
 			name: variable.name,
 			nodeName: variable.name,
-			description: variable.description || i18next.t('data_typeVariable', '{{data_type}} variable', { data_type: variable.data_type }),
+			description:
+				variable.description ||
+				i18next.t("data_typeVariable", "{{data_type}} variable", {
+					data_type: variable.data_type,
+				}),
 			matchedField: "variable",
 			matchedValue: variable.name,
 			category: variable.category ?? undefined,
@@ -341,6 +345,10 @@ function useSearchIndex(board: IBoard | undefined, enabled: boolean) {
 						}
 					}
 				}
+				// Operator node names ("/", "!=", …) are pure punctuation and would
+				// otherwise be split away entirely — keep operator runs as tokens.
+				const operators = text.match(/[+\-*/%^!<>=&|~]+/g);
+				if (operators) out.push(...operators);
 				return out;
 			},
 		});
@@ -527,7 +535,9 @@ const SearchResultItem = memo(
 								<FocusIcon className="size-3.5" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent side="left">{i18next.t('navigateToNode', 'Navigate to node')}</TooltipContent>
+						<TooltipContent side="left">
+							{i18next.t("navigateToNode", "Navigate to node")}
+						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
 			</CommandItem>
@@ -751,7 +761,7 @@ export const FlowSearch = memo(
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
 							onKeyDown={handleKeyDown}
-							placeholder={i18next.t('searchBoard', 'Search board...')}
+							placeholder={i18next.t("searchBoard", "Search board...")}
 							className="h-8 text-sm"
 							autoFocus
 						/>
@@ -768,14 +778,18 @@ export const FlowSearch = memo(
 					<div className="flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground border-b border-border">
 						<span>
 							{results.length > 0
-								? i18next.t('countResults', {
-										defaultValue_one: '{{count}} result',
-										defaultValue_other: '{{count}} results',
+								? i18next.t("countResults", {
+										defaultValue_one: "{{count}} result",
+										defaultValue_other: "{{count}} results",
 										count: results.length,
 									})
 								: query
-									? i18next.t('noResults', 'No results')
-									: i18next.t('totaldocumentsItemsIndexed', '{{totalDocuments}} items indexed', { totalDocuments })}
+									? i18next.t("noResults", "No results")
+									: i18next.t(
+											"totaldocumentsItemsIndexed",
+											"{{totalDocuments}} items indexed",
+											{ totalDocuments },
+										)}
 						</span>
 						{results.length > 0 && (
 							<div className="flex items-center gap-1">
@@ -807,11 +821,20 @@ export const FlowSearch = memo(
 					<div className="flex-1 overflow-y-auto">
 						{!query && (
 							<div className="p-4 text-center text-sm text-muted-foreground">
-								{i18next.t('typeToSearchNodesLayersPinValuesAndComments', 'Type to search nodes, layers, pin values, and comments...')}
+								{i18next.t(
+									"typeToSearchNodesLayersPinValuesAndComments",
+									"Type to search nodes, layers, pin values, and comments...",
+								)}
 							</div>
 						)}
 						{query && results.length === 0 && (
-							<div className="p-4 text-center text-sm text-muted-foreground">{i18next.t('noResultsFoundForQuery', 'No results found for "{{query}}"', { query })}</div>
+							<div className="p-4 text-center text-sm text-muted-foreground">
+								{i18next.t(
+									"noResultsFoundForQuery",
+									'No results found for "{{query}}"',
+									{ query },
+								)}
+							</div>
 						)}
 						{results.map((result, index) => (
 							<SidebarSearchResultItem
@@ -831,8 +854,11 @@ export const FlowSearch = memo(
 			<CommandDialog
 				open={open}
 				onOpenChange={handleOpenChange}
-				title={i18next.t('searchBoard2', 'Search Board')}
-				description={i18next.t('searchForNodesLayersPinValuesAndComments', 'Search for nodes, layers, pin values, and comments')}
+				title={i18next.t("searchBoard2", "Search Board")}
+				description={i18next.t(
+					"searchForNodesLayersPinValuesAndComments",
+					"Search for nodes, layers, pin values, and comments",
+				)}
 				showCloseButton={false}
 			>
 				{/* Custom header with sidebar toggle and close button */}
@@ -850,7 +876,9 @@ export const FlowSearch = memo(
 										<PanelRightCloseIcon className="size-4" />
 									</Button>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{i18next.t('openInSidebar', 'Open in sidebar')}</TooltipContent>
+								<TooltipContent side="bottom">
+									{i18next.t("openInSidebar", "Open in sidebar")}
+								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>
 					)}
@@ -864,22 +892,46 @@ export const FlowSearch = memo(
 					</Button>
 				</div>
 				<CommandInput
-					placeholder={i18next.t('searchNodesLayersPinsVariables', 'Search nodes, layers, pins, variables...')}
+					placeholder={i18next.t(
+						"searchNodesLayersPinsVariables",
+						"Search nodes, layers, pins, variables...",
+					)}
 					value={query}
 					onValueChange={setQuery}
 				/>
 				<CommandList className="max-h-[400px]">
 					{query && results.length === 0 && (
-						<CommandEmpty>{i18next.t('noResultsFoundForQuery', 'No results found for "{{query}}"', { query })}</CommandEmpty>
+						<CommandEmpty>
+							{i18next.t(
+								"noResultsFoundForQuery",
+								'No results found for "{{query}}"',
+								{ query },
+							)}
+						</CommandEmpty>
 					)}
 					{!query && (
 						<div className="py-6 text-center text-sm text-muted-foreground">
-							<p>{i18next.t('typeToSearchNodesLayersPinsVariables', 'Type to search nodes, layers, pins, variables...')}</p>
-							<p className="text-xs mt-1 text-muted-foreground/70">{i18next.t('totaldocumentsItemsIndexed', '{{totalDocuments}} items indexed', { totalDocuments })}</p>
+							<p>
+								{i18next.t(
+									"typeToSearchNodesLayersPinsVariables",
+									"Type to search nodes, layers, pins, variables...",
+								)}
+							</p>
+							<p className="text-xs mt-1 text-muted-foreground/70">
+								{i18next.t(
+									"totaldocumentsItemsIndexed",
+									"{{totalDocuments}} items indexed",
+									{ totalDocuments },
+								)}
+							</p>
 						</div>
 					)}
 					{groupedResults.node.length > 0 && (
-						<CommandGroup heading={i18next.t('nodesLength', 'Nodes ({{length}})', { length: groupedResults.node.length })}>
+						<CommandGroup
+							heading={i18next.t("nodesLength", "Nodes ({{length}})", {
+								length: groupedResults.node.length,
+							})}
+						>
 							{groupedResults.node.slice(0, 20).map((result) => (
 								<SearchResultItem
 									key={result.id}
@@ -891,7 +943,11 @@ export const FlowSearch = memo(
 						</CommandGroup>
 					)}
 					{groupedResults.layer.length > 0 && (
-						<CommandGroup heading={i18next.t('layersLength', 'Layers ({{length}})', { length: groupedResults.layer.length })}>
+						<CommandGroup
+							heading={i18next.t("layersLength", "Layers ({{length}})", {
+								length: groupedResults.layer.length,
+							})}
+						>
 							{groupedResults.layer.slice(0, 10).map((result) => (
 								<SearchResultItem
 									key={result.id}
@@ -903,7 +959,11 @@ export const FlowSearch = memo(
 						</CommandGroup>
 					)}
 					{groupedResults.pin.length > 0 && (
-						<CommandGroup heading={i18next.t('pinsLength', 'Pins ({{length}})', { length: groupedResults.pin.length })}>
+						<CommandGroup
+							heading={i18next.t("pinsLength", "Pins ({{length}})", {
+								length: groupedResults.pin.length,
+							})}
+						>
 							{groupedResults.pin.slice(0, 15).map((result) => (
 								<SearchResultItem
 									key={result.id}
@@ -916,7 +976,9 @@ export const FlowSearch = memo(
 					)}
 					{groupedResults["pin-value"].length > 0 && (
 						<CommandGroup
-							heading={i18next.t('pinValuesLength', 'Pin Values ({{length}})', { length: groupedResults["pin-value"].length })}
+							heading={i18next.t("pinValuesLength", "Pin Values ({{length}})", {
+								length: groupedResults["pin-value"].length,
+							})}
 						>
 							{groupedResults["pin-value"].slice(0, 20).map((result) => (
 								<SearchResultItem
@@ -930,7 +992,9 @@ export const FlowSearch = memo(
 					)}
 					{groupedResults.comment.length > 0 && (
 						<CommandGroup
-							heading={i18next.t('commentsLength', 'Comments ({{length}})', { length: groupedResults.comment.length })}
+							heading={i18next.t("commentsLength", "Comments ({{length}})", {
+								length: groupedResults.comment.length,
+							})}
 						>
 							{groupedResults.comment.slice(0, 10).map((result) => (
 								<SearchResultItem
@@ -944,7 +1008,9 @@ export const FlowSearch = memo(
 					)}
 					{groupedResults.variable.length > 0 && (
 						<CommandGroup
-							heading={i18next.t('variablesLength', 'Variables ({{length}})', { length: groupedResults.variable.length })}
+							heading={i18next.t("variablesLength", "Variables ({{length}})", {
+								length: groupedResults.variable.length,
+							})}
 						>
 							{groupedResults.variable.slice(0, 10).map((result) => (
 								<SearchResultItem

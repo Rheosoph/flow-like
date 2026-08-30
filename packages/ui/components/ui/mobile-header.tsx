@@ -1,6 +1,6 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import { SidebarTrigger } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import React, {
 	createContext,
@@ -204,7 +204,7 @@ export const MobileHeader: React.FC<{
 					{showSidebarTrigger && (
 						<SidebarTrigger
 							className="size-10 rounded-lg border extend-touch-target"
-							aria-label={t('openMenu', 'Open Menu')}
+							aria-label={t("openMenu", "Open Menu")}
 						/>
 					)}
 					{leftNodes}

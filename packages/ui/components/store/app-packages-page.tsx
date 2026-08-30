@@ -340,9 +340,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					}),
 				);
 			} else {
-				toast.error(
-					`Failed to update ${failed} of ${total} packages`,
-				);
+				toast.error(`Failed to update ${failed} of ${total} packages`);
 			}
 			invalidatePackageQueries();
 		},

@@ -9,6 +9,8 @@ import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
 import { DataProvider, DataScopeProvider, useData } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
+import type { A2UINavigationMessageInterceptor } from "./navigation-message";
+import { resolveHidden } from "./resolve-hidden";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -24,15 +26,6 @@ const EMPTY_DATA_MODEL: DataEntry[] = [];
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
-}
-
-function resolveHidden(
-	hidden: SurfaceComponent["component"]["hidden"] | undefined,
-	resolve: (boundValue: BoundValue, defaultValue?: unknown) => unknown,
-): boolean {
-	if (hidden === undefined) return false;
-	const value = resolve(hidden as BoundValue, false);
-	return value === true || value === "true";
 }
 
 function resolveStyleBindings(
@@ -124,6 +117,8 @@ export interface A2UIRendererProps {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	/** Consume page navigation inside an embedded owner instead of changing the host router. */
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
 	/** Mounted inside the ActionProvider; used by pages to register the FlowPilot live-page handle. */
 	agentBridge?: React.ReactNode;
 }
@@ -141,6 +136,7 @@ export function A2UIRenderer({
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
+	onNavigationMessage,
 	agentBridge,
 }: A2UIRendererProps) {
 	const { t } = useTranslation("common");
@@ -236,6 +232,7 @@ export function A2UIRenderer({
 					isPreviewMode={isPreviewMode}
 					openDialog={openDialog}
 					closeDialog={closeDialog}
+					onNavigationMessage={onNavigationMessage}
 				>
 					{agentBridge}
 					<ScopedCustomCss

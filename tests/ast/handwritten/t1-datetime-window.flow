@@ -1,0 +1,100 @@
+use datetime::{ add, addBusinessDays, businessDaysBetween, calendarInfo, clamp, endOf, format, humanize, isAfter, maxOf, startOf, toTimezone }
+use fmt::{ duration, ordinal }
+use int::{ toFloat }
+use log::{ info, warn }
+use string::{ padEnd, replace, toUpper }
+
+interface ChangeRequest {
+    change_id: string;
+    requested_at: string;
+    region: "eu" | "us" | "apac";
+    lead_time_days?: int = 3;
+    notes?: string | null;
+}
+
+@description("IANA timezone every maintenance notice is rendered in")
+@category("Operations/Scheduling")
+const reportTimezone = "Europe/Berlin"
+
+@description("Chat channel that receives freeze violations")
+let escalationChannel = "#release-ops"
+
+function windowBounds(anchor: Date, leadDays: int): (opensAt: Date, closesAt: Date) {
+    const workday = anchor.addBusinessDays({ days: leadDays })
+    const opensAt = workday.startOf({ unit: "day" })
+    const closesAt = workday.endOf({ unit: "day" })
+    return opensAt, closesAt
+}
+
+function noticeLine(instant: Date, region: string): (line: string) {
+    const stamp = instant.format({ format: "%Y-%m-%d %H:%M" })
+    const tag = region.toUpper()
+    const column = tag.padEnd({ length: 6, padding: " " })
+    return `[${column}] ${stamp}`
+}
+
+function checkpointLabel(instant: Date, reference: Date): (label: string) {
+    const { text: relative, isPast } = instant.humanize({ reference: reference })
+    const stamp = instant.format({ format: "%H:%M" })
+    return isPast ? `${stamp} (${relative} ago)` : `${stamp} (in ${relative})`
+}
+
+eventsGeneric planMaintenanceWindow(payload: Struct, changeId: string, requestedAt: string, region: string, leadDays: int) {
+    const requested = datetime::parse({ input: requestedAt, format: "%Y-%m-%dT%H:%M:%S%z" })
+    const freezeOpens = requested.add({ hours: -6 })
+    const freezeCloses = requested.add({ days: 1, hours: 6 })
+
+    const { opensAt, closesAt } = windowBounds(requested, leadDays)
+    const clearOfFreeze = opensAt.isAfter({ other: freezeCloses })
+    const leadUsed = freezeOpens.businessDaysBetween({ end: opensAt, includeEnd: false })
+    const { text: leadOrdinal } = leadUsed.ordinal()
+
+    const span = datetime::diff({ start: opensAt, end: closesAt })
+    span {
+        execOut: {
+            const spanSeconds = span.totalSeconds.toFloat()
+            const spanText = duration({ seconds: spanSeconds, style: "Short", maxParts: 2 })
+            const { formatted: localOpen, offsetSeconds } = opensAt.toTimezone({ timezone: reportTimezone, format: "%Y-%m-%d %H:%M" })
+            const offsetText = duration({ seconds: offsetSeconds.toFloat(), style: "Clock", maxParts: 2 })
+            const isoOpen = opensAt.format({ format: "rfc3339" })
+            const isoClose = closesAt.format({ format: "rfc3339" })
+            const windowId = isoOpen.replace("T", "-").replace(":", "")
+            const header = noticeLine(opensAt, region)
+
+            const { isWeekend, week, quarter } = opensAt.calendarInfo()
+            if (isWeekend) {
+                warn({ message: `${header} ${changeId} would open on a weekend, notify ${escalationChannel}`, toast: true })
+            } else if (clearOfFreeze) {
+                info({ message: `${header} ${changeId} runs ${isoOpen} -> ${isoClose} (${spanText}), local ${localOpen} ${reportTimezone}, offset ${offsetText}, ${leadOrdinal} working day after intake, week ${week} of Q${quarter}`, toast: false })
+            } else {
+                warn({ message: `${header} ${changeId} opens ${isoOpen} inside the change freeze, escalate in ${escalationChannel}`, toast: true })
+            }
+
+            const midpoint = opensAt.add({ hours: 12 })
+            const midpointLabel = checkpointLabel(midpoint, requested)
+            info({ message: `${windowId} halfway point ${midpointLabel}`, toast: false })
+
+            // BUG: an array literal whose elements are node outputs (`[opensAt, closesAt]`) does not
+            // resolve; only all-literal arrays do. The edges are collected explicitly instead.
+            const checkpoints = array::construct({ element: opensAt, element: closesAt })
+            const { result: latest, found } = maxOf({ dates: checkpoints })
+
+            for (const [index, checkpoint] of checkpoints) {
+                const { result: bounded, wasClamped } = checkpoint.clamp({ start: opensAt, end: latest })
+                const label = checkpointLabel(bounded, requested)
+                const { text: position } = index.ordinal()
+                info({ message: `${windowId} ${position} checkpoint ${label}${wasClamped ? " (clamped)" : ""}`, toast: false })
+            }
+
+            if (!found) {
+                warn({ message: `${windowId} produced no readable checkpoints`, toast: true })
+            }
+
+            return windowId
+        }
+        error: {
+            warn({ message: span.errorMessage, toast: true })
+            return ""
+        }
+    }
+}

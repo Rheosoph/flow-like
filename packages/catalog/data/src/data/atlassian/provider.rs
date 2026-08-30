@@ -176,7 +176,7 @@ impl AtlassianProvider {
                 // Server/Data Center PAT uses Bearer token
                 format!("Bearer {}", self.access_token)
             }
-            "api_token" | _ => {
+            _ => {
                 // Cloud API Token auth uses Basic auth with email:token
                 if let Some(email) = &self.email {
                     let credentials = format!("{}:{}", email, self.access_token);
@@ -225,6 +225,7 @@ impl NodeLogic for AtlassianApiTokenProviderNode {
             "Connect to Jira and Confluence using an API Token. For cloud: create token at id.atlassian.com/manage-profile/security/api-tokens. For server: use personal access token.",
             "Data/Atlassian",
         );
+        node.set_flowscript_name("atlassian", "providerApiToken");
         node.add_icon("/flow/icons/atlassian.svg");
 
         node.add_input_pin(
@@ -352,6 +353,7 @@ impl NodeLogic for AtlassianOAuthProviderNode {
             "Connect to Jira and Confluence using OAuth 2.0. Requires OAuth provider configuration in flow-like.config.json.",
             "Data/Atlassian",
         );
+        node.set_flowscript_name("atlassian", "providerOauth");
         node.add_icon("/flow/icons/atlassian.svg");
 
         node.add_input_pin(

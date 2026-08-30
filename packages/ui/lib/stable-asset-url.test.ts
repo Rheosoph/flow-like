@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	confirmStableAssetUrl,
+	hasExpiredAssetUrl,
 	isExpiredAssetUrl,
 	mergeMetadataMedia,
 	recoverStableAssetUrl,
@@ -258,5 +259,41 @@ describe("stabilizeSignedUrls", () => {
 
 		expect(rewritten.url).toBe(first);
 		expect(passthrough).toBe(unchanged);
+	});
+});
+
+describe("hasExpiredAssetUrl", () => {
+	/** What a cached page surface looks like once its links have died. */
+	const surfaceWith = (url: string) => ({
+		id: "page",
+		rootComponentId: "root",
+		components: {
+			root: { id: "root", component: { type: "column", children: ["img"] } },
+			img: {
+				id: "img",
+				component: { type: "image", src: { literalString: url } },
+			},
+		},
+	});
+
+	test("finds a dead signature nested anywhere in a record", () => {
+		const dead = signedAws(isoNow(-2 * 86_400_000));
+		expect(isExpiredAssetUrl(dead)).toBe(true);
+		expect(hasExpiredAssetUrl(surfaceWith(dead))).toBe(true);
+	});
+
+	test("passes a record whose signatures are all still live", () => {
+		expect(hasExpiredAssetUrl(surfaceWith(signedAws(isoNow())))).toBe(false);
+	});
+
+	test("ignores strings that are not signed URLs", () => {
+		expect(
+			hasExpiredAssetUrl({
+				text: "X-Amz-Date=20200101T000000Z",
+				path: "media/apps/a/i.webp",
+				n: 3,
+				missing: null,
+			}),
+		).toBe(false);
 	});
 });

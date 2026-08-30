@@ -1,20 +1,32 @@
+"use client";
+
 import { useTranslation } from "@flow-like/locales";
-import { useDraggable } from "@dnd-kit/core";
+import { createId } from "@paralleldrive/cuid2";
 import {
-	BracesIcon,
-	CircleDotIcon,
 	CirclePlusIcon,
+	ContrastIcon,
+	CornerUpLeftIcon,
 	EllipsisVerticalIcon,
-	EyeIcon,
-	EyeOffIcon,
 	GripIcon,
+	HelpCircleIcon,
 	ListIcon,
-	Trash2Icon,
-	WandIcon,
+	SearchIcon,
+	SquareFunctionIcon,
+	XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../../components/ui/button";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
+	ContextMenuTrigger,
+} from "../../../components/ui/context-menu";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -22,26 +34,11 @@ import {
 	DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
 import { Input } from "../../../components/ui/input";
-import { Label } from "../../../components/ui/label";
 import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectLabel,
-	SelectTrigger,
-	SelectValue,
-} from "../../../components/ui/select";
-import { Separator } from "../../../components/ui/separator";
-import {
-	Sheet,
-	SheetContent,
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-	SheetTrigger,
-} from "../../../components/ui/sheet";
-import { Switch } from "../../../components/ui/switch";
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "../../../components/ui/popover";
 import {
 	Tabs,
 	TabsContent,
@@ -50,29 +47,108 @@ import {
 } from "../../../components/ui/tabs";
 import {
 	type IGenericCommand,
+	moveToLayerCommand,
+	removeLayerCommand,
 	removeVariableCommand,
+	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../../../lib";
+import {
+	MAIN_FILE_LABEL,
+	activeModuleId,
+	boardModules,
+} from "../../../lib/flow-modules";
+import { owningModuleId } from "../../../lib/layer-to-function";
 import type { IBoard, ILayer, IVariable } from "../../../lib/schema/flow/board";
 import { ILayerType } from "../../../lib/schema/flow/board";
 import { IVariableType } from "../../../lib/schema/flow/node";
 import { IValueType } from "../../../lib/schema/flow/pin";
-import { convertJsonToUint8Array } from "../../../lib/uint8";
 import { cn } from "../../../lib/utils";
 import {
-	CategoryTree,
 	FOLDER_DROP_EVENT,
 	type IFolderDropDetail,
-	buildCategoryTree,
 	normalizeCategory,
 } from "../category-tree";
-import { FunctionsList, useCreateFunction } from "../functions/functions-menu";
+import { FunctionOverlay } from "../functions/function-overlay";
+import {
+	type IGroupMode,
+	IS_PREDICATES,
+	type ITokenItem,
+	TOKEN_GLYPH,
+	buildFolderTree,
+	buildUsageIndex,
+	folderPaths,
+	functionLayers,
+	groupItemsByModule,
+	matchesFunction,
+	matchesVariable,
+	parseTokenQuery,
+	resolveVariableScope,
+} from "../token-board/model";
+import { FunctionToken, VariableToken } from "../token-board/token";
+import { type ITokenSection, TokenBoard } from "../token-board/token-board";
 import { typeToColor } from "../utils";
 import { NewVariableDialog } from "./new-variable-dialog";
-import { VariablesMenuEdit } from "./variables-menu-edit";
+import { VariableOverlay } from "./variable-overlay";
+
+/** Either a variable (variable trees) or a function-layer handle (function tree). */
+type IDropPayload = IVariable & { layerId?: string };
 
 const VARIABLE_FOLDER_KIND = "variables";
 const LOCAL_VARIABLE_FOLDER_KIND = "local-variables";
+const FUNCTION_FOLDER_KIND = "functions";
+
+const pinCount = (layer: ILayer, pinType: "Input" | "Output") =>
+	Object.values(layer.pins ?? {}).filter((pin) => pin.pin_type === pinType)
+		.length;
+
+/**
+ * Creates a function layer. The name is asked for up front — the old button
+ * dropped a silent "New Function" layer on the canvas and left you to find it.
+ *
+ * `moduleId` files the function inside a module, which is what makes it local to
+ * that file instead of a board global.
+ */
+export function useCreateFunction(
+	executeCommand: (
+		command: IGenericCommand,
+		append: boolean,
+	) => Promise<unknown>,
+) {
+	return useCallback(
+		async (name: string, category?: string, moduleId?: string | null) => {
+			const parentId = moduleId ?? null;
+			const layer: ILayer = {
+				id: createId(),
+				name,
+				type: ILayerType.Function,
+				coordinates: [0, 0, 0],
+				nodes: {},
+				pins: {},
+				variables: {},
+				comments: {},
+				// The backend takes the parent of a *new* layer from `current_layer`;
+				// `parent_id` is what every local reader goes by. Both, or the function
+				// lands somewhere else than the file it was created from.
+				parent_id: parentId,
+				color: null,
+				comment: null,
+				error: null,
+				category: normalizeCategory(category) ?? null,
+			};
+			await executeCommand(
+				upsertLayerCommand({
+					layer,
+					node_ids: [],
+					current_layer: parentId,
+				}),
+				false,
+			);
+			return layer;
+		},
+		[executeCommand],
+	);
+}
 
 export function VariablesMenu({
 	board,
@@ -82,16 +158,34 @@ export function VariablesMenu({
 	boardRef,
 }: Readonly<{
 	board: IBoard;
-	executeCommand: (command: IGenericCommand, append: boolean) => Promise<any>;
+	executeCommand: (
+		command: IGenericCommand,
+		append: boolean,
+	) => Promise<unknown>;
 	currentLayerId?: string;
 	pushLayer?: (layer: ILayer) => Promise<void>;
 	boardRef?: RefObject<IBoard | undefined>;
 }>) {
 	const { t } = useTranslation("flow");
+	const [tab, setTab] = useState<"variables" | "functions">("variables");
+	const [rawQuery, setRawQuery] = useState("");
+	const [group, setGroup] = useState<IGroupMode>("folder");
+	const [tint, setTint] = useState(true);
+	const [editingVariable, setEditingVariable] = useState<IVariable | null>(
+		null,
+	);
+	const [editingFunction, setEditingFunction] = useState<ILayer | null>(null);
 	const [showNewVariableDialog, setShowNewVariableDialog] = useState(false);
-	const [showNewLocalVariableDialog, setShowNewLocalVariableDialog] =
-		useState(false);
+	const [newVariableScope, setNewVariableScope] = useState<"board" | "local">(
+		"board",
+	);
+	const [draftFunction, setDraftFunction] = useState<string | null>(null);
+	const searchRef = useRef<HTMLInputElement | null>(null);
+	const menuPosition = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 	const createFunction = useCreateFunction(executeCommand);
+
+	const query = useMemo(() => parseTokenQuery(rawQuery), [rawQuery]);
+	const usage = useMemo(() => buildUsageIndex(board), [board]);
 
 	const currentFunctionLayer = useMemo(() => {
 		if (!currentLayerId) return null;
@@ -100,79 +194,252 @@ export function VariablesMenu({
 		return layer;
 	}, [currentLayerId, board.layers]);
 
+	const modules = useMemo(() => boardModules(board.layers), [board.layers]);
+	// The file the canvas is standing in — what a new function is filed into.
+	const currentModuleId = useMemo(
+		() => activeModuleId(undefined, currentLayerId, board.layers),
+		[currentLayerId, board.layers],
+	);
+
+	/* ── commands ──────────────────────────────────────────────────────── */
+
 	const upsertVariable = useCallback(
 		async (variable: IVariable) => {
-			const oldVariable = board.variables[variable.id];
-			if (oldVariable === variable) return;
-			const command = upsertVariableCommand({
-				variable,
-			});
-
-			await executeCommand(command, false);
+			await executeCommand(upsertVariableCommand({ variable }), false);
 		},
-		[board],
+		[executeCommand],
 	);
 
 	const upsertLocalVariable = useCallback(
 		async (variable: IVariable) => {
 			if (!currentFunctionLayer) return;
-			const command = upsertVariableCommand({
-				variable,
-				layer_id: currentFunctionLayer.id,
-			});
-			await executeCommand(command, false);
+			await executeCommand(
+				upsertVariableCommand({ variable, layer_id: currentFunctionLayer.id }),
+				false,
+			);
 		},
 		[currentFunctionLayer, executeCommand],
 	);
 
-	const removeLocalVariable = useCallback(
-		async (variable: IVariable) => {
-			if (!currentFunctionLayer) return;
-			const command = removeVariableCommand({
-				variable,
-				layer_id: currentFunctionLayer.id,
-			});
-			await executeCommand(command, false);
+	const saveVariable = useCallback(
+		async (variable: IVariable, scope: "board" | "local") => {
+			if (!variable.editable) return;
+			if (scope === "local") await upsertLocalVariable(variable);
+			else await upsertVariable(variable);
+		},
+		[upsertLocalVariable, upsertVariable],
+	);
+
+	const deleteVariable = useCallback(
+		async (variable: IVariable, scope: "board" | "local") => {
+			if (!variable.editable) return;
+			const payload =
+				scope === "local" && currentFunctionLayer
+					? { variable, layer_id: currentFunctionLayer.id }
+					: { variable };
+			await executeCommand(removeVariableCommand(payload), false);
 		},
 		[currentFunctionLayer, executeCommand],
 	);
 
-	const removeVariable = useCallback(
-		async (variable: IVariable) => {
-			const command = removeVariableCommand({
-				variable,
-			});
-			await executeCommand(command, false);
+	const upsertFunction = useCallback(
+		async (layer: ILayer) => {
+			await executeCommand(upsertLayerCommand({ layer, node_ids: [] }), false);
 		},
-		[board],
+		[executeCommand],
 	);
 
-	const tree = useMemo(
-		() => buildCategoryTree(Object.values(board.variables)),
+	/** Re-files a function into another module — or into `main.flow`, which is no module. */
+	const moveFunctionToModule = useCallback(
+		async (layerId: string, target: string | null) => {
+			await executeCommand(
+				moveToLayerCommand({ ids: [layerId], target }),
+				false,
+			);
+		},
+		[executeCommand],
+	);
+
+	const deleteFunction = useCallback(
+		async (layer: ILayer) => {
+			await executeCommand(
+				removeLayerCommand({
+					layer,
+					preserve_nodes: false,
+					child_layers: [],
+					layer_nodes: [],
+					layers: [],
+					nodes: [],
+				}),
+				false,
+			);
+		},
+		[executeCommand],
+	);
+
+	/* ── items ─────────────────────────────────────────────────────────── */
+
+	const variableItems = useMemo<ITokenItem[]>(() => {
+		const items: ITokenItem[] = [];
+		const push = (variable: IVariable, scope: "board" | "local") => {
+			const uses = usage.variables[variable.id] ?? 0;
+			if (!matchesVariable(variable, query, uses, scope)) return;
+			items.push({
+				id: variable.id,
+				name: variable.name,
+				category: variable.category,
+				kind: "variable",
+				variable,
+				uses,
+				scope,
+			});
+		};
+		if (currentFunctionLayer) {
+			for (const variable of Object.values(
+				currentFunctionLayer.variables ?? {},
+			))
+				push(variable, "local");
+		}
+		for (const variable of Object.values(board.variables ?? {}))
+			push(variable, "board");
+		return items;
+	}, [board.variables, currentFunctionLayer, query, usage]);
+
+	const functionItems = useMemo<ITokenItem[]>(() => {
+		return functionLayers(board)
+			.map((layer) => ({ layer, calls: usage.functions[layer.id] ?? 0 }))
+			.filter(({ layer, calls }) => matchesFunction(layer, query, calls))
+			.map(({ layer, calls }) => ({
+				id: layer.id,
+				name: layer.name,
+				category: layer.category,
+				kind: "function" as const,
+				layer,
+				uses: calls,
+				scope: "board" as const,
+			}));
+	}, [board, query, usage]);
+
+	/**
+	 * Functions grouped by the file they live in: globals first, then one section per
+	 * module that owns at least one. A board whose functions are all global has a single
+	 * group, and a single group is no grouping — it renders as it always did.
+	 */
+	const functionSections = useMemo<ITokenSection[] | undefined>(() => {
+		if (modules.length === 0) return undefined;
+		const labelOf = new Map(
+			modules.map((module) => [module.id, module.pathLabel]),
+		);
+		const groups = groupItemsByModule(
+			functionItems,
+			board.layers,
+			modules.map((module) => module.id),
+		);
+		if (groups.length === 0) return undefined;
+		if (groups.length === 1 && groups[0].moduleId === null) return undefined;
+		return groups.map((group) => ({
+			key: group.moduleId ?? "global",
+			label:
+				group.moduleId === null
+					? t("global", "Global")
+					: (labelOf.get(group.moduleId) ?? group.moduleId),
+			items: group.items,
+		}));
+	}, [board.layers, functionItems, modules, t]);
+
+	const localItems = useMemo(
+		() =>
+			tab === "variables" && currentFunctionLayer && group === "folder"
+				? variableItems.filter((item) => item.scope === "local")
+				: [],
+		[tab, currentFunctionLayer, group, variableItems],
+	);
+	const items = useMemo(() => {
+		if (tab !== "variables") return functionItems;
+		if (localItems.length === 0) return variableItems;
+		return variableItems.filter((item) => item.scope !== "local");
+	}, [tab, functionItems, variableItems, localItems]);
+	const totalVariables =
+		Object.keys(board.variables ?? {}).length +
+		Object.keys(currentFunctionLayer?.variables ?? {}).length;
+	const totalFunctions = functionLayers(board).length;
+
+	const variableFolders = useMemo(
+		() =>
+			folderPaths(
+				buildFolderTree(
+					Object.values(board.variables ?? {}).map((variable) => ({
+						id: variable.id,
+						name: variable.name,
+						category: variable.category,
+						kind: "variable" as const,
+						variable,
+						uses: 0,
+						scope: "board" as const,
+					})),
+				),
+			),
 		[board.variables],
 	);
 
-	const localTree = useMemo(() => {
-		if (!currentFunctionLayer) return null;
-		return buildCategoryTree(Object.values(currentFunctionLayer.variables));
-	}, [currentFunctionLayer]);
+	const functionFolders = useMemo(
+		() =>
+			folderPaths(
+				buildFolderTree(
+					functionLayers(board).map((layer) => ({
+						id: layer.id,
+						name: layer.name,
+						category: layer.category,
+						kind: "function" as const,
+						layer,
+						uses: 0,
+						scope: "board" as const,
+					})),
+				),
+			),
+		[board],
+	);
 
-	// Folder drops are dispatched by FlowWrapper, which owns the DndContext.
+	const unusedCount = items.filter((item) => item.uses === 0).length;
+
+	/* ── folder drops (FlowWrapper owns the DndContext) ────────────────── */
+
 	useEffect(() => {
 		const handler = (event: Event) => {
-			const detail = (event as CustomEvent<IFolderDropDetail<IVariable>>)
+			const detail = (event as CustomEvent<IFolderDropDetail<IDropPayload>>)
 				.detail;
 			if (!detail || detail.consumed) return;
 
-			const isLocal = detail.kind === LOCAL_VARIABLE_FOLDER_KIND;
-			if (!isLocal && detail.kind !== VARIABLE_FOLDER_KIND) return;
+			if (detail.kind === FUNCTION_FOLDER_KIND) {
+				const layerId = detail.item?.layerId;
+				const layer = layerId ? board.layers[layerId] : undefined;
+				if (layer?.type !== ILayerType.Function) return;
+				const next = normalizeCategory(detail.path) ?? null;
+				if (normalizeCategory(layer.category) === (next ?? undefined)) return;
+				detail.consumed = true;
+				void upsertFunction({ ...layer, category: next });
+				return;
+			}
 
-			const variable = detail.item;
+			if (
+				detail.kind !== VARIABLE_FOLDER_KIND &&
+				detail.kind !== LOCAL_VARIABLE_FOLDER_KIND
+			)
+				return;
+
+			const variable = detail.item as IVariable;
 			if (!variable?.editable) return;
 
-			// A variable can only move within the scope it lives in.
-			const scope = isLocal ? currentFunctionLayer?.variables : board.variables;
-			if (!scope?.[variable.id]) return;
+			// Both scopes render in one board while you are inside a function, so the
+			// droppable's kind cannot say which one a variable belongs to — only the
+			// scope that actually holds it can.
+			const owner = resolveVariableScope(
+				variable.id,
+				currentFunctionLayer?.variables,
+				board.variables,
+			);
+			if (!owner) return;
+			const isLocal = owner === "local";
 
 			const nextCategory = normalizeCategory(detail.path);
 			if (normalizeCategory(variable.category) === nextCategory) return;
@@ -184,630 +451,626 @@ export function VariablesMenu({
 		document.addEventListener(FOLDER_DROP_EVENT, handler);
 		return () => document.removeEventListener(FOLDER_DROP_EVENT, handler);
 	}, [
-		upsertVariable,
-		upsertLocalVariable,
+		board.layers,
 		board.variables,
 		currentFunctionLayer,
+		upsertFunction,
+		upsertLocalVariable,
+		upsertVariable,
 	]);
 
-	const globalVariables = (
-		<CategoryTree
-			root={tree}
-			kind={VARIABLE_FOLDER_KIND}
-			renderItem={(variable) => (
-				<Variable
-					variable={variable}
-					refs={board.refs}
-					onVariableChange={(updated) => {
-						if (!updated.editable) return;
-						upsertVariable(updated);
+	/* ── actions ───────────────────────────────────────────────────────── */
+
+	const insertNode = useCallback(
+		(item: ITokenItem, operation: "get" | "set") => {
+			const detail =
+				item.kind === "function"
+					? {
+							type: "function-layer",
+							layerId: item.id,
+							screenPosition: menuPosition.current,
+						}
+					: {
+							variable: item.variable,
+							operation,
+							screenPosition: menuPosition.current,
+						};
+			document.dispatchEvent(new CustomEvent("flow-drop", { detail }));
+		},
+		[],
+	);
+
+	const moveItem = useCallback(
+		async (item: ITokenItem, category: string | null) => {
+			if (item.kind === "function" && item.layer) {
+				await upsertFunction({ ...item.layer, category });
+				return;
+			}
+			if (!item.variable?.editable) return;
+			await saveVariable(
+				{ ...item.variable, category: category ?? undefined },
+				item.scope,
+			);
+		},
+		[saveVariable, upsertFunction],
+	);
+
+	const duplicateVariable = useCallback(
+		async (item: ITokenItem) => {
+			if (!item.variable) return;
+			await saveVariable(
+				{
+					...item.variable,
+					id: createId(),
+					name: `${item.variable.name}_COPY`,
+				},
+				item.scope,
+			);
+		},
+		[saveVariable],
+	);
+
+	const openFunction = useCallback(
+		async (layer: ILayer) => {
+			if (pushLayer) await pushLayer(layer);
+		},
+		[pushLayer],
+	);
+
+	const commitDraftFunction = useCallback(async () => {
+		const name = (draftFunction ?? "").trim();
+		if (!name) {
+			setDraftFunction(null);
+			return;
+		}
+		const layer = await createFunction(name, undefined, currentModuleId);
+		setDraftFunction(null);
+		setEditingFunction(layer);
+	}, [createFunction, currentModuleId, draftFunction]);
+
+	/* ── rendering ─────────────────────────────────────────────────────── */
+
+	const folders = tab === "variables" ? variableFolders : functionFolders;
+
+	const renderMenu = (item: ITokenItem) => {
+		const itemModuleId =
+			item.kind === "function" ? owningModuleId(board.layers, item.id) : null;
+
+		return (
+			<ContextMenuContent className="w-56">
+				{item.kind === "variable" ? (
+					<>
+						<ContextMenuItem onClick={() => insertNode(item, "get")}>
+							{t("insertGetNode", "Insert Get node")}
+						</ContextMenuItem>
+						<ContextMenuItem onClick={() => insertNode(item, "set")}>
+							{t("insertSetNode", "Insert Set node")}
+						</ContextMenuItem>
+					</>
+				) : (
+					<>
+						<ContextMenuItem onClick={() => insertNode(item, "get")}>
+							{t("insertCallNode", "Insert Call node")}
+						</ContextMenuItem>
+						<ContextMenuItem
+							onClick={() => item.layer && void openFunction(item.layer)}
+						>
+							{t("openLayer", "Open layer")}
+						</ContextMenuItem>
+					</>
+				)}
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					onClick={() =>
+						item.kind === "function"
+							? setEditingFunction(item.layer ?? null)
+							: setEditingVariable(item.variable ?? null)
+					}
+				>
+					{t("editEllipsis", "Edit…")}
+				</ContextMenuItem>
+				{item.kind === "variable" && item.variable?.editable && (
+					<ContextMenuItem
+						onClick={() =>
+							item.variable &&
+							void saveVariable(
+								{ ...item.variable, exposed: !item.variable.exposed },
+								item.scope,
+							)
+						}
+					>
+						{item.variable.exposed
+							? t("stopExposing", "Stop exposing")
+							: t("exposeInAppConfig", "Expose in app config")}
+					</ContextMenuItem>
+				)}
+				<ContextMenuSub>
+					<ContextMenuSubTrigger>
+						{t("moveToFolder", "Move to folder")}
+					</ContextMenuSubTrigger>
+					<ContextMenuSubContent className="max-h-64 overflow-y-auto">
+						<ContextMenuItem onClick={() => void moveItem(item, null)}>
+							{t("topLevel", "Top level")}
+						</ContextMenuItem>
+						{folders.map((path) => (
+							<ContextMenuItem
+								key={path}
+								onClick={() => void moveItem(item, path)}
+							>
+								{path}
+							</ContextMenuItem>
+						))}
+					</ContextMenuSubContent>
+				</ContextMenuSub>
+				{item.kind === "function" && modules.length > 0 && (
+					<ContextMenuSub>
+						<ContextMenuSubTrigger>
+							{t("moveToModule", "Move to module")}
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent className="max-h-64 overflow-y-auto">
+							<ContextMenuItem
+								disabled={itemModuleId === null}
+								onClick={() => void moveFunctionToModule(item.id, null)}
+							>
+								{MAIN_FILE_LABEL}
+							</ContextMenuItem>
+							{modules.map((module) => (
+								<ContextMenuItem
+									key={module.id}
+									disabled={itemModuleId === module.id}
+									onClick={() => void moveFunctionToModule(item.id, module.id)}
+								>
+									{module.pathLabel}
+								</ContextMenuItem>
+							))}
+						</ContextMenuSubContent>
+					</ContextMenuSub>
+				)}
+				{item.kind === "variable" && (
+					<ContextMenuItem onClick={() => void duplicateVariable(item)}>
+						{t("duplicate", "Duplicate")}
+					</ContextMenuItem>
+				)}
+				<ContextMenuItem
+					onClick={() => void navigator.clipboard?.writeText(item.name)}
+				>
+					{t("copyName", "Copy name")}
+				</ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					variant="destructive"
+					disabled={item.kind === "variable" && !item.variable?.editable}
+					onClick={() =>
+						item.kind === "function"
+							? item.layer && void deleteFunction(item.layer)
+							: item.variable && void deleteVariable(item.variable, item.scope)
+					}
+				>
+					{t("delete", "Delete")}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		);
+	};
+
+	const renderToken = (item: ITokenItem, focused: boolean): ReactNode => (
+		<ContextMenu key={item.id}>
+			<ContextMenuTrigger
+				className="contents"
+				onContextMenu={(event) => {
+					menuPosition.current = { x: event.clientX, y: event.clientY };
+				}}
+			>
+				{item.kind === "function" && item.layer ? (
+					<FunctionToken
+						layer={item.layer}
+						calls={item.uses}
+						inputs={pinCount(item.layer, "Input")}
+						outputs={pinCount(item.layer, "Output")}
+						tint={tint}
+						focused={focused}
+						onOpen={() => setEditingFunction(item.layer ?? null)}
+					/>
+				) : item.variable ? (
+					<VariableToken
+						variable={item.variable}
+						uses={item.uses}
+						tint={tint}
+						focused={focused}
+						onOpen={() => setEditingVariable(item.variable ?? null)}
+					/>
+				) : null}
+			</ContextMenuTrigger>
+			{renderMenu(item)}
+		</ContextMenu>
+	);
+
+	const groupModes: Array<{ mode: IGroupMode; label: string }> = [
+		{ mode: "folder", label: t("folder", "folder") },
+		{ mode: "type", label: t("type", "type") },
+		{ mode: "scope", label: t("scope", "scope") },
+		{ mode: "usage", label: t("usage", "usage") },
+	];
+
+	return (
+		<div className="flex h-full flex-col overflow-hidden bg-card">
+			<Tabs
+				value={tab}
+				onValueChange={(value) => setTab(value as "variables" | "functions")}
+				className="shrink-0 gap-0"
+			>
+				<div className="flex items-center gap-1 px-2 pt-2">
+					<TabsList className="h-7 bg-transparent p-0">
+						<TabsTrigger value="variables" className="h-7 gap-1.5 text-xs">
+							{t("variables", "Variables")}
+							<span className="font-mono text-[10px] text-muted-foreground">
+								{totalVariables}
+							</span>
+						</TabsTrigger>
+						<TabsTrigger value="functions" className="h-7 gap-1.5 text-xs">
+							{t("functions", "Functions")}
+							<span className="font-mono text-[10px] text-muted-foreground">
+								{totalFunctions}
+							</span>
+						</TabsTrigger>
+					</TabsList>
+					<div className="flex-1" />
+					<Button
+						variant="ghost"
+						size="icon"
+						className="h-7 w-7"
+						aria-pressed={tint}
+						title={t("toggleTypeTint", "Type tint on/off")}
+						onClick={() => setTint((value) => !value)}
+					>
+						<ContrastIcon
+							className={cn("h-3.5 w-3.5", !tint && "text-muted-foreground")}
+						/>
+					</Button>
+					<TokenLegend />
+					{tab === "variables" && currentFunctionLayer ? (
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="h-7 w-7"
+									title={t("newVariable", "New variable")}
+								>
+									<CirclePlusIcon className="h-3.5 w-3.5" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuItem
+									onClick={() => {
+										setNewVariableScope("local");
+										setShowNewVariableDialog(true);
+									}}
+								>
+									{t("newLocalVariableIn", "New local variable in {{name}}", {
+										name: currentFunctionLayer.name,
+									})}
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => {
+										setNewVariableScope("board");
+										setShowNewVariableDialog(true);
+									}}
+								>
+									{t("newBoardVariable", "New board variable")}
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					) : (
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
+							title={
+								tab === "variables"
+									? t("newVariable", "New variable")
+									: t("newFunction", "New Function")
+							}
+							onClick={() => {
+								if (tab !== "variables") {
+									setDraftFunction("");
+									return;
+								}
+								setNewVariableScope("board");
+								setShowNewVariableDialog(true);
+							}}
+						>
+							<CirclePlusIcon className="h-3.5 w-3.5" />
+						</Button>
+					)}
+				</div>
+				<TabsContent value="variables" />
+				<TabsContent value="functions" />
+			</Tabs>
+
+			<div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1.5">
+				<div className="flex h-7 flex-1 items-center gap-1.5 rounded-md border bg-background px-2 focus-within:border-primary">
+					<SearchIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+					<input
+						ref={searchRef}
+						value={rawQuery}
+						onChange={(event) => setRawQuery(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Escape") {
+								setRawQuery("");
+								event.stopPropagation();
+							}
+						}}
+						placeholder={t(
+							"filterTokensPlaceholder",
+							"filter — name, type:string, is:unused, in:state",
+						)}
+						spellCheck={false}
+						aria-label={t("filter", "Filter")}
+						className="min-w-0 flex-1 bg-transparent font-mono text-[11px] outline-none placeholder:text-muted-foreground/75"
+					/>
+					{rawQuery && (
+						<button
+							type="button"
+							aria-label={t("clearFilter", "Clear filter")}
+							onClick={() => {
+								setRawQuery("");
+								searchRef.current?.focus();
+							}}
+							className="text-muted-foreground hover:text-foreground"
+						>
+							<XIcon className="h-3 w-3" />
+						</button>
+					)}
+				</div>
+			</div>
+
+			<div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+				<span className="mr-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+					{t("group", "Group")}
+				</span>
+				{groupModes.map(({ mode, label }) => (
+					<button
+						key={mode}
+						type="button"
+						aria-pressed={group === mode}
+						onClick={() => setGroup(mode)}
+						className={cn(
+							"rounded border border-transparent px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground",
+							group === mode && "border-border bg-muted text-foreground",
+						)}
+					>
+						{label}
+					</button>
+				))}
+			</div>
+
+			{currentFunctionLayer && (
+				<div className="flex items-center gap-2 border-y bg-background px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
+					<CornerUpLeftIcon className="h-3 w-3" />
+					<span>{t("inside", "inside")}</span>
+					<b className="font-medium text-primary">
+						{currentFunctionLayer.name}
+					</b>
+					<span>·</span>
+					<span>{t("localsFirst", "locals first")}</span>
+				</div>
+			)}
+
+			{draftFunction !== null && (
+				<div className="flex items-center gap-1.5 border-b bg-background px-2 py-2">
+					<SquareFunctionIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+					<Input
+						autoFocus
+						value={draftFunction}
+						onChange={(event) => setDraftFunction(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Enter") void commitDraftFunction();
+							if (event.key === "Escape") setDraftFunction(null);
+						}}
+						placeholder={t("functionNamePlaceholder", "functionName")}
+						className="h-7 font-mono text-xs"
+					/>
+					<Button size="sm" className="h-7" onClick={commitDraftFunction}>
+						{t("create", "Create")}
+					</Button>
+				</div>
+			)}
+
+			<TokenBoard
+				items={items}
+				kind={tab === "functions" ? FUNCTION_FOLDER_KIND : VARIABLE_FOLDER_KIND}
+				lead={
+					localItems.length > 0
+						? {
+								label: t("localToName", "Local · {{name}}", {
+									name: currentFunctionLayer?.name ?? "",
+								}),
+								items: localItems,
+							}
+						: undefined
+				}
+				sections={tab === "functions" ? functionSections : undefined}
+				group={group}
+				query={query}
+				renderToken={renderToken}
+				empty={
+					<div className="px-4 py-6 text-xs leading-relaxed text-muted-foreground">
+						{rawQuery ? (
+							<>
+								{t("nothingMatches", "Nothing matches")}{" "}
+								<span className="font-mono text-foreground">{rawQuery}</span>.{" "}
+								{t(
+									"tryTypeStringIsUnused",
+									"Try type:string, is:unused or in:submit.",
+								)}
+							</>
+						) : tab === "functions" ? (
+							t("noFunctionsYet", "No functions yet.")
+						) : (
+							t("noVariablesYet", "No variables yet.")
+						)}
+					</div>
+				}
+			/>
+
+			<div className="flex shrink-0 items-center gap-1.5 border-t px-2 py-1.5 font-mono text-[9.5px] text-muted-foreground">
+				<span>
+					{items.length ===
+					(tab === "variables" ? totalVariables : totalFunctions)
+						? items.length
+						: `${items.length} / ${tab === "variables" ? totalVariables : totalFunctions}`}
+				</span>
+				{unusedCount > 0 && (
+					<>
+						<span className="opacity-50">·</span>
+						<button
+							type="button"
+							className="text-destructive hover:underline"
+							onClick={() => setRawQuery("is:unused")}
+						>
+							{t("unusedCount", "{{count}} unused", { count: unusedCount })}
+						</button>
+					</>
+				)}
+				<div className="flex-1" />
+				<span>
+					{currentFunctionLayer
+						? t("localScope", "local scope")
+						: t("boardScope", "board scope")}
+				</span>
+			</div>
+
+			<NewVariableDialog
+				open={showNewVariableDialog}
+				onOpenChange={setShowNewVariableDialog}
+				onCreateVariable={
+					newVariableScope === "local" && currentFunctionLayer
+						? upsertLocalVariable
+						: upsertVariable
+				}
+			/>
+
+			{editingVariable && (
+				<VariableOverlay
+					key={editingVariable.id}
+					open={editingVariable !== null}
+					onOpenChange={(open) => {
+						if (!open) setEditingVariable(null);
 					}}
-					onVariableDeleted={(updated) => {
-						if (!updated.editable) return;
-						removeVariable(updated);
+					variable={editingVariable}
+					scope={
+						currentFunctionLayer?.variables?.[editingVariable.id]
+							? "local"
+							: "board"
+					}
+					uses={usage.variables[editingVariable.id] ?? 0}
+					folders={variableFolders}
+					refs={board.refs}
+					onApply={saveVariable}
+					onDelete={(variable, scope) => {
+						setEditingVariable(null);
+						void deleteVariable(variable, scope);
 					}}
 				/>
 			)}
-		/>
-	);
 
-	return (
-		<div className="flex flex-col h-full overflow-hidden">
-			<div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-				{!currentFunctionLayer && (
-					<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
-						<h3 className="text-sm font-semibold text-muted-foreground">
-							{t('variables', 'Variables')}
-						</h3>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="gap-1 h-6"
-							onClick={() => setShowNewVariableDialog(true)}
-						>
-							<CirclePlusIcon className="w-3 h-3" />
-							{t('new', 'New')}
-						</Button>
-					</div>
-				)}
-
-				<NewVariableDialog
-					open={showNewVariableDialog}
-					onOpenChange={setShowNewVariableDialog}
-					onCreateVariable={upsertVariable}
+			{editingFunction && (
+				<FunctionOverlay
+					open={editingFunction !== null}
+					onOpenChange={(open) => {
+						if (!open) setEditingFunction(null);
+					}}
+					layer={editingFunction}
+					calls={usage.functions[editingFunction.id] ?? 0}
+					folders={functionFolders}
+					boardRef={boardRef}
+					onApply={async (updated) => {
+						await upsertFunction(updated);
+						setEditingFunction(null);
+					}}
+					onDelete={() => {
+						const layer = editingFunction;
+						setEditingFunction(null);
+						void deleteFunction(layer);
+					}}
+					onOpenLayer={() => {
+						const layer = editingFunction;
+						setEditingFunction(null);
+						void openFunction(layer);
+					}}
 				/>
-
-				{currentFunctionLayer && (
-					<NewVariableDialog
-						open={showNewLocalVariableDialog}
-						onOpenChange={setShowNewLocalVariableDialog}
-						onCreateVariable={upsertLocalVariable}
-					/>
-				)}
-
-				{currentFunctionLayer && localTree && (
-					<>
-						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
-							<h3 className="text-xs font-semibold text-muted-foreground">{t('localName', 'Local — {{name}}', { name: currentFunctionLayer.name })}</h3>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="gap-1 h-6"
-								onClick={() => setShowNewLocalVariableDialog(true)}
-							>
-								<CirclePlusIcon className="w-3 h-3" />
-								{t('new', 'New')}
-							</Button>
-						</div>
-						<CategoryTree
-							root={localTree}
-							kind={LOCAL_VARIABLE_FOLDER_KIND}
-							renderItem={(variable) => (
-								<Variable
-									variable={variable}
-									refs={board.refs}
-									onVariableChange={(updated) => {
-										if (!updated.editable) return;
-										upsertLocalVariable(updated);
-									}}
-									onVariableDeleted={(updated) => {
-										if (!updated.editable) return;
-										removeLocalVariable(updated);
-									}}
-								/>
-							)}
-						/>
-						<Separator className="my-3" />
-					</>
-				)}
-				{!currentFunctionLayer && globalVariables}
-				{currentFunctionLayer && (
-					<>
-						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
-							<h3 className="text-xs font-semibold text-muted-foreground">
-								{t('global', 'Global')}
-							</h3>
-						</div>
-						{globalVariables}
-					</>
-				)}
-
-				{pushLayer && (
-					<>
-						<Separator className="my-3" />
-						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
-							<h3 className="text-sm font-semibold text-muted-foreground">
-								{t('functions', 'Functions')}
-							</h3>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="gap-1 h-6"
-								onClick={createFunction}
-							>
-								<CirclePlusIcon className="w-3 h-3" />
-								{t('new', 'New')}
-							</Button>
-						</div>
-						<FunctionsList
-							board={board}
-							executeCommand={executeCommand}
-							pushLayer={pushLayer}
-							boardRef={boardRef}
-						/>
-					</>
-				)}
-			</div>
+			)}
 		</div>
 	);
 }
 
-export function Variable({
-	variable,
-	onVariableChange,
-	onVariableDeleted,
-	preview = false,
-	refs,
-}: Readonly<{
-	variable: IVariable;
-	onVariableDeleted: (variable: IVariable) => void;
-	onVariableChange: (variable: IVariable) => void;
-	preview?: boolean;
-	refs?: Record<string, string>;
-}>) {
+/** The type vocabulary, one click away instead of learned by osmosis. */
+function TokenLegend() {
 	const { t } = useTranslation("flow");
-	const { attributes, listeners, setNodeRef, transform } = useDraggable({
-		id: variable.id,
-		data: variable,
-	});
-
-	const [localVariable, setLocalVariable] = useState(variable);
-	const [openEdit, setOpenEdit] = useState(false);
-
-	const saveVariable = useCallback(() => {
-		if (localVariable === variable) return;
-		onVariableChange(localVariable);
-	}, [localVariable, variable]);
-
-	function defaultValueFromType(
-		valueType: IValueType,
-		variableType: IVariableType,
-	) {
-		if (valueType === IValueType.Array) {
-			return [];
-		}
-		if (valueType === IValueType.HashSet) {
-			return new Set();
-		}
-		if (valueType === IValueType.HashMap) {
-			return new Map();
-		}
-		switch (variableType) {
-			case IVariableType.Boolean:
-				return false;
-			case IVariableType.Date:
-				return new Date().toISOString();
-			case IVariableType.Float:
-				return 0.0;
-			case IVariableType.Integer:
-				return 0;
-			case IVariableType.Generic:
-				return null;
-			case IVariableType.PathBuf:
-				return "";
-			case IVariableType.String:
-				return "";
-			case IVariableType.Struct:
-				return {};
-			case IVariableType.Byte:
-				return null;
-			case IVariableType.Execution:
-				return null;
-		}
-	}
-
-	const isArrayDropdown = (
-		<DropdownMenu>
-			<DropdownMenuTrigger>
-				<ValueTypeIcon
-					value_type={localVariable.value_type}
-					data_type={localVariable.data_type}
-				/>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent>
-				<DropdownMenuItem
-					className="gap-2"
-					onClick={(e) => {
-						setLocalVariable((old) => ({
-							...old,
-							value_type: IValueType.Normal,
-							default_value: convertJsonToUint8Array(
-								defaultValueFromType(IValueType.Normal, old.data_type),
-							),
-						}));
-						e.stopPropagation();
-					}}
-				>
-					<div
-						className="w-4 h-2 rounded-full"
-						style={{ backgroundColor: typeToColor(localVariable.data_type) }}
-					/>{" "}
-					{t('single', 'Single')}
-				</DropdownMenuItem>
-				<DropdownMenuItem
-					className="gap-2"
-					onClick={(e) => {
-						setLocalVariable((old) => ({
-							...old,
-							value_type: IValueType.Array,
-							default_value: convertJsonToUint8Array(
-								defaultValueFromType(IValueType.Array, old.data_type),
-							),
-						}));
-						e.stopPropagation();
-					}}
-				>
-					<GripIcon
-						className="w-4 h-4"
-						style={{ color: typeToColor(localVariable.data_type) }}
-					/>{" "}
-					{t('array', 'Array')}
-				</DropdownMenuItem>
-				<DropdownMenuItem
-					className="gap-2"
-					onClick={(e) => {
-						setLocalVariable((old) => ({
-							...old,
-							value_type: IValueType.HashSet,
-							default_value: convertJsonToUint8Array(
-								defaultValueFromType(IValueType.HashSet, old.data_type),
-							),
-						}));
-						e.stopPropagation();
-					}}
-				>
-					<EllipsisVerticalIcon
-						className="w-4 h-4"
-						style={{ color: typeToColor(localVariable.data_type) }}
-					/>{" "}
-					{t('set', 'Set')}
-				</DropdownMenuItem>
-				<DropdownMenuItem
-					className="gap-2"
-					onClick={(e) => {
-						setLocalVariable((old) => ({
-							...old,
-							value_type: IValueType.HashMap,
-							default_value: convertJsonToUint8Array(
-								defaultValueFromType(IValueType.HashMap, old.data_type),
-							),
-						}));
-						e.stopPropagation();
-					}}
-				>
-					<ListIcon
-						className="w-4 h-4"
-						style={{ color: typeToColor(localVariable.data_type) }}
-					/>{" "}
-					{t('map', 'Map')}
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-
-	const element = (
-		<div
-			ref={setNodeRef}
-			className={`relative flex w-full flex-row items-center justify-between gap-2 border p-1 px-2 rounded-md bg-card text-card-foreground ${transform ? "opacity-40" : ""} ${!variable.editable ? "text-muted-foreground" : ""}`}
-			{...listeners}
-			{...attributes}
-		>
-			<div className="flex flex-row gap-2 items-center" data-no-dnd>
-				{isArrayDropdown}
-				<p
-					className={`text-start line-clamp-2 ${!variable.editable ? "text-muted-foreground" : ""}`}
-				>
-					{localVariable.name}
-				</p>
-			</div>
-			<div className="flex flex-row items-center gap-2" data-no-dnd>
-				<Button
-					disabled={!variable.editable}
-					variant="ghost"
-					size="icon"
-					onClick={(event) => {
-						event.stopPropagation();
-						setLocalVariable((old) => ({ ...old, exposed: !old.exposed }));
-					}}
-				>
-					{localVariable.exposed ? (
-						<EyeIcon className="w-4 h-4" />
-					) : (
-						<EyeOffIcon className="w-4 h-4" />
-					)}
-				</Button>
-			</div>
-		</div>
-	);
-
-	if (preview) return element;
-
-	const selectPreviewElement = useCallback((type: IVariableType) => {
-		return (
-			<div className="flex items-center gap-2">
-				<div
-					className="size-2 rounded-full"
-					style={{ backgroundColor: typeToColor(type) }}
-				/>
-				<span>{type}</span>
-			</div>
-		);
-	}, []);
-
-	const valueTypePreviewElement = useCallback(
-		(valueType: IValueType) => {
-			const color = typeToColor(localVariable.data_type);
-			const iconClass = "w-3.5 h-3.5";
-
-			const getIcon = () => {
-				switch (valueType) {
-					case IValueType.Normal:
-						return <CircleDotIcon className={iconClass} style={{ color }} />;
-					case IValueType.Array:
-						return <GripIcon className={iconClass} style={{ color }} />;
-					case IValueType.HashSet:
-						return (
-							<EllipsisVerticalIcon className={iconClass} style={{ color }} />
-						);
-					case IValueType.HashMap:
-						return <ListIcon className={iconClass} style={{ color }} />;
-					default:
-						return null;
-				}
-			};
-
-			const getLabel = () => {
-				switch (valueType) {
-					case IValueType.Normal:
-						return "Single";
-					case IValueType.Array:
-						return "Array";
-					case IValueType.HashSet:
-						return "Set";
-					case IValueType.HashMap:
-						return "Map";
-					default:
-						return valueType;
-				}
-			};
-
-			return (
-				<div className="flex items-center gap-2">
-					{getIcon()}
-					<span>{getLabel()}</span>
-				</div>
-			);
-		},
-		[localVariable.data_type],
-	);
+	const types = [
+		IVariableType.String,
+		IVariableType.Integer,
+		IVariableType.Float,
+		IVariableType.Boolean,
+		IVariableType.Struct,
+		IVariableType.Date,
+		IVariableType.Byte,
+		IVariableType.Generic,
+		IVariableType.PathBuf,
+	];
 
 	return (
-		<Sheet
-			open={openEdit}
-			onOpenChange={(open) => {
-				if (!localVariable.editable) return;
-				setOpenEdit(open);
-				if (!open) {
-					saveVariable();
-				}
-			}}
-		>
-			<SheetTrigger asChild>{element}</SheetTrigger>
-			<SheetContent className="flex flex-col max-h-screen overflow-hidden px-3 pt-2 pb-4">
-				<SheetHeader className="shrink-0">
-					<SheetTitle className="flex flex-row items-center gap-2">
-						{t('editVariable', 'Edit Variable')}
-					</SheetTitle>
-					<SheetDescription className="flex flex-col gap-6 text-foreground">
-						<p className="text-muted-foreground">
-							{t('editTheVariablePropertiesToYourLiking', 'Edit the variable properties to your liking.')}
-						</p>
-					</SheetDescription>
-				</SheetHeader>
-
-				<div className="flex-1 overflow-y-auto space-y-6 pr-2">
-					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="name">{t('variableName', 'Variable Name')}</Label>
-						<Input
-							value={localVariable.name}
-							onChange={(e) => {
-								setLocalVariable((old) => ({ ...old, name: e.target.value }));
-							}}
-							id="name"
-							placeholder="Name"
-						/>
-					</div>
-
-					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="category">{t('category', 'Category')}</Label>
-						<Input
-							id="category"
-							value={localVariable.category ?? ""}
-							onChange={(e) => {
-								const v = e.target.value;
-								setLocalVariable((old) => ({
-									...old,
-									category: v.trim() === "" ? undefined : v,
-								}));
-							}}
-							placeholder={t('egMainbools', 'e.g. Main/Bools')}
-						/>
-						<small className="text-[0.8rem] text-muted-foreground">
-							{t('useToCreateNestedFoldersLeaveEmptyForToplevel', 'Use “/” to create nested folders. Leave empty for top-level.')}
-						</small>
-					</div>
-
-					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="var_type">{t('variableType', 'Variable Type')}</Label>
-						<div className="flex flex-row gap-2">
-							<Select
-								value={localVariable.data_type}
-								onValueChange={(value) =>
-									setLocalVariable((old) => ({
-										...old,
-										data_type: value as IVariableType,
-										default_value: convertJsonToUint8Array(
-											defaultValueFromType(
-												old.value_type,
-												value as IVariableType,
-											),
-										),
-									}))
-								}
-							>
-								<SelectTrigger id="var_type" className="flex-1">
-									<SelectValue placeholder={t('dataType', 'Data Type')} />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectLabel>{t('dataType', 'Data Type')}</SelectLabel>
-										<SelectItem value="Boolean">
-											{selectPreviewElement(IVariableType.Boolean)}
-										</SelectItem>
-										<SelectItem value="Date">
-											{selectPreviewElement(IVariableType.Date)}
-										</SelectItem>
-										<SelectItem value="Float">
-											{selectPreviewElement(IVariableType.Float)}
-										</SelectItem>
-										<SelectItem value="Integer">
-											{selectPreviewElement(IVariableType.Integer)}
-										</SelectItem>
-										<SelectItem value="Generic">
-											{selectPreviewElement(IVariableType.Generic)}
-										</SelectItem>
-										<SelectItem value="PathBuf">
-											{selectPreviewElement(IVariableType.PathBuf)}
-										</SelectItem>
-										<SelectItem value="String">
-											{selectPreviewElement(IVariableType.String)}
-										</SelectItem>
-										<SelectItem value="Struct">
-											{selectPreviewElement(IVariableType.Struct)}
-										</SelectItem>
-										<SelectItem value="Byte">
-											{selectPreviewElement(IVariableType.Byte)}
-										</SelectItem>
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-							<Select
-								value={localVariable.value_type}
-								onValueChange={(value) =>
-									setLocalVariable((old) => ({
-										...old,
-										value_type: value as IValueType,
-										default_value: convertJsonToUint8Array(
-											defaultValueFromType(value as IValueType, old.data_type),
-										),
-									}))
-								}
-							>
-								<SelectTrigger className="w-28">
-									<SelectValue placeholder={t('valueType', 'Value Type')} />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectGroup>
-										<SelectLabel>{t('valueType', 'Value Type')}</SelectLabel>
-										<SelectItem value="Normal">
-											{valueTypePreviewElement(IValueType.Normal)}
-										</SelectItem>
-										<SelectItem value="Array">
-											{valueTypePreviewElement(IValueType.Array)}
-										</SelectItem>
-										<SelectItem value="HashSet">
-											{valueTypePreviewElement(IValueType.HashSet)}
-										</SelectItem>
-										<SelectItem value="HashMap">
-											{valueTypePreviewElement(IValueType.HashMap)}
-										</SelectItem>
-									</SelectGroup>
-								</SelectContent>
-							</Select>
-						</div>
-					</div>
-
-					<div className="flex flex-col gap-1">
-						<div className="flex items-center space-x-2">
-							<Switch
-								checked={localVariable.exposed}
-								onCheckedChange={(checked) =>
-									setLocalVariable((old) => ({ ...old, exposed: checked }))
-								}
-								id="exposed"
-							/>
-							<Label htmlFor="exposed">{t('isExposed', 'Is Exposed?')}</Label>
-						</div>
-						<small className="text-[0.8rem] text-muted-foreground">
-							{t('ifYouExposeAVariableItWillBeVisibleInTheConfigurationTabOfYourApp', "If you expose a variable it will be visible in the configuration tab of your App.")}
-						</small>
-					</div>
-
-					<div className="flex flex-col gap-1">
-						<div className="flex items-center space-x-2">
-							<Switch
-								checked={localVariable.secret}
-								onCheckedChange={(checked) =>
-									setLocalVariable((old) => ({ ...old, secret: checked }))
-								}
-								id="secret"
-							/>
-							<Label htmlFor="secret">{t('isSecret', 'Is Secret?')}</Label>
-						</div>
-						<small className="text-[0.8rem] text-muted-foreground">
-							{t('aSecretVariableWillBeCoveredForInputEgPasswords', 'A secret variable will be covered for input (e.g passwords)')}
-						</small>
-					</div>
-
-					<div className="flex flex-col gap-1">
-						<div className="flex items-center space-x-2">
-							<Switch
-								checked={localVariable.runtime_configured ?? false}
-								onCheckedChange={(checked) =>
-									setLocalVariable((old) => ({
-										...old,
-										runtime_configured: checked,
-									}))
-								}
-								id="runtime_configured"
-							/>
-							<Label htmlFor="runtime_configured">{t('runtimeConfigured', 'Runtime Configured?')}</Label>
-						</div>
-						<small className="text-[0.8rem] text-muted-foreground">
-							{t('runtimeConfiguredVariablesAreSetPeruserLocallyTheyAreNeverStoredInTheFlowItself', "Runtime configured variables are set per-user locally. They are never stored in the flow itself.")}
-						</small>
-					</div>
-
-					{localVariable.data_type === IVariableType.Struct && (
-						<StructSchemaEditor
-							variable={localVariable}
-							refs={refs}
-							onSchemaChange={(schema) =>
-								setLocalVariable((old) => ({ ...old, schema }))
-							}
-						/>
-					)}
-
-					<Separator />
-
-					<div className="flex flex-col">
-						{!localVariable.exposed && (
-							<VariablesMenuEdit
-								key={`${localVariable.value_type} - ${localVariable.data_type}-${localVariable.secret}`}
-								variable={localVariable}
-								refs={refs}
-								updateVariable={async (variable) =>
-									setLocalVariable((old) => ({
-										...old,
-										default_value: variable.default_value,
-									}))
-								}
-							/>
-						)}
-					</div>
-				</div>
-
+		<Popover>
+			<PopoverTrigger asChild>
 				<Button
-					className="shrink-0"
-					variant="destructive"
-					onClick={() => {
-						onVariableDeleted(variable);
-					}}
+					variant="ghost"
+					size="icon"
+					className="h-7 w-7"
+					title={t("legend", "Legend")}
 				>
-					<Trash2Icon />
+					<HelpCircleIcon className="h-3.5 w-3.5" />
 				</Button>
-			</SheetContent>
-		</Sheet>
+			</PopoverTrigger>
+			<PopoverContent align="end" className="w-72 text-xs">
+				<p className="mb-2 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+					{t("glyphIsTheType", "Glyph = type")}
+				</p>
+				<div className="mb-3 grid grid-cols-2 gap-1">
+					{types.map((type) => (
+						<div key={type} className="flex items-center gap-2">
+							<span
+								className="flex h-4 w-5 items-center justify-center rounded-[2px] font-mono text-[10px]"
+								style={{
+									backgroundColor: typeToColor(type),
+									color: "var(--card)",
+								}}
+							>
+								{TOKEN_GLYPH[type]}
+							</span>
+							<span className="text-muted-foreground">{type}</span>
+						</div>
+					))}
+				</div>
+				<p className="mb-2 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+					{t("formIsTheContainer", "Form = container")}
+				</p>
+				<ul className="mb-3 space-y-1 text-muted-foreground">
+					<li>{t("plainSingleValue", "Plain — single value")}</li>
+					<li>{t("stackedArray", "Stacked plate — Array")}</li>
+					<li>{t("chamferedSet", "Chamfered ends — HashSet")}</li>
+					<li>{t("pairedCellsMap", "Paired cells — HashMap")}</li>
+					<li>{t("arrowTailFunction", "Arrow tail — callable function")}</li>
+					<li>{t("dashedUnused", "Dashed outline — nothing references it")}</li>
+				</ul>
+				<p className="mb-2 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+					{t("filterPredicates", "Filter predicates")}
+				</p>
+				<p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+					type:string · in:state ·{" "}
+					{IS_PREDICATES.map((predicate) => `is:${predicate}`).join(" · ")}
+				</p>
+			</PopoverContent>
+		</Popover>
 	);
 }
 
@@ -847,220 +1110,4 @@ export function ValueTypeIcon({
 			style={{ backgroundColor: typeToColor(data_type) }}
 		/>
 	);
-}
-
-const EMPTY_STRING_HASH = "16248035215404677707";
-
-const resolveRef = (
-	value: string | undefined | null,
-	refs: Record<string, string> | undefined,
-): string => {
-	if (!value) return "";
-	if (value === EMPTY_STRING_HASH) return "";
-	const resolved = refs?.[value];
-	return resolved ?? value;
-};
-
-function StructSchemaEditor({
-	variable,
-	refs,
-	onSchemaChange,
-}: Readonly<{
-	variable: IVariable;
-	refs?: Record<string, string>;
-	onSchemaChange: (schema: string | null) => void;
-}>) {
-	const { t } = useTranslation("flow");
-	const resolvedSchema = useMemo(() => {
-		if (!variable.schema) return "";
-		return resolveRef(variable.schema, refs);
-	}, [variable.schema, refs]);
-
-	const [schemaMode, setSchemaMode] = useState<"example" | "schema">("example");
-	const [exampleJson, setExampleJson] = useState("{}");
-	const [schemaJson, setSchemaJson] = useState(resolvedSchema || "");
-	const [error, setError] = useState<string | null>(null);
-	const [isFocused, setIsFocused] = useState(false);
-
-	useEffect(() => {
-		if (resolvedSchema) {
-			setSchemaJson(resolvedSchema);
-		}
-	}, [resolvedSchema]);
-
-	const handleGenerateFromExample = useCallback(() => {
-		try {
-			const parsed = JSON.parse(exampleJson);
-			// Generate a simple schema from the example
-			const schema = generateSchemaFromExample(parsed);
-			const schemaStr = JSON.stringify(schema, null, 2);
-			setSchemaJson(schemaStr);
-			onSchemaChange(schemaStr);
-			setError(null);
-		} catch (e) {
-			setError("Invalid JSON example");
-		}
-	}, [exampleJson, onSchemaChange]);
-
-	const handleSchemaChange = useCallback(
-		(value: string) => {
-			setSchemaJson(value);
-			if (!value.trim()) {
-				onSchemaChange(null);
-				setError(null);
-				return;
-			}
-			try {
-				JSON.parse(value);
-				onSchemaChange(value);
-				setError(null);
-			} catch {
-				setError("Invalid JSON schema");
-			}
-		},
-		[onSchemaChange],
-	);
-
-	return (
-		<div className="flex flex-col gap-2">
-			<Label className="flex items-center gap-2">
-				<BracesIcon className="w-4 h-4" />
-				{t('schema', 'Schema')}
-			</Label>
-			<small className="text-[0.8rem] text-muted-foreground -mt-1">
-				{t('defineAJsonSchemaToEnableFormbasedEditingForThisStruct', 'Define a JSON schema to enable form-based editing for this struct.')}
-			</small>
-
-			<Tabs
-				value={schemaMode}
-				onValueChange={(v) => setSchemaMode(v as "example" | "schema")}
-			>
-				<TabsList className="grid w-full grid-cols-2">
-					<TabsTrigger value="example" className="gap-1">
-						<WandIcon className="w-3 h-3" />
-						{t('fromExample', 'From Example')}
-					</TabsTrigger>
-					<TabsTrigger value="schema" className="gap-1">
-						<BracesIcon className="w-3 h-3" />
-						{t('editSchema', 'Edit Schema')}
-					</TabsTrigger>
-				</TabsList>
-
-				<TabsContent value="example" className="space-y-2">
-					<small className="text-[0.8rem] text-muted-foreground">
-						{t('pasteAnExampleJsonAndGenerateASchemaAutomatically', 'Paste an example JSON and generate a schema automatically.')}
-					</small>
-					<div
-						className={cn(
-							"relative w-full rounded-md border bg-transparent transition-all duration-200",
-							"border-input dark:bg-input/30",
-							isFocused && "border-ring ring-ring/50 ring-[3px]",
-						)}
-					>
-						<textarea
-							autoComplete="off"
-							autoCorrect="off"
-							autoCapitalize="off"
-							value={exampleJson}
-							onChange={(e) => setExampleJson(e.target.value)}
-							onFocus={() => setIsFocused(true)}
-							onBlur={() => setIsFocused(false)}
-							placeholder={`{"name": "John", "age": 30}`}
-							rows={5}
-							className="w-full resize-none bg-transparent px-3 py-2 text-sm outline-none font-mono"
-						/>
-					</div>
-					<Button
-						type="button"
-						variant="secondary"
-						size="sm"
-						className="gap-1"
-						onClick={handleGenerateFromExample}
-					>
-						<WandIcon className="w-3 h-3" />
-						{t('generateSchema', 'Generate Schema')}
-					</Button>
-				</TabsContent>
-
-				<TabsContent value="schema" className="space-y-2">
-					<small className="text-[0.8rem] text-muted-foreground">
-						{t('editTheJsonSchemaDirectlyLeaveEmptyToDisableFormMode', 'Edit the JSON schema directly. Leave empty to disable form mode.')}
-					</small>
-					<div
-						className={cn(
-							"relative w-full rounded-md border bg-transparent transition-all duration-200",
-							"border-input dark:bg-input/30",
-							isFocused && "border-ring ring-ring/50 ring-[3px]",
-							error && "border-destructive",
-						)}
-					>
-						<textarea
-							value={schemaJson}
-							onChange={(e) => handleSchemaChange(e.target.value)}
-							onFocus={() => setIsFocused(true)}
-							onBlur={() => setIsFocused(false)}
-							placeholder={`{"type": "object", "properties": {...}}`}
-							rows={8}
-							className="w-full resize-none bg-transparent px-3 py-2 text-sm outline-none font-mono"
-						/>
-					</div>
-					{error && <p className="text-xs text-destructive">{error}</p>}
-					{schemaJson && !error && (
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onClick={() => handleSchemaChange("")}
-						>
-							{t('clearSchema', 'Clear Schema')}
-						</Button>
-					)}
-				</TabsContent>
-			</Tabs>
-		</div>
-	);
-}
-
-function generateSchemaFromExample(example: unknown): object {
-	if (example === null) {
-		return { type: "null" };
-	}
-
-	if (Array.isArray(example)) {
-		const itemSchema =
-			example.length > 0 ? generateSchemaFromExample(example[0]) : {};
-		return { type: "array", items: itemSchema };
-	}
-
-	if (typeof example === "object") {
-		const properties: Record<string, object> = {};
-		const required: string[] = [];
-
-		for (const [key, value] of Object.entries(example)) {
-			properties[key] = generateSchemaFromExample(value);
-			if (value !== null && value !== undefined) {
-				required.push(key);
-			}
-		}
-
-		return {
-			type: "object",
-			properties,
-			required: required.length > 0 ? required : undefined,
-		};
-	}
-
-	if (typeof example === "boolean") {
-		return { type: "boolean" };
-	}
-
-	if (typeof example === "number") {
-		return Number.isInteger(example) ? { type: "integer" } : { type: "number" };
-	}
-
-	if (typeof example === "string") {
-		return { type: "string" };
-	}
-
-	return {};
 }

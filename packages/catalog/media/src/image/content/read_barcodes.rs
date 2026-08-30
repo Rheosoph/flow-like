@@ -5,19 +5,16 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
-use flow_like_types::{
-    anyhow, async_trait,
-    json::json,
-    rxing::{
-        BarcodeFormat, BinaryBitmap, DecodeHints,
-        Exceptions::NotFoundException,
-        Luma8LuminanceSource, MultiFormatReader, RXingResult,
-        common::HybridBinarizer,
-        multi::{ByQuadrantReader, GenericMultipleBarcodeReader, MultipleBarcodeReader},
-    },
-};
+use flow_like_types::{anyhow, async_trait, json::json};
 #[cfg(feature = "execute")]
 use rayon::prelude::*;
+use rxing::{
+    BarcodeFormat, BinaryBitmap, DecodeHints,
+    Exceptions::NotFoundException,
+    Luma8LuminanceSource, MultiFormatReader, RXingResult,
+    common::HybridBinarizer,
+    multi::{ByQuadrantReader, GenericMultipleBarcodeReader, MultipleBarcodeReader},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -703,7 +700,7 @@ fn decode_multiple_in_luma(
     width: u32,
     height: u32,
     hints: &DecodeHints,
-) -> flow_like_types::rxing::common::Result<Vec<RXingResult>> {
+) -> rxing::common::Result<Vec<RXingResult>> {
     let mut scanner = GenericMultipleBarcodeReader::new(MultiFormatReader::default());
     scanner.decode_multiple_with_hints(
         &mut BinaryBitmap::new(HybridBinarizer::new(Luma8LuminanceSource::new(
@@ -720,7 +717,7 @@ fn decode_multiple_in_luma_by_quadrant(
     width: u32,
     height: u32,
     hints: &DecodeHints,
-) -> flow_like_types::rxing::common::Result<Vec<RXingResult>> {
+) -> rxing::common::Result<Vec<RXingResult>> {
     let mut scanner =
         GenericMultipleBarcodeReader::new(ByQuadrantReader::new(MultiFormatReader::default()));
     scanner.decode_multiple_with_hints(
@@ -777,6 +774,7 @@ fn decode_variant_attempt(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_barcodes_in_luma(
     luma: Vec<u8>,
     width: u32,
@@ -876,18 +874,11 @@ fn decode_barcodes_in_luma(
     Ok(barcodes)
 }
 
-fn is_exhaustive_preprocess(preprocess_mode: PreprocessMode) -> bool {
-    matches!(
-        preprocess_mode,
-        PreprocessMode::Balanced | PreprocessMode::Aggressive | PreprocessMode::Industrial
-    )
-}
-
 fn append_processed_variants<F>(
     variants: &mut Vec<DecodeVariant>,
     source_count: usize,
     max_variants: usize,
-    mut build_variant: F,
+    build_variant: F,
 ) where
     F: FnMut(&DecodeVariant) -> Option<DecodeVariant>,
 {
@@ -1627,6 +1618,8 @@ impl NodeLogic for ReadBarcodesNode {
             "Read/Decode QR Codes and Barcodes",
             "Image/Content",
         );
+        node.set_flowscript_name("image", "readBarcodes");
+        node.set_receiver("image_in");
         node.set_version(6);
         node.add_icon("/flow/icons/barcode.svg");
 
@@ -1752,13 +1745,11 @@ impl NodeLogic for ReadBarcodesNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::{
-        image::{
-            DynamicImage, GenericImageView, GrayImage, ImageBuffer, Luma,
-            imageops::{FilterType, overlay},
-        },
-        rxing::{EncodeHints, MultiFormatWriter, Writer},
+    use flow_like_types::image::{
+        DynamicImage, GenericImageView, GrayImage, ImageBuffer, Luma,
+        imageops::{FilterType, overlay},
     };
+    use rxing::{EncodeHints, MultiFormatWriter, Writer};
 
     fn barcode_image(
         text: &str,

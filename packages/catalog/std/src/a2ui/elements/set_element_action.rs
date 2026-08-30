@@ -42,6 +42,7 @@ impl NodeLogic for SetElementAction {
             "Dynamically sets the legacy default action or a named event action of an interactive element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "setElementAction");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);
@@ -52,7 +53,8 @@ impl NodeLogic for SetElementAction {
             "Reference to the element (ID string or element object from Get Element)",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "event_name",

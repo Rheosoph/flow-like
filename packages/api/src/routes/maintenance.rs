@@ -13,6 +13,7 @@ use flow_like_types::{
 
 use crate::{
     cache::sweeper::sweep_once as sweep_cache_once,
+    channel::sweep_expired as sweep_channels_once,
     error::ApiError,
     state::AppState,
     telemetry::alerts::{TelemetryAlertConfig, evaluate_once},
@@ -67,6 +68,17 @@ async fn run_maintenance_job(
             )))
         }
         MaintenanceRunRequest::CacheCleanup => {
+            // Channel rows are expiring coordination state with no native TTL either; they ride
+            // the same scheduled job so serverless deployments need no second trigger.
+            match sweep_channels_once(&state.db).await {
+                Ok(deleted) => {
+                    tracing::info!(deleted, "Maintenance channel sweep completed")
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, "Scheduled channel sweep failed")
+                }
+            }
+
             let store = state.cache_store.clone().ok_or_else(|| {
                 ApiError::service_unavailable(
                     "Cache backend is not configured or failed to initialize on this deployment",

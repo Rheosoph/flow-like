@@ -78,6 +78,8 @@ impl NodeLogic for CopyNode {
             "Copies a file from one location to another",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "copy");
+        node.set_receiver("from");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

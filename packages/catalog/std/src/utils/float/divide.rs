@@ -20,10 +20,12 @@ impl NodeLogic for DivideFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_divide",
-            "/",
+            "/ (Float)",
             "Divides one float by another",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "divide");
+        node.set_receiver("dividend");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

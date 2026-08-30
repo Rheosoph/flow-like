@@ -310,7 +310,7 @@ function StandaloneModel3D({
 	const polyhavenResolution =
 		useResolved<PolyhavenResolution>(component.polyhavenResolution) ?? "1k";
 	const hdriPath = useResolved<string>(component.hdriUrl);
-	const { url: resolvedHdriUrl } = useAssetUrl(hdriPath);
+	const { url: resolvedHdriUrl } = useAssetUrl(hdriPath, { localFiles: true });
 
 	// Calculate camera position from angle and distance
 	const computedCameraPosition = useMemo(() => {
@@ -491,7 +491,9 @@ interface ModelWithAssetResolutionProps {
 }
 
 function ModelWithAssetResolution(props: ModelWithAssetResolutionProps) {
-	const { url: resolvedSrc, isLoading } = useAssetUrl(props.rawSrc);
+	const { url: resolvedSrc, isLoading } = useAssetUrl(props.rawSrc, {
+		localFiles: true,
+	});
 
 	if (isLoading) {
 		return <R3FPlaceholder position={props.position} color="#666" />;

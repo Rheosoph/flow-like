@@ -81,7 +81,7 @@ export function PathbufArrayVariable({
 						disabled={disabled}
 					/>
 					<Label htmlFor="is_folder" className="cursor-pointer">
-						{t('folder', 'Folder')}
+						{t("folder", "Folder")}
 					</Label>
 				</div>
 
@@ -100,7 +100,7 @@ export function PathbufArrayVariable({
 						<FileIcon className="mr-2 h-4 w-4 shrink-0" />
 					)}
 					<span className="truncate">
-						{isFolder ? t('addFolder', 'Add Folder') : t('addFile', 'Add File')}
+						{isFolder ? t("addFolder", "Add Folder") : t("addFile", "Add File")}
 					</span>
 				</Button>
 			</div>

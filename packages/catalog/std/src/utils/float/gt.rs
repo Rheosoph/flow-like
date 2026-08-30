@@ -20,10 +20,12 @@ impl NodeLogic for GreaterThanFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_greater_than",
-            ">",
+            "> (Float)",
             "Checks if one float is greater than another",
             "Math/Float/Comparison",
         );
+        node.set_flowscript_name("float", "greaterThan");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

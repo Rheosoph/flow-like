@@ -25,6 +25,7 @@ impl NodeLogic for DiagnoseFailureNode {
             "Captures diagnostic info when an automation fails",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "diagnoseFailure");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

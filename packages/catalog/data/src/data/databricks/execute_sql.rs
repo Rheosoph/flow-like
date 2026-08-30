@@ -53,6 +53,7 @@ impl NodeLogic for ExecuteDatabricksSqlNode {
             "Execute a SQL statement on a Databricks SQL warehouse. Supports SELECT, INSERT, UPDATE, DELETE, and DDL statements.",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "executeSql");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -141,7 +142,8 @@ impl NodeLogic for ExecuteDatabricksSqlNode {
             "Result rows as JSON array",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "row_count",

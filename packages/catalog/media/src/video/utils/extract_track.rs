@@ -19,6 +19,7 @@ impl NodeLogic for ExtractTrackNode {
             "Write one encoded media track into a new container",
             "Video/Tracks",
         );
+        node.set_flowscript_name("video", "extractTrack");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

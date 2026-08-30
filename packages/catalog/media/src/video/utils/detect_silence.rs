@@ -19,6 +19,7 @@ impl NodeLogic for DetectSilenceNode {
             "Decode audio and return silence intervals",
             "Audio",
         );
+        node.set_flowscript_name("audio", "detectSilence");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source audio/media FlowPath");

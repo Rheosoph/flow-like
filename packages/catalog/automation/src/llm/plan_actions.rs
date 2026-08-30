@@ -101,6 +101,7 @@ impl NodeLogic for LLMPlanActionsNode {
             "Uses LLM to plan a sequence of automation actions to achieve a goal",
             "Automation/LLM/Planning",
         );
+        node.set_flowscript_name("automation.llm", "planActions");
         node.add_icon("/flow/icons/bot-plan.svg");
         node.set_version(3);
 

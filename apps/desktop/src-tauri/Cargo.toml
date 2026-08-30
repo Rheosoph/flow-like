@@ -14,6 +14,10 @@ readme = "README.md"
 
 [lib]
 name = "app"
+# Tauri's generated mobile projects link this exact target (`libapp.a` on iOS
+# and the corresponding shared library on Android). `src/lib.rs` therefore
+# keeps these required crate types, but includes the application only for
+# `cfg(mobile)`; host builds compile it directly through `src/main.rs`.
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
@@ -33,8 +37,7 @@ local-stt-cuda = ["flow-like/local-stt-cuda", "flow-like-catalog/local-stt-cuda"
 local-stt-metal = ["flow-like/local-stt-metal", "flow-like-catalog/local-stt-metal"]
 
 [dependencies]
-flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts", "local-stt"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local"] }
+flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts", "local-stt"] }
 flow-like-types.workspace = true
 flow-like-wasm = { workspace = true, features = ["model"] }
 
@@ -43,7 +46,6 @@ tauri = { version = "2.11.1", features = [
     "macos-private-api",
     "tray-icon",
 ] }
-window-vibrancy = "0.6.0"
 
 anyhow = "1.0.95"
 sentry.workspace = true
@@ -56,11 +58,9 @@ futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 image.workspace = true
-imageproc.workspace = true
 webp.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 
-tauri-plugin = "2.5.2"
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-log = "2.8.0"
 tauri-plugin-notification = "2.3.3"
@@ -74,8 +74,6 @@ urlencoding.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 tauri-plugin-opener = "2.5.3"
-
-tracing-oslog = "0.3.0"
 
 rusqlite = { version = "0.32.0", features = ["bundled-full", "serde_json"] }
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"] }
@@ -114,10 +112,13 @@ enigo = "0.6.1"
 rdev.workspace = true
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies]
-flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate", "local"] }
+flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate"] }
+
+[target."cfg(target_os = \"android\")".dependencies]
+flow-like-catalog = { workspace = true, default-features = false, features = ["mobile"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]
+flow-like-catalog = { workspace = true, default-features = false, features = ["desktop"] }
 rdev = { workspace = true, features = ["x11", "wayland"] }
 # Never enable zbus/tokio here: features unify across the graph, and it switches
 # zbus::block_on to building its own runtime, which panics inside tokio workers
@@ -125,12 +126,14 @@ rdev = { workspace = true, features = ["x11", "wayland"] }
 atspi = { version = "0.25", features = ["zbus"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
+flow-like-catalog = { workspace = true, default-features = false, features = ["desktop-apple"] }
 cocoa = "0.26"
 macos-app-nap = "0.0.1"
 core-graphics = "0.25"
 objc2 = "0.6.3"
 
 [target."cfg(windows)".dependencies]
+flow-like-catalog = { workspace = true, default-features = false, features = ["desktop"] }
 windows = { version = "0.61", features = [
     "Win32_UI_Accessibility",
     "Win32_Foundation",
@@ -141,27 +144,7 @@ windows = { version = "0.61", features = [
 webview2-com = "0.38"
 
 [target."cfg(target_os = \"ios\")".dependencies]
+flow-like-catalog = { workspace = true, default-features = false, features = ["mobile-apple"] }
 objc2 = "0.6.3"
 security-framework = "3.7"
-
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = "fat"
-opt-level = "s"
-strip = true
-incremental = false
-split-debuginfo = "unpacked" # macOS
-debug = 0
-
-[profile.release.package."*"]
-opt-level = "z"
-
-[profile.dev]
-opt-level = 1
-debug = 1
-split-debuginfo = "unpacked" # macOS
-incremental = true
-
-[profile.dev.package."*"]
-opt-level = 0
+tracing-oslog = "0.3.0"

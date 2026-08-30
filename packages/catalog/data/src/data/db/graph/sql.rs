@@ -1,4 +1,4 @@
-use crate::data::datafusion::params;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -30,6 +30,8 @@ impl NodeLogic for GraphSqlQueryNode {
             "Executes a read-only SQL query against graph overlay tables via DataFusion. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "sqlQuery");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(1);
 
@@ -48,7 +50,7 @@ impl NodeLogic for GraphSqlQueryNode {
             "SQL query string. Use $placeholders for values that come from the flow (SELECT * FROM person WHERE id = $person_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.",
             VariableType::String,
         );
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
         node.add_input_pin(
             "limit",
             "Limit",
@@ -76,7 +78,8 @@ impl NodeLogic for GraphSqlQueryNode {
             "Query results as JSON array",
             VariableType::Struct,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_open_schema();
 
         node
     }
@@ -90,7 +93,8 @@ impl NodeLogic for GraphSqlQueryNode {
 
         let conn: NodeGraphConnection = context.evaluate_pin("graph").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
         let limit = if limit > 0 {
             Some(limit as usize)
@@ -128,6 +132,6 @@ impl NodeLogic for GraphSqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 }

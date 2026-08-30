@@ -27,6 +27,8 @@ impl NodeLogic for GetOrWriteCacheNode {
             "Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.",
             "Data/Cache",
         );
+        node.set_flowscript_name("data.cache", "getOrWrite");
+        node.set_receiver("cache");
         node.add_icon("/flow/icons/database.svg");
         node.set_version(2);
 

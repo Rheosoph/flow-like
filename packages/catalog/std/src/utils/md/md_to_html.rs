@@ -24,6 +24,8 @@ impl NodeLogic for MarkdownToHtmlNode {
             "Renders GitHub-flavoured Markdown as HTML",
             "Utils/Markdown",
         );
+        node.set_flowscript_name("md", "toHtml");
+        node.set_receiver("markdown");
 
         node.add_icon("/flow/icons/web.svg");
 

@@ -29,6 +29,7 @@ impl NodeLogic for PdfAddWatermarkNode {
             "Overlay a diagonal text watermark on all pages. Default: #FF4343 at 15% opacity.",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "addWatermark");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

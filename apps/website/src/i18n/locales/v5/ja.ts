@@ -292,6 +292,23 @@ export default {
 	"v5.control.item3": "EU AI Actへの対応",
 	"v5.control.item4": "エンドツーエンドの可観測性",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "開発者向けオープンガイド",
+	"v5.book.title": "インシデントから実装までを扱う、開発者向けガイド。",
+	"v5.book.body":
+		"FlowBookは、Flow-Likeで開発する開発者向けです。1つの実行可能なワークフローを、その型付きFlowScriptソース、ビジュアルキャンバス、そして成功や失敗によって残される実行時の証跡までたどります。",
+	"v5.book.meta": "オープン版 · 2026 · 英語",
+	"v5.book.read": "FlowBookをオンラインで読む",
+	"v5.book.download": "PDFをダウンロード",
+	"v5.book.note": "無料で読めます。登録は不要です。",
+	"v5.book.generalLabel": "一般向けガイド",
+	"v5.book.generalBody":
+		"製品の概要やステップ形式のチュートリアルは、ドキュメントまたはFlow-LikeのYouTubeチャンネルからご覧ください。",
+	"v5.book.docs": "ドキュメントを見る",
+	"v5.book.youtube": "YouTubeで見る",
+	"v5.book.coverCta": "オープン版をダウンロード",
+	"v5.book.aria": "FlowBook『Flow-Like開発者ガイド』をPDFでダウンロード",
+
 	"v5.footer.notes.kicker": "エンジンルームからのノート",
 	"v5.footer.notes.title": "私たちが構築しているもの、そして学んだこと。",
 	"v5.footer.notes.all": "すべてのノート →",

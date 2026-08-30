@@ -113,6 +113,18 @@ pub async fn open_shared_app(
             requested_visibility: None,
         };
         let (new_app_id, report) = fork_with_options(&state, options).await?;
+        // The learner never sees a fork dialog here, so anything the engine
+        // could not carry would vanish silently. Only the operator can act on
+        // it, so it goes to the log rather than the response.
+        if !report.skipped.is_empty() || !report.warnings.is_empty() {
+            tracing::warn!(
+                source_app_id = %link.app_id,
+                new_app_id = %new_app_id,
+                skipped = ?report.skipped,
+                warnings = ?report.warnings,
+                "course app fork did not carry everything"
+            );
+        }
         (new_app_id, Some(report.id_map), true)
     } else {
         (

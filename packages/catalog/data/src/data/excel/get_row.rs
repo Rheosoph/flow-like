@@ -41,6 +41,7 @@ impl NodeLogic for GetRowByIndexNode {
             "Return a single row as a struct (1-based index)",
             "Data/Excel/Rows",
         );
+        node.set_flowscript_name("excel", "getRowByIndex");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Table input
@@ -57,7 +58,8 @@ impl NodeLogic for GetRowByIndexNode {
         .set_default_value(Some(json!(1)));
 
         // Outputs
-        node.add_output_pin("row", "Row", "Row as struct", VariableType::Struct);
+        node.add_output_pin("row", "Row", "Row as struct", VariableType::Struct)
+            .set_open_schema();
         node.add_output_pin(
             "actual_row_index",
             "Row Index",

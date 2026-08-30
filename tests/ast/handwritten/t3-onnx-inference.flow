@@ -1,0 +1,220 @@
+use log::{ error, info, warn }
+
+interface ModelSpec {
+    name: string;
+    revision?: string = "v1";
+    input_size?: int = 224;
+    mean?: float[] = [];
+    std?: float[] = [];
+    crop_pct?: float = 0.875;
+}
+interface Verdict {
+    label: string;
+    class_idx?: int = 0;
+    score?: float = 0;
+    margin?: float = 0;
+    similarity?: float = 0;
+    accepted?: bool = false;
+    reason?: string = "";
+}
+interface DriftWindow {
+    p95?: float = 0;
+    spread?: float = 0;
+    mean?: float = 0;
+    samples?: int = 0;
+}
+
+@description("Folder under the storage root that holds the exported ONNX graphs")
+@category("Inference")
+const modelFolder = "onnx"
+@description("Backbone used for both the classifier head and the embedding head")
+@category("Inference")
+const backbone: ModelSpec = {"name":"mobilenetv3-defects","revision":"v7","input_size":224,"mean":[0.485,0.456,0.406],"std":[0.229,0.224,0.225],"crop_pct":0.875}
+@description("Minimum blended confidence that may be auto-accepted without human review")
+@category("Inference")
+const acceptThreshold = 0.82
+@description("Minimum gap between top-1 and the runner-up before a verdict is trusted")
+@category("Inference")
+const marginFloor = 0.15
+@category("Inference")
+let lastVerdict: Verdict = {"label":"unknown"}
+@category("Inference")
+let drift: DriftWindow = {}
+@category("Inference")
+let referenceEmbedding: float[] = []
+@category("Inference")
+let reviewQueue: string[] = []
+@category("Inference")
+let framesScored = 0
+
+function modelPath(spec: ModelSpec): (graph: Struct) {
+    const root = files::storageDir(false).child(modelFolder)
+    const graph = root.child(`${spec.name}-${spec.revision}.onnx`)
+    return graph
+}
+
+function openSession(spec: ModelSpec): (session: Struct, provider: string) {
+    const graph = modelPath(spec)
+    const { inputs } = onnx::modelInfo({ path: graph })
+    const { model: session, accelerated, activeProvider } = onnx::load({ path: graph })
+    const { inputNames, outputNames } = onnx::info({ model: session })
+    info({ message: `${spec.name}@${spec.revision} on ${activeProvider} accelerated=${accelerated}, ${array::length({ array: inputs })} tensors ${inputNames} -> ${outputNames}`, toast: false })
+    return session, activeProvider
+}
+
+function preprocess(source: Struct, spec: ModelSpec): (frame: Struct, width: int, height: int) {
+    const raw = image::read({ path: source, applyExif: true })
+    const rgb = raw.convertColor("RGB", false)
+    const { imageOut: scaled, widthOut, heightOut } = rgb.resize(false, "to_fill", "CatmullRom", spec.input_size, spec.input_size)
+    const frame = scaled.contrast(1.04, false)
+    return frame, widthOut, heightOut
+}
+
+function topPrediction(predictions: Struct[]): (best: Struct, score: float, margin: float, found: bool) {
+    const scores = predictions.pluck("score", true)
+    const ranked = scores.sort(true)
+    const { result: top, empty } = float::maxOf({ floats: scores })
+    const { element: runnerUp } = ranked.get(1)
+    const margin = float::subtract({ float1: top, float2: runnerUp })
+    const { index } = scores.indexOf(top)
+    const { element: best } = predictions.get(index)
+    const found = !empty
+    return best, top, margin, found
+}
+
+function driftWindow(scores: float[]): (p95: float, spread: float, mean: float, samples: int) {
+    const { result: p95 } = float::percentile({ floats: scores, percentile: 95.0 })
+    const { result: spread } = float::stdDev({ floats: scores })
+    const { result: mean } = float::average({ floats: scores })
+    const samples = array::length({ array: scores })
+    return p95.round(4), spread.round(4), mean.round(4), samples
+}
+
+function embedFrame(session: Struct, frame: Struct): (unit: float[], dimensions: int) {
+    const { features, dimensions } = onnx::featureExtraction({ model: session, imageIn: frame, normalize: true })
+    const { value: raw } = struct::get({ struct: features, field: "values" })
+    const unit = math::vector::normalize({ vector: raw })
+    return unit, dimensions
+}
+
+function scoreFrame(best: Struct, unit: float[], scores: float[]): (calibrated: float, label: string, classIdx: int) {
+    const { classIdx, label } = ml::classOrLabel({ prediction: best })
+    const confidence = ml::score({ prediction: best })
+    // BUG: `let similarity: float = 1.0` is never created on an empty board and reads back as
+    // unresolvable, so the annotation is dropped. See bug-t3-onnx-inference-typed-local-array.flow.
+    let similarity = 1.0
+    const referenceSize = array::length({ array: referenceEmbedding })
+    if (referenceSize == 0) {
+        referenceEmbedding = unit
+        warn({ message: `reference embedding seeded from a live frame at ${array::length({ array: unit })} dimensions`, toast: false })
+    } else {
+        similarity = math::vector::cosineSimilarity({ vector1: unit, vector2: referenceEmbedding })
+    }
+    const calibrated = math::eval({ expression: `${confidence} * 0.75 + ${similarity} * 0.25` }).clamp(0.0, 1.0)
+    const { p95, spread, mean, samples } = driftWindow(scores)
+    drift.p95 = p95
+    drift.spread = spread
+    drift.mean = mean
+    drift.samples = samples
+    lastVerdict.label = label
+    lastVerdict.class_idx = classIdx
+    lastVerdict.score = calibrated.round(4)
+    lastVerdict.similarity = similarity.round(4)
+    return calibrated, label, classIdx
+}
+
+function routeVerdict(framePath: string, calibrated: float, margin: float, label: string, classIdx: int, dimensions: int): (accepted: bool) {
+    lastVerdict.margin = margin.round(4)
+    const confident = calibrated.greaterThanOrEqual(acceptThreshold)
+    const separated = margin.greaterThanOrEqual(marginFloor)
+    if (confident && separated) {
+        lastVerdict.accepted = true
+        lastVerdict.reason = ""
+        info({ message: `accepted ${label} (#${classIdx}) at ${calibrated} over ${dimensions}d`, toast: false })
+    } else if (confident) {
+        lastVerdict.accepted = false
+        lastVerdict.reason = "runner-up too close"
+        reviewQueue = reviewQueue.push(framePath)
+    } else {
+        lastVerdict.accepted = false
+        lastVerdict.reason = "below acceptance threshold"
+        reviewQueue = reviewQueue.push(framePath)
+        const severity = calibrated.mapRange(0.0, acceptThreshold, 1.0, 0.0, true)
+        warn({ message: `queued ${framePath} for review, severity ${severity.round(2)}`, toast: false })
+    }
+    return lastVerdict.accepted
+}
+
+function persistVerdict(session: Struct, frameFile: Struct, frame: Struct, label: string, calibrated: float): (stem: string) {
+    const bboxes = onnx::objectDetection({ model: session, imageIn: frame, conf: 0.35, iou: 0.45, max: 20 })
+    const boxed = frame.drawBoxes(bboxes, false)
+    const stem = frameFile.filename(true)
+    const verdictPath = files::storageDir(false).child("verdicts").child(`${stem}.json`)
+    verdictPath.writeString(json::stringify({ value: lastVerdict, pretty: true }))
+    const annotated = boxed.textOverlay(`${label} ${calibrated}`, false, 12, 12, 18.0, "#FF3366")
+    annotated.write(verdictPath.setExtension("png"), "PNG", 90)
+    return stem
+}
+
+function calibrationPass(): (modelType: string) {
+    const root = files::storageDir(false).child("ml")
+    const frames = db::open({ name: "defect_frames", userScoped: false })
+    const scaler = ml::load({ path: root.child("defect-scaler.json") })
+    ml::applyTransform({ model: scaler, source: "Database", database: frames, records: "embedding", outputCol: "scaled", batchSize: 4096 })
+    const calibrator = ml::load({ path: root.child("defect-calibrator.json") })
+    ml::predict({ model: calibrator, source: "Database", database: frames, records: "scaled", outputCol: "defect_score", batchSize: 512 })
+    const { modelType } = ml::info({ model: calibrator })
+    return modelType
+}
+
+eventsGeneric classifyFrame(payload: Struct, framePath: string) {
+    const { session, provider } = openSession(backbone)
+    const frameFile = path::fromRawPath({ basePath: files::uploadDir(), rawPath: framePath })
+    const { frame, width, height } = preprocess(frameFile, backbone)
+    const predictions = onnx::imageClassification({ model: session, imageIn: frame, mean: backbone.mean, std: backbone.std, cropPct: backbone.crop_pct, softmax: true })
+    const scores = predictions.pluck("score", true)
+    const { best, score, margin, found } = topPrediction(predictions)
+
+    if (!found) {
+        error({ message: `no class survived softmax for ${framePath} at ${width}x${height} on ${provider}`, toast: true })
+    } else {
+        const { unit, dimensions } = embedFrame(session, frame)
+        const { calibrated, label, classIdx } = scoreFrame(best, unit, scores)
+        const accepted = routeVerdict(framePath, calibrated, margin, label, classIdx, dimensions)
+        const stem = persistVerdict(session, frameFile, frame, label, calibrated)
+        const calibratorType = calibrationPass()
+        info({ message: `${stem}: accepted=${accepted} top ${score}, drift p95=${drift.p95} sd=${drift.spread} over ${drift.samples} classes, calibrator ${calibratorType}`, toast: false })
+    }
+
+    const released = onnx::unload({ model: session })
+    framesScored = framesScored + 1
+    if (!released) {
+        warn({ message: `session for ${backbone.name} stayed resident after frame ${framesScored}`, toast: false })
+    }
+}
+
+eventsSimple refreshReference() {
+    const { session } = openSession(backbone)
+    const paths = files::uploadDir().child("golden-frames").listPaths(true)
+    let accumulator = []
+    let alignment = []
+    for (const [index, file] of paths) {
+        const { frame, width, height } = preprocess(file, backbone)
+        const { unit, dimensions } = embedFrame(session, frame)
+        if (index == 0) {
+            accumulator = unit
+        } else {
+            alignment = alignment.push(math::vector::dot({ vector1: accumulator, vector2: unit }))
+            accumulator = math::vector::add({ vector1: accumulator, vector2: unit })
+        }
+        info({ message: `golden frame ${index} ${width}x${height} -> ${dimensions}d`, toast: false })
+    }
+    const { result: cohesion, empty } = float::average({ floats: alignment })
+    if (empty) {
+        warn({ message: "no golden frames found, reference embedding left untouched", toast: true })
+    } else {
+        referenceEmbedding = math::vector::normalize({ vector: accumulator })
+        info({ message: `reference embedding refreshed, cohesion ${cohesion.round(3)}`, toast: false })
+    }
+    onnx::unload({ model: session })
+}

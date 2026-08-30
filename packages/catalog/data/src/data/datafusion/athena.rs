@@ -17,9 +17,11 @@ fn get_pin_string_value(node: &Node, name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Register an AWS Athena table in DataFusion
-/// This allows querying Athena data sources through DataFusion's SQL interface
-#[crate::register_node]
+/// Prototype for a direct Athena DataFusion provider.
+///
+/// DataFusion does not implement the `STORED AS ATHENA` statement emitted by
+/// this prototype. Keep it out of the catalog so it cannot collide with the
+/// executable ODBC-backed `df_register_athena` node.
 #[derive(Default)]
 pub struct RegisterAthenaNode {}
 
@@ -38,6 +40,8 @@ impl NodeLogic for RegisterAthenaNode {
             "Register an AWS Athena table in DataFusion. Query S3 data via Athena's catalog. Supports explicit credentials or environment variables (including Lambda IAM roles).",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerAthena");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/aws.svg");
         node.set_version(2);
 
@@ -161,6 +165,7 @@ impl NodeLogic for RegisterAthenaNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -197,11 +202,11 @@ impl NodeLogic for RegisterAthenaNode {
                 );
                 format!(
                     r#"CREATE EXTERNAL TABLE {}
-               STORED AS ATHENA
-               LOCATION 'athena://{}/{}/{}'
-               OPTIONS (
-                   {}
-               )"#,
+           STORED AS ATHENA
+           LOCATION 'athena://{}/{}/{}'
+           OPTIONS (
+               {}
+           )"#,
                     table_name, catalog, athena_database, athena_table, options
                 )
             }
@@ -231,11 +236,11 @@ impl NodeLogic for RegisterAthenaNode {
                 }
                 format!(
                     r#"CREATE EXTERNAL TABLE {}
-               STORED AS ATHENA
-               LOCATION 'athena://{}/{}/{}'
-               OPTIONS (
-                   {}
-               )"#,
+           STORED AS ATHENA
+           LOCATION 'athena://{}/{}/{}'
+           OPTIONS (
+               {}
+           )"#,
                     table_name, catalog, athena_database, athena_table, options
                 )
             }
@@ -248,10 +253,10 @@ impl NodeLogic for RegisterAthenaNode {
             Err(e) => {
                 return Err(flow_like_types::anyhow!(
                     "Athena direct integration not available. Error: {}. \
-                     Alternative approaches:\n\
-                     1. Use Athena to export results to S3 as Parquet, then mount the S3 path\n\
-                     2. Use AWS Data Wrangler to sync Athena tables to local Parquet files\n\
-                     3. Query Athena via the AWS SDK and load results as a table",
+                 Alternative approaches:\n\
+                 1. Use Athena to export results to S3 as Parquet, then mount the S3 path\n\
+                 2. Use AWS Data Wrangler to sync Athena tables to local Parquet files\n\
+                 3. Query Athena via the AWS SDK and load results as a table",
                     e
                 ));
             }
@@ -260,6 +265,13 @@ impl NodeLogic for RegisterAthenaNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {
@@ -332,6 +344,8 @@ impl NodeLogic for MountAthenaQueryNode {
             "Mount Parquet files from an Athena query result location in S3. Supports explicit credentials or environment variables (including Lambda IAM roles).",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "mountAthenaQuery");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/aws.svg");
         node.set_version(2);
 
@@ -436,6 +450,7 @@ impl NodeLogic for MountAthenaQueryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::csv::CsvFormat;
         use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -549,6 +564,13 @@ impl NodeLogic for MountAthenaQueryNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {

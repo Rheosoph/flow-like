@@ -1,0 +1,69 @@
+use auth::{ apiKey }
+use log::{ info, warn }
+use rest::{ registerAuth, registerFunction, registerOpenApi, server, serverConfig }
+use string::{ contains, trim }
+
+interface IncidentResult {
+    severity: string;
+    team: string;
+    runbook: string;
+}
+
+@description("API key configured on the REST App Event")
+@secret
+const incidentApiKey: string
+@description("System field shown by the Quick Action")
+let systemId = "payments"
+@description("Incident report shown by the Quick Action")
+let report = "Production is on hold"
+@description("Business impact shown by the Quick Action")
+let impact = "production-stopped"
+
+function decideIncident(systemId: string, report: string, impact: string): (result: IncidentResult) {
+    const normalized = systemId.trim()
+    const payments = normalized.contains({ substring: "payments", ignoreCase: true })
+    const productionStopped = report.contains({ substring: "production is on hold", ignoreCase: true })
+    let severity = "SEV-2"
+    let team = "platform-on-call"
+    let runbook = "runbooks/general.md"
+    if (payments) {
+        team = "payments-on-call"
+        runbook = "runbooks/payments.md"
+    }
+    if (productionStopped) {
+        severity = "SEV-1"
+    }
+    if (impact == "production-stopped") {
+        severity = "SEV-1"
+    }
+    return { severity: severity, team: team, runbook: runbook }
+}
+
+eventsSimple triageQuickAction() {
+    const result = decideIncident(systemId, report, impact)
+    info({ message: `Route ${systemId} to ${result.team}; open ${result.runbook}`, toast: false })
+}
+
+eventsGeneric triageRest(payload: Struct, systemId: string, report: string, impact: string, _client: Struct) {
+    const result = decideIncident(systemId, report, impact)
+    return result
+}
+
+eventsSimple configureIncidentRest() {
+    const base = serverConfig({ host: "127.0.0.1", port: 0, tls: { secure: false } })
+    const routed = base.registerFunction({ path: "/triage", method: "POST", fnRefs: [triageRest] })
+    const secured = routed.registerAuth({ auth: apiKey({ header: "x-api-key", key: incidentApiKey }) })
+    const documented = secured.registerOpenApi({ path: "/openapi.json", uiPath: "/docs" })
+    const address = server({ config: documented })
+    address {
+        onListening: {
+            info({ message: "Incident REST surface registered", toast: false })
+        }
+        onClose: {
+            info({ message: "Incident REST surface closed", toast: false })
+        }
+        execError: {
+            warn({ message: "Incident REST setup failed", toast: false })
+        }
+    }
+}

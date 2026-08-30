@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
+	IAppVisibility,
 	type IEvent,
 	IEventExecutionMode,
 	IExecutionStage,
@@ -23,12 +24,14 @@ import {
 import { addAppToProfile } from "../../lib/add-app-to-profile";
 import {
 	captureInlineAppPageSnapshots,
+	isAppPageSnapshotSourceCurrent,
 	uploadPageSnapshots,
 } from "../../lib/app-page-snapshot";
 import {
 	type AskUserAnswerPayload,
 	parseAskUserArguments,
 } from "../../lib/ask-user";
+import { replyToChannel } from "../../lib/channel";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
@@ -44,10 +47,13 @@ import {
 	createFlowScriptGenerationTrace,
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
+import { resolveFrontendToolApprovalScope } from "../../lib/frontend-tool-approval-scope";
 import {
+	inspectLiveAppPage,
 	interactWithAppPage,
 	parseInteractActions,
 } from "../../lib/interact-app-page";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
 import {
 	convertJsonToUint8Array,
@@ -58,6 +64,7 @@ import type {
 	IBoardState,
 } from "../../state/backend-state/board-state";
 import {
+	type FlowPilotFailureKind,
 	type IAgentDebugEvent,
 	agentDebugPreview,
 	agentGenerationReviewDispositionEvent,
@@ -109,6 +116,7 @@ import {
 	hasActiveFrontendRequestOwnership,
 	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	normalizeBoardRepairScope,
 	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
@@ -157,7 +165,6 @@ import {
 	resolveAppEventTarget,
 	resolveAppEventType,
 } from "./app-event-target";
-import { dataStudioRoutingGate } from "./data-studio-routing";
 import {
 	type DetachedPageLookup,
 	assertDetachedWriteSafe,
@@ -170,6 +177,10 @@ import {
 	resolveFlowPilotWidgetTarget,
 	slugifyRoute,
 } from "./flowpilot-widget-target";
+import {
+	InlineAppPageRuntimeHost,
+	presentInlineAppPage,
+} from "./inline-app-page-runtime";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import {
 	scoutForkPreview,
@@ -254,6 +265,11 @@ export interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	/**
+	 * How to answer. Present on every request the backend sends (Tauri event or SSE frame); absent
+	 * only on bridge-internal synthetic requests that are never replied to.
+	 */
+	channel?: IChannelHandle;
 	approval?: FrontendToolApproval;
 	/** Backend dispatch/deadline metadata used to settle before its receiver disappears. */
 	dispatchedAtMs?: number;
@@ -522,13 +538,15 @@ export interface RunScope {
 }
 
 interface SolveRoutingState {
-	appInventoryComplete: boolean;
+	appInventoryReturned: boolean;
 	sealedResearchUsed: boolean;
 }
 
-// Routing state is host-owned, not model-authored: public fallback is unavailable until a
-// complete local inventory has actually returned, and is one-shot afterwards. Keep it bounded so
-// abandoned run ids cannot accumulate for the lifetime of the desktop process.
+// Routing state is host-owned, not model-authored: public fallback is unavailable until a local
+// inventory has actually returned, and is one-shot afterwards. The gate is "an inventory came
+// back", never "every app in it read cleanly" — one app whose Events cannot be loaded makes the
+// listing partial, not absent, and must not permanently seal off public research. Keep it bounded
+// so abandoned run ids cannot accumulate for the lifetime of the desktop process.
 const solveRoutingStateByRun = new Map<string, SolveRoutingState>();
 const MAX_SOLVE_ROUTING_STATES = 256;
 
@@ -1208,10 +1226,19 @@ function promptForDialog(
 			respond: bound,
 		};
 	}
+	const approvalScope = resolveFrontendToolApprovalScope({
+		requestId: request.requestId,
+		toolName: request.toolName,
+		arguments: request.arguments,
+		approvalKind: request.approval?.kind,
+		approvalSessionKey: request.approval?.sessionKey,
+		contextAppId: request.context?.appId || request.context?.app_id,
+	});
 	return {
 		id: promptId,
 		kind: "approval" as const,
 		destructive: dialog.override?.destructive ?? false,
+		rememberable: approvalScope.rememberable,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -1230,6 +1257,8 @@ function promptForDialog(
 		appId:
 			argString(request.arguments, "app_id") ||
 			argString(request.arguments, "appId") ||
+			request.context?.appId ||
+			request.context?.app_id ||
 			undefined,
 		respond: bound,
 	};
@@ -1250,15 +1279,25 @@ function dialogPromptDebugInput(prompt: GlobalToolPrompt) {
  * Listens for the global FlowPilot assistant's tool requests (a dedicated Tauri event, separate from
  * the board copilot's) and executes them in the app: navigation, app creation, and delegating board
  * work. Mutating/execute tools and ask_user surface an inline prompt card in the chat (via the
- * global-chat store) instead of a modal. The response is returned through the shared
- * `flowpilot_frontend_tool_result` command.
+ * global-chat store) instead of a modal. The response is delivered on the channel handle each
+ * request carries (`replyToChannel`).
  */
 export function GlobalToolBridge() {
 	const router = useRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
 	const queryClient = useQueryClient();
-	const executeRuntimeTool = useFrontendRuntimeToolExecutor();
+	// The open Data Studio page is the only thing that knows which overlay "the
+	// ontology" refers to. Without it an omitted `overlay_id` reached graphState as
+	// "" — the web path has no apply_tool_context equivalent to fill it in.
+	// Deliberately NOT supplying defaultAppId: it also short-circuits
+	// assertAppVisibleForRuntime for every tool, which is a separate decision.
+	const dataStudioOverlayId = useAssistantSurface(
+		(s) => s.dataStudioSurface?.overlayId,
+	);
+	const executeRuntimeTool = useFrontendRuntimeToolExecutor({
+		defaultOverlayId: dataStudioOverlayId,
+	});
 	// Auth state gates online (cloud) app creation; keep it in a ref so the stable runTool
 	// callback reads the latest value without re-creating on every token refresh.
 	const auth = useAuth();
@@ -1348,6 +1387,9 @@ export function GlobalToolBridge() {
 			{
 				key: string;
 				baselineFingerprint?: FlowScriptBaselineFingerprint;
+				// The declared repair scope, so the deadline path charges the same retry bucket the
+				// dispatch was admitted against.
+				repairScope?: string;
 			}
 		>
 	>(new Map());
@@ -1452,6 +1494,41 @@ export function GlobalToolBridge() {
 			useGlobalChatStore.getState().recordDebugEvent(ownerMessageId, event);
 		},
 		[ownerMessageIdForRequest],
+	);
+	/**
+	 * Settle a delegated specialist run in the trace and hand its result back unchanged. Without
+	 * this the failure of a specialist that returns an error result (instead of throwing) leaves no
+	 * evidence at all, and the admin funnel shows a run that simply stopped making progress.
+	 */
+	const settleNestedSpecialist = useCallback(
+		<T extends Record<string, unknown>>(
+			request: FrontendToolRequest,
+			options: {
+				nestedRunRequestId: string;
+				toolName: string;
+				result: T;
+				error?: unknown;
+				summary: string;
+				failureKind?: FlowPilotFailureKind;
+			},
+		): T => {
+			recordNestedDebug(
+				request,
+				nestedAgentRunEvent({
+					requestId: options.nestedRunRequestId,
+					parentRequestId: request.requestId,
+					toolName: options.toolName,
+					stage: "finished",
+					status: String(options.result.status ?? "error"),
+					output: options.result,
+					error: options.error,
+					summary: options.summary,
+					failureKind: options.failureKind,
+				}),
+			);
+			return options.result;
+		},
+		[recordNestedDebug],
 	);
 	const isRequestExpired = useCallback((request: FrontendToolRequest) => {
 		const execution = requestExecutionLeasesRef.current.get(request);
@@ -2038,6 +2115,7 @@ export function GlobalToolBridge() {
 				case "ui_inspect":
 				case "execute_event":
 				case "execute_node":
+				case "run_board_tests":
 				case "query_execution_logs":
 				case "graph_overlay_tool":
 				case "graph_query_tool":
@@ -2245,6 +2323,22 @@ export function GlobalToolBridge() {
 								argString(args, "remote_event_token") || undefined,
 							language: argString(args, "language") || undefined,
 						});
+						// The fork exists on the hub, but this device has never opened it.
+						// Without a recorded visibility the desktop guesses "offline" and
+						// serves every later board/data read from an empty local store —
+						// the boards then look absent rather than undownloaded. Online
+						// forks land Private (utils/fork/mod.rs::fork_with_options).
+						await backend.appState
+							.recordLocalAppVisibility?.(
+								response.new_app_id,
+								IAppVisibility.Private,
+							)
+							.catch((error: unknown) => {
+								console.warn(
+									"[global-tool-bridge] fork_app: visibility cache failed",
+									error,
+								);
+							});
 						// Without this the forked app is invisible to list_apps /
 						// open_app_page, so the rest of the build cannot address it.
 						await addAppToProfile(backend, response.new_app_id);
@@ -2262,8 +2356,11 @@ export function GlobalToolBridge() {
 							// through this map. Node/pin maps are omitted deliberately.
 							board_id_map: response.report?.id_map?.boards ?? {},
 							event_id_map: response.report?.id_map?.events ?? {},
-							skipped: response.report?.skipped ?? [],
-							warnings: response.report?.warnings ?? [],
+							// A damaged source app can produce one skip per component, and
+							// the whole list would otherwise land in the model's context.
+							skipped: (response.report?.skipped ?? []).slice(0, 20),
+							skipped_total: response.report?.skipped?.length ?? 0,
+							warnings: (response.report?.warnings ?? []).slice(0, 10),
 						};
 					} catch (error) {
 						return {
@@ -2329,6 +2426,20 @@ export function GlobalToolBridge() {
 							};
 						}
 
+						// Same reason as fork_app: a joined app this device has never opened
+						// has no recorded visibility, and the desktop's fallback guess routes
+						// its boards at the local store instead of the hub. The app's own
+						// visibility is authoritative here — an acquired app is usually public.
+						if (app.visibility) {
+							await backend.appState
+								.recordLocalAppVisibility?.(appId, app.visibility)
+								.catch((error: unknown) => {
+									console.warn(
+										"[global-tool-bridge] acquire_app: visibility cache failed",
+										error,
+									);
+								});
+						}
 						await addAppToProfile(backend, appId);
 						queryClient.invalidateQueries({ queryKey: ["getApps"] });
 						queryClient.invalidateQueries({
@@ -2483,6 +2594,9 @@ export function GlobalToolBridge() {
 						eventId: pageEvent.id,
 						name: pageEvent.name || appId,
 					});
+					// An explicit open presents an existing card too. The runtime keeps its current
+					// route and state, so this does not reload the page or rerun its on-load workflow.
+					presentInlineAppPage(appId, pageEvent.id);
 					showConversation();
 					scope.referenceApp(appId);
 					const snapshot = await captureInlineAppPageSnapshots(
@@ -2490,20 +2604,78 @@ export function GlobalToolBridge() {
 						pageEvent.id,
 					);
 					assertRequestActive(request, "app page screenshot capture");
-					const { uploaded: uploadedSnapshots, uploadErrors } =
-						await uploadPageSnapshots(backend, snapshot.images);
+					let captureFailure = snapshot.failureReason;
+					let captureSourceCurrent = snapshot.source
+						? isAppPageSnapshotSourceCurrent(
+								snapshot.source,
+								appId,
+								pageEvent.id,
+							)
+						: false;
+					if (snapshot.source && !captureSourceCurrent) {
+						captureFailure =
+							"The page instance changed while its visual state was being captured.";
+					}
+					const uploadResult = captureSourceCurrent
+						? await uploadPageSnapshots(backend, snapshot.images)
+						: { uploaded: [], uploadErrors: [] };
 					assertRequestActive(request, "app page screenshot upload");
+					if (
+						snapshot.source &&
+						!isAppPageSnapshotSourceCurrent(
+							snapshot.source,
+							appId,
+							pageEvent.id,
+						)
+					) {
+						captureSourceCurrent = false;
+						captureFailure =
+							"The page instance changed while its visual captures were being attached.";
+					}
+					const uploadedSnapshots = captureSourceCurrent
+						? uploadResult.uploaded
+						: [];
+					const uploadErrors = uploadResult.uploadErrors;
 					const screenshotCount = uploadedSnapshots.length;
 					const screenshotComplete =
-						snapshot.complete && screenshotCount === snapshot.images.length;
+						captureSourceCurrent &&
+						snapshot.complete &&
+						screenshotCount === snapshot.images.length;
+					const livePage = captureSourceCurrent
+						? snapshot.source?.handle
+						: findLivePage(appId, { eventId: pageEvent.id });
+					let inspection: ReturnType<typeof inspectLiveAppPage> | undefined;
+					let semanticInspectionFailure: string | undefined;
+					if (livePage) {
+						try {
+							inspection = inspectLiveAppPage(livePage);
+						} catch (error) {
+							semanticInspectionFailure = getErrorMessage(
+								error,
+								"The rendered component tree could not be inspected.",
+							);
+						}
+					} else {
+						semanticInspectionFailure =
+							"No matching live page registered a rendered component tree.";
+					}
+					const semanticInspectionComplete = Boolean(
+						inspection?.root_component_id,
+					);
+					const evidenceComplete =
+						screenshotComplete && semanticInspectionComplete;
 					const failureDetail =
 						screenshotCount > 0
-							? undefined
+							? captureFailure ||
+								(uploadErrors.length > 0 ? uploadErrors[0] : undefined)
 							: snapshot.images.length > 0
-								? `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be uploaded for attachment (${uploadErrors[0] ?? "unknown upload error"})`
-								: `its rendered content could not be captured${snapshot.failureReason ? ` (${snapshot.failureReason})` : ""}`;
+								? captureFailure
+									? `its captured evidence was discarded: ${captureFailure}`
+									: `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be attached (${uploadErrors[0] ?? "unknown attachment error"})`
+								: `its rendered content could not be captured${captureFailure ? ` (${captureFailure})` : ""}`;
+					const failureDetailText = failureDetail?.replace(/[.\s]+$/, "");
 					return {
-						status: "ok",
+						status: evidenceComplete ? "ok" : "partial",
 						event_id: pageEvent.id,
 						page_id: pageEvent.default_page_id,
 						...(resolution.canonicalized_from
@@ -2512,14 +2684,32 @@ export function GlobalToolBridge() {
 									requested_event_id: eventId,
 								}
 							: {}),
-						message:
-							screenshotCount > 0
-								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
-								: `Embedded the page '${pageEvent.name}' inline, but ${failureDetail}. Do not claim to have read the page visually.`,
+						message: evidenceComplete
+							? `Embedded the page '${pageEvent.name}' inline, attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"}, and inspected its rendered controls and content.`
+							: screenshotComplete
+								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} complete visual capture${screenshotCount === 1 ? "" : "s"}, but semantic inspection did not register a rendered component tree. Use the visual captures and do not claim that controls were inspected structurally.`
+								: screenshotCount > 0
+									? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"}, but the visual evidence is partial${failureDetailText ? ` (${failureDetailText})` : ""}. ${semanticInspectionComplete ? "Inspect the semantic elements too" : "Semantic inspection was also unavailable"}, and do not claim that uncaptured regions were read visually.`
+									: `Embedded the page '${pageEvent.name}' inline, but ${failureDetailText ?? "its rendered content could not be captured"}. Semantic elements are included when the live page registered successfully. Do not claim to have read the page visually.`,
 						screenshot_count: screenshotCount,
 						screenshot_complete: screenshotComplete,
+						semantic_inspection_complete: semanticInspectionComplete,
+						...(inspection
+							? {
+									root_component_id: inspection.root_component_id,
+									element_count: inspection.element_count,
+									elements: inspection.elements,
+									...(inspection.elements_truncated
+										? { elements_truncated: true }
+										: {}),
+								}
+							: {}),
+						...(captureFailure ? { capture_failure: captureFailure } : {}),
 						...(uploadErrors.length > 0
 							? { upload_errors: uploadErrors.slice(0, 3) }
+							: {}),
+						...(semanticInspectionFailure
+							? { semantic_inspection_failure: semanticInspectionFailure }
 							: {}),
 						...(screenshotCount > 0
 							? { _flowpilot_image_urls: uploadedSnapshots }
@@ -2554,38 +2744,62 @@ export function GlobalToolBridge() {
 							message:
 								"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
 						};
-					// The live target is keyed by the CANONICAL page Event id. The resolver also
-					// repairs a page id passed as event_id (canonicalized_from: "page_id"), so a
-					// raw-id miss must be re-resolved before embedding or waiting — driving and
-					// revealing under the raw id would strand a collapsed card and time out.
+					// Validate the target against the current Event inventory on every interaction,
+					// including when an older render is still mounted. A stale live handle must not
+					// keep an inactive or repurposed Event executable.
 					let resolvedEventId: string | undefined = eventId || undefined;
 					let resolvedPageId: string | undefined = pageId || undefined;
-					const requestedTarget = eventId || pageId;
-					if (requestedTarget && !findLivePage(appId, { eventId, pageId })) {
-						const lookup = await resolveOpenAppPageRequest(
-							requestedTarget,
-							(targetEventId) =>
-								backend.eventState.getEvent(appId, targetEventId),
-							() => backend.eventState.getEvents(appId, true),
-						);
-						if (
-							lookup.status !== "inventory_unavailable" &&
-							lookup.resolution.ok
-						) {
-							const pageEvent = lookup.resolution.event;
-							resolvedEventId = pageEvent.id;
-							resolvedPageId = undefined;
-							if (!findLivePage(appId, { eventId: resolvedEventId })) {
-								// No live instance — embed it inline through the same card
-								// open_app_page uses before driving it.
-								useGlobalChatStore.getState().addInlineAppPage({
-									appId,
-									eventId: pageEvent.id,
-									name: pageEvent.name || appId,
-								});
-								showConversation();
-							}
-						}
+					const currentLivePage = findLivePage(appId, { eventId, pageId });
+					const requestedTarget =
+						eventId ||
+						pageId ||
+						currentLivePage?.eventId ||
+						currentLivePage?.pageId;
+					if (!requestedTarget) {
+						return {
+							status: "error",
+							code: "page_target_missing",
+							message:
+								"No page target was supplied and no live page could provide one. Call open_app_page with a current page Event id, then retry.",
+						};
+					}
+					const lookup = await resolveOpenAppPageRequest(
+						requestedTarget,
+						(targetEventId) =>
+							backend.eventState.getEvent(appId, targetEventId),
+						() => backend.eventState.getEvents(appId, true),
+					);
+					if (lookup.status === "inventory_unavailable") {
+						return {
+							status: "error",
+							code: "event_inventory_unavailable",
+							retryable: true,
+							relist_required: true,
+							message: `Could not refresh app '${appId}' Event metadata to verify '${requestedTarget}'. Refresh list_apps once before retrying, and do not interact with the stale render.`,
+						};
+					}
+					if (!lookup.resolution.ok) {
+						return {
+							status: "error",
+							code: lookup.resolution.code,
+							retryable: false,
+							relist_required: lookup.resolution.relist_required,
+							actual_kind: lookup.resolution.actual_kind,
+							message: `The requested app page is no longer an active page interface (${lookup.resolution.code}). Refresh list_apps once when relist_required is true; do not interact with the stale render.`,
+						};
+					}
+					const pageEvent = lookup.resolution.event;
+					resolvedEventId = pageEvent.id;
+					resolvedPageId = undefined;
+					if (!findLivePage(appId, { eventId: resolvedEventId })) {
+						// No live instance. Embed it inline through the same card open_app_page uses
+						// before driving it.
+						useGlobalChatStore.getState().addInlineAppPage({
+							appId,
+							eventId: pageEvent.id,
+							name: pageEvent.name || appId,
+						});
+						showConversation();
 					}
 					assertRequestActive(request, "app page interaction");
 					scope.referenceApp(appId);
@@ -3213,15 +3427,6 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "data_studio_agent": {
-					const routingState = scope.runId
-						? solveRoutingStateByRun.get(scope.runId)
-						: undefined;
-					const routingError = dataStudioRoutingGate({
-						routingReason: args.routing_reason ?? args.routingReason,
-						appInventoryComplete: routingState?.appInventoryComplete === true,
-					});
-					if (routingError) return routingError;
-
 					const instruction = argString(args, "instruction");
 					if (!instruction)
 						return {
@@ -3354,21 +3559,33 @@ export function GlobalToolBridge() {
 						publishDataLane("done");
 						publishSubSteps();
 						flushSubRun();
-						return {
-							status: "ok",
-							app_id: appId,
-							overlay_id: overlayId,
-							response: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "data_studio_agent",
+							result: {
+								status: "ok",
+								app_id: appId,
+								overlay_id: overlayId,
+								response: response.message,
+							},
+							summary: "Delegated Data Studio sub-agent finished.",
+						});
 					} catch (error) {
 						publishDataLane("failed");
 						publishSubSteps();
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "data_studio_agent",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated Data Studio sub-agent failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "research_agent": {
@@ -3379,12 +3596,12 @@ export function GlobalToolBridge() {
 					const routingState = scope.runId
 						? solveRoutingStateByRun.get(scope.runId)
 						: undefined;
-					if (!routingState?.appInventoryComplete)
+					if (!routingState?.appInventoryReturned)
 						return {
 							status: "error",
 							code: "local_app_discovery_required",
 							message:
-								"A complete list_apps result is required before sealed public research.",
+								"A list_apps result is required before sealed public research.",
 						};
 					if (routingState.sealedResearchUsed)
 						return {
@@ -3513,18 +3730,30 @@ export function GlobalToolBridge() {
 							undefined /* appId: the researcher has no app scope */,
 						);
 						flushSubRun();
-						return {
-							status: "ok",
-							sealed_to_source_request: true,
-							findings: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "research_agent",
+							result: {
+								status: "ok",
+								sealed_to_source_request: true,
+								findings: response.message,
+							},
+							summary: "Delegated web research finished.",
+						});
 					} catch (error) {
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "research_agent",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated web research failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "project_scout": {
@@ -3669,18 +3898,30 @@ export function GlobalToolBridge() {
 							scoutAppId || undefined,
 						);
 						flushSubRun();
-						return {
-							status: "ok",
-							focus: focus || undefined,
-							plan: response.message,
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "project_scout",
+							result: {
+								status: "ok",
+								focus: focus || undefined,
+								plan: response.message,
+							},
+							summary: "Delegated project scout finished.",
+						});
 					} catch (error) {
 						failProgressSteps();
 						flushSubRun();
-						return {
-							status: "error",
-							message: error instanceof Error ? error.message : String(error),
-						};
+						return settleNestedSpecialist(request, {
+							nestedRunRequestId,
+							toolName: "project_scout",
+							result: {
+								status: "error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+							error,
+							summary: "Delegated project scout failed.",
+							failureKind: "subagent_dispatch",
+						});
 					}
 				}
 				case "flowpilot_board": {
@@ -3693,6 +3934,13 @@ export function GlobalToolBridge() {
 					// Read-only mode: the board copilot answers a question about the board and
 					// makes no edits (no FlowScript, no apply, no approval).
 					const readOnly = argString(args, "mode") === "explain";
+					// Which part of the build this run repairs. Each scope carries its own
+					// zero-progress budget, so a failed graph build does not also block an unrelated
+					// repair on the same board. An unrecognised or absent value collapses to the
+					// shared whole-board bucket.
+					const repairScope = normalizeBoardRepairScope(
+						argString(args, "repair_scope") || argString(args, "repairScope"),
+					);
 					const appIdArg =
 						argString(args, "app_id") || argString(args, "appId");
 					const boardIdArg =
@@ -3735,6 +3983,7 @@ export function GlobalToolBridge() {
 					if (boardId) {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardEditRecoveryKey(appId, boardId),
+							repairScope,
 						});
 					}
 					// Explain/readback waits too, otherwise it can observe the pre-commit board while
@@ -3857,6 +4106,7 @@ export function GlobalToolBridge() {
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
+							repairScope,
 						});
 						const zeroProgressOwnerId =
 							ownerMessageId ?? parentRequestId(request) ?? request.requestId;
@@ -3865,14 +4115,15 @@ export function GlobalToolBridge() {
 							!boardZeroProgressRetryRef.current.canStart(
 								zeroProgressOwnerId,
 								boardRecoveryKey,
+								repairScope,
 							)
 						) {
 							return {
 								status: "zero_progress_retry_exhausted",
 								code: "FLOWPILOT_BOARD_ZERO_PROGRESS_RETRY_EXHAUSTED",
 								flowscript_status: "no_flowscript",
-								message:
-									"The board specialist already made the initial attempt and one materially different retry in this assistant turn without retaining any FlowScript source. A third equivalent run was not dispatched. Report the failure honestly instead of rewording the same request again.",
+								repair_scope: repairScope,
+								message: `The board specialist exhausted its zero-progress budget for repair scope "${repairScope}" on this board in this assistant turn: every dispatched run returned without retaining any FlowScript source. A further run against the same scope was not dispatched. A genuinely different part of the build may still be attempted by passing that repair_scope; rewording the same failing request is not a different scope. Otherwise report the failure honestly.`,
 							};
 						}
 						flowPilotDebugLog(
@@ -3915,6 +4166,7 @@ export function GlobalToolBridge() {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
 							baselineFingerprint,
+							repairScope,
 						});
 						const retainedCandidateAtStart = boardRecoveryRef.current.get(
 							boardRecoveryKey,
@@ -4541,6 +4793,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											draftId: token.draft_id,
 											revision: token.revision,
 											claimId: token.claim_id,
+											reason: diagnostics,
 										}),
 									);
 								} else {
@@ -4613,6 +4866,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										draftId: token.draft_id,
 										revision: token.revision,
 										claimId: token.claim_id,
+										reason: compiledResult,
 									}),
 								);
 								diagnostics = [
@@ -4712,7 +4966,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 										// undo history and board refetch — no query invalidation needed.
 										const applyResult = await applyLive.applyFlowScript(
 											flowscript,
-											{ allowDeletions, suppressBlockedToast: true },
+											{
+												allowDeletions,
+												suppressBlockedToast: true,
+												origin: "agent",
+											},
 										);
 										appliedCommands = applyResult?.commands?.length ?? 0;
 										appliedSourceCorrections =
@@ -4728,6 +4986,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												undefined,
 												catalog,
 												allowDeletions,
+												"agent",
 											);
 										appliedCommands = applyResult.commands?.length ?? 0;
 										appliedSourceCorrections =
@@ -4849,6 +5108,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												: staleSnapshotBlocked
 													? "stale"
 													: "error",
+										reason: diagnostics,
 									}),
 								);
 							}
@@ -4955,6 +5215,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									boardRecoveryKey,
 									request.requestId,
 									Boolean(retainedCandidate),
+									repairScope,
 								);
 							}
 							if (!nestedRunSettled) {
@@ -4969,6 +5230,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										output: interruptedResult,
 										error,
 										summary: "Delegated board sub-agent failed.",
+										failureKind: "subagent_dispatch",
 									}),
 								);
 							}
@@ -4985,6 +5247,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								boardRecoveryKey,
 								request.requestId,
 								!noFlowScript,
+								repairScope,
 							);
 						}
 						const unvalidatedWorkspace =
@@ -5219,7 +5482,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
+										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most twice for this repair_scope, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. Moving to a genuinely different part of the build means passing that repair_scope, which carries its own budget; merely rewording or shortening the same instruction is not a different scope or a different strategy. Once the scope's budget is spent, stop and tell the user honestly that the edit failed.",
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -5733,6 +5996,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									status: "error",
 									error,
 									summary: "Delegated UI sub-agent failed.",
+									failureKind: "subagent_dispatch",
 								}),
 							);
 						}
@@ -6447,7 +6711,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								}
 								publishWidgets();
 								// Surface app-chat dialogs (single/multiple choice, form) inline so the
-								// user can answer — respond_to_interaction unblocks the app workflow
+								// user can answer — replying on the interaction's channel unblocks the app workflow
 								// while this call_app_chat tool call is still awaiting its result.
 								if (result.interactions?.length) {
 									useGlobalChatStore
@@ -6534,6 +6798,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			openDialog,
 			presentBoardEditJob,
 			recordNestedDebug,
+			settleNestedSpecialist,
 			recordSettledGenerationReceipt,
 			assertRequestActive,
 			isRequestExpired,
@@ -6616,9 +6881,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 				}
 
 				const approval = request.approval;
-				const sessionKey =
-					approval?.sessionKey ||
-					`${request.toolName}:${approval?.kind ?? "none"}`;
+				const approvalScope = resolveFrontendToolApprovalScope({
+					requestId: request.requestId,
+					toolName: request.toolName,
+					arguments: request.arguments,
+					approvalKind: approval?.kind,
+					approvalSessionKey: approval?.sessionKey,
+					contextAppId: request.context?.appId || request.context?.app_id,
+				});
+				const sessionKey = approvalScope.sessionKey;
 				// Read through getState() rather than a selector so `execute` keeps a stable
 				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
 				// backend is untouched, so ordered execution of mutating tools still holds.
@@ -6630,7 +6901,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						request.arguments,
 					);
 
-				if (needsApproval && !approvedKeysRef.current.has(sessionKey)) {
+				if (
+					needsApproval &&
+					(!approvalScope.rememberable ||
+						!approvedKeysRef.current.has(sessionKey))
+				) {
 					const outcome = await openDialog({ type: "approval", request });
 					assertRequestActive(request, "approval response");
 					if (!outcome || !("approved" in outcome) || !outcome.approved) {
@@ -6640,7 +6915,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 							error: "User denied the request.",
 						};
 					}
-					if (outcome.remember) approvedKeysRef.current.add(sessionKey);
+					if (outcome.remember && approvalScope.rememberable) {
+						approvedKeysRef.current.add(sessionKey);
+					}
 				}
 
 				assertRequestActive(request, "tool mutation");
@@ -6759,6 +7036,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								recoveryScope.key,
 								request.requestId,
 								Boolean(retainedCandidate),
+								recoveryScope.repairScope,
 							);
 						}
 						cancelRequestDialogs(request.requestId, reason);
@@ -6797,6 +7075,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									error: reason,
 									summary:
 										"Delegated board run reached the frontend deadline; the best candidate was retained.",
+									failureKind: "subagent_dispatch",
 								}),
 							);
 						}
@@ -6828,8 +7107,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					? solveRoutingStateByRun.get(scope.runId)
 					: undefined;
 				setSolveRoutingState(scope.runId, {
-					appInventoryComplete:
-						inventory?.status === "ok" && inventory?.complete === true,
+					appInventoryReturned: inventory?.status === "ok",
 					sealedResearchUsed: previousRoutingState?.sealedResearchUsed ?? false,
 				});
 			}
@@ -6933,10 +7211,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 		void (async () => {
 			try {
-				const [{ listen }, { invoke }] = await Promise.all([
-					import("@tauri-apps/api/event"),
-					import("@tauri-apps/api/core"),
-				]);
+				const { listen } = await import("@tauri-apps/api/event");
 				const [stopRequests, stopCancellation, stopLifecycle] =
 					await Promise.all([
 						listen<FrontendToolRequest>(
@@ -6964,7 +7239,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											arguments_preview: agentDebugPreview(request),
 										});
 									}
-									if (request?.requestId) {
+									if (request?.requestId && request.channel) {
 										const response: FrontendToolResponse = {
 											requestId: request.requestId,
 											approved: true,
@@ -6972,9 +7247,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 												"Malformed frontend tool request: missing toolName.",
 										};
 										try {
-											await invoke("flowpilot_frontend_tool_result", {
-												response,
-											});
+											await replyToChannel(request.channel, response);
 										} catch (error) {
 											console.error(
 												"[global-tool-bridge] failed to reject malformed request",
@@ -6982,6 +7255,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 											);
 										}
 									}
+									return;
+								}
+								const channel = request.channel;
+								if (!channel) {
+									recordRequestDebug(request, {
+										id: `frontend:${request.requestId}:delivery`,
+										kind: "bridge",
+										stage: "response_delivery_failed",
+										status: "error",
+										name: request.toolName,
+										ended_at_ms: Date.now(),
+										error:
+											"Tauri emitted a frontend tool request without a channel; the result cannot be delivered.",
+									});
 									return;
 								}
 								flowPilotDebugLog(
@@ -6997,7 +7284,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									{ approved: response.approved, error: response.error },
 								);
 								try {
-									await invoke("flowpilot_frontend_tool_result", { response });
+									await replyToChannel(channel, response);
 									recordRequestDebug(request, {
 										id: `frontend:${request.requestId}:delivery`,
 										kind: "bridge",
@@ -7185,6 +7472,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 		setToolPrompt,
 	]);
 
-	// The pending prompt is rendered inline by the chat surfaces (InlineToolPrompt) via the store.
-	return null;
+	// The tool listeners and live page runtimes share this provider-level lifetime. A page can
+	// therefore remain rendered in its offscreen parking slot while the chat overlay is closed.
+	return <InlineAppPageRuntimeHost />;
 }

@@ -6,7 +6,7 @@ description = "Database-less Flow-Like maintenance job for Azure Container Apps"
 
 [dependencies]
 chrono.workspace = true
-flow-like-types.workspace = true
+flow-like-types-contracts = { workspace = true, features = ["maintenance"] }
 mimalloc.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

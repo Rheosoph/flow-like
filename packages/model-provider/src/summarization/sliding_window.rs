@@ -12,6 +12,7 @@ use crate::llm::ModelLogic;
 ///
 /// After all chunks are processed, a final synthesis pass converts the
 /// compressed memory into a polished summary.
+#[allow(clippy::too_many_arguments)]
 pub async fn sliding_window_summarize(
     chunks: &[TextChunk],
     instructions: &str,

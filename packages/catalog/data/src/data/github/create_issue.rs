@@ -50,6 +50,7 @@ impl NodeLogic for CreateGitHubIssueNode {
             "Create a new issue in a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createIssue");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -119,7 +120,8 @@ impl NodeLogic for CreateGitHubIssueNode {
             "Issue form field values accepted by the GitHub API",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

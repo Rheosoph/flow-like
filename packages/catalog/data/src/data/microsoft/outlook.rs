@@ -243,6 +243,7 @@ impl NodeLogic for ListOutlookMailFoldersNode {
             "List Outlook mail folders",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "listMailFolders");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -330,6 +331,7 @@ impl NodeLogic for ListOutlookMessagesNode {
             "List Outlook email messages",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "listMessages");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -457,6 +459,7 @@ impl NodeLogic for GetOutlookMessageNode {
             "Get a single Outlook email message by ID",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "getMessage");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -550,6 +553,7 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
             "Fetch attachments for an Outlook message",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "getMessageAttachments");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -652,6 +656,7 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
             "Access Outlook attachment fields and bytes",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "attachmentToFields");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -769,6 +774,7 @@ impl NodeLogic for SendOutlookMessageNode {
             "Send an email through Outlook",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "sendMessage");
         node.add_icon("/flow/icons/outlook.svg");
         node.set_version(1);
 
@@ -986,6 +992,7 @@ impl NodeLogic for ListOutlookCalendarEventsNode {
             "List Outlook calendar events",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "listCalendarEvents");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1121,6 +1128,7 @@ impl NodeLogic for ListOutlookContactsNode {
             "List Outlook contacts",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "listContacts");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1231,6 +1239,7 @@ impl NodeLogic for CreateOutlookCalendarEventNode {
             "Create a new Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "createCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1470,6 +1479,7 @@ impl NodeLogic for UpdateOutlookCalendarEventNode {
             "Update an existing Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "updateCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1655,6 +1665,7 @@ impl NodeLogic for DeleteOutlookCalendarEventNode {
             "Delete an Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "deleteCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1743,6 +1754,7 @@ impl NodeLogic for GetOutlookCalendarEventNode {
             "Get a single Outlook calendar event by ID",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "getCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1842,6 +1854,7 @@ impl NodeLogic for RsvpOutlookCalendarEventNode {
             "Accept, decline, or tentatively accept a calendar event invitation",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "rsvpCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
@@ -1973,6 +1986,7 @@ impl NodeLogic for ForwardOutlookCalendarEventNode {
             "Forward a calendar event to other recipients",
             "Data/Microsoft/Outlook",
         );
+        node.set_flowscript_name("microsoft.outlook", "forwardCalendarEvent");
         node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 

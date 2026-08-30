@@ -34,6 +34,9 @@ pub struct TelemetrySweepResponse {
     pub perf_deleted: u64,
     /// Alert inbox rows removed because they fell outside `FLOW_LIKE_ALERT_EVENT_RETENTION_DAYS`.
     pub alert_events_deleted: u64,
+    /// Captured FlowScript apply failures removed because they fell outside
+    /// `FLOW_LIKE_FLOWSCRIPT_FAILURE_RETENTION_DAYS`.
+    pub flowscript_failures_deleted: u64,
     /// Daily rollup rows removed because they fell outside `FLOW_LIKE_ROLLUP_RETENTION_DAYS`.
     pub rollups_deleted: u64,
 }
@@ -72,6 +75,7 @@ pub async fn sweep_telemetry(
             spans_deleted = result.spans_deleted,
             perf_deleted = result.perf_deleted,
             alert_events_deleted = result.alert_events_deleted,
+            flowscript_failures_deleted = result.flowscript_failures_deleted,
             rollups_deleted = result.rollups_deleted,
             "Admin telemetry sweep removed expired rows"
         );
@@ -85,6 +89,7 @@ pub async fn sweep_telemetry(
         spans_deleted: result.spans_deleted,
         perf_deleted: result.perf_deleted,
         alert_events_deleted: result.alert_events_deleted,
+        flowscript_failures_deleted: result.flowscript_failures_deleted,
         rollups_deleted: result.rollups_deleted,
     }))
 }

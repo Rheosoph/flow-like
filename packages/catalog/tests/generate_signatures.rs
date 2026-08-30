@@ -8,11 +8,11 @@
 //! Run `cargo test -p flow-like-catalog --test generate_signatures` to regenerate after
 //! changing node pins; the JSON diff then surfaces exactly which signatures moved.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use flow_like::flow::ast::{
-    SignatureSet, declarations_by_category, declarations_by_package, node_to_signature,
-    node_to_signature_in, schema_sidecar,
+    NodeNames, SignatureSet, declarations_by_category, declarations_by_package, node_names,
+    node_to_signature, node_to_signature_in, schema_sidecar,
 };
 use flow_like_catalog::{CatalogBuilder, labeled_catalog};
 
@@ -24,6 +24,31 @@ fn signatures_path() -> PathBuf {
 /// Directory holding the generated per-category `.flow.d` declaration files.
 fn declarations_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ast/flow.d")
+}
+
+/// Write `content` only when it differs. The `.flow.d` files are `include_str!`-embedded by
+/// `flow-like`, so an unchanged regeneration must not touch their mtimes and force a rebuild of
+/// every downstream crate.
+fn write_if_changed(path: &std::path::Path, content: &str) {
+    if std::fs::read_to_string(path).is_ok_and(|current| current == content) {
+        return;
+    }
+    std::fs::write(path, content).unwrap_or_else(|e| panic!("write {path:?}: {e}"));
+}
+
+/// Effective FlowScript names of every catalog node, `node_type` → record, sorted.
+///
+/// This is the review artifact for `namespace::alias` naming (and the method-form receiver per
+/// node). `lint_catalog::flowscript_names_snapshot_is_current` keeps it in sync with the catalog.
+fn names_snapshot() -> BTreeMap<String, NodeNames> {
+    CatalogBuilder::new()
+        .build()
+        .into_iter()
+        .map(|logic| {
+            let node = logic.get_node();
+            (node.name.clone(), node_names(&node))
+        })
+        .collect()
 }
 
 #[test]
@@ -42,7 +67,7 @@ fn generate_signatures_json() {
 
     let json = flow_like_types::json::to_string_pretty(&set).expect("serialize signature set");
     let path = signatures_path();
-    std::fs::write(&path, format!("{json}\n")).unwrap_or_else(|e| panic!("write {path:?}: {e}"));
+    write_if_changed(&path, &format!("{json}\n"));
 
     eprintln!(
         "wrote {} signatures to {}",
@@ -62,11 +87,10 @@ fn generate_signatures_json() {
     );
     for file in &files {
         let out = dir.join(format!("{}.flow.d", file.stem));
-        std::fs::write(&out, &file.content).unwrap_or_else(|e| panic!("write {out:?}: {e}"));
+        write_if_changed(&out, &file.content);
         index.push_str(&format!("// {} -> {}.flow.d\n", file.category, file.stem));
     }
-    let index_path = dir.join("index.flow.d");
-    std::fs::write(&index_path, index).unwrap_or_else(|e| panic!("write {index_path:?}: {e}"));
+    write_if_changed(&dir.join("index.flow.d"), &index);
 
     eprintln!(
         "wrote {} declaration files to {}",
@@ -80,13 +104,24 @@ fn generate_signatures_json() {
     let sidecar_json =
         flow_like_types::json::to_string_pretty(&sidecar).expect("serialize schema sidecar");
     let sidecar_path = dir.join("node.flow.schemas.json");
-    std::fs::write(&sidecar_path, format!("{sidecar_json}\n"))
-        .unwrap_or_else(|e| panic!("write {sidecar_path:?}: {e}"));
+    write_if_changed(&sidecar_path, &format!("{sidecar_json}\n"));
 
     eprintln!(
         "wrote schema sidecar for {} nodes to {}",
         sidecar.len(),
         sidecar_path.display()
+    );
+
+    let names = names_snapshot();
+    let names_json =
+        flow_like_types::json::to_string_pretty(&names).expect("serialize names snapshot");
+    let names_path = dir.join("names.json");
+    write_if_changed(&names_path, &format!("{names_json}\n"));
+
+    eprintln!(
+        "wrote FlowScript names for {} nodes to {}",
+        names.len(),
+        names_path.display()
     );
 
     // Emit per-package declaration files under `flow.d/packages/`. FlowPilot loads these so a
@@ -108,15 +143,13 @@ fn generate_signatures_json() {
     );
     for file in &pkg_files {
         let out = pkg_dir.join(format!("{}.flow.d", file.stem));
-        std::fs::write(&out, &file.content).unwrap_or_else(|e| panic!("write {out:?}: {e}"));
+        write_if_changed(&out, &file.content);
         pkg_index.push_str(&format!(
             "// {} -> packages/{}.flow.d\n",
             file.category, file.stem
         ));
     }
-    let pkg_index_path = pkg_dir.join("index.flow.d");
-    std::fs::write(&pkg_index_path, pkg_index)
-        .unwrap_or_else(|e| panic!("write {pkg_index_path:?}: {e}"));
+    write_if_changed(&pkg_dir.join("index.flow.d"), &pkg_index);
 
     eprintln!(
         "wrote {} per-package declaration files to {}",
@@ -127,7 +160,8 @@ fn generate_signatures_json() {
     let pkg_sidecar = schema_sidecar(&pkg_set.signatures);
     let pkg_sidecar_json =
         flow_like_types::json::to_string_pretty(&pkg_sidecar).expect("serialize package sidecar");
-    let pkg_sidecar_path = pkg_dir.join("node.flow.schemas.json");
-    std::fs::write(&pkg_sidecar_path, format!("{pkg_sidecar_json}\n"))
-        .unwrap_or_else(|e| panic!("write {pkg_sidecar_path:?}: {e}"));
+    write_if_changed(
+        &pkg_dir.join("node.flow.schemas.json"),
+        &format!("{pkg_sidecar_json}\n"),
+    );
 }

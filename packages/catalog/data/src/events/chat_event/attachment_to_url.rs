@@ -27,6 +27,8 @@ impl NodeLogic for AttachmentToUrlNode {
             "Get the URL from an attachment",
             "Events/Chat/Attachments",
         );
+        node.set_flowscript_name("chat", "toSignedUrl");
+        node.set_receiver("attachment");
         node.add_icon("/flow/icons/paperclip.svg");
 
         node.add_input_pin(

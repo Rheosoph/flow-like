@@ -26,6 +26,7 @@ impl NodeLogic for PushWidgetNode {
             "Embeds an a2ui widget instance into the chat message. Connect the Element Ref of an Instantiate Widget node.",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushWidget");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_event_callback(true);
 
@@ -41,7 +42,8 @@ impl NodeLogic for PushWidgetNode {
             "Widget",
             "Widget instance to embed (from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_output_pin(
             "exec_out",

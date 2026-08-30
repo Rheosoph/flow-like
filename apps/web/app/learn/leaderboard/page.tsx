@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Input,
@@ -9,6 +8,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Trophy } from "lucide-react";
@@ -78,10 +78,13 @@ export default function LeaderboardPage() {
 						<Trophy className="size-7 text-yellow-500" />
 					</div>
 					<h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-						{t('leaderboard', 'Leaderboard')}
+						{t("leaderboard", "Leaderboard")}
 					</h1>
 					<p className="text-muted-foreground">
-						{t('earnPointsBySolvingChallengesAndCompletingLessons', 'Earn points by solving challenges and completing lessons.')}
+						{t(
+							"earnPointsBySolvingChallengesAndCompletingLessons",
+							"Earn points by solving challenges and completing lessons.",
+						)}
 					</p>
 				</motion.section>
 
@@ -101,9 +104,14 @@ export default function LeaderboardPage() {
 							)}
 						</div>
 						<div className="flex-1">
-							<h2 className="font-semibold">{t('showMeOnTheLeaderboard', 'Show me on the leaderboard')}</h2>
+							<h2 className="font-semibold">
+								{t("showMeOnTheLeaderboard", "Show me on the leaderboard")}
+							</h2>
 							<p className="text-sm text-muted-foreground">
-								{t('offByDefaultFlipTheSwitchToStartCompeting', 'Off by default — flip the switch to start competing.')}
+								{t(
+									"offByDefaultFlipTheSwitchToStartCompeting",
+									"Off by default — flip the switch to start competing.",
+								)}
 							</p>
 						</div>
 						<Switch
@@ -117,14 +125,17 @@ export default function LeaderboardPage() {
 							htmlFor="display-name"
 							className="text-xs uppercase tracking-wide text-muted-foreground"
 						>
-							{t('displayName2', 'Display name')}
+							{t("displayName2", "Display name")}
 						</Label>
 						<Input
 							id="display-name"
 							value={displayName}
 							onChange={(e) => setDisplayName(e.target.value)}
 							maxLength={40}
-							placeholder={t('howYouAppearToOthers', 'How you appear to others')}
+							placeholder={t(
+								"howYouAppearToOthers",
+								"How you appear to others",
+							)}
 							className="rounded-xl"
 						/>
 					</div>
@@ -133,7 +144,7 @@ export default function LeaderboardPage() {
 						disabled={updateMutation.isPending || !profile}
 						className="rounded-xl"
 					>
-						{t('savePreferences', 'Save preferences')}
+						{t("savePreferences", "Save preferences")}
 					</Button>
 				</motion.section>
 

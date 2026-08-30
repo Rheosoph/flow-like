@@ -108,7 +108,7 @@ export function DateSetVariable({
 								{newDate ? (
 									`${format(newDate, "PPP")} - ${newTime}`
 								) : (
-									<span>{t('pickADate', 'Pick a date')}</span>
+									<span>{t("pickADate", "Pick a date")}</span>
 								)}
 							</span>
 						</Button>
@@ -116,7 +116,9 @@ export function DateSetVariable({
 					<PopoverContent className="w-auto p-2">
 						<div className="flex flex-col items-center gap-2">
 							<div className="flex items-center gap-2 w-full">
-								<p className="text-nowrap text-sm font-medium">{t('time', 'Time:')}</p>
+								<p className="text-nowrap text-sm font-medium">
+									{t("time", "Time:")}
+								</p>
 								<Input
 									disabled={disabled}
 									type="time"

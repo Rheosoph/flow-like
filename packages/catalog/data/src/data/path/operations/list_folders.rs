@@ -28,6 +28,8 @@ impl NodeLogic for ListFoldersNode {
             "Lists folders under a path",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "listFolders");
+        node.set_receiver("prefix");
         node.add_icon("/flow/icons/path.svg");
         node.set_scores(
             NodeScores::new()

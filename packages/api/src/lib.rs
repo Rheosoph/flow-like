@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-pub mod entity;
+pub use flow_like_api_entity as entity;
 mod middleware;
 pub mod openapi;
 mod routes;
@@ -28,12 +28,14 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod cache;
+pub mod channel;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 mod db_backfills;
 pub mod error;
 pub mod mail;
+pub mod model_tier;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;
@@ -88,6 +90,24 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
+    // Executors are read-only on the meta store; guarantee compiled board
+    // artifacts exist before every dispatch. Installed here because the
+    // dispatcher is built before the state it needs exists.
+    {
+        let ensurer_state = state.clone();
+        state.dispatcher.set_artifact_ensurer(std::sync::Arc::new(
+            move |app_id, board_id, version| {
+                let state = ensurer_state.clone();
+                Box::pin(async move {
+                    crate::execution::compiled_artifacts::ensure_compiled_artifact(
+                        &state, &app_id, &board_id, version,
+                    )
+                    .await
+                })
+            },
+        ));
+    }
+
     if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
         if state.platform_config.audit.require_signing {
             panic!(
@@ -121,8 +141,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/og", routes::og::routes())
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
-        .nest("/interaction", routes::interaction::routes())
-        .nest("/widget-query", routes::widget_query::routes())
+        .nest("/channels", routes::channel::routes())
         .nest("/maintenance", routes::maintenance::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())
@@ -130,6 +149,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/sink", routes::sink::routes())
         .nest("/aliases", routes::alias::routes())
         .nest("/telemetry", routes::telemetry::routes())
+        .nest("/flowscript", routes::flowscript::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
         .with_state(state.clone())
         .route("/version", get(|| async { "0.0.0" }))

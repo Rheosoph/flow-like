@@ -27,6 +27,8 @@ impl NodeLogic for HttpFetchNode {
             "Performs an HTTP request",
             "Web/API",
         );
+        node.set_flowscript_name("http", "fetch");
+        node.set_receiver("request");
 
         node.add_icon("/flow/icons/web.svg");
 

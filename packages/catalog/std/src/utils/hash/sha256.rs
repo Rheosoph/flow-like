@@ -25,6 +25,8 @@ impl NodeLogic for Sha256Node {
             "Computes the SHA-256 hash of the input string",
             "Utils/Hash",
         );
+        node.set_flowscript_name("hash", "sha256");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("exec_in", "Execute", "", VariableType::Execution);

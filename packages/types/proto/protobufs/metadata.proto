@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package flow_like_types;
+
+import "google/protobuf/timestamp.proto";
+
+message Metadata {
+  string name = 1;
+  string description = 2;
+  optional string long_description = 3;
+  optional string release_notes = 4;
+  repeated string tags = 5;
+  optional string use_case  = 6;
+  optional string icon = 7;
+  optional string thumbnail = 8;
+  repeated string preview_media = 9;
+  optional int32 age_rating = 10;
+  optional string website = 11;
+  optional string support_url = 12;
+  optional string docs_url = 13;
+  optional bytes organization_specific_values = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+}

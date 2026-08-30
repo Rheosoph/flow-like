@@ -26,12 +26,20 @@ export function PackageUpdateBanner({
 			<ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
 			<span className="text-sm text-amber-800 dark:text-amber-200">
 				{updates.length === 1
-					? t('updateAvailableForPackagename', 'Update available for {{packageName}}', { packageName: updates[0].packageName })
-					: t('lengthPackageUpdatesAvailable', '{{length}} package updates available', { length: updates.length })}
+					? t(
+							"updateAvailableForPackagename",
+							"Update available for {{packageName}}",
+							{ packageName: updates[0].packageName },
+						)
+					: t(
+							"lengthPackageUpdatesAvailable",
+							"{{length}} package updates available",
+							{ length: updates.length },
+						)}
 			</span>
 			<div className="flex items-center gap-2 ml-auto">
 				<Button variant="outline" size="sm" onClick={onReview}>
-					{t('review', 'Review')}
+					{t("review", "Review")}
 				</Button>
 				<Button
 					variant="ghost"

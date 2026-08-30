@@ -31,6 +31,7 @@ impl NodeLogic for GetProjectIssuesNode {
             "Get all issues for a specific Jira project",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getProjectIssues");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(2);
 

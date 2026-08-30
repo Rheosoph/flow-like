@@ -26,6 +26,7 @@ impl NodeLogic for FromRawPathNode {
             "Reconstructs a FlowPath from a raw path string using the store reference from a base path",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "fromRawPath");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

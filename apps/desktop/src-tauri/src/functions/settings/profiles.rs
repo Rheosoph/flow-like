@@ -99,11 +99,14 @@ pub async fn get_profiles_raw(
     Ok(profiles)
 }
 
+/// Hub profiles paired with the bits (models, embedding models) each one references.
+pub type ProfilesWithBits = Vec<(UserProfile, Vec<Bit>)>;
+
 #[instrument(skip_all)]
 #[tauri::command(async)]
 pub async fn get_default_profiles(
     app_handle: AppHandle,
-) -> Result<(Vec<(UserProfile, Vec<Bit>)>, Hub), TauriFunctionError> {
+) -> Result<(ProfilesWithBits, Hub), TauriFunctionError> {
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let default_hub = settings.lock().await.default_hub.clone();
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
@@ -119,7 +122,7 @@ pub async fn get_default_profiles(
 async fn get_bits(
     profiles: Vec<Profile>,
     http_client: Arc<HTTPClient>,
-) -> flow_like_types::Result<Vec<(UserProfile, Vec<Bit>)>> {
+) -> flow_like_types::Result<ProfilesWithBits> {
     // Collect all futures for models and embedding models
     let mut bits: HashMap<&str, &str> = HashMap::new();
     let mut hubs: HashMap<&str, Hub> = HashMap::new();

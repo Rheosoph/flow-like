@@ -15,5 +15,6 @@ pub mod par_for_each;
 pub mod par_for_each_batch;
 pub mod reroute;
 pub mod sequence;
+pub mod switch;
 pub mod timeout;
 pub mod while_loop;

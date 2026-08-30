@@ -28,6 +28,8 @@ impl NodeLogic for RandomIntegerInRangeNode {
             "Generates a random integer within a specified range",
             "Math/Int/Random",
         );
+        node.set_flowscript_name("int", "randomInRange");
+        node.set_receiver("");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("min", "Min", "Minimum Value", VariableType::Integer);

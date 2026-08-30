@@ -1,3 +1,4 @@
+#[cfg(feature = "execute")]
 use crate::data::datafusion::query::batches_to_rows;
 use crate::data::datafusion::session::DataFusionSession;
 use flow_like::flow::{
@@ -98,6 +99,8 @@ impl NodeLogic for TimeBinAggregationNode {
             "Create time-based aggregations using DataFusion's date_bin function. Groups data by fixed time intervals (minute, hour, day, etc.) and applies aggregation functions.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "timeBinAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
         node.set_version(1);
 
@@ -198,7 +201,8 @@ impl NodeLogic for TimeBinAggregationNode {
             "Query results as array of row structs",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin(
             "sql",
@@ -226,6 +230,7 @@ impl NodeLogic for TimeBinAggregationNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -243,7 +248,7 @@ impl NodeLogic for TimeBinAggregationNode {
             .unwrap_or_default();
 
         let interval = TimeInterval::from_string(&interval_str)
-            .ok_or_else(|| flow_like_types::anyhow!("Invalid interval: {}. Use: second, minute, 5m, 15m, 30m, hour, day, week, month, quarter, year", interval_str))?;
+        .ok_or_else(|| flow_like_types::anyhow!("Invalid interval: {}. Use: second, minute, 5m, 15m, 30m, hour, day, week, month, quarter, year", interval_str))?;
 
         let cached_session = session.load(context).await?;
 
@@ -345,6 +350,13 @@ impl NodeLogic for TimeBinAggregationNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 /// Truncate timestamps to a specific precision for grouping
@@ -368,6 +380,8 @@ impl NodeLogic for DateTruncAggregationNode {
             "Truncate timestamps to a specific precision (hour, day, month, etc.) and aggregate. Simpler alternative to date_bin for standard intervals.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "dateTruncAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
         node.set_version(1);
 
@@ -444,7 +458,8 @@ impl NodeLogic for DateTruncAggregationNode {
             "Aggregation results",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 
@@ -460,6 +475,7 @@ impl NodeLogic for DateTruncAggregationNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -508,6 +524,13 @@ impl NodeLogic for DateTruncAggregationNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 /// Create a sliding/tumbling window aggregation
@@ -530,6 +553,8 @@ impl NodeLogic for WindowAggregationNode {
             "Apply window functions for rolling/moving aggregations over time series data.",
             "Data/DataFusion/Aggregation",
         );
+        node.set_flowscript_name("df", "windowAggregation");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(1);
 
@@ -617,7 +642,8 @@ impl NodeLogic for WindowAggregationNode {
         .set_schema::<DataFusionSession>();
 
         node.add_output_pin("results", "Results", "Query results", VariableType::Struct)
-            .set_value_type(ValueType::Array);
+            .set_value_type(ValueType::Array)
+            .set_open_schema();
 
         node.add_output_pin("sql", "SQL", "Generated SQL", VariableType::String);
 
@@ -633,6 +659,7 @@ impl NodeLogic for WindowAggregationNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -728,6 +755,13 @@ impl NodeLogic for WindowAggregationNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 /// Convert DateTime<Utc> to/from DataFusion timestamps
@@ -750,6 +784,8 @@ impl NodeLogic for DateTimeToTimestampNode {
             "Convert a DateTime (ISO 8601 string) to SQL timestamp literal for use in DataFusion queries.",
             "Data/DataFusion/Time",
         );
+        node.set_flowscript_name("df", "toSqlTimestamp");
+        node.set_receiver("datetime");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(
@@ -836,6 +872,7 @@ impl NodeLogic for TimeRangeFilterNode {
             "Generate a SQL WHERE clause for filtering by time range. Supports relative time expressions.",
             "Data/DataFusion/Time",
         );
+        node.set_flowscript_name("df", "timeRangeFilter");
         node.add_icon("/flow/icons/filter.svg");
 
         node.add_input_pin(
@@ -908,10 +945,9 @@ impl NodeLogic for TimeRangeFilterNode {
 
             // Try relative time
             if s.starts_with('-') || s.starts_with('+') {
-                let (sign, rest) = if s.starts_with('-') {
-                    (-1i64, &s[1..])
-                } else {
-                    (1i64, &s[1..])
+                let (sign, rest) = match s.strip_prefix('-') {
+                    Some(rest) => (-1i64, rest),
+                    None => (1i64, s.strip_prefix('+').unwrap_or(s)),
                 };
 
                 let (num_str, unit) = rest.split_at(rest.len() - 1);

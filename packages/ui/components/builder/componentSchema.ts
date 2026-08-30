@@ -585,6 +585,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		label: { type: "boundValue" },
 		accept: { type: "boundValue" },
 		multiple: { type: "boundValue" },
+		directory: { type: "boundValue" },
 		disabled: { type: "boundValue" },
 		actions: { type: "actions" },
 	},

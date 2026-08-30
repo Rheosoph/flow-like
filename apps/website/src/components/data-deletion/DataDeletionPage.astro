@@ -60,7 +60,7 @@ const langAttr = lang === "zh" ? "zh-Hans" : lang;
 		<PostHog />
 	</head>
 	<body class="min-h-screen bg-background text-foreground overflow-y-auto overflow-x-hidden pt-16">
-		<Header client:only="react" />
+		<Header client:load pathname={Astro.url.pathname} />
 
 		<main class="relative">
 			<!-- Hero -->

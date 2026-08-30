@@ -27,6 +27,8 @@ impl NodeLogic for SetStructBodyNode {
             "Sets the body of a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "setStructBody");
+        node.set_receiver("request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(
@@ -43,7 +45,8 @@ impl NodeLogic for SetStructBodyNode {
             "Body",
             "The body of the request",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "request_out",

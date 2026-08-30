@@ -1,0 +1,46 @@
+{
+	"name": "@flow-like/flowbook",
+	"type": "module",
+	"version": "0.0.1",
+	"private": true,
+	"scripts": {
+		"dev": "astro dev",
+		"start": "astro dev",
+		"build": "bun run pdf:publish && bun run build:site",
+		"build:site": "astro build && node scripts/check-seo.mjs && node scripts/check-llm-content.mjs",
+		"build:release": "bun run pdf && bun run build:site",
+		"check": "astro check",
+		"seo:check": "node scripts/check-seo.mjs",
+		"seo:check:live": "node scripts/check-seo-live.mjs",
+		"llm:check": "node scripts/check-llm-content.mjs",
+		"test": "bun test src",
+		"pdf": "bun run build:site && bun run pdf:from-dist && bun run pdf:publish",
+		"pdf:from-dist": "node scripts/export-pdf.mjs",
+		"pdf:publish": "node scripts/publish-pdf.mjs",
+		"deploy": "bun run build:release && bunx wrangler pages deploy dist",
+		"deploy:force": "bun run build:release && bunx wrangler pages deploy dist --branch dev",
+		"preview": "astro preview",
+		"astro": "astro"
+	},
+	"dependencies": {
+		"@astrojs/react": "6.0.2",
+		"@astrojs/sitemap": "3.7.3",
+		"@astrojs/starlight": "0.41.7",
+		"@types/react": "^19.2.6",
+		"@types/react-dom": "^19.2.3",
+		"astro": "^7.2.2",
+		"react": "^19.2.1",
+		"react-dom": "^19.2.1",
+		"sharp": "^0.35.3"
+	},
+	"devDependencies": {
+		"@astrojs/check": "0.9.10",
+		"@astrojs/markdown-remark": "7.2.2",
+		"@fontsource-variable/inter": "5.3.0",
+		"@fontsource-variable/jetbrains-mono": "5.3.0",
+		"@fontsource-variable/source-serif-4": "5.3.0",
+		"pdf-lib": "^1.17.1",
+		"puppeteer": "24.43.1",
+		"typescript": "^5.9.3"
+	}
+}

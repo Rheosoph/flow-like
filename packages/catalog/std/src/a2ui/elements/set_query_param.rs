@@ -28,6 +28,7 @@ impl NodeLogic for SetQueryParam {
             "Sets or updates a query parameter in the URL",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "setQueryParam");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

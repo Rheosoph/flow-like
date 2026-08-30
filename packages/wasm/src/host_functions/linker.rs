@@ -1439,23 +1439,9 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
                     #[cfg(feature = "model")]
                     {
                         let mut factory = app_state.embedding_factory.lock().await;
-                        let embedding_provider = bit.try_to_embedding();
-                        let use_proxy = access_token.is_some()
-                            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
-                            && embedding_provider
-                                .as_ref()
-                                .is_some_and(|provider| provider.supports_remote());
-                        let model_result = if use_proxy {
-                            factory
-                                .build_text_proxy(
-                                    &bit,
-                                    access_token.expect("proxy mode requires an access token"),
-                                    usage_context,
-                                )
-                                .await
-                        } else {
-                            factory.build_text(&bit, app_state.clone()).await
-                        };
+                        let model_result = factory
+                            .build_text_routed(&bit, app_state.clone(), access_token, usage_context)
+                            .await;
                         let model = match model_result {
                             Ok(model) => model,
                             Err(_) => return 0,
@@ -2258,6 +2244,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         #[serde(default)]
                         output_schema: Option<serde_json::Value>,
                         #[serde(default)]
+                        #[allow(dead_code)] // wire contract: SDK sends additional_params (libs/wasm-sdk/wasm-sdk-rust/src/rig_provider.rs:413); parsed for parity with llm_prompt, not yet forwarded to History
                         additional_params: Option<serde_json::Value>,
                     }
 

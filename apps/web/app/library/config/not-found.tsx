@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { Button } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { ArrowBigLeftIcon } from "lucide-react";
 
 export default function NotFound() {
@@ -14,14 +14,14 @@ export default function NotFound() {
 				alt="404"
 				className="w-0 h-0 dark:w-56 dark:h-56"
 			/>
-			<h1>{t('comingSoon', 'Coming soon...')}</h1>
+			<h1>{t("comingSoon", "Coming soon...")}</h1>
 			<Button
 				className="mt-4"
 				onClick={() => {
 					window.history.back();
 				}}
 			>
-				<ArrowBigLeftIcon /> {t('goBack', 'Go Back')}
+				<ArrowBigLeftIcon /> {t("goBack", "Go Back")}
 			</Button>
 		</main>
 	);

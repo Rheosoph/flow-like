@@ -8,7 +8,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{Result, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{Result, async_trait};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +61,7 @@ impl NodeLogic for ModelInfoNode {
             "Get ONNX model metadata (inputs, outputs, shapes)",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "modelInfo");
 
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -203,6 +206,8 @@ impl NodeLogic for UnloadOnnxNode {
             "Release ONNX model from cache to free memory",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "unload");
+        node.set_receiver("model");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
@@ -291,6 +296,8 @@ impl NodeLogic for SessionInfoNode {
             "Get information about a loaded ONNX session",
             "AI/ML/ONNX",
         );
+        node.set_flowscript_name("onnx", "info");
+        node.set_receiver("model");
         node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");

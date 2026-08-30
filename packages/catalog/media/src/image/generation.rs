@@ -1728,6 +1728,29 @@ async fn eval_seed_pin(context: &mut ExecutionContext) -> Option<u64> {
     if seed > 0 { Some(seed as u64) } else { None }
 }
 
+/// What the image generation node writes to its `metadata` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ImageGenerationMetadata {
+    /// Provider that served the request.
+    pub provider: String,
+    /// Model identifier used.
+    pub model: String,
+    /// Model version, when the provider reports one.
+    pub version: Option<String>,
+    /// How many images were produced.
+    pub count: usize,
+    /// How many were asked for — a provider may return fewer.
+    pub requested_count: usize,
+    /// Image format that was requested.
+    pub output_format: Option<String>,
+    /// System prompt sent alongside the request, when one was set.
+    pub system_prompt: Option<String>,
+    /// Provider specific options that were applied.
+    pub provider_options: flow_like_types::Value,
+    /// One entry per produced asset.
+    pub assets: flow_like_types::Value,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct MakeOpenAiImageOptionsNode {}
@@ -1747,6 +1770,7 @@ impl NodeLogic for MakeOpenAiImageOptionsNode {
             "Creates typed image options for OpenAI and Azure OpenAI image generation.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "openai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1816,6 +1840,7 @@ impl NodeLogic for MakeGoogleImagenOptionsNode {
             "Creates typed image options for Google AI Studio and Vertex Imagen models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "googleImagen");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1868,6 +1893,7 @@ impl NodeLogic for MakeAwsBedrockImageOptionsNode {
             "Creates typed image options for AWS Bedrock image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "awsBedrock");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1954,6 +1980,7 @@ impl NodeLogic for MakeXaiImageOptionsNode {
             "Creates typed image options for xAI image generation.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "xai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -1999,6 +2026,7 @@ impl NodeLogic for MakeTogetherImageOptionsNode {
             "Creates typed image options for Together text-to-image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "together");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2075,6 +2103,7 @@ impl NodeLogic for MakeHuggingFaceImageOptionsNode {
             "Creates typed image options for Hugging Face text-to-image models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "huggingface");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2134,6 +2163,7 @@ impl NodeLogic for MakeOpenRouterImageOptionsNode {
             "Creates typed image options for OpenRouter image-output models.",
             "AI/Generative/Image/Options",
         );
+        node.set_flowscript_name("ai.image.options", "openrouter");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2189,6 +2219,7 @@ impl NodeLogic for GenerateImageNode {
             "Generates one image with an existing provider Bit and writes it to FlowPath.",
             "AI/Generative/Image",
         );
+        node.set_flowscript_name("ai.image", "generate");
         node.add_icon("/flow/icons/image.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2254,7 +2285,8 @@ impl NodeLogic for GenerateImageNode {
             "Metadata",
             "Generation metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::image::generation::ImageGenerationMetadata>();
         node.set_long_running(true);
         node
     }

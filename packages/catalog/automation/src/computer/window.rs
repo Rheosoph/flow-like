@@ -41,6 +41,7 @@ impl NodeLogic for ListWindowsNode {
             "Lists all visible windows on the desktop",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "listWindows");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -150,6 +151,7 @@ impl NodeLogic for GetActiveWindowNode {
             "Gets information about the currently focused window",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "getActiveWindow");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -262,6 +264,7 @@ impl NodeLogic for FindWindowByTitleNode {
             "Finds a window by its title (partial match supported)",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "findWindowByTitle");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -397,6 +400,7 @@ impl NodeLogic for LaunchAppNode {
             "Launches an application by path or name",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "launchApp");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -556,6 +560,7 @@ impl NodeLogic for CaptureWindowNode {
             "Captures a screenshot of a specific window",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "captureWindow");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -700,6 +705,7 @@ impl NodeLogic for FocusWindowNode {
             "Brings a window to the front and gives it focus",
             "Automation/Computer/Window",
         );
+        node.set_flowscript_name("computer", "focusWindow");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

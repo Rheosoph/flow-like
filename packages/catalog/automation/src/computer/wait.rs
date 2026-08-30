@@ -25,6 +25,7 @@ impl NodeLogic for ComputerWaitNode {
             "Waits for the specified number of milliseconds",
             "Automation/Computer/Wait",
         );
+        node.set_flowscript_name("computer", "wait");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

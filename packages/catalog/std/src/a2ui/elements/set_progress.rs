@@ -28,6 +28,7 @@ impl NodeLogic for SetProgress {
             "Sets the value of a progress bar (0-100)",
             "UI/Elements/Display",
         );
+        node.set_flowscript_name("ui", "setProgress");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

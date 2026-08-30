@@ -24,6 +24,8 @@ impl NodeLogic for AbsoluteIntegerNode {
             "Returns the absolute value of an Integer",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "abs");
+        node.set_receiver("integer");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("integer", "Integer", "Input Integer", VariableType::Integer);

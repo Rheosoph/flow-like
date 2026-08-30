@@ -1953,6 +1953,25 @@ async fn eval_positive_u32_pin(context: &mut ExecutionContext, name: &str) -> Op
     if value > 0 { Some(value as u32) } else { None }
 }
 
+/// What the audio nodes write to their `metadata` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct AudioGenerationMetadata {
+    /// Provider that served the request.
+    pub provider: String,
+    /// Model identifier used.
+    pub model: String,
+    /// Model version, when the provider reports one.
+    pub version: Option<String>,
+    /// Media type of the produced audio.
+    pub mime_type: Option<String>,
+    /// Container or codec that was requested.
+    pub output_format: Option<String>,
+    /// Where the audio was written.
+    pub path: Option<String>,
+    /// Everything else the provider returned, whose shape is the provider's own.
+    pub provider_metadata: flow_like_types::Value,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct MakeOpenAiCompatibleTextToSpeechOptionsNode {}
@@ -1972,6 +1991,7 @@ impl NodeLogic for MakeOpenAiCompatibleTextToSpeechOptionsNode {
             "Creates typed text-to-speech options for OpenAI-compatible providers.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "ttsOpenaiCompatible");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2036,6 +2056,7 @@ impl NodeLogic for MakeXaiTextToSpeechOptionsNode {
             "Creates typed text-to-speech options for xAI speech models.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "ttsXai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2107,6 +2128,7 @@ impl NodeLogic for MakeGoogleTextToSpeechOptionsNode {
             "Creates typed text-to-speech options for Gemini and Vertex speech models.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "ttsGoogle");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2176,6 +2198,7 @@ impl NodeLogic for MakeHuggingFaceTextToSpeechOptionsNode {
             "Creates typed text-to-speech options for Hugging Face speech models.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "ttsHuggingface");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2231,6 +2254,7 @@ impl NodeLogic for MakeMistralTextToSpeechOptionsNode {
             "Creates typed text-to-speech options for Mistral speech models.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "ttsMistral");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2284,6 +2308,7 @@ impl NodeLogic for MakeOpenAiCompatibleSpeechToTextOptionsNode {
             "Creates typed speech-to-text options for OpenAI-compatible providers.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "sttOpenaiCompatible");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2355,6 +2380,7 @@ impl NodeLogic for MakeXaiSpeechToTextOptionsNode {
             "Creates typed speech-to-text options for xAI transcription models.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "sttXai");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2406,6 +2432,7 @@ impl NodeLogic for MakeGoogleSpeechToTextOptionsNode {
             "Creates typed speech-to-text options for Gemini and Vertex audio transcription.",
             "AI/Generative/Audio/Options",
         );
+        node.set_flowscript_name("ai.audio.options", "sttGoogle");
         node.add_icon("/flow/icons/struct.svg");
         node.set_version(1);
         node.set_scores(option_node_scores());
@@ -2449,6 +2476,7 @@ impl NodeLogic for TextToSpeechNode {
             "Generates speech audio with an existing provider Bit and writes it to FlowPath.",
             "AI/Generative/Audio",
         );
+        node.set_flowscript_name("ai.audio", "textToSpeech");
         node.add_icon("/flow/icons/audio.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2495,7 +2523,8 @@ impl NodeLogic for TextToSpeechNode {
             "Metadata",
             "Generation metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node.set_long_running(true);
         node
     }
@@ -2583,6 +2612,7 @@ impl NodeLogic for LocalTextToSpeechNode {
             "Generates WAV speech locally with an installed any-tts model bit.",
             "AI/Generative/Audio",
         );
+        node.set_flowscript_name("ai.audio", "localTextToSpeech");
         node.add_icon("/flow/icons/audio.svg");
         node.set_version(4);
         node.set_scores(media_scores());
@@ -2670,7 +2700,8 @@ impl NodeLogic for LocalTextToSpeechNode {
             "Metadata",
             "Local synthesis metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node
     }
 
@@ -2772,6 +2803,7 @@ impl NodeLogic for SpeechToTextNode {
             "Transcribes or translates audio with an existing provider Bit.",
             "AI/Generative/Audio",
         );
+        node.set_flowscript_name("ai.audio", "speechToText");
         node.add_icon("/flow/icons/audio.svg");
         node.set_version(3);
         node.set_scores(media_scores());
@@ -2824,7 +2856,8 @@ impl NodeLogic for SpeechToTextNode {
             "Metadata",
             "Transcription metadata",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::audio::AudioGenerationMetadata>();
         node.set_long_running(true);
         node
     }
@@ -2916,6 +2949,7 @@ impl NodeLogic for LocalSpeechToTextNode {
             "Transcribes audio locally with an installed any-speech-to-text model bit. Decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM, including browser MediaRecorder output (Chrome WebM/Opus, Safari MP4/AAC).",
             "AI/Generative/Audio",
         );
+        node.set_flowscript_name("ai.audio", "localSpeechToText");
         node.add_icon("/flow/icons/audio.svg");
         node.set_version(1);
         node.set_scores(media_scores());

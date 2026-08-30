@@ -84,6 +84,8 @@ struct BranchToolCallArgs {
 
 #[derive(Debug, Deserialize)]
 struct BranchToolCall {
+    #[allow(dead_code)]
+    // required by the <tooluse> JSON contract: deserialization must fail when the model omits
     name: String,
     arguments: BranchToolCallArgs,
 }
@@ -107,6 +109,7 @@ impl NodeLogic for LLMBranchNode {
             "Routes execution based on an LLM-evaluated yes/no decision",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "branch");
         node.add_icon("/flow/icons/split.svg");
         node.set_version(3);
         node.set_scores(

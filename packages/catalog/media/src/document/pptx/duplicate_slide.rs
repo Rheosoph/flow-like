@@ -29,6 +29,7 @@ impl NodeLogic for PptxDuplicateSlideNode {
             "Clone a slide at a given index, inserting the copy at a target position. Preserves formatting, layouts, and master references.",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "duplicateSlide");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

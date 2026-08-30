@@ -1,25 +1,110 @@
 import * as vscode from "vscode";
 import {
+	type FlowDocumentModel,
 	type FlowInterface,
 	type FlowSymbol,
 	type FlowVariable,
 	analyzeFlowDocument,
+	expandUsePath,
 	identifierOccurrences,
+	maskLiterals,
+	trailingExpression,
 } from "./flowDocument";
 import {
+	type NamespaceEntry,
 	type NodeSignature,
 	type SignatureRegistry,
+	methodParams,
 	signatureLabel,
 	signatureMarkdown,
 } from "./signatures";
 import {
+	type ResolveContext,
+	type Shape,
+	contextOf,
+	expressionShape,
 	findVariable,
-	parseChain,
+	openedMembers,
+	resolveCallee,
+	resolveMethod,
+	shapeClass,
 	variableShape,
-	walkAccessors,
 } from "./typeResolver";
 
 const WORD_RE = /[A-Za-z_$][\w$]*/;
+const IDENT = "[A-Za-z_$][\\w$]*";
+const PATH_PREFIX_RE = new RegExp(`((?:${IDENT}\\s*::\\s*)+)$`);
+const PATH_TAIL_RE = new RegExp(`((?:${IDENT}\\s*::\\s*)*)$`);
+
+function callSnippet(sig: NodeSignature, name: string): vscode.SnippetString {
+	const args = sig.params
+		.map((p, idx) => `${p.name}: \${${idx + 1}:${p.name}}`)
+		.join(", ");
+	return new vscode.SnippetString(
+		sig.params.length > 0 ? `${name}({ ${args} })` : `${name}()`,
+	);
+}
+
+/** Method-form snippet: the receiver is bound; a single remaining input is passed positionally. */
+function methodSnippet(sig: NodeSignature): vscode.SnippetString {
+	const rest = methodParams(sig);
+	const name = sig.alias ?? sig.flat;
+	if (rest.length === 0) {
+		return new vscode.SnippetString(`${name}()`);
+	}
+	if (rest.length === 1) {
+		return new vscode.SnippetString(`${name}(\${1:${rest[0].name}})`);
+	}
+	const args = rest.map((p, idx) => `${p.name}: \${${idx + 1}:${p.name}}`).join(", ");
+	return new vscode.SnippetString(`${name}({ ${args} })`);
+}
+
+function nodeItem(
+	sig: NodeSignature,
+	label: string,
+	snippet: vscode.SnippetString,
+	sortPrefix: string,
+): vscode.CompletionItem {
+	const item = new vscode.CompletionItem(
+		{ label, description: sig.name !== label ? sig.name : undefined },
+		vscode.CompletionItemKind.Function,
+	);
+	item.detail = signatureLabel(sig);
+	item.documentation = signatureMarkdown(sig);
+	item.insertText = snippet;
+	item.filterText = `${label} ${sig.flat} ${sig.alias ?? ""}`;
+	item.sortText = `${sortPrefix}${sig.impure ? "1" : "0"}_${label}`;
+	return item;
+}
+
+function namespaceItems(ns: NamespaceEntry): vscode.CompletionItem[] {
+	const items: vscode.CompletionItem[] = [];
+	for (const [alias, sig] of ns.members) {
+		items.push(nodeItem(sig, alias, callSnippet(sig, alias), "0"));
+	}
+	for (const [segment, child] of ns.children) {
+		const item = new vscode.CompletionItem(segment, vscode.CompletionItemKind.Module);
+		item.detail = `namespace ${child.key} (${child.members.size} members)`;
+		item.insertText = `${segment}::`;
+		item.command = { command: "editor.action.triggerSuggest", title: "Suggest" };
+		item.sortText = `1_${segment}`;
+		items.push(item);
+	}
+	return items;
+}
+
+/** The `a::b::` path written right before the cursor, expanded through `use` lines. */
+function pathBeforeCursor(
+	before: string,
+	model: FlowDocumentModel,
+): string[] | undefined {
+	const match = PATH_PREFIX_RE.exec(before);
+	if (!match) {
+		return undefined;
+	}
+	const segments = match[1].split(/\s*::\s*/).filter(Boolean);
+	return expandUsePath(segments, model.uses);
+}
 
 /** Decorators recognized by the FlowScript parser. Mirrors the decorator
  * handling in flow-like-ast. */
@@ -84,8 +169,7 @@ export const FLOW_DECORATORS: readonly DecoratorDef[] = [
 		argumentKind: "optional-cache-settings",
 		detail:
 			'@cache, @cache({}), or @cache({ namespace: "…", ttlSeconds: 300, scope: "user" })',
-		doc:
-			'Caches this function\'s outputs. A cache hit skips the entire function body, including side effects, so use it only when outputs are determined by inputs. Bare `@cache` and `@cache({})` use the `"global"` namespace, a 300-second lifetime, and app scope. In the settings object, `namespace` separates cache keys, `ttlSeconds` is a non-negative integer (`0` means no expiry), and `scope` is `"app"` or `"user"`.',
+		doc: 'Caches this function\'s outputs. A cache hit skips the entire function body, including side effects, so use it only when outputs are determined by inputs. Bare `@cache` and `@cache({})` use the `"global"` namespace, a 300-second lifetime, and app scope. In the settings object, `namespace` separates cache keys, `ttlSeconds` is a non-negative integer (`0` means no expiry), and `scope` is `"app"` or `"user"`.',
 		snippet:
 			'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
 	},
@@ -108,34 +192,36 @@ function wordAt(
 	return { word: document.getText(range), range };
 }
 
-/** Resolve a variable's type for hover display. */
-function resolveVariableType(
-	variable: FlowVariable,
-	registry: SignatureRegistry,
-	interfaces?: ReadonlyMap<string, FlowInterface>,
-): string | undefined {
-	if (variable.typeText) {
-		return variable.typeText;
-	}
-	const shape = variableShape(variable, registry, interfaces);
-	return shape?.text;
-}
-
 function variableHoverMarkdown(
 	variable: FlowVariable,
-	registry: SignatureRegistry,
-	interfaces?: ReadonlyMap<string, FlowInterface>,
+	ctx: ResolveContext,
+	position: vscode.Position,
 ): vscode.MarkdownString {
 	const md = new vscode.MarkdownString();
-	const type = resolveVariableType(variable, registry, interfaces);
+	const shape: Shape | undefined = variableShape(
+		variable,
+		ctx.registry,
+		ctx.interfaces,
+		ctx,
+		position,
+	);
+	const type = variable.typeText ?? shape?.text;
 	md.appendCodeblock(
 		`${variable.keyword} ${variable.name}${type ? `: ${type}` : ""}`,
 		"flowscript",
 	);
-	if (variable.initCall && registry.has(variable.initCall)) {
-		md.appendMarkdown(`\n\nReturned by \`${variable.initCall}\`.`);
+	const producer = variable.initCall
+		? resolveCallee(variable.initCall, ctx)
+		: variable.initMethod
+			? resolveMethod(
+					expressionShape(variable.initMethod.receiverText, ctx, position),
+					variable.initMethod.member,
+					ctx,
+				).candidates[0]
+			: undefined;
+	if (producer) {
+		md.appendMarkdown(`\n\nReturned by \`${producer.name}\`.`);
 	}
-	const shape = variableShape(variable, registry, interfaces);
 	const objectShape =
 		shape?.kind === "object"
 			? shape
@@ -174,12 +260,53 @@ export class FlowCompletionProvider implements vscode.CompletionItemProvider {
 
 	provideCompletionItems(
 		document: vscode.TextDocument,
+		position?: vscode.Position,
 	): vscode.CompletionItem[] {
 		const items: vscode.CompletionItem[] = [];
 		const local = analyzeFlowDocument(document);
-
+		if (position) {
+			const before = maskLiterals(
+				document.getText(new vscode.Range(new vscode.Position(0, 0), position)),
+			).replace(/[A-Za-z_$][\w$]*$/, "");
+			if (/(::|\.)\s*$/.test(before)) {
+				return []; // Path and member positions belong to the dedicated providers.
+			}
+		}
+		const opened = new Set<NodeSignature>();
+		for (const use of local.uses) {
+			if (use.kind !== "glob" && use.kind !== "members") {
+				continue;
+			}
+			const ns = this.registry.namespace(expandUsePath(use.path, local.uses));
+			for (const [alias, sig] of ns?.members ?? []) {
+				if (use.kind === "members" && !use.members.includes(alias)) {
+					continue;
+				}
+				if (opened.has(sig)) {
+					continue;
+				}
+				opened.add(sig);
+				items.push(nodeItem(sig, alias, callSnippet(sig, alias), "0"));
+			}
+		}
 		for (const sig of this.registry.all()) {
-			items.push(this.signatureItem(sig));
+			if (opened.has(sig)) {
+				continue;
+			}
+			items.push(nodeItem(sig, sig.name, callSnippet(sig, sig.name), "1"));
+		}
+		for (const ns of this.registry.namespaces()) {
+			if (ns.path.length !== 1) {
+				continue;
+			}
+			const item = new vscode.CompletionItem(ns.key, vscode.CompletionItemKind.Module);
+			item.detail = `namespace (${ns.members.size} members${
+				ns.children.size > 0 ? `, ${ns.children.size} nested` : ""
+			})`;
+			item.insertText = `${ns.key}::`;
+			item.command = { command: "editor.action.triggerSuggest", title: "Suggest" };
+			item.sortText = `1_${ns.key}::`;
+			items.push(item);
 		}
 		for (const sym of local.symbols) {
 			if (this.registry.has(sym.name)) {
@@ -194,26 +321,31 @@ export class FlowCompletionProvider implements vscode.CompletionItemProvider {
 						: vscode.CompletionItemKind.Function,
 			);
 			item.detail = `(${sym.detail}) ${sym.name}`;
+			item.sortText = `0_${sym.name}`;
 			items.push(item);
 		}
 		return items;
 	}
+}
 
-	private signatureItem(sig: NodeSignature): vscode.CompletionItem {
-		const item = new vscode.CompletionItem(
-			sig.name,
-			vscode.CompletionItemKind.Function,
-		);
-		item.detail = signatureLabel(sig);
-		item.documentation = signatureMarkdown(sig);
-		const args = sig.params
-			.map((p, idx) => `${p.name}: \${${idx + 1}:${p.name}}`)
-			.join(", ");
-		item.insertText = new vscode.SnippetString(
-			sig.params.length > 0 ? `${sig.name}({ ${args} })` : `${sig.name}()`,
-		);
-		item.sortText = sig.impure ? `1_${sig.name}` : `0_${sig.name}`;
-		return item;
+/** Completion after `ns::` — the members and nested namespaces of that path. */
+export class FlowPathCompletionProvider implements vscode.CompletionItemProvider {
+	constructor(private readonly registry: SignatureRegistry) {}
+
+	provideCompletionItems(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+	): vscode.CompletionItem[] | undefined {
+		const before = maskLiterals(
+			document.getText(new vscode.Range(new vscode.Position(0, 0), position)),
+		).replace(/[A-Za-z_$][\w$]*$/, "");
+		if (!/::\s*$/.test(before)) {
+			return undefined;
+		}
+		const model = analyzeFlowDocument(document);
+		const path = pathBeforeCursor(before, model);
+		const ns = path ? this.registry.namespace(path) : undefined;
+		return ns ? namespaceItems(ns) : [];
 	}
 }
 
@@ -250,8 +382,9 @@ export class FlowDecoratorCompletionProvider
 	}
 }
 
-/** Completion for member access (`base.` / `base.field.`): lists the fields of
- * the resolved object shape — node return structs and inferred literal shapes. */
+/** Completion for member access (`base.` / `base.field.`): the fields of the resolved object
+ * shape (node return structs, inferred literal shapes) plus the methods callable on the
+ * receiver's class — every class, lower in the list, when the receiver type is unknown. */
 export class FlowMemberCompletionProvider
 	implements vscode.CompletionItemProvider
 {
@@ -261,40 +394,81 @@ export class FlowMemberCompletionProvider
 		document: vscode.TextDocument,
 		position: vscode.Position,
 	): vscode.CompletionItem[] | undefined {
-		const before = document
-			.lineAt(position.line)
-			.text.slice(0, position.character);
+		const before = maskLiterals(
+			document.getText(new vscode.Range(new vscode.Position(0, 0), position)),
+		).replace(/[A-Za-z_$][\w$]*$/, "");
 		if (!/\.\s*$/.test(before)) {
 			return undefined;
 		}
-		const chain = parseChain(before.replace(/\.\s*$/, ""));
-		if (!chain) {
+		const receiverText = trailingExpression(before.replace(/\.\s*$/, ""));
+		if (!receiverText) {
 			return undefined;
 		}
 		const model = analyzeFlowDocument(document);
-		const variable = findVariable(model.variables, chain.base, position);
-		if (!variable) {
-			return undefined;
-		}
-		const baseShape = variableShape(variable, this.registry, model.interfaces);
-		if (!baseShape) {
-			return undefined;
-		}
-		const target = walkAccessors(baseShape, chain.accessors);
-		if (target?.kind !== "object") {
-			return undefined;
-		}
-		const items: vscode.CompletionItem[] = [];
-		for (const [name, shape] of target.fields) {
-			const item = new vscode.CompletionItem(
-				name,
-				vscode.CompletionItemKind.Field,
-			);
-			item.detail = `${name}: ${shape.text}`;
-			const doc = target.docs?.get(name);
-			if (doc) {
-				item.documentation = new vscode.MarkdownString(doc);
+		const ctx = contextOf(this.registry, model);
+
+		// `ns.` with an unbound namespace root offers the namespace's members (namespace walk).
+		const segments = receiverText.split(".");
+		if (
+			segments.every((segment) => /^[A-Za-z_$][\w$]*$/.test(segment)) &&
+			!findVariable(model.variables, segments[0], position) &&
+			!model.localNames.has(segments[0])
+		) {
+			const ns = this.registry.namespace(expandUsePath(segments, model.uses));
+			if (ns) {
+				return namespaceItems(ns);
 			}
+		}
+
+		const shape = expressionShape(receiverText, ctx, position);
+		const items: vscode.CompletionItem[] = [];
+		const taken = new Set<string>();
+		if (shape?.kind === "object") {
+			for (const [name, field] of shape.fields) {
+				taken.add(name);
+				const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Field);
+				item.detail = `${name}: ${field.text}`;
+				item.sortText = `0_${name}`;
+				const doc = shape.docs?.get(name);
+				if (doc) {
+					item.documentation = new vscode.MarkdownString(doc);
+				}
+				items.push(item);
+			}
+		}
+		if (shape?.kind === "array") {
+			taken.add("length");
+			const item = new vscode.CompletionItem("length", vscode.CompletionItemKind.Field);
+			item.detail = "length: int";
+			item.sortText = "0_length";
+			items.push(item);
+		}
+		const cls = shapeClass(shape);
+		for (const { sig, cls: group } of this.registry.methodsOf(cls)) {
+			if (!sig.alias || taken.has(sig.alias)) {
+				continue;
+			}
+			const item = new vscode.CompletionItem(
+				{ label: sig.alias, description: cls ? sig.name : `${group} · ${sig.name}` },
+				vscode.CompletionItemKind.Method,
+			);
+			item.detail = signatureLabel(sig, true);
+			item.documentation = signatureMarkdown(sig);
+			item.insertText = methodSnippet(sig);
+			item.filterText = `${sig.alias} ${sig.flat}`;
+			item.sortText = `${cls ? "1" : "5"}_${sig.alias}`;
+			items.push(item);
+		}
+		for (const [name, receiverClass] of model.functionReceivers) {
+			if (taken.has(name) || (cls && receiverClass && receiverClass !== cls)) {
+				continue;
+			}
+			const item = new vscode.CompletionItem(
+				{ label: name, description: "function (this file)" },
+				vscode.CompletionItemKind.Method,
+			);
+			item.insertText = new vscode.SnippetString(`${name}($1)`);
+			item.sortText = `1_${name}`;
 			items.push(item);
 		}
 		return items;
@@ -331,13 +505,58 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 				}
 			}
 		}
-		const sig = this.registry.get(hit.word);
-		if (sig) {
-			return new vscode.Hover(signatureMarkdown(sig), hit.range);
-		}
 		const model = analyzeFlowDocument(document);
+		const ctx = contextOf(this.registry, model);
+		const lineText = document.lineAt(position.line).text;
+		const before = maskLiterals(lineText.slice(0, hit.range.start.character)).replace(/\s+$/, "");
+		const after = lineText.slice(hit.range.end.character);
+
+		// Qualified spelling (`hash::md5`) or one of its namespace segments.
+		if (/::$/.test(before) || /^\s*::/.test(after)) {
+			const prefix = (PATH_TAIL_RE.exec(before)?.[1] ?? "")
+				.split(/\s*::\s*/)
+				.filter(Boolean);
+			if (/^\s*::/.test(after)) {
+				const ns = this.registry.namespace(expandUsePath([...prefix, hit.word], model.uses));
+				if (ns) {
+					return new vscode.Hover(namespaceMarkdown(ns), hit.range);
+				}
+			} else {
+				const sig = this.registry.member(expandUsePath(prefix, model.uses), hit.word);
+				if (sig) {
+					return new vscode.Hover(signatureMarkdown(sig), hit.range);
+				}
+			}
+		}
+		// Method call `recv.word(` — dispatched on the receiver's class.
+		if (/\.$/.test(before) && /^\s*\(/.test(after)) {
+			const receiverText = trailingExpression(before.slice(0, -1));
+			const walked = receiverText.split(".");
+			const viaNamespace =
+				walked.every((segment) => /^[A-Za-z_$][\w$]*$/.test(segment)) &&
+				!findVariable(model.variables, walked[0], position)
+					? this.registry.member(expandUsePath(walked, model.uses), hit.word)
+					: undefined;
+			const sig =
+				viaNamespace ??
+				resolveMethod(expressionShape(receiverText, ctx, position), hit.word, ctx)
+					.candidates[0];
+			if (sig) {
+				return new vscode.Hover(signatureMarkdown(sig), hit.range);
+			}
+		}
+		if (!/\.$/.test(before)) {
+			const sig = this.registry.get(hit.word) ?? openedMembers(hit.word, ctx)[0];
+			if (sig) {
+				return new vscode.Hover(signatureMarkdown(sig), hit.range);
+			}
+			const ns = this.registry.namespace(expandUsePath([hit.word], model.uses));
+			if (ns && !findVariable(model.variables, hit.word, position)) {
+				return new vscode.Hover(namespaceMarkdown(ns), hit.range);
+			}
+		}
 		// Member access `base.field` — resolve the field from the base's node return.
-		const member = this.memberHover(document, position, hit, model);
+		const member = this.memberHover(document, position, hit, ctx);
 		if (member) {
 			return member;
 		}
@@ -348,7 +567,7 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 		const variable = findVariable(model.variables, hit.word, position);
 		if (variable) {
 			return new vscode.Hover(
-				variableHoverMarkdown(variable, this.registry, model.interfaces),
+				variableHoverMarkdown(variable, ctx, position),
 				hit.range,
 			);
 		}
@@ -362,45 +581,40 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 	}
 
 	/** Hover for a member access chain: resolve the type at the hovered segment,
-	 * walking through node return structs and inferred struct-literal shapes. */
+	 * walking through node return structs, method results and inferred struct-literal shapes. */
 	private memberHover(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		hit: { word: string; range: vscode.Range },
-		model: ReturnType<typeof analyzeFlowDocument>,
+		ctx: ResolveContext,
 	): vscode.Hover | undefined {
 		const start = hit.range.start;
 		if (start.character === 0) {
 			return undefined;
 		}
-		const dotRange = new vscode.Range(start.translate(0, -1), start);
-		if (document.getText(dotRange) !== ".") {
+		const before = maskLiterals(
+			document.lineAt(position.line).text.slice(0, start.character),
+		).replace(/\s+$/, "");
+		if (!before.endsWith(".")) {
 			return undefined;
 		}
-		const before = document
-			.lineAt(position.line)
-			.text.slice(0, hit.range.end.character);
-		const chain = parseChain(before);
-		if (!chain || chain.accessors.length === 0) {
+		const receiverText = trailingExpression(before.slice(0, -1));
+		const parent = expressionShape(receiverText, ctx, position);
+		if (!parent) {
 			return undefined;
 		}
-		const variable = findVariable(model.variables, chain.base, position);
-		if (!variable) {
-			return undefined;
-		}
-		const baseShape = variableShape(variable, this.registry, model.interfaces);
-		if (!baseShape) {
-			return undefined;
-		}
-		const resolved = walkAccessors(baseShape, chain.accessors);
+		const resolved =
+			parent.kind === "object"
+				? parent.fields.get(hit.word)
+				: parent.kind === "array" && hit.word === "length"
+					? { kind: "scalar" as const, text: "int" }
+					: undefined;
 		if (!resolved) {
 			return undefined;
 		}
-		// The parent object that owns the hovered field (for docs / origin).
-		const parent = walkAccessors(baseShape, chain.accessors.slice(0, -1));
 		const md = new vscode.MarkdownString();
 		md.appendCodeblock(`${hit.word}: ${resolved.text}`, "flowscript");
-		if (parent?.kind === "object") {
+		if (parent.kind === "object") {
 			const doc = parent.docs?.get(hit.word);
 			if (doc) {
 				md.appendMarkdown(`\n\n${doc}`);
@@ -411,6 +625,32 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 		}
 		return new vscode.Hover(md, hit.range);
 	}
+}
+
+function namespaceMarkdown(ns: NamespaceEntry): vscode.MarkdownString {
+	const md = new vscode.MarkdownString();
+	md.appendCodeblock(`use ${ns.key}::*`, "flowscript");
+	const members = [...ns.members.keys()].sort();
+	md.appendMarkdown(
+		`\n\n_namespace · ${members.length} member${members.length === 1 ? "" : "s"}_`,
+	);
+	if (members.length > 0) {
+		md.appendMarkdown(
+			`\n\n${members
+				.slice(0, 12)
+				.map((member) => `\`${member}\``)
+				.join(", ")}${members.length > 12 ? ", …" : ""}`,
+		);
+	}
+	if (ns.children.size > 0) {
+		md.appendMarkdown(
+			`\n\nNested: ${[...ns.children.keys()]
+				.sort()
+				.map((child) => `\`${ns.key}::${child}\``)
+				.join(", ")}`,
+		);
+	}
+	return md;
 }
 
 export class FlowSignatureHelpProvider implements vscode.SignatureHelpProvider {
@@ -424,15 +664,40 @@ export class FlowSignatureHelpProvider implements vscode.SignatureHelpProvider {
 		if (!ctx) {
 			return undefined;
 		}
-		const sig = this.registry.get(ctx.name);
+		const model = analyzeFlowDocument(document);
+		const resolveCtx = contextOf(this.registry, model);
+		let sig: NodeSignature | undefined;
+		let method = false;
+		if (ctx.receiverText !== undefined) {
+			const walked = ctx.receiverText.split(".");
+			const viaNamespace =
+				walked.every((segment) => /^[A-Za-z_$][\w$]*$/.test(segment)) &&
+				!findVariable(model.variables, walked[0], position)
+					? this.registry.member(expandUsePath(walked, model.uses), ctx.name)
+					: undefined;
+			if (viaNamespace) {
+				sig = viaNamespace;
+			} else {
+				const { candidates } = resolveMethod(
+					expressionShape(ctx.receiverText, resolveCtx, position),
+					ctx.name,
+					resolveCtx,
+				);
+				sig = candidates[0];
+				method = sig?.receiver !== undefined;
+			}
+		} else {
+			sig = resolveCallee(ctx.name, resolveCtx);
+		}
 		if (!sig) {
 			return undefined;
 		}
+		const params = method ? methodParams(sig) : sig.params;
 		const info = new vscode.SignatureInformation(
-			signatureLabel(sig),
+			signatureLabel(sig, method),
 			signatureMarkdown(sig),
 		);
-		info.parameters = sig.params.map(
+		info.parameters = params.map(
 			(p) =>
 				new vscode.ParameterInformation(
 					`${p.name}${p.optional ? "?" : ""}: ${p.type}`,
@@ -444,14 +709,17 @@ export class FlowSignatureHelpProvider implements vscode.SignatureHelpProvider {
 		help.activeSignature = 0;
 		help.activeParameter = Math.min(
 			ctx.activeParam,
-			Math.max(0, sig.params.length - 1),
+			Math.max(0, params.length - 1),
 		);
 		return help;
 	}
 }
 
 interface CallContext {
+	/** Member name: bare name, `a::b::name` path or method name. */
 	readonly name: string;
+	/** Receiver expression for method calls. */
+	readonly receiverText?: string;
 	readonly activeParam: number;
 }
 
@@ -461,36 +729,24 @@ function findEnclosingCall(
 	position: vscode.Position,
 ): CallContext | undefined {
 	const offset = document.offsetAt(position);
-	const text = document.getText();
+	const text = maskLiterals(document.getText());
 	let depth = 0;
 	let commas = 0;
-	let inString = false;
 
 	for (let i = offset - 1; i >= 0; i--) {
 		const ch = text[i];
-		if (inString) {
-			if (ch === '"' && text[i - 1] !== "\\") {
-				inString = false;
-			}
-			continue;
-		}
-		if (ch === '"') {
-			inString = true;
-			continue;
-		}
-		if (ch === ")" || ch === "}") {
+		if (ch === ")" || ch === "}" || ch === "]") {
 			depth++;
-		} else if (ch === "(") {
-			if (depth === 0) {
-				const name = identifierBefore(text, i);
-				if (!name) {
-					return undefined;
-				}
-				return { name, activeParam: commas };
+		} else if (ch === "(" || ch === "{" || ch === "[") {
+			if (depth > 0) {
+				depth--;
+			} else if (ch === "(") {
+				return calleeBefore(text, i, commas);
+			} else {
+				// Unclosed `{` / `[`: the cursor sits in the named-args object (or a literal);
+				// the positional index is the number of arguments written before it.
+				commas = 0;
 			}
-			depth--;
-		} else if (ch === "{") {
-			depth--;
 		} else if (ch === "," && depth === 0) {
 			commas++;
 		}
@@ -498,20 +754,39 @@ function findEnclosingCall(
 	return undefined;
 }
 
-function identifierBefore(
+function calleeBefore(
 	text: string,
 	parenIndex: number,
-): string | undefined {
+	activeParam: number,
+): CallContext | undefined {
 	let end = parenIndex;
 	while (end > 0 && /\s/.test(text[end - 1])) {
 		end--;
 	}
 	let start = end;
-	while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1])) {
+	while (start > 0 && /[A-Za-z0-9_$:]/.test(text[start - 1])) {
 		start--;
 	}
-	const name = text.slice(start, end);
-	return WORD_RE.test(name) ? name : undefined;
+	const head = text.slice(start, end);
+	if (!head || head.replace(/::/g, "").includes(":")) {
+		return undefined;
+	}
+	const segments = head.split(/\s*::\s*/);
+	if (segments.some((segment) => !WORD_RE.test(segment))) {
+		return undefined;
+	}
+	const before = text.slice(0, start).replace(/\s+$/, "");
+	if (before.endsWith("@")) {
+		return undefined;
+	}
+	if (segments.length === 1 && before.endsWith(".")) {
+		return {
+			name: head,
+			receiverText: trailingExpression(before.slice(0, -1)),
+			activeParam,
+		};
+	}
+	return { name: head.replace(/\s*::\s*/g, "::"), activeParam };
 }
 
 export class FlowDocumentSymbolProvider
@@ -582,11 +857,25 @@ export class FlowDefinitionProvider implements vscode.DefinitionProvider {
 		if (!hit) {
 			return undefined;
 		}
-		const sig = this.registry.get(hit.word);
+		const model = analyzeFlowDocument(document);
+		const ctx = contextOf(this.registry, model);
+		const lineText = document.lineAt(position.line).text;
+		const before = maskLiterals(lineText.slice(0, hit.range.start.character)).replace(/\s+$/, "");
+		const after = lineText.slice(hit.range.end.character);
+		let sig: NodeSignature | undefined;
+		if (/::$/.test(before)) {
+			const prefix = (PATH_TAIL_RE.exec(before)?.[1] ?? "").split(/\s*::\s*/).filter(Boolean);
+			sig = this.registry.member(expandUsePath(prefix, model.uses), hit.word);
+		} else if (/\.$/.test(before) && /^\s*\(/.test(after)) {
+			const receiverText = trailingExpression(before.slice(0, -1));
+			sig = resolveMethod(expressionShape(receiverText, ctx, position), hit.word, ctx)
+				.candidates[0];
+		} else if (!/\.$/.test(before)) {
+			sig = this.registry.get(hit.word) ?? openedMembers(hit.word, ctx)[0];
+		}
 		if (sig) {
 			return new vscode.Location(sig.source, sig.nameRange);
 		}
-		const model = analyzeFlowDocument(document);
 		const local = model.symbols.find((s) => s.name === hit.word);
 		if (local) {
 			return new vscode.Location(document.uri, local.selectionRange);
@@ -732,16 +1021,28 @@ export class FlowQuickFixProvider implements vscode.CodeActionProvider {
 	}
 
 	private closestNames(word: string): string[] {
-		const target = word.toLowerCase();
+		const target = word.toLowerCase().replace(/\s*::\s*/g, "::");
+		const member = target.split("::").pop() ?? target;
 		const scored: Array<{ name: string; distance: number }> = [];
 		for (const sig of this.registry.all()) {
-			const distance = levenshtein(target, sig.name.toLowerCase());
-			if (distance <= Math.max(2, Math.floor(word.length / 3))) {
+			const spellings = [sig.name, sig.flat];
+			if (sig.alias) {
+				spellings.push(sig.alias);
+			}
+			const distance = Math.min(
+				...spellings.map((spelling) =>
+					Math.min(
+						levenshtein(target, spelling.toLowerCase()),
+						levenshtein(member, spelling.toLowerCase()),
+					),
+				),
+			);
+			if (distance <= Math.max(2, Math.floor(member.length / 3))) {
 				scored.push({ name: sig.name, distance });
 			}
 		}
 		scored.sort((a, b) => a.distance - b.distance);
-		return scored.slice(0, 3).map((s) => s.name);
+		return [...new Set(scored.map((s) => s.name))].slice(0, 3);
 	}
 }
 

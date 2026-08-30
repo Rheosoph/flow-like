@@ -28,6 +28,7 @@ impl NodeLogic for RemoveFromContainer {
             "Removes an element from a container's children list",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "removeFromContainer");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

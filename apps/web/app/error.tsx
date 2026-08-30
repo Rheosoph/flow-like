@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { captureTelemetryError } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import * as Sentry from "@sentry/nextjs";
 import { AlertTriangle, ArrowLeft, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -27,10 +27,13 @@ export default function Error({
 			<div className="flex flex-col items-center gap-3 text-center">
 				<AlertTriangle className="h-12 w-12 text-destructive" />
 				<h2 className="text-2xl font-semibold tracking-tight">
-					{t('somethingWentWrong', 'Something went wrong')}
+					{t("somethingWentWrong", "Something went wrong")}
 				</h2>
 				<p className="text-sm text-muted-foreground max-w-md">
-					{t('anUnexpectedErrorOccurredYouCanTryReloadingThePageOrGoingBack', "An unexpected error occurred. You can try reloading the page or going back.")}
+					{t(
+						"anUnexpectedErrorOccurredYouCanTryReloadingThePageOrGoingBack",
+						"An unexpected error occurred. You can try reloading the page or going back.",
+					)}
 				</p>
 			</div>
 			<div className="flex items-center gap-3">
@@ -40,7 +43,7 @@ export default function Error({
 					className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md border border-border bg-background hover:bg-muted transition-colors"
 				>
 					<ArrowLeft className="h-4 w-4" />
-					{t('goBack', 'Go Back')}
+					{t("goBack", "Go Back")}
 				</button>
 				<button
 					type="button"
@@ -48,7 +51,7 @@ export default function Error({
 					className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
 				>
 					<RotateCcw className="h-4 w-4" />
-					{t('reload', 'Reload')}
+					{t("reload", "Reload")}
 				</button>
 			</div>
 		</div>

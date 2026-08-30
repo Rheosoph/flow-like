@@ -1,4 +1,3 @@
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IBit,
 	type IBitModelClassification,
@@ -11,7 +10,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Slider,
-	Textarea,
 	humanFileSize,
 } from "@flow-like/flow-like-ui";
 import {
@@ -22,24 +20,31 @@ import {
 	CardTitle,
 } from "@flow-like/flow-like-ui";
 import { Label } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useState } from "react";
 
 const PROVIDER_OPTIONS = [
 	"Local",
 	"MLX",
 	"Premium",
+	"Internal",
 	"Hosted",
 	"hosted:openrouter",
 	"hosted:openai",
 	"hosted:anthropic",
+	"hosted:bedrock",
 	"hosted:azure",
 	"hosted:vertex",
 ] as const;
 
 function isHostedProviderName(providerName?: null | string) {
 	const normalized = providerName?.trim().toLowerCase() ?? "";
-	return normalized === "hosted" || normalized.startsWith("hosted:");
+	return (
+		normalized === "premium" ||
+		normalized === "internal" ||
+		normalized === "hosted" ||
+		normalized.startsWith("hosted:")
+	);
 }
 
 function getProviderParams(provider: IModelProvider | undefined) {
@@ -61,17 +66,6 @@ export function LLMConfiguration({
 	const isHostedProvider = isHostedProviderName(
 		parameters?.provider?.provider_name,
 	);
-	const [providerParamsText, setProviderParamsText] = useState(
-		JSON.stringify(providerParams, null, 2),
-	);
-	const [providerParamsError, setProviderParamsError] = useState<string | null>(
-		null,
-	);
-
-	useEffect(() => {
-		setProviderParamsText(JSON.stringify(providerParams, null, 2));
-		setProviderParamsError(null);
-	}, [parameters?.provider]);
 
 	const updateParameter = (key: keyof ILlmParameters, value: unknown) => {
 		setBit((old) => ({
@@ -107,35 +101,12 @@ export function LLMConfiguration({
 		});
 	};
 
-	const handleProviderParamsBlur = () => {
-		const trimmed = providerParamsText.trim();
-		if (!trimmed) {
-			updateProviderParams({});
-			setProviderParamsError(null);
-			return;
-		}
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				throw new Error("Provider params must be a JSON object");
-			}
-			updateProviderParams(parsed as Record<string, unknown>);
-			setProviderParamsError(null);
-		} catch (error) {
-			setProviderParamsError(
-				error instanceof Error
-					? error.message
-					: t('providerParamsMustBeValidJson', 'Provider params must be valid JSON'),
-			);
-		}
-	};
-
 	return (
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader className="w-full">
 					<CardTitle className="flex items-center justify-between w-full">
-						<p>{t('llmConfiguration', 'LLM Configuration')}</p>
+						<p>{t("llmConfiguration", "LLM Configuration")}</p>
 						{bit.size ? (
 							<small className="font-normal text-muted-foreground">
 								{humanFileSize(bit.size)}
@@ -143,12 +114,17 @@ export function LLMConfiguration({
 						) : null}
 					</CardTitle>
 					<CardDescription>
-						{t('configureModelContextAndProcessingCapabilities', 'Configure model context and processing capabilities')}
+						{t(
+							"configureModelContextAndProcessingCapabilities",
+							"Configure model context and processing capabilities",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="context-length">{t('contextLength', 'Context Length')}</Label>
+						<Label htmlFor="context-length">
+							{t("contextLength", "Context Length")}
+						</Label>
 						<Input
 							id="context-length"
 							type="number"
@@ -164,7 +140,10 @@ export function LLMConfiguration({
 							max="2000000"
 						/>
 						<p className="text-xs text-muted-foreground">
-							{t('maximumNumberOfTokensTheModelCanProcess', 'Maximum number of tokens the model can process')}
+							{t(
+								"maximumNumberOfTokensTheModelCanProcess",
+								"Maximum number of tokens the model can process",
+							)}
 						</p>
 					</div>
 				</CardContent>
@@ -172,27 +151,38 @@ export function LLMConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('providerSettings', 'Provider Settings')}</CardTitle>
+					<CardTitle>{t("providerSettings", "Provider Settings")}</CardTitle>
 					<CardDescription>
-						{t('configureTheModelProviderAndIdentification', 'Configure the model provider and identification')}
+						{t(
+							"configureTheModelProviderAndIdentification",
+							"Configure the model provider and identification",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="provider-name">{t('providerName', 'Provider Name *')}</Label>
+							<Label htmlFor="provider-name">
+								{t("providerName", "Provider Name *")}
+							</Label>
 							<Select
 								value={parameters?.provider?.provider_name || "Local"}
 								onValueChange={(value) =>
 									updateParameter("provider", {
 										...parameters.provider,
 										provider_name: value,
-										params: getProviderParams(parameters?.provider),
+										params: isHostedProviderName(value)
+											? typeof providerParams.tier === "string"
+												? { tier: providerParams.tier }
+												: {}
+											: getProviderParams(parameters?.provider),
 									})
 								}
 							>
 								<SelectTrigger id="provider-name">
-									<SelectValue placeholder={t('selectProvider', 'Select provider')} />
+									<SelectValue
+										placeholder={t("selectProvider", "Select provider")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{PROVIDER_OPTIONS.map((providerName) => (
@@ -205,26 +195,29 @@ export function LLMConfiguration({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="model-id">{t('modelId', 'Model ID')}</Label>
+							<Label htmlFor="model-id">{t("modelId", "Model ID")}</Label>
 							<Input
 								id="model-id"
 								value={parameters?.provider?.model_id || ""}
 								onChange={(e) =>
 									updateProvider("model_id", e.target.value || null)
 								}
-								placeholder={t('optionalModelIdentifier', 'Optional model identifier')}
+								placeholder={t(
+									"optionalModelIdentifier",
+									"Optional model identifier",
+								)}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="version">{t('version', 'Version')}</Label>
+							<Label htmlFor="version">{t("version", "Version")}</Label>
 							<Input
 								id="version"
 								value={parameters?.provider?.version || ""}
 								onChange={(e) =>
 									updateProvider("version", e.target.value || null)
 								}
-								placeholder={t('optionalVersion', 'Optional version')}
+								placeholder={t("optionalVersion", "Optional version")}
 							/>
 						</div>
 					</div>
@@ -232,28 +225,7 @@ export function LLMConfiguration({
 					{isHostedProvider ? (
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 							<div className="space-y-2">
-								<Label htmlFor="provider-endpoint">{t('endpoint', 'Endpoint')}</Label>
-								<Input
-									id="provider-endpoint"
-									value={
-										typeof providerParams.endpoint === "string"
-											? providerParams.endpoint
-											: ""
-									}
-									onChange={(e) =>
-										updateProviderParams({
-											...providerParams,
-											endpoint: e.target.value.trim(),
-										})
-									}
-									placeholder={t('optionalCustomApiEndpoint', 'Optional custom API endpoint')}
-								/>
-								<p className="text-xs text-muted-foreground">
-									{t('hostedProvidersUseProviderMetadataPlusModelIdAndOptionalEndpointOverrides', "Hosted providers use provider metadata plus model id and optional endpoint overrides.")}
-								</p>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="provider-tier">{t('tier', 'Tier')}</Label>
+								<Label htmlFor="provider-tier">{t("tier", "Tier")}</Label>
 								<Input
 									id="provider-tier"
 									value={
@@ -262,39 +234,20 @@ export function LLMConfiguration({
 											: ""
 									}
 									onChange={(e) =>
-										updateProviderParams({
-											...providerParams,
-											tier: e.target.value.trim(),
-										})
+										updateProviderParams(
+											e.target.value.trim()
+												? { tier: e.target.value.trim() }
+												: {},
+										)
 									}
-									placeholder={t('optionalAccessTier', 'Optional access tier')}
+									placeholder={t("optionalAccessTier", "Optional access tier")}
 								/>
 								<p className="text-xs text-muted-foreground">
-									{t('optionalRoutingOrEntitlementMetadataStoredUnderProviderParams', "Optional routing or entitlement metadata stored under provider params.")}
+									{t(
+										"optionalEntitlementMetadataStoredUnderProviderParams",
+										"Optional entitlement metadata stored under provider params. The server controls the upstream endpoint.",
+									)}
 								</p>
-							</div>
-							<div className="space-y-2 md:col-span-2">
-								<Label htmlFor="provider-params-json">
-									{t('providerParamsJson', 'Provider Params JSON')}
-								</Label>
-								<Textarea
-									id="provider-params-json"
-									rows={8}
-									value={providerParamsText}
-									onChange={(e) => {
-										setProviderParamsText(e.target.value);
-										setProviderParamsError(null);
-									}}
-									onBlur={handleProviderParamsBlur}
-								/>
-								<p className="text-xs text-muted-foreground">
-									{t('useThisForProviderspecificOptionsSuchAsHeadersDeploymentNamesOrRoutingMetadata', "Use this for provider-specific options such as headers, deployment names, or routing metadata.")}
-								</p>
-								{providerParamsError ? (
-									<p className="text-xs text-destructive">
-										{providerParamsError}
-									</p>
-								) : null}
 							</div>
 						</div>
 					) : null}
@@ -304,7 +257,9 @@ export function LLMConfiguration({
 			{isHosted ? (
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('modelClassification', 'Model Classification')}</CardTitle>
+						<CardTitle>
+							{t("modelClassification", "Model Classification")}
+						</CardTitle>
 						<CardDescription>
 							{`Capability scores are automatically computed from the model slug — no manual configuration needed.`}
 						</CardDescription>
@@ -313,7 +268,9 @@ export function LLMConfiguration({
 			) : (
 				<Card>
 					<CardHeader>
-						<CardTitle>{t('modelClassification', 'Model Classification')}</CardTitle>
+						<CardTitle>
+							{t("modelClassification", "Model Classification")}
+						</CardTitle>
 						<CardDescription>
 							{`Rate each capability from 0.0 (poor) to 1.0 (excellent)`}
 						</CardDescription>
@@ -348,8 +305,8 @@ export function LLMConfiguration({
 												}
 											/>
 											<div className="flex justify-between text-xs text-muted-foreground">
-												<span>{t('poor', 'Poor')}</span>
-												<span>{t('excellent', 'Excellent')}</span>
+												<span>{t("poor", "Poor")}</span>
+												<span>{t("excellent", "Excellent")}</span>
 											</div>
 										</div>
 									);

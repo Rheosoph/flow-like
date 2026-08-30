@@ -3,7 +3,7 @@ use flow_like_gcp_data::metadata::{AccessToken, MetadataError, TokenSource};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
-use opentelemetry_sdk::{runtime, trace::TracerProvider};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::sync::{Arc, OnceLock, RwLock, mpsc};
 use std::time::Duration;
 use tonic::{
@@ -31,6 +31,23 @@ const TOKEN_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// outage the knob exists to surface.
 const STARTUP_TOKEN_TIMEOUT: Duration = Duration::from_secs(60);
 
+const OTLP_ENDPOINT_VARS: [&str; 2] = [
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+];
+const OTLP_TIMEOUT_VARS: [&str; 2] = [
+    "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    "OTEL_EXPORTER_OTLP_TIMEOUT",
+];
+const DEFAULT_OTLP_EXPORT_TIMEOUT: Duration = Duration::from_millis(10_000);
+
+struct EnabledTracing {
+    tracer: opentelemetry_sdk::trace::Tracer,
+    endpoint: String,
+    endpoint_var: &'static str,
+    timeout: Duration,
+}
+
 pub fn init_telemetry() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info")
@@ -38,8 +55,11 @@ pub fn init_telemetry() {
             .add_directive("rustls=warn".parse().expect("valid filter"))
             .add_directive("tokio=warn".parse().expect("valid filter"))
     });
-    let otel_layer =
-        init_tracing().map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
+    let (otlp, timeout_warning) = init_tracing();
+    let enabled = otlp
+        .as_ref()
+        .map(|otlp| (otlp.endpoint.clone(), otlp.endpoint_var, otlp.timeout));
+    let otel_layer = otlp.map(|otlp| tracing_opentelemetry::layer().with_tracer(otlp.tracer));
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
@@ -47,22 +67,35 @@ pub fn init_telemetry() {
         .with(otel_layer)
         .init();
 
+    if let Some(warning) = timeout_warning {
+        tracing::warn!("{warning}");
+    }
+    if let Some((endpoint, endpoint_var, timeout)) = enabled {
+        tracing::info!(
+            "OpenTelemetry tracing enabled (endpoint={endpoint} from {endpoint_var}, export timeout={}ms)",
+            timeout.as_millis()
+        );
+    }
+
     init_metrics();
 }
 
-fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
+fn init_tracing() -> (Option<EnabledTracing>, Option<String>) {
     let require_otel =
         std::env::var("GCP_REQUIRE_OTEL").is_ok_and(|value| value.eq_ignore_ascii_case("true"));
-    let endpoint = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-        Ok(endpoint) if !endpoint.trim().is_empty() => endpoint,
+    let (timeout, timeout_warning) = resolve_otlp_export_timeout();
+    let Some((endpoint_var, endpoint)) = resolve_otlp_endpoint() else {
         // Traces carry the audit trail for the API -> executor hop. A deployment
         // that declared it requires them must not come up quietly without them,
         // so the missing endpoint is fatal rather than a warning — the same
         // knob, with the same meaning, as on the GCP API image.
-        _ if require_otel => {
-            panic!("GCP_REQUIRE_OTEL=true requires OTEL_EXPORTER_OTLP_ENDPOINT")
+        if require_otel {
+            panic!(
+                "GCP_REQUIRE_OTEL=true requires {} or {}",
+                OTLP_ENDPOINT_VARS[0], OTLP_ENDPOINT_VARS[1]
+            )
         }
-        _ => return None,
+        return (None, timeout_warning);
     };
     // telemetry.googleapis.com meters every export against the project named on
     // the RPC, so an exporter without a project would only ever be rejected.
@@ -78,15 +111,16 @@ fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
         }
         _ => {
             eprintln!(
-                "OTEL_EXPORTER_OTLP_ENDPOINT is set but GCP_PROJECT_ID is not; OTLP export stays disabled"
+                "{endpoint_var} is set but GCP_PROJECT_ID is not; OTLP export stays disabled"
             );
-            return None;
+            return (None, timeout_warning);
         }
     };
     let authorizer = OtlpAuthorizer::start(&project_id, require_otel);
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    let exporter = match opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint(endpoint)
+        .with_endpoint(&endpoint)
+        .with_timeout(timeout)
         // Explicit, not implied by the https:// scheme: the exporter builds its
         // channel through tonic's `Endpoint::from_shared`, which never applies
         // the default TLS configuration `Endpoint::new` would, so without this
@@ -97,13 +131,66 @@ fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
         .with_tls_config(ClientTlsConfig::new().with_enabled_roots())
         .with_interceptor(authorizer)
         .build()
-        .unwrap_or_else(|error| panic!("required OTLP exporter could not initialize: {error}"));
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    {
+        Ok(exporter) => exporter,
+        Err(error) if require_otel => {
+            panic!("required OTLP exporter could not initialize: {error}")
+        }
+        Err(error) => {
+            eprintln!(
+                "the OTLP exporter for {endpoint_var}={endpoint} could not be built: {error}; OTLP export stays disabled"
+            );
+            return (None, timeout_warning);
+        }
+    };
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
     let tracer = provider.tracer("flow-like-gcp-executor");
     opentelemetry::global::set_tracer_provider(provider);
-    Some(tracer)
+    (
+        Some(EnabledTracing {
+            tracer,
+            endpoint,
+            endpoint_var,
+            timeout,
+        }),
+        timeout_warning,
+    )
+}
+
+fn resolve_otlp_endpoint() -> Option<(&'static str, String)> {
+    OTLP_ENDPOINT_VARS.into_iter().find_map(|name| {
+        let value = std::env::var(name).ok()?;
+        let value = value.trim();
+        (!value.is_empty()).then(|| (name, value.to_string()))
+    })
+}
+
+/// The OTel specification, and opentelemetry-otlp since 0.28, read these as
+/// milliseconds; 0.27 read them as seconds. Resolved here and passed to the
+/// builder explicitly so the value cannot change meaning under the process.
+fn resolve_otlp_export_timeout() -> (Duration, Option<String>) {
+    for name in OTLP_TIMEOUT_VARS {
+        let Ok(raw) = std::env::var(name) else {
+            continue;
+        };
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        return match raw.parse::<u64>() {
+            Ok(millis) => (Duration::from_millis(millis), None),
+            Err(_) => (
+                DEFAULT_OTLP_EXPORT_TIMEOUT,
+                Some(format!(
+                    "{name}={raw:?} is not a whole number of milliseconds; using {}ms",
+                    DEFAULT_OTLP_EXPORT_TIMEOUT.as_millis()
+                )),
+            ),
+        };
+    }
+    (DEFAULT_OTLP_EXPORT_TIMEOUT, None)
 }
 
 /// Per-RPC gRPC metadata for telemetry.googleapis.com: `authorization` carries

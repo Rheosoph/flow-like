@@ -49,6 +49,9 @@ impl GeneralTextSplitter {
 }
 
 #[async_trait]
+// `&Vec<String>` is baked into implementors across other crates; widening it to `&[String]` is a
+// cross-crate signature change, not a local readability fix.
+#[allow(clippy::ptr_arg)]
 pub trait EmbeddingModelLogic: Send + Sync + Cacheable + 'static {
     async fn get_splitter(
         &self,

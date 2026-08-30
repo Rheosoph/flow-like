@@ -92,6 +92,7 @@ impl NodeLogic for SetMediaSource {
             "Signs a FlowPath and sets it as the source for image, video, avatar, iframe, lottie, or file preview elements",
             "UI/Elements/Media",
         );
+        node.set_flowscript_name("ui", "setMediaSource");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);
@@ -102,7 +103,8 @@ impl NodeLogic for SetMediaSource {
             "Reference to the media element",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "file",

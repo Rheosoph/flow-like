@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -52,7 +51,9 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -382,6 +383,9 @@ export default function Id({
 		[id ?? ""],
 	) ?? { visibility: IAppVisibility.Offline };
 	const currentRoute = usePathname();
+	// Storage browsers and Data Studio own their vertical space; every other
+	// section scrolls the page.
+	const contentFillsHeight = configRouteFillsHeight(currentRoute);
 	const router = useRouter();
 	const metadata = useInvoke(
 		backend.appState.getAppMeta,
@@ -641,7 +645,7 @@ export default function Id({
 					size="icon"
 					className="md:hidden size-9"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label={t('configurationSections', 'Configuration sections')}
+					aria-label={t("configurationSections", "Configuration sections")}
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>,
@@ -650,7 +654,7 @@ export default function Id({
 						key="config-back"
 						href={`/library/config?id=${id}`}
 						className="md:hidden"
-						aria-label={t('backToDashboard', 'Back to dashboard')}
+						aria-label={t("backToDashboard", "Back to dashboard")}
 					>
 						<Button variant="ghost" size="icon" className="size-9">
 							<ChevronLeftIcon className="w-5 h-5" />
@@ -660,9 +664,13 @@ export default function Id({
 			],
 			right: canUseApp ? (
 				<Link key="use-app" href={useAppHref} className="md:hidden">
-					<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
+					<Button
+						variant="default"
+						size="sm"
+						aria-label={t("useApp", "Use App")}
+					>
 						<SparklesIcon className="w-4 h-4" />
-						{t('useApp', 'Use App')}
+						{t("useApp", "Use App")}
 					</Button>
 				</Link>
 			) : undefined,
@@ -690,8 +698,11 @@ export default function Id({
 		!encrypt || (password.length >= 8 && password === confirmPassword);
 
 	const handleExport = useCallback(async () => {
-		const loader = toast.loading(t('exportingApp', 'Exporting app...'), {
-			description: t('thisMayTakeAMomentPleaseWait', 'This may take a moment, please wait.'),
+		const loader = toast.loading(t("exportingApp", "Exporting app..."), {
+			description: t(
+				"thisMayTakeAMomentPleaseWait",
+				"This may take a moment, please wait.",
+			),
 		});
 		setExporting(true);
 		try {
@@ -699,7 +710,10 @@ export default function Id({
 				appId: id,
 				...(encrypt && password ? { password } : {}),
 			});
-			toast.success(t('appExportedSuccessfully', 'App exported successfully!'), { id: loader });
+			toast.success(
+				t("appExportedSuccessfully", "App exported successfully!"),
+				{ id: loader },
+			);
 			setExportOpen(false);
 			setPassword("");
 			setConfirmPassword("");
@@ -733,7 +747,7 @@ export default function Id({
 				);
 		if (!runMeta) {
 			toastError(
-				t('failedToExecuteBoard', 'Failed to execute board'),
+				t("failedToExecuteBoard", "Failed to execute board"),
 				<PlayCircleIcon className="w-4 h-4" />,
 			);
 		}
@@ -753,7 +767,7 @@ export default function Id({
 											className="flex items-center gap-1"
 										>
 											<LayoutGridIcon className="w-3 h-3" />
-											{t('home', 'Home')}
+											{t("home", "Home")}
 										</BreadcrumbLink>
 									</BreadcrumbItem>
 									<BreadcrumbSeparator />
@@ -782,7 +796,9 @@ export default function Id({
 												className="flex items-center gap-2 w-full rounded-full px-4"
 											>
 												<SparklesIcon className="w-4 h-4" />
-												<h4 className="text-sm font-medium">{t('useApp', 'Use App')}</h4>
+												<h4 className="text-sm font-medium">
+													{t("useApp", "Use App")}
+												</h4>
 											</Button>
 										</Link>
 									) : (
@@ -792,7 +808,9 @@ export default function Id({
 												className="flex items-center gap-2 w-full rounded-full px-4"
 											>
 												<WorkflowIcon className="w-4 h-4" />
-												<h4 className="text-sm font-medium">{t('startBuilding', 'Start Building')}</h4>
+												<h4 className="text-sm font-medium">
+													{t("startBuilding", "Start Building")}
+												</h4>
 											</Button>
 										</Link>
 									)}
@@ -801,9 +819,13 @@ export default function Id({
 								{/* Mobile quick action */}
 								{useAppHref ? (
 									<Link href={useAppHref} className="md:hidden">
-										<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
+										<Button
+											variant="default"
+											size="sm"
+											aria-label={t("useApp", "Use App")}
+										>
 											<SparklesIcon className="w-4 h-4" />
-											{t('useApp', 'Use App')}
+											{t("useApp", "Use App")}
 										</Button>
 									</Link>
 								) : (
@@ -811,10 +833,10 @@ export default function Id({
 										<Button
 											variant="default"
 											size="sm"
-											aria-label={t('startBuilding', 'Start Building')}
+											aria-label={t("startBuilding", "Start Building")}
 										>
 											<WorkflowIcon className="w-4 h-4" />
-											{t('startBuilding', 'Start Building')}
+											{t("startBuilding", "Start Building")}
 										</Button>
 									</Link>
 								)}
@@ -824,7 +846,7 @@ export default function Id({
 									size="sm"
 									className="md:hidden"
 									onClick={() => setMobileNavOpen(true)}
-									aria-label={t('openMenu', 'Open menu')}
+									aria-label={t("openMenu", "Open menu")}
 								>
 									<MenuIcon className="w-4 h-4" />
 								</Button>
@@ -849,10 +871,13 @@ export default function Id({
 						<SheetHeader className="p-4 pb-3 border-b text-left space-y-3">
 							<div>
 								<SheetTitle>
-									{t('configure', 'Configure')} {metadata.data?.name ?? "app"}
+									{t("configure", "Configure")} {metadata.data?.name ?? "app"}
 								</SheetTitle>
 								<SheetDescription>
-									{t('jumpToAConfigurationSection', 'Jump to a configuration section')}
+									{t(
+										"jumpToAConfigurationSection",
+										"Jump to a configuration section",
+									)}
 								</SheetDescription>
 							</div>
 							<div className="relative">
@@ -860,9 +885,12 @@ export default function Id({
 								<Input
 									value={mobileNavFilter}
 									onChange={(e) => setMobileNavFilter(e.target.value)}
-									placeholder={t('filterSections', 'Filter sections…')}
+									placeholder={t("filterSections", "Filter sections…")}
 									className="pl-8 h-10"
-									aria-label={t('filterConfigurationSections', 'Filter configuration sections')}
+									aria-label={t(
+										"filterConfigurationSections",
+										"Filter configuration sections",
+									)}
 								/>
 							</div>
 						</SheetHeader>
@@ -883,7 +911,13 @@ export default function Id({
 										: visibleNavItems;
 									if (filtered.length === 0) {
 										return (
-											<p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('noSectionsMatchMobilenavfilter', 'No sections match “{{mobileNavFilter}}”.', { mobileNavFilter })}</p>
+											<p className="px-3 py-8 text-center text-sm text-muted-foreground">
+												{t(
+													"noSectionsMatchMobilenavfilter",
+													"No sections match “{{mobileNavFilter}}”.",
+													{ mobileNavFilter },
+												)}
+											</p>
 										);
 									}
 									let lastGroup = "";
@@ -905,7 +939,11 @@ export default function Id({
 														aria-disabled="true"
 													>
 														<Icon className="w-4 h-4 shrink-0" />
-														<span className="truncate">{t('labelSoon', '{{label}} (soon)', { label: item.label })}</span>
+														<span className="truncate">
+															{t("labelSoon", "{{label}} (soon)", {
+																label: item.label,
+															})}
+														</span>
 													</div>
 												) : item.locked ? (
 													<button
@@ -955,7 +993,9 @@ export default function Id({
 										}}
 									>
 										<DownloadIcon className="w-4 h-4 shrink-0" />
-										<span className="truncate">{t('exportApp', 'Export App')}</span>
+										<span className="truncate">
+											{t("exportApp", "Export App")}
+										</span>
 									</Button>
 								)}
 							</nav>
@@ -983,7 +1023,9 @@ export default function Id({
 				<Dialog open={exportOpen} onOpenChange={setExportOpen}>
 					<DialogContent className="sm:max-w-[520px]">
 						<DialogHeader>
-							<DialogTitle>{t('exportApplication', 'Export Application')}</DialogTitle>
+							<DialogTitle>
+								{t("exportApplication", "Export Application")}
+							</DialogTitle>
 							<DialogDescription>
 								{`Choose how you want to export your app.`}
 							</DialogDescription>
@@ -1009,7 +1051,9 @@ export default function Id({
 									</div>
 								</div>
 								<div className="flex items-center gap-2">
-									<span className="text-xs text-muted-foreground">{t('encrypt', 'Encrypt')}</span>
+									<span className="text-xs text-muted-foreground">
+										{t("encrypt", "Encrypt")}
+									</span>
 									<Switch checked={encrypt} onCheckedChange={setEncrypt} />
 								</div>
 							</div>
@@ -1018,7 +1062,7 @@ export default function Id({
 								<div className="space-y-3">
 									<div className="grid gap-2">
 										<Label htmlFor="export-password" className="text-xs">
-											{t('password', 'Password')}
+											{t("password", "Password")}
 										</Label>
 										<div className="relative">
 											<Input
@@ -1026,7 +1070,10 @@ export default function Id({
 												type={showPassword ? "text" : "password"}
 												value={password}
 												onChange={(e) => setPassword(e.target.value)}
-												placeholder={t('enterAStrongPassword', 'Enter a strong password')}
+												placeholder={t(
+													"enterAStrongPassword",
+													"Enter a strong password",
+												)}
 												autoFocus
 											/>
 											<Button
@@ -1053,14 +1100,14 @@ export default function Id({
 											htmlFor="export-password-confirm"
 											className="text-xs"
 										>
-											{t('confirmPassword', 'Confirm password')}
+											{t("confirmPassword", "Confirm password")}
 										</Label>
 										<Input
 											id="export-password-confirm"
 											type={showPassword ? "text" : "password"}
 											value={confirmPassword}
 											onChange={(e) => setConfirmPassword(e.target.value)}
-											placeholder={t('reenterPassword', 'Re-enter password')}
+											placeholder={t("reenterPassword", "Re-enter password")}
 										/>
 									</div>
 
@@ -1086,7 +1133,10 @@ export default function Id({
 
 									{!passValid && (
 										<p className="text-xs text-destructive">
-											{t('passwordsMustMatchAndBeAtLeast8Characters', 'Passwords must match and be at least 8 characters.')}
+											{t(
+												"passwordsMustMatchAndBeAtLeast8Characters",
+												"Passwords must match and be at least 8 characters.",
+											)}
 										</p>
 									)}
 								</div>
@@ -1099,7 +1149,7 @@ export default function Id({
 								onClick={() => setExportOpen(false)}
 								disabled={exporting}
 							>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button
 								onClick={handleExport}
@@ -1155,7 +1205,13 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">{t('labelComingSoon', '{{label}} (Coming soon!)', { label: item.label })}</p>
+																	<p className="font-bold">
+																		{t(
+																			"labelComingSoon",
+																			"{{label}} (Coming soon!)",
+																			{ label: item.label },
+																		)}
+																	</p>
 																	<p className="text-xs mt-1">
 																		{item.description}
 																	</p>
@@ -1180,7 +1236,11 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">{t('labelLocked', '{{label}} (locked)', { label: item.label })}</p>
+																	<p className="font-bold">
+																		{t("labelLocked", "{{label}} (locked)", {
+																			label: item.label,
+																		})}
+																	</p>
 																	<p className="text-xs mt-1">
 																		{item.lockedReason ?? item.description}
 																	</p>
@@ -1233,13 +1293,20 @@ export default function Id({
 														onClick={() => setExportOpen(true)}
 													>
 														<DownloadIcon className="w-4 h-4 shrink-0" />
-														<span className="truncate">{t('exportApp', 'Export App')}</span>
+														<span className="truncate">
+															{t("exportApp", "Export App")}
+														</span>
 													</Button>
 												</TooltipTrigger>
 												<TooltipContent side="right" className="max-w-xs">
-													<p className="font-bold">{t('exportApplication', 'Export Application')}</p>
+													<p className="font-bold">
+														{t("exportApplication", "Export Application")}
+													</p>
 													<p className="text-xs mt-1">
-														{t('exportTheApplicationToAFileForBackupOrSharing', "Export the application to a file for backup or sharing.")}
+														{t(
+															"exportTheApplicationToAFileForBackupOrSharing",
+															"Export the application to a file for backup or sharing.",
+														)}
 													</p>
 												</TooltipContent>
 											</Tooltip>
@@ -1251,7 +1318,9 @@ export default function Id({
 									<div className="px-3">
 										<div className="flex items-center gap-2 mb-3">
 											<ZapIcon className="w-4 h-4 text-primary" />
-											<h4 className="text-sm font-medium">{t('quickActions', 'Quick Actions')}</h4>
+											<h4 className="text-sm font-medium">
+												{t("quickActions", "Quick Actions")}
+											</h4>
 										</div>
 										<div className="flex flex-col gap-2 pb-4">
 											{events.data &&
@@ -1299,7 +1368,10 @@ export default function Id({
 													))
 											) : (
 												<p className="text-xs text-muted-foreground py-2">
-													{t('noQuickActionsAvailable', 'No quick actions available')}
+													{t(
+														"noQuickActionsAvailable",
+														"No quick actions available",
+													)}
 												</p>
 											)}
 										</div>
@@ -1347,44 +1419,35 @@ export default function Id({
 										/>
 									</div>
 								)}
-							{currentRoute?.includes("/storage") ||
-							currentRoute?.includes("/explore") ? (
-								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 overflow-hidden p-0 md:p-6 md:pt-4 md:pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
+							<div
+								className={
+									contentFillsHeight
+										? "h-full flex flex-col"
+										: "h-full overflow-y-auto"
+								}
+							>
+								<div
+									className={
+										contentFillsHeight
+											? "flex-1 min-h-0 overflow-hidden p-0 md:p-6 md:pt-4 md:pr-16"
+											: "p-0 md:p-6 md:pt-4 md:pr-16"
+									}
+								>
+									<Suspense
+										fallback={
+											<div className="space-y-4">
+												<Skeleton className="h-8 w-full" />
+												<Skeleton className="h-32 w-full" />
+												<Skeleton className="h-24 w-full" />
 											</div>
-										</Suspense>
-									</div>
+										}
+									>
+										<div key={id ?? "missing-app"} className="contents">
+											{children}
+										</div>
+									</Suspense>
 								</div>
-							) : (
-								<div className="h-full overflow-y-auto">
-									<div className="p-0 md:p-6 md:pt-4 md:pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
-											</div>
-										</Suspense>
-									</div>
-								</div>
-							)}
+							</div>
 						</CardContent>
 					</Card>
 				</div>

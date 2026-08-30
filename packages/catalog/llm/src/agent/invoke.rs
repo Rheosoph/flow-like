@@ -16,7 +16,9 @@ use flow_like_model_provider::{
     history::History,
     response::{LLMUsageStats, Response},
 };
-use flow_like_types::{async_trait, json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json;
 #[cfg(feature = "execute")]
 use std::collections::HashMap;
 
@@ -39,6 +41,8 @@ impl NodeLogic for InvokeAgentNode {
             "Executes an Agent with history and returns the complete response",
             "AI/Agents",
         );
+        node.set_flowscript_name("agent", "invoke");
+        node.set_receiver("agent");
         node.set_version(4);
         node.add_icon("/flow/icons/bot-invoke.svg");
 

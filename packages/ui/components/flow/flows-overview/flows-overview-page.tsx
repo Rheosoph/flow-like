@@ -71,7 +71,7 @@ function DimensionControl({
 						: "text-muted-foreground hover:text-foreground",
 				)}
 			>
-				{t('weakestFirst', 'Weakest first')}
+				{t("weakestFirst", "Weakest first")}
 			</button>
 			{SCORE_CATEGORIES.map((category) => {
 				const minimum = appWideMinimum(rows, category);
@@ -83,7 +83,9 @@ function DimensionControl({
 						type="button"
 						aria-pressed={active}
 						onClick={() => onSort(active ? null : category)}
-						title={t('sortEveryBandByVal', 'Sort every band by {{val}}', { val: categoryLabel })}
+						title={t("sortEveryBandByVal", "Sort every band by {{val}}", {
+							val: categoryLabel,
+						})}
 						className={cn(
 							"inline-flex h-7 shrink-0 items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors",
 							active
@@ -121,16 +123,16 @@ function BandSection({
 	const { t } = useTranslation("flow");
 	if (rows.length === 0) return null;
 	const label = {
-		flagged: t('flagged', 'Flagged'),
-		watch: t('watch', 'Watch'),
-		good: t('good', 'Good'),
-		unscored: t('notScored', 'Not scored'),
+		flagged: t("flagged", "Flagged"),
+		watch: t("watch", "Watch"),
+		good: t("good", "Good"),
+		unscored: t("notScored", "Not scored"),
 	}[band];
 	const description = {
-		flagged: t('weakestDimensionIsUnder4', 'Weakest dimension is under 4'),
-		watch: t('weakestDimensionIs4To6', 'Weakest dimension is 4 to 6'),
-		good: t('everyDimensionIs7OrBetter', 'Every dimension is 7 or better'),
-		unscored: t('noNodeDeclaresAScore', 'No Node declares a score'),
+		flagged: t("weakestDimensionIsUnder4", "Weakest dimension is under 4"),
+		watch: t("weakestDimensionIs4To6", "Weakest dimension is 4 to 6"),
+		good: t("everyDimensionIs7OrBetter", "Every dimension is 7 or better"),
+		unscored: t("noNodeDeclaresAScore", "No Node declares a score"),
 	}[band];
 	return (
 		<section className="flex flex-col gap-2.5">
@@ -295,13 +297,18 @@ export function FlowsOverviewPage({
 			<header className="flex flex-col gap-3">
 				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="min-w-0">
-						<h1 className="text-xl font-semibold tracking-tight">{t('flows', 'Flows')}</h1>
+						<h1 className="text-xl font-semibold tracking-tight">
+							{t("flows", "Flows")}
+						</h1>
 						<p className="mt-0.5 text-xs text-muted-foreground">
-							{t('ratedByThe', 'Rated by the')}{" "}
+							{t("ratedByThe", "Rated by the")}{" "}
 							<span className="font-medium text-foreground">
-								{t('lowestscoringNode', 'lowest-scoring node')}
+								{t("lowestscoringNode", "lowest-scoring node")}
 							</span>{" "}
-							{t('inEachCategoryHigherIsBetter', 'in each category — higher is better.')}
+							{t(
+								"inEachCategoryHigherIsBetter",
+								"in each category — higher is better.",
+							)}
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -310,15 +317,18 @@ export function FlowsOverviewPage({
 							<Input
 								value={query}
 								onChange={(event) => setQuery(event.target.value)}
-								placeholder={t('searchFlowsPagesEvents', 'Search flows, pages, events…')}
-								aria-label={t('searchFlows', 'Search flows')}
+								placeholder={t(
+									"searchFlowsPagesEvents",
+									"Search flows, pages, events…",
+								)}
+								aria-label={t("searchFlows", "Search flows")}
 								className="h-9 border-border/60 bg-muted/40 pl-9 text-sm focus:bg-background"
 							/>
 							{query ? (
 								<button
 									type="button"
 									onClick={() => setQuery("")}
-									aria-label={t('clearSearch', 'Clear search')}
+									aria-label={t("clearSearch", "Clear search")}
 									className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 transition-colors hover:text-foreground"
 								>
 									<XIcon className="size-3.5" />
@@ -342,11 +352,11 @@ export function FlowsOverviewPage({
 						/>
 						{conformity !== undefined ? (
 							<p className="text-[11px] italic text-muted-foreground/70">
-								{t('aiActConformityScalesOn', 'AI Act conformity scales on')}{" "}
+								{t("aiActConformityScalesOn", "AI Act conformity scales on")}{" "}
 								<span className="font-mono not-italic">
-									{t('minsecurityGovernance', 'min(security, governance)')}
+									{t("minsecurityGovernance", "min(security, governance)")}
 								</span>{" "}
-								{t('weakestFlow', '— weakest flow')}{" "}
+								{t("weakestFlow", "— weakest flow")}{" "}
 								<span
 									className={cn(
 										"font-mono not-italic",
@@ -394,7 +404,13 @@ export function FlowsOverviewPage({
 							setBoardCreation={setBoardCreation}
 						/>
 					) : visibleCount === 0 ? (
-						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">{t('noFlowMatchesLdquoqueryrdquo', 'No flow matches “{{query}}”.', { query })}</p>
+						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
+							{t(
+								"noFlowMatchesLdquoqueryrdquo",
+								"No flow matches “{{query}}”.",
+								{ query },
+							)}
+						</p>
 					) : (
 						BAND_ORDER.map((band) => {
 							const bandRows = bands.get(band) ?? [];
@@ -458,15 +474,20 @@ function EmptyFlows({
 		<Card className="items-center justify-center gap-3 border-dashed border-border/60 bg-card/60 py-16">
 			<WorkflowIcon className="size-10 text-muted-foreground/40" />
 			<div className="text-center">
-				<p className="text-base font-semibold">{t('noFlowsYet', 'No flows yet')}</p>
+				<p className="text-base font-semibold">
+					{t("noFlowsYet", "No flows yet")}
+				</p>
 				<p className="mt-1 max-w-md text-sm text-muted-foreground">
-					{t('aFlowHoldsTheNodesThatDoTheWorkPlusAnyPagesBuiltOnTopOfItEventsBoundOnTheEventsPageDecideWhatStartsIt', "A flow holds the nodes that do the work, plus any pages built on top of it. Events bound on the Events page decide what starts it.")}
+					{t(
+						"aFlowHoldsTheNodesThatDoTheWorkPlusAnyPagesBuiltOnTopOfItEventsBoundOnTheEventsPageDecideWhatStartsIt",
+						"A flow holds the nodes that do the work, plus any pages built on top of it. Events bound on the Events page decide what starts it.",
+					)}
 				</p>
 			</div>
 			<Button
 				onClick={() => setBoardCreation({ ...boardCreation, open: true })}
 			>
-				{t('createYourFirstFlow', 'Create your first flow')}
+				{t("createYourFirstFlow", "Create your first flow")}
 			</Button>
 		</Card>
 	);

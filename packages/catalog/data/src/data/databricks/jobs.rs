@@ -123,6 +123,7 @@ impl NodeLogic for ListDatabricksJobsNode {
             "List all jobs in the Databricks workspace",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "listJobs");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -315,6 +316,7 @@ impl NodeLogic for RunDatabricksJobNode {
             "Trigger a job run immediately",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "runJob");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -341,7 +343,8 @@ impl NodeLogic for RunDatabricksJobNode {
             "Optional: JSON object with job parameters",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",
@@ -488,6 +491,7 @@ impl NodeLogic for GetDatabricksJobRunNode {
             "Get the status of a job run",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "getJobRun");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -669,6 +673,7 @@ impl NodeLogic for CancelDatabricksJobRunNode {
             "Cancel a running job",
             "Data/Databricks",
         );
+        node.set_flowscript_name("databricks", "cancelJobRun");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

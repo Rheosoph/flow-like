@@ -1,6 +1,6 @@
-use crate::data::datafusion::params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::path::FlowPath;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -8,10 +8,15 @@ use flow_like::flow::{
     pin::ValueType,
     variable::VariableType,
 };
-use flow_like_types::{Value as JsonValue, async_trait, json::json, reqwest::Url};
+#[cfg(feature = "iceberg")]
+use flow_like_types::Value as JsonValue;
+#[cfg(any(feature = "execute", feature = "delta", feature = "iceberg"))]
+use flow_like_types::reqwest::Url;
+use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(feature = "execute", feature = "delta", feature = "iceberg", test))]
 fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
 }
@@ -62,6 +67,24 @@ pub struct DeltaHistoryEntry {
 // ============================================================================
 
 /// Register a Delta Lake table in DataFusion using FlowPath
+/// A snapshot entry of an Iceberg table, as written to the `snapshots` pin.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct IcebergSnapshot {
+    pub snapshot_id: i64,
+    /// When the snapshot was committed, in milliseconds since the epoch.
+    pub timestamp_ms: i64,
+    /// The snapshot this one was built on, absent for the first.
+    pub parent_snapshot_id: Option<i64>,
+}
+
+/// The partitioning an Iceberg table is currently written with.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct IcebergPartitionSpec {
+    pub spec_id: i32,
+    /// How many columns take part in the partitioning.
+    pub fields_count: usize,
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct RegisterDeltaTableNode {}
@@ -81,6 +104,8 @@ impl NodeLogic for RegisterDeltaTableNode {
             "Register a Delta Lake table in DataFusion using a FlowPath. Requires the 'delta' feature.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerDelta");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -203,6 +228,7 @@ impl NodeLogic for RegisterDeltaTableNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -230,6 +256,8 @@ impl NodeLogic for DeltaTimeTravelNode {
             "Load a specific version or timestamp of a Delta table for point-in-time queries.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "deltaTimeTravel");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(
@@ -381,6 +409,7 @@ impl NodeLogic for DeltaTimeTravelNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -408,6 +437,7 @@ impl NodeLogic for DeltaTableInfoNode {
             "Get metadata and history information about a Delta table.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "deltaInfo");
         node.add_icon("/flow/icons/info.svg");
         node.set_version(1);
 
@@ -554,6 +584,7 @@ impl NodeLogic for DeltaTableInfoNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -585,6 +616,8 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
             "Register Hive-partitioned Parquet files as a table in DataFusion using a FlowPath.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerHiveParquet");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -644,6 +677,7 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::parquet::ParquetFormat;
         use flow_like_storage::datafusion::datasource::listing::{
@@ -687,6 +721,13 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 /// Register partitioned JSON files as a table using FlowPath
@@ -709,6 +750,8 @@ impl NodeLogic for RegisterPartitionedJsonNode {
             "Register partitioned JSON/NDJSON files as a table in DataFusion using a FlowPath.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerPartitionedJson");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -776,6 +819,7 @@ impl NodeLogic for RegisterPartitionedJsonNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::datafusion::datasource::file_format::json::JsonFormat;
         use flow_like_storage::datafusion::datasource::listing::{
@@ -822,6 +866,13 @@ impl NodeLogic for RegisterPartitionedJsonNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -848,6 +899,8 @@ impl NodeLogic for WriteDeltaTableNode {
             "Write query results to a new or existing Delta Lake table using FlowPath. Supports append, overwrite modes.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "writeDelta");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -872,7 +925,7 @@ impl NodeLogic for WriteDeltaTableNode {
             VariableType::String,
         );
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_input_pin(
             "path",
@@ -941,7 +994,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -954,7 +1007,8 @@ impl NodeLogic for WriteDeltaTableNode {
 
             let session: DataFusionSession = context.evaluate_pin("session").await?;
             let query: String = context.evaluate_pin("query").await?;
-            let query_params = params::resolve_params(context, &query).await?;
+            let query_params =
+                params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
             let path: FlowPath = context.evaluate_pin("path").await?;
             let mode: String = context
                 .evaluate_pin("mode")
@@ -1040,6 +1094,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
         #[cfg(not(feature = "delta"))]
         {
+            let _ = context;
             Err(flow_like_types::anyhow!(
                 "Delta Lake support not enabled. Rebuild with the 'delta' feature flag."
             ))
@@ -1071,6 +1126,8 @@ impl NodeLogic for RegisterIcebergTableNode {
             "Register an Apache Iceberg table in DataFusion from a metadata file. Supports schema evolution and partition pruning.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "registerIceberg");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -1236,6 +1293,7 @@ impl NodeLogic for IcebergTableInfoNode {
             "Get metadata, snapshots, and history of an Apache Iceberg table from a metadata file.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "icebergInfo");
         node.add_icon("/flow/icons/info.svg");
 
         node.add_input_pin(
@@ -1275,25 +1333,29 @@ impl NodeLogic for IcebergTableInfoNode {
             "Schema",
             "Table schema as JSON",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "snapshots",
             "Snapshots",
             "List of all snapshots",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::datafusion::data_lakes::IcebergSnapshot>();
         node.add_output_pin(
             "partition_spec",
             "Partition Spec",
             "Current partition specification",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<crate::data::datafusion::data_lakes::IcebergPartitionSpec>();
         node.add_output_pin(
             "properties",
             "Properties",
             "Table properties",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.scores = Some(NodeScores {
             privacy: 9,
@@ -1408,6 +1470,8 @@ impl NodeLogic for IcebergTimeTravelNode {
             "Load a specific snapshot of an Iceberg table for point-in-time queries.",
             "Data/DataFusion/Lakes",
         );
+        node.set_flowscript_name("df", "icebergTimeTravel");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/clock.svg");
 
         node.add_input_pin(

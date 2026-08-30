@@ -71,6 +71,10 @@
 				},
 				"is_locked": {
 					"type": ["boolean", "null"]
+				},
+				"node_id": {
+					"description": "Soft reference to a board node this comment is attached to (e.g. the statement a FlowScript thread anchors on).\nPresentation metadata only \u2014 dangling references are legal; a missing node means unanchored.",
+					"type": ["string", "null"]
 				}
 			},
 			"required": ["id", "content", "comment_type", "timestamp", "coordinates"]

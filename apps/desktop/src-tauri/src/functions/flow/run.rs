@@ -1,6 +1,10 @@
+#![allow(clippy::too_many_arguments)]
+
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
+use flow_like::flow::compiled::TemplateCache;
 use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
@@ -9,14 +13,15 @@ use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like::flow_like_storage::{Path, serde_arrow};
 use flow_like::hub::Hub;
-use flow_like::state::RunData;
+use flow_like::state::{FlowLikeState, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{json, tokio};
 use futures::TryStreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -25,6 +30,23 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
+
+/// Desktop-wide template cache. Runs skip proto decode + `node_updates`
+/// entirely when the local compiled artifact (or this cache) is warm; the
+/// registry fingerprint inside the cache key covers catalog / installed-node
+/// changes.
+static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
+
+pub(crate) async fn resolve_run_template(
+    state: &Arc<flow_like::state::FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Result<Arc<flow_like::flow::compiled::CompiledRunTemplate>> {
+    TEMPLATE_CACHE
+        .resolve(state, app_id, board_id, version, "")
+        .await
+}
 
 #[derive(Serialize)]
 struct ReportRunRequest {
@@ -196,7 +218,118 @@ fn daemon_sub_from_credentials(credentials: &SharedCredentials, app_id: &str) ->
     }
 }
 
+/// A run that dies in setup never reaches the flush that would have recorded
+/// it, so the attempt disappears from the board's history entirely. Record it
+/// the way a finished run is recorded, with the failure as its only log line.
+async fn record_setup_rejection(
+    flow_like_state: &Arc<FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+    event_id: Option<&str>,
+    node_id: &str,
+    version: Option<(u32, u32, u32)>,
+    payload: Option<&flow_like_types::Value>,
+    reason: String,
+) {
+    let mut rejection = RejectedRun::new(app_id, board_id, RejectionStage::Setup, reason)
+        .with_node(node_id)
+        .with_board_version(version)
+        .with_payload(payload);
+
+    // An event-triggered run learns its board and start node from the event, so
+    // recover them the same way here instead of recording against the caller's
+    // (often empty) board id.
+    if let Some(event_id) = event_id {
+        let execution_state = Arc::new(flow_like_state.for_execution_run());
+        match App::load(app_id.to_string(), execution_state).await {
+            Ok(app) => match app.get_event(event_id, None).await {
+                Ok(event) => rejection = rejection.with_event_definition(&event),
+                Err(_) => rejection = rejection.with_event(event_id, None),
+            },
+            Err(_) => rejection = rejection.with_event(event_id, None),
+        }
+    }
+
+    if rejection.board_id.is_empty() {
+        tracing::warn!(
+            app_id = %app_id,
+            event_id = event_id.unwrap_or(""),
+            "Run failed before its board could be identified; nothing to record"
+        );
+        return;
+    }
+
+    if let Err(error) = flow_like_state.record_rejected_run(&rejection).await {
+        tracing::warn!(
+            app_id = %app_id,
+            board_id = %rejection.board_id,
+            error = %error,
+            "Failed to record a run that never started"
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_internal(
+    app_handle: AppHandle,
+    app_id: String,
+    board_id: String,
+    payload: RunPayload,
+    requested_version: Option<(u32, u32, u32)>,
+    events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
+    event_id: Option<String>,
+    stream_state: bool,
+    credentials: Option<SharedCredentials>,
+    token: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    overrides: ExecutionOverrides,
+) -> Result<Option<LogMeta>, TauriFunctionError> {
+    let started = Arc::new(AtomicBool::new(false));
+    let app_handle_for_rejection = app_handle.clone();
+    let recorded_payload = payload.payload.clone();
+    let recorded_board_id = board_id.clone();
+    let recorded_event_id = event_id.clone();
+    let recorded_node_id = payload.id.clone();
+
+    let result = execute_prepared(
+        app_handle,
+        app_id.clone(),
+        board_id,
+        payload,
+        requested_version,
+        events,
+        event_id,
+        stream_state,
+        credentials,
+        token,
+        oauth_tokens,
+        overrides,
+        started.clone(),
+    )
+    .await;
+
+    if let Err(error) = &result
+        && !started.load(Ordering::Relaxed)
+        && let Ok(state) = TauriFlowLikeState::construct(&app_handle_for_rejection).await
+    {
+        record_setup_rejection(
+            &state,
+            &app_id,
+            &recorded_board_id,
+            recorded_event_id.as_deref(),
+            &recorded_node_id,
+            requested_version,
+            recorded_payload.as_ref(),
+            error.to_string(),
+        )
+        .await;
+    }
+
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_prepared(
     app_handle: AppHandle,
     app_id: String,
     mut board_id: String,
@@ -209,6 +342,7 @@ async fn execute_internal(
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     overrides: ExecutionOverrides,
+    started: Arc<AtomicBool>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
@@ -229,11 +363,11 @@ async fn execute_internal(
         event = Some(intermediate_event);
     }
 
-    let Ok(board) = app.open_board(board_id.clone(), None, version).await else {
-        return Err(TauriFunctionError::new("Board not found"));
-    };
-
-    let board = Arc::new(board.lock().await.clone());
+    let template = resolve_run_template(&flow_like_state, &app_id, &board_id, version)
+        .await
+        .map_err(|e| {
+            TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
+        })?;
 
     let profile = TauriSettingsState::current_profile(&app_handle).await?;
 
@@ -282,9 +416,11 @@ async fn execute_internal(
         .map(|e| (Some(e.name.clone()), Some(e.event_type.clone())))
         .unwrap_or((None, None));
 
-    let mut internal_run = InternalRun::new(
+    let identity_token = token.clone();
+
+    let mut internal_run = InternalRun::from_template(
         &app_id,
-        board,
+        template,
         event,
         &flow_like_state,
         &profile.hub_profile,
@@ -294,6 +430,8 @@ async fn execute_internal(
         credentials,
         token,
         oauth_tokens.unwrap_or_default().into_iter().collect(),
+        None,
+        None,
     )
     .await?;
 
@@ -306,9 +444,17 @@ async fn execute_internal(
     }
     internal_run.set_execution_environment(local_execution_environment());
 
-    // Desktop runs are always admin/owner, but keep the signed-in subject so
-    // nodes and surfaces see the real user instead of the local placeholder.
-    internal_run.set_local_user_context().await;
+    // Offline apps are owner-equivalent; hosted apps must run under the role
+    // the hub grants, so the same board gates identically here and in the cloud.
+    crate::execution_identity::apply_local_run_identity(
+        &mut internal_run,
+        &app.visibility,
+        &app_id,
+        identity_token.as_deref(),
+        &profile.hub_profile.hub,
+        &flow_like_state,
+    )
+    .await;
 
     if overrides.log_flush_interval.is_some() || overrides.log_batch_size.is_some() {
         internal_run
@@ -356,6 +502,7 @@ async fn execute_internal(
     );
 
     shared_flow_like_state.register_run(&run_id, run_data);
+    started.store(true, Ordering::Relaxed);
 
     let run_arc = internal_run.run.clone();
 

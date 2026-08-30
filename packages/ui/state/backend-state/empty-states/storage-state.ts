@@ -1,7 +1,9 @@
 import type {
+	BulkUploadProgressCallback,
 	IStorageItem,
 	IStorageItemActionResult,
 	IStorageState,
+	IStorageUploadOptions,
 } from "@flow-like/flow-like-ui";
 
 export class EmptyStorageState implements IStorageState {
@@ -33,7 +35,8 @@ export class EmptyStorageState implements IStorageState {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
@@ -41,7 +44,8 @@ export class EmptyStorageState implements IStorageState {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void> {
 		throw new Error("Method not implemented.");
 	}

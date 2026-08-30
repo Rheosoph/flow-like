@@ -14,9 +14,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics::init_telemetry()?;
 
     let config = config::Config::from_env()?;
-    // A no-op under `server-execute` (no ONNX runtime is linked); called so
-    // this entrypoint does not drift from the queue worker's execution path.
-    flow_like_catalog::initialize();
+    // Keep startup aligned with the queue worker. The remote-only `server`
+    // bundle reports that no local inference runtime is configured.
+    let _ = flow_like_catalog::initialize();
 
     tracing::info!(
         port = config.port,

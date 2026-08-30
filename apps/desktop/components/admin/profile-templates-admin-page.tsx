@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -23,6 +22,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
 	Pencil,
@@ -103,7 +103,9 @@ export function ProfileTemplatesAdminPage({
 			}
 
 			const confirmed = window.confirm(
-				t('deleteProfileTemplateVal', 'Delete profile template "{{val}}"?', { val: template.name || template.id }),
+				t("deleteProfileTemplateVal", 'Delete profile template "{{val}}"?', {
+					val: template.name || template.id,
+				}),
 			);
 			if (!confirmed) return;
 
@@ -117,7 +119,9 @@ export function ProfileTemplatesAdminPage({
 				queryClient.invalidateQueries({ queryKey: ["info", "profiles"] });
 			} catch (error) {
 				const message =
-					error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+					error instanceof Error
+						? error.message
+						: t("unknownError", "Unknown error");
 				toast.error(`Failed to delete template: ${message}`);
 			} finally {
 				setDeletingId(null);
@@ -132,15 +136,20 @@ export function ProfileTemplatesAdminPage({
 				<div className="mx-auto max-w-6xl space-y-6">
 					<div className="flex items-center justify-between gap-4">
 						<div>
-							<h1 className="text-3xl font-bold">{t('profileTemplates', 'Profile Templates')}</h1>
+							<h1 className="text-3xl font-bold">
+								{t("profileTemplates", "Profile Templates")}
+							</h1>
 							<p className="text-muted-foreground">
-								{t('browseAndManageReusableProfileTemplatesForTheDesktopApp', "Browse and manage reusable profile templates for the desktop app.")}
+								{t(
+									"browseAndManageReusableProfileTemplatesForTheDesktopApp",
+									"Browse and manage reusable profile templates for the desktop app.",
+								)}
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
 							<Button variant="outline" size="sm" onClick={handleRefresh}>
 								<RefreshCw className="mr-2 h-4 w-4" />
-								{t('refresh', 'Refresh')}
+								{t("refresh", "Refresh")}
 							</Button>
 							{manageMode && (
 								<Button
@@ -148,7 +157,7 @@ export function ProfileTemplatesAdminPage({
 									onClick={() => router.push("/admin/profiles/add")}
 								>
 									<Plus className="mr-2 h-4 w-4" />
-									{t('newTemplate', 'New Template')}
+									{t("newTemplate", "New Template")}
 								</Button>
 							)}
 						</div>
@@ -156,9 +165,12 @@ export function ProfileTemplatesAdminPage({
 
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('templates', 'Templates')}</CardTitle>
+							<CardTitle>{t("templates", "Templates")}</CardTitle>
 							<CardDescription>
-								{t('searchByTemplateNameIdHubTagOrInterest', 'Search by template name, id, hub, tag, or interest.')}
+								{t(
+									"searchByTemplateNameIdHubTagOrInterest",
+									"Search by template name, id, hub, tag, or interest.",
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="space-y-4">
@@ -166,7 +178,10 @@ export function ProfileTemplatesAdminPage({
 								<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 								<Input
 									className="pl-10"
-									placeholder={t('searchProfileTemplates', 'Search profile templates...')}
+									placeholder={t(
+										"searchProfileTemplates",
+										"Search profile templates...",
+									)}
 									value={searchTerm}
 									onChange={(event) => setSearchTerm(event.target.value)}
 								/>
@@ -186,12 +201,14 @@ export function ProfileTemplatesAdminPage({
 									<TableHeader>
 										<TableRow>
 											<TableHead>Name</TableHead>
-											<TableHead>{t('templateId', 'Template ID')}</TableHead>
-											<TableHead>{t('bits', 'Bits')}</TableHead>
-											<TableHead>{t('tags', 'Tags')}</TableHead>
-											<TableHead>{t('updated', 'Updated')}</TableHead>
+											<TableHead>{t("templateId", "Template ID")}</TableHead>
+											<TableHead>{t("bits", "Bits")}</TableHead>
+											<TableHead>{t("tags", "Tags")}</TableHead>
+											<TableHead>{t("updated", "Updated")}</TableHead>
 											{manageMode && (
-												<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
+												<TableHead className="text-right">
+													{t("actions", "Actions")}
+												</TableHead>
 											)}
 										</TableRow>
 									</TableHeader>
@@ -203,7 +220,10 @@ export function ProfileTemplatesAdminPage({
 													className="py-10 text-center text-muted-foreground"
 												>
 													<UserRound className="mx-auto mb-3 h-5 w-5" />
-													{t('noProfileTemplatesFound', 'No profile templates found.')}
+													{t(
+														"noProfileTemplatesFound",
+														"No profile templates found.",
+													)}
 												</TableCell>
 											</TableRow>
 										) : (
@@ -258,7 +278,7 @@ export function ProfileTemplatesAdminPage({
 																	}
 																>
 																	<Pencil className="mr-2 h-3 w-3" />
-																	{t('edit', 'Edit')}
+																	{t("edit", "Edit")}
 																</Button>
 																<Button
 																	variant="destructive"
@@ -267,7 +287,7 @@ export function ProfileTemplatesAdminPage({
 																	onClick={() => handleDelete(template)}
 																>
 																	<Trash2 className="mr-2 h-3 w-3" />
-																	{t('delete', 'Delete')}
+																	{t("delete", "Delete")}
 																</Button>
 															</div>
 														</TableCell>

@@ -20,7 +20,9 @@ use flow_like_model_provider::ml::{
         value::{Value, ValueType as OrtValueType},
     },
 };
-use flow_like_types::{Result, anyhow, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::anyhow;
+use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,6 +66,7 @@ pub enum EntityLabel {
 
 impl EntityLabel {
     /// Parse from label string, auto-detecting prefix format
+    #[allow(clippy::should_implement_trait)] // infallible lenient parser; a FromStr impl would need a junk Err type
     pub fn from_str(s: &str) -> Self {
         let s = s.trim();
         if s == "O" || s.is_empty() {
@@ -195,6 +198,10 @@ pub struct TokenPrediction {
     pub end: usize,
 }
 
+/// Entity being accumulated across BIO tokens:
+/// (tokens, entity_type, start_token, start_char, end_char, summed_confidence, token_count)
+type PendingEntity = (Vec<String>, String, usize, usize, usize, f32, usize);
+
 /// Merge BIO-tagged tokens into entities
 pub fn merge_entities(
     tokens: &[String],
@@ -204,8 +211,7 @@ pub fn merge_entities(
     original_text: &str,
 ) -> Vec<NamedEntity> {
     let mut entities = Vec::new();
-    let mut current_entity: Option<(Vec<String>, String, usize, usize, usize, f32, usize)> = None;
-    // (tokens, entity_type, start_token, start_char, end_char, sum_conf, count)
+    let mut current_entity: Option<PendingEntity> = None;
 
     for (i, (token, label)) in tokens.iter().zip(labels.iter()).enumerate() {
         let conf = confidences.get(i).copied().unwrap_or(0.0);
@@ -1126,6 +1132,7 @@ impl NodeLogic for NerNode {
             "Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Text longer than the model's window is split into overlapping chunks rather than truncated, so entities are found throughout a long document. Download tokenizer.json and config.json from the same model repository — config.json carries the id2label mapping that names the entity types and the sequence length the model accepts.",
             "AI/ML/ONNX/NLP",
         );
+        node.set_flowscript_name("onnx", "ner");
         node.set_version(2);
 
         node.add_icon("/flow/icons/type.svg");

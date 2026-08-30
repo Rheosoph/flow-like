@@ -24,6 +24,8 @@ impl NodeLogic for MaxIntegerNode {
             "Returns the larger of two integers",
             "Math/Int",
         );
+        node.set_flowscript_name("int", "max");
+        node.set_receiver("integer1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin(

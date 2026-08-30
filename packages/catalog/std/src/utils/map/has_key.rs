@@ -26,6 +26,8 @@ impl NodeLogic for HasKeyMapNode {
             "Checks if a key exists in the map",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "has");
+        node.set_receiver("map_in");
 
         node.add_icon("/flow/icons/book-key.svg");
 

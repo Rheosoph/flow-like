@@ -14,7 +14,7 @@ use crate::{
             sync_board::{board_sync_tail, seed_board_revision},
         },
         wasm_catalog::{
-            app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+            app_wasm_nodes_cached, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
         },
     },
     state::AppState,
@@ -47,6 +47,7 @@ pub struct ExecuteCommandsBody {
 /// `Commands` when the request carried no `sync`, `WithSync` when it did. `sync: null` inside
 /// `WithSync` means the tail could not be built (never an error — the write is committed) and the
 /// client should sync separately.
+#[allow(clippy::large_enum_variant)] // untagged response body, built once per request and moved straight into Json(..)
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ExecuteCommandsResponse {
@@ -252,9 +253,15 @@ pub async fn execute_commands(
     let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
     let idempotency_key = command_idempotency_key(&headers, &sub, &app_id, &board_id)?;
     let receipt_ack_key = command_receipt_ack_key(&headers, &sub, &app_id, &board_id)?;
-    if idempotency_key.is_some() && receipt_ack_key.is_some() {
+    // Folding an acknowledgement into a mutation is only meaningful for a *previous* batch.
+    // Acknowledging the key this very request submits under would release the receipt that guards
+    // it, letting a retry apply the same commands twice.
+    if let (Some(mutation), Some(acknowledgement)) =
+        (idempotency_key.as_ref(), receipt_ack_key.as_ref())
+        && mutation.ref_key == acknowledgement.ref_key
+    {
         return Err(ApiError::bad_request(
-            "Idempotency-Key and FlowLike-Idempotency-Ack cannot be sent together.",
+            "FlowLike-Idempotency-Ack must reference a previous batch, not this request's Idempotency-Key.",
         ));
     }
     let digest = idempotency_key
@@ -277,21 +284,34 @@ pub async fn execute_commands(
         .as_ref()
         .and_then(|key| board.internal_ref(&key.ref_key).map(ToString::to_string));
     let pruned_receipts = prune_command_receipts(&mut board, now_ms, COMMAND_RECEIPT_MAX_ENTRIES)?;
-    if let Some(receipt_ack_key) = receipt_ack_key {
+    // A delivery may acknowledge the previous batch while submitting the next one. Releasing the
+    // receipt here lets it ride along with this mutation's single board write instead of costing a
+    // second request with its own permission check, mutation lock, board load and full-board PUT.
+    // A request that fails before saving keeps the receipt, so the release stays fail-closed.
+    let released_receipt = match receipt_ack_key.as_ref() {
+        Some(key) => board.remove_internal_ref(&key.ref_key).is_some(),
+        None => false,
+    };
+
+    if receipt_ack_key.is_some() && idempotency_key.is_none() {
         if !params.commands.is_empty() {
             return Err(ApiError::bad_request(
                 "A receipt ACK request must contain an empty command list.",
             ));
         }
-        let removed = board
-            .remove_internal_ref(&receipt_ack_key.ref_key)
-            .is_some();
-        if removed || pruned_receipts {
-            board.save(None).await?;
+        let mut cached = None;
+        if released_receipt || pruned_receipts {
+            let put = board.save(None).await?;
+            // Re-pin the cache to what this request just wrote. Without it the next mutation's
+            // `If-None-Match` misses and pays a full board load and normalisation sweep for an
+            // object this instance is already holding.
+            cached = state.seed_board_cache(&app_id, &board_id, board, &put);
         }
         drop(mutation_guard);
         let sync = match &sync_request {
-            Some(request) => Some(board_sync_tail(&state, &app_id, &board_id, None, request).await),
+            Some(request) => {
+                Some(board_sync_tail(&state, &app_id, &board_id, cached, request).await)
+            }
             None => None,
         };
         return Ok(Json(ExecuteCommandsResponse::new(Vec::new(), sync)));
@@ -305,7 +325,7 @@ pub async fn execute_commands(
             && let Ok(receipt) = serde_json::from_str::<DurableCommandReceipt>(encoded)
             && receipt.version == 1
         {
-            if pruned_receipts {
+            if pruned_receipts || released_receipt {
                 board.save(None).await?;
             }
             if receipt.request_digest != *digest {
@@ -335,7 +355,7 @@ pub async fn execute_commands(
                     ))
                 })?;
         }
-        if pruned_receipts {
+        if pruned_receipts || released_receipt {
             board.save(None).await?;
         }
         return Err(ApiError::conflict(
@@ -359,12 +379,12 @@ pub async fn execute_commands(
             Arc::new(flow_state)
         }
     };
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
-    let builtin_nodes = state.registry.as_ref().get_nodes();
-    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
+    let builtin_nodes = state.registry.as_ref().get_nodes_shared();
+    if hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes) {
         board.mark_changed();
     }
-    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm.nodes, &builtin_nodes)?;
 
     // A rejected batch is a property of the payload, not a server fault: the client will resubmit
     // the identical bytes forever. Falling through the generic `Error` conversion would answer 500
@@ -412,16 +432,25 @@ pub async fn execute_commands(
     // The write is committed; everything below is read-only bookkeeping, so concurrent writers
     // may proceed while the snapshot and the sync tail are built.
     drop(mutation_guard);
-    let cached = seed_board_revision(&state, &app_id, &board_id, board, &put)
-        .instrument(tracing::debug_span!("execute_commands.snapshot"))
-        .await;
+    // Pinning the cache to this write is what makes the next request's `If-None-Match` a memory
+    // hit. Building the sync snapshot on top of it only pays off when a tail is actually requested:
+    // the desktop drain never sends a manifest, and a Lambda freezes at the response, so there is no
+    // window in which an unrequested snapshot could be built off the critical path anyway.
     let sync = match &sync_request {
-        Some(request) => Some(
-            board_sync_tail(&state, &app_id, &board_id, cached, request)
-                .instrument(tracing::debug_span!("execute_commands.sync_tail"))
-                .await,
-        ),
-        None => None,
+        Some(request) => {
+            let cached = seed_board_revision(&state, &app_id, &board_id, board, &put)
+                .instrument(tracing::debug_span!("execute_commands.snapshot"))
+                .await;
+            Some(
+                board_sync_tail(&state, &app_id, &board_id, cached, request)
+                    .instrument(tracing::debug_span!("execute_commands.sync_tail"))
+                    .await,
+            )
+        }
+        None => {
+            state.seed_board_cache(&app_id, &board_id, board, &put);
+            None
+        }
     };
 
     Ok(Json(ExecuteCommandsResponse::new(

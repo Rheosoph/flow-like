@@ -26,6 +26,8 @@ impl NodeLogic for PopArrayNode {
             "Removes and returns the last element of an array",
             "Utils/Array",
         );
+        node.set_flowscript_name("array", "pop");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

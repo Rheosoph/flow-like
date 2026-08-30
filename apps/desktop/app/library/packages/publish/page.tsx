@@ -1,14 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
-import {
-	MemoryTier,
-	type PackageManifest,
-	TimeoutTier,
-	useBackend,
-	useInvoke,
-	useMutation,
-} from "@flow-like/flow-like-ui";
 import {
 	Badge,
 	Button,
@@ -20,6 +11,8 @@ import {
 	Checkbox,
 	Input,
 	Label,
+	MemoryTier,
+	type PackageManifest,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -27,7 +20,12 @@ import {
 	SelectValue,
 	Separator,
 	Textarea,
-} from "@flow-like/flow-like-ui/components";
+	TimeoutTier,
+	useBackend,
+	useInvoke,
+	useMutation,
+} from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import {
@@ -270,7 +268,10 @@ export default function PublishPackagePage() {
 		}) => {
 			toast.success(
 				response.message ??
-					t('packageSubmittedForReviewItWillBeAvailableAfterAdminApproval', 'Package submitted for review! It will be available after admin approval.'),
+					t(
+						"packageSubmittedForReviewItWillBeAvailableAfterAdminApproval",
+						"Package submitted for review! It will be available after admin approval.",
+					),
 			);
 			router.push("/library/packages");
 		},
@@ -330,9 +331,14 @@ export default function PublishPackagePage() {
 			<main className="flex-col flex flex-grow max-h-full p-6 overflow-auto items-center justify-center">
 				<Card className="max-w-md">
 					<CardHeader>
-						<CardTitle>{t('authenticationRequired', 'Authentication Required')}</CardTitle>
+						<CardTitle>
+							{t("authenticationRequired", "Authentication Required")}
+						</CardTitle>
 						<CardDescription>
-							{t('pleaseSignInToPublishPackagesToTheRegistry', 'Please sign in to publish packages to the registry.')}
+							{t(
+								"pleaseSignInToPublishPackagesToTheRegistry",
+								"Please sign in to publish packages to the registry.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -350,21 +356,28 @@ export default function PublishPackagePage() {
 				<div className="space-y-2">
 					<h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
 						<Upload className="h-8 w-8" />
-						{t('publishPackage', 'Publish Package')}
+						{t("publishPackage", "Publish Package")}
 					</h1>
 					<p className="text-muted-foreground">
-						{t('shareYourWasmNodePackageWithTheCommunity', 'Share your WASM node package with the community')}
+						{t(
+							"shareYourWasmNodePackageWithTheCommunity",
+							"Share your WASM node package with the community",
+						)}
 					</p>
 				</div>
 
 				{/* Step Indicator */}
 				<div className="flex items-center justify-between">
-					<StepIndicator step="upload" currentStep={step} label={t('uploadWasm', 'Upload WASM')} />
+					<StepIndicator
+						step="upload"
+						currentStep={step}
+						label={t("uploadWasm", "Upload WASM")}
+					/>
 					<ChevronRight className="h-4 w-4 text-muted-foreground" />
 					<StepIndicator
 						step="manifest"
 						currentStep={step}
-						label={t('packageInfo', 'Package Info')}
+						label={t("packageInfo", "Package Info")}
 					/>
 					<ChevronRight className="h-4 w-4 text-muted-foreground" />
 					<StepIndicator
@@ -381,9 +394,14 @@ export default function PublishPackagePage() {
 					{step === "upload" && (
 						<>
 							<CardHeader>
-								<CardTitle className="text-lg">{t('uploadWasmFile', 'Upload WASM File')}</CardTitle>
+								<CardTitle className="text-lg">
+									{t("uploadWasmFile", "Upload WASM File")}
+								</CardTitle>
 								<CardDescription>
-									{t('selectTheCompiledWasmFileForYourNodePackage', 'Select the compiled WASM file for your node package')}
+									{t(
+										"selectTheCompiledWasmFileForYourNodePackage",
+										"Select the compiled WASM file for your node package",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4">
@@ -401,15 +419,23 @@ export default function PublishPackagePage() {
 												{(wasmFile.data.length / 1024).toFixed(2)} KB
 											</p>
 											<Button variant="outline" size="sm">
-												{t('chooseDifferentFile', 'Choose Different File')}
+												{t("chooseDifferentFile", "Choose Different File")}
 											</Button>
 										</div>
 									) : (
 										<div className="space-y-2">
 											<Upload className="mx-auto h-12 w-12 text-muted-foreground" />
-											<p className="font-medium">{t('clickToSelectWasmFile', 'Click to select WASM file')}</p>
+											<p className="font-medium">
+												{t(
+													"clickToSelectWasmFile",
+													"Click to select WASM file",
+												)}
+											</p>
 											<p className="text-sm text-muted-foreground">
-												{t('onlyWasmFilesAreAccepted', 'Only .wasm files are accepted')}
+												{t(
+													"onlyWasmFilesAreAccepted",
+													"Only .wasm files are accepted",
+												)}
 											</p>
 										</div>
 									)}
@@ -421,15 +447,20 @@ export default function PublishPackagePage() {
 					{step === "manifest" && (
 						<>
 							<CardHeader>
-								<CardTitle className="text-lg">{t('packageInformation', 'Package Information')}</CardTitle>
+								<CardTitle className="text-lg">
+									{t("packageInformation", "Package Information")}
+								</CardTitle>
 								<CardDescription>
-									{t('provideDetailsAboutYourPackage', 'Provide details about your package')}
+									{t(
+										"provideDetailsAboutYourPackage",
+										"Provide details about your package",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4">
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label htmlFor="id">{t('packageId', 'Package ID *')}</Label>
+										<Label htmlFor="id">{t("packageId", "Package ID *")}</Label>
 										<Input
 											id="id"
 											placeholder="com.example.my-package"
@@ -438,7 +469,9 @@ export default function PublishPackagePage() {
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label htmlFor="version">{t('version2', 'Version *')}</Label>
+										<Label htmlFor="version">
+											{t("version2", "Version *")}
+										</Label>
 										<Input
 											id="version"
 											placeholder="1.0.0"
@@ -448,19 +481,26 @@ export default function PublishPackagePage() {
 									</div>
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="name">{t('displayName3', 'Display Name *')}</Label>
+									<Label htmlFor="name">
+										{t("displayName3", "Display Name *")}
+									</Label>
 									<Input
 										id="name"
-										placeholder={t('myAwesomePackage', 'My Awesome Package')}
+										placeholder={t("myAwesomePackage", "My Awesome Package")}
 										value={formData.name}
 										onChange={(e) => updateField("name", e.target.value)}
 									/>
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="description">{t('description2', 'Description *')}</Label>
+									<Label htmlFor="description">
+										{t("description2", "Description *")}
+									</Label>
 									<Textarea
 										id="description"
-										placeholder={t('aBriefDescriptionOfWhatYourPackageDoes', 'A brief description of what your package does...')}
+										placeholder={t(
+											"aBriefDescriptionOfWhatYourPackageDoes",
+											"A brief description of what your package does...",
+										)}
 										value={formData.description}
 										onChange={(e) => updateField("description", e.target.value)}
 										rows={3}
@@ -469,7 +509,7 @@ export default function PublishPackagePage() {
 								<Separator />
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label htmlFor="license">{t('license', 'License')}</Label>
+										<Label htmlFor="license">{t("license", "License")}</Label>
 										<Input
 											id="license"
 											placeholder="MIT"
@@ -478,10 +518,12 @@ export default function PublishPackagePage() {
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label htmlFor="keywords">{t('keywords', 'Keywords')}</Label>
+										<Label htmlFor="keywords">
+											{t("keywords", "Keywords")}
+										</Label>
 										<Input
 											id="keywords"
-											placeholder={t('aiDataTransform', 'ai, data, transform')}
+											placeholder={t("aiDataTransform", "ai, data, transform")}
 											value={formData.keywords}
 											onChange={(e) => updateField("keywords", e.target.value)}
 										/>
@@ -494,7 +536,7 @@ export default function PublishPackagePage() {
 											className="flex items-center gap-1"
 										>
 											<Github className="h-4 w-4" />
-											{t('repositoryUrl', 'Repository URL')}
+											{t("repositoryUrl", "Repository URL")}
 										</Label>
 										<Input
 											id="repository"
@@ -511,7 +553,7 @@ export default function PublishPackagePage() {
 											className="flex items-center gap-1"
 										>
 											<Globe className="h-4 w-4" />
-											{t('homepage', 'Homepage')}
+											{t("homepage", "Homepage")}
 										</Label>
 										<Input
 											id="homepage"
@@ -529,16 +571,19 @@ export default function PublishPackagePage() {
 						<>
 							<CardHeader>
 								<CardTitle className="text-lg">
-									{t('permissionsResources', 'Permissions & Resources')}
+									{t("permissionsResources", "Permissions & Resources")}
 								</CardTitle>
 								<CardDescription>
-									{t('declareTheCapabilitiesYourPackageNeeds', 'Declare the capabilities your package needs')}
+									{t(
+										"declareTheCapabilitiesYourPackageNeeds",
+										"Declare the capabilities your package needs",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label>{t('memoryTier', 'Memory Tier')}</Label>
+										<Label>{t("memoryTier", "Memory Tier")}</Label>
 										<Select
 											value={formData.memoryTier}
 											onValueChange={(v) =>
@@ -552,24 +597,38 @@ export default function PublishPackagePage() {
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="minimal">{t('minimal16Mb', 'Minimal (16 MB)')}</SelectItem>
-												<SelectItem value="light">{t('light32Mb', 'Light (32 MB)')}</SelectItem>
+												<SelectItem value="minimal">
+													{t("minimal16Mb", "Minimal (16 MB)")}
+												</SelectItem>
+												<SelectItem value="light">
+													{t("light32Mb", "Light (32 MB)")}
+												</SelectItem>
 												<SelectItem value="standard">
-													{t('standard64Mb', 'Standard (64 MB)')}
+													{t("standard64Mb", "Standard (64 MB)")}
 												</SelectItem>
-												<SelectItem value="heavy">{t('heavy128Mb', 'Heavy (128 MB)')}</SelectItem>
+												<SelectItem value="heavy">
+													{t("heavy128Mb", "Heavy (128 MB)")}
+												</SelectItem>
 												<SelectItem value="intensive">
-													{t('intensive256Mb', 'Intensive (256 MB)')}
+													{t("intensive256Mb", "Intensive (256 MB)")}
 												</SelectItem>
-												<SelectItem value="large">{t('large512Mb', 'Large (512 MB)')}</SelectItem>
-												<SelectItem value="huge">{t('huge1Gb', 'Huge (1 GB)')}</SelectItem>
-												<SelectItem value="extreme">{t('extreme2Gb', 'Extreme (2 GB)')}</SelectItem>
-												<SelectItem value="maximum">{t('maximum4Gb', 'Maximum (4 GB)')}</SelectItem>
+												<SelectItem value="large">
+													{t("large512Mb", "Large (512 MB)")}
+												</SelectItem>
+												<SelectItem value="huge">
+													{t("huge1Gb", "Huge (1 GB)")}
+												</SelectItem>
+												<SelectItem value="extreme">
+													{t("extreme2Gb", "Extreme (2 GB)")}
+												</SelectItem>
+												<SelectItem value="maximum">
+													{t("maximum4Gb", "Maximum (4 GB)")}
+												</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
 									<div className="space-y-2">
-										<Label>{t('timeoutTier', 'Timeout Tier')}</Label>
+										<Label>{t("timeoutTier", "Timeout Tier")}</Label>
 										<Select
 											value={formData.timeoutTier}
 											onValueChange={(v) =>
@@ -583,16 +642,24 @@ export default function PublishPackagePage() {
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="quick">{t('quick5s', 'Quick (5s)')}</SelectItem>
-												<SelectItem value="standard">{t('standard30s', 'Standard (30s)')}</SelectItem>
-												<SelectItem value="extended">{t('extended60s', 'Extended (60s)')}</SelectItem>
+												<SelectItem value="quick">
+													{t("quick5s", "Quick (5s)")}
+												</SelectItem>
+												<SelectItem value="standard">
+													{t("standard30s", "Standard (30s)")}
+												</SelectItem>
+												<SelectItem value="extended">
+													{t("extended60s", "Extended (60s)")}
+												</SelectItem>
 												<SelectItem value="long_running">
-													{t('longRunning5min', 'Long Running (5min)')}
+													{t("longRunning5min", "Long Running (5min)")}
 												</SelectItem>
 												<SelectItem value="very_long">
-													{t('veryLong10min', 'Very Long (10min)')}
+													{t("veryLong10min", "Very Long (10min)")}
 												</SelectItem>
-												<SelectItem value="maximum">{t('maximum30min', 'Maximum (30min)')}</SelectItem>
+												<SelectItem value="maximum">
+													{t("maximum30min", "Maximum (30min)")}
+												</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -601,7 +668,9 @@ export default function PublishPackagePage() {
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">{t('networkAccess', 'Network Access')}</h4>
+									<h4 className="font-medium">
+										{t("networkAccess", "Network Access")}
+									</h4>
 									<div className="flex items-center space-x-2">
 										<Checkbox
 											id="httpEnabled"
@@ -610,16 +679,24 @@ export default function PublishPackagePage() {
 												updateField("httpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="httpEnabled">{t('enableHttpRequests', 'Enable HTTP requests')}</Label>
+										<Label htmlFor="httpEnabled">
+											{t("enableHttpRequests", "Enable HTTP requests")}
+										</Label>
 									</div>
 									{formData.httpEnabled && (
 										<div className="space-y-2 ml-6">
 											<Label htmlFor="allowedHosts">
-												{t('allowedHostsCommaseparatedEmptyAll', 'Allowed Hosts (comma-separated, empty = all)')}
+												{t(
+													"allowedHostsCommaseparatedEmptyAll",
+													"Allowed Hosts (comma-separated, empty = all)",
+												)}
 											</Label>
 											<Input
 												id="allowedHosts"
-												placeholder={t('apiexamplecomCdnexamplecom', 'api.example.com, cdn.example.com')}
+												placeholder={t(
+													"apiexamplecomCdnexamplecom",
+													"api.example.com, cdn.example.com",
+												)}
 												value={formData.allowedHosts}
 												onChange={(e) =>
 													updateField("allowedHosts", e.target.value)
@@ -636,7 +713,10 @@ export default function PublishPackagePage() {
 											}
 										/>
 										<Label htmlFor="websocketEnabled">
-											{t('enableWebsocketConnections', 'Enable WebSocket connections')}
+											{t(
+												"enableWebsocketConnections",
+												"Enable WebSocket connections",
+											)}
 										</Label>
 									</div>
 								</div>
@@ -644,7 +724,9 @@ export default function PublishPackagePage() {
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">{t('storageAccess', 'Storage Access')}</h4>
+									<h4 className="font-medium">
+										{t("storageAccess", "Storage Access")}
+									</h4>
 									<div className="flex items-center space-x-2">
 										<Checkbox
 											id="nodeStorage"
@@ -653,7 +735,9 @@ export default function PublishPackagePage() {
 												updateField("nodeStorage", c === true)
 											}
 										/>
-										<Label htmlFor="nodeStorage">{t('nodescopedStorage', 'Node-scoped storage')}</Label>
+										<Label htmlFor="nodeStorage">
+											{t("nodescopedStorage", "Node-scoped storage")}
+										</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -663,14 +747,18 @@ export default function PublishPackagePage() {
 												updateField("userStorage", c === true)
 											}
 										/>
-										<Label htmlFor="userStorage">{t('userscopedStorage', 'User-scoped storage')}</Label>
+										<Label htmlFor="userStorage">
+											{t("userscopedStorage", "User-scoped storage")}
+										</Label>
 									</div>
 								</div>
 
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">{t('additionalCapabilities', 'Additional Capabilities')}</h4>
+									<h4 className="font-medium">
+										{t("additionalCapabilities", "Additional Capabilities")}
+									</h4>
 									<div className="grid grid-cols-2 gap-2">
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -680,7 +768,9 @@ export default function PublishPackagePage() {
 													updateField("variables", c === true)
 												}
 											/>
-											<Label htmlFor="variables">{t('variables', 'Variables')}</Label>
+											<Label htmlFor="variables">
+												{t("variables", "Variables")}
+											</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -690,7 +780,7 @@ export default function PublishPackagePage() {
 													updateField("cache", c === true)
 												}
 											/>
-											<Label htmlFor="cache">{t('cache', 'Cache')}</Label>
+											<Label htmlFor="cache">{t("cache", "Cache")}</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -700,7 +790,9 @@ export default function PublishPackagePage() {
 													updateField("streaming", c === true)
 												}
 											/>
-											<Label htmlFor="streaming">{t('streaming', 'Streaming')}</Label>
+											<Label htmlFor="streaming">
+												{t("streaming", "Streaming")}
+											</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -718,7 +810,9 @@ export default function PublishPackagePage() {
 													updateField("models", c === true)
 												}
 											/>
-											<Label htmlFor="models">{t('modelsLlm', 'Models / LLM')}</Label>
+											<Label htmlFor="models">
+												{t("modelsLlm", "Models / LLM")}
+											</Label>
 										</div>
 									</div>
 								</div>
@@ -729,9 +823,14 @@ export default function PublishPackagePage() {
 					{step === "review" && (
 						<>
 							<CardHeader>
-								<CardTitle className="text-lg">{t('reviewSubmit', 'Review & Submit')}</CardTitle>
+								<CardTitle className="text-lg">
+									{t("reviewSubmit", "Review & Submit")}
+								</CardTitle>
 								<CardDescription>
-									{t('reviewYourPackageDetailsBeforeSubmittingForReview', 'Review your package details before submitting for review')}
+									{t(
+										"reviewYourPackageDetailsBeforeSubmittingForReview",
+										"Review your package details before submitting for review",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
@@ -759,32 +858,54 @@ export default function PublishPackagePage() {
 								<div className="rounded-lg border p-4 space-y-2">
 									<h4 className="font-medium flex items-center gap-2">
 										<Shield className="h-4 w-4" />
-										{t('permissionsSummary', 'Permissions Summary')}
+										{t("permissionsSummary", "Permissions Summary")}
 									</h4>
 									<div className="flex flex-wrap gap-1">
-										<Badge variant="outline">{t('memoryMemorytier', 'Memory: {{memoryTier}}', { memoryTier: formData.memoryTier })}</Badge>
-										<Badge variant="outline">{t('timeoutTimeouttier', 'Timeout: {{timeoutTier}}', { timeoutTier: formData.timeoutTier })}</Badge>
+										<Badge variant="outline">
+											{t("memoryMemorytier", "Memory: {{memoryTier}}", {
+												memoryTier: formData.memoryTier,
+											})}
+										</Badge>
+										<Badge variant="outline">
+											{t("timeoutTimeouttier", "Timeout: {{timeoutTier}}", {
+												timeoutTier: formData.timeoutTier,
+											})}
+										</Badge>
 										{formData.httpEnabled && (
 											<Badge variant="outline">{`HTTP`}</Badge>
 										)}
 										{formData.websocketEnabled && (
-											<Badge variant="outline">{t('websocket', 'WebSocket')}</Badge>
+											<Badge variant="outline">
+												{t("websocket", "WebSocket")}
+											</Badge>
 										)}
 										{formData.nodeStorage && (
-											<Badge variant="outline">{t('nodeStorage', 'Node Storage')}</Badge>
+											<Badge variant="outline">
+												{t("nodeStorage", "Node Storage")}
+											</Badge>
 										)}
 										{formData.userStorage && (
-											<Badge variant="outline">{t('userStorage', 'User Storage')}</Badge>
+											<Badge variant="outline">
+												{t("userStorage", "User Storage")}
+											</Badge>
 										)}
 										{formData.variables && (
-											<Badge variant="outline">{t('variables', 'Variables')}</Badge>
+											<Badge variant="outline">
+												{t("variables", "Variables")}
+											</Badge>
 										)}
-										{formData.cache && <Badge variant="outline">{t('cache', 'Cache')}</Badge>}
+										{formData.cache && (
+											<Badge variant="outline">{t("cache", "Cache")}</Badge>
+										)}
 										{formData.streaming && (
-											<Badge variant="outline">{t('streaming', 'Streaming')}</Badge>
+											<Badge variant="outline">
+												{t("streaming", "Streaming")}
+											</Badge>
 										)}
 										{formData.a2ui && <Badge variant="outline">{`A2UI`}</Badge>}
-										{formData.models && <Badge variant="outline">{t('models', 'Models')}</Badge>}
+										{formData.models && (
+											<Badge variant="outline">{t("models", "Models")}</Badge>
+										)}
 									</div>
 								</div>
 
@@ -793,10 +914,13 @@ export default function PublishPackagePage() {
 										<AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
 										<div>
 											<h4 className="font-medium text-yellow-500">
-												{t('adminReviewRequired', 'Admin Review Required')}
+												{t("adminReviewRequired", "Admin Review Required")}
 											</h4>
 											<p className="text-sm text-muted-foreground mt-1">
-												{t('yourPackageWillBeSubmittedForReviewAnAdminWillReviewTheCodeAndPermissionsBeforeItBecomesAvailableInThePublicRegistry', "Your package will be submitted for review. An admin will review the code and permissions before it becomes available in the public registry.")}
+												{t(
+													"yourPackageWillBeSubmittedForReviewAnAdminWillReviewTheCodeAndPermissionsBeforeItBecomesAvailableInThePublicRegistry",
+													"Your package will be submitted for review. An admin will review the code and permissions before it becomes available in the public registry.",
+												)}
 											</p>
 										</div>
 									</div>
@@ -812,7 +936,7 @@ export default function PublishPackagePage() {
 							onClick={prevStep}
 							disabled={step === "upload"}
 						>
-							{t('back', 'Back')}
+							{t("back", "Back")}
 						</Button>
 						{step === "review" ? (
 							<Button
@@ -827,13 +951,13 @@ export default function PublishPackagePage() {
 								) : (
 									<>
 										<Upload className="mr-2 h-4 w-4" />
-										{t('submitForReview', 'Submit for Review')}
+										{t("submitForReview", "Submit for Review")}
 									</>
 								)}
 							</Button>
 						) : (
 							<Button onClick={nextStep} disabled={!canProceed()}>
-								{t('continue', 'Continue')}
+								{t("continue", "Continue")}
 								<ChevronRight className="ml-2 h-4 w-4" />
 							</Button>
 						)}

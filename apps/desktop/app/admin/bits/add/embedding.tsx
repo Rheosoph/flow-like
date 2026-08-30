@@ -1,4 +1,3 @@
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -19,6 +18,7 @@ import {
 	Slider,
 	Textarea,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -57,15 +57,20 @@ export function EmbeddingConfiguration({
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader>
-					<CardTitle>{t('modelProvider', 'Model Provider')}</CardTitle>
+					<CardTitle>{t("modelProvider", "Model Provider")}</CardTitle>
 					<CardDescription>
-						{t('configureTheEmbeddingModelProvider', 'Configure the embedding model provider')}
+						{t(
+							"configureTheEmbeddingModelProvider",
+							"Configure the embedding model provider",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="provider-name">{t('providerName', 'Provider Name *')}</Label>
+							<Label htmlFor="provider-name">
+								{t("providerName", "Provider Name *")}
+							</Label>
 							<Select
 								value={parameters?.provider?.provider_name || "Local"}
 								onValueChange={(value) =>
@@ -78,16 +83,20 @@ export function EmbeddingConfiguration({
 								}
 							>
 								<SelectTrigger id="provider-name">
-									<SelectValue placeholder={t('selectProvider', 'Select provider')} />
+									<SelectValue
+										placeholder={t("selectProvider", "Select provider")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="Local">{t('local', 'Local')}</SelectItem>
-									<SelectItem value="Premium">{t('premium', 'Premium')}</SelectItem>
+									<SelectItem value="Local">{t("local", "Local")}</SelectItem>
+									<SelectItem value="Premium">
+										{t("premium", "Premium")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="model-id">{t('modelId', 'Model ID')}</Label>
+							<Label htmlFor="model-id">{t("modelId", "Model ID")}</Label>
 							<Input
 								id="model-id"
 								disabled={parameters.provider.provider_name === "Local"}
@@ -100,11 +109,14 @@ export function EmbeddingConfiguration({
 										},
 									})
 								}
-								placeholder={t('egTextembeddingada002', 'e.g., text-embedding-ada-002')}
+								placeholder={t(
+									"egTextembeddingada002",
+									"e.g., text-embedding-ada-002",
+								)}
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="version">{t('version', 'Version')}</Label>
+							<Label htmlFor="version">{t("version", "Version")}</Label>
 							<Input
 								disabled={parameters.provider.provider_name === "Local"}
 								id="version"
@@ -126,15 +138,26 @@ export function EmbeddingConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('vectorConfiguration', 'Vector Configuration')}</CardTitle>
+					<CardTitle>
+						{t("vectorConfiguration", "Vector Configuration")}
+					</CardTitle>
 					<CardDescription>
-						{t('configureVectorDimensionsAndPooling', 'Configure vector dimensions and pooling')}
+						{t(
+							"configureVectorDimensionsAndPooling",
+							"Configure vector dimensions and pooling",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-2 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="input-length">{t('inputLengthInput_length', 'Input Length: {{input_length}}', { input_length: parameters.input_length })}</Label>
+							<Label htmlFor="input-length">
+								{t(
+									"inputLengthInput_length",
+									"Input Length: {{input_length}}",
+									{ input_length: parameters.input_length },
+								)}
+							</Label>
 							<div className="flex gap-2 items-center">
 								<Slider
 									id="input-length"
@@ -164,7 +187,13 @@ export function EmbeddingConfiguration({
 							</div>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="vector-length">{t('vectorLengthVector_length', 'Vector Length: {{vector_length}}', { vector_length: parameters.vector_length })}</Label>
+							<Label htmlFor="vector-length">
+								{t(
+									"vectorLengthVector_length",
+									"Vector Length: {{vector_length}}",
+									{ vector_length: parameters.vector_length },
+								)}
+							</Label>
 							<div className="flex gap-2 items-center">
 								<Slider
 									id="vector-length"
@@ -195,7 +224,9 @@ export function EmbeddingConfiguration({
 						</div>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="pooling">{t('poolingStrategy', 'Pooling Strategy')}</Label>
+						<Label htmlFor="pooling">
+							{t("poolingStrategy", "Pooling Strategy")}
+						</Label>
 						<Select
 							value={parameters.pooling}
 							onValueChange={(value) =>
@@ -203,12 +234,23 @@ export function EmbeddingConfiguration({
 							}
 						>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectPoolingStrategy', 'Select pooling strategy')} />
+								<SelectValue
+									placeholder={t(
+										"selectPoolingStrategy",
+										"Select pooling strategy",
+									)}
+								/>
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="CLS">{t('clsToken', 'CLS Token')}</SelectItem>
-								<SelectItem value="Mean">{t('meanPooling', 'Mean Pooling')}</SelectItem>
-								<SelectItem value="None">{t('noPooling', 'No Pooling')}</SelectItem>
+								<SelectItem value="CLS">
+									{t("clsToken", "CLS Token")}
+								</SelectItem>
+								<SelectItem value="Mean">
+									{t("meanPooling", "Mean Pooling")}
+								</SelectItem>
+								<SelectItem value="None">
+									{t("noPooling", "No Pooling")}
+								</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
@@ -217,14 +259,19 @@ export function EmbeddingConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('textPrefixes', 'Text Prefixes')}</CardTitle>
+					<CardTitle>{t("textPrefixes", "Text Prefixes")}</CardTitle>
 					<CardDescription>
-						{t('configurePrefixesForDifferentTextTypes', 'Configure prefixes for different text types')}
+						{t(
+							"configurePrefixesForDifferentTextTypes",
+							"Configure prefixes for different text types",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="query-prefix">{t('queryPrefix', 'Query Prefix')}</Label>
+						<Label htmlFor="query-prefix">
+							{t("queryPrefix", "Query Prefix")}
+						</Label>
 						<Textarea
 							id="query-prefix"
 							value={parameters.prefix.query}
@@ -236,12 +283,14 @@ export function EmbeddingConfiguration({
 									},
 								})
 							}
-							placeholder={t('prefixForQueryTexts', 'Prefix for query texts')}
+							placeholder={t("prefixForQueryTexts", "Prefix for query texts")}
 							rows={2}
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="paragraph-prefix">{t('paragraphPrefix', 'Paragraph Prefix')}</Label>
+						<Label htmlFor="paragraph-prefix">
+							{t("paragraphPrefix", "Paragraph Prefix")}
+						</Label>
 						<Textarea
 							id="paragraph-prefix"
 							value={parameters.prefix.paragraph}
@@ -253,7 +302,10 @@ export function EmbeddingConfiguration({
 									},
 								})
 							}
-							placeholder={t('prefixForParagraphTexts', 'Prefix for paragraph texts')}
+							placeholder={t(
+								"prefixForParagraphTexts",
+								"Prefix for paragraph texts",
+							)}
 							rows={2}
 						/>
 					</div>
@@ -262,16 +314,20 @@ export function EmbeddingConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('languages', 'Languages')}</CardTitle>
-					<CardDescription>{t('configureSupportedLanguages', 'Configure supported languages')}</CardDescription>
+					<CardTitle>{t("languages", "Languages")}</CardTitle>
+					<CardDescription>
+						{t("configureSupportedLanguages", "Configure supported languages")}
+					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="add-language">{t('addLanguage', 'Add Language')}</Label>
+						<Label htmlFor="add-language">
+							{t("addLanguage", "Add Language")}
+						</Label>
 						<div className="flex gap-2">
 							<Input
 								id="add-language"
-								placeholder={t('egEnDeFr', 'e.g., en, de, fr')}
+								placeholder={t("egEnDeFr", "e.g., en, de, fr")}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										addLanguage(e.currentTarget.value);
@@ -289,7 +345,7 @@ export function EmbeddingConfiguration({
 									input.value = "";
 								}}
 							>
-								{t('add', 'Add')}
+								{t("add", "Add")}
 							</Button>
 						</div>
 					</div>

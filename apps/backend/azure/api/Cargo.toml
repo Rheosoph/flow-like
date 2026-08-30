@@ -5,11 +5,12 @@ edition = "2024"
 description = "Flow-Like Azure API Service"
 
 [dependencies]
-flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email"] }
+flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email", "channel-azure"] }
 flow-like-secrets.workspace = true
 flow-like-azure-data.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+# Match the remote-only executor catalog: no ONNX or desktop automation nodes.
+flow-like-catalog = { workspace = true, features = ["remote-metadata"] }
 mimalloc.workspace = true
 axum.workspace = true
 azure_core = "0.32.0"

@@ -124,6 +124,9 @@ impl ToProto<flow_like_types::proto::Node> for Node {
             only_offline: self.only_offline,
             version: self.version,
             wasm: self.wasm.as_ref().map(|w| w.to_proto()),
+            namespace: self.namespace.clone(),
+            alias: self.alias.clone(),
+            receiver: self.receiver.clone(),
         }
     }
 }
@@ -180,6 +183,9 @@ impl FromProto<flow_like_types::proto::Node> for Node {
             only_offline: proto.only_offline,
             version: proto.version,
             wasm: proto.wasm.map(NodeWasm::from_proto),
+            namespace: proto.namespace,
+            alias: proto.alias,
+            receiver: proto.receiver,
         }
     }
 }

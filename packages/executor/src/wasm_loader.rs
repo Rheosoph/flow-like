@@ -21,14 +21,16 @@ pub(crate) struct WasmLoadReport {
 
 static WASM_ENGINE: OnceCell<Arc<WasmEngine>> = OnceCell::const_new();
 static WASM_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
-static WASM_PACKAGE_CACHE: LazyLock<moka::sync::Cache<String, Arc<Vec<Arc<dyn NodeLogic>>>>> =
-    LazyLock::new(|| {
-        moka::sync::Cache::builder()
-            .max_capacity(256)
-            .time_to_live(Duration::from_secs(30 * 60))
-            .time_to_idle(Duration::from_secs(10 * 60))
-            .build()
-    });
+/// Nodes registered by one WASM package, keyed by the package cache key.
+type WasmPackageNodeCache = moka::sync::Cache<String, Arc<Vec<Arc<dyn NodeLogic>>>>;
+
+static WASM_PACKAGE_CACHE: LazyLock<WasmPackageNodeCache> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(256)
+        .time_to_live(Duration::from_secs(30 * 60))
+        .time_to_idle(Duration::from_secs(10 * 60))
+        .build()
+});
 
 async fn wasm_engine() -> Result<Arc<WasmEngine>, ExecutorError> {
     WASM_ENGINE
@@ -226,7 +228,7 @@ async fn load_single_package(
         }
     };
 
-    let init_security = flow_like_wasm::WasmSecurityConfig::default();
+    let init_security = flow_like_wasm::WasmSecurityConfig::default().for_metadata();
 
     let mut instance = loaded
         .instantiate(engine, init_security.clone())

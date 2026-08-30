@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Card,
@@ -35,6 +34,7 @@ import {
 	useInvoke,
 	validateMlxModelAssets,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	FileTextIcon,
@@ -805,7 +805,7 @@ export default function Page() {
 							setType(IBitTypes.Stt);
 						}}
 					>
-						{t('hostedStt', 'Hosted STT')}
+						{t("hostedStt", "Hosted STT")}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Stt && localStt ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -814,7 +814,7 @@ export default function Page() {
 							setType(IBitTypes.Stt);
 						}}
 					>
-						{t('localStt', 'Local STT')}
+						{t("localStt", "Local STT")}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Embedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -823,19 +823,19 @@ export default function Page() {
 							setType(IBitTypes.Embedding);
 						}}
 					>
-						{t('embedding', 'Embedding')}
+						{t("embedding", "Embedding")}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ImageEmbedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.ImageEmbedding)}
 					>
-						{t('imageEmbedding', 'Image Embedding')}
+						{t("imageEmbedding", "Image Embedding")}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ObjectDetection ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.ObjectDetection)}
 					>
-						{t('classification', 'Classification')}
+						{t("classification", "Classification")}
 					</button>
 				</div>
 				<br />
@@ -1325,9 +1325,9 @@ export default function Page() {
 					{loading ? (
 						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
 					) : isMlxModel ? (
-						t('uploadMlxModel', 'Upload MLX model')
+						t("uploadMlxModel", "Upload MLX model")
 					) : (
-						t('addBit', 'Add Bit')
+						t("addBit", "Add Bit")
 					)}
 				</Button>
 			</div>

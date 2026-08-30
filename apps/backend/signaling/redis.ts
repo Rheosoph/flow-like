@@ -1,15 +1,15 @@
+import { isIP } from "node:net";
 import { DefaultAzureCredential } from "@azure/identity";
 import {
-	createClient,
-	createCluster,
 	type RedisClientType,
 	type RedisClusterType,
+	createClient,
+	createCluster,
 } from "@redis/client";
 import {
 	EntraIdCredentialsProviderFactory,
 	REDIS_SCOPE_DEFAULT,
 } from "@redis/entraid";
-import { isIP } from "node:net";
 
 export type RedisAuthMode = "local" | "azure-entra";
 
@@ -94,7 +94,9 @@ function normalizeAzureHostSuffix(value: string | undefined): string {
 	return suffix;
 }
 
-export function parseRedisConfig(env: Environment = process.env): SignalRedisConfig {
+export function parseRedisConfig(
+	env: Environment = process.env,
+): SignalRedisConfig {
 	const authMode = (env.REDIS_AUTH_MODE || "local").trim().toLowerCase();
 	if (authMode !== "local" && authMode !== AZURE_AUTH_MODE) {
 		throw new Error("REDIS_AUTH_MODE must be local or azure-entra");
@@ -112,7 +114,10 @@ export function parseRedisConfig(env: Environment = process.env): SignalRedisCon
 	}
 	if (!parsed.hostname) throw new Error("REDIS_URL must include a hostname");
 
-	const clusterMode = parseBoolean(env.REDIS_CLUSTER_MODE, "REDIS_CLUSTER_MODE");
+	const clusterMode = parseBoolean(
+		env.REDIS_CLUSTER_MODE,
+		"REDIS_CLUSTER_MODE",
+	);
 	if (authMode === "local") {
 		return {
 			authMode,
@@ -136,13 +141,21 @@ export function parseRedisConfig(env: Environment = process.env): SignalRedisCon
 		throw new Error("Azure Redis REDIS_URL must not contain credentials");
 	}
 	if (parsed.search || parsed.hash) {
-		throw new Error("Azure Redis REDIS_URL must not contain query or fragment data");
+		throw new Error(
+			"Azure Redis REDIS_URL must not contain query or fragment data",
+		);
 	}
-	if (parsed.pathname !== "" && parsed.pathname !== "/" && parsed.pathname !== "/0") {
+	if (
+		parsed.pathname !== "" &&
+		parsed.pathname !== "/" &&
+		parsed.pathname !== "/0"
+	) {
 		throw new Error("Azure Redis supports only database 0");
 	}
 	if (isIP(parsed.hostname)) {
-		throw new Error("Azure Redis REDIS_URL must use its DNS hostname for TLS validation");
+		throw new Error(
+			"Azure Redis REDIS_URL must use its DNS hostname for TLS validation",
+		);
 	}
 
 	const azureClientId = env.AZURE_CLIENT_ID?.trim();
@@ -164,7 +177,10 @@ export function parseRedisConfig(env: Environment = process.env): SignalRedisCon
 
 	const azureHostSuffix = normalizeAzureHostSuffix(env.AZURE_REDIS_HOST_SUFFIX);
 	const hostname = parsed.hostname.toLowerCase();
-	if (!hostname.endsWith(azureHostSuffix) || hostname.length <= azureHostSuffix.length) {
+	if (
+		!hostname.endsWith(azureHostSuffix) ||
+		hostname.length <= azureHostSuffix.length
+	) {
 		throw new Error(
 			`Azure Redis hostname must end with the configured ${azureHostSuffix} suffix`,
 		);
@@ -323,7 +339,8 @@ export function attachRedisLifecycleLogging(
 	role: string,
 ): void {
 	client.on("error", (error: unknown) => {
-		const message = error instanceof Error ? error.message : "unknown Redis error";
+		const message =
+			error instanceof Error ? error.message : "unknown Redis error";
 		console.error(`[Redis:${role}] ${message}`);
 	});
 	client.on("reconnecting", () => {

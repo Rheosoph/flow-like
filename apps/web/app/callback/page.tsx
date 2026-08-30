@@ -53,7 +53,9 @@ export default function CallbackPage() {
 		return (
 			<div className="flex h-screen items-center justify-center">
 				<div className="text-center">
-					<div className="mb-4 text-lg">{t('signingYouIn', 'Signing you in...')}</div>
+					<div className="mb-4 text-lg">
+						{t("signingYouIn", "Signing you in...")}
+					</div>
 					<div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />
 				</div>
 			</div>
@@ -65,11 +67,16 @@ export default function CallbackPage() {
 			<div className="flex h-screen items-center justify-center">
 				<div className="text-center space-y-4">
 					<div className="mb-4 text-lg text-red-500">
-						{auth.error ? t('authenticationError', 'Authentication Error') : t('authenticationTimedOut', 'Authentication timed out')}
+						{auth.error
+							? t("authenticationError", "Authentication Error")
+							: t("authenticationTimedOut", "Authentication timed out")}
 					</div>
 					<div className="text-sm text-muted-foreground">
 						{auth.error?.message ||
-							t('theSigninProcessDidNotCompleteThisCanHappenOnMobileBrowsers', 'The sign-in process did not complete. This can happen on mobile browsers.')}
+							t(
+								"theSigninProcessDidNotCompleteThisCanHappenOnMobileBrowsers",
+								"The sign-in process did not complete. This can happen on mobile browsers.",
+							)}
 					</div>
 					<div className="flex gap-3 justify-center">
 						<button
@@ -77,14 +84,14 @@ export default function CallbackPage() {
 							onClick={() => auth.signinRedirect()}
 							className="px-4 py-2 bg-primary text-primary-foreground rounded"
 						>
-							{t('tryAgain', 'Try Again')}
+							{t("tryAgain", "Try Again")}
 						</button>
 						<button
 							type="button"
 							onClick={() => router.push("/")}
 							className="px-4 py-2 bg-secondary text-secondary-foreground rounded"
 						>
-							{t('returnHome', 'Return Home')}
+							{t("returnHome", "Return Home")}
 						</button>
 					</div>
 				</div>
@@ -95,7 +102,9 @@ export default function CallbackPage() {
 	return (
 		<div className="flex h-screen items-center justify-center">
 			<div className="text-center">
-				<div className="mb-4 text-lg">{t('processingAuthentication', 'Processing authentication...')}</div>
+				<div className="mb-4 text-lg">
+					{t("processingAuthentication", "Processing authentication...")}
+				</div>
 				<div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto" />
 			</div>
 		</div>

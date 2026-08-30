@@ -11,11 +11,3 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false

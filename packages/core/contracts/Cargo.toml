@@ -1,0 +1,9 @@
+[package]
+name = "flow-like-core-contracts"
+version = "0.1.0"
+edition = "2024"
+description = "Dependency-light public contracts shared by Flow-Like core consumers"
+license-file = "../../../LICENSE"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }

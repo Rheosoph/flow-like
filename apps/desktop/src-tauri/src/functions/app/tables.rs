@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -322,6 +324,8 @@ pub async fn db_list(
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VectorQueryPayload {
+    #[allow(dead_code)]
+    // wire field: frontend IQueryTableVectorPayload always sends the vector column name; LanceDB currently resolves it itself
     pub column: String,
     pub vector: Vec<f64>,
 }
@@ -364,6 +368,10 @@ pub async fn db_query(
     let limit = limit.unwrap_or(25).min(250) as usize;
     let offset = offset.unwrap_or(0).min(MAX_OFFSET) as usize;
     if let Some(sql) = payload.sql {
+        // The registered provider supports DML, but this command is the read/query
+        // surface — reject anything but a single SELECT before planning.
+        flow_like::flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql)
+            .map_err(|e| anyhow!("Invalid query SQL: {e}"))?;
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
         context
@@ -517,7 +525,7 @@ pub async fn build_index(
     .await?;
     db.index(&column, Some(&index_type)).await?;
     if optimize.unwrap_or(false) {
-        db.optimize(false).await?;
+        db.optimize(true).await?;
     }
     Ok(())
 }
@@ -541,7 +549,7 @@ pub async fn db_optimize(
         sub,
     )
     .await?;
-    db.optimize(keep_versions.unwrap_or(false)).await?;
+    db.optimize(keep_versions.unwrap_or(true)).await?;
     Ok(())
 }
 

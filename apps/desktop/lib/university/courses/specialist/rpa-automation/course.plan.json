@@ -265,7 +265,11 @@
 											"label": "End with Take Screenshot instead of checking the extracted values"
 										}
 									],
-									"correct": ["wait-before-touch", "wait-result", "close-both-paths"]
+									"correct": [
+										"wait-before-touch",
+										"wait-result",
+										"close-both-paths"
+									]
 								}
 							}
 						],
@@ -349,7 +353,11 @@
 											"label": "Trust the match tolerance to absorb redesigns without recreating anything"
 										}
 									],
-									"correct": ["tight-crop", "region-search", "recreate-on-change"]
+									"correct": [
+										"tight-crop",
+										"region-search",
+										"recreate-on-change"
+									]
 								}
 							},
 							{

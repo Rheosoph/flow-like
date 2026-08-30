@@ -223,7 +223,7 @@ fn validate_azure_postgres_host(host: &str) -> Result<(), PostgresAuthError> {
 }
 
 fn validate_postgres_name(name: &'static str, value: &str) -> Result<(), PostgresAuthError> {
-    if value.as_bytes().len() > 63
+    if value.len() > 63
         || value
             .chars()
             .any(|character| character.is_control() || character == '\0')

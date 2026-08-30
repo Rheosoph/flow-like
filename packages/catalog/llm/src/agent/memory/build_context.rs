@@ -31,6 +31,8 @@ impl NodeLogic for BuildMemoryContextNode {
             "Assembles retrieved memory records into a token-budgeted context string for injection into agent system prompts",
             "AI/Memory",
         );
+        node.set_flowscript_name("ai.memory", "buildContext");
+        node.set_receiver("memory_config");
         node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
@@ -62,7 +64,8 @@ impl NodeLogic for BuildMemoryContextNode {
             "Array of memory records from Search Memory node",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node.add_input_pin(
             "header",

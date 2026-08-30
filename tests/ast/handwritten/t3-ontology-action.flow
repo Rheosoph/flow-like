@@ -1,0 +1,189 @@
+use json::{ stringify }
+use log::{ info, warn }
+
+interface AssetSnapshot {
+    asset_id: string;
+    site: string;
+    health_status: string;
+    criticality: int;
+    owner_team: string;
+}
+interface QuarantineOutcome {
+    object_type: string;
+    quarantined: int;
+    blast_radius: int;
+    remote_run_id: string;
+}
+
+@description("Saved Data Studio ontology that types the field fleet")
+@category("Ontology")
+let assetOntology = "field-fleet"
+@description("Ontology object type every quarantine decision is made against")
+@category("Ontology")
+let assetType = "Asset"
+@description("Saved ontology action that quarantines an asset and files a work order")
+@category("Ontology")
+let quarantineAction = "quarantine_asset"
+@description("Installed remote contract that owns partner-operated sites")
+@category("Ontology")
+let partnerBinding = "partner-fleet-contract"
+@description("Graph overlay holding the live asset dependency topology")
+@category("Topology")
+let topologyOverlay = "asset-topology"
+@description("Table every quarantine decision is written to for the audit trail")
+@category("Topology")
+let auditTable = "quarantine_audit"
+@description("Criticality at or above which a dependent blocks an automatic quarantine")
+@category("Policy")
+let blockingCriticality = 4
+@description("Asset ids this run already wrote a quarantine marker for")
+@category("Runtime")
+let quarantined: string[] = []
+
+function topology(): (graph: Struct) {
+    const { graph } = db::graph::openOverlay({ overlayId: topologyOverlay, userScoped: false })
+    return graph
+}
+
+// BUG: the fields of an ontology object have to be read one member access at a time.
+// `struct::break({ structIn: asset })` is the node built for exactly this, but its field outputs
+// are never predicted onto a new board, so nothing can be destructured out of it -- see
+// bug-t3-ontology-action-struct-break-destructure.flow.
+function assetLabel(asset: AssetSnapshot): (label: string) {
+    return `${asset.asset_id} @ ${asset.site} (${asset.owner_team})`
+}
+
+function cypherParams(assetId: string, minCriticality: int): (params: Struct) {
+    const seed = struct::make()
+    const withAsset = seed.set("asset_id", assetId).structOut
+    return withAsset.set("min_criticality", minCriticality).structOut
+}
+
+function actionParameters(reason: string, requestedBy: string, stamp: string): (parameters: Struct) {
+    const seed = struct::make()
+    const withReason = seed.set("reason", reason).structOut
+    const withActor = withReason.set("requested_by", requestedBy).structOut
+    return withActor.set("requested_at", stamp).structOut
+}
+
+function blastRadius(graph: Struct, assetId: string): (nodes: Struct[], edges: Struct[], reach: int) {
+    const { resultNodes, resultEdges } = graph.neighbors({ label: assetType, nodeId: assetId, depth: 3, direction: "incoming", limit: 250 })
+    return resultNodes, resultEdges, array::length({ array: resultNodes })
+}
+
+function blockingDependents(graph: Struct, assetId: string): (rows: Struct[]) {
+    const params = cypherParams(assetId, blockingCriticality)
+    const { results } = graph.cypherQuery({ query: "MATCH (a:Asset {id: $asset_id})<-[:DEPENDS_ON]-(d:Asset) WHERE d.criticality >= $min_criticality RETURN d", params: params, limit: 100 })
+    return results
+}
+
+function markQuarantined(graph: Struct, assetId: string, reason: string, stamp: string): (errorMessage: string) {
+    const marker = struct::make()
+    const withId = marker.set("id", assetId).structOut
+    const withReason = withId.set("reason", reason).structOut
+    const payload = withReason.set("quarantined_at", stamp).structOut
+    const { errorMessage } = graph.upsertNode({ label: "Quarantine", value: payload })
+    return errorMessage
+}
+
+function linkImpact(graph: Struct, assetId: string, dependentId: string, hops: int): (errorMessage: string) {
+    const edge = struct::make()
+    const withSrc = edge.set("src", assetId).structOut
+    const withDst = withSrc.set("dst", dependentId).structOut
+    const payload = withDst.set("hops", hops).structOut
+    const { errorMessage } = graph.upsertEdge({ label: "IMPACTS", value: payload })
+    return errorMessage
+}
+
+function recordAudit(assetId: string, runId: string, stamp: string): (errorMessage: string) {
+    const table = db::open({ name: auditTable, userScoped: false, batchSize: 64 })
+    const seed = struct::make()
+    const withId = seed.set("id", assetId).structOut
+    const withRun = withId.set("remote_run_id", runId).structOut
+    const row = withRun.set("decided_at", stamp).structOut
+    const { errorMessage } = table.upsert({ idRow: "id", value: row })
+    return errorMessage
+}
+
+function summarize(objectType: string, reach: int, runId: string): (outcome: QuarantineOutcome) {
+    const seed = struct::make()
+    const withType = seed.set("object_type", objectType).structOut
+    const withCount = withType.set("quarantined", array::length({ array: quarantined })).structOut
+    const withReach = withCount.set("blast_radius", reach).structOut
+    return withReach.set("remote_run_id", runId).structOut
+}
+
+eventsGeneric onQuarantineRequest(payload: Struct) {
+    const assetId = payload.asset_id
+    const reason = payload.reason
+    const requestedBy = payload.requested_by
+    const stamp = datetime::now().format({ format: "rfc3339" })
+    const graph = topology()
+
+    const lookup = ontology::queryObjects({ ontologyId: assetOntology, objectType: assetType, limit: 200 })
+    lookup {
+        execOut: {
+            const { arrayOut: degraded, kept: degradedCount } = array::filterBy({ arrayIn: lookup.objects, key: "health_status", operator: "==", value: "degraded", compare: "string", ignoreCase: true, invert: false })
+            info({ message: `${degradedCount} degraded assets in ${assetOntology}`, toast: false })
+
+            const { nodes: reached, reach: reach } = blastRadius(graph, assetId)
+            const blockers = blockingDependents(graph, assetId)
+            const blockerCount = array::length({ array: blockers })
+
+            if (blockerCount > 0) {
+                warn({ message: `quarantine of ${assetId} blocked by ${blockerCount} critical dependents`, toast: true })
+                events::returnResult({ response: stringify({ value: blockers, pretty: false }) })
+            } else {
+                const parameters = actionParameters(reason, requestedBy, stamp)
+                const prepared = ontology::prepareAction({ ontologyId: assetOntology, actionId: quarantineAction, objects: degraded, parameters: parameters })
+                prepared {
+                    execOut: {
+                        const remote = ontology::invokeRemoteAction({ bindingId: partnerBinding, actionId: quarantineAction, objects: degraded, parameters: parameters, timeout: 120 })
+                        remote {
+                            execOut: {
+                                quarantined = array::push({ arrayIn: quarantined, value: assetId }).arrayOut
+                                for (const [hops, dependent] of reached) {
+                                    linkImpact(graph, assetId, dependent.id, hops)
+                                    info({ message: assetLabel(dependent), toast: false })
+                                }
+                                markQuarantined(graph, assetId, reason, stamp)
+                                recordAudit(assetId, remote.runId, stamp)
+                                const outcome = summarize(assetType, reach, remote.runId)
+                                events::returnResult({ response: stringify({ value: outcome, pretty: true }) })
+                            }
+                            error: {
+                                warn({ message: `remote quarantine failed: ${remote.errorMessage}`, toast: true })
+                            }
+                        }
+                    }
+                    error: {
+                        warn({ message: `action binding rejected the request: ${prepared.errorMessage}`, toast: true })
+                    }
+                }
+            }
+        }
+        error: {
+            warn({ message: `ontology read failed: ${lookup.errorMessage}`, toast: true })
+        }
+    }
+}
+
+ontologyActionInput onQuarantineFired(object: Struct, objects: Struct[], parameters: Struct, objectType: string, objectIds: string[], idempotencyKey: string) {
+    const graph = topology()
+    const stamp = datetime::now().format({ format: "rfc3339" })
+    const reason = parameters.reason
+    info({ message: `${objectType} quarantine fired for ${idempotencyKey}`, toast: false })
+
+    for (const assetId of objectIds) {
+        const failure = markQuarantined(graph, assetId, reason, stamp)
+        if (failure != "") {
+            warn({ message: `overlay write failed for ${assetId}: ${failure}`, toast: false })
+        } else {
+            quarantined = array::push({ arrayIn: quarantined, value: assetId }).arrayOut
+            recordAudit(assetId, idempotencyKey, stamp)
+        }
+    }
+
+    const outcome = summarize(objectType, 0, idempotencyKey)
+    info({ message: stringify({ value: outcome, pretty: false }), toast: false })
+}

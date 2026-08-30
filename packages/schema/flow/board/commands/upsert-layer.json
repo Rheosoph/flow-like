@@ -167,7 +167,7 @@
 		},
 		"LayerType": {
 			"type": "string",
-			"enum": ["Function", "Macro", "Collapsed"]
+			"enum": ["Function", "Macro", "Collapsed", "Module"]
 		},
 		"Node": {
 			"type": "object",
@@ -299,6 +299,18 @@
 							"type": "null"
 						}
 					]
+				},
+				"namespace": {
+					"description": "FlowScript namespace path (`string`, `http`, `utils.markdown`; dotted when nested).\nPresentation only — never part of node identity (`name` stays the id).",
+					"type": ["string", "null"]
+				},
+				"alias": {
+					"description": "FlowScript member name inside `namespace` (`trim`, `fetch`, `createIssue`).\nPresentation only — never part of node identity.",
+					"type": ["string", "null"]
+				},
+				"receiver": {
+					"description": "Name of the data input pin that receives the value in FlowScript method form (`s` in `s.trim()`).\nPresentation only. Absent applies the default rule; an empty string opts out (static only).",
+					"type": ["string", "null"]
 				}
 			},
 			"required": [
@@ -736,6 +748,10 @@
 				},
 				"is_locked": {
 					"type": ["boolean", "null"]
+				},
+				"node_id": {
+					"description": "Soft reference to a board node this comment is attached to (e.g. the statement a FlowScript thread anchors on).\nPresentation metadata only \u2014 dangling references are legal; a missing node means unanchored.",
+					"type": ["string", "null"]
 				}
 			},
 			"required": ["id", "content", "comment_type", "timestamp", "coordinates"]

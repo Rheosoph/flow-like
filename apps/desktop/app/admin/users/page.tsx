@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Avatar,
 	AvatarFallback,
@@ -41,6 +40,7 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -192,7 +192,9 @@ function PermissionDialog({
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="max-w-md">
 					<DialogHeader>
-						<DialogTitle>{t('editPermissions', 'Edit Permissions')}</DialogTitle>
+						<DialogTitle>
+							{t("editPermissions", "Edit Permissions")}
+						</DialogTitle>
 						<DialogDescription>
 							{userDisplayName(user, user.id)}
 						</DialogDescription>
@@ -213,7 +215,7 @@ function PermissionDialog({
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setOpen(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button onClick={handleSave} disabled={saving}>
 							{saving ? "Saving…" : "Save"}
@@ -294,10 +296,12 @@ function UserRow({
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="FREE">{t('free', 'Free')}</SelectItem>
-						<SelectItem value="PREMIUM">{t('premium', 'Premium')}</SelectItem>
-						<SelectItem value="PRO">{t('pro', 'Pro')}</SelectItem>
-						<SelectItem value="ENTERPRISE">{t('enterprise', 'Enterprise')}</SelectItem>
+						<SelectItem value="FREE">{t("free", "Free")}</SelectItem>
+						<SelectItem value="PREMIUM">{t("premium", "Premium")}</SelectItem>
+						<SelectItem value="PRO">{t("pro", "Pro")}</SelectItem>
+						<SelectItem value="ENTERPRISE">
+							{t("enterprise", "Enterprise")}
+						</SelectItem>
 					</SelectContent>
 				</Select>
 			</TableCell>
@@ -434,15 +438,18 @@ export default function AdminUsersPage() {
 						<div>
 							<h1 className="text-3xl font-bold flex items-center gap-2">
 								<Users className="h-7 w-7" />
-								{t('userManagement', 'User Management')}
+								{t("userManagement", "User Management")}
 							</h1>
 							<p className="text-muted-foreground">
-								{t('manageUserAccountsTiersAndPermissions', 'Manage user accounts, tiers, and permissions')}
+								{t(
+									"manageUserAccountsTiersAndPermissions",
+									"Manage user accounts, tiers, and permissions",
+								)}
 							</p>
 						</div>
 						<Button onClick={handleRefresh} variant="outline" size="sm">
 							<RefreshCw className="h-4 w-4 mr-2" />
-							{t('refresh', 'Refresh')}
+							{t("refresh", "Refresh")}
 						</Button>
 					</div>
 
@@ -450,7 +457,7 @@ export default function AdminUsersPage() {
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 								<CardTitle className="text-sm font-medium">
-									{t('totalUsers', 'Total Users')}
+									{t("totalUsers", "Total Users")}
 								</CardTitle>
 								<Users className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
@@ -467,18 +474,22 @@ export default function AdminUsersPage() {
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 								<CardTitle className="text-sm font-medium">
-									{t('currentPage', 'Current Page')}
+									{t("currentPage", "Current Page")}
 								</CardTitle>
 								<Shield className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
 							<CardContent>
-								<div className="text-2xl font-bold">{`${page} /`}{Math.max(1, totalPages)}
+								<div className="text-2xl font-bold">
+									{`${page} /`}
+									{Math.max(1, totalPages)}
 								</div>
 							</CardContent>
 						</Card>
 						<Card>
 							<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-								<CardTitle className="text-sm font-medium">{t('showing', 'Showing')}</CardTitle>
+								<CardTitle className="text-sm font-medium">
+									{t("showing", "Showing")}
+								</CardTitle>
 								<CheckCircle className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
 							<CardContent>
@@ -491,9 +502,9 @@ export default function AdminUsersPage() {
 
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('users', 'Users')}</CardTitle>
+							<CardTitle>{t("users", "Users")}</CardTitle>
 							<CardDescription>
-								{users.data?.total ?? 0} {t('totalUsers2', 'total users')}
+								{users.data?.total ?? 0} {t("totalUsers2", "total users")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -501,7 +512,10 @@ export default function AdminUsersPage() {
 								<div className="relative flex-1 min-w-[200px] max-w-sm">
 									<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 									<Input
-										placeholder={t('searchByNameEmailUsername', 'Search by name, email, username…')}
+										placeholder={t(
+											"searchByNameEmailUsername",
+											"Search by name, email, username…",
+										)}
 										value={searchQuery}
 										onChange={(e) => {
 											setSearchQuery(e.target.value);
@@ -521,10 +535,18 @@ export default function AdminUsersPage() {
 										<SelectValue placeholder="Status" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="all">{t('allStatuses', 'All statuses')}</SelectItem>
-										<SelectItem value="ACTIVE">{t('active', 'Active')}</SelectItem>
-										<SelectItem value="INACTIVE">{t('inactive', 'Inactive')}</SelectItem>
-										<SelectItem value="BANNED">{t('banned', 'Banned')}</SelectItem>
+										<SelectItem value="all">
+											{t("allStatuses", "All statuses")}
+										</SelectItem>
+										<SelectItem value="ACTIVE">
+											{t("active", "Active")}
+										</SelectItem>
+										<SelectItem value="INACTIVE">
+											{t("inactive", "Inactive")}
+										</SelectItem>
+										<SelectItem value="BANNED">
+											{t("banned", "Banned")}
+										</SelectItem>
 									</SelectContent>
 								</Select>
 								<Select
@@ -538,11 +560,17 @@ export default function AdminUsersPage() {
 										<SelectValue placeholder="Tier" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="all">{t('allTiers', 'All tiers')}</SelectItem>
-										<SelectItem value="FREE">{t('free', 'Free')}</SelectItem>
-										<SelectItem value="PREMIUM">{t('premium', 'Premium')}</SelectItem>
-										<SelectItem value="PRO">{t('pro', 'Pro')}</SelectItem>
-										<SelectItem value="ENTERPRISE">{t('enterprise', 'Enterprise')}</SelectItem>
+										<SelectItem value="all">
+											{t("allTiers", "All tiers")}
+										</SelectItem>
+										<SelectItem value="FREE">{t("free", "Free")}</SelectItem>
+										<SelectItem value="PREMIUM">
+											{t("premium", "Premium")}
+										</SelectItem>
+										<SelectItem value="PRO">{t("pro", "Pro")}</SelectItem>
+										<SelectItem value="ENTERPRISE">
+											{t("enterprise", "Enterprise")}
+										</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
@@ -557,13 +585,13 @@ export default function AdminUsersPage() {
 								<Table>
 									<TableHeader>
 										<TableRow>
-											<TableHead>{t('user', 'User')}</TableHead>
-											<TableHead>{t('status', 'Status')}</TableHead>
-											<TableHead>{t('tier', 'Tier')}</TableHead>
-											<TableHead>{t('storage', 'Storage')}</TableHead>
-											<TableHead>{t('llmSpend', 'LLM Spend')}</TableHead>
-											<TableHead>{t('joined', 'Joined')}</TableHead>
-											<TableHead>{t('actions', 'Actions')}</TableHead>
+											<TableHead>{t("user", "User")}</TableHead>
+											<TableHead>{t("status", "Status")}</TableHead>
+											<TableHead>{t("tier", "Tier")}</TableHead>
+											<TableHead>{t("storage", "Storage")}</TableHead>
+											<TableHead>{t("llmSpend", "LLM Spend")}</TableHead>
+											<TableHead>{t("joined", "Joined")}</TableHead>
+											<TableHead>{t("actions", "Actions")}</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -582,7 +610,7 @@ export default function AdminUsersPage() {
 													colSpan={7}
 													className="text-center py-8 text-muted-foreground"
 												>
-													{t('noUsersFound', 'No users found')}
+													{t("noUsersFound", "No users found")}
 												</TableCell>
 											</TableRow>
 										)}
@@ -592,7 +620,13 @@ export default function AdminUsersPage() {
 
 							{totalPages > 1 && (
 								<div className="flex items-center justify-between mt-4">
-									<div className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</div>
+									<div className="text-sm text-muted-foreground">
+										{t(
+											"pagePageOfTotalpages",
+											"Page {{page}} of {{totalPages}}",
+											{ page, totalPages },
+										)}
+									</div>
 									<div className="flex gap-2">
 										<Button
 											variant="outline"
@@ -600,7 +634,7 @@ export default function AdminUsersPage() {
 											onClick={() => setPage((p) => Math.max(1, p - 1))}
 											disabled={page === 1}
 										>
-											{t('previous', 'Previous')}
+											{t("previous", "Previous")}
 										</Button>
 										<Button
 											variant="outline"
@@ -610,7 +644,7 @@ export default function AdminUsersPage() {
 											}
 											disabled={page === totalPages}
 										>
-											{t('next', 'Next')}
+											{t("next", "Next")}
 										</Button>
 									</div>
 								</div>

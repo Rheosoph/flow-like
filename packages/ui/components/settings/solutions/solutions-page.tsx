@@ -205,11 +205,13 @@ export function SolutionsPage({
 			<Card className="w-full">
 				<CardContent className="flex flex-col items-center justify-center py-12 gap-4">
 					<AlertCircle className="h-12 w-12 text-destructive" />
-					<p className="text-lg font-medium">{t('failedToLoadSolutions', 'Failed to load solutions')}</p>
+					<p className="text-lg font-medium">
+						{t("failedToLoadSolutions", "Failed to load solutions")}
+					</p>
 					<p className="text-sm text-muted-foreground">{error.message}</p>
 					<Button onClick={onRefresh} variant="outline">
 						<RefreshCw className="h-4 w-4 mr-2" />
-						{t('retry', 'Retry')}
+						{t("retry", "Retry")}
 					</Button>
 				</CardContent>
 			</Card>
@@ -234,15 +236,18 @@ export function SolutionsPage({
 			<div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
 				<div>
 					<h2 className="text-2xl font-bold tracking-tight">
-						{t('solutionRequests', 'Solution Requests')}
+						{t("solutionRequests", "Solution Requests")}
 					</h2>
 					<p className="text-muted-foreground">
-						{t('manageAndTrackCustomSolutionRequests', 'Manage and track custom solution requests')}
+						{t(
+							"manageAndTrackCustomSolutionRequests",
+							"Manage and track custom solution requests",
+						)}
 					</p>
 				</div>
 				<Button onClick={onRefresh} variant="outline" size="sm">
 					<RefreshCw className="h-4 w-4 mr-2" />
-					{t('refresh', 'Refresh')}
+					{t("refresh", "Refresh")}
 				</Button>
 			</div>
 
@@ -259,11 +264,16 @@ export function SolutionsPage({
 				<Card>
 					<CardContent className="flex flex-col items-center justify-center py-12 gap-4">
 						<FileText className="h-12 w-12 text-muted-foreground" />
-						<p className="text-lg font-medium">{t('noSolutionsFound', 'No solutions found')}</p>
+						<p className="text-lg font-medium">
+							{t("noSolutionsFound", "No solutions found")}
+						</p>
 						<p className="text-sm text-muted-foreground">
 							{statusFilter || searchQuery
-								? t('tryAdjustingYourFilters', 'Try adjusting your filters')
-								: t('noSolutionRequestsHaveBeenSubmittedYet', 'No solution requests have been submitted yet')}
+								? t("tryAdjustingYourFilters", "Try adjusting your filters")
+								: t(
+										"noSolutionRequestsHaveBeenSubmittedYet",
+										"No solution requests have been submitted yet",
+									)}
 						</p>
 					</CardContent>
 				</Card>
@@ -310,7 +320,10 @@ function SolutionFilters({
 					<div className="relative flex-1">
 						<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 						<Input
-							placeholder={t('searchByNameEmailOrCompany', 'Search by name, email, or company...')}
+							placeholder={t(
+								"searchByNameEmailOrCompany",
+								"Search by name, email, or company...",
+							)}
 							value={searchQuery}
 							onChange={(e) => onSearchChange(e.target.value)}
 							className="pl-9"
@@ -323,17 +336,19 @@ function SolutionFilters({
 								<Filter className="h-4 w-4 mr-2" />
 								{statusFilter
 									? SolutionStatusLabels[statusFilter]
-									: t('allStatus', 'All Status')}
+									: t("allStatus", "All Status")}
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="w-48">
-							<DropdownMenuLabel>{t('filterByStatus', 'Filter by Status')}</DropdownMenuLabel>
+							<DropdownMenuLabel>
+								{t("filterByStatus", "Filter by Status")}
+							</DropdownMenuLabel>
 							<DropdownMenuSeparator />
 							<DropdownMenuCheckboxItem
 								checked={!statusFilter}
 								onCheckedChange={() => onStatusFilterChange(undefined)}
 							>
-								{t('allStatus', 'All Status')}
+								{t("allStatus", "All Status")}
 							</DropdownMenuCheckboxItem>
 							{statusOptions.map((status) => (
 								<DropdownMenuCheckboxItem
@@ -357,7 +372,7 @@ function SolutionFilters({
 							}}
 						>
 							<X className="h-4 w-4 mr-2" />
-							{t('clear', 'Clear')}
+							{t("clear", "Clear")}
 						</Button>
 					)}
 				</div>
@@ -395,12 +410,12 @@ function SolutionsTable({
 				<TableHeader>
 					<TableRow>
 						<TableHead className="w-[50px]" />
-						<TableHead>{t('requester', 'Requester')}</TableHead>
-						<TableHead>{t('company', 'Company')}</TableHead>
-						<TableHead>{t('status', 'Status')}</TableHead>
-						<TableHead>{t('payment', 'Payment')}</TableHead>
-						<TableHead className="text-right">{t('total', 'Total')}</TableHead>
-						<TableHead>{t('created', 'Created')}</TableHead>
+						<TableHead>{t("requester", "Requester")}</TableHead>
+						<TableHead>{t("company", "Company")}</TableHead>
+						<TableHead>{t("status", "Status")}</TableHead>
+						<TableHead>{t("payment", "Payment")}</TableHead>
+						<TableHead className="text-right">{t("total", "Total")}</TableHead>
+						<TableHead>{t("created", "Created")}</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -495,7 +510,7 @@ function PaymentBadge({
 				className="text-yellow-600 border-yellow-600/50 bg-yellow-500/10"
 			>
 				<CreditCard className="h-3 w-3 mr-1" />
-				{t('awaiting', 'Awaiting')}
+				{t("awaiting", "Awaiting")}
 			</Badge>
 		);
 	}
@@ -507,7 +522,7 @@ function PaymentBadge({
 				className="text-green-600 border-green-600/50 bg-green-500/10"
 			>
 				<Check className="h-3 w-3 mr-1" />
-				{t('depositPaid', 'Deposit Paid')}
+				{t("depositPaid", "Deposit Paid")}
 			</Badge>
 		);
 	}
@@ -518,7 +533,7 @@ function PaymentBadge({
 			className="text-blue-600 border-blue-600/50 bg-blue-500/10"
 		>
 			<Check className="h-3 w-3 mr-1" />
-			{t('setupComplete', 'Setup Complete')}
+			{t("setupComplete", "Setup Complete")}
 		</Badge>
 	);
 }
@@ -546,11 +561,14 @@ function SolutionsPagination({
 			<CardContent className="p-4">
 				<div className="flex flex-col sm:flex-row items-center justify-between gap-4">
 					<div className="text-sm text-muted-foreground">
-						{t('showing', 'Showing')} {(page - 1) * limit + 1} to {Math.min(page * limit, total)}{" "}{t('ofTotalResults', 'of {{total}} results', { total })}</div>
+						{t("showing", "Showing")} {(page - 1) * limit + 1} to{" "}
+						{Math.min(page * limit, total)}{" "}
+						{t("ofTotalResults", "of {{total}} results", { total })}
+					</div>
 
 					<div className="flex items-center gap-4">
 						<div className="flex items-center gap-2">
-							<Label className="text-sm">{t('perPage', 'Per page:')}</Label>
+							<Label className="text-sm">{t("perPage", "Per page:")}</Label>
 							<Select
 								value={limit.toString()}
 								onValueChange={(value) => onLimitChange(Number(value))}
@@ -584,7 +602,12 @@ function SolutionsPagination({
 							>
 								<ChevronLeft className="h-4 w-4" />
 							</Button>
-							<span className="px-4 text-sm">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</span>
+							<span className="px-4 text-sm">
+								{t("pagePageOfTotalpages", "Page {{page}} of {{totalPages}}", {
+									page,
+									totalPages,
+								})}
+							</span>
 							<Button
 								variant="outline"
 								size="icon"
@@ -617,12 +640,12 @@ function SolutionsTableSkeleton() {
 				<TableHeader>
 					<TableRow>
 						<TableHead className="w-[50px]" />
-						<TableHead>{t('requester', 'Requester')}</TableHead>
-						<TableHead>{t('company', 'Company')}</TableHead>
-						<TableHead>{t('status', 'Status')}</TableHead>
-						<TableHead>{t('payment', 'Payment')}</TableHead>
-						<TableHead className="text-right">{t('total', 'Total')}</TableHead>
-						<TableHead>{t('created', 'Created')}</TableHead>
+						<TableHead>{t("requester", "Requester")}</TableHead>
+						<TableHead>{t("company", "Company")}</TableHead>
+						<TableHead>{t("status", "Status")}</TableHead>
+						<TableHead>{t("payment", "Payment")}</TableHead>
+						<TableHead className="text-right">{t("total", "Total")}</TableHead>
+						<TableHead>{t("created", "Created")}</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -728,7 +751,7 @@ function SolutionDetailView({
 			<div className="space-y-4">
 				<Button variant="ghost" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-2" />
-					{t('backToList', 'Back to list')}
+					{t("backToList", "Back to list")}
 				</Button>
 				<div className="flex items-center justify-center py-12">
 					<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -744,7 +767,7 @@ function SolutionDetailView({
 				<div className="flex items-center gap-4">
 					<Button variant="ghost" size="sm" onClick={onBack}>
 						<ArrowLeft className="h-4 w-4 mr-2" />
-						{t('back', 'Back')}
+						{t("back", "Back")}
 					</Button>
 					<div>
 						<div className="flex items-center gap-2">
@@ -758,7 +781,7 @@ function SolutionDetailView({
 				</div>
 				<Button variant="outline" onClick={() => setIsEditing(true)}>
 					<Edit className="h-4 w-4 mr-2" />
-					{t('edit', 'Edit')}
+					{t("edit", "Edit")}
 				</Button>
 			</div>
 
@@ -772,7 +795,9 @@ function SolutionDetailView({
 					{/* Contact Info */}
 					<Card>
 						<CardHeader>
-							<CardTitle className="text-lg">{t('contactInformation', 'Contact Information')}</CardTitle>
+							<CardTitle className="text-lg">
+								{t("contactInformation", "Contact Information")}
+							</CardTitle>
 						</CardHeader>
 						<CardContent className="grid grid-cols-2 gap-4">
 							<InfoItem icon={User} label="Name" value={solution.name} />
@@ -785,7 +810,7 @@ function SolutionDetailView({
 							<InfoItem
 								icon={Clock}
 								label="Timeline"
-								value={solution.timeline ?? t('notSpecified', 'Not specified')}
+								value={solution.timeline ?? t("notSpecified", "Not specified")}
 							/>
 						</CardContent>
 					</Card>
@@ -793,19 +818,30 @@ function SolutionDetailView({
 					{/* Project Details */}
 					<Card>
 						<CardHeader>
-							<CardTitle className="text-lg">{t('projectDetails', 'Project Details')}</CardTitle>
+							<CardTitle className="text-lg">
+								{t("projectDetails", "Project Details")}
+							</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-6">
 							<div className="grid grid-cols-2 gap-4">
 								<InfoItem
-									label={t('applicationType', 'Application Type')}
+									label={t("applicationType", "Application Type")}
 									value={solution.applicationType}
 								/>
-								<InfoItem label={t('dataSecurity', 'Data Security')} value={solution.dataSecurity} />
-								<InfoItem label={t('userType', 'User Type')} value={solution.userType} />
-								<InfoItem label={t('userCount', 'User Count')} value={solution.userCount} />
 								<InfoItem
-									label={t('technicalLevel', 'Technical Level')}
+									label={t("dataSecurity", "Data Security")}
+									value={solution.dataSecurity}
+								/>
+								<InfoItem
+									label={t("userType", "User Type")}
+									value={solution.userType}
+								/>
+								<InfoItem
+									label={t("userCount", "User Count")}
+									value={solution.userCount}
+								/>
+								<InfoItem
+									label={t("technicalLevel", "Technical Level")}
 									value={solution.technicalLevel}
 								/>
 							</div>
@@ -814,20 +850,24 @@ function SolutionDetailView({
 
 							<div className="space-y-4">
 								<div>
-									<Label className="text-sm font-semibold">{t('description', 'Description')}</Label>
+									<Label className="text-sm font-semibold">
+										{t("description", "Description")}
+									</Label>
 									<p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
 										{solution.description}
 									</p>
 								</div>
 								<div>
-									<Label className="text-sm font-semibold">{t('exampleInput', 'Example Input')}</Label>
+									<Label className="text-sm font-semibold">
+										{t("exampleInput", "Example Input")}
+									</Label>
 									<p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap bg-muted/50 p-3 rounded-md">
 										{solution.exampleInput}
 									</p>
 								</div>
 								<div>
 									<Label className="text-sm font-semibold">
-										{t('expectedOutput', 'Expected Output')}
+										{t("expectedOutput", "Expected Output")}
 									</Label>
 									<p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap bg-muted/50 p-3 rounded-md">
 										{solution.expectedOutput}
@@ -836,7 +876,7 @@ function SolutionDetailView({
 								{solution.additionalNotes && (
 									<div>
 										<Label className="text-sm font-semibold">
-											{t('additionalNotes', 'Additional Notes')}
+											{t("additionalNotes", "Additional Notes")}
 										</Label>
 										<p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
 											{solution.additionalNotes}
@@ -853,7 +893,7 @@ function SolutionDetailView({
 							<CardHeader>
 								<CardTitle className="text-lg flex items-center gap-2">
 									<File className="h-5 w-5" />
-									{t('attachedFiles', 'Attached Files')}
+									{t("attachedFiles", "Attached Files")}
 								</CardTitle>
 							</CardHeader>
 							<CardContent>
@@ -894,7 +934,9 @@ function SolutionDetailView({
 					{solution.adminNotes && (
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-lg">{t('adminNotes', 'Admin Notes')}</CardTitle>
+								<CardTitle className="text-lg">
+									{t("adminNotes", "Admin Notes")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								<p className="text-sm text-muted-foreground whitespace-pre-wrap">
@@ -912,42 +954,50 @@ function SolutionDetailView({
 						<CardHeader>
 							<CardTitle className="text-lg flex items-center gap-2">
 								<CreditCard className="h-5 w-5" />
-								{t('payment', 'Payment')}
+								{t("payment", "Payment")}
 							</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-4">
 							<div className="flex items-center justify-between">
-								<span className="text-sm text-muted-foreground">{t('total', 'Total')}</span>
+								<span className="text-sm text-muted-foreground">
+									{t("total", "Total")}
+								</span>
 								<span className="font-semibold">
 									{formatCurrency(solution.totalCents)}
 								</span>
 							</div>
 							<div className="flex items-center justify-between">
-								<span className="text-sm text-muted-foreground">{t('deposit', 'Deposit')}</span>
+								<span className="text-sm text-muted-foreground">
+									{t("deposit", "Deposit")}
+								</span>
 								<div className="flex items-center gap-2">
 									<span className="font-medium">
 										{formatCurrency(solution.depositCents)}
 									</span>
 									{solution.paidDeposit ? (
 										<Badge className="bg-green-500/10 text-green-500">
-											{t('paid', 'Paid')}
+											{t("paid", "Paid")}
 										</Badge>
 									) : (
 										<Badge className="bg-yellow-500/10 text-yellow-500">
-											{t('pending', 'Pending')}
+											{t("pending", "Pending")}
 										</Badge>
 									)}
 								</div>
 							</div>
 							<div className="flex items-center justify-between">
-								<span className="text-sm text-muted-foreground">{t('remainder', 'Remainder')}</span>
+								<span className="text-sm text-muted-foreground">
+									{t("remainder", "Remainder")}
+								</span>
 								<span className="font-medium">
 									{formatCurrency(solution.remainderCents)}
 								</span>
 							</div>
 							<Separator />
 							<div className="flex items-center justify-between">
-								<span className="text-sm text-muted-foreground">{t('tier', 'Tier')}</span>
+								<span className="text-sm text-muted-foreground">
+									{t("tier", "Tier")}
+								</span>
 								<Badge variant="outline">{solution.pricingTier}</Badge>
 							</div>
 						</CardContent>
@@ -959,10 +1009,13 @@ function SolutionDetailView({
 							<CardHeader>
 								<CardTitle className="text-lg flex items-center gap-2">
 									<ExternalLink className="h-5 w-5" />
-									{t('customerTracking', 'Customer Tracking')}
+									{t("customerTracking", "Customer Tracking")}
 								</CardTitle>
 								<CardDescription>
-									{t('shareThisUrlWithTheCustomerToTrackStatus', 'Share this URL with the customer to track status')}
+									{t(
+										"shareThisUrlWithTheCustomerToTrackStatus",
+										"Share this URL with the customer to track status",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -983,7 +1036,9 @@ function SolutionDetailView({
 													<Copy className="h-4 w-4" />
 												</Button>
 											</TooltipTrigger>
-											<TooltipContent>{t('copyUrl', 'Copy URL')}</TooltipContent>
+											<TooltipContent>
+												{t("copyUrl", "Copy URL")}
+											</TooltipContent>
 										</Tooltip>
 									</TooltipProvider>
 								</div>
@@ -996,14 +1051,14 @@ function SolutionDetailView({
 						<CardHeader>
 							<CardTitle className="text-lg flex items-center gap-2">
 								<MessageSquare className="h-5 w-5" />
-								{t('activityLog', 'Activity Log')}
+								{t("activityLog", "Activity Log")}
 							</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-4">
 							{/* Add log input */}
 							<div className="flex gap-2">
 								<Input
-									placeholder={t('addALogEntry', 'Add a log entry...')}
+									placeholder={t("addALogEntry", "Add a log entry...")}
 									value={newLogAction}
 									onChange={(e) => setNewLogAction(e.target.value)}
 									onKeyDown={(e) => {
@@ -1034,7 +1089,7 @@ function SolutionDetailView({
 										))
 									) : (
 										<p className="text-sm text-muted-foreground text-center py-4">
-											{t('noActivityYet', 'No activity yet')}
+											{t("noActivityYet", "No activity yet")}
 										</p>
 									)}
 								</div>
@@ -1045,24 +1100,34 @@ function SolutionDetailView({
 					{/* Metadata */}
 					<Card>
 						<CardHeader>
-							<CardTitle className="text-lg">{t('details', 'Details')}</CardTitle>
+							<CardTitle className="text-lg">
+								{t("details", "Details")}
+							</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-3 text-sm">
 							<div className="flex items-center justify-between">
-								<span className="text-muted-foreground">{t('assignedTo', 'Assigned To')}</span>
+								<span className="text-muted-foreground">
+									{t("assignedTo", "Assigned To")}
+								</span>
 								<span>{solution.assignedTo ?? "Unassigned"}</span>
 							</div>
 							<div className="flex items-center justify-between">
-								<span className="text-muted-foreground">{t('created', 'Created')}</span>
+								<span className="text-muted-foreground">
+									{t("created", "Created")}
+								</span>
 								<span>{formatDate(solution.createdAt)}</span>
 							</div>
 							<div className="flex items-center justify-between">
-								<span className="text-muted-foreground">{t('updated', 'Updated')}</span>
+								<span className="text-muted-foreground">
+									{t("updated", "Updated")}
+								</span>
 								<span>{formatDate(solution.updatedAt)}</span>
 							</div>
 							{solution.deliveredAt && (
 								<div className="flex items-center justify-between">
-									<span className="text-muted-foreground">{t('delivered', 'Delivered')}</span>
+									<span className="text-muted-foreground">
+										{t("delivered", "Delivered")}
+									</span>
 									<span>{formatDate(solution.deliveredAt)}</span>
 								</div>
 							)}
@@ -1285,21 +1350,26 @@ function SolutionEditDialog({
 		<Dialog open={!!solution} onOpenChange={onClose}>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>{t('editSolutionRequest', 'Edit Solution Request')}</DialogTitle>
+					<DialogTitle>
+						{t("editSolutionRequest", "Edit Solution Request")}
+					</DialogTitle>
 					<DialogDescription>
-						{t('updateTheStatusAndAdminDetailsForThisSolutionRequest', 'Update the status and admin details for this solution request.')}
+						{t(
+							"updateTheStatusAndAdminDetailsForThisSolutionRequest",
+							"Update the status and admin details for this solution request.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
-						<Label>{t('status', 'Status')}</Label>
+						<Label>{t("status", "Status")}</Label>
 						<Select
 							value={status}
 							onValueChange={(value) => setStatus(value as SolutionStatus)}
 						>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectStatus', 'Select status')} />
+								<SelectValue placeholder={t("selectStatus", "Select status")} />
 							</SelectTrigger>
 							<SelectContent>
 								{Object.values(SolutionStatus).map((s) => (
@@ -1312,29 +1382,38 @@ function SolutionEditDialog({
 					</div>
 
 					<div className="space-y-2">
-						<Label>{t('assignedTo', 'Assigned To')}</Label>
+						<Label>{t("assignedTo", "Assigned To")}</Label>
 						<Input
 							value={assignedTo}
 							onChange={(e) => setAssignedTo(e.target.value)}
-							placeholder={t('enterAssigneeNameOrEmail', 'Enter assignee name or email')}
+							placeholder={t(
+								"enterAssigneeNameOrEmail",
+								"Enter assignee name or email",
+							)}
 						/>
 					</div>
 
 					<div className="space-y-2">
-						<Label>{t('adminNotes', 'Admin Notes')}</Label>
+						<Label>{t("adminNotes", "Admin Notes")}</Label>
 						<Textarea
 							value={adminNotes}
 							onChange={(e) => setAdminNotes(e.target.value)}
-							placeholder={t('internalNotesAboutThisRequest', 'Internal notes about this request...')}
+							placeholder={t(
+								"internalNotesAboutThisRequest",
+								"Internal notes about this request...",
+							)}
 							rows={4}
 						/>
 					</div>
 
 					<div className="flex items-center justify-between">
 						<div className="space-y-0.5">
-							<Label>{t('priority', 'Priority')}</Label>
+							<Label>{t("priority", "Priority")}</Label>
 							<p className="text-sm text-muted-foreground">
-								{t('markThisRequestAsHighPriority', 'Mark this request as high priority')}
+								{t(
+									"markThisRequestAsHighPriority",
+									"Mark this request as high priority",
+								)}
 							</p>
 						</div>
 						<Switch checked={priority} onCheckedChange={setPriority} />
@@ -1343,11 +1422,11 @@ function SolutionEditDialog({
 
 				<DialogFooter>
 					<Button variant="outline" onClick={onClose} disabled={isUpdating}>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={handleSave} disabled={isUpdating}>
 						{isUpdating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-						{t('saveChanges', 'Save Changes')}
+						{t("saveChanges", "Save Changes")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -1,5 +1,4 @@
 "use client";
-import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	AppLinkPicker,
 	type AppOption,
@@ -17,6 +16,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -137,8 +137,8 @@ function CourseAdminContent() {
 			queryClient.invalidateQueries({ queryKey: ["learn", "courses"] });
 			toast.success(
 				args.item === "icon"
-					? t('courseIconUploaded', 'Course icon uploaded')
-					: t('courseBannerUploaded', 'Course banner uploaded'),
+					? t("courseIconUploaded", "Course icon uploaded")
+					: t("courseBannerUploaded", "Course banner uploaded"),
 			);
 		},
 		onError: (err) => {
@@ -167,7 +167,7 @@ function CourseAdminContent() {
 				<div className="mx-auto max-w-3xl p-6 md:p-10">
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('courseMissing', 'Course missing')}</CardTitle>
+							<CardTitle>{t("courseMissing", "Course missing")}</CardTitle>
 							<CardDescription>
 								{`Open a course from the course admin library.`}
 							</CardDescription>
@@ -176,7 +176,7 @@ function CourseAdminContent() {
 							<Button asChild variant="outline">
 								<Link href="/learn/admin">
 									<ArrowLeft className="mr-2 h-4 w-4" />
-									{t('courseAdmin', 'Course admin')}
+									{t("courseAdmin", "Course admin")}
 								</Link>
 							</Button>
 						</CardContent>
@@ -195,7 +195,7 @@ function CourseAdminContent() {
 						className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 					>
 						<ArrowLeft className="h-3 w-3" />
-						{t('authoring', 'Authoring')}
+						{t("authoring", "Authoring")}
 					</Link>
 					<h1 className="ml-auto text-2xl font-semibold truncate max-w-[60%]">
 						{course?.name ?? courseId}
@@ -210,13 +210,15 @@ function CourseAdminContent() {
 						}}
 					>
 						<Trash2 className="h-3.5 w-3.5 mr-1.5" />
-						{t('delete', 'Delete')}
+						{t("delete", "Delete")}
 					</Button>
 				</div>
 
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">{t('courseDetails', 'Course details')}</CardTitle>
+						<CardTitle className="text-base">
+							{t("courseDetails", "Course details")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<CourseForm
@@ -343,8 +345,8 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 				moduleId,
 				lessonId,
 				{
-					title: t('newLesson', 'New lesson'),
-					content: t('newLessonStartWriting', "# New lesson Start writing…"),
+					title: t("newLesson", "New lesson"),
+					content: t("newLessonStartWriting", "# New lesson Start writing…"),
 					position,
 				},
 			);
@@ -361,9 +363,14 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">{t('modulesLessons', 'Modules & lessons')}</CardTitle>
+				<CardTitle className="text-base">
+					{t("modulesLessons", "Modules & lessons")}
+				</CardTitle>
 				<CardDescription>
-					{t('modulesGroupLessonsReorderViaThePositionField', 'Modules group lessons. Reorder via the position field.')}
+					{t(
+						"modulesGroupLessonsReorderViaThePositionField",
+						"Modules group lessons. Reorder via the position field.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
@@ -379,23 +386,25 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 							htmlFor="new-module-title"
 							className="text-xs font-medium text-muted-foreground"
 						>
-							{t('newModuleTitle', 'New module title')}
+							{t("newModuleTitle", "New module title")}
 						</label>
 						<Input
 							id="new-module-title"
 							value={newTitle}
 							onChange={(e) => setNewTitle(e.target.value)}
-							placeholder={t('gettingStarted', 'Getting started')}
+							placeholder={t("gettingStarted", "Getting started")}
 						/>
 					</div>
 					<Button type="submit" disabled={createModule.isPending || !profile}>
 						<Plus className="h-4 w-4 mr-2" />
-						{t('addModule', 'Add module')}
+						{t("addModule", "Add module")}
 					</Button>
 				</form>
 
 				{modules.length === 0 ? (
-					<p className="text-sm text-muted-foreground">{t('noModulesYet', 'No modules yet.')}</p>
+					<p className="text-sm text-muted-foreground">
+						{t("noModulesYet", "No modules yet.")}
+					</p>
 				) : (
 					<ul className="space-y-3">
 						{modules.map((m) => (
@@ -470,7 +479,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 											disabled={createLesson.isPending}
 										>
 											<Plus className="h-3 w-3 mr-2" />
-											{t('addLesson', 'Add lesson')}
+											{t("addLesson", "Add lesson")}
 										</Button>
 									</li>
 								</ul>
@@ -548,9 +557,19 @@ function AppLinksEditor({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">{t('linkedApps', 'Linked apps')}</CardTitle>
-				<CardDescription><Trans i18nKey="appsUsedByThisCourseStrongsharedTemplatestrongPlaygroundAppsAreForkedIntoTheUsersLibraryOnFirstEncounter">Apps used by this course. <strong>Shared template</strong> /
-					Playground apps are forked into the user's library on first encounter.</Trans>{" "}<Trans i18nKey="strongreferencestrongAppsAreReadonlyLinks"><strong>Reference</strong> apps are read-only links.</Trans></CardDescription>
+				<CardTitle className="text-base">
+					{t("linkedApps", "Linked apps")}
+				</CardTitle>
+				<CardDescription>
+					<Trans i18nKey="appsUsedByThisCourseStrongsharedTemplatestrongPlaygroundAppsAreForkedIntoTheUsersLibraryOnFirstEncounter">
+						Apps used by this course. <strong>Shared template</strong> /
+						Playground apps are forked into the user's library on first
+						encounter.
+					</Trans>{" "}
+					<Trans i18nKey="strongreferencestrongAppsAreReadonlyLinks">
+						<strong>Reference</strong> apps are read-only links.
+					</Trans>
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="space-y-2 rounded-md border p-3 bg-muted/20">
@@ -560,12 +579,14 @@ function AppLinksEditor({
 						disabled={!draft.appId || upsert.isPending || !profile}
 					>
 						<Plus className="h-4 w-4 mr-2" />
-						{t('addLink', 'Add link')}
+						{t("addLink", "Add link")}
 					</Button>
 				</div>
 
 				{links.length === 0 ? (
-					<p className="text-sm text-muted-foreground">{t('noAppsLinkedYet', 'No apps linked yet.')}</p>
+					<p className="text-sm text-muted-foreground">
+						{t("noAppsLinkedYet", "No apps linked yet.")}
+					</p>
 				) : (
 					<ul className="space-y-2">
 						{links.map((l) => (

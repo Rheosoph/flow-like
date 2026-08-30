@@ -26,6 +26,8 @@ impl NodeLogic for ExtractContentNode {
             "Extracts text content from a chat message, flattening multi-part payloads",
             "AI/Generative/History/Message",
         );
+        node.set_flowscript_name("history", "extractContent");
+        node.set_receiver("message");
         node.add_icon("/flow/icons/message.svg");
         node.set_version(2);
         node.set_scores(

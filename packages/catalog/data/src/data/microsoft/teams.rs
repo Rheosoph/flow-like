@@ -98,6 +98,7 @@ impl NodeLogic for ListJoinedTeamsNode {
             "List all Microsoft Teams the user has joined",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "listJoined");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
@@ -176,6 +177,7 @@ impl NodeLogic for ListTeamChannelsNode {
             "List all channels in a Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "listChannels");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
@@ -260,6 +262,7 @@ impl NodeLogic for SendChannelMessageNode {
             "Send a message to a Microsoft Teams channel",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "sendMessage");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
@@ -390,6 +393,7 @@ impl NodeLogic for GetChannelMessagesNode {
             "Get messages from a Microsoft Teams channel",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "getMessages");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
@@ -488,6 +492,7 @@ impl NodeLogic for CreateTeamNode {
             "Create a new Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "createTeam");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 
@@ -621,6 +626,7 @@ impl NodeLogic for CreateChannelNode {
             "Create a new channel in a Microsoft Team",
             "Data/Microsoft/Teams",
         );
+        node.set_flowscript_name("microsoft.teams", "createChannel");
         node.set_version(1);
         node.add_icon("/flow/icons/teams.svg");
 

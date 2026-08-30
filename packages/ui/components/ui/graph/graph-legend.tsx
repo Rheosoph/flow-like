@@ -18,6 +18,12 @@ export interface LegendEntry {
 
 export interface GraphLegendProps {
 	entries: LegendEntry[];
+	/**
+	 * Controlled hidden-label set. Omit to let the legend own it, which the a2ui
+	 * `graph` element relies on. Supplying it makes the caller the single source of
+	 * truth, so label visibility set from outside the legend stays in sync with it.
+	 */
+	hidden?: ReadonlySet<string>;
 	onToggleVisibility?: (label: string, visible: boolean) => void;
 	onStyleChange?: (
 		label: string,
@@ -289,45 +295,51 @@ function byPresence(a: LegendEntry, b: LegendEntry): number {
 
 export function GraphLegend({
 	entries,
+	hidden: hiddenProp,
 	onToggleVisibility,
 	onStyleChange,
 }: GraphLegendProps) {
 	const { t } = useTranslation("common");
-	const [hidden, setHidden] = useState<Set<string>>(new Set());
+	const [internalHidden, setInternalHidden] = useState<Set<string>>(new Set());
 	const [collapsed, setCollapsed] = useState(false);
 
+	const isControlled = hiddenProp !== undefined;
+	const hidden = hiddenProp ?? internalHidden;
+
+	// Notification is driven off the EFFECTIVE set, never off the internal updater's
+	// `prev`: under control that value is stale and would invert the reported state.
 	const toggle = useCallback(
 		(label: string) => {
-			setHidden((prev) => {
+			const visible = hidden.has(label);
+			onToggleVisibility?.(label, visible);
+			if (isControlled) return;
+			setInternalHidden((prev) => {
 				const next = new Set(prev);
-				if (next.has(label)) {
-					next.delete(label);
-					onToggleVisibility?.(label, true);
-				} else {
-					next.add(label);
-					onToggleVisibility?.(label, false);
-				}
+				if (visible) next.delete(label);
+				else next.add(label);
 				return next;
 			});
 		},
-		[onToggleVisibility],
+		[hidden, isControlled, onToggleVisibility],
 	);
 
 	const toggleAll = useCallback(
 		(section: LegendEntry[], visible: boolean) => {
-			setHidden((prev) => {
+			const affected = section.filter(
+				(entry) => hidden.has(entry.label) === visible,
+			);
+			for (const entry of affected) onToggleVisibility?.(entry.label, visible);
+			if (isControlled) return;
+			setInternalHidden((prev) => {
 				const next = new Set(prev);
-				for (const entry of section) {
-					if (visible === next.has(entry.label)) {
-						if (visible) next.delete(entry.label);
-						else next.add(entry.label);
-						onToggleVisibility?.(entry.label, visible);
-					}
+				for (const entry of affected) {
+					if (visible) next.delete(entry.label);
+					else next.add(entry.label);
 				}
 				return next;
 			});
 		},
-		[onToggleVisibility],
+		[hidden, isControlled, onToggleVisibility],
 	);
 
 	const { nodeEntries, edgeEntries } = useMemo(

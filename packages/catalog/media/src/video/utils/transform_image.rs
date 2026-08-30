@@ -19,6 +19,7 @@ impl NodeLogic for TransformImageNode {
             "Apply crop, resize, flip, rotate, blur, and color filters to a still image",
             "Image",
         );
+        node.set_flowscript_name("image", "transform");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source image FlowPath");

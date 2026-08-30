@@ -34,7 +34,9 @@ export function NameDialog({
 			>
 				<DialogHeader>
 					<DialogTitle>Name</DialogTitle>
-					<DialogDescription>{t('nameYourNode', 'Name your node.')}</DialogDescription>
+					<DialogDescription>
+						{t("nameYourNode", "Name your node.")}
+					</DialogDescription>
 				</DialogHeader>
 				<DialogDescription>
 					<Input
@@ -53,7 +55,7 @@ export function NameDialog({
 							onOpenChange(false);
 						}}
 					>
-						{t('save', 'Save')}
+						{t("save", "Save")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

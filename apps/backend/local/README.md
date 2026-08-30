@@ -33,6 +33,9 @@ cargo run
 
 The API will start on **http://localhost:8080**
 
+Hosted completion and embedding requests use this address as their local proxy
+default. Set `API_BASE_URL` in `api/.env` only when the API listens elsewhere.
+
 ### 3. Start the Runtime (in another terminal)
 
 ```bash
@@ -41,6 +44,9 @@ cargo run
 ```
 
 The runtime will start on **http://localhost:9000**
+
+The API passes its callback address to each run. `API_BASE_URL` in
+`runtime/.env` is the fallback for runs started outside that path.
 
 ## Configuration
 
@@ -69,11 +75,13 @@ ASYNC_EXECUTION_BACKEND="redis"
 - `EXECUTOR_URL` - Runtime URL for HTTP execution
 - `EXECUTION_BACKEND` - Streaming backend: `http`
 - `ASYNC_EXECUTION_BACKEND` - Async backend: `http`, `redis`
+- `API_BASE_URL` - Authenticated model proxy base (default: `http://localhost:8080`)
 
 ### Runtime (.env)
 - `RUNTIME_PORT` - Runtime server port (default: 9000)
 - `QUEUE_WORKER_ENABLED` - Enable Redis queue polling (required for `ASYNC_EXECUTION_BACKEND=redis`)
 - `REDIS_URL` - Redis connection string
+- `API_BASE_URL` - Model proxy fallback (default: `http://localhost:8080`)
 
 ## Stopping
 

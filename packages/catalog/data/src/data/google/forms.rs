@@ -162,6 +162,7 @@ impl NodeLogic for GetGoogleFormNode {
             "Get details of a Google Form",
             "Data/Google/Forms",
         );
+        node.set_flowscript_name("google.forms", "get");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -272,6 +273,7 @@ impl NodeLogic for ListGoogleFormResponsesNode {
             "List all responses to a Google Form",
             "Data/Google/Forms",
         );
+        node.set_flowscript_name("google.forms", "listResponses");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -407,6 +409,7 @@ impl NodeLogic for GetGoogleFormResponseNode {
             "Get a specific response from a Google Form",
             "Data/Google/Forms",
         );
+        node.set_flowscript_name("google.forms", "getResponse");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -519,6 +522,7 @@ impl NodeLogic for CreateGoogleFormNode {
             "Create a new Google Form",
             "Data/Google/Forms",
         );
+        node.set_flowscript_name("google.forms", "create");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -638,6 +642,7 @@ impl NodeLogic for UpdateGoogleFormInfoNode {
             "Update title and description of a Google Form",
             "Data/Google/Forms",
         );
+        node.set_flowscript_name("google.forms", "updateInfo");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

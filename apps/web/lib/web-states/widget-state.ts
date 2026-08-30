@@ -1,6 +1,7 @@
 import {
 	type IMetadata,
 	type IWidgetState,
+	applyWidgetRename,
 	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
 import type {
@@ -39,7 +40,8 @@ export class WebWidgetState implements IWidgetState {
 		widgetId: string,
 		version?: Version,
 	): Promise<IWidget> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		// The handler parses MAJOR_MINOR_PATCH; dots fail to parse as u32.
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IWidget>(
 			`apps/${appId}/widgets/${widgetId}${params}`,
 			this.backend.auth,
@@ -82,6 +84,15 @@ export class WebWidgetState implements IWidgetState {
 			{ widget: normalizedWidget },
 			this.backend.auth,
 		);
+	}
+
+	async renameWidget(
+		appId: string,
+		widgetId: string,
+		name: string,
+		language?: string,
+	): Promise<void> {
+		await applyWidgetRename(this, appId, widgetId, name, language);
 	}
 
 	async deleteWidget(appId: string, widgetId: string): Promise<void> {

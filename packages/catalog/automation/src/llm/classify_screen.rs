@@ -92,6 +92,7 @@ impl NodeLogic for LLMClassifyScreenNode {
             "Uses vision LLM to classify screen state and identify visible elements",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "classifyScreen");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

@@ -1,0 +1,9 @@
+// A type annotation on a literal-initialized function-local makes the local unreadable.
+// FLOWSCRIPT.md documents exactly this pattern: `let n: int = 0` then `n = n + 1`.
+// Dropping the `: int` (or the `: string[]` on an accumulator seeded with `[]`) makes the
+// identical fixture reconcile clean, so the annotation itself is what breaks resolution.
+eventsSimple typedLocalCounter() {
+    let seen: int = 0
+    seen = seen + 1
+    log::info({ message: `${seen}`, toast: false })
+}

@@ -25,6 +25,8 @@ impl NodeLogic for Md5Node {
             "Computes the MD5 hash of the input string. Note: MD5 is not collision-resistant — use SHA-256 or Blake3 for security-sensitive hashing.",
             "Utils/Hash",
         );
+        node.set_flowscript_name("hash", "md5");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("exec_in", "Execute", "", VariableType::Execution);

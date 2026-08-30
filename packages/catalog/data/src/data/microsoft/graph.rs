@@ -200,6 +200,7 @@ async fn upload_with_simple_put(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_with_session(
     context: &mut ExecutionContext,
     client: &reqwest::Client,
@@ -265,6 +266,7 @@ async fn upload_with_session(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_flow_path_to_drive(
     context: &mut ExecutionContext,
     client: &reqwest::Client,
@@ -324,6 +326,7 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             "Call any Microsoft Graph endpoint with optional collection pagination",
             "Data/Microsoft",
         );
+        node.set_flowscript_name("microsoft", "graphRequest");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -362,7 +365,8 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             VariableType::Struct,
         )
         .set_value_type(ValueType::Normal)
-        .set_default_value(Some(json!(null)));
+        .set_default_value(Some(json!(null)))
+        .set_open_schema();
         node.add_input_pin(
             "paginate",
             "Paginate",
@@ -384,14 +388,16 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             "Response",
             "Raw JSON response",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "values",
             "Values",
             "Paginated collection values",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
         node.add_output_pin(
             "next_link",
             "Next Link",

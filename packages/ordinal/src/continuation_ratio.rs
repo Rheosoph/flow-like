@@ -419,7 +419,7 @@ impl<F: Float> ContinuationRatio<F> {
         let mut reached = F::one();
         for stop in conditional {
             probabilities.push(reached * stop);
-            reached = reached * (F::one() - stop);
+            reached *= F::one() - stop;
         }
         probabilities.push(reached);
         probabilities
@@ -674,9 +674,9 @@ fn fit_sub_model<F: Float, D: Data<Elem = F>>(
             let v_hat = v[index] / bias_correction2;
             let update = params.learning_rate * m_hat / (v_hat.sqrt() + eps);
             if index < n_features {
-                coefficients[index] = coefficients[index] - update;
+                coefficients[index] -= update;
             } else {
-                intercept = intercept - update;
+                intercept -= update;
             }
         }
     }
@@ -752,21 +752,21 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
         } else {
             (one - probability).ln()
         };
-        objective = objective - log_likelihood;
+        objective -= log_likelihood;
 
         let variance = (probability * (one - probability)).max(floor);
         let d_eta = link.pdf(eta) * (probability - target) / variance;
-        grad_intercept = grad_intercept + d_eta;
+        grad_intercept += d_eta;
         for (feature, value) in row.iter().enumerate() {
-            grad_coefficients[feature] = grad_coefficients[feature] + d_eta * *value;
+            grad_coefficients[feature] += d_eta * *value;
         }
     }
 
     // L2 on the coefficients only. Penalizing the intercept would bias the stopping rate itself,
     // which on the small high-level subsets is the one quantity the data does pin down.
-    objective = objective + F::cast(0.5) * alpha * coefficients.dot(coefficients);
+    objective += F::cast(0.5) * alpha * coefficients.dot(coefficients);
     for (feature, value) in coefficients.iter().enumerate() {
-        grad_coefficients[feature] = grad_coefficients[feature] + alpha * *value;
+        grad_coefficients[feature] += alpha * *value;
     }
 
     (objective, grad_coefficients, grad_intercept)

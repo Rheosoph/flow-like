@@ -6,14 +6,17 @@
 //! Supports batch processing for large datasets.
 //! Adds / upserts predictions back into the Database.
 
+use crate::ml::MLPrediction;
+use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::make_new_field;
-use crate::ml::{MLPrediction, NodeMLModel};
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::pin::ValueType;
+use flow_like::flow::{board::Board, node::remove_pin_by_name};
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
-    node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
+    execution::context::ExecutionContext,
+    node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
@@ -25,9 +28,10 @@ use flow_like_storage::arrow_schema::Schema;
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 
@@ -50,6 +54,8 @@ impl NodeLogic for MLPredictNode {
             "Predict with Machine Learning Model",
             "AI/ML",
         );
+        node.set_flowscript_name("ml", "predict");
+        node.set_receiver("model");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -284,7 +290,6 @@ impl NodeLogic for MLPredictNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

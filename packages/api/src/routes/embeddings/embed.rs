@@ -371,6 +371,7 @@ fn estimate_embedding_price(model_id: &str, token_count: i64) -> i64 {
     (token_count * price_per_1k) / 1000
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn track_embedding_usage(
     state: &AppState,
     user_sub: &str,

@@ -11,13 +11,7 @@
 		"isPublished": true,
 		"iconUrl": null,
 		"bannerUrl": null,
-		"tags": [
-			"storage",
-			"database",
-			"sql",
-			"rag",
-			"ontology"
-		],
+		"tags": ["storage", "database", "sql", "rag", "ontology"],
 		"position": 3,
 		"description": "Give a support copilot its data: files, tables, SQL, retrieval, and a semantic graph \u2014 each in the right home, every import safe to run twice.",
 		"longDescription": "You're building a Customer Support Copilot, and its data has to live somewhere. This course walks the five homes Flow-Like offers \u2014 typed pin values, file Storage, native tables, DataFusion SQL sessions, and the ontology layer \u2014 through one running scenario: ingest archived tickets idempotently, debug a join that doubles your numbers, index the refund policy for grounded retrieval, and map customers, tickets, and agents into an explorable graph. The finale is a design review of a partner team's flawed RAG assistant \u2014 you name exactly what broke, and what it should have done instead.",
@@ -112,9 +106,7 @@
 											"label": "As a registered table in the run's DataFusion session"
 										}
 									],
-									"correct": [
-										"pin-value"
-									]
+									"correct": ["pin-value"]
 								}
 							},
 							{
@@ -147,11 +139,7 @@
 											"label": "Ticket status encoded in filenames like ticket-1042-open.md so it's visible in Storage"
 										}
 									],
-									"correct": [
-										"policy-storage",
-										"ticket-rows",
-										"ontology-link"
-									]
+									"correct": ["policy-storage", "ticket-rows", "ontology-link"]
 								}
 							},
 							{
@@ -180,9 +168,7 @@
 											"label": "The summary was saved to Storage under the run's ID automatically"
 										}
 									],
-									"correct": [
-										"nothing-durable"
-									]
+									"correct": ["nothing-durable"]
 								}
 							}
 						],
@@ -225,9 +211,7 @@
 											"label": "It's automatically indexed so the copilot can cite it"
 										}
 									],
-									"correct": [
-										"team-readable"
-									]
+									"correct": ["team-readable"]
 								}
 							},
 							{
@@ -256,9 +240,7 @@
 											"label": "A retry will find the file at its original path and continue from row 500"
 										}
 									],
-									"correct": [
-										"half-finished"
-									]
+									"correct": ["half-finished"]
 								}
 							},
 							{
@@ -291,10 +273,7 @@
 											"label": "The uploading user's ID"
 										}
 									],
-									"correct": [
-										"content-hash",
-										"source-id"
-									]
+									"correct": ["content-hash", "source-id"]
 								}
 							}
 						],
@@ -337,9 +316,7 @@
 											"label": "800 \u2014 the re-run refuses to start while partial data exists"
 										}
 									],
-									"correct": [
-										"duplicated"
-									]
+									"correct": ["duplicated"]
 								}
 							},
 							{
@@ -372,11 +349,7 @@
 											"label": "Delete all rows at the start of every run and reimport from scratch"
 										}
 									],
-									"correct": [
-										"stable-key",
-										"upsert-retry",
-										"manifest"
-									]
+									"correct": ["stable-key", "upsert-retry", "manifest"]
 								}
 							},
 							{
@@ -405,9 +378,7 @@
 											"label": "Counting requires an index, which didn't exist yet"
 										}
 									],
-									"correct": [
-										"not-flushed"
-									]
+									"correct": ["not-flushed"]
 								}
 							}
 						],
@@ -450,9 +421,7 @@
 											"label": "Run three separate queries and let the model combine the results in its context"
 										}
 									],
-									"correct": [
-										"datafusion-session"
-									]
+									"correct": ["datafusion-session"]
 								}
 							},
 							{
@@ -481,9 +450,7 @@
 											"label": "The WHERE filter ran after the join, doubling the matched rows"
 										}
 									],
-									"correct": [
-										"duplicate-keys"
-									]
+									"correct": ["duplicate-keys"]
 								}
 							},
 							{
@@ -512,9 +479,7 @@
 											"label": "Create an index on ticket_id so the query sees new rows"
 										}
 									],
-									"correct": [
-										"flush-first"
-									]
+									"correct": ["flush-first"]
 								}
 							}
 						],
@@ -557,9 +522,7 @@
 											"label": "Reusing the model halves embedding cost, which is the main concern"
 										}
 									],
-									"correct": [
-										"same-space"
-									]
+									"correct": ["same-space"]
 								}
 							},
 							{
@@ -588,9 +551,7 @@
 											"label": "Skip retrieval ranking and send the full corpus as context so nothing is missed"
 										}
 									],
-									"correct": [
-										"hybrid"
-									]
+									"correct": ["hybrid"]
 								}
 							},
 							{
@@ -623,10 +584,7 @@
 											"label": "Update and redeploy the query workflow"
 										}
 									],
-									"correct": [
-										"reindex-source",
-										"retire-old"
-									]
+									"correct": ["reindex-source", "retire-old"]
 								}
 							}
 						],
@@ -669,9 +627,7 @@
 											"label": "Nothing yet \u2014 rows are copied lazily the first time someone traverses them"
 										}
 									],
-									"correct": [
-										"nothing-copied"
-									]
+									"correct": ["nothing-copied"]
 								}
 							},
 							{
@@ -737,9 +693,7 @@
 											"label": "The tickets table was created user-scoped instead of project-scoped"
 										}
 									],
-									"correct": [
-										"duplicate-identity"
-									]
+									"correct": ["duplicate-identity"]
 								}
 							}
 						],
@@ -790,9 +744,7 @@
 											"label": "Retrieval should combine full-text and vector candidates"
 										}
 									],
-									"correct": [
-										"lane-separation"
-									]
+									"correct": ["lane-separation"]
 								}
 							},
 							{
@@ -825,10 +777,7 @@
 											"label": "The nightly copy into graph_chunks"
 										}
 									],
-									"correct": [
-										"run-stamped-ids",
-										"insert-for-retry"
-									]
+									"correct": ["run-stamped-ids", "insert-for-retry"]
 								}
 							},
 							{
@@ -857,9 +806,7 @@
 											"label": "Run the count in a DataFusion session instead of a table node"
 										}
 									],
-									"correct": [
-										"flush-before-count"
-									]
+									"correct": ["flush-before-count"]
 								}
 							},
 							{
@@ -888,9 +835,7 @@
 											"label": "Into post-processing \u2014 strip figures as well as titles from answers"
 										}
 									],
-									"correct": [
-										"retrieval-filter"
-									]
+									"correct": ["retrieval-filter"]
 								}
 							},
 							{
@@ -919,9 +864,7 @@
 											"label": "Lower the full-text match threshold until paraphrases start matching"
 										}
 									],
-									"correct": [
-										"go-hybrid"
-									]
+									"correct": ["go-hybrid"]
 								}
 							},
 							{

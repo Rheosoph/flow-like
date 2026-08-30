@@ -1,5 +1,7 @@
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     variable::VariableType,
 };
@@ -26,6 +28,7 @@ impl NodeLogic for DropGraphOverlayNode {
             "Deletes a graph overlay definition (does not drop underlying tables)",
             "Data/Database/Graph",
         );
+        node.set_flowscript_name("db.graph", "dropOverlay");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

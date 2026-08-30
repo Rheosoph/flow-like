@@ -5,7 +5,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
-use serde::{Deserialize, Serialize};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -17,12 +16,6 @@ impl DateTimeDurationNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SystemTime {
-    secs_since_epoch: i64,
-    nanos_since_epoch: u32,
-}
-
 #[async_trait]
 impl NodeLogic for DateTimeDurationNode {
     fn get_node(&self) -> Node {
@@ -32,6 +25,8 @@ impl NodeLogic for DateTimeDurationNode {
             "Adds or subtracts a duration from a date",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "add");
+        node.set_receiver("date");
 
         node.add_input_pin("date", "Date", "Base date", VariableType::Date);
         node.add_input_pin(

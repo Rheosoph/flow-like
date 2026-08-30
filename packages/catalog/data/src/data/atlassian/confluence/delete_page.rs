@@ -27,6 +27,7 @@ impl NodeLogic for DeleteConfluencePageNode {
             "Delete a Confluence page. Use with caution - this action cannot be undone.",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "deletePage");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

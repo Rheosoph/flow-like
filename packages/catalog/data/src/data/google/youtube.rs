@@ -129,6 +129,7 @@ impl NodeLogic for SearchYouTubeVideosNode {
             "Search for YouTube videos",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "search");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -291,6 +292,7 @@ impl NodeLogic for GetYouTubeVideoNode {
             "Get YouTube video details by ID",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "getVideo");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -403,6 +405,7 @@ impl NodeLogic for ListMyYouTubeVideosNode {
             "List videos from the authenticated user's channel",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "listMyVideos");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -536,6 +539,7 @@ impl NodeLogic for GetYouTubeChannelNode {
             "Get YouTube channel details",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "getChannel");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -667,6 +671,7 @@ impl NodeLogic for ListYouTubePlaylistsNode {
             "List YouTube playlists",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "listPlaylists");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -836,6 +841,7 @@ impl NodeLogic for GetYouTubePlaylistItemsNode {
             "Get videos in a YouTube playlist",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "getPlaylistItems");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1005,6 +1011,7 @@ impl NodeLogic for AddToYouTubePlaylistNode {
             "Add a video to a YouTube playlist",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "addToPlaylist");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1136,6 +1143,7 @@ impl NodeLogic for RemoveFromYouTubePlaylistNode {
             "Remove a video from a YouTube playlist",
             "Data/Google/YouTube",
         );
+        node.set_flowscript_name("google.youtube", "removeFromPlaylist");
         node.add_icon("/flow/icons/google.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -24,6 +24,7 @@ impl NodeLogic for CellToChildrenNode {
             "Returns all child cells at a finer resolution that fit within the given cell.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellToChildren");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin("cell", "Cell", "H3 cell index", VariableType::String)

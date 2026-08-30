@@ -82,6 +82,7 @@ impl NodeLogic for PushCsvToChart {
             "Push data to a Nivo or Plotly chart. Select JSON for pre-formatted data or CSV for auto-transformation.",
             "UI/Elements/Charts",
         );
+        node.set_flowscript_name("ui", "pushCsvToChart");
         node.add_icon("/flow/icons/a2ui.svg");
         node.set_version(2);
 
@@ -93,7 +94,8 @@ impl NodeLogic for PushCsvToChart {
             "Reference to the chart element",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin("library", "Library", "Nivo or Plotly", VariableType::String)
             .set_options(
@@ -122,7 +124,8 @@ impl NodeLogic for PushCsvToChart {
             "Data",
             "Chart data as JSON array/object or JSON string",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
 

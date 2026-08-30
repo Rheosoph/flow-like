@@ -28,7 +28,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCopilotSDK, useInvoke } from "../../hooks";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
-import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
+import {
+	IBitTypes,
+	isFreeLlmModel,
+	isHostedLlmModel,
+	selectProfileLlmModels,
+} from "../../lib";
 import {
 	type AskUserAnswerPayload,
 	type AskUserDraft,
@@ -37,6 +42,7 @@ import {
 	initialAskUserDrafts,
 	parseAskUserArguments,
 } from "../../lib/ask-user";
+import { replyToChannel } from "../../lib/channel";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import {
@@ -59,6 +65,11 @@ import {
 	deliverBoardEditJobReceipt,
 	isDirectFlowPilotBoardEditJob,
 } from "../../lib/flowpilot/board-edit-job-delivery";
+import {
+	type FrontendToolApprovalScope,
+	resolveFrontendToolApprovalScope,
+} from "../../lib/frontend-tool-approval-scope";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
@@ -185,6 +196,12 @@ const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
 const BOARD_EDIT_JOB_POLL_INTERVAL_MS = 2_500;
 const HOST_BOARD_APPLY_FEEDBACK_PREFIX = "Host board apply result:";
+// Auto mode closes the build loop: after a review auto-applies, one bounded verification turn
+// runs the persisted board (run_board_tests / targeted events) and repairs failures. Capped per
+// user turn so a board that keeps failing cannot verify-and-repair forever.
+const MAX_AUTO_VERIFY_ROUNDS = 2;
+const AUTO_VERIFY_PROMPT =
+	"Verify the changes you just applied, at runtime. If the board has test events, call run_board_tests; otherwise execute the touched events with execute_event/execute_node and read their logs with query_execution_logs. If verification fails, fix the FlowScript, commit again, and re-verify. Finish with a short verdict of what was checked and what passed or failed.";
 const HOST_BOARD_APPLY_FAILURE_PREFIX = `${HOST_BOARD_APPLY_FEEDBACK_PREFIX}\nThe queued board change was not fully applied.`;
 
 function isSettledBoardEditJob(job: BoardEditJob): boolean {
@@ -328,6 +345,8 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Executing event";
 		case "execute_node":
 			return "Executing node";
+		case "run_board_tests":
+			return "Running board tests";
 		case "query_execution_logs":
 			return "Reading execution logs";
 		case "ask_user":
@@ -391,6 +410,8 @@ interface FrontendToolRequest {
 	approval?: FrontendToolApproval;
 	deadlineAtMs?: number;
 	deadline_at_ms?: number;
+	/** How to answer; every request Rust emits carries one. */
+	channel?: IChannelHandle;
 }
 
 interface FrontendToolResponse {
@@ -405,6 +426,7 @@ type FrontendToolDialogState =
 			type: "approval";
 			request: FrontendToolRequest;
 			remember: boolean;
+			rememberable: boolean;
 	  }
 	| {
 			type: "ask";
@@ -417,13 +439,6 @@ interface FrontendToolQueuedDialog {
 	dialog: FrontendToolDialogState;
 	resolve: (value: any) => void;
 }
-
-type TauriCoreModule = {
-	invoke: <T = unknown>(
-		command: string,
-		args?: Record<string, unknown>,
-	) => Promise<T>;
-};
 
 type TauriEventModule = {
 	listen: <T = unknown>(
@@ -439,10 +454,6 @@ function isTauriRuntime(): boolean {
 	if (typeof window === "undefined") return false;
 	const w = window as unknown as Record<string, unknown>;
 	return Boolean(w.__TAURI__ || w.__TAURI_IPC__ || w.__TAURI_INTERNALS__);
-}
-
-async function importTauriCore(): Promise<TauriCoreModule> {
-	return import("@tauri-apps/api/core") as Promise<TauriCoreModule>;
 }
 
 async function importTauriEvent(): Promise<TauriEventModule> {
@@ -630,6 +641,9 @@ function FlowPilotImpl({
 	const flowIrApplyInFlightRef = useRef(false);
 	const autoApplyAttemptRef = useRef<string | null>(null);
 	const autoApplyComponentsAttemptRef = useRef<string | null>(null);
+	const [autoVerifyRequest, setAutoVerifyRequest] = useState(0);
+	const autoVerifyHandledRef = useRef(0);
+	const autoVerifyRoundsRef = useRef(0);
 	const currentBoardIdRef = useRef<string | undefined>(board?.id);
 	const currentBoardNodeCountRef = useRef<number | undefined>(
 		flowPilotBoardNodeCount(board),
@@ -693,13 +707,18 @@ function FlowPilotImpl({
 			disposition: "applied" | "dismissed" | "stale" | "error",
 			token?: FlowIrCommitToken,
 			finalBoardNodeCount?: number,
+			reason?: unknown,
 		) => {
+			if (disposition === "applied" && autoModeRef.current) {
+				setAutoVerifyRequest((count) => count + 1);
+			}
 			const run = generationMetricsRunRef.current;
 			if (!run) return;
 			run.disposeReview(
 				disposition,
 				token,
 				finalBoardNodeCount ?? currentBoardNodeCountRef.current,
+				reason,
 			);
 			if (generationMetricsRunRef.current === run) {
 				generationMetricsRunRef.current = undefined;
@@ -1111,29 +1130,22 @@ function FlowPilotImpl({
 
 	// Filter profile and custom models to runtimes supported by this host.
 	const { canHostLlamaCPP, canHostMLX } = backendContext.capabilities();
-	const bitsModels = useMemo(() => {
-		if (!foundBits.data || !profile.data?.hub_profile.bits) return [];
-		const profileBitIds = new Set(profile.data.hub_profile.bits);
-		const profileModels = foundBits.data.filter((model) =>
-			profileBitIds.has(`${model.hub}:${model.id}`),
-		);
-		const seen = new Set(profileModels.map((model) => model.id));
-		const ownModels = (customBits.data ?? []).filter(
-			(model) =>
-				!seen.has(model.id) &&
-				(model.type === IBitTypes.Llm || model.type === IBitTypes.Vlm),
-		);
-		return filterHostableLlmModels([...ownModels, ...profileModels], {
+	const bitsModels = useMemo(
+		() =>
+			selectProfileLlmModels(
+				foundBits.data,
+				customBits.data,
+				profile.data?.hub_profile.bits,
+				{ canHostLlamaCPP, canHostMLX },
+			),
+		[
+			foundBits.data,
+			customBits.data,
+			profile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
-		});
-	}, [
-		foundBits.data,
-		customBits.data,
-		profile.data?.hub_profile.bits,
-		canHostLlamaCPP,
-		canHostMLX,
-	]);
+		],
+	);
 
 	const openFrontendToolDialog = useCallback(
 		(dialog: FrontendToolDialogState, resolve: (value: any) => void) => {
@@ -1148,14 +1160,25 @@ function FlowPilotImpl({
 		[],
 	);
 
+	const approvalScopeForRequest = useCallback(
+		(request: FrontendToolRequest): FrontendToolApprovalScope =>
+			resolveFrontendToolApprovalScope({
+				requestId: request.requestId,
+				toolName: request.toolName,
+				arguments: request.arguments,
+				approvalKind: request.approval?.kind,
+				approvalSessionKey: request.approval?.sessionKey,
+				contextAppId: activeAppId,
+			}),
+		[activeAppId],
+	);
+
 	const requestFrontendToolApproval = useCallback(
 		(
 			request: FrontendToolRequest,
 		): Promise<{ approved: boolean; remember: boolean }> => {
 			const approval = request.approval;
-			const sessionKey =
-				approval?.sessionKey ||
-				`${request.toolName}:${approval?.kind ?? "none"}`;
+			const approvalScope = approvalScopeForRequest(request);
 			// Auto mode is read through a ref so toggling it never changes this callback's
 			// identity: the Tauri bridge listener would otherwise tear down and cancel every
 			// in-flight request. `remember: false` keeps auto-approvals out of the session
@@ -1168,7 +1191,8 @@ function FlowPilotImpl({
 					request.arguments,
 					activeAppId,
 				) ||
-				approvedFrontendToolKeysRef.current.has(sessionKey)
+				(approvalScope.rememberable &&
+					approvedFrontendToolKeysRef.current.has(approvalScope.sessionKey))
 			) {
 				return Promise.resolve({ approved: true, remember: false });
 			}
@@ -1179,12 +1203,13 @@ function FlowPilotImpl({
 						type: "approval",
 						request,
 						remember: false,
+						rememberable: approvalScope.rememberable,
 					},
 					resolve,
 				);
 			});
 		},
-		[activeAppId, openFrontendToolDialog],
+		[activeAppId, approvalScopeForRequest, openFrontendToolDialog],
 	);
 
 	const requestFrontendUserInput = useCallback(
@@ -1272,12 +1297,14 @@ function FlowPilotImpl({
 						error: "User denied the request.",
 					};
 				}
-				const sessionKey =
-					request.approval?.sessionKey ||
-					`${request.toolName}:${request.approval?.kind ?? "none"}`;
-				if (approval.remember && request.approval?.kind !== "none") {
+				const approvalScope = approvalScopeForRequest(request);
+				if (
+					approval.remember &&
+					request.approval?.kind !== "none" &&
+					approvalScope.rememberable
+				) {
 					lease.assertActive("approval persistence");
-					approvedFrontendToolKeysRef.current.add(sessionKey);
+					approvedFrontendToolKeysRef.current.add(approvalScope.sessionKey);
 				}
 
 				lease.assertActive("tool execution");
@@ -1288,6 +1315,7 @@ function FlowPilotImpl({
 					case "ui_inspect":
 					case "execute_event":
 					case "execute_node":
+					case "run_board_tests":
 					case "query_execution_logs":
 					case "interact_app_page":
 					case "call_app_chat":
@@ -1314,7 +1342,12 @@ function FlowPilotImpl({
 				};
 			}
 		},
-		[executeRuntimeTool, requestFrontendToolApproval, requestFrontendUserInput],
+		[
+			approvalScopeForRequest,
+			executeRuntimeTool,
+			requestFrontendToolApproval,
+			requestFrontendUserInput,
+		],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
 
@@ -1330,10 +1363,7 @@ function FlowPilotImpl({
 
 		async function installListener() {
 			try {
-				const [eventApi, coreApi] = await Promise.all([
-					importTauriEvent(),
-					importTauriCore(),
-				]);
+				const eventApi = await importTauriEvent();
 
 				const [stop, stopCancellation] = await Promise.all([
 					eventApi.listen<FrontendToolRequest>(
@@ -1342,6 +1372,14 @@ function FlowPilotImpl({
 							if (disposed) return;
 							const request = event.payload;
 							if (!request?.requestId || !request.toolName) return;
+							const channel = request.channel;
+							if (!channel) {
+								console.warn(
+									"FlowPilot frontend tool request carries no channel; it cannot be answered:",
+									request.requestId,
+								);
+								return;
+							}
 							const lease = frontendToolRequestGuardRef.current.begin({
 								requestId: request.requestId,
 								deadlineAtMs: resolveFrontendToolExecutionDeadline({
@@ -1363,9 +1401,7 @@ function FlowPilotImpl({
 								if (disposed || !lease.isActive()) return;
 								lease.assertActive("frontend response delivery");
 								try {
-									await coreApi.invoke("flowpilot_frontend_tool_result", {
-										response,
-									});
+									await replyToChannel(channel, response);
 								} catch (error) {
 									if (!disposed) {
 										console.warn(
@@ -1550,9 +1586,7 @@ function FlowPilotImpl({
 			setSelectedModelId(preferredModel?.id || "");
 		} else {
 			// Bits provider - existing logic
-			const hostedModel = bitsModels.find(
-				(m) => m.parameters?.provider?.provider_name === "Hosted",
-			);
+			const hostedModel = bitsModels.find(isHostedLlmModel);
 			const gpt4o = bitsModels.find((m) => m.id.includes("gpt-4o"));
 			const defaultModel = hostedModel || gpt4o || bitsModels[0];
 			setSelectedModelId(defaultModel?.id || "");
@@ -2033,12 +2067,12 @@ function FlowPilotImpl({
 							...compiledResult.diagnostics,
 						]);
 						if (compiledResult.status === "stale") {
-							settleGenerationReview("stale", token);
+							settleGenerationReview("stale", token, undefined, compiledResult);
 							await dismissPendingFlowIrCommit();
 							setPendingCommands([]);
 							setFlowscriptWorkspaceStatus("stale");
 						} else {
-							settleGenerationReview("error", token);
+							settleGenerationReview("error", token, undefined, compiledResult);
 						}
 						return;
 					}
@@ -2055,6 +2089,7 @@ function FlowPilotImpl({
 					}
 					applyResult = await onApplyFlowScript(flowscriptWorkspace, {
 						suppressBlockedToast: true,
+						origin: "agent",
 					});
 					if (!applyResult) return;
 
@@ -2093,7 +2128,12 @@ function FlowPilotImpl({
 					}
 					recordBoardApplyFailure(diagnostics);
 					setFlowscriptWorkspaceStatus("validation_errors");
-					settleGenerationReview("error", pendingFlowIrCommit);
+					settleGenerationReview(
+						"error",
+						pendingFlowIrCommit,
+						undefined,
+						diagnostics,
+					);
 					return;
 				}
 				if (shouldApplyFlowScript || hasRetainedCompiledBatch) {
@@ -2101,7 +2141,7 @@ function FlowPilotImpl({
 					setFlowscriptWorkspaceStatus("applied");
 				}
 			} catch (error) {
-				settleGenerationReview("error", pendingFlowIrCommit);
+				settleGenerationReview("error", pendingFlowIrCommit, undefined, error);
 				recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 				console.error("Failed to apply FlowPilot commands:", error);
 				return;
@@ -2233,7 +2273,7 @@ function FlowPilotImpl({
 		try {
 			const applyResult = await onApplyFlowScript(
 				destructiveApplyRequest.flowscript,
-				{ allowDeletions: true },
+				{ allowDeletions: true, origin: "agent" },
 			);
 			if (!applyResult) return;
 
@@ -2245,7 +2285,7 @@ function FlowPilotImpl({
 				recordBoardApplyFailure(diagnostics);
 				setFlowscriptWorkspaceStatus("validation_errors");
 				setDestructiveApplyRequest(null);
-				settleGenerationReview("error");
+				settleGenerationReview("error", undefined, undefined, diagnostics);
 				return;
 			}
 
@@ -2257,7 +2297,7 @@ function FlowPilotImpl({
 			setPendingCommands([]);
 			setDestructiveApplyRequest(null);
 		} catch (error) {
-			settleGenerationReview("error");
+			settleGenerationReview("error", undefined, undefined, error);
 			recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 			console.error("Failed to apply destructive FlowScript edit:", error);
 		} finally {
@@ -2318,6 +2358,9 @@ function FlowPilotImpl({
 
 			let currentImages = [...attachedImages];
 			const currentInput = input;
+			if (currentInput !== AUTO_VERIFY_PROMPT) {
+				autoVerifyRoundsRef.current = 0;
+			}
 			const currentContextNodes = [...selectedNodeIds];
 			const scope: CopilotScope =
 				agentMode === "board"
@@ -2734,7 +2777,8 @@ function FlowPilotImpl({
 								toolName === "commit_flowscript" ||
 								toolName === "edit_flowscript" ||
 								toolName === "execute_event" ||
-								toolName === "execute_node"
+								toolName === "execute_node" ||
+								toolName === "run_board_tests"
 							) {
 								setLoadingPhase("generating");
 							} else if (
@@ -3445,6 +3489,7 @@ function FlowPilotImpl({
 							: "error",
 					false,
 					currentBoardNodeCountRef.current,
+					{ message: error },
 				);
 				if (generationMetricsRunRef.current === generationMetricsRun) {
 					generationMetricsRunRef.current = undefined;
@@ -3752,6 +3797,25 @@ function FlowPilotImpl({
 		autoApplyAttemptRef.current = autoApplyKey;
 		void executePendingCommands();
 	}, [autoApplyKey, executePendingCommands]);
+
+	// After an auto-mode apply settles, send one synthetic verification turn. Skipped while a run
+	// is active (mid-run segment applies), while the user has a draft typed, and once the bounded
+	// per-user-turn budget is spent — a repair commit from the verification turn re-enters the
+	// same queued → auto-apply → verify cycle.
+	useEffect(() => {
+		if (autoVerifyRequest === 0) return;
+		if (autoVerifyHandledRef.current === autoVerifyRequest) return;
+		if (loading) return;
+		autoVerifyHandledRef.current = autoVerifyRequest;
+		if (!autoModeRef.current) return;
+		if (autoVerifyRoundsRef.current >= MAX_AUTO_VERIFY_ROUNDS) return;
+		if (input.trim().length > 0) return;
+		autoVerifyRoundsRef.current += 1;
+		setInput(AUTO_VERIFY_PROMPT);
+		setTimeout(() => {
+			handleSubmitRef.current?.();
+		}, 100);
+	}, [autoVerifyRequest, loading, input]);
 
 	// Components stream in batches during generation, so this waits for `!loading` rather
 	// than applying partial batches.
@@ -4259,18 +4323,24 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 							<pre className="max-h-56 overflow-auto rounded-lg border border-border/50 bg-background/80 p-3 text-xs text-muted-foreground">
 								{JSON.stringify(dialog.request.arguments, null, 2)}
 							</pre>
-							<label className="flex items-center gap-2 text-sm text-muted-foreground">
-								<Checkbox
-									checked={dialog.remember}
-									onCheckedChange={(checked) =>
-										onDialogChange({
-											...dialog,
-											remember: checked === true,
-										})
-									}
-								/>
-								Don&apos;t ask again for this action this session
-							</label>
+							{dialog.rememberable ? (
+								<label
+									htmlFor="frontend-tool-remember"
+									className="flex items-center gap-2 text-sm text-muted-foreground"
+								>
+									<Checkbox
+										id="frontend-tool-remember"
+										checked={dialog.remember}
+										onCheckedChange={(checked) =>
+											onDialogChange({
+												...dialog,
+												remember: checked === true,
+											})
+										}
+									/>
+									Don&apos;t ask again for this action this session
+								</label>
+							) : null}
 						</>
 					) : (
 						<AskUserQuestions

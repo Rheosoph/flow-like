@@ -103,24 +103,32 @@ export function QueryResultGraph({
 		<div className="relative flex h-full min-h-0 flex-col">
 			<div className="absolute right-0 top-0 z-10 flex items-center gap-2">
 				{truncated && (
-					<span className="text-xs text-amber-600 dark:text-amber-400">{t('cappedAtMax_nodesNodes', 'Capped at {{MAX_NODES}} nodes', { MAX_NODES })}</span>
+					<span className="text-xs text-amber-600 dark:text-amber-400">
+						{t("cappedAtMax_nodesNodes", "Capped at {{MAX_NODES}} nodes", {
+							MAX_NODES,
+						})}
+					</span>
 				)}
 				<Popover>
 					<PopoverTrigger asChild>
 						<Button variant="outline" size="sm" className="h-8 gap-1.5">
-							<Settings2 className="h-3.5 w-3.5" /> {t('configure', 'Configure')}
+							<Settings2 className="h-3.5 w-3.5" />{" "}
+							{t("configure", "Configure")}
 						</Button>
 					</PopoverTrigger>
 					<PopoverContent align="end" className="w-64 space-y-3">
 						<div className="grid gap-1.5">
 							<Label className="text-xs text-muted-foreground">
-								{t('sourceColumn', 'Source column')}
+								{t("sourceColumn", "Source column")}
 							</Label>
 							<Select
 								value={config.source}
 								onValueChange={(value) => update({ source: value })}
 							>
-								<SelectTrigger className="h-8" aria-label={t('sourceColumn', 'Source column')}>
+								<SelectTrigger
+									className="h-8"
+									aria-label={t("sourceColumn", "Source column")}
+								>
 									<SelectValue placeholder="Select" />
 								</SelectTrigger>
 								<SelectContent>
@@ -134,13 +142,16 @@ export function QueryResultGraph({
 						</div>
 						<div className="grid gap-1.5">
 							<Label className="text-xs text-muted-foreground">
-								{t('targetColumn', 'Target column')}
+								{t("targetColumn", "Target column")}
 							</Label>
 							<Select
 								value={config.target}
 								onValueChange={(value) => update({ target: value })}
 							>
-								<SelectTrigger className="h-8" aria-label={t('targetColumn', 'Target column')}>
+								<SelectTrigger
+									className="h-8"
+									aria-label={t("targetColumn", "Target column")}
+								>
 									<SelectValue placeholder="Select" />
 								</SelectTrigger>
 								<SelectContent>
@@ -158,23 +169,26 @@ export function QueryResultGraph({
 
 			{!ready ? (
 				<div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-					{t('mapASourceAndTargetColumnToDrawARelationshipGraph', 'Map a source and target column to draw a relationship graph.')}
+					{t(
+						"mapASourceAndTargetColumnToDrawARelationshipGraph",
+						"Map a source and target column to draw a relationship graph.",
+					)}
 				</div>
 			) : (
 				<div
 					role="img"
 					aria-label={t(
-						'relationshipGraphWithNodesAndLinks',
-						'Relationship graph with {{nodes}} and {{links}}',
+						"relationshipGraphWithNodesAndLinks",
+						"Relationship graph with {{nodes}} and {{links}}",
 						{
-							nodes: t('countNodes', {
-								defaultValue_one: '{{count}} Node',
-								defaultValue_other: '{{count}} Nodes',
+							nodes: t("countNodes", {
+								defaultValue_one: "{{count}} Node",
+								defaultValue_other: "{{count}} Nodes",
 								count: data.nodes.length,
 							}),
-							links: t('countLinks', {
-								defaultValue_one: '{{count}} link',
-								defaultValue_other: '{{count}} links',
+							links: t("countLinks", {
+								defaultValue_one: "{{count}} link",
+								defaultValue_other: "{{count}} links",
 								count: data.links.length,
 							}),
 						},

@@ -118,7 +118,9 @@ export function MediaNode(props: NodeProps<MediaNode>) {
 					) : (
 						<VideoIcon className="w-8 h-8" />
 					)}
-					<span className="text-xs">{t('mediaNotAvailable', 'Media not available')}</span>
+					<span className="text-xs">
+						{t("mediaNotAvailable", "Media not available")}
+					</span>
 				</div>
 			);
 		}
@@ -127,7 +129,9 @@ export function MediaNode(props: NodeProps<MediaNode>) {
 			return (
 				<div className="flex flex-col items-center justify-center h-full text-destructive gap-2">
 					<AlertCircleIcon className="w-8 h-8" />
-					<span className="text-xs">{t('failedToLoadMedia', 'Failed to load media')}</span>
+					<span className="text-xs">
+						{t("failedToLoadMedia", "Failed to load media")}
+					</span>
 				</div>
 			);
 		}

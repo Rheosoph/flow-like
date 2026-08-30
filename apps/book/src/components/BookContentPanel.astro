@@ -1,0 +1,50 @@
+---
+const isLanding = Boolean(Astro.locals.starlightRoute.entry.data.hero);
+---
+
+<div class:list={["content-panel", isLanding && "content-panel--landing"]}>
+	<div class="sl-container"><slot /></div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.content-panel {
+			padding: 1.5rem var(--sl-content-pad-x);
+		}
+
+		.content-panel + .content-panel {
+			border-top: 1px solid var(--sl-color-hairline);
+		}
+
+		.sl-container {
+			max-width: var(--sl-content-width);
+		}
+
+		.sl-container > :global(* + *) {
+			margin-top: 1.5rem;
+		}
+
+		.content-panel--landing {
+			padding: 0;
+		}
+
+		.content-panel--landing > .sl-container {
+			max-width: none;
+			margin: 0;
+		}
+
+		.content-panel--landing > .sl-container > :global(* + *) {
+			margin-top: 0;
+		}
+
+		@media (min-width: 72rem) {
+			.sl-container {
+				margin-inline: var(--sl-content-margin-inline, auto);
+			}
+
+			.content-panel--landing > .sl-container {
+				margin-inline: 0;
+			}
+		}
+	}
+</style>

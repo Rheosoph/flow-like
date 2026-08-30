@@ -1,0 +1,868 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/inter/wght-italic.css";
+@import "@fontsource-variable/source-serif-4";
+@import "@fontsource-variable/source-serif-4/wght-italic.css";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+
+:root {
+	--flowbook-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	--flowbook-serif: "Source Serif 4 Variable", "Source Serif 4", "Iowan Old Style", Charter,
+		"Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+	--flowbook-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+		Monaco, Consolas, monospace;
+	--flowbook-ink: oklch(0.184 0.0081 285.5768);
+	--flowbook-paper: oklch(0.9841 0.0035 39.4848);
+	--flowbook-paper-deep: oklch(0.9466 0.0084 56.3108);
+	--flowbook-card: #fff;
+	--flowbook-orange: oklch(0.6724 0.208 34.7886);
+	--flowbook-orange-dark: oklch(0.51 0.18 31.5);
+	--flowbook-callout-ink: oklch(0.43 0.065 45);
+	--flowbook-callout-border: oklch(0.72 0.075 45);
+	--flowbook-callout-bg: oklch(0.965 0.012 52);
+	--flowbook-muted: oklch(0.5137 0.0156 285.8367);
+	--flowbook-rule: oklch(0.8933 0.0111 54.4825);
+	--flowbook-grid: color-mix(in oklab, var(--flowbook-ink) 7%, transparent);
+
+	--sl-font: var(--flowbook-sans);
+	--sl-font-mono: var(--flowbook-mono);
+	--sl-color-accent-low: oklch(0.93 0.04 33);
+	--sl-color-accent: var(--flowbook-orange);
+	--sl-color-accent-high: oklch(0.43 0.15 31.5);
+	--sl-color-white: var(--flowbook-ink);
+	--sl-color-gray-1: oklch(0.25 0.011 285.5);
+	--sl-color-gray-2: oklch(0.38 0.014 285.7);
+	--sl-color-gray-3: var(--flowbook-muted);
+	--sl-color-gray-4: oklch(0.68 0.012 285.8);
+	--sl-color-gray-5: oklch(0.82 0.012 54.5);
+	--sl-color-gray-6: oklch(0.93 0.008 54.5);
+	--sl-color-gray-7: oklch(0.969 0.0057 84.6);
+	--sl-color-black: var(--flowbook-paper);
+	--sl-color-bg: var(--flowbook-paper);
+	--sl-color-bg-nav: color-mix(in srgb, var(--flowbook-paper) 88%, transparent);
+	--sl-color-bg-sidebar: oklch(0.9706 0.0057 84.5662);
+	--sl-color-bg-inline-code: var(--flowbook-paper-deep);
+	--sl-color-text: var(--flowbook-muted);
+	--sl-color-text-accent: var(--flowbook-orange);
+	--sl-color-text-invert: white;
+	--sl-color-bg-accent: var(--flowbook-orange);
+	--sl-color-hairline-light: color-mix(in srgb, var(--flowbook-rule) 66%, transparent);
+	--sl-color-hairline: color-mix(in srgb, var(--flowbook-rule) 82%, transparent);
+	--sl-color-hairline-shade: var(--flowbook-rule);
+	--sl-content-width: 50rem;
+	--sl-sidebar-width: 19.5rem;
+	--sl-text-5xl: clamp(3.1rem, 5vw, 4.75rem);
+	--sl-shadow-sm: 0 0.25rem 1rem rgba(25, 20, 18, 0.04);
+	--sl-shadow-md: 0 1rem 2.5rem rgba(25, 20, 18, 0.08);
+	--sl-shadow-lg: 0 2rem 5rem rgba(25, 20, 18, 0.12);
+}
+
+:root[data-theme="dark"] {
+	--flowbook-ink: oklch(0.9544 0.0059 59.6503);
+	--flowbook-paper: oklch(0.164 0.0111 268.0057);
+	--flowbook-paper-deep: oklch(0.22 0.012 264.3);
+	--flowbook-card: oklch(0.1993 0.0111 260.661);
+	--flowbook-orange: oklch(0.71 0.19 34.8);
+	--flowbook-orange-dark: oklch(0.78 0.15 36);
+	--flowbook-callout-ink: oklch(0.84 0.07 50);
+	--flowbook-callout-border: oklch(0.54 0.085 43);
+	--flowbook-callout-bg: oklch(0.22 0.018 38);
+	--flowbook-muted: oklch(0.6984 0.0157 264.467);
+	--flowbook-rule: oklch(0.2921 0.014 261.7008);
+	--flowbook-grid: color-mix(in oklab, var(--flowbook-ink) 5%, transparent);
+
+	--sl-color-accent-low: oklch(0.27 0.07 31.5);
+	--sl-color-accent: var(--flowbook-orange);
+	--sl-color-accent-high: oklch(0.88 0.08 34);
+	--sl-color-white: var(--flowbook-ink);
+	--sl-color-gray-1: oklch(0.9 0.008 60);
+	--sl-color-gray-2: oklch(0.78 0.012 60);
+	--sl-color-gray-3: var(--flowbook-muted);
+	--sl-color-gray-4: oklch(0.5 0.014 264);
+	--sl-color-gray-5: oklch(0.34 0.014 262);
+	--sl-color-gray-6: oklch(0.23 0.012 264);
+	--sl-color-gray-7: oklch(0.19 0.011 264);
+	--sl-color-black: var(--flowbook-paper);
+	--sl-color-bg: var(--flowbook-paper);
+	--sl-color-bg-nav: color-mix(in srgb, var(--flowbook-paper) 87%, transparent);
+	--sl-color-bg-sidebar: oklch(0.145 0.011 268);
+	--sl-color-bg-inline-code: var(--flowbook-paper-deep);
+	--sl-color-text: var(--flowbook-muted);
+	--sl-color-text-accent: var(--flowbook-orange);
+	--sl-color-text-invert: white;
+	--sl-color-bg-accent: var(--flowbook-orange);
+	--sl-color-hairline-light: color-mix(in srgb, var(--flowbook-rule) 62%, transparent);
+	--sl-color-hairline: color-mix(in srgb, var(--flowbook-rule) 78%, transparent);
+	--sl-color-hairline-shade: var(--flowbook-rule);
+	--sl-shadow-sm: 0 0.25rem 1rem rgba(0, 0, 0, 0.14);
+	--sl-shadow-md: 0 1rem 2.5rem rgba(0, 0, 0, 0.23);
+	--sl-shadow-lg: 0 2rem 5rem rgba(0, 0, 0, 0.35);
+}
+
+html {
+	background: var(--flowbook-paper);
+	font-family: var(--flowbook-sans);
+	font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+	font-synthesis: none;
+}
+
+body {
+	background-color: var(--flowbook-paper);
+	background-image: radial-gradient(var(--flowbook-grid) 1px, transparent 1px);
+	background-size: 18px 18px;
+	color: var(--flowbook-ink);
+}
+
+::selection {
+	background: color-mix(in oklab, var(--flowbook-orange) 26%, transparent);
+	color: var(--flowbook-ink);
+}
+
+:focus-visible {
+	outline-color: var(--flowbook-orange);
+}
+
+/* Navigation chrome */
+header.header {
+	border-bottom: 1px solid color-mix(in srgb, var(--flowbook-rule) 68%, transparent);
+	background: var(--sl-color-bg-nav);
+	backdrop-filter: blur(1.25rem) saturate(125%);
+	box-shadow: 0 0.65rem 2rem color-mix(in srgb, var(--flowbook-ink) 4%, transparent);
+	transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+header.header > .header {
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	backdrop-filter: none;
+}
+
+html[data-has-hero]:not(.flowbook-header-light) header.header {
+	border-bottom-color: rgba(255, 255, 255, 0.09);
+	background: rgba(12, 14, 19, 0.76);
+	box-shadow: none;
+	color-scheme: dark;
+}
+
+html[data-has-hero]:not(.flowbook-header-light) header.header :is(.site-title, button, a) {
+	color: #f6f1ed;
+}
+
+html[data-has-hero]:not(.flowbook-header-light) header.header button[data-open-modal] {
+	border-color: rgba(255, 255, 255, 0.14);
+	background: rgba(255, 255, 255, 0.055);
+	color: rgba(246, 241, 237, 0.78);
+}
+
+html[data-has-hero].flowbook-header-light header.header {
+	border-bottom-color: rgba(24, 23, 27, 0.1);
+	background: rgba(252, 250, 248, 0.88);
+	box-shadow: 0 0.5rem 2.5rem rgba(24, 23, 27, 0.06);
+	color-scheme: light;
+}
+
+html[data-has-hero].flowbook-header-light header.header :is(.site-title, button, a) {
+	color: #18171b;
+}
+
+html[data-has-hero].flowbook-header-light header.header button[data-open-modal] {
+	border-color: rgba(24, 23, 27, 0.12);
+	background: rgba(255, 255, 255, 0.72);
+	color: #67646d;
+}
+
+.site-title {
+	font-family: var(--flowbook-sans);
+	font-size: 1.05rem;
+	font-weight: 720;
+	letter-spacing: -0.045em;
+	color: var(--flowbook-ink);
+	transition: color 160ms ease;
+}
+
+.site-title:hover {
+	color: var(--flowbook-orange-dark);
+}
+
+header.header button[data-open-modal] {
+	border-color: color-mix(in srgb, var(--flowbook-rule) 80%, transparent);
+	border-radius: 0.55rem;
+	background: color-mix(in srgb, var(--flowbook-card) 58%, transparent);
+	box-shadow: none;
+}
+
+header.header button[data-open-modal]:hover {
+	border-color: color-mix(in srgb, var(--flowbook-muted) 44%, var(--flowbook-rule));
+	background: color-mix(in srgb, var(--flowbook-card) 82%, transparent);
+}
+
+header.header button[data-open-modal] > kbd {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 80%, transparent);
+	font-family: var(--flowbook-mono);
+}
+
+header.header .social-icons::after {
+	height: 1.25rem;
+	border-color: color-mix(in srgb, var(--flowbook-rule) 74%, transparent);
+}
+
+/* Reading navigation */
+.sidebar-pane {
+	border-inline-end: 1px solid color-mix(in srgb, var(--flowbook-rule) 76%, transparent);
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--sl-color-bg-sidebar) 94%, transparent), var(--sl-color-bg-sidebar)),
+		var(--sl-color-bg-sidebar);
+}
+
+.sidebar-content {
+	padding-top: 1.7rem;
+	font-family: var(--flowbook-sans);
+}
+
+.sidebar-content .group-label .large {
+	font: 750 0.6rem/1.3 var(--flowbook-mono);
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--flowbook-muted);
+}
+
+.sidebar-content summary {
+	margin-bottom: 0.45rem;
+}
+
+.sidebar-content ul ul li {
+	border-inline-start-color: color-mix(in srgb, var(--flowbook-rule) 76%, transparent);
+}
+
+.sidebar-content a {
+	margin-block: 0.08rem;
+	border-radius: 0.48rem;
+	padding-block: 0.48rem;
+	font-size: 0.79rem;
+	line-height: 1.35;
+	color: var(--flowbook-muted);
+	transition: background 160ms ease, color 160ms ease;
+}
+
+.sidebar-content a:hover {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 72%, transparent);
+	color: var(--flowbook-ink);
+}
+
+.sidebar-content a[aria-current="page"] {
+	background: color-mix(in oklab, var(--flowbook-paper-deep) 88%, var(--flowbook-orange) 12%);
+	box-shadow: none;
+	font-weight: 680;
+	color: var(--flowbook-ink);
+}
+
+.right-sidebar {
+	border-inline-start: 1px solid color-mix(in srgb, var(--flowbook-rule) 68%, transparent);
+	font-family: var(--flowbook-sans);
+}
+
+.right-sidebar h2 {
+	font: 750 0.58rem/1 var(--flowbook-mono);
+	letter-spacing: 0.13em;
+	text-transform: uppercase;
+	color: var(--flowbook-muted);
+}
+
+.right-sidebar a {
+	border-radius: 0;
+	font-size: 0.76rem;
+	color: var(--flowbook-muted);
+}
+
+.right-sidebar a[aria-current="true"] {
+	box-shadow: inset 1px 0 var(--flowbook-orange);
+	color: var(--flowbook-orange-dark);
+}
+
+/* Long-form reading surface */
+.content-panel:not(.content-panel--landing) {
+	padding-block: 0;
+}
+
+.content-panel:not(.content-panel--landing) > .sl-container {
+	position: relative;
+	padding: 0;
+}
+
+.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) {
+	padding-top: clamp(3.75rem, 7vw, 7rem);
+}
+
+.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) > .sl-container {
+	padding-bottom: clamp(2.25rem, 4vw, 3.5rem);
+}
+
+.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) + .content-panel {
+	padding-bottom: clamp(4rem, 8vw, 8rem);
+}
+
+.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) + .content-panel > .sl-container {
+	padding-top: clamp(2.25rem, 4vw, 3.5rem);
+	border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 84%, transparent);
+}
+
+.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) + .content-panel > .sl-container::before {
+	position: absolute;
+	top: -1px;
+	left: 0;
+	width: 5rem;
+	height: 2px;
+	background: var(--flowbook-orange);
+	content: "";
+}
+
+.content-panel + .content-panel {
+	border-top: 0;
+}
+
+.sl-markdown-content {
+	font-family: var(--flowbook-serif);
+	font-size: 1.075rem;
+	line-height: 1.82;
+	color: var(--flowbook-ink);
+}
+
+.sl-markdown-content > :first-child {
+	margin-top: 0;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) {
+	font-family: var(--flowbook-sans);
+	font-weight: 690;
+	letter-spacing: -0.045em;
+	color: var(--flowbook-ink);
+}
+
+.content-panel > .sl-container > h1#_top,
+.sl-markdown-content h1 {
+	max-width: 17ch;
+	font-size: clamp(2.85rem, 6vw, 5rem);
+	line-height: 0.98;
+	letter-spacing: -0.065em;
+}
+
+.content-panel > .sl-container > h1#_top {
+	margin: 0;
+	font-family: var(--flowbook-sans);
+	font-weight: 690;
+	color: var(--flowbook-ink);
+	text-wrap: balance;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+	padding-top: 1.2rem;
+	border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 78%, transparent);
+}
+
+.sl-markdown-content h2 {
+	margin-block-start: 4.5rem;
+	font-size: clamp(1.9rem, 3.5vw, 2.7rem);
+	line-height: 1.06;
+}
+
+.sl-markdown-content h3 {
+	margin-block-start: 3.2rem;
+	font-size: 1.45rem;
+	line-height: 1.18;
+}
+
+.sl-markdown-content > p:first-of-type {
+	font-size: clamp(1.18rem, 2vw, 1.35rem);
+	line-height: 1.68;
+	color: color-mix(in srgb, var(--flowbook-ink) 82%, var(--flowbook-muted));
+}
+
+.sl-markdown-content p,
+.sl-markdown-content li {
+	text-wrap: pretty;
+}
+
+.sl-markdown-content strong {
+	font-weight: 680;
+	color: var(--flowbook-ink);
+}
+
+.sl-markdown-content a:not([class]) {
+	text-decoration-color: color-mix(in srgb, var(--flowbook-orange) 54%, transparent);
+	text-decoration-thickness: 0.08em;
+	text-underline-offset: 0.16em;
+	color: var(--flowbook-orange-dark);
+}
+
+.sl-markdown-content a:not([class]):hover {
+	text-decoration-color: var(--flowbook-orange);
+	color: var(--flowbook-orange-dark);
+}
+
+.sl-markdown-content blockquote {
+	position: relative;
+	margin-block: 2.8rem;
+	padding: 1.6rem 1.75rem 1.6rem 2rem;
+	border: 1px solid color-mix(in srgb, var(--flowbook-orange) 24%, var(--flowbook-rule));
+	border-inline-start: 0.22rem solid var(--flowbook-orange);
+	border-radius: 0.2rem 0.75rem 0.75rem 0.2rem;
+	background: color-mix(in srgb, var(--flowbook-orange) 7%, transparent);
+	font-size: 1.2rem;
+	font-style: italic;
+	line-height: 1.65;
+	color: var(--flowbook-ink);
+}
+
+.sl-markdown-content blockquote p {
+	margin: 0;
+}
+
+.sl-markdown-content :not(pre) > code {
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.32rem;
+	background: var(--flowbook-paper-deep);
+	font-family: var(--flowbook-mono);
+	font-size: 0.84em;
+	font-weight: 560;
+	color: var(--flowbook-orange-dark);
+}
+
+body:not(.flowbook-print) .sl-markdown-content pre {
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 72%, var(--flowbook-muted));
+	border-radius: 0.7rem !important;
+	box-shadow: none !important;
+	font-family: var(--flowbook-mono);
+	font-size: 0.875rem;
+	font-variant-ligatures: none;
+	font-weight: 460;
+	line-height: 1.65;
+	overscroll-behavior-inline: contain;
+	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
+	scrollbar-width: thin;
+	tab-size: 4;
+}
+
+body:not(.flowbook-print) .expressive-code {
+	--flowbook-code-bg: color-mix(in oklab, var(--flowbook-paper-deep) 72%, var(--flowbook-card));
+	--flowbook-code-chrome: color-mix(in oklab, var(--flowbook-paper-deep) 91%, var(--flowbook-ink) 3%);
+	--flowbook-code-border: color-mix(in srgb, var(--flowbook-rule) 72%, var(--flowbook-muted));
+	--flowbook-code-toolbar-height: 2.5rem;
+
+	--ec-brdRad: 0.7rem;
+	--ec-brdCol: var(--flowbook-code-border);
+	--ec-codeFontFml: var(--flowbook-mono);
+	--ec-codeFontSize: 0.875rem;
+	--ec-codeFontWg: 460;
+	--ec-codeLineHt: 1.65;
+	--ec-codePadBlk: 1rem;
+	--ec-codePadInl: 1.1rem;
+	--ec-codeBg: var(--flowbook-code-bg);
+	--ec-codeFg: var(--flowbook-ink);
+	--ec-codeSelBg: color-mix(in srgb, var(--flowbook-orange) 24%, transparent);
+	--ec-focusBrd: var(--flowbook-orange);
+	--ec-sbThumbCol: color-mix(in srgb, var(--flowbook-muted) 48%, transparent);
+	--ec-sbThumbHoverCol: color-mix(in srgb, var(--flowbook-muted) 78%, transparent);
+	--ec-uiFontFml: var(--flowbook-sans);
+	--ec-uiPadInl: 1rem;
+	--ec-frm-frameBoxShdCssVal: none;
+	--ec-frm-edActTabBg: var(--flowbook-code-chrome);
+	--ec-frm-edActTabFg: var(--flowbook-ink);
+	--ec-frm-edActTabBrdCol: var(--flowbook-code-border);
+	--ec-frm-edActTabIndTopCol: var(--flowbook-orange);
+	--ec-frm-edTabBarBg: var(--flowbook-code-chrome);
+	--ec-frm-edTabBarBrdCol: var(--flowbook-code-border);
+	--ec-frm-edTabBarBrdBtmCol: var(--flowbook-code-border);
+	--ec-frm-edBg: var(--flowbook-code-bg);
+	--ec-frm-trmTtbBg: var(--flowbook-code-chrome);
+	--ec-frm-trmTtbFg: var(--flowbook-muted);
+	--ec-frm-trmTtbBrdBtmCol: var(--flowbook-code-border);
+	--ec-frm-trmBg: var(--flowbook-code-bg);
+	--ec-frm-inlBtnFg: color-mix(in srgb, var(--flowbook-ink) 82%, var(--flowbook-muted));
+	--ec-frm-inlBtnBg: var(--flowbook-ink);
+	--ec-frm-inlBtnBgIdleOpa: 0;
+	--ec-frm-inlBtnBgHoverOrFocusOpa: 0.09;
+	--ec-frm-inlBtnBgActOpa: 0.15;
+	--ec-frm-inlBtnBrd: var(--flowbook-code-border);
+	--ec-frm-inlBtnBrdOpa: 1;
+
+	margin-block: 1.75rem;
+}
+
+body:not(.flowbook-print) .expressive-code .frame {
+	border: 0 !important;
+	border-radius: 0.7rem !important;
+	box-shadow: none !important;
+}
+
+body:not(.flowbook-print) .expressive-code pre {
+	position: relative;
+	border-color: var(--flowbook-code-border) !important;
+	background: var(--flowbook-code-bg);
+	box-shadow: none !important;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre {
+	background: linear-gradient(
+		to bottom,
+		var(--flowbook-code-chrome) 0,
+		var(--flowbook-code-chrome) calc(var(--flowbook-code-toolbar-height) - 1px),
+		var(--flowbook-code-border) calc(var(--flowbook-code-toolbar-height) - 1px),
+		var(--flowbook-code-border) var(--flowbook-code-toolbar-height),
+		var(--flowbook-code-bg) var(--flowbook-code-toolbar-height)
+	) !important;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre::before {
+	position: absolute;
+	top: 0.78rem;
+	left: var(--ec-codePadInl);
+	content: attr(data-language);
+	font: 720 0.625rem/1 var(--flowbook-mono);
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--flowbook-muted) 88%, var(--flowbook-ink));
+	user-select: none;
+}
+
+body:not(.flowbook-print) .expressive-code .frame:not(.has-title):not(.is-terminal) pre > code {
+	padding-block: calc(var(--ec-codePadBlk) + var(--flowbook-code-toolbar-height)) var(--ec-codePadBlk);
+	font-variant-ligatures: none;
+}
+
+body:not(.flowbook-print) .expressive-code .frame.has-title pre,
+body:not(.flowbook-print) .expressive-code .frame.is-terminal pre {
+	border-start-start-radius: 0 !important;
+	border-start-end-radius: 0 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button {
+	width: 2rem;
+	height: 2rem;
+	border-radius: 0.4rem;
+	background: var(--flowbook-code-bg);
+	opacity: 0.86 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button:hover {
+	opacity: 1 !important;
+}
+
+body:not(.flowbook-print) .expressive-code .copy button:focus-visible,
+body:not(.flowbook-print) .expressive-code pre:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
+}
+
+.sl-markdown-content hr {
+	margin-block: 4rem;
+	border-color: color-mix(in srgb, var(--flowbook-rule) 80%, transparent);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll {
+	max-inline-size: 100%;
+	margin-block: 2rem 2.25rem;
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 82%, var(--flowbook-muted));
+	border-radius: 0.75rem;
+	background: var(--flowbook-card);
+	overflow-x: auto;
+	overscroll-behavior-inline: contain;
+	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
+	scrollbar-width: thin;
+	-webkit-overflow-scrolling: touch;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll:focus-visible {
+	outline: 2px solid var(--flowbook-orange);
+	outline-offset: 2px;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table {
+	display: table;
+	inline-size: 100%;
+	min-inline-size: 36rem;
+	margin: 0;
+	border: 0;
+	border-collapse: separate;
+	border-spacing: 0;
+	background: var(--flowbook-card);
+	overflow: visible;
+	font: 500 0.9rem/1.5 var(--flowbook-sans);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table:has(tr > :nth-child(3)) {
+	min-inline-size: 44rem;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table:has(tr > :nth-child(4)) {
+	min-inline-size: 52rem;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :is(th, td) {
+	padding: 0.78rem 0.95rem;
+	border: 0;
+	border-block-end: 1px solid color-mix(in srgb, var(--flowbook-rule) 72%, transparent);
+	vertical-align: top;
+	text-align: start;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll thead th {
+	background: var(--flowbook-paper-deep);
+	font: 700 0.76rem/1.4 var(--flowbook-sans);
+	letter-spacing: 0.025em;
+	color: var(--flowbook-ink);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr {
+	background: var(--flowbook-card);
+	transition: background-color 140ms ease;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:nth-child(even) {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 36%, var(--flowbook-card));
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:is(:hover, :focus-within) {
+	background: color-mix(in srgb, var(--flowbook-paper-deep) 62%, var(--flowbook-card));
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody tr:last-child > * {
+	border-block-end: 0;
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll tbody td:first-child {
+	font-weight: 650;
+	color: var(--flowbook-ink);
+}
+
+body:not(.flowbook-print)
+	.sl-markdown-content
+	.flowbook-table-scroll
+	table:has(tr > :nth-child(3))
+	:is(th, td):first-child {
+	position: sticky;
+	inset-inline-start: 0;
+	z-index: 1;
+	background: inherit;
+	box-shadow: 1px 0 0 color-mix(in srgb, var(--flowbook-rule) 72%, transparent);
+}
+
+body:not(.flowbook-print)
+	.sl-markdown-content
+	.flowbook-table-scroll
+	table:has(tr > :nth-child(3))
+	thead
+	th:first-child {
+	z-index: 2;
+	background: var(--flowbook-paper-deep);
+}
+
+body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :not(pre) > code {
+	white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+	body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll table {
+		font-size: 0.875rem;
+	}
+
+	body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll :is(th, td) {
+		padding: 0.7rem 0.75rem;
+	}
+}
+
+.sl-markdown-content .flowbook-workflow-figure {
+	margin: 2.2rem 0 2.4rem;
+	border: 1px solid color-mix(in srgb, var(--flowbook-rule) 88%, transparent);
+	border-radius: 0.85rem;
+	background: var(--flowbook-card);
+	box-shadow: var(--sl-shadow-md);
+	overflow: hidden;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image {
+	display: block;
+	position: relative;
+	border: 0;
+	background: #fbfaf9;
+	text-decoration: none;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image:is(:hover, :focus-visible) {
+	background: #fff;
+}
+
+.sl-markdown-content .flowbook-workflow-figure__image:focus-visible::after {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	box-shadow: inset 0 0 0 3px var(--flowbook-orange);
+	pointer-events: none;
+	content: "";
+}
+
+.sl-markdown-content .flowbook-workflow-figure :is(picture, img) {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.sl-markdown-content .flowbook-workflow-figure figcaption {
+	margin: 0;
+	padding: 0.85rem 1rem 0.95rem;
+	border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 78%, transparent);
+	font: 560 0.76rem/1.55 var(--flowbook-sans);
+	color: var(--flowbook-muted);
+}
+
+.starlight-aside {
+	border-color: var(--flowbook-callout-border);
+	border-radius: 0.75rem;
+	background: var(--flowbook-callout-bg);
+	box-shadow: none;
+}
+
+.starlight-aside--note {
+	--sl-color-asides-text-accent: var(--flowbook-callout-ink);
+	--sl-color-asides-border: var(--flowbook-callout-border);
+	background: var(--flowbook-callout-bg);
+}
+
+.starlight-aside__title {
+	font-family: var(--flowbook-sans);
+	font-size: 0.78rem;
+	letter-spacing: -0.01em;
+}
+
+.pagination-links a {
+	min-height: 7rem;
+	border: 1px solid var(--flowbook-rule);
+	border-radius: 0.8rem;
+	background: color-mix(in srgb, var(--flowbook-card) 72%, transparent);
+	box-shadow: none;
+	font-family: var(--flowbook-sans);
+	transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.pagination-links a:hover {
+	border-color: color-mix(in srgb, var(--flowbook-orange) 55%, var(--flowbook-rule));
+	box-shadow: var(--sl-shadow-md);
+	transform: translateY(-0.18rem);
+}
+
+.pagination-links .link-title {
+	font-weight: 680;
+	letter-spacing: -0.025em;
+}
+
+footer .meta {
+	font-family: var(--flowbook-sans);
+}
+
+.flowbook-kicker {
+	margin-block-end: 0.8rem;
+	font: 760 0.64rem/1 var(--flowbook-mono);
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--flowbook-orange-dark);
+}
+
+html[data-has-hero] .content-panel--landing > .sl-container > footer {
+	display: none;
+}
+
+html[data-has-hero] .content-panel--landing .sl-markdown-content {
+	font-family: var(--flowbook-sans);
+	font-size: 1rem;
+	line-height: normal;
+}
+
+html[data-has-hero] .content-panel--landing .sl-markdown-content h2 {
+	padding-top: 0;
+	border-top: 0;
+}
+
+@media (max-width: 49.99rem) {
+	.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) {
+		padding: 3rem 0 0;
+	}
+
+	.content-panel:not(.content-panel--landing) > .sl-container {
+		padding-inline: var(--sl-content-pad-x);
+		border: 0;
+	}
+
+	.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) + .content-panel {
+		padding: 0 0 4rem;
+	}
+
+	.content-panel:not(.content-panel--landing):has(> .sl-container > h1#_top) + .content-panel > .sl-container {
+		padding-top: 2rem;
+		border-top: 1px solid color-mix(in srgb, var(--flowbook-rule) 84%, transparent);
+	}
+
+	.sl-markdown-content {
+		font-size: 1rem;
+		line-height: 1.76;
+	}
+
+	.content-panel > .sl-container > h1#_top,
+	.sl-markdown-content h1 {
+		font-size: clamp(2.7rem, 13vw, 4.25rem);
+	}
+
+	.sl-markdown-content h2 {
+		margin-block-start: 3.7rem;
+	}
+}
+
+@media print {
+	:root,
+	:root[data-theme="dark"] {
+		--flowbook-ink: #000;
+		--flowbook-paper: #fff;
+		--flowbook-paper-deep: #f3f3f3;
+		--flowbook-card: #fff;
+		--flowbook-muted: #333;
+		--flowbook-rule: #bbb;
+	}
+
+	body {
+		background: white !important;
+	}
+
+	.content-panel:not(.content-panel--landing) > .sl-container {
+		background: white !important;
+	}
+
+	.sl-markdown-content {
+		font-size: 11pt;
+		color: black !important;
+	}
+
+	.content-panel > .sl-container > h1#_top {
+		font-size: 26pt;
+		color: black !important;
+	}
+
+	.sl-markdown-content h2 {
+		font-size: 18pt;
+		color: black !important;
+	}
+
+	.sl-markdown-content :is(h3, h4, h5, h6) {
+		color: black !important;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

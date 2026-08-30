@@ -48,6 +48,8 @@ impl NodeLogic for ImageOverlayNode {
             "Overlay one image on top of another with configurable position, size, opacity and fit mode",
             "Image/Overlay",
         );
+        node.set_flowscript_name("image", "overlay");
+        node.set_receiver("base_image");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

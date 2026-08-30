@@ -331,7 +331,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 				className="w-full flex items-center justify-center text-muted-foreground"
 				style={{ height: input.config.height || height }}
 			>
-				{t('loadingChart', 'Loading chart...')}
+				{t("loadingChart", "Loading chart...")}
 			</div>
 		);
 	}
@@ -344,7 +344,8 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 			>
 				<div className="text-sm">{error}</div>
 				<div className="text-xs text-muted-foreground mt-2">
-					{t('availableTypes', 'Available types:')} {Object.keys(CHART_PACKAGES).join(", ")}
+					{t("availableTypes", "Available types:")}{" "}
+					{Object.keys(CHART_PACKAGES).join(", ")}
 				</div>
 			</div>
 		);
@@ -371,7 +372,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 				) : null}
 				{!isRenderable ? (
 					<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-						{t('waitingForChartData', 'Waiting for chart data…')}
+						{t("waitingForChartData", "Waiting for chart data…")}
 					</div>
 				) : null}
 			</div>

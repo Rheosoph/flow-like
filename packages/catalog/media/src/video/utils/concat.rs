@@ -19,6 +19,7 @@ impl NodeLogic for ConcatMediaNode {
             "Concatenate packet-copy-compatible media files",
             "Video/Editing",
         );
+        node.set_flowscript_name("video", "concat");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         node.add_input_pin(

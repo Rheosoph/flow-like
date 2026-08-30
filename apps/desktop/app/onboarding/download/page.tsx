@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IHub,
 	type UseQueryResult,
@@ -23,6 +22,7 @@ import {
 import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -168,13 +168,13 @@ export default function ProfileCreation() {
 			<div className="p-3 sm:p-4 max-w-screen-lg w-full z-10 mx-auto">
 				<div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
 					<div className="w-full">
-						<h1>{t('greatSelection', '🚀 Great Selection!')}</h1>
+						<h1>{t("greatSelection", "🚀 Great Selection!")}</h1>
 						<h2>
-							{t('letapossDownloadYourModels', "Let's download your models")}{" "}
+							{t("letapossDownloadYourModels", "Let's download your models")}{" "}
 							<b className="highlight">
 								{(stats[stats.length - 1]?.progress || 0).toFixed(2)}%
 							</b>{" "}
-							{t('finished', 'finished 🤩')}
+							{t("finished", "finished 🤩")}
 						</h2>
 					</div>
 				</div>
@@ -221,7 +221,7 @@ export default function ProfileCreation() {
 					</div>
 					<div className="flex flex-row flex-wrap gap-2 justify-end items-center">
 						<div className="border p-2 bg-card text-card-foreground">
-							{humanFileSize(totalSize)} {t('total', 'Total')}
+							{humanFileSize(totalSize)} {t("total", "Total")}
 						</div>
 						<div className="border p-2 bg-card text-card-foreground">
 							{humanFileSize(stats[stats.length - 1]?.speed ?? 0)} / s
@@ -232,7 +232,7 @@ export default function ProfileCreation() {
 							}}
 							className="border p-2 bg-primary text-primary-foreground hover:bg-background hover:text-foreground transition-all"
 						>
-							{t('backgroundDownload', 'Background Download')}
+							{t("backgroundDownload", "Background Download")}
 						</button>
 					</div>
 				</div>

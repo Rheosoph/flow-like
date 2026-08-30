@@ -28,6 +28,8 @@ impl NodeLogic for SetWeightNode {
             "Adjusts the relative weight for a specific capability preference",
             "AI/Generative/Preferences",
         );
+        node.set_flowscript_name("ai.preferences", "setWeight");
+        node.set_receiver("preferences_in");
         node.add_icon("/flow/icons/struct.svg");
         node.set_scores(
             NodeScores::new()

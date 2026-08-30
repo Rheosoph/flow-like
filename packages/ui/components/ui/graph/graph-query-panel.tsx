@@ -45,7 +45,7 @@ export function GraphQueryPanel({
 			<div className="p-3 border-b space-y-2">
 				<div className="flex items-center justify-between">
 					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-						{t('cypherQuery', 'Cypher Query')}
+						{t("cypherQuery", "Cypher Query")}
 					</p>
 					<Button
 						size="sm"
@@ -80,7 +80,7 @@ export function GraphQueryPanel({
 						<TabsList className="mx-3 mt-2 w-fit">
 							<TabsTrigger value="table" className="text-xs gap-1">
 								<Table2 className="h-3.5 w-3.5" />
-								{t('table', 'Table')}
+								{t("table", "Table")}
 							</TabsTrigger>
 							<TabsTrigger value="json" className="text-xs gap-1">
 								<Network className="h-3.5 w-3.5" />
@@ -106,7 +106,7 @@ export function GraphQueryPanel({
 													))
 												) : (
 													<th className="px-3 py-2 text-left font-medium text-muted-foreground">
-														{t('value2', 'Value')}
+														{t("value2", "Value")}
 													</th>
 												)}
 											</tr>
@@ -147,7 +147,7 @@ export function GraphQueryPanel({
 			)}
 			{results && results.length === 0 && (
 				<div className="p-4 text-center text-sm text-muted-foreground">
-					{t('queryReturnedNoResults', 'Query returned no results')}
+					{t("queryReturnedNoResults", "Query returned no results")}
 				</div>
 			)}
 		</div>

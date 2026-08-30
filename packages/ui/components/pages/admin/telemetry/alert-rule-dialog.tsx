@@ -114,11 +114,15 @@ function sourceOf(form: AlertRuleForm): string | null {
  * metric's table, so an impossible combination never round-trips into a 400.
  */
 function validateForm(form: AlertRuleForm): string | null {
-	if (!form.name.trim()) return i18next.t('giveTheRuleAName', 'Give the rule a name.');
+	if (!form.name.trim())
+		return i18next.t("giveTheRuleAName", "Give the rule a name.");
 	if (form.mode === "threshold") {
 		const threshold = Number.parseFloat(form.threshold);
 		if (!Number.isFinite(threshold)) {
-			return i18next.t('thresholdModeNeedsANumericThreshold', 'Threshold mode needs a numeric threshold.');
+			return i18next.t(
+				"thresholdModeNeedsANumericThreshold",
+				"Threshold mode needs a numeric threshold.",
+			);
 		}
 	} else {
 		const sensitivity = Number.parseFloat(form.sensitivity);
@@ -127,7 +131,11 @@ function validateForm(form: AlertRuleForm): string | null {
 			sensitivity < MIN_ALERT_SENSITIVITY ||
 			sensitivity > MAX_ALERT_SENSITIVITY
 		) {
-			return i18next.t('sensitivityMustBeBetweenMin_alert_sensitivityAndMax_alert_sensitivity', 'Sensitivity must be between {{MIN_ALERT_SENSITIVITY}} and {{MAX_ALERT_SENSITIVITY}}.', { MIN_ALERT_SENSITIVITY, MAX_ALERT_SENSITIVITY });
+			return i18next.t(
+				"sensitivityMustBeBetweenMin_alert_sensitivityAndMax_alert_sensitivity",
+				"Sensitivity must be between {{MIN_ALERT_SENSITIVITY}} and {{MAX_ALERT_SENSITIVITY}}.",
+				{ MIN_ALERT_SENSITIVITY, MAX_ALERT_SENSITIVITY },
+			);
 		}
 		const minSamples = Number.parseInt(form.minSamples, 10);
 		if (
@@ -135,7 +143,11 @@ function validateForm(form: AlertRuleForm): string | null {
 			minSamples < MIN_ALERT_SAMPLES ||
 			minSamples > MAX_ALERT_SAMPLES
 		) {
-			return i18next.t('baselineWindowsMustBeBetweenMin_alert_samplesAndMax_alert_samples', 'Baseline windows must be between {{MIN_ALERT_SAMPLES}} and {{MAX_ALERT_SAMPLES}}.', { MIN_ALERT_SAMPLES, MAX_ALERT_SAMPLES });
+			return i18next.t(
+				"baselineWindowsMustBeBetweenMin_alert_samplesAndMax_alert_samples",
+				"Baseline windows must be between {{MIN_ALERT_SAMPLES}} and {{MAX_ALERT_SAMPLES}}.",
+				{ MIN_ALERT_SAMPLES, MAX_ALERT_SAMPLES },
+			);
 		}
 	}
 	return alertSourceMismatch(form.metric, sourceOf(form));
@@ -271,7 +283,11 @@ export function TelemetryAlertRuleDialog({
 		},
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: ALERTS_QUERY_KEY });
-			toast.success(rule ? t('alertRuleUpdated', 'Alert rule updated') : "Alert rule created");
+			toast.success(
+				rule
+					? t("alertRuleUpdated", "Alert rule updated")
+					: "Alert rule created",
+			);
 			onOpenChange(false);
 		},
 		onError: (error: Error) =>
@@ -283,10 +299,15 @@ export function TelemetryAlertRuleDialog({
 			<DialogContent className="max-w-2xl">
 				<DialogHeader>
 					<DialogTitle>
-						{rule ? t('editAlertRule', 'Edit alert rule') : t('newAlertRule', 'New alert rule')}
+						{rule
+							? t("editAlertRule", "Edit alert rule")
+							: t("newAlertRule", "New alert rule")}
 					</DialogTitle>
 					<DialogDescription>
-						{t('alertsAreEvaluatedOverAnonymousTelemetryAggregatesAndAlwaysLandInTheInappInboxDeliveryBelowReachesThePlatformOperatorsAsWellNoThirdpartyAlertingServiceIsInvolved', "Alerts are evaluated over anonymous telemetry aggregates and always land in the in-app inbox. Delivery below reaches the platform operators as well — no third-party alerting service is involved.")}
+						{t(
+							"alertsAreEvaluatedOverAnonymousTelemetryAggregatesAndAlwaysLandInTheInappInboxDeliveryBelowReachesThePlatformOperatorsAsWellNoThirdpartyAlertingServiceIsInvolved",
+							"Alerts are evaluated over anonymous telemetry aggregates and always land in the in-app inbox. Delivery below reaches the platform operators as well — no third-party alerting service is involved.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -301,13 +322,16 @@ export function TelemetryAlertRuleDialog({
 							onChange={(e) =>
 								setForm((prev) => ({ ...prev, name: e.target.value }))
 							}
-							placeholder={t('desktopErrorRateSpike', 'Desktop error rate spike')}
+							placeholder={t(
+								"desktopErrorRateSpike",
+								"Desktop error rate spike",
+							)}
 						/>
 					</div>
 
 					<div className="grid gap-3 sm:grid-cols-2">
 						<div className="space-y-1.5">
-							<Label className="text-xs">{t('metric', 'Metric')}</Label>
+							<Label className="text-xs">{t("metric", "Metric")}</Label>
 							<Select
 								value={form.metric}
 								onValueChange={(metric) =>
@@ -330,7 +354,7 @@ export function TelemetryAlertRuleDialog({
 							</p>
 						</div>
 						<div className="space-y-1.5">
-							<Label className="text-xs">{t('mode', 'Mode')}</Label>
+							<Label className="text-xs">{t("mode", "Mode")}</Label>
 							<Select
 								value={form.mode}
 								onValueChange={(mode) => setForm((prev) => ({ ...prev, mode }))}
@@ -354,7 +378,7 @@ export function TelemetryAlertRuleDialog({
 
 					<div className="grid gap-3 sm:grid-cols-2">
 						<div className="space-y-1.5">
-							<Label className="text-xs">{t('comparator', 'Comparator')}</Label>
+							<Label className="text-xs">{t("comparator", "Comparator")}</Label>
 							<Select
 								value={form.comparator}
 								onValueChange={(comparator) =>
@@ -374,7 +398,7 @@ export function TelemetryAlertRuleDialog({
 							</Select>
 						</div>
 						<div className="space-y-1.5">
-							<Label className="text-xs">{t('window', 'Window')}</Label>
+							<Label className="text-xs">{t("window", "Window")}</Label>
 							<Select
 								value={String(form.windowMinutes)}
 								onValueChange={(value) =>
@@ -402,7 +426,7 @@ export function TelemetryAlertRuleDialog({
 						<div className="grid gap-3 sm:grid-cols-2">
 							<NumberField
 								id="alert-rule-sensitivity"
-								label={t('sensitivity', 'Sensitivity (σ)')}
+								label={t("sensitivity", "Sensitivity (σ)")}
 								value={form.sensitivity}
 								onChange={(sensitivity) =>
 									setForm((prev) => ({ ...prev, sensitivity }))
@@ -414,7 +438,7 @@ export function TelemetryAlertRuleDialog({
 							/>
 							<NumberField
 								id="alert-rule-min-samples"
-								label={t('baselineWindows', 'Baseline windows')}
+								label={t("baselineWindows", "Baseline windows")}
 								value={form.minSamples}
 								onChange={(minSamples) =>
 									setForm((prev) => ({ ...prev, minSamples }))
@@ -440,7 +464,7 @@ export function TelemetryAlertRuleDialog({
 					)}
 
 					<div className="space-y-1.5">
-						<Label className="text-xs">{t('source', 'Source')}</Label>
+						<Label className="text-xs">{t("source", "Source")}</Label>
 						<Select
 							value={form.source}
 							onValueChange={(source) =>
@@ -451,7 +475,9 @@ export function TelemetryAlertRuleDialog({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value={ANY_SOURCE}>{t('allSources', 'All sources')}</SelectItem>
+								<SelectItem value={ANY_SOURCE}>
+									{t("allSources", "All sources")}
+								</SelectItem>
 								{ALERT_SOURCE_OPTIONS.map((source) => (
 									<SelectItem key={source} value={source}>
 										{alertSourceLabel(source)}
@@ -469,7 +495,10 @@ export function TelemetryAlertRuleDialog({
 					<ToggleRow
 						id="alert-rule-enabled"
 						label="Enabled"
-						description={t('disabledRulesStayConfiguredButAreSkippedByTheEvaluator', 'Disabled rules stay configured but are skipped by the evaluator.')}
+						description={t(
+							"disabledRulesStayConfiguredButAreSkippedByTheEvaluator",
+							"Disabled rules stay configured but are skipped by the evaluator.",
+						)}
 						checked={form.enabled}
 						onCheckedChange={(enabled) =>
 							setForm((prev) => ({ ...prev, enabled }))
@@ -478,9 +507,12 @@ export function TelemetryAlertRuleDialog({
 
 					<div className="space-y-2">
 						<div className="space-y-0.5">
-							<Label className="text-xs">{t('delivery', 'Delivery')}</Label>
+							<Label className="text-xs">{t("delivery", "Delivery")}</Label>
 							<p className="text-[11px] text-muted-foreground">
-								{t('everyAlertIsWrittenToTheInappInboxTheseChannelsSendItOutOfBandAsWellOnBothTheFiringAndTheRecoveryTransition', "Every alert is written to the in-app inbox. These channels send it out of band as well, on both the firing and the recovery transition.")}
+								{t(
+									"everyAlertIsWrittenToTheInappInboxTheseChannelsSendItOutOfBandAsWellOnBothTheFiringAndTheRecoveryTransition",
+									"Every alert is written to the in-app inbox. These channels send it out of band as well, on both the firing and the recovery transition.",
+								)}
 							</p>
 						</div>
 						<ToggleRow
@@ -494,7 +526,10 @@ export function TelemetryAlertRuleDialog({
 						/>
 						{form.notifyEmail ? (
 							<p className="text-[11px] text-muted-foreground">
-								{t('nothingIsSentWhenThisPlatformHasNoAlertingMailboxOrMailProviderConfiguredTheAlertStillLandsInTheInbox', "Nothing is sent when this platform has no alerting mailbox or mail provider configured — the alert still lands in the inbox.")}
+								{t(
+									"nothingIsSentWhenThisPlatformHasNoAlertingMailboxOrMailProviderConfiguredTheAlertStillLandsInTheInbox",
+									"Nothing is sent when this platform has no alerting mailbox or mail provider configured — the alert still lands in the inbox.",
+								)}
 							</p>
 						) : null}
 						<ToggleRow
@@ -519,13 +554,17 @@ export function TelemetryAlertRuleDialog({
 						onClick={() => onOpenChange(false)}
 						disabled={save.isPending}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button
 						onClick={() => save.mutate()}
 						disabled={save.isPending || !profile || Boolean(validationError)}
 					>
-						{save.isPending ? "Saving…" : rule ? t('saveChanges', 'Save changes') : t('createRule', 'Create rule')}
+						{save.isPending
+							? "Saving…"
+							: rule
+								? t("saveChanges", "Save changes")
+								: t("createRule", "Create rule")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

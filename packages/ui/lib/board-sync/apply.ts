@@ -146,6 +146,9 @@ export function toNode(
 			wire.oauth_providers ?? catalogNode?.oauth_providers ?? null,
 		required_oauth_scopes:
 			wire.required_oauth_scopes ?? catalogNode?.required_oauth_scopes ?? null,
+		namespace: wire.namespace ?? catalogNode?.namespace ?? null,
+		alias: wire.alias ?? catalogNode?.alias ?? null,
+		receiver: wire.receiver ?? catalogNode?.receiver ?? null,
 	};
 	return { node, hydratable };
 }

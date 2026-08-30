@@ -33,6 +33,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { ToolbarButton } from "../layer-node/layer-node-toolbar";
+import { EDITABLE_REFERENCE_NODES } from "./flow-node-edit-menu";
 
 interface FlowNodeToolbarProps {
 	node: INode;
@@ -81,7 +82,7 @@ const AlignmentMenu = memo(
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger className="text-xs">
 						<AlignStartVerticalIcon className="h-3 w-3 mr-1.5" />
-						{i18next.t('align', 'Align')}
+						{i18next.t("align", "Align")}
 					</DropdownMenuSubTrigger>
 					<DropdownMenuSubContent className="text-xs">
 						<DropdownMenuItem
@@ -89,35 +90,35 @@ const AlignmentMenu = memo(
 							onClick={() => onAlign("align", "start")}
 						>
 							<AlignStartVerticalIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('start', 'Start')}
+							{i18next.t("start", "Start")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("align", "center")}
 						>
 							<AlignCenterVerticalIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('center', 'Center')}
+							{i18next.t("center", "Center")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("align", "end")}
 						>
 							<AlignEndVerticalIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('end', 'End')}
+							{i18next.t("end", "End")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("align", "distribute")}
 						>
 							<GripVerticalIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('distributeEvenly', 'Distribute Evenly')}
+							{i18next.t("distributeEvenly", "Distribute Evenly")}
 						</DropdownMenuItem>
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger className="text-xs">
 						<AlignVerticalJustifyStartIcon className="h-3 w-3 mr-1.5" />
-						{i18next.t('justify', 'Justify')}
+						{i18next.t("justify", "Justify")}
 					</DropdownMenuSubTrigger>
 					<DropdownMenuSubContent className="text-xs">
 						<DropdownMenuItem
@@ -125,28 +126,28 @@ const AlignmentMenu = memo(
 							onClick={() => onAlign("justify", "start")}
 						>
 							<AlignVerticalJustifyStartIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('start', 'Start')}
+							{i18next.t("start", "Start")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("justify", "center")}
 						>
 							<AlignVerticalJustifyCenterIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('center', 'Center')}
+							{i18next.t("center", "Center")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("justify", "end")}
 						>
 							<AlignVerticalJustifyEndIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('end', 'End')}
+							{i18next.t("end", "End")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="text-xs"
 							onClick={() => onAlign("justify", "distribute")}
 						>
 							<GripHorizontalIcon className="h-3 w-3 mr-1.5" />
-							{i18next.t('distributeEvenly', 'Distribute Evenly')}
+							{i18next.t("distributeEvenly", "Distribute Evenly")}
 						</DropdownMenuItem>
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
@@ -209,8 +210,11 @@ const FlowNodeToolbar = memo(
 			[node.pins],
 		);
 
-		const isGenericEvent = node.name === "events_generic";
 		const isStartNode = node.start ?? false;
+		// Generic events edit their own payload; the reference nodes open the
+		// variable or function they point at.
+		const hasEditButton =
+			node.name === "events_generic" || EDITABLE_REFERENCE_NODES.has(node.name);
 
 		// Stable onClick so the memoized ToolbarButton (and its Radix Tooltip/Popper,
 		// which measures the DOM on render) doesn't re-render on every toolbar render.
@@ -250,7 +254,7 @@ const FlowNodeToolbar = memo(
 									tooltip="Rename"
 								/>
 							)}
-							{isGenericEvent && (
+							{hasEditButton && (
 								<ToolbarButton
 									onClick={onEdit}
 									icon={SlidersHorizontalIcon}
@@ -272,7 +276,12 @@ const FlowNodeToolbar = memo(
 									onClick={onHandleError}
 									icon={CircleXIcon}
 									tooltip={
-										errorHandled ? i18next.t('removeErrorHandling', 'Remove Error Handling') : "Handle Errors"
+										errorHandled
+											? i18next.t(
+													"removeErrorHandling",
+													"Remove Error Handling",
+												)
+											: "Handle Errors"
 									}
 								/>
 							)}

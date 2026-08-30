@@ -1,11 +1,11 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	type INode,
 	addNodeCommand,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
@@ -80,7 +80,9 @@ export function FlowDeepLinkHandler({
 					queryKey: ["getBoard", appId, boardId],
 				});
 				toast.success(
-					t('addedValToTheBoard', 'Added "{{val}}" to the board', { val: prototype.friendly_name ?? prototype.name }),
+					t("addedValToTheBoard", 'Added "{{val}}" to the board', {
+						val: prototype.friendly_name ?? prototype.name,
+					}),
 				);
 			} catch (err) {
 				console.error("addNode deep link failed", err);

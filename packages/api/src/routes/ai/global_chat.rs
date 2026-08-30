@@ -19,15 +19,17 @@
 //! ## Bidirectional tools
 //! SSE is server→client only, but the platform tools (navigate, create app, delegate to the board /
 //! widget copilots, ask the user) run in the browser and must return a value to the running loop.
-//! The bridge emits a `tool_request` SSE frame — `{ requestId, toolName, arguments, approval }`, the
-//! same shape the desktop sends over its Tauri event — and awaits a `POST /{runId}/tool-result`.
-//! Because that POST may land on a different process than the streaming run (each AWS
-//! streaming-Lambda request gets its own instance), the two coordinate through a Postgres
-//! `GlobalChatToolCall` row (insert PENDING + short-poll ↔ POST flips it to RESPONDED) rather than
-//! shared process memory. Memory tools never reach the bridge (handled in core). Runs are not
-//! resumable across a reconnect; a dropped stream lets pending tool calls time out and get swept.
+//! The bridge emits a `tool_request` SSE frame — `{ requestId, toolName, arguments, approval,
+//! channel }`, the desktop's Tauri-event shape plus the channel ticket — and blocks on the run's
+//! [`Channel`]. The browser answers through that ticket's transport (`POST /channels/{run}/push`
+//! on the HTTP transport, a cloud pub/sub otherwise), so the reply may land on a different process
+//! than the streaming run (each AWS streaming-Lambda request gets its own instance). Stop and
+//! steer ride the same channel as `cancel` / `inbound` pushes. Memory tools never reach the bridge
+//! (handled in core). Runs are not resumable across a reconnect; a dropped stream lets pending
+//! requests expire and get swept.
 
 use std::{
+    collections::HashSet,
     convert::Infallible,
     sync::{
         Arc,
@@ -44,6 +46,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flow_like::bit::BitTypes;
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
@@ -55,24 +58,18 @@ use flow_like::flow::copilot::{
     AttachmentManifestEntry, ChatMessage, GlobalDataStudioContext, GlobalOpenBoardContext,
     PlatformContextInput, PlatformSpecialist, build_platform_context, run_platform_chat,
 };
+use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
-use flow_like_types::tokio::{
-    sync::{mpsc, oneshot},
-    time::sleep,
-};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set,
-};
+use flow_like_types::channel::{Channel, ChannelOutcome, PollingChannel};
+use flow_like_types::tokio::sync::{mpsc, oneshot};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::copilot::{master_flow_like_state, user_access_token};
 use crate::{
-    entity::{
-        global_chat_tool_call, prelude::GlobalChatToolCall, profile,
-        sea_orm_active_enums::InteractionStatus,
-    },
+    channel::DbChannelStore,
+    entity::{bit, profile},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -87,9 +84,6 @@ pub fn routes() -> Router<AppState> {
             "/feedback",
             axum::routing::put(feedback::upsert_global_chat_feedback),
         )
-        .route("/{run_id}/tool-result", post(global_chat_tool_result))
-        .route("/{run_id}/cancel", post(global_chat_cancel))
-        .route("/{run_id}/steer", post(global_chat_steer))
         .route(
             "/memory",
             get(global_chat_memory_status).delete(global_chat_clear_memory),
@@ -169,35 +163,17 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Cross-instance tool-call coordination (Postgres-backed).
+// Run ids and channels
 // ---------------------------------------------------------------------------------------------
-// The desktop drives frontend tools over a Tauri event; the browser drives them over one SSE stream
-// whose `POST /{runId}/tool-result` may land on a DIFFERENT process (AWS streaming-Lambda scales each
-// request onto its own instance). So the awaiting run and the result POST cannot share process memory
-// — they coordinate through a lean `GlobalChatToolCall` row instead, mirroring the interaction
-// endpoint: the run inserts a PENDING row and short-polls it; any instance's POST flips it to
-// RESPONDED. Rows are deleted when the run's loop ends; abandoned rows are swept lazily.
 
-static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Initial interval between reads of a pending tool-call row. The poll backs off up to
-/// [`TOOL_POLL_MAX_INTERVAL`] so a long human-in-the-loop tool (e.g. `ask_user`, `call_app_chat`)
-/// does not hammer the DB for its whole timeout window while fast tools still resolve quickly.
-const TOOL_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// Upper bound the poll interval backs off to.
-const TOOL_POLL_MAX_INTERVAL: Duration = Duration::from_secs(3);
+/// Lifetime of a chat run's channel. Bounds what a turn that dies without cleanup can leave behind
+/// (rows, transport credentials) and matches the STS cap for a chained AssumeRole.
+const CHAT_CHANNEL_TTL_SECS: i64 = 3600;
 
-fn next_request_id() -> String {
-    let counter = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-    format!("flowpilot-tool-{millis}-{counter}")
-}
-
-fn next_run_id() -> String {
-    let counter = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn next_run_id() -> String {
+    let counter = RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -205,99 +181,36 @@ fn next_run_id() -> String {
     format!("global-chat-{millis}-{counter}")
 }
 
-// Run control (stop / steer) rides the SAME coordination table, for the same reason tool results
-// do: the control POST may land on a different instance than the one running the turn, so process
-// memory is not a shared medium. Control rows are distinguished from tool calls by their id prefix
-// and are swept by `finish_run_rows` along with everything else the run owns.
-//
-// A cancel row is a tombstone (its presence is the signal). A steer row carries the user's text in
-// `response_value` and is deleted once the loop has folded it in.
-const CANCEL_ROW_PREFIX: &str = "cancel:";
-const STEER_ROW_PREFIX: &str = "steer:";
-/// Written once when a run starts, purely so control requests have something to authorize against.
-const OWNER_ROW_PREFIX: &str = "run:";
-/// Control rows outlive nothing: they are swept with the run. This only bounds abandoned rows if a
-/// run dies without cleanup.
-const CONTROL_ROW_TTL_SECS: i64 = 3600;
-/// Cap on unconsumed steering rows per run, matching the desktop registry. A user hammering the
-/// composer during a slow round must not grow the next prompt without bound.
-const MAX_PENDING_STEER_ROWS: u64 = 8;
-
-fn cancel_row_id(run_id: &str) -> String {
-    format!("{CANCEL_ROW_PREFIX}{run_id}")
-}
-
-fn owner_row_id(run_id: &str) -> String {
-    format!("{OWNER_ROW_PREFIX}{run_id}")
-}
-
-/// Whether `sub` started the chat run that owns `run_id`. A nested specialist rides that run's id
-/// for tool coordination, so it must prove ownership before writing rows against it.
-pub(crate) async fn run_owned_by(db: &DatabaseConnection, run_id: &str, sub: &str) -> bool {
-    matches!(
-        GlobalChatToolCall::find_by_id(owner_row_id(run_id)).one(db).await,
-        Ok(Some(row)) if row.sub == sub
-    )
-}
-
-/// Insert a PENDING coordination row for one in-flight browser tool call.
-async fn insert_pending_tool_call(
-    db: &DatabaseConnection,
+/// One channel per chat run, keyed by the run id. On the HTTP transport the API polls its own
+/// `Channel` rows; on a cloud transport the API process holds the waiter connection for the
+/// streaming turn exactly like an executor would.
+pub(crate) async fn build_chat_channel(
+    state: &AppState,
     run_id: &str,
-    request_id: &str,
     sub: &str,
-    expires_at: i64,
-) -> Result<(), sea_orm::DbErr> {
-    global_chat_tool_call::ActiveModel {
-        id: Set(request_id.to_string()),
-        run_id: Set(run_id.to_string()),
-        sub: Set(sub.to_string()),
-        status: Set(InteractionStatus::Pending),
-        expires_at: Set(expires_at),
-        response_value: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+) -> Result<Arc<dyn Channel>, ApiError> {
+    let issuer = &state.channels;
+    let mint_error = |e: flow_like_types::Error| {
+        ApiError::internal(format!("Failed to mint the FlowPilot channel: {e}"))
+    };
+    if issuer.backend().is_http() {
+        let handle = issuer
+            .http_handle(run_id, sub, None, CHAT_CHANNEL_TTL_SECS)
+            .map_err(mint_error)?;
+        return Ok(Arc::new(PollingChannel::new(
+            DbChannelStore::new(state.db.clone(), sub, None),
+            handle,
+        )));
     }
-    .insert(db)
-    .await
-    .map(|_| ())
-}
-
-/// Best-effort delete of a single coordination row (the run consumed its result or gave up on it).
-async fn delete_tool_call(db: &DatabaseConnection, request_id: &str) {
-    if let Err(error) = GlobalChatToolCall::delete_by_id(request_id.to_string())
-        .exec(db)
+    let grant = issuer
+        .grant(run_id, sub, None, CHAT_CHANNEL_TTL_SECS)
         .await
-    {
-        tracing::warn!(%error, request_id, "[global_chat] failed to delete tool-call row");
-    }
-}
-
-/// Delete every coordination row for a finished run, and — at ~5% probability — sweep abandoned rows
-/// past their expiry. There is no background reaper (a streaming Lambda freezes once it returns), so
-/// cleanup piggybacks on run completion.
-async fn finish_run_rows(db: &DatabaseConnection, run_id: &str) {
-    if let Err(error) = GlobalChatToolCall::delete_many()
-        .filter(global_chat_tool_call::Column::RunId.eq(run_id))
-        .exec(db)
+        .map_err(mint_error)?;
+    // Eager on purpose: stop/steer may arrive before the first tool call, and a cloud transport
+    // only delivers to a waiter that is already subscribed.
+    flow_like_channels::connect_executor_channel(&grant)
         .await
-    {
-        tracing::warn!(%error, run_id, "[global_chat] failed to delete run tool-call rows");
-    }
-
-    let sample = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or_default();
-    if sample.is_multiple_of(20) {
-        let now = chrono::Utc::now().timestamp();
-        if let Err(error) = GlobalChatToolCall::delete_many()
-            .filter(global_chat_tool_call::Column::ExpiresAt.lt(now))
-            .exec(db)
-            .await
-        {
-            tracing::warn!(%error, "[global_chat] expired tool-call sweep failed");
-        }
-    }
+        .map_err(|e| ApiError::internal(format!("Failed to open the FlowPilot channel: {e}")))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -348,11 +261,12 @@ pub struct GlobalChatRequest {
     pub scope: CopilotScope,
 }
 
-/// A browser-executed tool result, posted back to unblock the awaiting tool future. Same shape the
-/// desktop `flowpilot_frontend_tool_result` command accepts.
+/// A browser-executed tool result: the `value` of the reply pushed into the run's channel. Same
+/// shape the desktop `flowpilot_frontend_tool_result` command accepts.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultBody {
+    #[serde(default)]
     pub request_id: String,
     pub approved: bool,
     #[serde(default)]
@@ -428,6 +342,19 @@ pub(crate) async fn load_user_profile_opt(
     sub: &str,
     profile_id: Option<&str>,
 ) -> Result<Option<Arc<Profile>>, ApiError> {
+    Ok(load_user_profile_access(state, sub, profile_id)
+        .await?
+        .map(|(profile, _)| profile))
+}
+
+/// As [`load_user_profile_opt`], but also reports what the caller's plan leaves
+/// selectable — callers that let the copilot pick a model need this to fail with a
+/// real explanation instead of a mid-stream 402.
+pub(crate) async fn load_user_profile_access(
+    state: &AppState,
+    sub: &str,
+    profile_id: Option<&str>,
+) -> Result<Option<(Arc<Profile>, ProfileModelAccess)>, ApiError> {
     let mut query = profile::Entity::find()
         .filter(profile::Column::UserId.eq(sub))
         .filter(profile::Column::DeletedAt.is_null());
@@ -462,7 +389,161 @@ pub(crate) async fn load_user_profile_opt(
         .map(flow_like::profile::ProfileCustomBit)
         .collect();
 
-    Ok(Some(Arc::new(profile)))
+    let access = drop_models_above_plan(state, sub, &mut profile).await;
+
+    Ok(Some((Arc::new(profile), access)))
+}
+
+/// What the caller's plan leaves them to work with, once the profile's own
+/// line-up has been measured against it.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProfileModelAccess {
+    /// LLM/VLM models the profile references, whatever the plan says.
+    pub profile_models: usize,
+    /// ...of those, the ones the plan actually covers.
+    pub allowed_models: usize,
+}
+
+impl ProfileModelAccess {
+    /// A profile that offers nothing to auto-select from. `None` when the caller
+    /// named a model explicitly — an explicit pick resolves straight off the hub
+    /// and is the proxy's business, not ours.
+    pub(crate) fn rejection(&self, model_id: Option<&str>) -> Option<ApiError> {
+        if model_id.is_some() || self.allowed_models > 0 {
+            return None;
+        }
+        if self.profile_models > 0 {
+            return Some(ApiError::payment_required(
+                "None of the models in this profile are included in your plan. Upgrade, or add a model your plan covers in Settings → Models.".to_string(),
+            ));
+        }
+        Some(ApiError::bad_request(
+            "This profile has no language model. Add one in Settings → Models before using FlowPilot.".to_string(),
+        ))
+    }
+}
+
+/// Strip the profile's LLM/VLM references that the caller's plan does not include,
+/// so automatic "best model" selection cannot pick one the proxy will reject with a
+/// 402 halfway through the stream — or, worse, escape the profile entirely and land
+/// on the catalog's flagship. Custom bits are counted but never stripped: those run
+/// on the user's own provider credentials, not on a hosted tier.
+///
+/// Best effort — a tier or bit lookup that fails leaves the profile as it was rather
+/// than locking the user out of their own models.
+async fn drop_models_above_plan(
+    state: &AppState,
+    sub: &str,
+    profile: &mut Profile,
+) -> ProfileModelAccess {
+    let custom_models = profile
+        .custom_bits
+        .iter()
+        .map(|custom| &custom.0)
+        .filter(|bit| matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm))
+        .filter(|bit| {
+            profile.bits.iter().any(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+                    == bit.id
+            })
+        })
+        .count();
+
+    let unmeasured = ProfileModelAccess {
+        profile_models: custom_models,
+        allowed_models: custom_models,
+    };
+
+    if profile.bits.is_empty() {
+        return unmeasured;
+    }
+
+    let user_tier = match crate::middleware::jwt::tier_for_sub(state, sub).await {
+        Ok(tier) => tier,
+        Err(err) => {
+            tracing::warn!(sub = %sub, "Could not resolve tier for model gating: {err:?}");
+            return unmeasured;
+        }
+    };
+
+    let raw_ids: Vec<&str> = profile
+        .bits
+        .iter()
+        .map(|reference| {
+            reference
+                .rsplit_once(':')
+                .map_or(reference.as_str(), |(_, id)| id)
+        })
+        .collect();
+
+    // Every chat turn loads the profile, so keep the bit lookup off the hot path:
+    // the verdict only changes when the profile's line-up or the plan changes.
+    let cache_key = format!(
+        "plan_blocked_bits:{}:{}:{}",
+        profile.id,
+        user_tier.llm_tiers.join(","),
+        raw_ids.join(",")
+    );
+
+    let (blocked, hub_models): (Vec<String>, usize) = match state.get_cache(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let rows = match bit::Entity::find()
+                .filter(bit::Column::Id.is_in(raw_ids))
+                .all(&state.db)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(err) => {
+                    tracing::warn!(sub = %sub, "Could not load profile bits for model gating: {err:?}");
+                    return unmeasured;
+                }
+            };
+
+            let mut blocked = Vec::new();
+            let mut hub_models = 0usize;
+            for row in rows {
+                let id = row.id.clone();
+                let bit = flow_like::bit::Bit::from(row);
+                if !matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm) {
+                    continue;
+                }
+                hub_models += 1;
+                if !crate::model_tier::llm_bit_allowed(&bit, &user_tier) {
+                    blocked.push(id);
+                }
+            }
+            state.set_cache(cache_key, (&blocked, hub_models));
+            (blocked, hub_models)
+        }
+    };
+
+    let access = ProfileModelAccess {
+        profile_models: custom_models + hub_models,
+        allowed_models: custom_models + hub_models - blocked.len(),
+    };
+
+    if blocked.is_empty() {
+        return access;
+    }
+
+    let blocked: HashSet<String> = blocked.into_iter().collect();
+    profile.bits.retain(|reference| {
+        let id = reference
+            .rsplit_once(':')
+            .map_or(reference.as_str(), |(_, id)| id);
+        !blocked.contains(id)
+    });
+    tracing::debug!(
+        sub = %sub,
+        "Removed {} model(s) above the user's plan from profile {}",
+        blocked.len(),
+        profile.id
+    );
+
+    access
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -476,52 +557,41 @@ pub(crate) enum GlobalChatFrame {
     ToolRequest(Value),
 }
 
-/// Server-side platform tool bridge. Emits a `tool_request` frame down the SSE stream and blocks the
-/// tool future on a Postgres `GlobalChatToolCall` row completed by `POST /{runId}/tool-result` — so
-/// the result POST may hit a different process than the streaming run (Lambda). Mirrors the desktop
-/// `GlobalPlatformBridge`: same missing-args guard, same approval policy (from the shared core spec),
-/// same result normalization — so the frontend tool handlers behave identically on both transports.
+/// Server-side platform tool bridge. Emits a `tool_request` frame down the SSE stream (carrying
+/// the channel ticket the browser answers through) and blocks the tool future on the run's
+/// [`Channel`] — so the reply may arrive on a different process than the streaming run (Lambda),
+/// through a Postgres row or a cloud transport. Mirrors the desktop `GlobalPlatformBridge`: same
+/// missing-args guard, same approval policy (from the shared core spec), same result
+/// normalization — so the frontend tool handlers behave identically on both transports.
 pub(crate) struct ServerPlatformBridge {
-    db: DatabaseConnection,
-    run_id: String,
-    sub: String,
+    channel: Arc<dyn Channel>,
     frames: mpsc::UnboundedSender<GlobalChatFrame>,
     /// Set when this bridge serves a nested specialist rather than the root orchestrator. It picks
-    /// the tool specs approval/timeouts are read from, and keeps the specialist out of the run's
-    /// steering queue — mid-run instructions belong to the orchestrator the user is talking to.
+    /// the tool specs approval/timeouts are read from.
     specialist: Option<PlatformSpecialist>,
 }
 
 impl ServerPlatformBridge {
-    /// Bridge for the root orchestrator turn that owns `run_id`.
+    /// Bridge for the root orchestrator turn that owns the channel.
     pub(crate) fn orchestrator(
-        db: DatabaseConnection,
-        run_id: String,
-        sub: String,
+        channel: Arc<dyn Channel>,
         frames: mpsc::UnboundedSender<GlobalChatFrame>,
     ) -> Self {
         Self {
-            db,
-            run_id,
-            sub,
+            channel,
             frames,
             specialist: None,
         }
     }
 
-    /// Bridge for a nested specialist run. It rides the owning chat run's id so the browser posts
-    /// results to the endpoint it already knows and a cancel of that run stops the specialist too.
+    /// Bridge for a nested specialist run on its own channel.
     pub(crate) fn specialist(
-        db: DatabaseConnection,
-        run_id: String,
-        sub: String,
+        channel: Arc<dyn Channel>,
         frames: mpsc::UnboundedSender<GlobalChatFrame>,
         specialist: PlatformSpecialist,
     ) -> Self {
         Self {
-            db,
-            run_id,
-            sub,
+            channel,
             frames,
             specialist: Some(specialist),
         }
@@ -536,57 +606,40 @@ impl ServerPlatformBridge {
     }
 }
 
+fn tool_error(tool_name: &str, error: &str) -> String {
+    json!({ "status": "error", "tool": tool_name, "error": error }).to_string()
+}
+
+/// Steering pushes carry the instruction as the push `value`: a string, or an object with a
+/// `message` field. Blank instructions are dropped.
+fn steering_text(value: Value) -> Option<String> {
+    let text = match value {
+        Value::String(text) => text,
+        Value::Object(mut object) => match object.remove("message") {
+            Some(Value::String(text)) => text,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
 #[async_trait]
 impl PlatformToolBridge for ServerPlatformBridge {
-    /// One indexed read per tool round. Cheap next to the 500ms poll the tool path already runs,
-    /// and it is the only way a browser's steer POST reaches a turn on another instance.
+    /// One drain per tool round. On the HTTP transport this is a single indexed read; it is the
+    /// only way a browser's steer reaches a turn on another instance.
     async fn drain_steering(&self) -> Vec<String> {
-        // A specialist shares the run id but not the conversation: consuming these would delete
-        // instructions the user aimed at the orchestrator.
-        if self.specialist.is_some() {
-            return Vec::new();
-        }
-        let rows = match GlobalChatToolCall::find()
-            .filter(global_chat_tool_call::Column::RunId.eq(self.run_id.clone()))
-            .filter(global_chat_tool_call::Column::Id.starts_with(STEER_ROW_PREFIX))
-            .order_by_asc(global_chat_tool_call::Column::CreatedAt)
-            .all(&self.db)
+        self.channel
+            .drain_inbound()
             .await
-        {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::warn!(%error, run_id = %self.run_id, "[global_chat] steering read failed");
-                return Vec::new();
-            }
-        };
-        if rows.is_empty() {
-            return Vec::new();
-        }
-        let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
-        let messages: Vec<String> = rows
             .into_iter()
-            .filter_map(|row| row.response_value)
-            .filter(|text| !text.trim().is_empty())
-            .collect();
-        // Delete only what was read: a steer that arrives between the read and the delete keeps its
-        // row and is picked up next round rather than being dropped.
-        if let Err(error) = GlobalChatToolCall::delete_many()
-            .filter(global_chat_tool_call::Column::Id.is_in(ids))
-            .exec(&self.db)
-            .await
-        {
-            tracing::warn!(%error, run_id = %self.run_id, "[global_chat] steering cleanup failed");
-        }
-        messages
+            .filter_map(steering_text)
+            .collect()
     }
 
     async fn is_cancelled(&self) -> bool {
-        matches!(
-            GlobalChatToolCall::find_by_id(cancel_row_id(&self.run_id))
-                .one(&self.db)
-                .await,
-            Ok(Some(_))
-        )
+        self.channel.is_cancelled().await
     }
 
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
@@ -613,29 +666,22 @@ impl PlatformToolBridge for ServerPlatformBridge {
             None => (ResolvedToolApproval::none(), DEFAULT_TOOL_TIMEOUT_SECS),
         };
 
-        let request_id = next_request_id();
-        let expires_at = chrono::Utc::now().timestamp() + timeout_secs as i64;
-
-        // Persist the pending request BEFORE announcing it, so a result POST that races the frame
-        // always finds a row to flip. Any instance can then deliver the result.
-        if let Err(error) =
-            insert_pending_tool_call(&self.db, &self.run_id, &request_id, &self.sub, expires_at)
-                .await
-        {
-            tracing::warn!(%error, tool_name, "[global_chat] failed to persist tool request");
-            return json!({
-                "status": "error",
-                "tool": tool_name,
-                "error": "Failed to register the tool request."
-            })
-            .to_string();
-        }
+        // Register BEFORE announcing, so a reply that races the frame always finds its
+        // registration. Any instance (or the cloud transport) can then deliver the reply.
+        let ticket = match self.channel.open(Duration::from_secs(timeout_secs)).await {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                tracing::warn!(%error, tool_name, "[global_chat] failed to register tool request");
+                return tool_error(tool_name, "Failed to register the tool request.");
+            }
+        };
 
         let request = json!({
-            "requestId": request_id,
+            "requestId": ticket.request_id,
             "toolName": tool_name,
             "arguments": arguments,
             "approval": approval,
+            "channel": ticket.handle,
         });
 
         if self
@@ -643,66 +689,30 @@ impl PlatformToolBridge for ServerPlatformBridge {
             .send(GlobalChatFrame::ToolRequest(request))
             .is_err()
         {
-            delete_tool_call(&self.db, &request_id).await;
-            return json!({
-                "status": "error",
-                "tool": tool_name,
-                "error": "The FlowPilot stream is no longer connected."
-            })
-            .to_string();
+            self.channel.abandon(&ticket).await;
+            return tool_error(tool_name, "The FlowPilot stream is no longer connected.");
         }
 
-        // Short-poll the row until the browser POSTs a result (from any instance) or it expires.
-        // Back off from a snappy initial interval so a slow tool doesn't hammer the DB.
-        let mut poll_interval = TOOL_POLL_INTERVAL;
-        loop {
-            sleep(poll_interval).await;
-            poll_interval = (poll_interval * 2).min(TOOL_POLL_MAX_INTERVAL);
-
-            if chrono::Utc::now().timestamp() >= expires_at {
-                delete_tool_call(&self.db, &request_id).await;
-                return json!({
-                    "status": "timeout",
-                    "tool": tool_name,
-                    "message": "Timed out waiting for the FlowPilot tool response."
-                })
-                .to_string();
+        match self.channel.wait(&ticket, None).await {
+            Ok(ChannelOutcome::Responded(value)) => {
+                match serde_json::from_value::<ToolResultBody>(value) {
+                    Ok(response) => normalize_response(tool_name, response),
+                    Err(_) => tool_error(tool_name, "The FlowPilot tool response was malformed."),
+                }
             }
-
-            match GlobalChatToolCall::find_by_id(request_id.clone())
-                .one(&self.db)
-                .await
-            {
-                Ok(Some(row)) if row.status == InteractionStatus::Responded => {
-                    let response = row
-                        .response_value
-                        .as_deref()
-                        .and_then(|value| serde_json::from_str::<ToolResultBody>(value).ok());
-                    delete_tool_call(&self.db, &request_id).await;
-                    return match response {
-                        Some(response) => normalize_response(tool_name, response),
-                        None => json!({
-                            "status": "error",
-                            "tool": tool_name,
-                            "error": "The FlowPilot tool response was malformed."
-                        })
-                        .to_string(),
-                    };
-                }
-                // Still pending — keep waiting.
-                Ok(Some(_)) => {}
-                // Row vanished (run finished elsewhere or swept) — stop waiting.
-                Ok(None) => {
-                    return json!({
-                        "status": "error",
-                        "tool": tool_name,
-                        "error": "The FlowPilot run ended before the tool responded."
-                    })
-                    .to_string();
-                }
-                Err(error) => {
-                    tracing::warn!(%error, request_id, "[global_chat] tool-call poll failed");
-                }
+            Ok(ChannelOutcome::Expired) => json!({
+                "status": "timeout",
+                "tool": tool_name,
+                "message": "Timed out waiting for the FlowPilot tool response."
+            })
+            .to_string(),
+            Ok(ChannelOutcome::Cancelled) | Ok(ChannelOutcome::Closed) => tool_error(
+                tool_name,
+                "The FlowPilot run ended before the tool responded.",
+            ),
+            Err(error) => {
+                tracing::warn!(%error, tool_name, "[global_chat] tool wait failed");
+                tool_error(tool_name, "The FlowPilot tool channel failed.")
             }
         }
     }
@@ -742,10 +752,12 @@ fn normalize_tool_result(result: Option<Value>) -> Value {
 // Handlers
 // ---------------------------------------------------------------------------------------------
 
-/// Global FlowPilot assistant chat (browser). Streams over SSE: an opening `run` event carries the
-/// `{ "runId": ... }` clients POST tool results to; `token` events carry raw stream chunks;
-/// `tool_request` events carry `{ requestId, toolName, arguments, approval }`; a terminal `final`
-/// event carries the [`UnifiedCopilotResponse`] JSON, or `error` carries `{ "error": string }`.
+/// Global FlowPilot assistant chat (browser). Streams over SSE: an opening `run` event carries
+/// `{ "runId": ..., "channel": ChannelHandle }` — the channel clients push stop/steer into;
+/// `token` events carry raw stream chunks; `tool_request` events carry
+/// `{ requestId, toolName, arguments, approval, channel }` where `channel` is the ticket the
+/// result is pushed through; a terminal `final` event carries the [`UnifiedCopilotResponse`]
+/// JSON, or `error` carries `{ "error": string }`.
 pub async fn global_chat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -763,14 +775,19 @@ pub async fn global_chat(
         ));
     }
 
-    let profile = load_user_profile_opt(&state, &sub, payload.profile_id.as_deref())
-        .await?
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "No profile found for this user. A synced profile with model Bits is required to use FlowPilot in the browser.",
-            )
-        })?;
+    let (profile, model_access) =
+        load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
+            .await?
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "No profile found for this user. A synced profile with model Bits is required to use FlowPilot in the browser.",
+                )
+            })?;
+    if let Some(rejection) = model_access.rejection(payload.model_id.as_deref()) {
+        return Err(rejection);
+    }
     let flow_like_state = master_flow_like_state(&state).await?;
+    let run_id = next_run_id();
 
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
     // User-scoped by `sub` so tenants never share a namespace. Failures degrade to no memory.
@@ -786,6 +803,12 @@ pub async fn global_chat(
                         Some(&sub),
                         &profile.id,
                         &bit,
+                        token.clone(),
+                        Some(ModelUsageContext {
+                            app_id: None,
+                            run_id: Some(run_id.clone()),
+                            api_base_url: None,
+                        }),
                     )
                     .await
                     {
@@ -824,33 +847,12 @@ pub async fn global_chat(
         (!images.is_empty()).then_some(images)
     };
 
-    let run_id = next_run_id();
     let scope = payload.scope;
 
-    // Ownership marker, written before anything streams. Stop/steer arrive on a possibly different
-    // instance and have nothing else to authorize against — without this, controlling a turn that
-    // has not yet called a tool would be indistinguishable from controlling someone else's run.
-    if let Err(error) = (global_chat_tool_call::ActiveModel {
-        id: Set(owner_row_id(&run_id)),
-        run_id: Set(run_id.clone()),
-        sub: Set(sub.clone()),
-        status: Set(InteractionStatus::Responded),
-        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
-        response_value: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-    })
-    .insert(&state.db)
-    .await
-    {
-        // Not fatal: the turn still runs, it just cannot be stopped or steered.
-        tracing::warn!(%error, run_id, "[global_chat] failed to record run ownership");
-    }
-
+    let channel = build_chat_channel(&state, &run_id, &sub).await?;
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::orchestrator(
-        state.db.clone(),
-        run_id.clone(),
-        sub.clone(),
+        channel.clone(),
         frames_tx.clone(),
     ));
 
@@ -860,8 +862,7 @@ pub async fn global_chat(
     };
 
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
-    let run_id_for_task = run_id.clone();
-    let cleanup_db = state.db.clone();
+    let channel_for_task = channel.clone();
 
     flow_like_types::tokio::spawn(async move {
         let result = run_platform_chat(
@@ -891,8 +892,9 @@ pub async fn global_chat(
         })
         .map_err(|e| e.to_string());
 
-        // Cleanup here (not in the SSE stream) so rows never leak even if the client disconnects.
-        finish_run_rows(&cleanup_db, &run_id_for_task).await;
+        // Close here (not in the SSE stream) so rows and transport connections never leak when the
+        // client disconnects.
+        channel_for_task.close().await;
         let _ = done_tx.send(result);
     });
 
@@ -900,7 +902,7 @@ pub async fn global_chat(
         yield Ok::<Event, Infallible>(
             Event::default()
                 .event("run")
-                .data(json!({ "runId": run_id }).to_string()),
+                .data(json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
         );
 
         let mut frame_stream_open = true;
@@ -957,180 +959,6 @@ pub async fn global_chat(
             .interval(Duration::from_secs(15)),
     );
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
-}
-
-/// Deliver a browser-executed tool result to the awaiting run. Only the user who started the run may
-/// post to it, and only for a request the run is actually waiting on.
-pub async fn global_chat_tool_result(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(run_id): Path<String>,
-    Json(body): Json<ToolResultBody>,
-) -> Result<Json<Value>, ApiError> {
-    let sub = user.sub()?;
-
-    let row = GlobalChatToolCall::find_by_id(body.request_id.clone())
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query tool call: {e}")))?
-        .ok_or_else(|| ApiError::bad_request("Unknown or already-finished FlowPilot tool call."))?;
-
-    // Only the user who started the run, and only for a request that run is actually waiting on.
-    if row.run_id != run_id {
-        return Err(ApiError::bad_request(
-            "Tool call does not belong to this run.",
-        ));
-    }
-    if row.sub != sub {
-        return Err(ApiError::FORBIDDEN);
-    }
-    // First write wins; a retry after the poll consumed and deleted the row is a harmless no-op.
-    if row.status == InteractionStatus::Responded {
-        return Ok(Json(json!({ "status": "ok" })));
-    }
-
-    let response_json = serde_json::to_string(&body)
-        .map_err(|e| ApiError::bad_request(format!("Invalid tool result: {e}")))?;
-
-    let mut active: global_chat_tool_call::ActiveModel = row.into();
-    active.status = Set(InteractionStatus::Responded);
-    active.response_value = Set(Some(response_json));
-    active
-        .update(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to update tool call: {e}")))?;
-
-    Ok(Json(json!({ "status": "ok" })))
-}
-
-/// Body of `POST /{run_id}/steer`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct SteerBody {
-    /// The instruction to fold into the turn that is already generating.
-    pub message: String,
-}
-
-/// Verify the caller owns the run before letting them control it. Ownership is established by any
-/// coordination row the run wrote; a run with no rows yet is indistinguishable from an unknown run,
-/// which is the safe answer for both.
-async fn assert_run_owner(
-    db: &DatabaseConnection,
-    run_id: &str,
-    sub: &str,
-) -> Result<(), ApiError> {
-    let owned = GlobalChatToolCall::find()
-        .filter(global_chat_tool_call::Column::RunId.eq(run_id.to_string()))
-        .filter(global_chat_tool_call::Column::Sub.eq(sub.to_string()))
-        .one(db)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?;
-    if owned.is_none() {
-        return Err(ApiError::bad_request(
-            "Unknown or already-finished FlowPilot run.",
-        ));
-    }
-    Ok(())
-}
-
-/// Stop a running turn. The generation halts at its next round boundary; whatever it produced up to
-/// that point is what the user keeps. Idempotent — a second stop is a no-op.
-#[utoipa::path(
-    post,
-    path = "/{run_id}/cancel",
-    tag = "AI",
-    description = "Stop a running FlowPilot response. The turn halts at its next step and keeps what it already produced.",
-    params(("run_id" = String, Path, description = "Run to stop")),
-    responses((status = 200, description = "Cancellation recorded")),
-)]
-pub async fn global_chat_cancel(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(run_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
-    let sub = user.sub()?;
-    assert_run_owner(&state.db, &run_id, &sub).await?;
-
-    let row = global_chat_tool_call::ActiveModel {
-        id: Set(cancel_row_id(&run_id)),
-        run_id: Set(run_id.clone()),
-        sub: Set(sub),
-        status: Set(InteractionStatus::Responded),
-        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
-        response_value: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-    };
-    // A duplicate stop means the tombstone is already there, which is exactly the desired state.
-    if let Err(error) = row.insert(&state.db).await {
-        tracing::debug!(%error, run_id, "[global_chat] cancel row already present");
-    }
-    Ok(Json(json!({ "status": "ok" })))
-}
-
-/// Push a user instruction into a turn that is already generating. It is folded into the
-/// conversation at the run's next round boundary rather than restarting the turn.
-#[utoipa::path(
-    post,
-    path = "/{run_id}/steer",
-    tag = "AI",
-    description = "Send a message into a FlowPilot response that is still generating, without restarting it.",
-    params(("run_id" = String, Path, description = "Run to steer")),
-    responses((status = 200, description = "Message queued for the running turn")),
-)]
-pub async fn global_chat_steer(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(run_id): Path<String>,
-    Json(body): Json<SteerBody>,
-) -> Result<Json<Value>, ApiError> {
-    let sub = user.sub()?;
-    let message = body.message.trim();
-    if message.is_empty() {
-        return Err(ApiError::bad_request("A steering message cannot be empty."));
-    }
-    if message.len() > MAX_PROMPT_CHARS {
-        return Err(ApiError::bad_request(
-            "The steering message is too long for one turn.",
-        ));
-    }
-    assert_run_owner(&state.db, &run_id, &sub).await?;
-
-    // A stopped turn will never drain the queue; refusing lets the UI restore the text instead of
-    // pretending it landed.
-    if GlobalChatToolCall::find_by_id(cancel_row_id(&run_id))
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?
-        .is_some()
-    {
-        return Err(ApiError::bad_request("This response has been stopped."));
-    }
-
-    let pending = GlobalChatToolCall::find()
-        .filter(global_chat_tool_call::Column::RunId.eq(run_id.clone()))
-        .filter(global_chat_tool_call::Column::Id.starts_with(STEER_ROW_PREFIX))
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?;
-    if pending >= MAX_PENDING_STEER_ROWS {
-        return Err(ApiError::bad_request(
-            "Too many messages are already waiting for this response.",
-        ));
-    }
-
-    global_chat_tool_call::ActiveModel {
-        id: Set(format!("{STEER_ROW_PREFIX}{run_id}:{}", next_request_id())),
-        run_id: Set(run_id),
-        sub: Set(sub),
-        status: Set(InteractionStatus::Pending),
-        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
-        response_value: Set(Some(message.to_string())),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-    }
-    .insert(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("Failed to queue steering message: {e}")))?;
-
-    Ok(Json(json!({ "status": "ok" })))
 }
 
 /// Query for the memory status/clear endpoints: which profile's memory to act on.

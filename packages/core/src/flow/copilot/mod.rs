@@ -31,8 +31,8 @@ pub use assistant::{
     run_platform_chat, run_specialist_chat,
 };
 pub use context::{
-    EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext, PinContext,
-    VariableContext, prepare_context,
+    BoardLayoutContext, EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext,
+    NodeLayoutContext, PinContext, VariableContext, prepare_context, prepare_layout_context,
 };
 pub use evaluation::{
     FLOWPILOT_GENERATION_EVALUATION_VERSION, FlowPilotDurationMetric, FlowPilotEvaluationRunStatus,
@@ -96,9 +96,9 @@ pub use tools::{
     GetCurrentFlowScriptTool, GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsArgs,
     GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool, ModelFacingEmitCommandsTool,
     PatchFlowScriptTool, PlanBoardScopeTool, QueryExecutionLogsArgs, QueryExecutionLogsTool,
-    QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool,
-    SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool, ThinkingArgs,
-    UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
+    QueryLogsArgs, QueryLogsTool, RunBoardTestsArgs, RunBoardTestsTool, SearchArgs,
+    SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool,
+    ThinkingArgs, UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
     build_find_connectable_nodes_output, build_list_board_nodes_output, build_node_details_output,
     build_unconfigured_nodes_output, declaration_queries, detect_flowscript_candidate_regression,
     flowscript_has_executable_node_call, flowscript_missing_function_helpers,
@@ -341,6 +341,7 @@ pub fn workflow_authoring_defers_runtime_tool(tool_name: &str) -> bool {
         "execute_event"
             | "execute_node"
             | "query_execution_logs"
+            | "run_board_tests"
             | "interact_app_page"
             | "call_app_chat"
     )
@@ -657,6 +658,7 @@ impl Copilot {
     }
 
     /// Main entry point - unified agent that can both explain and modify
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat<F>(
         &self,
         board: &Board,
@@ -683,7 +685,18 @@ impl Copilot {
         }
 
         let context = prepare_context(board, selected_node_ids)?;
-        let context_json = flow_like_types::json::to_string_pretty(&context)?;
+        // Authoring mode already embeds the anchored FlowScript render, which carries every node,
+        // pin, default, and edge; only layout facts (position/size/layer membership) need a second
+        // channel. Read-only mode has no FlowScript authoring surface and keeps the rich graph
+        // context for inspection answers.
+        let context_json = if self.read_only {
+            flow_like_types::json::to_string_pretty(&context)?
+        } else {
+            flow_like_types::json::to_string_pretty(&prepare_layout_context(
+                board,
+                selected_node_ids,
+            ))?
+        };
 
         // Render the board as FlowScript (with stable `//@n:<id>` anchors) so the agent edits the
         // text surface by default and reconcile can match identities on apply.
@@ -867,7 +880,7 @@ impl Copilot {
             );
         } else {
             system_prompt.push_str(
-                "\n\n## HOST MODE: FLOWSCRIPT AUTHORING\nUse the current FlowScript plus one focused get_declarations batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then write its active segment, patch, check, and commit the retained source. Broad graph/catalog discovery and direct command emission are not available in this authoring run; do not request catalog_search, graph inspection tools, search_by_pin, filter_category, find_connectable_nodes, or emit_commands. Runtime execution and log verification are deferred until the user has accepted and persisted this review; perform them in a later turn against the applied board.",
+                "\n\n## HOST MODE: FLOWSCRIPT AUTHORING\nUse the current FlowScript plus one focused get_declarations batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then write its active segment, patch as needed, and commit the retained source directly once it has zero diagnostics (check_flowscript only when growing a staged draft). Broad graph/catalog discovery and direct command emission are not available in this authoring run; do not request catalog_search, graph inspection tools, search_by_pin, filter_category, find_connectable_nodes, or emit_commands. Runtime execution and log verification are deferred until the user has accepted and persisted this review; perform them in a later turn against the applied board.",
             );
         }
         if let Some(manifest_prompt) = workflow_manifest
@@ -1039,6 +1052,9 @@ impl Copilot {
                     })
                     .tool(QueryExecutionLogsTool {
                         bridge: bridge.clone(),
+                    })
+                    .tool(RunBoardTestsTool {
+                        bridge: bridge.clone(),
                     });
             }
         }
@@ -1145,7 +1161,8 @@ impl Copilot {
 
         let mut full_response = String::new();
         let mut all_commands: Vec<BoardCommand> = Vec::new();
-        let mut iteration_budget = DEFAULT_WORKFLOW_ITERATION_BUDGET;
+        let mut iteration_budget = workflow_iteration_budget(board.nodes.len());
+        let mut progress_iteration_extension_granted = false;
         let max_discovery_rounds_before_emit = 4u64;
         let mut plan_step_counter = 0u32;
         const MAX_INVALID_FLOWSCRIPT_ATTEMPTS: u8 = 5;
@@ -2040,7 +2057,20 @@ impl Copilot {
 
             // Continue to next iteration (agent will see tool results and continue)
             if iteration + 1 >= iteration_budget {
-                break;
+                if !progress_iteration_extension_granted
+                    && workflow_session_is_progressing(workflow_session.as_ref())
+                {
+                    progress_iteration_extension_granted = true;
+                    iteration_budget = iteration_budget
+                        .saturating_add(PROGRESS_ITERATION_EXTENSION)
+                        .min(MAX_TYPED_IR_ITERATION_BUDGET);
+                    flowpilot_debug_log!(
+                        "[Copilot] Round budget exhausted while the session ledger shows progress; granting one {PROGRESS_ITERATION_EXTENSION}-round extension"
+                    );
+                }
+                if iteration + 1 >= iteration_budget {
+                    break;
+                }
             }
         }
 
@@ -2185,6 +2215,7 @@ impl Copilot {
     }
 
     /// Execute a tool by name and return the result
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool(
         &self,
         name: &str,
@@ -2531,7 +2562,7 @@ impl Copilot {
                 execute_workflow_context_bridge_tool(self.runtime_bridge.as_ref(), name, arguments)
                     .await
             }
-            "execute_event" | "execute_node" | "query_execution_logs" => {
+            "execute_event" | "execute_node" | "query_execution_logs" | "run_board_tests" => {
                 execute_runtime_bridge_tool(self.runtime_bridge.as_ref(), name, arguments).await
             }
             "query_logs" => {
@@ -2763,19 +2794,20 @@ impl Copilot {
         token: Option<String>,
     ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
         let bit = if let Some(profile) = &self.profile {
-            if let Some(id) = model_id {
-                profile
-                    .find_bit(&id, self.state.http_client.clone())
-                    .await?
-            } else {
-                let preference = BitModelPreference {
-                    reasoning_weight: Some(1.0),
-                    ..Default::default()
-                };
-                profile
-                    .get_best_model(&preference, false, true, self.state.http_client.clone())
-                    .await?
-            }
+            let preference = BitModelPreference {
+                reasoning_weight: Some(1.0),
+                ..Default::default()
+            };
+            let capabilities = FlowLikeState::completion_model_capabilities(&self.state).await;
+            profile
+                .resolve_completion_model(
+                    model_id.as_deref(),
+                    &preference,
+                    false,
+                    capabilities,
+                    self.state.http_client.clone(),
+                )
+                .await?
         } else {
             Bit {
                 id: "gpt-4o".to_string(),
@@ -3350,8 +3382,8 @@ impl TypedIrOperationLedger {
     }
 }
 
-const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, reuse or obtain one usable declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript immediately with one fresh draft_id for its active segment; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, hand-authored command JSON, or requests for unavailable direct-command tools.";
-const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript lifecycle action now: after usable declarations, call plan_board_scope exactly once unless an accepted plan is already retained; then write its active segment, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
+const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, reuse or obtain one usable declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript immediately with one fresh draft_id for its active segment; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call commit_flowscript at that exact revision directly — commit validates inline; check_flowscript is only for growing a staged draft further. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, hand-authored command JSON, or requests for unavailable direct-command tools.";
+const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript lifecycle action now: after usable declarations, call plan_board_scope exactly once unless an accepted plan is already retained; then write its active segment, patch the retained diagnostic at its exact revision, or commit a zero-diagnostic revision directly. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
 const TYPED_IR_FORCE_INSTRUCTION: &str = "Continue the active typed Flow IR path now. If plan_flow_ir returned selection_required, copy one semantically compatible candidate.node_type into exact_node_type for every required capability and resubmit the complete plan; only begin_flow_ir_draft after feasible is true. Otherwise repair the capability request from its structured feedback. After the draft exists, add or repair complete modules with update_flow_ir_draft and upsert_flow_ir_module at the exact latest revision, then validate_flow_ir_draft. Preserve every expected module and requested capability. Do not switch mutation representations or answer with only text.";
 const TYPED_IR_FORCE_ESCALATION: &str = "STOP analyzing and continue the typed Flow IR path. If the latest plan contains selection_required, resubmit the complete plan now with one compatible candidate.node_type copied into exact_node_type for every required capability. Otherwise use the exact latest revision and call the next typed draft operation now: begin the feasible planned draft, update its retained header, upsert a complete expected module, or validate it. Preserve full requested scope and do not switch mutation representations.";
 const TYPED_IR_REPAIR_INSTRUCTION: &str = "Repair the retained typed Flow IR at its exact current revision. Follow each structured diagnostic JSON-pointer path; use update_flow_ir_draft for header/expected-module repairs and upsert_flow_ir_module for the named module, then call validate_flow_ir_draft again. Keep all requested capabilities and expected modules. Do not switch mutation representations or replace the draft with a smaller smoke test.";
@@ -3734,6 +3766,31 @@ fn typed_ir_iteration_budget(module_count: usize) -> u64 {
         .clamp(MIN_TYPED_IR_ITERATION_BUDGET, MAX_TYPED_IR_ITERATION_BUDGET)
 }
 
+/// Baseline round budget scaled by board size: editing a large board takes more rounds even when
+/// every round makes progress. Small boards keep the historical default; the hard loop ceiling
+/// still bounds everything.
+fn workflow_iteration_budget(node_count: usize) -> u64 {
+    DEFAULT_WORKFLOW_ITERATION_BUDGET
+        .saturating_add((node_count as u64) / 8)
+        .clamp(
+            DEFAULT_WORKFLOW_ITERATION_BUDGET,
+            MAX_TYPED_IR_ITERATION_BUDGET,
+        )
+}
+
+/// Rounds granted by the one progress-based budget re-arm at exhaustion.
+const PROGRESS_ITERATION_EXTENSION: u64 = 6;
+
+/// Whether the shared session ledger says the loop is still converging: the most recent attempt
+/// made forward progress and no circuit is open. Circling loops (open circuit, repeated
+/// strategies, zero progress) never qualify — those cut-offs stay exactly as strict as before.
+fn workflow_session_is_progressing(session: Option<&Arc<StdMutex<WorkflowSession>>>) -> bool {
+    session
+        .and_then(|session| session.lock().ok())
+        .map(|session| session.is_progressing())
+        .unwrap_or(false)
+}
+
 fn typed_ir_phase_after_tool_result(
     current: TypedIrWatchdogPhase,
     tool_name: &str,
@@ -3973,8 +4030,8 @@ mod runtime_bridge_tests {
     /// so it ran out of iterations mid-repair and the loop broke out with an empty final message.
     #[test]
     fn flowscript_path_leaves_the_twelve_round_default() {
-        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
-        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET);
+        const { assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET) };
+        const { assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET) };
         for tool in [
             "write_flowscript",
             "patch_flowscript",
@@ -4028,6 +4085,7 @@ mod runtime_bridge_tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -4046,11 +4104,12 @@ mod runtime_bridge_tests {
             "ok"
         );
 
-        let calls = concrete.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "execute_node");
-        assert_eq!(calls[0].1["node_id"], "node");
-        drop(calls);
+        {
+            let calls = concrete.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "execute_node");
+            assert_eq!(calls[0].1["node_id"], "node");
+        }
 
         let invalid = execute_runtime_bridge_tool(
             Some(&bridge),
@@ -4067,7 +4126,12 @@ mod runtime_bridge_tests {
 
     #[test]
     fn runtime_verification_waits_for_the_authoring_turn_to_be_applied() {
-        for tool_name in ["execute_event", "execute_node", "query_execution_logs"] {
+        for tool_name in [
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+            "run_board_tests",
+        ] {
             assert!(workflow_authoring_defers_runtime_tool(tool_name));
         }
         assert!(!workflow_authoring_defers_runtime_tool("get_declarations"));
@@ -4107,6 +4171,9 @@ mod runtime_bridge_tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }];
         let begin = ir_tools::BeginFlowIrDraftArgs {
             draft_id: "direct-bound".to_string(),
@@ -4468,7 +4535,7 @@ mod runtime_bridge_tests {
             typed_ir_iteration_budget(ir::MAX_FLOW_IR_MODULES),
             MAX_TYPED_IR_ITERATION_BUDGET
         );
-        assert!(MAX_TYPED_IR_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
+        const { assert!(MAX_TYPED_IR_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET) };
     }
 
     #[test]

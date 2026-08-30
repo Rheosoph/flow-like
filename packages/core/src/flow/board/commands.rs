@@ -73,7 +73,8 @@ impl_command_methods!(
     RemoveVariable,
     UpsertVariable,
     UpsertLayer,
-    RemoveLayer
+    RemoveLayer,
+    MoveToLayer
 );
 
 #[async_trait]
@@ -127,6 +128,87 @@ pub enum GenericCommand {
     UpsertVariable(variables::upsert_variable::UpsertVariableCommand),
     UpsertLayer(layer::upsert_layer::UpsertLayerCommand),
     RemoveLayer(layer::remove_layer::RemoveLayerCommand),
+    MoveToLayer(layer::move_to_layer::MoveToLayerCommand),
+}
+
+impl GenericCommand {
+    /// Record what this command wrote directly, so `node_updates` can re-evaluate only what the
+    /// edit could have reached instead of the whole board.
+    ///
+    /// Only direct writes belong here — propagation along wires, references and variables is the
+    /// sweep's job. The match is exhaustive on purpose: a new command variant must be classified
+    /// here rather than silently defaulting to "changed nothing", which would leave the nodes it
+    /// touched holding stale derivations.
+    pub fn touched(&self, touched: &mut super::dirty::Touched) {
+        match self {
+            // Comments carry no derivation, so nothing re-evaluates on their account.
+            GenericCommand::RemoveComment(_) | GenericCommand::UpsertComment(_) => {}
+            GenericCommand::AddNode(command) => {
+                touched.nodes.insert(command.node.id.clone());
+            }
+            GenericCommand::UpdateNode(command) => {
+                touched.nodes.insert(command.node.id.clone());
+            }
+            // Coordinates feed no derivation, but a move also reparents between layers.
+            GenericCommand::MoveNode(command) => {
+                touched.nodes.insert(command.node_id.clone());
+            }
+            GenericCommand::RemoveNode(command) => {
+                touched.nodes.insert(command.node.id.clone());
+                touched
+                    .nodes
+                    .extend(command.connected_nodes.iter().map(|node| node.id.clone()));
+            }
+            GenericCommand::CopyPaste(command) => {
+                touched
+                    .nodes
+                    .extend(command.new_nodes.iter().map(|node| node.id.clone()));
+                touched
+                    .layers
+                    .extend(command.new_layers.iter().map(|layer| layer.id.clone()));
+            }
+            GenericCommand::ConnectPin(command) => {
+                touched.nodes.insert(command.from_node.clone());
+                touched.nodes.insert(command.to_node.clone());
+            }
+            GenericCommand::DisconnectPin(command) => {
+                touched.nodes.insert(command.from_node.clone());
+                touched.nodes.insert(command.to_node.clone());
+            }
+            GenericCommand::UpsertPin(command) => {
+                touched.nodes.insert(command.node_id.clone());
+            }
+            GenericCommand::UpsertVariable(command) => {
+                touched.variables.insert(command.variable.id.clone());
+            }
+            GenericCommand::RemoveVariable(command) => {
+                touched.variables.insert(command.variable.id.clone());
+            }
+            GenericCommand::UpsertLayer(command) => {
+                touched.layers.insert(command.layer.id.clone());
+                touched.nodes.extend(command.node_ids.iter().cloned());
+                touched.nodes.extend(command.layer.nodes.keys().cloned());
+            }
+            GenericCommand::RemoveLayer(command) => {
+                touched.layers.insert(command.layer.id.clone());
+                touched.layers.extend(command.child_layers.iter().cloned());
+                touched.nodes.extend(command.layer_nodes.iter().cloned());
+                touched
+                    .nodes
+                    .extend(command.nodes.iter().map(|node| node.id.clone()));
+            }
+            // `previous` mixes node, comment and layer ids with no per-entry type tag, so a
+            // moved id is recorded in both sets — `Touched::seed` only acts on the set that
+            // matches what the id actually names and no-ops on the other.
+            GenericCommand::MoveToLayer(command) => {
+                touched.nodes.extend(command.previous.keys().cloned());
+                touched.layers.extend(command.previous.keys().cloned());
+                if let Some(target) = &command.target {
+                    touched.layers.insert(target.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Stable digest for a typed command batch. Commands contain nested `HashMap`s, so serializing the

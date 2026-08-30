@@ -19,6 +19,7 @@ impl NodeLogic for TranscodeVideoNode {
             "Packet-copy when allowed or decode/encode a selected video stream into a target container",
             "Video/Transcode",
         );
+        node.set_flowscript_name("video", "transcode");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

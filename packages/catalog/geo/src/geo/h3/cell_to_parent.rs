@@ -24,6 +24,7 @@ impl NodeLogic for CellToParentNode {
             "Returns the parent cell at a coarser resolution. The parent contains the given cell.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellToParent");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin("cell", "Cell", "H3 cell index", VariableType::String)

@@ -209,7 +209,7 @@ export function AppConnectionManagement({
 			toast.error(
 				error instanceof Error && error.message
 					? error.message
-					: t('failedToGrantAppAccess', 'Failed to grant app access'),
+					: t("failedToGrantAppAccess", "Failed to grant app access"),
 			);
 		} finally {
 			setIsGranting(false);
@@ -239,7 +239,7 @@ export function AppConnectionManagement({
 			toast.error(
 				error instanceof Error && error.message
 					? error.message
-					: t('failedToRequestAccess', 'Failed to request access'),
+					: t("failedToRequestAccess", "Failed to request access"),
 			);
 		} finally {
 			setIsRequesting(false);
@@ -263,7 +263,7 @@ export function AppConnectionManagement({
 				toast.error(
 					error instanceof Error && error.message
 						? error.message
-						: t('failedToApproveRequest', 'Failed to approve request'),
+						: t("failedToApproveRequest", "Failed to approve request"),
 				);
 			}
 		},
@@ -281,7 +281,7 @@ export function AppConnectionManagement({
 				toast.error(
 					error instanceof Error && error.message
 						? error.message
-						: t('failedToRejectRequest', 'Failed to reject request'),
+						: t("failedToRejectRequest", "Failed to reject request"),
 				);
 			}
 		},
@@ -305,7 +305,7 @@ export function AppConnectionManagement({
 				toast.error(
 					error instanceof Error && error.message
 						? error.message
-						: t('failedToUpdateRole', 'Failed to update role'),
+						: t("failedToUpdateRole", "Failed to update role"),
 				);
 			}
 		},
@@ -323,7 +323,7 @@ export function AppConnectionManagement({
 				toast.error(
 					error instanceof Error && error.message
 						? error.message
-						: t('failedToRemoveConnection', 'Failed to remove connection'),
+						: t("failedToRemoveConnection", "Failed to remove connection"),
 				);
 			}
 		},
@@ -339,7 +339,7 @@ export function AppConnectionManagement({
 					onClick={() => setView("list")}
 				>
 					<ListIcon className="size-4" />
-					{t('list', 'List')}
+					{t("list", "List")}
 				</Button>
 				<Button
 					variant={view === "graph" ? "secondary" : "ghost"}
@@ -347,7 +347,7 @@ export function AppConnectionManagement({
 					onClick={() => setView("graph")}
 				>
 					<WaypointsIcon className="size-4" />
-					{t('processGraph', 'Process graph')}
+					{t("processGraph", "Process graph")}
 				</Button>
 			</div>
 
@@ -373,10 +373,16 @@ export function AppConnectionManagement({
 					<TeamSection>
 						<SectionHeading
 							icon={ArrowDownLeftIcon}
-							title={t('appsThatCanReachThisOne', 'Apps that can reach this one')}
+							title={t(
+								"appsThatCanReachThisOne",
+								"Apps that can reach this one",
+							)}
 							count={incoming.length}
 							countTone={pendingIncoming.length > 0 ? "attention" : "neutral"}
-							description={t('theyCanWorkWithThisAppsTablesFilesAndEventsUnderTheRoleYouGrant', 'They can work with this app\'s tables, files and events under the role you grant.')}
+							description={t(
+								"theyCanWorkWithThisAppsTablesFilesAndEventsUnderTheRoleYouGrant",
+								"They can work with this app's tables, files and events under the role you grant.",
+							)}
 							actions={
 								<Button
 									size="sm"
@@ -384,7 +390,7 @@ export function AppConnectionManagement({
 									className={TEAM_ACTION_GRADIENT}
 								>
 									<PlusIcon className="size-4" />
-									{t('grantAccess', 'Grant access')}
+									{t("grantAccess", "Grant access")}
 								</Button>
 							}
 						/>
@@ -393,7 +399,7 @@ export function AppConnectionManagement({
 							<EmptyState
 								className="max-w-full"
 								icons={[BlocksIcon]}
-								title={t('noConnectedApps', 'No connected apps')}
+								title={t("noConnectedApps", "No connected apps")}
 								description={`Grant another app access to let it work with this app's data.`}
 							/>
 						) : (
@@ -424,9 +430,12 @@ export function AppConnectionManagement({
 					<TeamSection>
 						<SectionHeading
 							icon={ArrowUpRightIcon}
-							title={t('appsThisOneCanReach', 'Apps this one can reach')}
+							title={t("appsThisOneCanReach", "Apps this one can reach")}
 							count={outgoing.length}
-							description={t('accessThisAppHasAskedForElsewhere', 'Access this app has asked for elsewhere.')}
+							description={t(
+								"accessThisAppHasAskedForElsewhere",
+								"Access this app has asked for elsewhere.",
+							)}
 							actions={
 								<Button
 									variant="outline"
@@ -434,7 +443,7 @@ export function AppConnectionManagement({
 									onClick={() => setShowRequestDialog(true)}
 								>
 									<SendIcon className="size-4" />
-									{t('requestAccess', 'Request access')}
+									{t("requestAccess", "Request access")}
 								</Button>
 							}
 						/>
@@ -443,7 +452,7 @@ export function AppConnectionManagement({
 							<EmptyState
 								className="max-w-full"
 								icons={[SendIcon]}
-								title={t('noOutgoingAccess', 'No outgoing access')}
+								title={t("noOutgoingAccess", "No outgoing access")}
 								description={`Request access to another app to work with its data from this app.`}
 							/>
 						) : (
@@ -456,13 +465,19 @@ export function AppConnectionManagement({
 										onRemove={() => handleRemove(connection)}
 										removeLabel={
 											connection.status === "PENDING"
-												? t('cancelRequest', 'Cancel Request')
-												: t('removeAccess', 'Remove Access')
+												? t("cancelRequest", "Cancel Request")
+												: t("removeAccess", "Remove Access")
 										}
 										removeDescription={
 											connection.status === "PENDING"
-												? t('thePendingAccessRequestWillBeWithdrawn', 'The pending access request will be withdrawn.')
-												: t('thisAppWillLoseAccessToTheConnectedAppsDataThisActionCannotBeUndone', 'This app will lose access to the connected app\'s data. This action cannot be undone.')
+												? t(
+														"thePendingAccessRequestWillBeWithdrawn",
+														"The pending access request will be withdrawn.",
+													)
+												: t(
+														"thisAppWillLoseAccessToTheConnectedAppsDataThisActionCannotBeUndone",
+														"This app will lose access to the connected app's data. This action cannot be undone.",
+													)
 										}
 									/>
 								))}
@@ -480,30 +495,38 @@ export function AppConnectionManagement({
 							<BlocksIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
-							{t('grantAppAccess', 'Grant App Access')}
+							{t("grantAppAccess", "Grant App Access")}
 						</DialogTitle>
 						<DialogDescription className="text-center">
-							{t('giveAnotherAppAccessToThisAppWithASpecificRole', 'Give another app access to this app with a specific role')}
+							{t(
+								"giveAnotherAppAccessToThisAppWithASpecificRole",
+								"Give another app access to this app with a specific role",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 
 					<div className="space-y-4 py-4">
 						<div className="space-y-2">
-							<Label htmlFor="grant-app-id">{t('appId2', 'App ID *')}</Label>
+							<Label htmlFor="grant-app-id">{t("appId2", "App ID *")}</Label>
 							<AppSearchPicker
 								inputId="grant-app-id"
 								currentAppId={appId}
 								value={grantAppId}
 								onChange={setGrantAppId}
-								placeholder={t('searchAppsOrPasteAnAppId', 'Search apps or paste an app ID')}
+								placeholder={t(
+									"searchAppsOrPasteAnAppId",
+									"Search apps or paste an app ID",
+								)}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="grant-role">{t('role', 'Role *')}</Label>
+							<Label htmlFor="grant-role">{t("role", "Role *")}</Label>
 							<Select value={grantRoleId} onValueChange={setGrantRoleId}>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectARole', 'Select a role')} />
+									<SelectValue
+										placeholder={t("selectARole", "Select a role")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{availableRoles.map((role) => (
@@ -514,14 +537,17 @@ export function AppConnectionManagement({
 								</SelectContent>
 							</Select>
 							<p className="text-xs text-muted-foreground">
-								{t('theRoleDeterminesWhatTheConnectedAppIsAllowedToDo', 'The role determines what the connected app is allowed to do')}
+								{t(
+									"theRoleDeterminesWhatTheConnectedAppIsAllowedToDo",
+									"The role determines what the connected app is allowed to do",
+								)}
 							</p>
 						</div>
 					</div>
 
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setShowGrantDialog(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={handleGrant}
@@ -541,36 +567,48 @@ export function AppConnectionManagement({
 							<SendIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
-							{t('requestAccess2', 'Request Access')}
+							{t("requestAccess2", "Request Access")}
 						</DialogTitle>
 						<DialogDescription className="text-center">
-							{t('requestAccessToAnotherAppInTheNameOfThisApp', 'Request access to another app in the name of this app')}
+							{t(
+								"requestAccessToAnotherAppInTheNameOfThisApp",
+								"Request access to another app in the name of this app",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 
 					<div className="space-y-4 py-4">
 						<div className="space-y-2">
-							<Label htmlFor="request-app-id">{t('appId2', 'App ID *')}</Label>
+							<Label htmlFor="request-app-id">{t("appId2", "App ID *")}</Label>
 							<AppSearchPicker
 								inputId="request-app-id"
 								currentAppId={appId}
 								value={requestAppId}
 								onChange={setRequestAppId}
-								placeholder={t('searchAppsOrPasteAnAppId', 'Search apps or paste an app ID')}
+								placeholder={t(
+									"searchAppsOrPasteAnAppId",
+									"Search apps or paste an app ID",
+								)}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="request-comment">{t('message', 'Message')}</Label>
+							<Label htmlFor="request-comment">{t("message", "Message")}</Label>
 							<Textarea
 								id="request-comment"
-								placeholder={t('whyDoesThisAppNeedAccess', 'Why does this app need access?')}
+								placeholder={t(
+									"whyDoesThisAppNeedAccess",
+									"Why does this app need access?",
+								)}
 								value={requestComment}
 								onChange={(e) => setRequestComment(e.target.value)}
 								className="min-h-20 resize-none"
 							/>
 							<p className="text-xs text-muted-foreground">
-								{t('optionalMessageShownToTheOtherAppapossAdmins', "Optional message shown to the other app's admins")}
+								{t(
+									"optionalMessageShownToTheOtherAppapossAdmins",
+									"Optional message shown to the other app's admins",
+								)}
 							</p>
 						</div>
 					</div>
@@ -580,13 +618,13 @@ export function AppConnectionManagement({
 							variant="outline"
 							onClick={() => setShowRequestDialog(false)}
 						>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={handleRequest}
 							disabled={isRequesting || !requestAppId.trim()}
 						>
-							{isRequesting ? "Sending..." : t('sendRequest', 'Send Request')}
+							{isRequesting ? "Sending..." : t("sendRequest", "Send Request")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -597,8 +635,10 @@ export function AppConnectionManagement({
 				onOpenChange={(open) => {
 					if (!open) setApproveTarget(null);
 				}}
-				title={t('approveRequest', 'Approve Request')}
-				description={t('selectARoleForVal', 'Select a role for "{{val}}"', { val: connectionAppLabel(approveTarget, approveTarget?.source_app_id) })}
+				title={t("approveRequest", "Approve Request")}
+				description={t("selectARoleForVal", 'Select a role for "{{val}}"', {
+					val: connectionAppLabel(approveTarget, approveTarget?.source_app_id),
+				})}
 				confirmLabel="Approve"
 				roles={availableRoles}
 				initialRoleId={undefined}
@@ -610,7 +650,7 @@ export function AppConnectionManagement({
 				onOpenChange={(open) => {
 					if (!open) setChangeRoleTarget(null);
 				}}
-				title={t('changeRole', 'Change Role')}
+				title={t("changeRole", "Change Role")}
 				description={`Select a new role for "${connectionAppLabel(changeRoleTarget, changeRoleTarget?.source_app_id)}"`}
 				confirmLabel="Save Changes"
 				roles={availableRoles}
@@ -706,7 +746,10 @@ function AppSearchPicker({
 				<SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 			</div>
 			<p className="text-xs text-muted-foreground">
-				{t('searchYourAppsByNameOrPasteAnyAppIdDirectlyToConnectAnAppYouDonapostOwn', "Search your apps by name, or paste any app ID directly to connect an app you don't own.")}
+				{t(
+					"searchYourAppsByNameOrPasteAnyAppIdDirectlyToConnectAnAppYouDonapostOwn",
+					"Search your apps by name, or paste any app ID directly to connect an app you don't own.",
+				)}
 			</p>
 
 			{activeSelection && (
@@ -732,7 +775,9 @@ function AppSearchPicker({
 					{isFetching && results.length === 0 && (
 						<div className="flex items-center justify-center gap-2 py-4 text-muted-foreground">
 							<RefreshCwIcon className="h-4 w-4 animate-spin" />
-							<span className="text-sm">{t('searchingApps', 'Searching apps...')}</span>
+							<span className="text-sm">
+								{t("searchingApps", "Searching apps...")}
+							</span>
 						</div>
 					)}
 
@@ -764,7 +809,10 @@ function AppSearchPicker({
 
 					{!isFetching && results.length === 0 && (
 						<p className="py-2 text-center text-xs text-muted-foreground">
-							{t('noAppsFoundYouCanStillPasteAnAppIdDirectly', 'No apps found. You can still paste an app ID directly.')}
+							{t(
+								"noAppsFoundYouCanStillPasteAnAppIdDirectly",
+								"No apps found. You can still paste an app ID directly.",
+							)}
 						</p>
 					)}
 				</div>
@@ -808,7 +856,7 @@ function PendingRequestCard({
 			<Avatar className="size-9 shrink-0 rounded-lg">
 				<AvatarImage
 					src={connection.app_icon ?? undefined}
-					alt={t('applabelIcon', '{{appLabel}} icon', { appLabel })}
+					alt={t("applabelIcon", "{{appLabel}} icon", { appLabel })}
 				/>
 				<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
 					<BlocksIcon className="size-4" />
@@ -819,7 +867,7 @@ function PendingRequestCard({
 				<div className={TEAM_ROW_TITLE}>
 					<span className="truncate">{appLabel}</span>
 					<StatusChip tone="attention" pip>
-						{t('wantsAccess', 'Wants access')}
+						{t("wantsAccess", "Wants access")}
 					</StatusChip>
 				</div>
 				{connection.app_description && (
@@ -828,7 +876,7 @@ function PendingRequestCard({
 				<div className={TEAM_ROW_META}>
 					<span className="flex items-center gap-1">
 						<ClockIcon className="size-3.5" />
-						{t('requested', 'Requested')}{" "}
+						{t("requested", "Requested")}{" "}
 						{new Date(connection.created_at * 1000).toLocaleDateString()}
 					</span>
 				</div>
@@ -838,18 +886,20 @@ function PendingRequestCard({
 			<TeamRowActions always>
 				<Button size="sm" onClick={onApprove}>
 					<CheckIcon className="size-3.5" />
-					{t('approve', 'Approve')}
+					{t("approve", "Approve")}
 				</Button>
 				<AlertDialog>
 					<AlertDialogTrigger asChild>
 						<Button size="sm" variant="outline">
 							<XIcon className="size-3.5" />
-							{t('reject', 'Reject')}
+							{t("reject", "Reject")}
 						</Button>
 					</AlertDialogTrigger>
 					<AlertDialogContent>
 						<AlertDialogHeader>
-							<AlertDialogTitle>{t('rejectRequest', 'Reject Request')}</AlertDialogTitle>
+							<AlertDialogTitle>
+								{t("rejectRequest", "Reject Request")}
+							</AlertDialogTitle>
 							<AlertDialogDescription>
 								Are you sure you want to reject the access request from &quot;
 								{appLabel}&quot;? The request will be deleted and the app will
@@ -857,12 +907,12 @@ function PendingRequestCard({
 							</AlertDialogDescription>
 						</AlertDialogHeader>
 						<AlertDialogFooter>
-							<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+							<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 							<AlertDialogAction
 								onClick={onReject}
 								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 							>
-								{t('reject', 'Reject')}
+								{t("reject", "Reject")}
 							</AlertDialogAction>
 						</AlertDialogFooter>
 					</AlertDialogContent>
@@ -902,7 +952,7 @@ function ConnectionRow({
 			<Avatar className="size-9 shrink-0 rounded-lg">
 				<AvatarImage
 					src={connection.app_icon ?? undefined}
-					alt={t('applabelIcon', '{{appLabel}} icon', { appLabel })}
+					alt={t("applabelIcon", "{{appLabel}} icon", { appLabel })}
 				/>
 				<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
 					<BlocksIcon className="size-4" />
@@ -914,11 +964,11 @@ function ConnectionRow({
 					<span className="truncate">{appLabel}</span>
 					{isPending ? (
 						<StatusChip tone="attention" pip>
-							{t('waitingForApproval', 'Waiting for approval')}
+							{t("waitingForApproval", "Waiting for approval")}
 						</StatusChip>
 					) : (
 						<StatusChip tone="success" pip>
-							{t('active', 'Active')}
+							{t("active", "Active")}
 						</StatusChip>
 					)}
 					{connection.role_name && (
@@ -948,7 +998,7 @@ function ConnectionRow({
 						{onChangeRole && (
 							<DropdownMenuItem onClick={onChangeRole}>
 								<SettingsIcon className="size-4" />
-								{t('changeRole', 'Change Role')}
+								{t("changeRole", "Change Role")}
 							</DropdownMenuItem>
 						)}
 						<AlertDialog>
@@ -970,7 +1020,7 @@ function ConnectionRow({
 									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>
-									<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+									<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 									<AlertDialogAction
 										onClick={onRemove}
 										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -1045,10 +1095,10 @@ function RoleSelectDialog({
 
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
-						<Label htmlFor="connection-role">{t('role', 'Role *')}</Label>
+						<Label htmlFor="connection-role">{t("role", "Role *")}</Label>
 						<Select value={roleId} onValueChange={setRoleId}>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectARole', 'Select a role')} />
+								<SelectValue placeholder={t("selectARole", "Select a role")} />
 							</SelectTrigger>
 							<SelectContent>
 								{roles.map((role) => (
@@ -1059,14 +1109,17 @@ function RoleSelectDialog({
 							</SelectContent>
 						</Select>
 						<p className="text-xs text-muted-foreground">
-							{t('theRoleDeterminesWhatTheConnectedAppIsAllowedToDo', 'The role determines what the connected app is allowed to do')}
+							{t(
+								"theRoleDeterminesWhatTheConnectedAppIsAllowedToDo",
+								"The role determines what the connected app is allowed to do",
+							)}
 						</p>
 					</div>
 				</div>
 
 				<DialogFooter>
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={handleConfirm} disabled={isSubmitting || !roleId}>
 						{isSubmitting ? "Saving..." : confirmLabel}

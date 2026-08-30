@@ -29,6 +29,7 @@ impl NodeLogic for ErrorNode {
             "Logs / Prints an Error",
             "Logging",
         );
+        node.set_flowscript_name("log", "error");
         node.add_icon("/flow/icons/log-error.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

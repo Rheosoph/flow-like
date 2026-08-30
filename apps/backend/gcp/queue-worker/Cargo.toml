@@ -14,10 +14,10 @@ blake3.workspace = true
 chrono.workspace = true
 flow-like-gcp-data.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-compiler.workspace = true
-flow-like-executor = { workspace = true, features = ["all-server-execute"] }
-flow-like-types.workspace = true
+flow-like-executor = { workspace = true, features = ["server", "channel-gcp"] }
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
 image.workspace = true
 # Push deliveries authenticate with a Google-signed RS256 OIDC token, so the
 # `rust_crypto` feature the workspace already pins is what supplies RSA.

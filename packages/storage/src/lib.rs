@@ -1,21 +1,39 @@
+#[cfg(feature = "database-runtime")]
 pub mod android_store;
+#[cfg(feature = "database-runtime")]
 pub mod arrow_utils;
+#[cfg(any(feature = "query-parser", feature = "database-runtime"))]
 pub mod databases;
-pub mod files;
+#[cfg(feature = "files")]
+pub use flow_like_storage_files as files;
+#[cfg(feature = "database-runtime")]
 pub mod lancedb_write_options;
 
+#[cfg(feature = "database-runtime")]
 pub use arrow;
+#[cfg(feature = "database-runtime")]
 pub use arrow_array;
+#[cfg(feature = "database-runtime")]
 pub use arrow_schema;
-pub use blake3;
+#[cfg(feature = "database-runtime")]
 pub use datafusion;
+#[cfg(feature = "files")]
+pub use flow_like_storage_files::Path;
+#[cfg(feature = "files")]
+pub use flow_like_storage_files::blake3;
+#[cfg(feature = "files")]
+pub use flow_like_storage_files::object_store;
+#[cfg(feature = "database-runtime")]
 pub use lance;
+#[cfg(feature = "database-runtime")]
 pub use lance_file;
+#[cfg(feature = "database-runtime")]
 pub use lance_io;
+#[cfg(feature = "database-runtime")]
 pub use lancedb;
+#[cfg(feature = "database-runtime")]
 pub use num_cpus;
-pub use object_store;
-pub use object_store::path::Path;
+#[cfg(feature = "database-runtime")]
 pub use serde_arrow;
 
 // Re-export data lake formats

@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -17,7 +16,6 @@ import {
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-	IIndexType,
 	Input,
 	Label,
 	Tabs,
@@ -44,13 +42,14 @@ import {
 import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data-studio/query-workbench";
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
-import LanceDBExplorer from "@flow-like/flow-like-ui/components/ui/lance-viewer";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
 	GraphOverlay,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
 import { useRequestFabBubble } from "@flow-like/flow-like-ui/state/fab-bubble";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangle,
 	ArrowDownAZ,
@@ -84,27 +83,10 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { DEFAULT_TABLE_PAGE_SIZE, TableInspector } from "./table-inspector";
 
 export interface ExploreDataPageProps {
 	appId: string;
-}
-
-const DEFAULT_TABLE_PAGE_SIZE = 25;
-
-function extractErrorMessage(err: unknown): string {
-	if (err instanceof Error) return err.message;
-	if (typeof err === "string") return err;
-	if (err && typeof err === "object") {
-		const obj = err as Record<string, unknown>;
-		if (typeof obj.error === "string") return obj.error;
-		if (typeof obj.message === "string") return obj.message;
-		try {
-			return JSON.stringify(err);
-		} catch {
-			return String(err);
-		}
-	}
-	return String(err);
 }
 
 // Mirrors the server-side cascade matcher: bare name, case sensitive, one
@@ -137,18 +119,57 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	const userScoped = searchParams?.get("scope") === "user";
 
 	// Publish the open Data Studio page so the global assistant resolves "this data" to this
-	// app/overlay without overriding Event-first routing. Cleared on unmount.
+	// app/overlay instead of asking which app. Cleared on unmount.
 	const setDataStudioSurface = useAssistantSurface(
 		(state) => state.setDataStudioSurface,
 	);
+	// `data_studio_section` already renders app/overlay NAMES and has been showing raw ids
+	// because nothing populated them. Both queries are keyed exactly as DatabaseOverview's,
+	// so react-query serves them from the same cache entry rather than refetching.
+	const surfaceBackend = useBackend();
+	const surfaceAppMeta = useInvoke(
+		surfaceBackend.appState.getAppMeta,
+		surfaceBackend.appState,
+		[appId],
+	);
+	const surfaceOverlays = useInvoke(
+		surfaceBackend.graphState.listOverlays,
+		surfaceBackend.graphState,
+		[appId],
+	);
+	const overlayNames = useMemo(
+		() => (surfaceOverlays.data ?? []).map((overlay) => overlay.name),
+		[surfaceOverlays.data],
+	);
+	const overlayName = useMemo(
+		() =>
+			overlayParam
+				? (surfaceOverlays.data ?? []).find(
+						(overlay) => overlay.id === overlayParam,
+					)?.name
+				: undefined,
+		[surfaceOverlays.data, overlayParam],
+	);
+	const appName = surfaceAppMeta.data?.name;
 	useEffect(() => {
 		setDataStudioSurface({
 			appId,
+			appName,
 			overlayId: overlayParam ?? undefined,
+			overlayName,
+			overlayNames,
 			selectedTable: table || undefined,
 		});
 		return () => setDataStudioSurface(null);
-	}, [appId, overlayParam, table, setDataStudioSurface]);
+	}, [
+		appId,
+		appName,
+		overlayParam,
+		overlayName,
+		overlayNames,
+		table,
+		setDataStudioSurface,
+	]);
 
 	// The ontology and table views are what FlowPilot actually works on here, so they get the
 	// launcher; DatabaseOverview decides for itself per tab.
@@ -199,7 +220,6 @@ function TableView({
 	onBack: () => void;
 }>) {
 	const { t } = useTranslation("settings");
-	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -210,25 +230,6 @@ function TableView({
 	const pageSize = pageSizeParam
 		? Number.parseInt(pageSizeParam, 10) || DEFAULT_TABLE_PAGE_SIZE
 		: DEFAULT_TABLE_PAGE_SIZE;
-	const offset = (page - 1) * pageSize;
-
-	const schema = useInvoke(backend.dbState.getSchema, backend.dbState, [
-		appId,
-		table,
-		userScoped,
-	]);
-	const count = useInvoke(backend.dbState.countItems, backend.dbState, [
-		appId,
-		table,
-		userScoped,
-	]);
-	const list = useInvoke(backend.dbState.listItems, backend.dbState, [
-		appId,
-		table,
-		offset,
-		pageSize,
-		userScoped,
-	]);
 
 	// The explorer reports its pagination once on mount, which for a deep link is
 	// already what the URL says. Navigating anyway costs a client-side transition
@@ -254,179 +255,20 @@ function TableView({
 		[router, pathname, searchParams],
 	);
 
-	const handleRefresh = useCallback(() => {
-		schema.refetch();
-		count.refetch();
-		list.refetch();
-	}, [schema, count, list]);
-
-	const handleOptimize = useCallback(async () => {
-		try {
-			await backend.dbState.optimize(appId, table, undefined, userScoped);
-			toast.success("Optimized table");
-			handleRefresh();
-		} catch (err) {
-			toast.error(`Optimize failed: ${extractErrorMessage(err)}`);
-			throw err;
-		}
-	}, [backend.dbState, appId, table, userScoped, handleRefresh]);
-
-	const handleUpdateItem = useCallback(
-		async (filter: string, updates: Record<string, unknown>) => {
-			try {
-				await backend.dbState.updateItem(
-					appId,
-					table,
-					filter,
-					updates,
-					userScoped,
-				);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Update failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleDropColumns = useCallback(
-		async (columns: string[]) => {
-			try {
-				await backend.dbState.dropColumns(appId, table, columns, userScoped);
-				toast.success(`Dropped column${columns.length > 1 ? "s" : ""}`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Drop column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleAddColumn = useCallback(
-		async (name: string, sqlExpression: string) => {
-			try {
-				await backend.dbState.addColumn(
-					appId,
-					table,
-					{
-						name,
-						sql_expression: sqlExpression,
-					},
-					userScoped,
-				);
-				toast.success(`Added column "${name}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Add column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleAlterColumn = useCallback(
-		async (column: string, nullable: boolean) => {
-			try {
-				await backend.dbState.alterColumn(
-					appId,
-					table,
-					column,
-					nullable,
-					userScoped,
-				);
-				toast.success(`Altered column "${column}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Alter column failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleGetIndices = useCallback(async () => {
-		return backend.dbState.getIndices(appId, table, userScoped);
-	}, [backend.dbState, appId, table, userScoped]);
-
-	const handleDropIndex = useCallback(
-		async (indexName: string) => {
-			try {
-				await backend.dbState.dropIndex(appId, table, indexName, userScoped);
-				toast.success(`Dropped index "${indexName}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Drop index failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	const handleBuildIndex = useCallback(
-		async (column: string, indexType: string) => {
-			const typeMap: Record<string, IIndexType> = {
-				fulltext: IIndexType.FullText,
-				btree: IIndexType.BTree,
-				bitmap: IIndexType.Bitmap,
-				labellist: IIndexType.LabelList,
-				auto: IIndexType.Auto,
-			};
-			const enumType = typeMap[indexType.toLowerCase()] ?? IIndexType.Auto;
-			try {
-				await backend.dbState.buildIndex(
-					appId,
-					table,
-					column,
-					enumType,
-					undefined,
-					userScoped,
-				);
-				toast.success(`Built index on "${column}"`);
-				handleRefresh();
-			} catch (err) {
-				toast.error(`Build index failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.dbState, appId, table, userScoped, handleRefresh],
-	);
-
-	if (!schema.data || !list.data) {
-		return <TableViewLoadingState onBack={onBack} tableName={table} />;
-	}
-
 	return (
-		<div className="flex flex-col h-full grow max-h-full min-w-0">
-			<LanceDBExplorer
-				total={count.data}
-				tableName={table}
-				arrowSchema={schema.data}
-				rows={list.data}
-				initialPage={page}
-				initialPageSize={pageSize}
-				onPageRequest={(args) => {
-					updateUrlParams(args.page, args.pageSize);
-				}}
-				loading={list.isLoading}
-				error={list.error?.message}
-				onRefresh={handleRefresh}
-				onOptimize={handleOptimize}
-				onUpdateItem={handleUpdateItem}
-				onDropColumns={handleDropColumns}
-				onAddColumn={handleAddColumn}
-				onAlterColumn={handleAlterColumn}
-				onGetIndices={handleGetIndices}
-				onDropIndex={handleDropIndex}
-				onBuildIndex={handleBuildIndex}
-			>
-				<Button variant={"default"} size={"sm"} onClick={onBack}>
-					<ArrowLeftIcon />
-					{t('back', 'Back')}
-				</Button>
-			</LanceDBExplorer>
-		</div>
+		<TableInspector
+			appId={appId}
+			table={table}
+			userScoped={userScoped}
+			page={page}
+			pageSize={pageSize}
+			onPageChange={updateUrlParams}
+		>
+			<Button variant={"default"} size={"sm"} onClick={onBack}>
+				<ArrowLeftIcon />
+				{t("back", "Back")}
+			</Button>
+		</TableInspector>
 	);
 }
 
@@ -749,7 +591,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						}),
 					);
 					throw new Error(
-						t('oauthAuthorizationIsRequiredCompleteAuthorizationThenConfirmTheActionAgain', 'OAuth authorization is required. Complete authorization, then confirm the action again.'),
+						t(
+							"oauthAuthorizationIsRequiredCompleteAuthorizationThenConfirmTheActionAgain",
+							"OAuth authorization is required. Complete authorization, then confirm the action again.",
+						),
 					);
 				}
 				governedPayload = { ...payload, oauth_tokens: oauth.tokens };
@@ -875,14 +720,28 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			const details: string[] = [];
 			if (result.ontologies.length > 0) {
 				details.push(
-					t('lengthOntologvalUpdatedVal2', '{{length}} ontolog{{val}} updated: {{val2}}', { length: result.ontologies.length, val: result.ontologies.length === 1 ? "y was" : "ies were", val2: formatList(result.ontologies) }),
+					t(
+						"lengthOntologvalUpdatedVal2",
+						"{{length}} ontolog{{val}} updated: {{val2}}",
+						{
+							length: result.ontologies.length,
+							val: result.ontologies.length === 1 ? "y was" : "ies were",
+							val2: formatList(result.ontologies),
+						},
+					),
 				);
 			}
 			if (result.saved_queries.length > 0) {
 				details.push(
-					t('lengthSavedQuervalStillReferenceThisTableAndWillNowFailVal2', '{{length}} saved quer{{val}} still reference this table and will now fail: {{val2}}', { length: result.saved_queries.length, val: result.saved_queries.length === 1 ? "y" : "ies", val2: formatList(
-						result.saved_queries,
-					) }),
+					t(
+						"lengthSavedQuervalStillReferenceThisTableAndWillNowFailVal2",
+						"{{length}} saved quer{{val}} still reference this table and will now fail: {{val2}}",
+						{
+							length: result.saved_queries.length,
+							val: result.saved_queries.length === 1 ? "y" : "ies",
+							val2: formatList(result.saved_queries),
+						},
+					),
 				);
 			}
 			if (result.warnings.length > 0) {
@@ -891,15 +750,27 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			const description = details.length > 0 ? details.join("\n") : undefined;
 
 			if (result.dropped) {
-				toast.success(t('deletedTableTable_name', 'Deleted table "{{table_name}}"', { table_name: result.table_name }), { description });
+				toast.success(
+					t("deletedTableTable_name", 'Deleted table "{{table_name}}"', {
+						table_name: result.table_name,
+					}),
+					{ description },
+				);
 			} else {
-				toast.info(t('tableTable_nameNoLongerExisted', 'Table "{{table_name}}" no longer existed', { table_name: result.table_name }), {
-					description,
-				});
+				toast.info(
+					t(
+						"tableTable_nameNoLongerExisted",
+						'Table "{{table_name}}" no longer existed',
+						{ table_name: result.table_name },
+					),
+					{
+						description,
+					},
+				);
 			}
 			closeDeleteDialog();
 		} catch (err) {
-			const message = extractErrorMessage(err);
+			const message = getErrorMessage(err);
 			setDeleteError(message);
 			toast.error(`Delete table failed: ${message}`);
 		} finally {
@@ -964,7 +835,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const failedQueries: { name: string; onRetry: () => void }[] = [];
 	if (tables.error) {
 		failedQueries.push({
-			name: t('projectTables', 'project tables'),
+			name: t("projectTables", "project tables"),
 			onRetry: () => {
 				tables.refetch();
 			},
@@ -972,7 +843,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	}
 	if (userTables.error) {
 		failedQueries.push({
-			name: t('userTables', 'user tables'),
+			name: t("userTables", "user tables"),
 			onRetry: () => {
 				userTables.refetch();
 			},
@@ -996,18 +867,24 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							<Layers3 className="h-5 w-5" />
 						</div>
 						<div>
-							<h1 className="text-2xl font-semibold">{t('dataStudio', 'Data Studio')}</h1>
+							<h1 className="text-2xl font-semibold">
+								{t("dataStudio", "Data Studio")}
+							</h1>
 							<p className="text-sm text-muted-foreground">
-								{t('modelExploreOperateAndShareYourProjectData', 'Model, explore, operate, and share your project data.')}
+								{t(
+									"modelExploreOperateAndShareYourProjectData",
+									"Model, explore, operate, and share your project data.",
+								)}
 							</p>
 						</div>
 					</div>
 					<div className="flex items-center gap-2">
 						<Button variant="outline" size="sm" onClick={refreshStudio}>
-							<RefreshCw className="h-4 w-4" /> {t('refresh', 'Refresh')}
+							<RefreshCw className="h-4 w-4" /> {t("refresh", "Refresh")}
 						</Button>
 						<Button size="sm" onClick={() => setSetupOpen(true)}>
-							<Plus className="h-4 w-4" /> {t('setUpOntology', 'Set up ontology')}
+							<Plus className="h-4 w-4" />{" "}
+							{t("setUpOntology", "Set up ontology")}
 						</Button>
 					</div>
 				</header>
@@ -1024,31 +901,31 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<TabsList className="w-max">
 						<TabsTrigger value="overview">
 							<LayoutDashboard className="mr-1.5 h-3.5 w-3.5" />
-							{t('overview', 'Overview')}
+							{t("overview", "Overview")}
 						</TabsTrigger>
 						<TabsTrigger value="objects">
 							<Box className="mr-1.5 h-3.5 w-3.5" />
-							{t('explore', 'Explore')}
+							{t("explore", "Explore")}
 						</TabsTrigger>
 						<TabsTrigger value="model">
 							<Network className="mr-1.5 h-3.5 w-3.5" />
-							{t('model2', 'Model')}
+							{t("model2", "Model")}
 						</TabsTrigger>
 						<TabsTrigger value="actions">
 							<Workflow className="mr-1.5 h-3.5 w-3.5" />
-							{t('actions', 'Actions')}
+							{t("actions", "Actions")}
 						</TabsTrigger>
 						<TabsTrigger value="sharing">
 							<Share2 className="mr-1.5 h-3.5 w-3.5" />
-							{t('sharing', 'Sharing')}
+							{t("sharing", "Sharing")}
 						</TabsTrigger>
 						<TabsTrigger value="sources">
 							<Database className="mr-1.5 h-3.5 w-3.5" />
-							{t('sources', 'Sources')}
+							{t("sources", "Sources")}
 						</TabsTrigger>
 						<TabsTrigger value="queries">
 							<SquareTerminal className="mr-1.5 h-3.5 w-3.5" />
-							{t('queries', 'Queries')}
+							{t("queries", "Queries")}
 						</TabsTrigger>
 					</TabsList>
 				</div>
@@ -1115,9 +992,14 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				>
 					<div className="flex items-center justify-between gap-3">
 						<div>
-							<h2 className="font-semibold">{t('nativeTables', 'Native tables')}</h2>
+							<h2 className="font-semibold">
+								{t("nativeTables", "Native tables")}
+							</h2>
 							<p className="text-sm text-muted-foreground">
-								{t('openASourceToInspectRowsSchemaAndIndexes', 'Open a source to inspect rows, schema, and indexes.')}
+								{t(
+									"openASourceToInspectRowsSchemaAndIndexes",
+									"Open a source to inspect rows, schema, and indexes.",
+								)}
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
@@ -1125,7 +1007,9 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 								variant="ghost"
 								size="icon"
 								onClick={toggleSort}
-								title={t('sortVal', 'Sort {{val}}', { val: sortAsc ? "descending" : "ascending" })}
+								title={t("sortVal", "Sort {{val}}", {
+									val: sortAsc ? "descending" : "ascending",
+								})}
 							>
 								{sortAsc ? (
 									<ArrowUpAZ className="h-4 w-4" />
@@ -1134,7 +1018,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 								)}
 							</Button>
 							<Button size="sm" onClick={() => setDesignerOpen(true)}>
-								<Plus className="h-4 w-4" /> {t('newTable', 'New table')}
+								<Plus className="h-4 w-4" /> {t("newTable", "New table")}
 							</Button>
 						</div>
 					</div>
@@ -1158,7 +1042,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						<div className="space-y-4 pt-4">
 							<div>
 								<h2 className="flex items-center gap-2 font-semibold">
-									<Cloud className="h-4 w-4" /> {t('remoteObjects', 'Remote objects')}
+									<Cloud className="h-4 w-4" />{" "}
+									{t("remoteObjects", "Remote objects")}
 								</h2>
 								<p className="text-sm text-muted-foreground">
 									{`Installed from connected projects. Read-only previews resolve live against the source.`}
@@ -1227,23 +1112,37 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<AlertDialogHeader>
 						<AlertDialogTitle className="flex items-center gap-2">
 							<AlertTriangle className="h-5 w-5 text-destructive" />
-							{t('delete', 'Delete')} {deleteTarget?.name}?
+							{t("delete", "Delete")} {deleteTarget?.name}?
 						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('thisPermanentlyDeletesTheTableEveryRowInItItsSchemaAndItsIndexesItCannotBeUndone', "This permanently deletes the table, every row in it, its schema and its indexes. It cannot be undone.")}
+							{t(
+								"thisPermanentlyDeletesTheTableEveryRowInItItsSchemaAndItsIndexesItCannotBeUndone",
+								"This permanently deletes the table, every row in it, its schema and its indexes. It cannot be undone.",
+							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<div className="space-y-3">
 						{referencingOntologies.length > 0 ? (
 							<div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
-								<p className="font-medium">{t('countOntologiesReferenceThisTableAndWillBeUpdated', { defaultValue_one: "{{count}} ontology references this table and will be updated:", defaultValue_other: "{{count}} ontologies reference this table and will be updated:", count: referencingOntologies.length })}</p>
+								<p className="font-medium">
+									{t("countOntologiesReferenceThisTableAndWillBeUpdated", {
+										defaultValue_one:
+											"{{count}} ontology references this table and will be updated:",
+										defaultValue_other:
+											"{{count}} ontologies reference this table and will be updated:",
+										count: referencingOntologies.length,
+									})}
+								</p>
 								<p className="mt-1 text-muted-foreground">
 									{formatList(referencingOntologies)}
 								</p>
 							</div>
 						) : (
 							<p className="text-sm text-muted-foreground">
-								{t('anyOntologyMappingOrSavedQueryThatPointsAtThisTableWillBePrunedOrReportedAfterTheDelete', "Any ontology mapping or saved query that points at this table will be pruned or reported after the delete.")}
+								{t(
+									"anyOntologyMappingOrSavedQueryThatPointsAtThisTableWillBePrunedOrReportedAfterTheDelete",
+									"Any ontology mapping or saved query that points at this table will be pruned or reported after the delete.",
+								)}
 							</p>
 						)}
 						<div className="grid gap-1.5">
@@ -1252,7 +1151,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 								<span className="font-mono font-semibold text-foreground">
 									{deleteTarget?.name}
 								</span>{" "}
-								{t('toConfirm', 'to confirm')}
+								{t("toConfirm", "to confirm")}
 							</Label>
 							<Input
 								id="confirm-drop-table"
@@ -1271,7 +1170,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					</div>
 					<AlertDialogFooter>
 						<AlertDialogCancel disabled={deleting}>
-							{t('keepTable', 'Keep table')}
+							{t("keepTable", "Keep table")}
 						</AlertDialogCancel>
 						<AlertDialogAction
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -1288,7 +1187,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							) : (
 								<Trash2 className="h-3.5 w-3.5" />
 							)}
-							{t('deleteTable', 'Delete table')}
+							{t("deleteTable", "Delete table")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -1313,7 +1212,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
 		<Input
 			value={value}
 			onChange={(event) => onChange(event.target.value)}
-			placeholder={i18next.t('searchTables', 'Search tables...')}
+			placeholder={i18next.t("searchTables", "Search tables...")}
 			className="pl-9 pr-9"
 		/>
 		{value && (
@@ -1322,7 +1221,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
 				size="sm"
 				onClick={onClear}
 				className="absolute right-1 top-1 h-8 w-8 p-0"
-				title={i18next.t('clearSearch', 'Clear search')}
+				title={i18next.t("clearSearch", "Clear search")}
 			>
 				<X className="h-4 w-4" />
 			</Button>
@@ -1350,7 +1249,9 @@ const TableGrid: React.FC<TableGridProps> = ({
 		return (
 			<div className="rounded-lg border bg-card p-8 text-center">
 				<Search className="mx-auto h-10 w-10 text-muted-foreground mb-4" />
-				<h3 className="text-lg font-semibold mb-2">{t('noMatchesFound', 'No matches found')}</h3>
+				<h3 className="text-lg font-semibold mb-2">
+					{t("noMatchesFound", "No matches found")}
+				</h3>
 				<p className="text-sm text-muted-foreground">
 					{t("noTablesMatchQuery", 'No tables match "{{query}}".', {
 						query: searchQuery,
@@ -1366,12 +1267,15 @@ const TableGrid: React.FC<TableGridProps> = ({
 				<div className="mb-4 rounded-2xl bg-primary/10 p-3 text-primary">
 					<Database className="h-6 w-6" />
 				</div>
-				<h3 className="font-semibold">{t('noTablesYet', 'No tables yet')}</h3>
+				<h3 className="font-semibold">{t("noTablesYet", "No tables yet")}</h3>
 				<p className="mt-1 max-w-sm text-sm text-muted-foreground">
-					{t('createANativeTableToStoreStructuredDataThenExploreRowsSchemaAndIndexes', "Create a native table to store structured data, then explore rows, schema, and indexes.")}
+					{t(
+						"createANativeTableToStoreStructuredDataThenExploreRowsSchemaAndIndexes",
+						"Create a native table to store structured data, then explore rows, schema, and indexes.",
+					)}
 				</p>
 				<Button className="mt-5" onClick={onCreate}>
-					<Plus className="h-4 w-4" /> {t('newTable', 'New table')}
+					<Plus className="h-4 w-4" /> {t("newTable", "New table")}
 				</Button>
 			</div>
 		);
@@ -1409,7 +1313,7 @@ const TableCard: React.FC<TableCardProps> = ({
 				type="button"
 				onClick={onSelect}
 				className="w-full h-full p-0 text-left"
-				title={t('openTableName', 'Open table: {{name}}', { name: table.name })}
+				title={t("openTableName", "Open table: {{name}}", { name: table.name })}
 			>
 				<div className="p-5 space-y-5">
 					<div className="flex items-start justify-between gap-3 pr-8">
@@ -1441,7 +1345,7 @@ const TableCard: React.FC<TableCardProps> = ({
 								className="shrink-0 bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] gap-1"
 							>
 								<User className="h-3 w-3" />
-								{t('userScoped', 'User scoped')}
+								{t("userScoped", "User scoped")}
 							</Badge>
 						) : (
 							<Badge
@@ -1449,14 +1353,21 @@ const TableCard: React.FC<TableCardProps> = ({
 								className="shrink-0 bg-primary/10 text-primary border-primary/20 text-[10px] gap-1"
 							>
 								<Globe className="h-3 w-3" />
-								{t('shared', 'Shared')}
+								{t("shared", "Shared")}
 							</Badge>
 						)}
 					</div>
 
 					<div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
-						<span>{t('schemaAndCountsLoadOnDemand', 'Schema and counts load on demand')}</span>
-						<span className="font-medium text-foreground">{t('openTable', 'Open table →')}</span>
+						<span>
+							{t(
+								"schemaAndCountsLoadOnDemand",
+								"Schema and counts load on demand",
+							)}
+						</span>
+						<span className="font-medium text-foreground">
+							{t("openTable", "Open table →")}
+						</span>
 					</div>
 				</div>
 			</button>
@@ -1465,7 +1376,9 @@ const TableCard: React.FC<TableCardProps> = ({
 					<Button
 						variant="ghost"
 						size="icon"
-						aria-label={t('actionsForName', 'Actions for {{name}}', { name: table.name })}
+						aria-label={t("actionsForName", "Actions for {{name}}", {
+							name: table.name,
+						})}
 						className="absolute right-2 top-2 h-7 w-7 opacity-0 transition-opacity max-sm:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
 					>
 						<MoreVertical className="h-4 w-4" />
@@ -1479,7 +1392,7 @@ const TableCard: React.FC<TableCardProps> = ({
 							onRequestDelete();
 						}}
 					>
-						<Trash2 className="h-4 w-4" /> {t('deleteTable', 'Delete table')}
+						<Trash2 className="h-4 w-4" /> {t("deleteTable", "Delete table")}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -1507,7 +1420,11 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 				type="button"
 				onClick={onOpen}
 				className="h-full w-full p-0 text-left"
-				title={t('previewRemoteObjectsName', 'Preview remote objects: {{name}}', { name })}
+				title={t(
+					"previewRemoteObjectsName",
+					"Preview remote objects: {{name}}",
+					{ name },
+				)}
 			>
 				<div className="space-y-5 p-5">
 					<div className="flex items-start justify-between gap-3">
@@ -1519,7 +1436,9 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 								<h3 className="truncate text-sm font-semibold leading-tight">
 									{name}
 								</h3>
-								<p className="truncate text-xs text-muted-foreground">{t('fromSourcename', 'from {{sourceName}}', { sourceName })}</p>
+								<p className="truncate text-xs text-muted-foreground">
+									{t("fromSourcename", "from {{sourceName}}", { sourceName })}
+								</p>
 							</div>
 						</div>
 						<Badge
@@ -1527,14 +1446,20 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 							className="shrink-0 gap-1 border-sky-500/20 bg-sky-500/10 text-[10px] text-sky-500"
 						>
 							<Cloud className="h-3 w-3" />
-							{t('remote', 'Remote')}
+							{t("remote", "Remote")}
 						</Badge>
 					</div>
 
 					<div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
-						<span>{t('countObjects', { defaultValue_one: '{{count}} object', defaultValue_other: '{{count}} objects', count: objectCount })}</span>
+						<span>
+							{t("countObjects", {
+								defaultValue_one: "{{count}} object",
+								defaultValue_other: "{{count}} objects",
+								count: objectCount,
+							})}
+						</span>
 						<span className="font-medium text-foreground">
-							{t('previewObjects', 'Preview objects →')}
+							{t("previewObjects", "Preview objects →")}
 						</span>
 					</div>
 				</div>
@@ -1544,17 +1469,6 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 };
 
 const LOADING_CARD_KEYS = ["one", "two", "three", "four", "five", "six"];
-const LOADING_COLUMN_KEYS = ["one", "two", "three", "four", "five"];
-const LOADING_ROW_KEYS = [
-	"one",
-	"two",
-	"three",
-	"four",
-	"five",
-	"six",
-	"seven",
-	"eight",
-];
 
 const LoadingState: React.FC = () => (
 	<div className="p-6">
@@ -1583,63 +1497,6 @@ const LoadingState: React.FC = () => (
 					</div>
 				</Card>
 			))}
-		</div>
-	</div>
-);
-
-const TableViewLoadingState: React.FC<{
-	onBack: () => void;
-	tableName: string;
-}> = ({ onBack, tableName }) => (
-	<div className="flex flex-col h-full grow max-h-full min-w-0 p-4 gap-4">
-		<div className="flex items-center gap-3">
-			<Button variant="default" size="sm" onClick={onBack}>
-				<ArrowLeftIcon />
-				{i18next.t('back', 'Back')}
-			</Button>
-			<div className="flex items-center gap-2 min-w-0">
-				<Database className="h-5 w-5 text-muted-foreground animate-pulse shrink-0" />
-				<span className="text-sm font-medium truncate">{tableName}</span>
-			</div>
-		</div>
-		<div className="flex items-center gap-2">
-			<div className="h-9 w-24 bg-muted animate-pulse rounded" />
-			<div className="h-9 flex-1 bg-muted animate-pulse rounded" />
-			<div className="h-9 w-20 bg-muted animate-pulse rounded" />
-		</div>
-		<div className="flex-1 rounded border overflow-hidden">
-			<div className="h-10 bg-muted/60 border-b flex items-center gap-4 px-4">
-				{LOADING_COLUMN_KEYS.map((key, index) => (
-					<div
-						key={key}
-						className="h-4 bg-muted animate-pulse rounded"
-						style={{ width: `${60 + index * 20}px` }}
-					/>
-				))}
-			</div>
-			{LOADING_ROW_KEYS.map((rowKey, rowIndex) => (
-				<div
-					key={rowKey}
-					className="h-10 border-b flex items-center gap-4 px-4"
-				>
-					{LOADING_COLUMN_KEYS.map((columnKey, columnIndex) => (
-						<div
-							key={`${rowKey}-${columnKey}`}
-							className="h-3.5 bg-muted/50 animate-pulse rounded"
-							style={{
-								width: `${40 + ((rowIndex + columnIndex) % 4) * 25}px`,
-							}}
-						/>
-					))}
-				</div>
-			))}
-		</div>
-		<div className="flex items-center justify-between shrink-0">
-			<div className="h-4 w-32 bg-muted animate-pulse rounded" />
-			<div className="flex gap-1">
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-			</div>
 		</div>
 	</div>
 );
@@ -1687,7 +1544,12 @@ const OverlayView: React.FC<{
 	return (
 		<div className="flex flex-col h-full min-h-0">
 			<div className="flex items-center gap-3 border-b p-4">
-				<Button variant="ghost" size="icon" className="shrink-0" onClick={onBack}>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="shrink-0"
+					onClick={onBack}
+				>
 					<ArrowLeftIcon className="h-4 w-4" />
 				</Button>
 				<div className="min-w-0 flex-1">
@@ -1711,7 +1573,7 @@ const OverlayView: React.FC<{
 							<div className="text-center space-y-2">
 								<p className="text-sm text-destructive">{message}</p>
 								<Button variant="outline" onClick={onBack}>
-									{t('goBack', 'Go back')}
+									{t("goBack", "Go back")}
 								</Button>
 							</div>
 						</div>
@@ -1737,7 +1599,13 @@ const PartialFailureAlert: React.FC<{
 		>
 			<div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
 				<AlertTriangle className="h-4 w-4 shrink-0" />
-				<span>{t('failedToLoadNamesSomeDataMayBeMissing', 'Failed to load {{names}}. Some data may be missing.', { names })}</span>
+				<span>
+					{t(
+						"failedToLoadNamesSomeDataMayBeMissing",
+						"Failed to load {{names}}. Some data may be missing.",
+						{ names },
+					)}
+				</span>
 			</div>
 			<Button
 				variant="outline"
@@ -1746,7 +1614,7 @@ const PartialFailureAlert: React.FC<{
 				className="shrink-0"
 			>
 				<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-				{t('retry', 'Retry')}
+				{t("retry", "Retry")}
 			</Button>
 		</div>
 	);
@@ -1756,13 +1624,18 @@ const ErrorState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
 	<div className="p-6">
 		<div className="rounded-lg border bg-card p-8 text-center">
 			<Database className="mx-auto h-10 w-10 text-destructive mb-4" />
-			<h3 className="text-lg font-semibold mb-2">{i18next.t('failedToLoadTables', 'Failed to load tables')}</h3>
+			<h3 className="text-lg font-semibold mb-2">
+				{i18next.t("failedToLoadTables", "Failed to load tables")}
+			</h3>
 			<p className="text-sm text-muted-foreground mb-4">
-				{i18next.t('thereWasAnErrorLoadingTheDatabaseTables', 'There was an error loading the database tables.')}
+				{i18next.t(
+					"thereWasAnErrorLoadingTheDatabaseTables",
+					"There was an error loading the database tables.",
+				)}
 			</p>
 			<Button onClick={onRetry}>
 				<RefreshCw className="mr-2 h-4 w-4" />
-				{i18next.t('tryAgain', 'Try again')}
+				{i18next.t("tryAgain", "Try again")}
 			</Button>
 		</div>
 	</div>
@@ -1772,13 +1645,18 @@ const EmptyState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
 	<div className="p-6">
 		<div className="rounded-lg border bg-card p-8 text-center">
 			<Database className="mx-auto h-10 w-10 text-muted-foreground mb-4" />
-			<h3 className="text-lg font-semibold mb-2">{i18next.t('noTablesFound', 'No tables found')}</h3>
+			<h3 className="text-lg font-semibold mb-2">
+				{i18next.t("noTablesFound", "No tables found")}
+			</h3>
 			<p className="text-sm text-muted-foreground mb-4">
-				{i18next.t('thisProjectDoesnapostAppearToHaveAnyDatabaseTablesYet', "This project doesn't appear to have any database tables yet.")}
+				{i18next.t(
+					"thisProjectDoesnapostAppearToHaveAnyDatabaseTablesYet",
+					"This project doesn't appear to have any database tables yet.",
+				)}
 			</p>
 			<Button onClick={onRetry}>
 				<RefreshCw className="mr-2 h-4 w-4" />
-				{i18next.t('refresh', 'Refresh')}
+				{i18next.t("refresh", "Refresh")}
 			</Button>
 		</div>
 	</div>

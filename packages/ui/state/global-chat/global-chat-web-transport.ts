@@ -2,12 +2,14 @@
 // drives a run over a Tauri `Channel` + a separate Tauri event for tool requests; in the browser the
 // same run is one HTTP request whose SSE response multiplexes everything:
 //
-//   event: run           data: { "runId": "..." }                      → address for tool results
-//   event: token         data: <raw FlowPilot stream chunk>            → forwarded to the parser
-//   event: tool_request  data: { requestId, toolName, arguments, ... } → executed here, result POSTed back
-//   event: final         data: <UnifiedCopilotResponse JSON>           → resolves the run
-//   event: error         data: { "error": "..." }                      → throws
+//   event: run           data: { "runId": "...", "channel": IChannelHandle }  → run-level channel (cancel / steer)
+//   event: token         data: <raw FlowPilot stream chunk>                   → forwarded to the parser
+//   event: tool_request  data: { requestId, toolName, arguments, channel, … } → executed here, result replied on its channel
+//   event: final         data: <UnifiedCopilotResponse JSON>                  → resolves the run
+//   event: error         data: { "error": "..." }                             → throws
 //
+// Nothing goes back up this stream: every request carries a channel handle naming the transport
+// the waiter listens on (see `lib/channel`), with the API push endpoint as fallback.
 // `token`/`tool_request`/`run`/`final` mirror the exact payload shapes the desktop uses, so the
 // shared stream parser and the frontend tool bridge behave identically on both transports.
 
@@ -15,6 +17,13 @@ import type {
 	FrontendToolRequest,
 	FrontendToolResponse,
 } from "../../components/global-chat/global-tool-bridge";
+import {
+	cancelChannel,
+	isChannelHandle,
+	replyToChannel,
+	steerChannel,
+} from "../../lib/channel";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import type { IAgentDebugEvent } from "./agent-debug-report";
 import {
 	registerGlobalChatRunControl,
@@ -24,28 +33,15 @@ import {
 } from "./global-chat-run-control";
 
 // The desktop and browser tool contracts are identical; reuse the canonical bridge types so a single
-// executor (see `global-chat-tool-registry`) satisfies both transports.
-export type WebToolRequest = FrontendToolRequest;
+// executor (see `global-chat-tool-registry`) satisfies both transports. On the wire the channel is
+// mandatory — a request without one cannot be answered.
+export type WebToolRequest = FrontendToolRequest & { channel: IChannelHandle };
 export type WebToolResponse = FrontendToolResponse;
 
 const DEFAULT_TOOL_RESULT_DELIVERY_TIMEOUT_MS = 30_000;
 const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 10 * 60_000;
-const MAX_ERROR_BODY_CHARS = 1_000;
 
-export interface WebGlobalChatOptions {
-	/** API origin (scheme + host, no `/api/v1`), e.g. from `getApiOrigin()`. */
-	baseUrl: string;
-	/** The user's access token (OpenID). Required — hosted Bit models are billed against it. */
-	token?: string;
-	/** POST body for `/ai/global-chat` (userPrompt, history, modelId, embeddingModelId, …). */
-	body: Record<string, unknown>;
-	/**
-	 * The run id the FRONTEND minted (the assistant message id). The server mints its own and hands
-	 * it back in the `run` frame; only this transport sees both. It uses the client id to register
-	 * the run's cancel/steer control and to tag outgoing tool requests, so the tool bridge can route
-	 * a tool's output back to the right reply when several turns stream at once.
-	 */
-	clientRunId?: string;
+export interface ToolDispatchOptions {
 	/**
 	 * Execute one browser tool and resolve with its result. Wire this to the same handlers the
 	 * desktop tool bridge uses (navigate, open_app_chat, flowpilot_board, ask_user, …). When omitted
@@ -62,10 +58,26 @@ export interface WebGlobalChatOptions {
 	 * persisted debug report. The callback is observational: exceptions never break the run.
 	 */
 	onLifecycle?: (event: IAgentDebugEvent) => void;
-	/** Maximum time allowed for the tool-result POST itself (tool execution has its own deadline). */
+	/** Maximum time allowed for delivering a result / control push (tool execution has its own deadline). */
 	toolResultDeliveryTimeoutMs?: number;
 	/** Hard upper bound for a browser tool handler, also applied when the server omitted a deadline. */
 	toolExecutionTimeoutMs?: number;
+}
+
+export interface WebGlobalChatOptions extends ToolDispatchOptions {
+	/** API origin (scheme + host, no `/api/v1`), e.g. from `getApiOrigin()`. */
+	baseUrl: string;
+	/** The user's access token (OpenID). Required — hosted Bit models are billed against it. */
+	token?: string;
+	/** POST body for `/ai/global-chat` (userPrompt, history, modelId, embeddingModelId, …). */
+	body: Record<string, unknown>;
+	/**
+	 * The run id the FRONTEND minted (the assistant message id). The server mints its own and hands
+	 * it back in the `run` frame; only this transport sees both. It uses the client id to register
+	 * the run's cancel/steer control and to tag outgoing tool requests, so the tool bridge can route
+	 * a tool's output back to the right reply when several turns stream at once.
+	 */
+	clientRunId?: string;
 }
 
 function errorMessage(error: unknown) {
@@ -80,7 +92,7 @@ function parentRequestId(request: WebToolRequest) {
 	);
 }
 
-function deliveryTimeout(options: WebGlobalChatOptions) {
+function deliveryTimeout(options: ToolDispatchOptions) {
 	const configured = options.toolResultDeliveryTimeoutMs;
 	return typeof configured === "number" && Number.isFinite(configured)
 		? Math.max(1, configured)
@@ -88,7 +100,7 @@ function deliveryTimeout(options: WebGlobalChatOptions) {
 }
 
 function executionTimeout(
-	options: WebGlobalChatOptions,
+	options: ToolDispatchOptions,
 	request: WebToolRequest,
 ) {
 	const configured = options.toolExecutionTimeoutMs;
@@ -110,7 +122,7 @@ function executionTimeout(
 	return explicitCap ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
 }
 
-function emitLifecycle(options: WebGlobalChatOptions, event: IAgentDebugEvent) {
+function emitLifecycle(options: ToolDispatchOptions, event: IAgentDebugEvent) {
 	try {
 		options.onLifecycle?.(event);
 	} catch {
@@ -132,6 +144,50 @@ function bridgeEvent(
 		timestamp_ms: Date.now(),
 		...fields,
 	};
+}
+
+/**
+ * Bound one channel push by the delivery timeout. Pushes must fail loudly: a stuck result leaves
+ * the server blocked on the request, and the composer restores a steering message that never landed.
+ */
+async function withDeliveryTimeout<T>(
+	options: ToolDispatchOptions,
+	describe: string,
+	run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const timeoutMs = deliveryTimeout(options);
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return await run(controller.signal);
+	} catch (error) {
+		if (controller.signal.aborted) {
+			throw new Error(`${describe} timed out after ${timeoutMs} ms.`);
+		}
+		throw new Error(`${describe} failed: ${errorMessage(error)}`);
+	} finally {
+		clearTimeout(timeoutId);
+	}
+}
+
+function parseRunFrame(data: string): {
+	runId: string;
+	channel: IChannelHandle;
+} {
+	let value: unknown;
+	try {
+		value = JSON.parse(data);
+	} catch {
+		throw new Error("Malformed run frame: payload is not valid JSON.");
+	}
+	const record = (value ?? {}) as { runId?: unknown; channel?: unknown };
+	if (typeof record.runId !== "string" || !record.runId.trim()) {
+		throw new Error("Malformed run frame: runId is missing.");
+	}
+	if (!isChannelHandle(record.channel)) {
+		throw new Error("Malformed run frame: channel is missing.");
+	}
+	return { runId: record.runId, channel: record.channel };
 }
 
 function parseToolRequest(data: string): WebToolRequest {
@@ -161,16 +217,20 @@ function parseToolRequest(data: string): WebToolRequest {
 			"Malformed tool_request frame: arguments must be an object.",
 		);
 	}
+	if (!isChannelHandle(record.channel)) {
+		throw new Error("Malformed tool_request frame: channel is missing.");
+	}
 	return {
 		...(record as WebToolRequest),
 		requestId: record.requestId,
 		toolName: record.toolName,
 		arguments: record.arguments ?? {},
+		channel: record.channel,
 	};
 }
 
 async function executeBrowserTool(
-	options: WebGlobalChatOptions,
+	options: ToolDispatchOptions,
 	request: WebToolRequest,
 ): Promise<WebToolResponse> {
 	const id = `web:${request.requestId}:handler`;
@@ -280,48 +340,8 @@ async function executeBrowserTool(
 	return result;
 }
 
-/**
- * POST a control action (`cancel` / `steer`) for a live run. Kept separate from tool-result
- * delivery because it must fail loudly: the composer restores a steering message the run refused,
- * and the stop button reports a cancel that did not land.
- */
-async function postRunControl(
-	options: WebGlobalChatOptions,
-	authHeaders: Record<string, string>,
-	runId: string,
-	action: "cancel" | "steer",
-	payload: Record<string, unknown>,
-) {
-	const controller = new AbortController();
-	const timeoutId = setTimeout(
-		() => controller.abort(),
-		deliveryTimeout(options),
-	);
-	try {
-		const response = await fetch(
-			`${options.baseUrl}/api/v1/ai/global-chat/${encodeURIComponent(runId)}/${action}`,
-			{
-				method: "POST",
-				headers: { "content-type": "application/json", ...authHeaders },
-				body: JSON.stringify(payload),
-				signal: controller.signal,
-			},
-		);
-		if (!response.ok) {
-			const text = await response.text().catch(() => "");
-			throw new Error(
-				`FlowPilot ${action} failed (${response.status}): ${text.slice(0, MAX_ERROR_BODY_CHARS)}`,
-			);
-		}
-	} finally {
-		clearTimeout(timeoutId);
-	}
-}
-
 async function deliverToolResult(
-	options: WebGlobalChatOptions,
-	authHeaders: Record<string, string>,
-	runId: string,
+	options: ToolDispatchOptions,
 	request: WebToolRequest,
 	result: WebToolResponse,
 ) {
@@ -337,51 +357,17 @@ async function deliverToolResult(
 		}),
 	);
 
-	const timeoutMs = deliveryTimeout(options);
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		let response: globalThis.Response;
-		try {
-			response = await fetch(
-				`${options.baseUrl}/api/v1/ai/global-chat/${encodeURIComponent(runId)}/tool-result`,
-				{
-					method: "POST",
-					headers: { "content-type": "application/json", ...authHeaders },
-					body: JSON.stringify({ ...result, requestId: request.requestId }),
-					signal: controller.signal,
-				},
-			);
-		} catch (error) {
-			if (controller.signal.aborted) {
-				throw new Error(
-					`Tool result delivery timed out after ${timeoutMs} ms for request '${request.requestId}'.`,
-				);
-			}
-			throw new Error(
-				`Tool result delivery failed for request '${request.requestId}': ${errorMessage(error)}`,
-			);
-		}
-
-		let responseBody: string;
-		try {
-			responseBody = await response.text();
-		} catch (error) {
-			if (controller.signal.aborted) {
-				throw new Error(
-					`Tool result delivery timed out after ${timeoutMs} ms for request '${request.requestId}'.`,
-				);
-			}
-			throw new Error(
-				`Tool result acknowledgement could not be read for request '${request.requestId}': ${errorMessage(error)}`,
-			);
-		}
-		if (!response.ok) {
-			throw new Error(
-				`Tool result delivery failed (${response.status}) for request '${request.requestId}': ${responseBody.slice(0, MAX_ERROR_BODY_CHARS) || response.statusText}`,
-			);
-		}
-
+		await withDeliveryTimeout(
+			options,
+			`Tool result delivery for request '${request.requestId}'`,
+			(signal) =>
+				replyToChannel(
+					request.channel,
+					{ ...result, requestId: request.requestId },
+					{ signal },
+				),
+		);
 		emitLifecycle(
 			options,
 			bridgeEvent(id, "tool_result_delivered", "done", {
@@ -389,9 +375,7 @@ async function deliverToolResult(
 				parent_request_id: parentRequestId(request),
 				name: request.toolName,
 				ended_at_ms: Date.now(),
-				result_summary: responseBody
-					? "Tool result acknowledged by the server."
-					: "Tool result delivered.",
+				result_summary: `Tool result delivered over ${request.channel.transport.type}.`,
 			}),
 		);
 	} catch (error) {
@@ -406,59 +390,39 @@ async function deliverToolResult(
 			}),
 		);
 		throw error;
-	} finally {
-		clearTimeout(timeoutId);
 	}
 }
 
 async function dispatchToolRequest(
-	options: WebGlobalChatOptions,
-	authHeaders: Record<string, string>,
-	runId: string,
+	options: ToolDispatchOptions,
 	request: WebToolRequest,
 ) {
 	const result = await executeBrowserTool(options, request);
-	await deliverToolResult(options, authHeaders, runId, request, result);
+	await deliverToolResult(options, request, result);
 }
 
 /**
  * Execute one `tool_request` frame that arrived on a nested specialist's own SSE stream
- * (`/ai/copilot/chat` with a Data Studio / Scout scope) and POST its result back.
+ * (`/ai/copilot/chat` with a Data Studio / Scout scope) and reply on the channel it carries.
  *
- * A specialist rides the owning chat run's id, so the result goes to the very same
- * `/ai/global-chat/{runId}/tool-result` endpoint the orchestrator's tools use — only the stream the
- * request travelled down differs.
+ * A specialist rides the owning chat run, so its requests carry that run's channel — only the
+ * stream the request travelled down differs from the orchestrator's own tools.
  */
 export async function dispatchSpecialistToolRequest(params: {
-	baseUrl: string;
-	token?: string;
-	runId: string;
 	data: string;
 	onToolRequest: (request: WebToolRequest) => Promise<WebToolResponse>;
-	onToolCancel?: WebGlobalChatOptions["onToolCancel"];
+	onToolCancel?: ToolDispatchOptions["onToolCancel"];
 }): Promise<void> {
-	const options: WebGlobalChatOptions = {
-		baseUrl: params.baseUrl,
-		token: params.token,
-		body: {},
-		onToolRequest: params.onToolRequest,
-		onToolCancel: params.onToolCancel,
-	};
-	const authHeaders: Record<string, string> = params.token
-		? { authorization: `Bearer ${params.token}` }
-		: {};
 	await dispatchToolRequest(
-		options,
-		authHeaders,
-		params.runId,
+		{ onToolRequest: params.onToolRequest, onToolCancel: params.onToolCancel },
 		parseToolRequest(params.data),
 	);
 }
 
 /**
  * Build a `start(onChunk)` transport for {@link driveGlobalChatStream} that talks to the browser API.
- * Forwards `token` frames to `onChunk`, dispatches `tool_request` frames to `onToolRequest` and POSTs
- * the result back keyed by the run id, and resolves with the final `UnifiedCopilotResponse`.
+ * Forwards `token` frames to `onChunk`, dispatches `tool_request` frames to `onToolRequest` and
+ * replies on each request's channel, and resolves with the final `UnifiedCopilotResponse`.
  */
 export function webGlobalChatStart(options: WebGlobalChatOptions) {
 	return async (onChunk: (chunk: string) => void): Promise<unknown> => {
@@ -478,25 +442,29 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 		// Stopping a browser run has two halves: abort the SSE request so the UI stops immediately,
 		// and tell the server to cancel the generation so it does not keep burning tokens.
 		//
-		// The control is registered BEFORE the request goes out, closing over a run id that is only
-		// filled in when the server's `run` frame lands. Stopping in that window still aborts the
-		// stream locally; steering in it is refused rather than silently dropped.
+		// The control is registered BEFORE the request goes out, closing over a run channel that is
+		// only filled in when the server's `run` frame lands. Stopping in that window still aborts
+		// the stream locally; steering in it is refused rather than silently dropped.
 		const streamAbort = new AbortController();
-		let serverRunId: string | undefined;
+		let runChannel: IChannelHandle | undefined;
 		if (options.clientRunId) {
 			registerGlobalChatRunControl(options.clientRunId, {
 				cancel: async () => {
 					streamAbort.abort();
-					if (!serverRunId) return;
-					await postRunControl(options, authHeaders, serverRunId, "cancel", {});
+					const channel = runChannel;
+					if (!channel) return;
+					await withDeliveryTimeout(options, "FlowPilot cancel", (signal) =>
+						cancelChannel(channel, { signal }),
+					);
 				},
 				steer: async (content) => {
-					if (!serverRunId) {
+					const channel = runChannel;
+					if (!channel) {
 						throw new Error("The run has not started yet.");
 					}
-					await postRunControl(options, authHeaders, serverRunId, "steer", {
-						message: content,
-					});
+					await withDeliveryTimeout(options, "FlowPilot steer", (signal) =>
+						steerChannel(channel, content, { signal }),
+					);
 				},
 			});
 		}
@@ -559,42 +527,37 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 				if (transportError) return;
 				switch (eventName) {
 					case "run": {
-						let nextRunId: unknown;
+						let parsed: { runId: string; channel: IChannelHandle };
 						try {
-							nextRunId = (JSON.parse(data) as { runId?: unknown }).runId;
-						} catch {
-							protocolFailure(
-								"malformed_run_frame",
-								"Malformed run frame: payload is not valid JSON.",
-							);
+							parsed = parseRunFrame(data);
+						} catch (error) {
+							protocolFailure("malformed_run_frame", errorMessage(error));
 							return;
 						}
-						if (typeof nextRunId !== "string" || !nextRunId.trim()) {
-							protocolFailure(
-								"malformed_run_frame",
-								"Malformed run frame: runId is missing.",
-							);
-							return;
-						}
-						if (runId && runId !== nextRunId) {
+						if (runId && runId !== parsed.runId) {
 							protocolFailure(
 								"conflicting_run_frame",
 								"Conflicting run frame received for an active FlowPilot stream.",
 							);
 							return;
 						}
-						runId = nextRunId;
+						runId = parsed.runId;
 						// The run is addressable from here on — the control registered above starts
 						// reaching the server instead of only aborting locally.
-						serverRunId = nextRunId;
-						// Nested specialist runs are separate HTTP requests that still post their
-						// tool results to THIS run, so they need the server's id too.
+						runChannel = parsed.channel;
+						// Nested specialist runs are separate HTTP requests that still ride THIS run,
+						// so they need the server's id too.
 						if (options.clientRunId) {
-							registerGlobalChatTransportRunId(options.clientRunId, nextRunId);
+							registerGlobalChatTransportRunId(
+								options.clientRunId,
+								parsed.runId,
+							);
 						}
 						emitLifecycle(
 							options,
-							bridgeEvent("web:protocol:run", "run_frame_received", "done"),
+							bridgeEvent("web:protocol:run", "run_frame_received", "done", {
+								summary: `Run channel transport: ${parsed.channel.transport.type}.`,
+							}),
 						);
 						return;
 					}
@@ -612,7 +575,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 						if (!runId) {
 							protocolFailure(
 								"tool_request_without_run",
-								"Received a tool_request frame before a valid run frame; the result cannot be routed.",
+								"Received a tool_request frame before a valid run frame.",
 							);
 							return;
 						}
@@ -665,9 +628,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 								},
 							),
 						);
-						trackDispatch(
-							dispatchToolRequest(options, authHeaders, runId, request),
-						);
+						trackDispatch(dispatchToolRequest(options, request));
 						return;
 					}
 					case "final":
@@ -750,7 +711,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 			}
 
 			// A final frame should normally follow delivery, but awaiting the tracked tasks closes a race
-			// with servers that optimistically finish their SSE stream before consuming the result POST.
+			// with servers that optimistically finish their SSE stream before consuming the reply.
 			await Promise.all([...outstandingDispatches]);
 			if (transportError) throw transportError;
 			if (!runId) {

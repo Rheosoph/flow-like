@@ -1,4 +1,5 @@
 export * from "./use-asset-image";
+export * from "./use-asset-source";
 export * from "./use-board-bridge";
 export * from "./use-invoke";
 export * from "./use-hub";
@@ -13,6 +14,8 @@ export * from "./use-widget-resolver";
 export * from "./use-copilot-sdk";
 export * from "./use-media-upload";
 export * from "./use-peer-users";
+export * from "./use-user-lookup";
 export * from "./use-theme-gradient";
 export * from "./use-search-index";
 export * from "./use-model-names";
+export * from "./use-storage-tree";

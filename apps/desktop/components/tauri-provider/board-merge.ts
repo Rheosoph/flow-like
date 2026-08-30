@@ -114,10 +114,14 @@ const preserveSecretValues = (
 	for (const [nodeId, remoteNode] of Object.entries(remoteBoard.nodes ?? {})) {
 		preservePins(remoteNode.pins, localBoard.nodes?.[nodeId]?.pins);
 	}
-	for (const [layerId, remoteLayer] of Object.entries(remoteBoard.layers ?? {})) {
+	for (const [layerId, remoteLayer] of Object.entries(
+		remoteBoard.layers ?? {},
+	)) {
 		const localLayer = localBoard.layers?.[layerId];
 		preservePins(remoteLayer.pins, localLayer?.pins);
-		for (const [nodeId, remoteNode] of Object.entries(remoteLayer.nodes ?? {})) {
+		for (const [nodeId, remoteNode] of Object.entries(
+			remoteLayer.nodes ?? {},
+		)) {
 			preservePins(remoteNode.pins, localLayer?.nodes?.[nodeId]?.pins);
 		}
 	}

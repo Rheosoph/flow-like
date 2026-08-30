@@ -2,15 +2,20 @@
 //!
 //! Exhaustive search over parameter grid with cross-validation.
 
-use crate::ml::{GridSearchEntry, GridSearchResult, NodeMLModel, ParameterSpec};
+#[cfg(feature = "execute")]
+use crate::ml::GridSearchEntry;
+use crate::ml::ParameterSpec;
+use crate::ml::{GridSearchResult, NodeMLModel};
 #[cfg(feature = "execute")]
 use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -18,9 +23,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, seq::SliceRandom};
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -128,6 +134,7 @@ impl NodeLogic for GridSearchNode {
             "Exhaustive search over parameter combinations with cross-validation. Returns the best parameters found. Model Type accepts the same names the Auto Classifier reports as its best model, so the two nodes chain directly.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "gridSearch");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 
@@ -499,7 +506,6 @@ impl NodeLogic for GridSearchNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let model_type: String = node
             .get_pin_by_name("model_type")

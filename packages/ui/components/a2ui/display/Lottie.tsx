@@ -5,6 +5,7 @@ import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, LottieComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -13,11 +14,21 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
+function isInlineAnimation(value: string | undefined): value is string {
+	const start = value?.trimStart().charAt(0);
+	return start === "{" || start === "[";
+}
+
 export function A2UILottie({
 	component,
 	style,
 }: ComponentProps<LottieComponent>) {
-	const src = useResolved<string>(component.src);
+	// `src` doubles as an inline animation document, which is neither a URL nor
+	// a path and must never be sent off to be signed.
+	const rawSrc = useResolved<string>(component.src);
+	const inlineJson = isInlineAnimation(rawSrc) ? rawSrc : undefined;
+	const { url: resolvedSrc } = useAssetUrl(inlineJson ? undefined : rawSrc);
+	const src = inlineJson ?? resolvedSrc;
 	const loop = useResolved<boolean>(component.loop);
 	const autoplay = useResolved<boolean>(component.autoplay);
 	const speed = useResolved<number>(component.speed);

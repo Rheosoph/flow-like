@@ -4,12 +4,12 @@ import Editor, { type Monaco } from "@monaco-editor/react";
 import { CheckCircle2, CopyIcon, FileCode2Icon, XIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../lib/monaco-key-guard";
 import {
 	FLOWSCRIPT_LANGUAGE_ID,
 	FLOWSCRIPT_THEME_DARK,
 	FLOWSCRIPT_THEME_LIGHT,
-	defineFlowScriptThemes,
-	registerFlowScriptLanguage,
+	setupFlowScriptEditor,
 } from "../flow/flowscript/flowscript-language";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -17,15 +17,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 export function formatLineCount(source: string): string {
 	const lines = source ? source.split("\n").length : 0;
 	return `${lines} line${lines === 1 ? "" : "s"}`;
-}
-
-/** Registers the shared FlowScript language + themes and applies the theme for this editor. */
-function setupFlowScriptEditor(monaco: Monaco, isDark: boolean) {
-	registerFlowScriptLanguage(monaco);
-	defineFlowScriptThemes(monaco);
-	monaco.editor.setTheme(
-		isDark ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT,
-	);
 }
 
 interface FlowScriptWorkspacePanelProps {
@@ -147,6 +138,7 @@ export const FlowScriptWorkspacePanel = memo(function FlowScriptWorkspacePanel({
 				<div className="h-full min-h-0 overflow-hidden rounded-xl border border-border/45 bg-card shadow-[0_18px_45px_rgba(15,23,42,0.08)] ring-1 ring-black/[0.02] dark:shadow-black/25 dark:ring-white/[0.03]">
 					<Editor
 						beforeMount={handleBeforeMount}
+						className={FLOW_KEY_OPT_OUT_CLASS}
 						height="100%"
 						language={FLOWSCRIPT_LANGUAGE_ID}
 						theme={isDark ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT}

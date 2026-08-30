@@ -15,9 +15,11 @@ use crate::ml::{
     values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -28,9 +30,10 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::AdjacentCategory;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -83,6 +86,7 @@ impl NodeLogic for FitOrdinalAdjacentCategoryNode {
             "Fit/Train an ordinal model that compares each level with the one directly below it: `log( P(level k+1) / P(level k) ) = contrast_k + x . beta`. Its coefficients answer `what does one more unit of this feature do to my rating?` - `exp(coefficient)` is the factor on the odds of scoring one level higher rather than staying put, the same factor at every step. That is NOT what Train Ordinal Model (Proportional Odds) reports: a cumulative coefficient is the log odds ratio of everything AT OR BELOW a cut point against everything above it, pooling levels instead of comparing two neighbours. The same fitted number therefore means different things in the two families, and since one shared coefficient applies once per step here, the bottom-to-top effect is (levels - 1) times the per-step effect. Pick this for ratings, severity grades and Likert answers, where the question really is about one step; pick proportional odds when the question is about crossing a threshold (`does this case escalate past level 2?`). Fitted by penalized maximum likelihood over all levels jointly, so per-level probabilities are calibrated and the Predict node returns a confidence. Scale your features first with the Fit Feature Scaler node: this is a gradient fit, and unscaled columns make it converge slowly or not at all.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "fitOrdinalAdjacentCategory");
         node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -428,7 +432,6 @@ impl NodeLogic for FitOrdinalAdjacentCategoryNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

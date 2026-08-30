@@ -28,12 +28,12 @@ fn collect_pins(context: &ExecutionContext) -> (Vec<Arc<InternalPin>>, Vec<Strin
     let mut exec_pins = Vec::new();
     let mut output_pins = Vec::new();
 
-    for pin in context.node.pins.values() {
+    for pin in context.node.pins.iter() {
         if pin.pin_type == PinType::Output {
             if pin.data_type == VariableType::Execution {
                 exec_pins.push(pin.clone());
-            } else if pin.name != "payload" {
-                output_pins.push(pin.name.clone());
+            } else if pin.name.as_ref() != "payload" {
+                output_pins.push(pin.name.to_string());
             }
         }
     }
@@ -130,6 +130,7 @@ impl NodeLogic for GenericEventNode {
             "A generic event without input or output",
             "Events",
         );
+        node.set_flowscript_name("events", "generic");
         node.add_icon("/flow/icons/event.svg");
         node.set_start(true);
         node.set_can_be_referenced_by_fns(true);
@@ -146,7 +147,8 @@ impl NodeLogic for GenericEventNode {
             "Payload",
             "The payload of the event",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

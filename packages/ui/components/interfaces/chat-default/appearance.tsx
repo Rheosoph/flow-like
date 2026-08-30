@@ -1,22 +1,14 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	type CSSProperties,
-	type ReactNode,
-	useEffect,
-	useId,
-	useState,
-} from "react";
+import { type CSSProperties, type ReactNode, useId } from "react";
+import { useAssetSource } from "../../../hooks/use-asset-source";
+import { isStorageAssetPath } from "../../../lib/asset-url-cache";
 import {
 	createChatBackgroundImage,
 	escapeCssAttributeValue,
 	resolveChatColorScheme,
 } from "../../../lib/chat-appearance";
-import {
-	isStoragePrefix,
-	presignSinglePath,
-} from "../../../lib/presign-assets";
 import type { IEventPayloadChat } from "../../../lib/schema/flow/event-payload-chat";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -44,49 +36,14 @@ export function ChatAppearance({
 		typeof config.background_image === "string"
 			? config.background_image.trim()
 			: "";
-	const storageBackedBackground =
-		configuredBackgroundImage.length > 0 &&
-		isStoragePrefix(configuredBackgroundImage);
-	const [presignedBackground, setPresignedBackground] = useState<{
-		appId: string;
-		source: string;
-		url?: string;
-	} | null>(null);
-
-	useEffect(() => {
-		if (!storageBackedBackground || !appId) return;
-
-		let cancelled = false;
-		void presignSinglePath(
-			appId,
-			configuredBackgroundImage,
-			backend.storageState,
-		).then((url) => {
-			if (cancelled) return;
-			setPresignedBackground({
-				appId,
-				source: configuredBackgroundImage,
-				url: url && !isStoragePrefix(url) ? url : undefined,
-			});
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [
+	const { src: resolvedBackground } = useAssetSource(
 		appId,
-		backend.storageState,
-		configuredBackgroundImage,
-		storageBackedBackground,
-	]);
-
-	const resolvedBackgroundImage = storageBackedBackground
-		? presignedBackground &&
-			presignedBackground.appId === appId &&
-			presignedBackground.source === configuredBackgroundImage
-			? presignedBackground.url
-			: undefined
-		: configuredBackgroundImage || undefined;
+		configuredBackgroundImage || undefined,
+	);
+	// A storage path that came back unresolved has nothing to paint.
+	const resolvedBackgroundImage = isStorageAssetPath(resolvedBackground)
+		? undefined
+		: resolvedBackground;
 	const backgroundImage = createChatBackgroundImage(resolvedBackgroundImage);
 	const customCssScope = `[data-fl-chat-root="${escapeCssAttributeValue(scopeKey)}"]`;
 

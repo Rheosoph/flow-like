@@ -4,18 +4,23 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+# A direct/default dependency keeps the historical CachedDB surface. Workspace
+# members inherit `default-features = false` and select `execute` only for
+# runtime products, keeping catalog metadata builds light.
+default = ["execute"]
 local-ml = ["flow-like-model-provider/local-ml", "flow-like/local-ml"]
 remote-ml = ["flow-like-model-provider/remote-ml", "flow-like/remote-ml"]
 tauri = ["flow-like/tauri"]
-# Execution feature - enables heavy dependencies for node execution
-execute = []
+# Execution feature - enables the core execution surface and the database
+# implementation used by NodeDBConnection. Metadata keeps only `flow-metadata`
+# and the lightweight file/query-parser storage baseline.
+execute = ["flow-like/flow-runtime", "flow-like-storage/database-runtime"]
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
-flow-like-storage.workspace = true
+flow-like-storage = { workspace = true, default-features = false }
 flow-like-catalog-macros.workspace = true
 ahash.workspace = true
 tracing.workspace = true

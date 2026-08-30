@@ -83,6 +83,7 @@ impl NodeLogic for GetWorklogNode {
             "Get work log entries for a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getWorklog");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -213,6 +214,7 @@ impl NodeLogic for AddWorklogNode {
             "Add a work log entry to a Jira issue",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "addWorklog");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

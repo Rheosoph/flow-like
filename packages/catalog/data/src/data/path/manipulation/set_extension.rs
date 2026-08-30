@@ -26,6 +26,8 @@ impl NodeLogic for SetExtensionNode {
             "Sets the file extension of a path",
             "Data/Files/Path",
         );
+        node.set_flowscript_name("path", "setExtension");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

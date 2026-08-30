@@ -26,6 +26,7 @@ impl NodeLogic for PushReasoningNode {
             "Pushes reasoning tokens to the current step",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushReasoning");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

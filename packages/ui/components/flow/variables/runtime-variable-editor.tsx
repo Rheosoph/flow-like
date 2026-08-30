@@ -108,7 +108,7 @@ function MaskedSecretInput({
 						default_value: convertJsonToUint8Array(e.target.value) ?? null,
 					});
 				}}
-				placeholder={t('enterSecretValue', 'Enter secret value...')}
+				placeholder={t("enterSecretValue", "Enter secret value...")}
 				className="pr-10 font-mono"
 			/>
 			<Button

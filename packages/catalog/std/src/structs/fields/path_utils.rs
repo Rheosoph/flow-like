@@ -1,12 +1,14 @@
 use flow_like_types::{Result, Value, anyhow};
 
+/// One step of a field path. The grammar is shared with the array key nodes so
+/// `orders[0].total` means the same thing everywhere in the catalog.
 #[derive(Debug, Clone)]
-enum PathSegment {
+pub enum PathSegment {
     Field(String),
     ArrayIndex(usize),
 }
 
-fn parse_path(path: &str) -> Vec<PathSegment> {
+pub fn parse_path(path: &str) -> Vec<PathSegment> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut chars = path.chars().peekable();

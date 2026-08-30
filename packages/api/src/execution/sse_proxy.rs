@@ -318,6 +318,7 @@ pub async fn update_run_on_completion(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn track_execution_usage_from_run(
     db: &DatabaseConnection,
     run_id: &str,

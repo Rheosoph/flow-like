@@ -24,6 +24,7 @@ impl NodeLogic for DataUpdate {
             "Updates data in a surface's data model",
             "UI/Data",
         );
+        node.set_flowscript_name("ui", "dataUpdate");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

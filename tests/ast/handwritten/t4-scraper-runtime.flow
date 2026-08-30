@@ -1,0 +1,555 @@
+use http::{ setAccept, setBearerAuth, setHeader, setStructBody }
+use log::{ error, info, warn }
+use mcp::{ registerFunctions, registerPrompt }
+use path::{ child, setExtension }
+use rest::{ registerFunction, registerOpenApi }
+use string::{ normalizeWhitespace, regexCaptures, regexMatch, replace, slugify, splitOnce, toLower, trim, trimEnd, truncate }
+
+interface CrawlTarget {
+    url: string;
+    depth?: int = 0;
+    referrer?: string | null = null;
+    renderMode: "static" | "browser" | "api";
+}
+interface DatasetRow {
+    "dataset-id": string;
+    url: string;
+    host: string;
+    title?: string | null = null;
+    text?: string = "";
+    fingerprint: string;
+    "http-status"?: int = 200;
+    scrapedAt: Date;
+}
+// BUG(bug-t4-scraper-runtime-interface-set-field): `seenFingerprints?: Set<string>` is the natural
+// spelling and `Set<T>` is a first-class type on globals and parameters, but an interface body
+// rejects it outright, so the ledger's fingerprint roll is declared as `string[]` here.
+interface RunLedger {
+    runId: string;
+    "dataset-id": string;
+    seenFingerprints?: string[] = [];
+    hostBudget?: Map<string, int> = {};
+    targets?: CrawlTarget[] = [];
+    startedAt: Date;
+}
+
+@description("Bearer token for the dataset marketplace API")
+@secret
+const marketplaceToken: string
+@description("Deployment region injected by the runtime, never stored on the board")
+@runtime
+const crawlRegion: string
+@description("Dataset every crawl entry point writes into")
+@category("Scraper/Runtime")
+let activeDatasetId = "eu-news-index"
+@description("Hard page ceiling enforced by every crawl entry point")
+@category("Scraper/Runtime")
+let pageBudget = 240
+@description("Run id of the crawl currently draining the frontier")
+@category("Scraper/Runtime")
+let activeRunId = ""
+@description("Hosts the abuse team has permanently banned from every crawl")
+@category("Scraper/Policy")
+const blockedHosts: Set<string>
+@description("Pages fetched per host in the current run")
+@category("Scraper/Policy")
+const hostBudgetSpent: Map<string, int>
+
+function hostOf(rawUrl: string): (host: string) {
+    const withoutScheme = rawUrl.trim().replace("^https?://", "", { isRegex: true })
+    const { before: authority } = withoutScheme.splitOnce("/")
+    return authority.toLower()
+}
+
+function fingerprintOf(url: string, body: string): (fingerprint: string) {
+    const canonical = url.toLower().trimEnd()
+    const size = string::length({ string: body })
+    const digest = hash::blake3({ input: `${canonical}|${size}` })
+    return digest
+}
+
+function cookieJar(host: string): (jar: Struct) {
+    const dir = files::cacheDir({ nodeScope: false, userScope: true })
+    const stem = host.slugify({ separator: "-", maxLength: 64 })
+    const jar = dir.child(stem).setExtension("cookies")
+    return jar
+}
+
+function proxyPool(size: int): (proxies: string[]) {
+    let pool = array::make()
+    let index = 0
+    while (index < size) {
+        const address = faker::internet::ipv4()
+        pool = array::push({ arrayIn: pool, value: `http://${address}:8080` })
+        index = index + 1
+    }
+    const proxies = array::shuffle({ arrayIn: pool })
+    return proxies
+}
+
+@cache({ namespace: "scraper-robots-v1", ttlSeconds: 900, scope: "app" })
+function politenessDelay(host: string): (delayMs: float) {
+    const request = http::request({ method: "GET", url: `https://${host}/robots.txt` })
+    const probe = http::fetch({ request: request })
+    let delayMs = 250.0
+    probe {
+        execSuccess: {
+            const text = http::toText({ response: probe })
+            const { groups: captured, found: declared } = text.regexCaptures("Crawl-delay:\\s*(\\d+)")
+            if (declared) {
+                const { element: rawSeconds } = array::get({ arrayIn: captured, index: 1 })
+                const seconds = string::toFloat({ string: rawSeconds, fallback: 0.25 })
+                delayMs = float::multiply({ float1: seconds, float2: 1000.0 })
+            }
+        }
+        execError: {
+            warn({ message: `no robots.txt for ${host}, keeping the default politeness window`, toast: false })
+        }
+    }
+    return delayMs
+}
+
+// BUG(bug-t4-scraper-runtime-quoted-field-assign): the bracket lvalue `row["dataset-id"] = ...`
+// re-renders as `row.dataset-id = ...` and no longer parses, so every quoted key on this board is
+// written with an explicit `struct::set` instead. Reading one back (`ledger["dataset-id"]`) is
+// fine — only the write side loses its quotes.
+function normalizeRow(url: string, body: string, status: int): (row: DatasetRow) {
+    const host = hostOf(url)
+    const { firstMatch: rawTitle } = body.regexMatch("<title[^>]*>([^<]*)</title>")
+    const { result: title } = types::fallback({ value: rawTitle.trim(), default: url })
+    const stripped = body.replace("<[^>]+>", " ", { isRegex: true }).normalizeWhitespace()
+    const { truncated: text } = stripped.truncate({ maxLength: 4000, ellipsis: "…" })
+    const empty = struct::make()
+    const tagged = struct::set({ structIn: empty, field: "dataset-id", value: activeDatasetId })
+    const row = struct::set({ structIn: tagged, field: "http-status", value: status })
+    row.url = url
+    row.host = host
+    row.title = title
+    row.text = text
+    row.fingerprint = fingerprintOf(url, body)
+    row.scrapedAt = datetime::now()
+    return row
+}
+
+function ledgerFor(runId: string, seen: Set<string>, startedAt: Date): (ledger: RunLedger) {
+    const fingerprints = set::toArray({ setIn: seen })
+    const empty = struct::make()
+    const ledger = struct::set({ structIn: empty, field: "dataset-id", value: activeDatasetId })
+    ledger.runId = runId
+    ledger.seenFingerprints = fingerprints
+    ledger.hostBudget = hostBudgetSpent
+    ledger.targets = array::make()
+    ledger.startedAt = startedAt
+    return ledger
+}
+
+function noteCandidate(link: string, seenBefore: bool): (queued: bool) {
+    const childHost = hostOf(link)
+    const banned = set::has({ setIn: blockedHosts, value: childHost })
+    const queued = !(seenBefore || banned)
+    info({ message: `${crawlRegion}: candidate ${link} on ${childHost} queued=${queued}`, toast: false })
+    return queued
+}
+
+function persistPage(store: Struct, url: string, body: string, status: int): (written: int) {
+    const row = normalizeRow(url, body, status)
+    const written = dataset::commit(store, row)
+    return written
+}
+
+// The frontier drain. The `while` guard reads `frontier`, and the body pops its head and pushes
+// every newly discovered link back onto it, so the collection the condition tests is rewritten on
+// every turn; `spent` is the second half of the guard and is all that bounds a cyclic site.
+function drainFrontier(seedUrls: string[], budget: int, agent: string): (spent: int, stored: int) {
+    const store = dataset::open()
+    // BUG(bug-t4-knowledge-qa-while-mutated-typed-array): a local seeded straight from a `string[]`
+    // pin loses its Array container the moment it is reassigned inside the loop, so the frontier is
+    // seeded from `array::make()` (Generic/Array) and the seeds are pushed in afterwards.
+    let frontier = array::make()
+    frontier = array::batchPush({ arrayIn: frontier, items: seedUrls })
+    let visited = set::make()
+    let spent = 0
+    let stored = 0
+    while (array::length({ array: frontier }) > 0 && spent < budget) {
+        const { element: head } = array::get({ arrayIn: frontier, index: 0 })
+        frontier = array::removeIndex({ arrayIn: frontier, index: 0 })
+        spent = spent + 1
+        const host = hostOf(head)
+        const banned = set::has({ setIn: blockedHosts, value: host })
+        const replay = set::has({ setIn: visited, value: head })
+        if (banned || replay) {
+            info({ message: `skipping ${host}`, toast: false })
+        } else {
+            visited = set::insert({ setIn: visited, value: head }).setOut
+            const { value: priorHits } = map::get({ mapIn: hostBudgetSpent, key: host })
+            const nextHits = int::increment({ integer: priorHits, step: 1 })
+            map::setRef({ varRef: "hostBudgetSpent", key: host, value: nextHits })
+            let attempt = 0
+            let landed = false
+            let body = ""
+            let status = 0
+            let backoffMs = politenessDelay(host)
+            while (attempt < 4 && !landed) {
+                const request = http::request({ method: "GET", url: head }).setHeader("user-agent", agent).setBearerAuth({ token: marketplaceToken }).setAccept({ accept: "text/html" })
+                const response = http::fetch({ request: request })
+                response {
+                    execSuccess: {
+                        body = http::toText({ response: response })
+                        status = http::status({ response: response })
+                        landed = true
+                    }
+                    execError: {
+                        warn({ message: `attempt ${attempt} failed for ${host}`, toast: false })
+                        if (attempt == 3) {
+                            error({ message: `frontier abandoned at ${host} after ${spent} pages`, toast: true })
+                            return spent, stored
+                        }
+                    }
+                }
+                control::delay({ time: backoffMs })
+                backoffMs = float::multiply({ float1: backoffMs, float2: 2.0 })
+                attempt = attempt + 1
+            }
+            if (landed) {
+                stored = stored + persistPage(store, head, body, status)
+            }
+            const linkSet = web::extractLinks({ startingPage: head, sameDomain: true, offsetMs: 200, depth: 1 }).links
+            const discovered = set::toArray({ setIn: linkSet })
+            @parallel
+            for (const link of discovered) {
+                const seenBefore = set::has({ setIn: visited, value: link })
+                noteCandidate(link, seenBefore)
+            }
+            frontier = array::batchPush({ arrayIn: frontier, items: discovered })
+            frontier = array::unique({ arrayIn: frontier }).arrayOut
+        }
+    }
+    return spent, stored
+}
+
+function scheduledCrawl(seedUrls: string[], budget: int): (summaryLine: string) {
+    const startedAt = datetime::now()
+    const stamp = datetime::format({ date: startedAt, format: "%Y%m%d%H%M%S" })
+    activeRunId = hash::sha256({ input: `${crawlRegion}:${stamp}` })
+    const agent = faker::internet::userAgent()
+    const { spent, stored } = drainFrontier(seedUrls, budget, agent)
+    const ledger = ledgerFor(activeRunId, blockedHosts, startedAt)
+    const ledgerDataset = ledger["dataset-id"]
+    const { report, rows } = dataset::exports::summarize()
+    dataset::exports::stage(report)
+    return `run ${activeRunId} stored ${stored} of ${rows} rows in ${ledgerDataset} after ${spent} pages`
+}
+
+function renderWithBrowser(targetUrl: string): (row: DatasetRow) {
+    const store = dataset::open()
+    const agent = faker::internet::userAgent()
+    const rpa = automation::startSession({ defaultDelayMs: 120, clickDelayMs: 40, debugMode: false })
+    const opened = browser::open({ session: rpa, webdriverUrl: "http://127.0.0.1:9515", browserType: "Chrome", headless: true, viewportWidth: 1440, viewportHeight: 900, userAgent: agent, pageLoadTimeout: 30 })
+    const visited = browser::goto({ session: opened, url: targetUrl })
+    const settled = browser::waitForNetworkIdle({ session: visited, idleTimeMs: 750, timeoutMs: 15000 })
+    let markup = ""
+    settled {
+        execOut: {
+            const { html } = browser::getDomSnapshot({ session: settled, includeStyles: false })
+            markup = html
+        }
+        execTimeout: {
+            warn({ message: `${targetUrl} never went network-idle, snapshotting anyway`, toast: false })
+            const { html: partial } = browser::getDomSnapshot({ session: settled, includeStyles: false })
+            markup = partial
+        }
+    }
+    const host = hostOf(targetUrl)
+    const jar = cookieJar(host)
+    const jarred = browser::saveCookies({ session: settled, filePath: jar })
+    browser::close({ session: jarred })
+    const row = normalizeRow(targetUrl, markup, 200)
+    dataset::commit(store, row)
+    return row
+}
+
+function fetchInline(targetUrl: string): (row: DatasetRow) {
+    const store = dataset::open()
+    const request = http::request({ method: "GET", url: targetUrl }).setBearerAuth({ token: marketplaceToken })
+    const response = http::fetch({ request: request })
+    let row = {}
+    response {
+        execSuccess: {
+            const body = http::toText({ response: response })
+            const status = http::status({ response: response })
+            row = normalizeRow(targetUrl, body, status)
+            dataset::commit(store, row)
+        }
+        execError: {
+            error({ message: `inline crawl failed for ${targetUrl}`, toast: false })
+        }
+    }
+    return row
+}
+
+function sqlParam(key: string, value: any): (params: Struct) {
+    const empty = struct::make()
+    const params = struct::set({ structIn: empty, field: key, value: value })
+    return params
+}
+
+function crawlRestConfig(): (config: Struct) {
+    const base = rest::serverConfig({ host: "0.0.0.0", port: 8788, timeoutSeconds: 0, maxConnections: 64, maxBodyBytes: 1048576, tls: { secure: false } })
+    const routed = base.registerFunction({ path: "/crawl", method: "POST", fnRefs: [crawlEndpoint] })
+    const secured = routed.registerAuth({ auth: auth::bearer({ token: marketplaceToken }) })
+    const config = secured.registerOpenApi({ path: "/openapi.json", uiPath: "/docs" })
+    return config
+}
+
+function datasetMcpConfig(): (config: Struct) {
+    const base = mcp::serverConfig({ host: "0.0.0.0", port: 8790, path: "/mcp", timeoutSeconds: 0, maxConnections: 32, maxBodyBytes: 262144, tls: { secure: false } })
+    const tooled = base.registerFunctions({ fnRefs: [datasetToolCall] })
+    const prompted = tooled.registerPrompt({ name: "dataset-brief", description: "Summarize what a scraped dataset contains", template: "Describe the dataset {{dataset}} for a marketplace listing." })
+    const config = mcp::registerAuth({ configIn: prompted, auth: auth::apiKey({ header: "x-dataset-key", key: marketplaceToken }) })
+    return config
+}
+
+function dropDatasetRow(fingerprint: string): (dropped: int) {
+    const store = dataset::open()
+    const params = sqlParam("fp", fingerprint)
+    const removed = db::delete({ database: store, filter: "fingerprint = $fp", params: params })
+    const dropped = array::length({ array: removed })
+    info({ message: `row ${fingerprint} dropped ${dropped} record(s) from ${activeDatasetId}`, toast: true })
+    return dropped
+}
+
+function openRowDetail(instanceId: string, note: any) {
+    const query = sqlParam("note", note)
+    ui::setPageState({ key: "dataset-id", value: activeDatasetId })
+    ui::navigateTo({ route: `/datasets/${activeDatasetId}/rows/${instanceId}`, queryParams: query, replace: false })
+}
+
+function crawlProgressChannel(runId: any) {
+    const progress = websocket::connect({ config: { url: "ws://127.0.0.1:8787/crawl", timeoutSeconds: 30, tls: { secure: false } } })
+    progress {
+        onConnect: {
+            const empty = struct::make()
+            const hello = struct::set({ structIn: empty, field: "dataset-id", value: activeDatasetId })
+            hello.run = runId
+            websocket::send({ session: progress, messageType: "Text", payload: json::stringify({ value: hello, pretty: false }) })
+        }
+        onClose: {
+            info({ message: "crawl progress channel closed", toast: false })
+        }
+        execError: {
+            warn({ message: "crawl progress channel unavailable", toast: false })
+        }
+    }
+}
+
+function renderConsole(runId: any): (rows: int) {
+    const store = dataset::open()
+    const rows = db::count({ database: store, filter: "", params: {} })
+    const { element: banner, exists: bannerExists } = ui::getElement({ elementRef: "crawl-banner" })
+    if (bannerExists) {
+        ui::setElementText({ elementRef: banner, text: `${rows} rows in ${activeDatasetId} (run ${runId})` })
+        ui::setProgress({ elementRef: banner, value: 100.0 })
+    }
+    const proxies = proxyPool(3)
+    const proxyCount = array::length({ array: proxies })
+    ui::setPageState({ key: "dataset-id", value: activeDatasetId })
+    ui::setPageState({ key: "proxy-pool-size", value: proxyCount })
+    return rows
+}
+
+eventsGeneric crawlSchedule(payload: Struct, seedUrls: string[], budget: int) {
+    const summaryLine = scheduledCrawl(seedUrls, budget)
+    info({ message: summaryLine, toast: false })
+    return summaryLine
+}
+
+eventsGeneric crawlEndpoint(payload: Struct, targetUrl: string, renderMode: string, _client: Struct) {
+    if (renderMode == "browser") {
+        const rendered = renderWithBrowser(targetUrl)
+        return rendered
+    }
+    const row = fetchInline(targetUrl)
+    return row
+}
+
+eventsGeneric datasetToolCall(payload: Struct, datasetId: string, hostFilter: string, _client: Struct) {
+    const answer = dataset::query(datasetId, hostFilter)
+    return answer
+}
+
+eventsSimple configureCrawlRest() {
+    const config = crawlRestConfig()
+    const address = rest::server({ config: config })
+    address {
+        onListening: {
+            info({ message: `crawl REST surface bound to ${address}`, toast: false })
+        }
+        onClose: {
+            info({ message: "crawl REST surface closed", toast: false })
+        }
+        execError: {
+            warn({ message: "crawl REST surface failed to bind", toast: true })
+        }
+    }
+}
+
+eventsSimple configureDatasetMcp() {
+    const config = datasetMcpConfig()
+    const address = mcp::server({ config: config })
+    address {
+        onListening: {
+            info({ message: `dataset MCP surface bound to ${address}`, toast: false })
+        }
+        onClose: {
+            info({ message: "dataset MCP surface closed", toast: false })
+        }
+        execError: {
+            warn({ message: "dataset MCP surface failed to bind", toast: true })
+        }
+    }
+}
+
+eventsWidgetAction datasetRowAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const fingerprint = events::extractActionContext({ actionContext: actionContext, fieldName: "fingerprint" })
+    const note = events::extractInputValue({ inputValues: inputValues, componentId: "row-note" })
+    if (eventName == "drop-row") {
+        dropDatasetRow(fingerprint)
+    } else {
+        openRowDetail(widgetInstanceId, note)
+    }
+}
+
+eventsSimple consoleLoad() {
+    const { value: requestedRun, exists: hasRun } = ui::getQueryParam({ paramName: "run" })
+    const runId = hasRun ? requestedRun : activeRunId
+    const rows = renderConsole(runId)
+    crawlProgressChannel(runId)
+    info({ message: `console loaded ${rows} rows for run ${runId}`, toast: false })
+    ui::showScreen()
+}
+
+eventsGeneric publishListing(payload: Struct, title: string, summary: string, _client: Struct) {
+    const listing = marketplace::publish(title, summary)
+    return listing
+}
+
+detached {
+    const sampleCompany = faker::company::name()
+    const sampleHost = sampleCompany.slugify({ separator: "-", maxLength: 32 })
+    const suffix = faker::internet::domainSuffix()
+    const slug = faker::lorem::word()
+    const bodyText = faker::lorem::paragraph({ minSentences: 2, maxSentences: 5 })
+    const status = faker::number::integer({ min: 200, max: 299 })
+    const sampleRow = normalizeRow(`https://${sampleHost}.${suffix}/${slug}`, bodyText, status)
+    info({ message: `synthetic fixture row for ${sampleRow.host}`, toast: false })
+}
+
+module dataset {
+    function open(): (store: Struct) {
+        const store = db::open({ name: "scraper_rows", userScoped: false, batchSize: 512 })
+        return store
+    }
+
+    function commit(store: Struct, row: Struct): (written: int) {
+        const failure = db::upsert({ database: store, idRow: "fingerprint", value: row })
+        const rejected = !types::isEmpty({ value: failure, trim: true })
+        if (rejected) {
+            error({ message: `dataset write rejected: ${failure}`, toast: true })
+            return 0
+        }
+        return 1
+    }
+
+    function query(datasetId: string, hostFilter: string): (answer: Struct) {
+        const store = dataset::open()
+        const params = sqlParam("host", hostFilter)
+        const matches = db::filter({ database: store, filter: "host = $host", params: params, limit: 50, offset: 0 })
+        const digest = json::stringify({ value: matches, pretty: false })
+        const { truncated: preview } = digest.truncate({ maxLength: 2000, ellipsis: "…" })
+        const empty = struct::make()
+        const answer = struct::set({ structIn: empty, field: "dataset-id", value: datasetId })
+        answer.host = hostFilter
+        answer.matches = array::length({ array: matches })
+        answer.digest = preview
+        return answer
+    }
+
+    module exports {
+        function summarize(): (report: string, rows: int) {
+            const store = dataset::open()
+            const session = df::createSession({ sessionName: "dataset-exports", targetPartitions: 4, batchSize: 4096 })
+            df::registerLance({ session: session, database: store, tableName: "rows" })
+            const { result: report, rowCount: rows } = df::executeSql({ session: session, query: "SELECT host, COUNT(*) AS pages FROM rows GROUP BY host ORDER BY pages DESC", params: {} })
+            return report, rows
+        }
+
+        function stage(report: string): (manifest: Struct) {
+            const dir = files::cacheDir({ nodeScope: false, userScope: false })
+            const target = dir.child(`${activeDatasetId}-summary`).setExtension("json")
+            const manifest = struct::make()
+            manifest.report = report
+            manifest.region = crawlRegion
+            const key = crypto::generateKey()
+            const sealed = crypto::aesEncryptValue({ key: key, value: manifest })
+            const bytes = json::toBytes({ value: sealed, pretty: true })
+            files::put({ path: target, bytes: bytes })
+            return manifest
+        }
+    }
+}
+
+module marketplace {
+    function listingSlug(title: string): (slug: string) {
+        const slug = title.slugify({ separator: "-", maxLength: 64 })
+        return slug
+    }
+
+    function priceTier(rows: int): (tier: string, monthlyUsd: float) {
+        if (rows > 1000000) {
+            return "enterprise", 999.0
+        }
+        if (rows > 50000) {
+            return "growth", 199.0
+        }
+        return "starter", 29.0
+    }
+
+    function offer(slug: string, summary: string, tier: string, monthlyUsd: float): (published: bool) {
+        const empty = struct::make()
+        const listing = struct::set({ structIn: empty, field: "monthly-usd", value: monthlyUsd })
+        listing.slug = slug
+        listing.summary = summary
+        listing.tier = tier
+        const preview = struct::pick({ struct: listing, fields: ["slug", "summary", "tier"], mode: "Keep" })
+        const signature = hash::md5({ input: `${slug}|${tier}|${monthlyUsd}` })
+        const request = http::request({ method: "POST", url: "https://market.flow-like.com/v1/listings" }).setBearerAuth({ token: marketplaceToken }).setStructBody({ body: preview }).setHeader("x-listing-signature", signature)
+        const response = http::fetch({ request: request })
+        let published = false
+        response {
+            execSuccess: {
+                published = http::isSuccess({ response: response })
+                info({ message: `listing ${slug} offered on the ${tier} tier`, toast: false })
+            }
+            execError: {
+                error({ message: `listing ${slug} rejected by the marketplace`, toast: true })
+            }
+        }
+        return published
+    }
+
+    function publish(title: string, summary: string): (listing: Struct) {
+        const { report, rows } = dataset::exports::summarize()
+        const { tier, monthlyUsd } = marketplace::priceTier(rows)
+        const slug = marketplace::listingSlug(title)
+        const published = marketplace::offer(slug, summary, tier, monthlyUsd)
+        const { truncated: brief } = report.truncate({ maxLength: 512, ellipsis: "…" })
+        const empty = struct::make()
+        const listing = struct::set({ structIn: empty, field: "monthly-usd", value: monthlyUsd })
+        listing.slug = slug
+        listing.tier = tier
+        listing.rows = rows
+        listing.published = published
+        listing.report = brief
+        return listing
+    }
+}

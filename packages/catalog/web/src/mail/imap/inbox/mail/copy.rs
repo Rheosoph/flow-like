@@ -29,6 +29,8 @@ impl NodeLogic for ImapCopyMailNode {
             "Copies a mail (by UID) to another IMAP mailbox",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "copyMessage");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

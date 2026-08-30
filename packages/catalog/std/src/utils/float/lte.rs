@@ -20,10 +20,12 @@ impl NodeLogic for LessThanOrEqualFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_less_than_or_equal",
-            "<=",
+            "<= (Float)",
             "Checks if one float is less than or equal to another",
             "Math/Float/Comparison",
         );
+        node.set_flowscript_name("float", "lessThanOrEqual");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

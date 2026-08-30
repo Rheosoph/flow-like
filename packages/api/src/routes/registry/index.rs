@@ -209,10 +209,12 @@ pub async fn delete_package(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
 
-    let mut model: wasm_package::ActiveModel = Default::default();
-    model.id = Set(id.clone());
-    model.status = Set(WasmPackageStatus::Disabled);
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
+    let model = wasm_package::ActiveModel {
+        id: Set(id.clone()),
+        status: Set(WasmPackageStatus::Disabled),
+        updated_at: Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    };
     model
         .update(&state.db)
         .await
@@ -258,10 +260,12 @@ pub async fn restore_package(
         return Err(ApiError::conflict("Package is not disabled"));
     }
 
-    let mut model: wasm_package::ActiveModel = Default::default();
-    model.id = Set(id.clone());
-    model.status = Set(WasmPackageStatus::Active);
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
+    let model = wasm_package::ActiveModel {
+        id: Set(id.clone()),
+        status: Set(WasmPackageStatus::Active),
+        updated_at: Set(chrono::Utc::now().naive_utc()),
+        ..Default::default()
+    };
     model
         .update(&state.db)
         .await

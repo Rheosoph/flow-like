@@ -1,0 +1,48 @@
+---
+import DefaultFooter from "@astrojs/starlight/components/Footer.astro";
+import { getCollection } from "astro:content";
+import ReadingExperience from "./ReadingExperience";
+import { CURRENT_BOOK_EDITION } from "../lib/book-edition";
+import BookRelatedReading from "./BookRelatedReading.astro";
+
+const { entry } = Astro.locals.starlightRoute;
+const docs = await getCollection("docs");
+const titleById = new Map(docs.map((doc) => [doc.id, doc.data.title]));
+const editionEntries = [
+	{
+		entryId: CURRENT_BOOK_EDITION.introduction.entryId,
+		label: "Introduction",
+	},
+	...CURRENT_BOOK_EDITION.parts.flatMap((part) =>
+		part.chapters.map((chapter) => ({
+			entryId: chapter.entryId,
+			label: `Chapter ${chapter.number}`,
+		})),
+	),
+];
+const chapters = editionEntries.map(({ entryId, label }) => ({
+	entryId,
+	path: `/${entryId}/`,
+	title: titleById.get(entryId) ?? label,
+	label,
+}));
+const currentEntryId = entry.id;
+const isReadingPage = chapters.some((chapter) => chapter.entryId === currentEntryId);
+---
+
+<BookRelatedReading />
+{
+	(isReadingPage || currentEntryId === "") && (
+		<ReadingExperience
+			client:idle
+			editionId={CURRENT_BOOK_EDITION.id}
+			chapters={chapters}
+			currentEntryId={currentEntryId}
+			currentPath={Astro.url.pathname}
+			currentTitle={entry.data.title}
+			isReadingPage={isReadingPage}
+			isLandingPage={currentEntryId === ""}
+		/>
+	)
+}
+<DefaultFooter />

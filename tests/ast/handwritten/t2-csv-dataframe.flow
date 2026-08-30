@@ -1,0 +1,88 @@
+use array::{ pluck, slice, sumField, unique }
+use df::*
+use files::{ storageDir, writeString }
+use log::{ info, warn }
+use path::*
+use string::*
+
+interface ExportWindow {
+    region: string;
+    label: string;
+    since: string;
+    until: string;
+    top_n?: int = 10;
+    include_channels?: bool = true;
+}
+
+@description("Storage folder the nightly order exports are dropped into")
+@category("Sales Reporting")
+let exportFolder = "sales-exports"
+@description("Column delimiter used by the upstream order export")
+@category("Sales Reporting")
+let csvDelimiter = ","
+@description("Net amount below which an order row is treated as noise")
+@category("Sales Reporting")
+let minNetAmount = 25
+
+function exportSlug(label: string): (slug: string) {
+    const trimmed = label.trim()
+    return trimmed.slugify({ separator: "-", maxLength: 48 })
+}
+
+function reportTarget(root: Struct, label: string, extension: string): (target: Struct) {
+    const slug = exportSlug(label)
+    const named = root.child("reports").child(slug)
+    return named.setExtension(extension)
+}
+
+eventsGeneric buildRegionalSalesReport(payload: Struct, window: ExportWindow) {
+    const root = storageDir({ nodeScope: false }).child(exportFolder)
+    const ordersCsv = root.child("orders")
+    let region = window.region
+    const session = createSession({ sessionName: `sales-${region}`, targetPartitions: 8, batchSize: 8192, repartitionAggregations: true, collectStatistics: true })
+    session.mountCsv({ path: ordersCsv, tableName: "orders_raw", hasHeader: true, delimiter: csvDelimiter })
+    const rawSchema = session.describeTable({ tableName: "orders_raw" })
+    info({ message: `orders_raw schema: ${rawSchema}`, toast: false })
+    const { whereClause: orderedBetween } = timeRangeFilter({ timestampColumn: "ordered_at", startTime: window.since, endTime: window.until })
+    // BUG: the injection-safe spelling `params: { region: region, floor: minNetAmount }` silently
+    // loses the wire (see bug-t2-csv-dataframe-sql-params-object.flow), so the window has to be
+    // interpolated into the SQL text instead.
+    const cleanSql = `SELECT order_id, sales_rep, channel, net_amount FROM orders_raw WHERE region = '${region}' AND ${orderedBetween} AND net_amount >= ${minNetAmount}`
+    const { table: cleaned, rowCount: keptRows } = session.sqlQuery({ query: cleanSql })
+    if (keptRows == 0) {
+        warn({ message: `${region}: no orders between ${window.since} and ${window.until} cleared the ${minNetAmount} floor`, toast: true })
+    } else {
+        session.registerCsvTable({ table: cleaned, tableName: "orders_clean" })
+        const registered = session.listTables().tableNames
+        info({ message: `session catalog: ${registered.join({ separator: ", " })}`, toast: false })
+        const rankSql = `SELECT sales_rep, channel, count(*) AS order_count, round(sum(net_amount), 2) AS revenue FROM orders_clean GROUP BY sales_rep, channel HAVING count(*) > 1 ORDER BY revenue DESC LIMIT ${window.top_n}`
+        const { rows: leaderboard, rowCount: pairCount, fromCache } = session.sqlQueryCached({ query: rankSql, scope: "app", namespace: "sales-leaderboard-v1", ttlSeconds: 900 })
+        const freshness = fromCache ? "served from the leaderboard cache" : "recomputed from the export"
+        const podium = leaderboard.slice({ start: 0, length: 3 })
+        const podiumReps = podium.pluck({ key: "sales_rep", skipMissing: true })
+        const distinctReps = leaderboard.pluck({ key: "sales_rep", skipMissing: true }).unique()
+        const { sum: revenue, counted: aggregateRows } = leaderboard.sumField({ field: "revenue" })
+        for (const [rank, entry] of leaderboard) {
+            info({ message: `#${rank} ${entry.sales_rep} via ${entry.channel}: ${entry.revenue}`, toast: false })
+        }
+        let channelSection = "channel breakdown suppressed for this window"
+        if (window.include_channels) {
+            const channelSql = `SELECT channel, count(*) AS orders, round(sum(net_amount), 2) AS revenue FROM orders_clean GROUP BY channel ORDER BY revenue DESC`
+            const { result: channelTable } = session.executeSql({ query: channelSql })
+            channelSection = channelTable
+        }
+        const headline = `# ${window.label} - ${region}`
+        const stats = `${keptRows} qualifying orders across ${pairCount} rep/channel pairs, ${revenue} total revenue over ${aggregateRows} aggregate row(s); ${freshness}.`
+        const podiumLine = `Podium: ${podiumReps.join({ separator: " > " })}`
+        const rosterLine = `Contributing reps: ${distinctReps.join({ separator: ", " })}`
+        // BUG: [headline, stats, ...].join(...) - an array literal built from node outputs cannot be
+        // lowered (see bug-t2-csv-dataframe-array-literal-receiver.flow); interpolate instead.
+        const blockBreak = "\n\n"
+        const report = `${headline}${blockBreak}${stats}${blockBreak}${podiumLine}${blockBreak}${rosterLine}${blockBreak}${channelSection}`
+        const markdownTarget = reportTarget(root, window.label, "md")
+        markdownTarget.writeString({ content: report })
+        const summaryTarget = reportTarget(root, window.label, "txt")
+        summaryTarget.writeString({ content: stats })
+        info({ message: `wrote ${markdownTarget.filename({ removeExtension: false })} and ${summaryTarget.filename({ removeExtension: false })}`, toast: false })
+    }
+}

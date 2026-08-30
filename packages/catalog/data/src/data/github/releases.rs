@@ -116,6 +116,7 @@ impl NodeLogic for ListGitHubReleasesNode {
             "List releases for a repository",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listReleases");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -288,6 +289,7 @@ impl NodeLogic for GetLatestGitHubReleaseNode {
             "Get the latest published release (excludes drafts and prereleases)",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getLatestRelease");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -440,6 +442,7 @@ impl NodeLogic for GetGitHubReleaseByTagNode {
             "Get a release by its tag name",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "getReleaseByTag");
         node.add_icon("/flow/icons/github.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -600,6 +603,7 @@ impl NodeLogic for CreateGitHubReleaseNode {
             "Create a new release",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "createRelease");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -895,6 +899,7 @@ impl NodeLogic for ListGitHubReleaseAssetsNode {
             "List assets attached to a release",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "listReleaseAssets");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -1057,6 +1062,7 @@ impl NodeLogic for UploadGitHubReleaseAssetNode {
             "Upload a FlowPath file as a release asset",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "uploadReleaseAsset");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 
@@ -1264,6 +1270,7 @@ impl NodeLogic for DownloadGitHubReleaseAssetNode {
             "Download a release asset into a FlowPath",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "downloadReleaseAsset");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

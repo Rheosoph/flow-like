@@ -166,7 +166,9 @@ export function GenericVariable({
 	return (
 		<div className="grid w-full items-center gap-1.5">
 			<div className="grid gap-1.5">
-				<Label htmlFor="generic_value_template">{t('valueType', 'Value Type')}</Label>
+				<Label htmlFor="generic_value_template">
+					{t("valueType", "Value Type")}
+				</Label>
 				<Select
 					disabled={disabled}
 					value={template}
@@ -175,23 +177,29 @@ export function GenericVariable({
 					}
 				>
 					<SelectTrigger id="generic_value_template">
-						<SelectValue placeholder={t('valueType', 'Value Type')} />
+						<SelectValue placeholder={t("valueType", "Value Type")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="custom">{t('customJson', 'Custom JSON')}</SelectItem>
-						<SelectItem value="unset">{t('noDefault', 'No default')}</SelectItem>
-						<SelectItem value="string">{t('string', 'String')}</SelectItem>
-						<SelectItem value="integer">{t('integer', 'Integer')}</SelectItem>
-						<SelectItem value="float">{t('float', 'Float')}</SelectItem>
-						<SelectItem value="boolean">{t('boolean', 'Boolean')}</SelectItem>
-						<SelectItem value="object">{t('object', 'Object')}</SelectItem>
-						<SelectItem value="array">{t('array', 'Array')}</SelectItem>
-						<SelectItem value="null">{t('null', 'Null')}</SelectItem>
+						<SelectItem value="custom">
+							{t("customJson", "Custom JSON")}
+						</SelectItem>
+						<SelectItem value="unset">
+							{t("noDefault", "No default")}
+						</SelectItem>
+						<SelectItem value="string">{t("string", "String")}</SelectItem>
+						<SelectItem value="integer">{t("integer", "Integer")}</SelectItem>
+						<SelectItem value="float">{t("float", "Float")}</SelectItem>
+						<SelectItem value="boolean">{t("boolean", "Boolean")}</SelectItem>
+						<SelectItem value="object">{t("object", "Object")}</SelectItem>
+						<SelectItem value="array">{t("array", "Array")}</SelectItem>
+						<SelectItem value="null">{t("null", "Null")}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 
-			<Label htmlFor="generic_default_value">{t('jsonValue2', 'JSON Value')}</Label>
+			<Label htmlFor="generic_default_value">
+				{t("jsonValue2", "JSON Value")}
+			</Label>
 			<div
 				className={cn(
 					"relative w-full rounded-md border bg-transparent transition-all duration-200",

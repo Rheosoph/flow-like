@@ -37,6 +37,7 @@ impl NodeLogic for QueryRemoteOntologyChildrenNode {
             "Expands a parent object's containment children through an installed ontology contract from a connected project",
             "Data Studio/Remote Objects",
         );
+        node.set_flowscript_name("ontology", "queryRemoteChildren");
         node.set_version(1);
         node.add_icon("/flow/icons/database.svg");
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

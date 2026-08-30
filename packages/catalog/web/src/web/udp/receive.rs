@@ -42,6 +42,8 @@ impl NodeLogic for UdpReceiveNode {
              or the timeout expires, then fires on_close.",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "receive");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);
@@ -137,15 +139,15 @@ impl NodeLogic for UdpReceiveNode {
         let mut has_sender_addr_pin = false;
         let mut typed_pin_count: usize = 0;
 
-        for pin in ref_node_pins.values() {
+        for pin in ref_node_pins.iter() {
             if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
                 continue;
             }
-            if pin.name == "sender_addr" {
+            if pin.name.as_ref() == "sender_addr" {
                 has_sender_addr_pin = true;
                 continue;
             }
-            if pin.name == "payload" {
+            if pin.name.as_ref() == "payload" {
                 continue;
             }
             typed_pin_count += 1;
@@ -201,10 +203,10 @@ impl NodeLogic for UdpReceiveNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| {
-                                p.pin_type == PinType::Output && p.name == "sender_addr"
+                            .filter(|p| {
+                                p.pin_type == PinType::Output && p.name.as_ref() == "sender_addr"
                             })
-                            .map(|(_, p)| p.clone())
+                            .map(|p| (*p).clone())
                             .collect();
                         for pin in addr_pins {
                             pin.set_value(json!(sender_str.as_str())).await;
@@ -217,13 +219,13 @@ impl NodeLogic for UdpReceiveNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| {
+                            .filter(|p| {
                                 p.pin_type == PinType::Output
                                     && p.data_type == VariableType::String
-                                    && p.name != "payload"
-                                    && p.name != "sender_addr"
+                                    && p.name.as_ref() != "payload"
+                                    && p.name.as_ref() != "sender_addr"
                             })
-                            .map(|(_, p)| p.clone())
+                            .map(|p| (*p).clone())
                             .collect();
                         if let Some(pin) = pins.first() {
                             pin.set_value(json!(text.as_ref())).await;
@@ -233,13 +235,13 @@ impl NodeLogic for UdpReceiveNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| {
+                            .filter(|p| {
                                 p.pin_type == PinType::Output
                                     && p.data_type == VariableType::Byte
-                                    && p.name != "payload"
-                                    && p.name != "sender_addr"
+                                    && p.name.as_ref() != "payload"
+                                    && p.name.as_ref() != "sender_addr"
                             })
-                            .map(|(_, p)| p.clone())
+                            .map(|p| (*p).clone())
                             .collect();
                         if let Some(pin) = pins.first() {
                             pin.set_value(json!(data.clone())).await;
@@ -249,8 +251,10 @@ impl NodeLogic for UdpReceiveNode {
                             .node
                             .pins
                             .iter()
-                            .filter(|(_, p)| p.pin_type == PinType::Output && p.name == "payload")
-                            .map(|(_, p)| p.clone())
+                            .filter(|p| {
+                                p.pin_type == PinType::Output && p.name.as_ref() == "payload"
+                            })
+                            .map(|p| (*p).clone())
                             .collect();
                         for pin in payload_pins {
                             pin.set_value(json!(data.clone())).await;

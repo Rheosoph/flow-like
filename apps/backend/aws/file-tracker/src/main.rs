@@ -24,8 +24,7 @@ async fn resolve_database_url() -> String {
                     ..Default::default()
                 }),
             );
-            let secrets =
-                SecretStore::new(secret_config).expect("Failed to create secret store");
+            let secrets = SecretStore::new(secret_config).expect("Failed to create secret store");
             let value = secrets
                 .get_secret_string(&SecretRef::new("DATABASE_URL"))
                 .await

@@ -40,27 +40,31 @@ runs:
         test -e "$lib_dir/libOpenCL.so"
       shell: bash
 
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: 1.97.1
+        targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+    - name: Configure CI Rust builds
+      run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      shell: bash
+
+    - name: Cache Cargo registry, git checkouts, and build artifacts
+      uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      with:
+        # Keep concurrent test/clippy/fmt jobs from racing to publish different
+        # immutable target archives while retaining warm caches per workflow.
+        shared-key: workspace-${{ runner.arch }}-${{ github.job }}
+        cache-on-failure: true
+
     - name: Cache Bun dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         path: |
           ~/.bun
         key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
         restore-keys: ${{ runner.os }}-bun-
-
-    - name: Cache cargo registry
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-cargo-registry-
-
-    - name: Cache cargo build
-      uses: actions/cache@v3
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-cargo-target-
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -75,12 +79,6 @@ runs:
     - name: Install Bun
       run: npm install -g bun
       shell: bash
-
-    - name: Install Rust stable
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: 1.97.1
-        targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
     - name: Install frontend dependencies
       run: bun install --frozen-lockfile

@@ -28,6 +28,7 @@ fn wasm_file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+#[allow(dead_code)] // manual flush for INSPECTION_CACHE; invalidation currently rides on stored mtimes
 pub fn clear_inspection_cache() {
     INSPECTION_CACHE.clear();
 }
@@ -954,7 +955,7 @@ pub async fn developer_inspect_node(
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-        let security = WasmSecurityConfig::permissive();
+        let security = WasmSecurityConfig::permissive().for_metadata();
         let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
             TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
         })?;
@@ -1084,7 +1085,7 @@ pub async fn developer_inspect_package(
                 TauriFunctionError::new(&format!("Failed to load WASM module: {}", e))
             })?;
 
-            let security = WasmSecurityConfig::permissive();
+            let security = WasmSecurityConfig::permissive().for_metadata();
             let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
             })?;
@@ -1628,7 +1629,7 @@ pub async fn developer_run_node(
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
         let mut inspect_instance = loaded
-            .instantiate(&engine, WasmSecurityConfig::permissive())
+            .instantiate(&engine, WasmSecurityConfig::permissive().for_metadata())
             .await
             .map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
@@ -1704,7 +1705,7 @@ async fn load_wasm_nodes_from_path(
 
     let security = WasmSecurityConfig::permissive();
     let mut instance = loaded
-        .instantiate(&engine, security.clone())
+        .instantiate(&engine, security.for_metadata())
         .await
         .map_err(|e| TauriFunctionError::new(&format!("Failed to instantiate module: {}", e)))?;
 
@@ -1853,9 +1854,9 @@ pub async fn developer_load_into_catalog(
             .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
-        let mut inner = flow_like::state::FlowNodeRegistryInner {
-            registry: registry.node_registry.registry.clone(),
-        };
+        let mut inner = flow_like::state::FlowNodeRegistryInner::from_registry(
+            registry.node_registry.registry.clone(),
+        );
         for (node, logic) in node_pairs {
             inner.insert(node, logic);
         }
@@ -2031,9 +2032,9 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
     {
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
-        let mut inner = flow_like::state::FlowNodeRegistryInner {
-            registry: registry.node_registry.registry.clone(),
-        };
+        let mut inner = flow_like::state::FlowNodeRegistryInner::from_registry(
+            registry.node_registry.registry.clone(),
+        );
         for (node, logic) in node_pairs {
             inner.insert(node, logic);
         }

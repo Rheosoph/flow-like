@@ -29,7 +29,8 @@
 		"**/*.ts",
 		"**/*.tsx",
 		".next/types/**/*.ts",
-		".next/dev/types/**/*.ts"
+		".next/dev/types/**/*.ts",
+		"../../packages/ui/types/lucide-react-icons.d.ts"
 	],
 	"exclude": ["flow-like", "node_modules", "out", "src-tauri", "src"]
 }

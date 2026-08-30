@@ -15,7 +15,7 @@ use flow_like_types::{
 use portpicker::pick_unused_port;
 use std::{
     io::{BufRead, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Child,
     sync::{Arc, Mutex},
     time::Duration,
@@ -155,7 +155,7 @@ impl LocalModel {
     }
 
     fn server_args(
-        gguf_path: &PathBuf,
+        gguf_path: &Path,
         context_length: u32,
         port: u16,
         gpu_mode: bool,
@@ -215,7 +215,7 @@ impl LocalModel {
 
     async fn spawn_server(
         child_handle: &Arc<Mutex<Option<Child>>>,
-        gguf_path: &PathBuf,
+        gguf_path: &Path,
         context_length: u32,
         port: u16,
         gpu_mode: bool,
@@ -384,6 +384,24 @@ impl LocalModel {
     }
 }
 
+impl Drop for LocalModel {
+    fn drop(&mut self) {
+        println!("DROPPING LOCAL MODEL");
+        if let Ok(mut guard) = self.handle.lock() {
+            if let Some(child) = guard.as_mut() {
+                match child.kill() {
+                    Ok(_) => println!("Child process was killed successfully."),
+                    Err(e) => eprintln!("Failed to kill child process: {}", e),
+                }
+            } else {
+                println!("No child process to kill.");
+            }
+        } else {
+            println!("Failed to lock local model handle for dropping.");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,23 +472,5 @@ mod tests {
         assert_eq!(arg_value(&args, "--device"), Some("none"));
         assert_eq!(arg_value(&args, "--n-gpu-layers"), Some("0"));
         assert_eq!(arg_value(&args, "--flash-attn"), Some("off"));
-    }
-}
-
-impl Drop for LocalModel {
-    fn drop(&mut self) {
-        println!("DROPPING LOCAL MODEL");
-        if let Ok(mut guard) = self.handle.lock() {
-            if let Some(child) = guard.as_mut() {
-                match child.kill() {
-                    Ok(_) => println!("Child process was killed successfully."),
-                    Err(e) => eprintln!("Failed to kill child process: {}", e),
-                }
-            } else {
-                println!("No child process to kill.");
-            }
-        } else {
-            println!("Failed to lock local model handle for dropping.");
-        }
     }
 }

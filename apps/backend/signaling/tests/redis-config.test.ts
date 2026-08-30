@@ -29,7 +29,10 @@ describe("Redis configuration", () => {
 	});
 
 	test.each([
-		["plaintext transport", "redis://flow-like.westeurope.redis.azure.net:10000"],
+		[
+			"plaintext transport",
+			"redis://flow-like.westeurope.redis.azure.net:10000",
+		],
 		[
 			"password in URL",
 			"rediss://default:secret@flow-like.westeurope.redis.azure.net:10000",

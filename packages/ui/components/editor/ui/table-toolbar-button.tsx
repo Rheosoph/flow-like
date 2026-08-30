@@ -62,7 +62,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger className="gap-2 data-disabled:pointer-events-none data-disabled:opacity-50">
 							<Grid3x3Icon className="size-4" />
-							<span>{t('table', 'Table')}</span>
+							<span>{t("table", "Table")}</span>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent className="m-0 p-0">
 							<TablePicker />
@@ -75,7 +75,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 							disabled={!tableSelected}
 						>
 							<div className="size-4" />
-							<span>{t('cell', 'Cell')}</span>
+							<span>{t("cell", "Cell")}</span>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent>
 							<DropdownMenuItem
@@ -87,7 +87,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<Combine />
-								{t('mergeCells', 'Merge cells')}
+								{t("mergeCells", "Merge cells")}
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								className="min-w-[180px]"
@@ -98,7 +98,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<Ungroup />
-								{t('splitCell', 'Split cell')}
+								{t("splitCell", "Split cell")}
 							</DropdownMenuItem>
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
@@ -109,7 +109,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 							disabled={!tableSelected}
 						>
 							<div className="size-4" />
-							<span>{t('row', 'Row')}</span>
+							<span>{t("row", "Row")}</span>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent>
 							<DropdownMenuItem
@@ -121,7 +121,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<ArrowUp />
-								{t('insertRowBefore', 'Insert row before')}
+								{t("insertRowBefore", "Insert row before")}
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								className="min-w-[180px]"
@@ -132,7 +132,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<ArrowDown />
-								{t('insertRowAfter', 'Insert row after')}
+								{t("insertRowAfter", "Insert row after")}
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								className="min-w-[180px]"
@@ -143,7 +143,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<XIcon />
-								{t('deleteRow', 'Delete row')}
+								{t("deleteRow", "Delete row")}
 							</DropdownMenuItem>
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
@@ -154,7 +154,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 							disabled={!tableSelected}
 						>
 							<div className="size-4" />
-							<span>{t('column', 'Column')}</span>
+							<span>{t("column", "Column")}</span>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent>
 							<DropdownMenuItem
@@ -166,7 +166,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<ArrowLeft />
-								{t('insertColumnBefore', 'Insert column before')}
+								{t("insertColumnBefore", "Insert column before")}
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								className="min-w-[180px]"
@@ -177,7 +177,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<ArrowRight />
-								{t('insertColumnAfter', 'Insert column after')}
+								{t("insertColumnAfter", "Insert column after")}
 							</DropdownMenuItem>
 							<DropdownMenuItem
 								className="min-w-[180px]"
@@ -188,7 +188,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 								}}
 							>
 								<XIcon />
-								{t('deleteColumn', 'Delete column')}
+								{t("deleteColumn", "Delete column")}
 							</DropdownMenuItem>
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
@@ -202,7 +202,7 @@ export function TableToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<Trash2Icon />
-						{t('deleteTable', 'Delete table')}
+						{t("deleteTable", "Delete table")}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

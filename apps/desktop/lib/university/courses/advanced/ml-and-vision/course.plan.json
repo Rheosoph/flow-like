@@ -188,7 +188,10 @@
 											"label": "Pick a strong algorithm first — the task sorts itself out during training"
 										}
 									],
-									"correct": ["category-classification", "classifier-distance-blind"]
+									"correct": [
+										"category-classification",
+										"classifier-distance-blind"
+									]
 								}
 							}
 						],
@@ -721,7 +724,11 @@
 											"label": "Run Semantic Segmentation first — the other vision nodes require its masks"
 										}
 									],
-									"correct": ["hand-labeled", "route-classify", "verify-tensors"]
+									"correct": [
+										"hand-labeled",
+										"route-classify",
+										"verify-tensors"
+									]
 								}
 							}
 						],
@@ -913,7 +920,11 @@
 											"label": "Read confidence from the column Database-mode Predict writes next to the prediction"
 										}
 									],
-									"correct": ["separate-saves", "vector-confidence", "test-untouched"]
+									"correct": [
+										"separate-saves",
+										"vector-confidence",
+										"test-untouched"
+									]
 								}
 							},
 							{

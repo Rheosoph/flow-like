@@ -1,0 +1,616 @@
+// Freight execution and settlement control tower (modelled on Shipsy). Order tenders arrive by
+// API and by mail, stops are geocoded and H3 cell-indexed, allocation re-decides as telemetry
+// lands, and a nightly settlement joins carrier invoices against executed shipments.
+//
+// Event bodies delegate to function layers: the root layer carries a hard 100-node budget and
+// events live in it, so a fixture this size cannot inline its work.
+use hash::{ blake3 }
+use log::{ error, info, warn }
+
+interface TenderPayload {
+    tender_id: string;
+    stops: TenderStop[];
+    total_weight_kg?: float;
+}
+interface TenderStop {
+    stop_id: string;
+    kind: "pickup" | "drop";
+    address: string;
+    latitude: float;
+    longitude: float;
+    h3_cell?: string | null;
+    window_start: string;
+    window_end: string;
+    weight_kg: float;
+}
+interface CarrierBid {
+    carrier_id: string;
+    shipment_id: string;
+    lane: string;
+    cost_eur: float;
+    eta_minutes: int;
+    reliability: float;
+    plan_cell?: string | null;
+}
+interface AllocationPlan {
+    plan_hash: string;
+    revision: int;
+    assignments: Map<string, CarrierBid>;
+    unassigned: string[];
+}
+interface SettlementLine {
+    shipment_id: string;
+    carrier_id: string;
+    invoiced_eur: float;
+    executed_eur: float;
+    variance_eur: float;
+    status: "match" | "underbilled" | "overbilled" | "missing";
+}
+
+@description("Base URL of the TMS the control tower federates tenders with")
+const tmsBaseUrl = "https://tms.internal.freight/api/v3"
+@description("Bearer token for the TMS tender API")
+@secret
+const tmsApiToken: string
+@description("IMAP password for the mailed-tender inbox")
+@secret
+const tenderMailboxPassword: string
+@description("H3 resolution the tower indexes stops and telemetry at")
+@category("Freight/Planning")
+let planningResolution = 8
+@description("Hard cap on allocation revisions before the plan is frozen as-is")
+@category("Freight/Planning")
+let maxPlanRevisions = 6
+@category("Freight/Planning")
+let telemetryTimeoutSeconds = 900
+@description("Every H3 district the live plan currently covers")
+@category("Freight/State")
+let coveredCells: Set<string> = []
+@description("Winning carrier bid per shipment, keyed by shipment id")
+@category("Freight/State")
+let carrierByShipment: Map<string, CarrierBid> = {}
+@category("Freight/State")
+let openTenderIds: Set<string> = []
+@category("Freight/Settlement")
+let settlementCurrency = "EUR"
+@category("Freight/Settlement")
+@runtime
+let lastSettlementRunId = ""
+
+@cache({ namespace: "freight-geocode-v4", ttlSeconds: 86400, scope: "app" })
+function geocodeStop(address: string, resolution: int): (cell: string, label: string) {
+    let cell = ""
+    let label = address
+    const lookup = geo::searchLocation({ query: address, limit: 1, countryCodes: "de,at,ch,nl" })
+    lookup {
+        execSuccess: {
+            // `firstResult` is a `SearchResult`; the H3 and reverse-geocode pins take a
+            // `GeoCoordinate`, so project the two fields rather than passing the whole hit.
+            const point = { latitude: lookup.firstResult.lat, longitude: lookup.firstResult.lon }
+            cell = h3::latlngToCell({ coordinate: point, resolution: resolution })
+            const named = geo::reverseGeocode({ coordinate: point, zoom: 16 })
+            named {
+                execSuccess: {
+                    label = named.displayName
+                }
+                execError: {
+                    warn({ message: `no reverse geocode for ${address}`, toast: false })
+                }
+            }
+        }
+        execError: {
+            warn({ message: `could not geocode ${address}`, toast: false })
+        }
+    }
+    return cell, label
+}
+
+function stopFootprint(cell: string, ringSize: int): (district: string, ring: string[], areaKm2: float) {
+    const { parent: district } = h3::cellToParent({ cell: cell, parentResolution: 5 })
+    const { cells: ring } = h3::gridDisk({ cell: cell, k: ringSize })
+    const { area: areaKm2 } = h3::cellArea({ cell: cell })
+    return district, ring, areaKm2
+}
+
+function laneScore(bid: Struct, detourMeters: float, dwellSeconds: float): (score: float, label: string) {
+    const detourKm = float::divide({ dividend: detourMeters, divisor: 1000.0 })
+    const detourCost = float::multiply({ float1: detourKm, float2: 0.92 })
+    const dwellPenalty = float::mulAdd({ float: dwellSeconds, factor: 0.004, addend: 0.0 })
+    const gross = float::add({ float1: detourCost, float2: dwellPenalty })
+    const reliability = float::clamp({ float: bid.reliability, min: 0.4, max: 1.0 })
+    const score = float::divide({ dividend: gross, divisor: reliability }).round(2)
+    const label = fmt::number({ value: score, decimals: 2, thousands: ".", decimalPoint: ",", suffix: " EUR" })
+    return score, label
+}
+
+function corridorMatrix(stops: Struct[]): (slowestSeconds: float, nearestName: string, hops: int) {
+    let slowestSeconds = 0.0
+    let nearestName = "unknown"
+    let hops = 0
+    const matrix = geo::osrmTable({ coordinates: stops, profile: "Car", includeDurations: true, includeDistances: true })
+    matrix {
+        execSuccess: {
+            const flatDurations = array::flatten({ arrayIn: matrix.durations, depth: 2 })
+            slowestSeconds = float::maxOf({ floats: flatDurations }).result
+            const flatDistances = array::flatten({ arrayIn: matrix.distances, depth: 2 })
+            const longestLeg = float::maxOf({ floats: flatDistances }).result
+            const { element: firstStop } = array::get({ arrayIn: stops, index: 0 })
+            const snapped = geo::osrmNearest({ coordinate: firstStop, number: 3 })
+            snapped {
+                execSuccess: {
+                    hops = array::length({ array: snapped.waypoints })
+                    nearestName = snapped.nearest.name
+                    const legLabel = fmt::number({ value: longestLeg, decimals: 0, suffix: " m" })
+                    info({ message: `corridor spans ${legLabel} across ${hops} snapped waypoint(s)`, toast: false })
+                }
+                execError: {
+                    warn({ message: "could not snap the corridor origin", toast: false })
+                }
+            }
+        }
+        execError: {
+            warn({ message: "corridor matrix unavailable", toast: false })
+        }
+    }
+    return slowestSeconds, nearestName, hops
+}
+
+function dockWindow(slotMinutes: int, queueDepth: int, laneCount: int): (startOffset: int, slots: int, saturated: bool) {
+    const { result: slots, success: divisible } = int::div({ integer1: queueDepth, integer2: laneCount })
+    const rawOffset = int::multiply({ integer1: slots, integer2: slotMinutes })
+    const burst = int::multiply({ integer1: laneCount, integer2: 4 })
+    const saturated = int::greaterThanOrEqual({ integer1: queueDepth, integer2: burst })
+    const startOffset = int::clamp({ integer: rawOffset, min: 0, max: 480 })
+    if (!(divisible)) {
+        warn({ message: `dock queue ${queueDepth} does not divide evenly across ${laneCount} lane(s)`, toast: false })
+    }
+    return startOffset, slots, saturated
+}
+
+function laneAffinity(laneProfile: float[], carrierVector: float[]): (affinity: float, spread: float) {
+    const affinity = math::vector::cosineSimilarity({ vector1: laneProfile, vector2: carrierVector })
+    const delta = math::vector::subtract({ vector1: laneProfile, vector2: carrierVector })
+    const { result: spread } = float::stdDev({ floats: delta })
+    const drift = math::eval({ expression: "1 - 0.85" })
+    const penalised = float::subtract({ float1: affinity, float2: drift })
+    return penalised, spread
+}
+
+function planFingerprint(assignments: Struct[], revision: int): (planHash: string) {
+    const ordered = array::sort({ arrayIn: assignments, descending: false, compare: "shipment_id" })
+    const canonical = json::stringify({ value: ordered, pretty: false })
+    const digest = blake3({ input: canonical })
+    return `${digest}-r${revision}`
+}
+
+function rebalanceAllocations(shipments: Struct[], bids: Struct[], revisionCap: int): (planHash: string, revisions: int, freshlyPlaced: int) {
+    let revision = 0
+    let previousHash = ""
+    let currentHash = "cold-start"
+    let freshlyPlaced = 0
+
+    // Stability comparison: the sweep stops on the first revision whose plan hash repeats,
+    // and the explicit iteration cap freezes a plan that never settles.
+    while (control::whileLoop({ condition: currentHash != previousHash, maxIter: revisionCap })) {
+        previousHash = currentHash
+        revision = revision + 1
+        freshlyPlaced = 0
+
+        for (const window of control::forEachBatch({ array: shipments, batchSize: 25 })) {
+            const destinationCells = array::pluck({ arrayIn: window.batch, key: "destination_cell", skipMissing: true })
+            const { compacted: districts, compactedCount: districtCount } = h3::compactCells({ cells: destinationCells })
+            for (const district of districts) {
+                const { setOut: widened } = set::insert({ setIn: coveredCells, value: district })
+                coveredCells = widened
+            }
+            info({ message: `revision ${revision} window ${window.index} touches ${districtCount} district(s)`, toast: false })
+        }
+
+        for (const laneGroup of control::parallelForEachBatch({ array: bids, batchSize: 10, maxConcurrent: 4 })) {
+            const ranked = array::sort({ arrayIn: laneGroup.batch, descending: false, compare: "cost_eur" })
+            for (const bid of ranked) {
+                let shipmentId = bid.shipment_id
+                const { value: incumbent, found: alreadyPlaced } = map::get({ mapIn: carrierByShipment, key: shipmentId })
+                if (alreadyPlaced) {
+                    if (bid.cost_eur < incumbent.cost_eur) {
+                        carrierByShipment = map::set({ mapIn: carrierByShipment, key: shipmentId, value: bid }).mapOut
+                    }
+                } else {
+                    const { affinity, spread } = laneAffinity(bid.lane_profile, bid.carrier_profile)
+                    let scored = struct::set({ structIn: bid, field: "affinity", value: affinity }).structOut
+                    let banded = struct::set({ structIn: scored, field: "affinity_spread", value: spread }).structOut
+                    carrierByShipment = map::set({ mapIn: carrierByShipment, key: shipmentId, value: banded }).mapOut
+                    freshlyPlaced = freshlyPlaced + 1
+                }
+            }
+        }
+
+        const placed = map::values({ mapIn: carrierByShipment })
+        currentHash = planFingerprint(placed, revision)
+    }
+
+    const settledIn = int::clamp({ integer: revision, min: 1, max: revisionCap })
+    return currentHash, settledIn, freshlyPlaced
+}
+
+module tender {
+    function normalize(raw: TenderPayload): (tenderId: string, stops: Struct[], totalWeight: float) {
+        let tenderId = raw.tender_id
+        let stops = raw.stops
+        const { sum: totalWeight } = array::sumField({ arrayIn: stops, field: "weight_kg" })
+        return tenderId, stops, totalWeight
+    }
+
+    function validate(tenderId: string, stops: Struct[], totalWeight: float): (accepted: bool, reason: string) {
+        let accepted = true
+        let reason = "accepted"
+        const stopCount = array::length({ array: stops })
+        if (stopCount < 2) {
+            accepted = false
+            reason = `tender ${tenderId} carries only ${stopCount} stop(s)`
+        }
+        const idOk = string::startsWith({ string: tenderId, prefix: "TND-", ignoreCase: false })
+        if (!(idOk)) {
+            accepted = false
+            reason = `tender id ${tenderId} does not follow the TND- convention`
+        }
+        const overweight = float::greaterThan({ float1: totalWeight, float2: 24000.0 })
+        if (overweight) {
+            const weightLabel = fmt::number({ value: totalWeight, decimals: 0, suffix: " kg" })
+            accepted = false
+            reason = `tender ${tenderId} exceeds the 24 t trailer limit at ${weightLabel}`
+        }
+        const kinds = array::pluck({ arrayIn: stops, key: "kind", skipMissing: true })
+        const { arrayOut: distinctKinds } = array::unique({ arrayIn: kinds })
+        const kindCount = array::length({ array: distinctKinds })
+        if (kindCount < 2) {
+            accepted = false
+            reason = `tender ${tenderId} has no pickup/drop pairing`
+        }
+        return accepted, reason
+    }
+
+    function persist(tenderId: string, stops: Struct[]): (stored: int) {
+        const shipments = db::open({ name: "shipments", userScoped: false, batchSize: 256 })
+        // BUG: `let rows: Struct[] = []` only RE-BINDS an existing board variable; on a
+        // fresh board it registers nothing and every read fails. Bind a real value instead.
+        let rows = array::make()
+        for (const [position, stop] of stops) {
+            let owned = struct::set({ structIn: stop, field: "tender_id", value: tenderId }).structOut
+            let sequenced = struct::set({ structIn: owned, field: "sequence", value: position }).structOut
+            rows = array::push({ arrayIn: rows, value: sequenced })
+        }
+        db::batchUpsert({ database: shipments, idRow: "stop_id", value: rows })
+        db::buildIndex({ database: shipments, column: "tender_id", type: "BTREE" })
+        // BUG: dynamic object literal -- the placeholder bag is assembled with structSet.
+        const emptyParams = struct::make()
+        const countParams = struct::set({ structIn: emptyParams, field: "tender", value: tenderId }).structOut
+        const stored = db::count({ database: shipments, filter: "tender_id = $tender", params: countParams })
+        return stored
+    }
+
+    module mail {
+        function extractPdf(attachment: Struct): (text: string, pages: int) {
+            const { filename, data } = email::attachmentToFields({ attachment: attachment })
+            const target = files::storageDir({ nodeScope: false }).child("tenders").child(filename)
+            files::writeBytes({ path: target, content: data })
+            const text = pdf::extractText({ template: target })
+            const pages = pdf::pageCount({ pdf: target })
+            return text, pages
+        }
+    }
+}
+
+module settlement {
+    function reconciliationSql(startTime: string, endTime: string, currency: string): (query: string) {
+        const { whereClause: executedWindow } = df::timeRangeFilter({ timestampColumn: "executed_at", startTime: startTime, endTime: endTime })
+        return `SELECT s.shipment_id, s.carrier_id, s.executed_eur, COALESCE(i.invoiced_eur, 0.0) AS invoiced_eur, COALESCE(i.invoiced_eur, 0.0) - s.executed_eur AS variance_eur FROM executed_shipments s LEFT JOIN carrier_invoices i ON i.shipment_id = s.shipment_id AND i.currency = '${currency}' WHERE ${executedWindow} ORDER BY variance_eur DESC`
+    }
+
+    function writeVarianceWorkbook(rows: Struct[], stamp: string): (workbook: Struct, written: int) {
+        const workbook = files::storageDir({ nodeScope: false }).child("settlement").child(`variance-${stamp}.xlsx`)
+        excel::newWorksheet({ file: workbook, sheetName: "Variance", ifExists: "Replace" })
+        excel::writeCell({ file: workbook, sheet: "Variance", row: "1", col: "A", value: "Shipment" })
+        excel::writeCell({ file: workbook, sheet: "Variance", row: "1", col: "B", value: "Carrier" })
+        excel::writeCell({ file: workbook, sheet: "Variance", row: "1", col: "C", value: "Executed" })
+        excel::writeCell({ file: workbook, sheet: "Variance", row: "1", col: "D", value: "Invoiced" })
+        excel::writeCell({ file: workbook, sheet: "Variance", row: "1", col: "E", value: "Variance" })
+        let written = 0
+        for (const [offset, row] of rows) {
+            const line = int::add({ integer1: offset, integer2: 2 })
+            const rowLabel = `${line}`
+            const executedLabel = fmt::number({ value: row.executed_eur, decimals: 2 })
+            const invoicedLabel = fmt::number({ value: row.invoiced_eur, decimals: 2 })
+            const varianceLabel = fmt::number({ value: row.variance_eur, decimals: 2, suffix: " EUR" })
+            excel::writeCell({ file: workbook, sheet: "Variance", row: rowLabel, col: "A", value: row.shipment_id })
+            excel::writeCell({ file: workbook, sheet: "Variance", row: rowLabel, col: "B", value: row.carrier_id })
+            excel::writeCell({ file: workbook, sheet: "Variance", row: rowLabel, col: "C", value: executedLabel })
+            excel::writeCell({ file: workbook, sheet: "Variance", row: rowLabel, col: "D", value: invoicedLabel })
+            excel::writeCellHtml({ file: workbook, sheet: "Variance", row: rowLabel, col: "E", value: varianceLabel })
+            written = line
+        }
+        return workbook, written
+    }
+
+    function carrierRollup(lines: Struct[], invoices: Struct[]): (rollup: Struct[], carriers: int, meanVariance: float) {
+        const { groups: rollup, groupCount: carriers } = array::groupBy({ arrayIn: lines, key: "carrier_id" })
+        const { pairs: matched, matched: matchedCount } = array::joinBy({ arrayLeft: lines, arrayRight: invoices, keyLeft: "shipment_id", keyRight: "shipment_id" })
+        const variances = array::pluck({ arrayIn: matched, key: "variance_eur", skipMissing: true })
+        const { result: meanVariance } = float::average({ floats: variances })
+        const worstFirst = array::sort({ arrayIn: lines, descending: true, compare: "variance_eur" })
+        const { element: worst, success: hasWorst } = array::get({ arrayIn: worstFirst, index: 0 })
+        info({ message: `${carriers} carrier(s), ${matchedCount} matched line(s), worst line resolved: ${hasWorst}`, toast: false })
+        const trimmed = struct::pick({ struct: worst, fields: ["shipment_id", "carrier_id", "variance_eur"], mode: "Keep" })
+        const worstJson = json::stringify({ value: trimmed, pretty: false })
+        warn({ message: `largest variance line ${worstJson}`, toast: false })
+        return rollup, carriers, meanVariance
+    }
+
+    function summaryPdf(markdown: string, stamp: string): (report: Struct, pages: int) {
+        const output = files::storageDir({ nodeScope: false }).child("settlement").child(`settlement-${stamp}.pdf`)
+        const { result: report, pages } = pdf::fromMarkdown({ markdown: markdown, output: output, pageSize: "A4", embedImages: false, pageNumbers: true, title: "Carrier settlement variance", subtitle: stamp, cover: true, author: "Freight Control Tower" })
+        return report, pages
+    }
+}
+
+detached {
+    const spoolSize = fmt::bytes({ bytes: 734003200, standard: "Binary", decimals: 1 }).text
+    const idleFor = fmt::duration({ seconds: 5400.0, style: "Short", maxParts: 2 })
+    warn({ message: `telemetry spool holds ${spoolSize} after ${idleFor} without a drain`, toast: false })
+}
+
+function ingestTender(raw: TenderPayload): (tenderId: string) {
+    const { tenderId, stops, totalWeight } = tender::normalize(raw)
+    let geocoded = array::make()
+    for (const stop of stops) {
+        const { cell, label } = geocodeStop(stop.address, planningResolution)
+        const { district, areaKm2 } = stopFootprint(cell, 2)
+        const described = { stop_id: stop.stop_id, h3_cell: cell, district_cell: district, resolved_address: label, weight_kg: stop.weight_kg }
+        info({ message: `${stop.stop_id} resolved to ${label} in district ${district} (${areaKm2} km2)`, toast: false })
+        geocoded = array::push({ arrayIn: geocoded, value: described })
+    }
+    const { accepted, reason } = tender::validate(tenderId, geocoded, totalWeight)
+    if (accepted) {
+        const { slowestSeconds, nearestName, hops } = corridorMatrix(geocoded)
+        const dwellLabel = fmt::duration({ seconds: slowestSeconds, style: "Short", maxParts: 2 })
+        info({ message: `slowest corridor leg ${dwellLabel} from ${nearestName} over ${hops} waypoint(s)`, toast: false })
+        const stored = tender::persist(tenderId, geocoded)
+        openTenderIds = set::insert({ setIn: openTenderIds, value: tenderId }).setOut
+        const weightLabel = fmt::number({ value: totalWeight, decimals: 1, suffix: " kg" })
+        info({ message: `tender ${tenderId}: ${stored} stop(s) stored, ${weightLabel}`, toast: false })
+        return tenderId
+    }
+    warn({ message: reason, toast: true })
+    return "rejected"
+}
+
+eventsGeneric tenderIntake(payload: Struct, tenderRef: string) {
+    const request = http::request({ method: "GET", url: `${tmsBaseUrl}/tenders/${tenderRef}` })
+    const authorized = http::setBearerAuth({ request: request, token: tmsApiToken })
+    const prepared = http::setAccept({ request: authorized, accept: "application/json" })
+    const apiCall = http::fetch({ request: prepared })
+    apiCall {
+        execSuccess: {
+            return ingestTender(apiCall.response.toJson())
+        }
+        execError: {
+            const status = apiCall.response.status()
+            error({ message: `tender ${tenderRef} could not be pulled from the TMS (status ${status})`, toast: true })
+            return "rejected"
+        }
+    }
+}
+
+eventsSimple tenderApiSink() {
+    const baseConfig = rest::serverConfig({ host: "0.0.0.0", port: 8443, timeoutSeconds: 0, maxConnections: 256, maxBodyBytes: 4194304, tls: { secure: true, accept_invalid_certificates: false } })
+    const routed = rest::registerFunction({ configIn: baseConfig, path: "/v3/tenders", method: "POST", fnRefs: [tenderIntake] })
+    const documented = rest::registerOpenApi({ configIn: routed, path: "/openapi.json", uiPath: "/docs" })
+    const listening = rest::server({ config: documented })
+    listening {
+        onListening: {
+            info({ message: `tender sink listening on ${listening}`, toast: false })
+        }
+        onClose: {
+            warn({ message: "tender sink closed", toast: false })
+        }
+        execError: {
+            error({ message: "tender sink failed to start", toast: false })
+        }
+    }
+}
+
+function trackFrame(topic: string, frame: Struct): (shipmentId: string) {
+    let shipmentId = frame.shipment_id
+    const framePoint = { latitude: frame.latitude, longitude: frame.longitude }
+    const cell = h3::latlngToCell({ coordinate: framePoint, resolution: planningResolution })
+    set::insertRef({ varRef: "coveredCells", value: cell })
+    const { value: carrier, found: assigned } = map::get({ mapIn: carrierByShipment, key: shipmentId })
+    if (assigned) {
+        const drift = h3::gridDistance({ cellA: cell, cellB: carrier.plan_cell })
+        if (drift > 3) {
+            const { path: recovery, length: recoveryLength } = h3::gridPath({ cellA: cell, cellB: carrier.plan_cell })
+            warn({ message: `${shipmentId} drifted ${drift} cell(s) off plan on ${topic}; ${recoveryLength} cell recovery path`, toast: false })
+            const shipments = db::open({ name: "shipments", userScoped: false })
+            const driftRow = { shipment_id: shipmentId, drift_cells: drift, recovery_path: recovery, last_cell: cell }
+            db::upsert({ database: shipments, idRow: "shipment_id", value: driftRow })
+        }
+    } else {
+        info({ message: `telemetry for unplanned shipment ${shipmentId} on ${topic}`, toast: false })
+    }
+    return shipmentId
+}
+
+eventsGeneric telemetryFrame(topic: string, framePayload: string) {
+    return trackFrame(topic, json::parse({ string: framePayload }))
+}
+
+eventsSimple telemetryTower() {
+    const session = mqtt::connect({ config: { host: "mqtt.freight.internal", port: 8883, client_id: "freight-control-tower", keep_alive_seconds: 30, use_tls: true } })
+    mqtt::subscribe({ session: session, topic: "fleet/+/telemetry", qos: "AtLeastOnce", timeoutSeconds: telemetryTimeoutSeconds, fnRefs: [telemetryFrame] }) {
+        onSubscribed: {
+            info({ message: "control tower subscribed to fleet telemetry", toast: false })
+            mqtt::publish({ session: session, topic: "fleet/control/status", payload: "tower-online", qos: "AtLeastOnce", retain: true })
+        }
+        onClose: {
+            const covered = set::size({ setIn: coveredCells })
+            warn({ message: `telemetry stream closed with ${covered} district(s) covered`, toast: false })
+            mqtt::disconnect({ session: session })
+        }
+        execError: {
+            error({ message: "telemetry subscription could not be established", toast: true })
+        }
+    }
+}
+
+function sweepMailbox(): (handled: int) {
+    const mailbox = imap::connect({ host: "imap.freight.internal", port: 993, username: "tenders@freight.internal", password: tenderMailboxPassword, encryption: "Tls" })
+    const inbox = imap::inbox({ connection: mailbox, inbox: "INBOX/Tenders" })
+    const mails = imap::listMails({ inbox: inbox, filter: "UNSEEN" })
+    let handled = 0
+    for (const reference of mails) {
+        const message = imap::fetchMail({ emailRef: reference })
+        const { subject, plain: body } = email::getContent({ email: message })
+        const { from: sender } = email::getHeaders({ email: message })
+        const { email: senderAddress } = email::addressToFields({ address: sender })
+        const attachments = email::getAttachments({ email: message })
+        for (const attachment of attachments) {
+            const { text: tenderText, pages } = tender::mail::extractPdf(attachment)
+            const { matches: tenderRefs } = string::extract({ string: tenderText, pattern: "TND-\\d\\d\\d\\d\\d\\d", unique: true })
+            info({ message: `${senderAddress} mailed ${subject} across ${pages} page(s)`, toast: false })
+            for (const candidate of tenderRefs) {
+                openTenderIds = set::insert({ setIn: openTenderIds, value: candidate }).setOut
+            }
+        }
+        // `markSeen`/`moveMessage` take an EmailRef, not the fetched Email.
+        const { reference: handle } = email::toReference({ mail: message })
+        imap::markSeen({ email: handle, markAsSeen: true })
+        imap::moveMessage({ email: handle, destination: "INBOX/Tenders/Processed", createIfMissing: true, expungeMode: "Deferred" })
+        handled = handled + 1
+    }
+    return handled
+}
+
+eventsSimple mailedTenderSweep() {
+    const handled = sweepMailbox()
+    const still = set::size({ setIn: openTenderIds })
+    info({ message: `mailed tender sweep handled ${handled} message(s); ${still} tender(s) open`, toast: false })
+}
+
+function reconcileInvoices(runStart: Date, stamp: string): (rowCount: int, overbilled: Struct[], overbilledCount: int, driver: string, mounted: string[]) {
+    const session = df::createSession({ sessionName: `settlement-${stamp}`, targetPartitions: 8, batchSize: 8192, repartitionJoins: true, collectStatistics: true })
+    const warehouse = files::storageDir({ nodeScope: false }).child("warehouse")
+    df::mountParquet({ session: session, path: warehouse.child("executed"), tableName: "executed_shipments" })
+    df::mountCsv({ session: session, path: warehouse.child("invoices"), tableName: "carrier_invoices", hasHeader: true, delimiter: ";" })
+    const { tableNames: mounted } = df::listTables({ session: session })
+    const query = settlement::reconciliationSql("-1d", "now", settlementCurrency)
+    const { rows, rowCount } = df::sqlQuery({ session: session, query: query })
+    const { rows: invoiceRows, fromCache } = df::sqlQueryCached({ session: session, query: "SELECT shipment_id, invoiced_eur FROM carrier_invoices", scope: "app", namespace: "settlement-invoices-v1", ttlSeconds: 3600 })
+    const { timestampLiteral: cutoff, epochMicros: cutoffMicros } = df::toSqlTimestamp({ datetime: runStart })
+    const { rollup, carriers, meanVariance } = settlement::carrierRollup(rows, invoiceRows)
+    info({ message: `reconciled ${rowCount} line(s) against ${carriers} carrier(s) as of ${cutoff} (${cutoffMicros}); invoice cache hit: ${fromCache}`, toast: false })
+
+    const { arrayOut: overbilled, kept: overbilledCount } = array::filterBy({ arrayIn: rows, key: "variance_eur", operator: "Greater Than", value: "0.5", compare: "Number", ignoreCase: false, invert: false })
+    const periodStart = runStart.startOf("month")
+    const workingDays = datetime::businessDaysBetween({ start: periodStart, end: runStart, includeEnd: true })
+    const dailyMean = float::divide({ dividend: meanVariance, divisor: workingDays.toFloat() }).round(3)
+    const rollupSize = array::length({ array: rollup })
+    info({ message: `${rollupSize} carrier rollup row(s) over ${workingDays} working day(s); ${dailyMean} EUR mean daily variance`, toast: false })
+
+    const modelPath = files::storageDir({ nodeScope: false }).child("models").child("carrier-variance.mlmodel")
+    const model = ml::load({ path: modelPath })
+    const { topFeature: driver } = ml::featureImportance({ model: model, featureNames: ["detour_km", "dwell_minutes", "fuel_surcharge", "reliability"] })
+    const variancePredictions = db::open({ name: "carrier_variance", userScoped: false })
+    ml::predict({ model: model, source: "Database", database: variancePredictions, records: "feature_vector", predictionsCol: "predicted_variance", batchSize: 2048 })
+    return rowCount, overbilled, overbilledCount, driver, mounted
+}
+
+function publishSettlement(stamp: string, runStart: Date, rowCount: int, overbilled: Struct[], overbilledCount: int, driver: string, mounted: string[]): (runId: string) {
+    const variances = array::pluck({ arrayIn: overbilled, key: "variance_eur", skipMissing: true })
+    const { result: totalVariance } = float::sum({ floats: variances })
+    const { result: medianVariance } = float::median({ floats: variances })
+    const { result: tailVariance } = float::percentile({ floats: variances, percentile: 95.0 })
+    const { workbook, written } = settlement::writeVarianceWorkbook(overbilled, stamp)
+    const markdown = "# Carrier settlement {stamp}\n\n- tables mounted: {mounted}\n- rows reconciled: {rows}\n- overbilled lines: {over}\n- total variance: {total}\n- median variance: {median}\n- p95 variance: {tail}\n- dominant cost driver: {driver}\n".format({ stamp: stamp, mounted: mounted, rows: rowCount, over: overbilledCount, total: totalVariance, median: medianVariance, tail: tailVariance, driver: driver })
+    const { report, pages } = settlement::summaryPdf(markdown, stamp)
+
+    const icon = files::storageDir({ nodeScope: false }).child("branding").child("tower.png")
+    const runEnd = datetime::now()
+    const { totalSeconds: elapsed } = datetime::diff({ start: runStart, end: runEnd })
+    const elapsedLabel = fmt::duration({ seconds: elapsed.toFloat(), style: "Short", maxParts: 2 })
+    notify::user({ title: "Settlement ready", description: `${written} variance row(s) in ${pages} page(s), built in ${elapsedLabel}`, icon: icon, link: "/settlement?run={run}".format({ run: stamp }), showDesktop: true })
+    const workbookPath = path::rawPath({ path: workbook })
+    const reportPath = path::rawPath({ path: report })
+    info({ message: `settlement ${stamp} written to ${workbookPath} alongside ${reportPath}`, toast: false })
+    return stamp
+}
+
+eventsSimple nightlySettlement() {
+    const runStart = datetime::now()
+    const stamp = runStart.format("%Y-%m-%d")
+    const { rowCount, overbilled, overbilledCount, driver, mounted } = reconcileInvoices(runStart, stamp)
+    lastSettlementRunId = publishSettlement(stamp, runStart, rowCount, overbilled, overbilledCount, driver, mounted)
+}
+
+function reassignCarrier(actionContext: Struct, banner: Struct): (placed: bool) {
+    let shipmentId = actionContext.shipment_id
+    const { value: carrier, found: known } = map::get({ mapIn: carrierByShipment, key: shipmentId })
+    if (known) {
+        const pickupPoint = { latitude: actionContext.pickup_lat, longitude: actionContext.pickup_lon }
+        const dropPoint = { latitude: actionContext.drop_lat, longitude: actionContext.drop_lon }
+        const detour = geo::planRoute({ start: pickupPoint, end: dropPoint, profile: "Car", alternatives: true })
+        detour {
+            execSuccess: {
+                const { score, label: costLabel } = laneScore(carrier, detour.distance, detour.duration)
+                const etaLabel = fmt::duration({ seconds: detour.duration, style: "Short", maxParts: 2 })
+                ui::setElementText({ elementRef: banner, text: `${shipmentId} -> ${carrier.carrier_id} at ${costLabel} (${etaLabel})` })
+                ui::setPageState({ key: "dispatch.selected_score", value: score })
+                const { element: laneTable } = ui::getElement({ elementRef: "lane-table" })
+                const laneRows = map::values({ mapIn: carrierByShipment })
+                ui::updateTable({ elementRef: laneTable, operation: "Set Data", data: { rows: laneRows } })
+            }
+            execError: {
+                ui::setElementText({ elementRef: banner, text: `no route between the ${shipmentId} stops` })
+            }
+        }
+        return true
+    }
+    ui::setElementText({ elementRef: banner, text: `${shipmentId} has no winning bid yet` })
+    ui::setPageState({ key: "dispatch.error", value: shipmentId })
+    return false
+}
+
+function resweepDock(laneQuery: string, banner: Struct): (planHash: string) {
+    const shipments = db::open({ name: "shipments", userScoped: false })
+    const openLegs = db::filter({ database: shipments, filter: "status = $status", params: { status: "tendered" }, limit: 500, offset: 0 })
+    const bidBook = db::open({ name: "carrier_bids", userScoped: false })
+    const bids = db::ftsSearch({ database: bidBook, search: laneQuery, fields: ["lane"], limit: 250, offset: 0 })
+    const queueDepth = array::length({ array: openLegs })
+    const { startOffset, slots, saturated } = dockWindow(30, queueDepth, 6)
+    const { element: progressBar } = ui::getElement({ elementRef: "resweep-progress" })
+    ui::setProgress({ elementRef: progressBar, value: 5.0 })
+    const { planHash, revisions, freshlyPlaced } = rebalanceAllocations(openLegs, bids, maxPlanRevisions)
+    ui::setProgress({ elementRef: progressBar, value: 100.0 })
+    info({ message: `dock plan: ${slots} slot(s) from +${startOffset} min, saturated: ${saturated}`, toast: false })
+    ui::setElementText({ elementRef: banner, text: `plan ${planHash} settled after ${revisions} revision(s); ${freshlyPlaced} newly placed` })
+    const { element: coverage } = ui::getElement({ elementRef: "coverage-map" })
+    const districts = set::toArray({ setIn: coveredCells })
+    ui::updateGeomap({ elementRef: coverage, property: "Markers", markers: districts })
+    return planHash
+}
+
+eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const { element: banner } = ui::getElement({ elementRef: "dispatch-banner" })
+    if (eventName == "reassign") {
+        reassignCarrier(actionContext, banner)
+    } else if (eventName == "resweep") {
+        resweepDock(inputValues.lane_query, banner)
+    } else {
+        const { value: requestedRun, exists: hasRun } = ui::getQueryParam({ paramName: "run" })
+        if (hasRun) {
+            const encoded = ui::urlEncode({ input: actionContext.shipment_id })
+            ui::setElementText({ elementRef: banner, text: `showing settlement run ${requestedRun} for ${encoded}` })
+        } else {
+            ui::setElementText({ elementRef: banner, text: `last settlement run ${lastSettlementRunId}` })
+        }
+    }
+}

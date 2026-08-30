@@ -105,7 +105,7 @@ const customFeatures = [
   <body
     class="bg-background text-foreground antialiased overflow-x-hidden max-w-full"
   >
-    <Header client:only="react" />
+    <Header client:load pathname={Astro.url.pathname} />
 
     <main class="pt-16">
       <!-- HERO -->

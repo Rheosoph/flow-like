@@ -30,6 +30,7 @@ impl NodeLogic for QueryChildren {
             "Gets all child elements of a container",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryChildren");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -68,30 +69,11 @@ impl NodeLogic for QueryChildren {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let element_id: String = context.evaluate_pin("element_ref").await?;
+        context
+            .ensure_elements(&[format!("children:{element_id}")])
+            .await?;
 
-        let elements = context.get_frontend_elements().await?;
-
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("children")
-                .await?
-                .set_value(Value::Array(vec![]))
-                .await;
-            context
-                .get_pin_by_name("child_ids")
-                .await?
-                .set_value(Value::Array(vec![]))
-                .await;
-            context
-                .get_pin_by_name("count")
-                .await?
-                .set_value(Value::Number(0.into()))
-                .await;
-            return Ok(());
-        };
-
-        let Some(element) = elements_map.get(&element_id) else {
+        let Some((_, element)) = context.read_element(&element_id).await? else {
             context.log_message(
                 &format!("Element not found: {}", element_id),
                 LogLevel::Warn,
@@ -130,10 +112,9 @@ impl NodeLogic for QueryChildren {
         // Fetch full element data for each child
         let mut children: Vec<Value> = Vec::new();
         for child_id in &child_ids {
-            if let Some(child_element) = elements_map.get(child_id) {
-                let mut child_with_id = child_element.clone();
+            if let Some((resolved_id, mut child_with_id)) = context.read_element(child_id).await? {
                 if let Some(obj) = child_with_id.as_object_mut() {
-                    obj.insert("_id".to_string(), Value::String(child_id.clone()));
+                    obj.insert("_id".to_string(), Value::String(resolved_id));
                 }
                 children.push(child_with_id);
             }

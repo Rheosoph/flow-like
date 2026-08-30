@@ -31,6 +31,18 @@ export function humanFileSize(bytes: number, si = false, dp = 1) {
 	return `${value.toFixed(dp)} ${units[u]}`;
 }
 
+/**
+ * Splits a column or field name into its lowercase words, so `createdAt`,
+ * `created_at` and `Created At` all read the same to a naming heuristic.
+ */
+export function splitNameSegments(name: string): string[] {
+	return name
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.split(/[^a-zA-Z0-9]+/)
+		.filter(Boolean)
+		.map((segment) => segment.toLowerCase());
+}
+
 const SAFE_URL_PROTOCOLS = ["http:", "https:", "blob:", "data:"];
 
 /** Sanitize image URL to prevent XSS - only allow safe protocols */

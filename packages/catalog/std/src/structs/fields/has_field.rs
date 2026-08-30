@@ -25,6 +25,8 @@ impl NodeLogic for HasStructFieldNode {
             "Checks if a field exists in a struct (supports dot notation and array access)",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "has");
+        node.set_receiver("struct");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_output_pin(
@@ -34,7 +36,8 @@ impl NodeLogic for HasStructFieldNode {
             VariableType::Boolean,
         );
 
-        node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct);
+        node.add_input_pin("struct", "Struct", "Struct Output", VariableType::Struct)
+            .set_open_schema();
 
         node.add_input_pin(
             "field",

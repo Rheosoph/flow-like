@@ -21,11 +21,16 @@
 //! never guesses identities or ambiguous catalog matches: a partial or ambiguous edit produces
 //! diagnostics instead of destructive commands.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
+use super::lower::{
+    FlowScriptFile, WHILE_LOOP, is_trigger_entry, loop_node_keyword, module_path, owning_module,
+    sugared_loop_head_pin, sugared_loop_node_type,
+};
+use super::template::{STRING_FORMAT_NODE_TYPE, template_format_call};
 use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
     BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
@@ -60,6 +65,39 @@ pub enum ReconcileMode {
     Additive,
 }
 
+/// Everything a reconcile needs to know about the document it is given beyond the AST itself.
+///
+/// The default is a whole-document [`ReconcileMode::Replace`] with no scope and no file, which is
+/// exactly what the historical `reconcile_*` entry points do.
+#[derive(Debug, Default, Clone)]
+pub struct ReconcileOptions<'a> {
+    pub mode: ReconcileMode,
+    /// Anchors (event entry node id / function layer id) the deletion diff is limited to. `None`
+    /// means the document represents the whole visible board.
+    pub scope_anchors: Option<&'a [String]>,
+    /// Which virtual FlowScript file this document is (see [`FlowScriptFile`]). `None` and
+    /// [`FlowScriptFile::Main`] both mean "top-level sections own no module"; a
+    /// [`FlowScriptFile::Module`] makes that module the context of every top-level section and
+    /// turns variable declarations into create/update-only board globals.
+    pub file: Option<FlowScriptFile>,
+}
+
+impl ReconcileOptions<'_> {
+    /// The module layer this document's top-level sections belong to.
+    fn base_module(&self) -> Option<&str> {
+        match &self.file {
+            Some(FlowScriptFile::Module(module_id)) => Some(module_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// A module file carries no variables of its own: its declarations create/update board
+    /// globals, and the ones it omits are simply owned by another file.
+    fn is_module_file(&self) -> bool {
+        self.base_module().is_some()
+    }
+}
+
 /// Diff a parsed FlowScript AST against `existing` and emit the minimal `BoardCommand`s.
 ///
 /// Only nodes carrying a stable anchor (`//@n:<id>`) are eligible for in-place edits or removal,
@@ -67,7 +105,7 @@ pub enum ReconcileMode {
 /// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
 /// absent from the text. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
-    reconcile_inner(existing, new, None, None, ReconcileMode::Replace)
+    reconcile_inner(existing, new, None, None, &ReconcileOptions::default())
 }
 
 /// Diff a parsed FlowScript AST against `existing`, using catalog metadata to turn unanchored
@@ -81,7 +119,35 @@ pub fn reconcile_with_catalog(
     new: &BoardAst,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None, ReconcileMode::Replace)
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        &ReconcileOptions::default(),
+    )
+}
+
+/// Like [`reconcile_with_catalog`] but with an editing scope: board events/functions whose anchor
+/// (entry node id / layer id) is NOT in `scope_anchors` are invisible to the deletion diff — their
+/// nodes are never removed merely for being absent from the (deliberately partial) document. Pass
+/// `None` for whole-document semantics.
+pub fn reconcile_with_catalog_scoped(
+    existing: &Board,
+    new: &BoardAst,
+    catalog: &[NodeMetadata],
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        &ReconcileOptions {
+            scope_anchors,
+            ..ReconcileOptions::default()
+        },
+    )
 }
 
 /// Catalog-aware reconcile with explicit document scope semantics.
@@ -91,7 +157,16 @@ pub fn reconcile_with_catalog_mode(
     catalog: &[NodeMetadata],
     mode: ReconcileMode,
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None, mode)
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        None,
+        &ReconcileOptions {
+            mode,
+            ..ReconcileOptions::default()
+        },
+    )
 }
 
 /// Like [`reconcile_with_catalog`] but runs `enricher` to materialize each new node's dynamic
@@ -108,7 +183,7 @@ pub fn reconcile_with_catalog_enriched(
         new,
         Some(catalog),
         Some(enricher),
-        ReconcileMode::Replace,
+        &ReconcileOptions::default(),
     )
 }
 
@@ -122,31 +197,1205 @@ pub type MetadataEnricher = Box<
         + Sync,
 >;
 
+/// One `module name { … }` block on the path to a section.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ModuleBlockRef {
+    name: String,
+    /// `//@l:<layer id>` identity anchor, when the block carries one.
+    anchor: Option<String>,
+}
+
+/// Where a document section lives: the module file it was submitted in, plus the chain of
+/// `module` blocks written around it (outermost first).
+///
+/// Block nesting is always relative to the enclosing context, so one value describes a full
+/// document (`base: None`, top-level blocks are root modules) and a module file (`base` is that
+/// module, blocks nest one level below it) with the same rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+struct ModulePath {
+    base: Option<String>,
+    blocks: Vec<ModuleBlockRef>,
+}
+
+impl ModulePath {
+    fn child(&self, module: &ModuleDecl) -> Self {
+        let mut blocks = self.blocks.clone();
+        blocks.push(ModuleBlockRef {
+            name: module.name.clone(),
+            anchor: module
+                .anchor
+                .as_deref()
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty())
+                .map(str::to_string),
+        });
+        Self {
+            base: self.base.clone(),
+            blocks,
+        }
+    }
+
+    /// Human-readable scope for a diagnostic.
+    fn label(&self) -> String {
+        if !self.blocks.is_empty() {
+            return format!(
+                "in module `{}`",
+                self.blocks
+                    .iter()
+                    .map(|block| block.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::")
+            );
+        }
+        match &self.base {
+            Some(_) => "in this module file".to_string(),
+            None => "at the top level".to_string(),
+        }
+    }
+}
+
+/// A document with its `module` blocks hoisted to the top level.
+///
+/// Every diff/collector phase works on one flat section list — module content is ordinary
+/// content — while `function_scopes`/`event_scopes`/`detached_scopes` (index-aligned with
+/// `ast.functions` / `ast.events` / `ast.detached`) keep the module each section was declared in.
+struct FlatDocument {
+    ast: BoardAst,
+    function_scopes: Vec<ModulePath>,
+    event_scopes: Vec<ModulePath>,
+    detached_scopes: Vec<ModulePath>,
+    /// Every `module` block in the document, outermost first, in declaration order.
+    module_blocks: Vec<ModulePath>,
+}
+
+impl FlatDocument {
+    /// Flatten `ast` as the given virtual file: the file's own module becomes the base scope of
+    /// every top-level section.
+    fn new(ast: &BoardAst, base_module: Option<&str>) -> Self {
+        let root = ModulePath {
+            base: base_module.map(str::to_string),
+            blocks: Vec::new(),
+        };
+        let mut flat = Self {
+            function_scopes: vec![root.clone(); ast.functions.len()],
+            event_scopes: vec![root.clone(); ast.events.len()],
+            detached_scopes: vec![root.clone(); ast.detached.len()],
+            module_blocks: Vec::new(),
+            ast: BoardAst {
+                modules: Vec::new(),
+                ..ast.clone()
+            },
+        };
+        flat.hoist(&ast.modules, &root);
+        flat
+    }
+
+    fn hoist(&mut self, modules: &[ModuleDecl], parent: &ModulePath) {
+        for module in modules {
+            let scope = parent.child(module);
+            self.module_blocks.push(scope.clone());
+            for function in &module.functions {
+                self.ast.functions.push(function.clone());
+                self.function_scopes.push(scope.clone());
+            }
+            for event in &module.events {
+                self.ast.events.push(event.clone());
+                self.event_scopes.push(scope.clone());
+            }
+            for block in &module.detached {
+                self.ast.detached.push(block.clone());
+                self.detached_scopes.push(scope.clone());
+            }
+            self.hoist(&module.modules, &scope);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AuthoredNodeScope {
+    Existing(Option<String>),
+    Planned(String),
+}
+
+/// Record the semantic scope in which every authored node anchor appears. The catalog-less
+/// reconcile path still edits literals on anchored nodes, so it needs the same ownership check as
+/// structural planning before it can queue an `UpdateNodePin`.
+fn authored_node_scopes(
+    existing: &Board,
+    doc: &FlatDocument,
+    modules: &ModuleResolution,
+) -> HashMap<String, AuthoredNodeScope> {
+    fn module_scope(scope: &ModulePath, modules: &ModuleResolution) -> AuthoredNodeScope {
+        match modules.target(scope) {
+            ModuleTarget::Root => AuthoredNodeScope::Existing(None),
+            ModuleTarget::Existing(id) => AuthoredNodeScope::Existing(Some(id)),
+            ModuleTarget::New(index) => AuthoredNodeScope::Planned(
+                modules
+                    .created
+                    .get(index)
+                    .map(|module| format!("new module `{}`", module.name))
+                    .unwrap_or_else(|| "a new module".to_string()),
+            ),
+        }
+    }
+
+    fn register(
+        anchor: Option<&str>,
+        scope: &AuthoredNodeScope,
+        out: &mut HashMap<String, AuthoredNodeScope>,
+    ) {
+        if let Some(anchor) = anchor.map(str::trim).filter(|anchor| !anchor.is_empty()) {
+            out.insert(anchor.to_string(), scope.clone());
+        }
+    }
+
+    fn visit_call(
+        call: &Call,
+        fallback_anchor: Option<&str>,
+        scope: &AuthoredNodeScope,
+        out: &mut HashMap<String, AuthoredNodeScope>,
+    ) {
+        register(call.anchor.as_deref().or(fallback_anchor), scope, out);
+        if let Some(receiver) = &call.receiver {
+            visit_expr(receiver, scope, out);
+        }
+        for positional in &call.positional {
+            visit_expr(positional, scope, out);
+        }
+        for arg in &call.args {
+            visit_expr(&arg.value, scope, out);
+        }
+    }
+
+    fn visit_expr(
+        expr: &Expr,
+        scope: &AuthoredNodeScope,
+        out: &mut HashMap<String, AuthoredNodeScope>,
+    ) {
+        match expr {
+            Expr::Call(call) => visit_call(call, None, scope, out),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => visit_expr(base, scope, out),
+            Expr::Object(fields) => {
+                for field in fields {
+                    visit_expr(&field.value, scope, out);
+                }
+            }
+            Expr::Array(items) => {
+                for item in items {
+                    visit_expr(item, scope, out);
+                }
+            }
+            Expr::Index { base, index }
+            | Expr::Binary {
+                lhs: base,
+                rhs: index,
+                ..
+            } => {
+                visit_expr(base, scope, out);
+                visit_expr(index, scope, out);
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                visit_expr(cond, scope, out);
+                visit_expr(then, scope, out);
+                visit_expr(otherwise, scope, out);
+            }
+            Expr::Template { parts } => {
+                for part in template_exprs(parts) {
+                    visit_expr(part, scope, out);
+                }
+            }
+            Expr::Ref(_) | Expr::Literal(_) => {}
+        }
+    }
+
+    fn visit_event(
+        event: &EventBlock,
+        scope: &AuthoredNodeScope,
+        out: &mut HashMap<String, AuthoredNodeScope>,
+    ) {
+        register(event.anchor.as_deref(), scope, out);
+        visit_block(&event.body, scope, out);
+    }
+
+    fn visit_block(
+        block: &Block,
+        scope: &AuthoredNodeScope,
+        out: &mut HashMap<String, AuthoredNodeScope>,
+    ) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { call, anchor, .. }
+                | Stmt::Destructure { call, anchor, .. }
+                | Stmt::Call { call, anchor } => visit_call(call, anchor.as_deref(), scope, out),
+                Stmt::Branch {
+                    call,
+                    condition,
+                    arms,
+                    anchor,
+                    ..
+                } => {
+                    visit_call(call, anchor.as_deref(), scope, out);
+                    if let Some(condition) = condition {
+                        visit_expr(condition, scope, out);
+                    }
+                    for arm in arms {
+                        visit_block(&arm.body, scope, out);
+                    }
+                }
+                Stmt::Loop {
+                    call,
+                    iterable,
+                    body,
+                    anchor,
+                    ..
+                } => {
+                    visit_call(call, anchor.as_deref(), scope, out);
+                    if let Some(iterable) = iterable {
+                        visit_expr(iterable, scope, out);
+                    }
+                    visit_block(body, scope, out);
+                }
+                Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+                    register(anchor.as_deref(), scope, out);
+                    visit_expr(value, scope, out);
+                }
+                Stmt::FieldAssign { value, anchor, .. } => {
+                    register(anchor.as_deref(), scope, out);
+                    visit_expr(value, scope, out);
+                }
+                Stmt::Return { values, anchor } => {
+                    register(anchor.as_deref(), scope, out);
+                    for value in values {
+                        visit_expr(value, scope, out);
+                    }
+                }
+                Stmt::Handler(event) => visit_event(event, scope, out),
+                Stmt::Local(_) | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    let claimed_function_layers = doc
+        .ast
+        .functions
+        .iter()
+        .filter_map(|function| function.anchor.as_ref())
+        .filter(|anchor| {
+            existing
+                .layers
+                .get(*anchor)
+                .is_some_and(|layer| matches!(layer.r#type, LayerType::Function))
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut scopes = HashMap::new();
+    for (index, function) in doc.ast.functions.iter().enumerate() {
+        let live_layer = function
+            .anchor
+            .as_deref()
+            .and_then(|anchor| existing.layers.get(anchor))
+            .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            .or_else(|| {
+                let module = modules.board_module(&doc.function_scopes[index])?;
+                matching_function_layer(
+                    existing,
+                    function,
+                    module.as_deref(),
+                    &claimed_function_layers,
+                )
+            });
+        let scope = live_layer
+            .map(|layer| AuthoredNodeScope::Existing(Some(layer.id.clone())))
+            .unwrap_or_else(|| {
+                AuthoredNodeScope::Planned(format!("new Function `{}`", function.name))
+            });
+        visit_block(&function.body, &scope, &mut scopes);
+    }
+    for (index, event) in doc.ast.events.iter().enumerate() {
+        let scope = module_scope(&doc.event_scopes[index], modules);
+        visit_event(event, &scope, &mut scopes);
+    }
+    for (index, block) in doc.ast.detached.iter().enumerate() {
+        let scope = module_scope(&doc.detached_scopes[index], modules);
+        visit_block(block, &scope, &mut scopes);
+    }
+    scopes
+}
+
+/// Hoist every `module` block's sections to the top level in place, dropping the block structure.
+/// Used for the board's own lowered AST, where only the sections matter.
+fn flatten_board_sections(ast: &mut BoardAst) {
+    fn drain(
+        modules: Vec<ModuleDecl>,
+        functions: &mut Vec<FnDecl>,
+        events: &mut Vec<EventBlock>,
+        detached: &mut Vec<Block>,
+    ) {
+        for module in modules {
+            functions.extend(module.functions);
+            events.extend(module.events);
+            detached.extend(module.detached);
+            drain(module.modules, functions, events, detached);
+        }
+    }
+    let modules = std::mem::take(&mut ast.modules);
+    drain(
+        modules,
+        &mut ast.functions,
+        &mut ast.events,
+        &mut ast.detached,
+    );
+}
+
+/// What a `module` block resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModuleTarget {
+    /// The board root — "main" is not a layer.
+    Root,
+    Existing(String),
+    /// A module this document has to create, indexed into [`ModuleResolution::created`].
+    New(usize),
+}
+
+/// A module the document declares that does not exist on the board yet.
+#[derive(Debug, Clone)]
+struct CreatedModule {
+    name: String,
+    parent: ModuleTarget,
+    /// Lowercase `::` path from the root module, for qualified call resolution.
+    path: Vec<String>,
+}
+
+/// Every `module` block of a document mapped onto the board's module tree.
+#[derive(Debug, Default)]
+struct ModuleResolution {
+    scopes: HashMap<ModulePath, ModuleTarget>,
+    created: Vec<CreatedModule>,
+    /// Lowercase `::` path of every module layer on the board plus every module this document
+    /// creates, keyed by layer id (existing) — new modules carry their path in `created`.
+    board_paths: HashMap<String, Vec<String>>,
+    /// Anchored module layers whose written block name differs from the board layer name
+    /// (normalized): `(layer id, written name)`. The written name wins — the anchor is identity,
+    /// the text is the source of truth for presentation.
+    renames: Vec<(String, String)>,
+    /// Anchored module layers written under a different parent than the one they have on the
+    /// board: `(layer id, written parent)`. The written nesting position wins.
+    reparents: Vec<(String, ModuleTarget)>,
+    /// Every live Module layer explicitly anchored anywhere in this document. Unanchored blocks
+    /// cannot name-match these layers through an old live name while the same revision renames or
+    /// moves them.
+    reserved_anchors: HashSet<String>,
+    /// Module layer ids already claimed by an anchored block, so a duplicated anchor is a
+    /// diagnostic instead of two conflicting moves.
+    claimed_anchors: HashSet<String>,
+    corrections: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+impl ModuleResolution {
+    fn target(&self, scope: &ModulePath) -> ModuleTarget {
+        self.scopes
+            .get(scope)
+            .cloned()
+            .unwrap_or(ModuleTarget::Root)
+    }
+
+    /// The module a scope names as it exists ON THE BOARD: `Some(None)` is the board root,
+    /// `Some(Some(id))` an existing module layer, and `None` a module this document still has to
+    /// create — which nothing on the board can belong to yet.
+    fn board_module(&self, scope: &ModulePath) -> Option<Option<String>> {
+        match self.target(scope) {
+            ModuleTarget::Root => Some(None),
+            ModuleTarget::Existing(id) => Some(Some(id)),
+            ModuleTarget::New(_) => None,
+        }
+    }
+}
+
+/// Map every `module` block of `doc` onto the board's module tree, deciding for each whether it
+/// names an existing module layer or one this document has to create.
+///
+/// An anchored block wins the identity match. Its written name and nesting position still decide
+/// the requested rename or reparent, and a corrupt/cyclic module ancestry is diagnosed rather
+/// than trusted.
+fn resolve_modules(board: &Board, doc: &FlatDocument, base: Option<&str>) -> ModuleResolution {
+    let mut resolution = ModuleResolution {
+        board_paths: board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Module))
+            .map(|layer| {
+                (
+                    layer.id.clone(),
+                    module_path(board, &layer.id)
+                        .into_iter()
+                        .map(|segment| segment.to_lowercase())
+                        .collect(),
+                )
+            })
+            .collect(),
+        reserved_anchors: doc
+            .module_blocks
+            .iter()
+            .filter_map(|scope| scope.blocks.last()?.anchor.as_ref())
+            .filter(|anchor| {
+                board
+                    .layers
+                    .get(*anchor)
+                    .is_some_and(|layer| matches!(layer.r#type, LayerType::Module))
+            })
+            .cloned()
+            .collect(),
+        ..ModuleResolution::default()
+    };
+
+    if let Some(base) = base {
+        match board.layers.get(base) {
+            Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                if module_path(board, base).is_empty() {
+                    resolution.diagnostics.push(format!(
+                        "module layer `{base}` has a cyclic parent chain; the board's module tree must be repaired before FlowScript can be applied to it"
+                    ));
+                }
+            }
+            Some(layer) => resolution.diagnostics.push(format!(
+                "FlowScript file `{base}` is a {:?} layer, not a module",
+                layer.r#type
+            )),
+            None => resolution.diagnostics.push(format!(
+                "FlowScript file `{base}` does not name a layer on this board"
+            )),
+        }
+    }
+
+    let root = ModulePath {
+        base: base.map(str::to_string),
+        blocks: Vec::new(),
+    };
+    resolution.scopes.insert(
+        root,
+        match base {
+            Some(base) => ModuleTarget::Existing(base.to_string()),
+            None => ModuleTarget::Root,
+        },
+    );
+
+    for scope in &doc.module_blocks {
+        resolve_module_scope(board, scope, &mut resolution);
+    }
+    apply_written_module_structure(board, &mut resolution);
+    validate_final_module_paths(board, &mut resolution);
+    resolution
+}
+
+/// Reject a revision whose final normalized module tree gives two layers the same path. Untouched
+/// legacy duplicates remain readable, but a rename, move, or create may not introduce or preserve
+/// an ambiguous path.
+fn validate_final_module_paths(board: &Board, resolution: &mut ModuleResolution) {
+    let mut changed = resolution
+        .renames
+        .iter()
+        .map(|(id, _)| id.clone())
+        .chain(resolution.reparents.iter().map(|(id, _)| id.clone()))
+        .collect::<HashSet<_>>();
+    for (id, final_path) in &resolution.board_paths {
+        let original_path = module_path(board, id)
+            .into_iter()
+            .map(|segment| segment.to_lowercase())
+            .collect::<Vec<_>>();
+        if &original_path != final_path {
+            // A parent rename or move changes every descendant path even when the descendant has
+            // no command of its own. Treat those inherited changes as part of this revision.
+            changed.insert(id.clone());
+        }
+    }
+    let mut occupants = BTreeMap::<Vec<String>, Vec<(String, bool)>>::new();
+    for (id, path) in &resolution.board_paths {
+        if !path.is_empty() {
+            occupants
+                .entry(path.clone())
+                .or_default()
+                .push((format!("layer `{id}`"), changed.contains(id)));
+        }
+    }
+    for module in &resolution.created {
+        if !module.path.is_empty() {
+            occupants
+                .entry(module.path.clone())
+                .or_default()
+                .push((format!("new module `{}`", module.name), true));
+        }
+    }
+    for (path, mut entries) in occupants {
+        if entries.len() < 2 || !entries.iter().any(|(_, changed)| *changed) {
+            continue;
+        }
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        resolution.diagnostics.push(format!(
+            "module path `{}` would identify multiple module layers ({}); rename or move one module before applying this revision",
+            path.join("::"),
+            entries
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+}
+
+/// Make the document's written module structure authoritative for path resolution: refuse any
+/// reparent that would cycle through the board's remaining structure, then recompute every module
+/// path (existing and created) with the surviving renames/reparents applied, so qualified `::`
+/// calls in this document resolve against the tree the text describes.
+fn apply_written_module_structure(board: &Board, resolution: &mut ModuleResolution) {
+    let name_overrides: HashMap<String, String> = resolution.renames.iter().cloned().collect();
+    let mut parent_overrides: HashMap<String, ModuleTarget> = HashMap::new();
+    let mut kept_reparents: Vec<(String, ModuleTarget)> = Vec::new();
+    for (moved, parent) in std::mem::take(&mut resolution.reparents) {
+        if written_module_ancestors(board, &parent_overrides, &resolution.created, &parent)
+            .contains(moved.as_str())
+        {
+            resolution.diagnostics.push(format!(
+                "module `{moved}` cannot move under one of its own descendants; fix the written module nesting"
+            ));
+            continue;
+        }
+        parent_overrides.insert(moved.clone(), parent.clone());
+        kept_reparents.push((moved, parent));
+    }
+    resolution.reparents = kept_reparents;
+
+    let module_ids: Vec<String> = resolution.board_paths.keys().cloned().collect();
+    let mut patched: HashMap<String, Vec<String>> = HashMap::new();
+    for id in module_ids {
+        let path = written_target_path(
+            board,
+            &name_overrides,
+            &parent_overrides,
+            &resolution.created,
+            &ModuleTarget::Existing(id.clone()),
+        );
+        patched.insert(id, path);
+    }
+    resolution.board_paths = patched;
+    for index in 0..resolution.created.len() {
+        resolution.created[index].path = written_target_path(
+            board,
+            &name_overrides,
+            &parent_overrides,
+            &resolution.created,
+            &ModuleTarget::New(index),
+        );
+    }
+}
+
+/// The lowercase `::` path of `target` (its own segment included) under the WRITTEN module
+/// structure: renames replace segments, reparents replace parent links. Cycle-guarded.
+fn written_target_path(
+    board: &Board,
+    name_overrides: &HashMap<String, String>,
+    parent_overrides: &HashMap<String, ModuleTarget>,
+    created: &[CreatedModule],
+    target: &ModuleTarget,
+) -> Vec<String> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut current = target.clone();
+    loop {
+        match current {
+            ModuleTarget::Root => break,
+            ModuleTarget::New(index) => {
+                if !seen.insert(index) {
+                    break;
+                }
+                let Some(module) = created.get(index) else {
+                    break;
+                };
+                segments.push(to_camel_case(&module.name).to_lowercase());
+                current = module.parent.clone();
+            }
+            ModuleTarget::Existing(id) => {
+                if !seen_ids.insert(id.clone()) {
+                    break;
+                }
+                let Some(layer) = board.layers.get(&id) else {
+                    break;
+                };
+                let name = name_overrides
+                    .get(&id)
+                    .map(String::as_str)
+                    .unwrap_or(layer.name.as_str());
+                segments.push(to_camel_case(name).to_lowercase());
+                current = match parent_overrides.get(&id) {
+                    Some(next) => next.clone(),
+                    None => board
+                        .layers
+                        .get(&id)
+                        .and_then(|layer| owning_module(board, layer.parent_id.as_deref()))
+                        .map(ModuleTarget::Existing)
+                        .unwrap_or(ModuleTarget::Root),
+                };
+            }
+        }
+    }
+    segments.reverse();
+    segments
+}
+
+/// Every existing module layer id on the parent chain of `target`, following the written
+/// overrides. Cycle-guarded; used to refuse a reparent under a descendant.
+fn written_module_ancestors(
+    board: &Board,
+    parent_overrides: &HashMap<String, ModuleTarget>,
+    created: &[CreatedModule],
+    target: &ModuleTarget,
+) -> HashSet<String> {
+    let mut chain: HashSet<String> = HashSet::new();
+    let mut current = target.clone();
+    loop {
+        match current {
+            ModuleTarget::Root => break,
+            ModuleTarget::New(index) => match created.get(index) {
+                Some(module) => current = module.parent.clone(),
+                None => break,
+            },
+            ModuleTarget::Existing(id) => {
+                if !chain.insert(id.clone()) {
+                    break;
+                }
+                current = match parent_overrides.get(&id) {
+                    Some(next) => next.clone(),
+                    None => board
+                        .layers
+                        .get(&id)
+                        .and_then(|layer| owning_module(board, layer.parent_id.as_deref()))
+                        .map(ModuleTarget::Existing)
+                        .unwrap_or(ModuleTarget::Root),
+                };
+            }
+        }
+    }
+    chain
+}
+
+fn resolve_module_scope(
+    board: &Board,
+    scope: &ModulePath,
+    resolution: &mut ModuleResolution,
+) -> ModuleTarget {
+    if let Some(known) = resolution.scopes.get(scope) {
+        return known.clone();
+    }
+    let Some((block, prefix)) = scope.blocks.split_last() else {
+        return ModuleTarget::Root;
+    };
+    let parent = resolve_module_scope(
+        board,
+        &ModulePath {
+            base: scope.base.clone(),
+            blocks: prefix.to_vec(),
+        },
+        resolution,
+    );
+    let target = resolve_module_block(board, block, &parent, resolution);
+    resolution.scopes.insert(scope.clone(), target.clone());
+    target
+}
+
+fn resolve_module_block(
+    board: &Board,
+    block: &ModuleBlockRef,
+    parent: &ModuleTarget,
+    resolution: &mut ModuleResolution,
+) -> ModuleTarget {
+    let parent_layer = match parent {
+        ModuleTarget::Existing(id) => Some(id.as_str()),
+        ModuleTarget::Root | ModuleTarget::New(_) => None,
+    };
+
+    if let Some(anchor) = block.anchor.as_deref() {
+        return match board.layers.get(anchor) {
+            Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                if !resolution.claimed_anchors.insert(anchor.to_string()) {
+                    resolution.diagnostics.push(format!(
+                        "module `{}` anchors to `{anchor}`, but another module block in this document already carries that anchor; every `//@l:` module anchor must be unique",
+                        block.name
+                    ));
+                    return ModuleTarget::Existing(anchor.to_string());
+                }
+                let actual_parent = owning_module(board, layer.parent_id.as_deref());
+                if module_path(board, anchor).is_empty() {
+                    resolution.diagnostics.push(format!(
+                        "module `{}` anchors to `{anchor}`, whose parent chain is cyclic; the board's module tree must be repaired first",
+                        block.name
+                    ));
+                } else if actual_parent.as_deref() != parent_layer
+                    || matches!(parent, ModuleTarget::New(_))
+                {
+                    // The anchor keeps identity; the written nesting position decides where the
+                    // module lives. The move applies as an explicit reviewable command.
+                    resolution
+                        .reparents
+                        .push((anchor.to_string(), parent.clone()));
+                }
+                if to_camel_case(&layer.name) != to_camel_case(&block.name) {
+                    resolution
+                        .renames
+                        .push((anchor.to_string(), block.name.clone()));
+                }
+                ModuleTarget::Existing(anchor.to_string())
+            }
+            Some(layer) => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` anchors to `{anchor}`, which is a {:?} layer, not a module",
+                    block.name, layer.r#type
+                ));
+                ModuleTarget::Root
+            }
+            None if board_contains_entity_id(board, anchor) => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` anchors to `{anchor}`, but that ID identifies {}, not a module layer",
+                    block.name,
+                    board_entity_location_labels(board, anchor).join(" and ")
+                ));
+                ModuleTarget::Root
+            }
+            None => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` anchors to `{anchor}`, which no longer exists on the board; remove the anchor to create a new module",
+                    block.name
+                ));
+                ModuleTarget::Root
+            }
+        };
+    }
+
+    let normalized = to_camel_case(&block.name);
+    if !matches!(parent, ModuleTarget::New(_)) {
+        let mut matches = board
+            .layers
+            .values()
+            .filter(|layer| {
+                matches!(layer.r#type, LayerType::Module)
+                    && !resolution.reserved_anchors.contains(&layer.id)
+                    && to_camel_case(&layer.name) == normalized
+                    && owning_module(board, layer.parent_id.as_deref()).as_deref() == parent_layer
+            })
+            .map(|layer| layer.id.clone())
+            .collect::<Vec<_>>();
+        matches.sort();
+        match matches.as_slice() {
+            [only] => return ModuleTarget::Existing(only.clone()),
+            [] => {}
+            many => {
+                resolution.diagnostics.push(format!(
+                    "module `{}` matches {} module layers by name ({}); anchor the block with `//@l:<layer id>` to say which one it is",
+                    block.name,
+                    many.len(),
+                    quoted_list(many)
+                ));
+                return ModuleTarget::Root;
+            }
+        }
+    }
+
+    let mut path = match parent {
+        ModuleTarget::Root => Vec::new(),
+        ModuleTarget::Existing(id) => resolution.board_paths.get(id).cloned().unwrap_or_default(),
+        ModuleTarget::New(index) => resolution.created[*index].path.clone(),
+    };
+    path.push(normalized.to_lowercase());
+    resolution.created.push(CreatedModule {
+        name: block.name.clone(),
+        parent: parent.clone(),
+        path,
+    });
+    ModuleTarget::New(resolution.created.len() - 1)
+}
+
+/// Remove board-local identities that cannot resolve on this board.
+///
+/// FlowScript is often copied between boards. The syntax of an anchor remains valid in the
+/// destination, but its id does not. Keeping that unavailable id would block planning before the
+/// ordinary unanchored resolver gets a chance to reuse a unique compatible entity or create one.
+/// A live id is never cleared here, including one that resolves to the wrong kind of entity. Those
+/// conflicts still need the normal compatibility diagnostic because they refer to local state.
+fn normalize_unavailable_anchors(existing: &Board, ast: &mut BoardAst) -> Vec<String> {
+    fn clear_if_unavailable(
+        anchor: &mut Option<String>,
+        kind: &str,
+        available: impl FnOnce(&str) -> bool,
+        corrections: &mut Vec<String>,
+    ) {
+        let Some(value) = anchor.as_deref() else {
+            return;
+        };
+        if available(value) {
+            return;
+        }
+        let value = anchor.take().unwrap_or_default();
+        corrections.push(format!(
+            "Ignored unavailable {kind} anchor `{value}`; reconciliation treated the entity as unanchored."
+        ));
+    }
+
+    fn visit_call(existing: &Board, call: &mut Call, corrections: &mut Vec<String>) {
+        clear_if_unavailable(
+            &mut call.anchor,
+            "node",
+            |id| board_contains_entity_id(existing, id),
+            corrections,
+        );
+        if let Some(receiver) = &mut call.receiver {
+            visit_expr(existing, receiver, corrections);
+        }
+        for positional in &mut call.positional {
+            visit_expr(existing, positional, corrections);
+        }
+        for arg in &mut call.args {
+            visit_expr(existing, &mut arg.value, corrections);
+        }
+    }
+
+    fn visit_expr(existing: &Board, expr: &mut Expr, corrections: &mut Vec<String>) {
+        match expr {
+            Expr::Call(call) => visit_call(existing, call, corrections),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => {
+                visit_expr(existing, base, corrections)
+            }
+            Expr::Object(fields) => {
+                for field in fields {
+                    visit_expr(existing, &mut field.value, corrections);
+                }
+            }
+            Expr::Array(items) => {
+                for item in items {
+                    visit_expr(existing, item, corrections);
+                }
+            }
+            Expr::Index { base, index } => {
+                visit_expr(existing, base, corrections);
+                visit_expr(existing, index, corrections);
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                visit_expr(existing, cond, corrections);
+                visit_expr(existing, then, corrections);
+                visit_expr(existing, otherwise, corrections);
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                visit_expr(existing, lhs, corrections);
+                visit_expr(existing, rhs, corrections);
+            }
+            Expr::Template { parts } => {
+                for part in parts {
+                    if let TemplatePart::Expr(expr) = part {
+                        visit_expr(existing, expr, corrections);
+                    }
+                }
+            }
+            Expr::Ref(_) | Expr::Literal(_) => {}
+        }
+    }
+
+    fn visit_event(
+        existing: &Board,
+        event: &mut EventBlock,
+        variable_scope: Option<&str>,
+        inside_function: bool,
+        corrections: &mut Vec<String>,
+    ) {
+        // Missing Event anchors keep their specialized recovery path. It can preserve a unique
+        // compatible entry before falling back to a fresh entry node. A multi-arm Event can repeat
+        // that identity on its first routing Branch, so protect the legal pair as one unit.
+        let shared_branch_anchor = event.anchor.as_deref().and_then(|event_anchor| {
+            let Stmt::Branch { call, anchor, .. } = event.body.stmts.first_mut()? else {
+                return None;
+            };
+            let statement_anchor = (anchor.as_deref() == Some(event_anchor))
+                .then(|| anchor.take())
+                .flatten();
+            let call_anchor = (call.anchor.as_deref() == Some(event_anchor))
+                .then(|| call.anchor.take())
+                .flatten();
+            (statement_anchor.is_some() || call_anchor.is_some())
+                .then_some((statement_anchor, call_anchor))
+        });
+        visit_block(
+            existing,
+            &mut event.body,
+            variable_scope,
+            inside_function,
+            corrections,
+        );
+        if let Some((statement_anchor, call_anchor)) = shared_branch_anchor
+            && let Some(Stmt::Branch { call, anchor, .. }) = event.body.stmts.first_mut()
+        {
+            if statement_anchor.is_some() {
+                *anchor = statement_anchor;
+            }
+            if call_anchor.is_some() {
+                call.anchor = call_anchor;
+            }
+        }
+    }
+
+    fn visit_function(existing: &Board, function: &mut FnDecl, corrections: &mut Vec<String>) {
+        clear_if_unavailable(
+            &mut function.anchor,
+            "Function layer",
+            |id| board_contains_entity_id(existing, id),
+            corrections,
+        );
+        let variable_scope = function.anchor.as_deref().filter(|id| {
+            existing
+                .layers
+                .get(*id)
+                .is_some_and(|layer| matches!(layer.r#type, LayerType::Function))
+        });
+        visit_block(
+            existing,
+            &mut function.body,
+            variable_scope,
+            true,
+            corrections,
+        );
+    }
+
+    fn visit_block(
+        existing: &Board,
+        block: &mut Block,
+        variable_scope: Option<&str>,
+        inside_function: bool,
+        corrections: &mut Vec<String>,
+    ) {
+        for stmt in &mut block.stmts {
+            match stmt {
+                Stmt::Let { call, anchor, .. }
+                | Stmt::Destructure { call, anchor, .. }
+                | Stmt::Call { call, anchor } => {
+                    visit_call(existing, call, corrections);
+                    clear_if_unavailable(
+                        anchor,
+                        "node",
+                        |id| board_contains_entity_id(existing, id),
+                        corrections,
+                    );
+                }
+                Stmt::Branch {
+                    call,
+                    condition,
+                    arms,
+                    anchor,
+                    ..
+                } => {
+                    visit_call(existing, call, corrections);
+                    if let Some(condition) = condition {
+                        visit_expr(existing, condition, corrections);
+                    }
+                    for arm in arms {
+                        visit_block(
+                            existing,
+                            &mut arm.body,
+                            variable_scope,
+                            inside_function,
+                            corrections,
+                        );
+                    }
+                    clear_if_unavailable(
+                        anchor,
+                        "node",
+                        |id| board_contains_entity_id(existing, id),
+                        corrections,
+                    );
+                }
+                Stmt::Loop {
+                    call,
+                    iterable,
+                    body,
+                    anchor,
+                    ..
+                } => {
+                    visit_call(existing, call, corrections);
+                    if let Some(iterable) = iterable {
+                        visit_expr(existing, iterable, corrections);
+                    }
+                    visit_block(existing, body, variable_scope, inside_function, corrections);
+                    clear_if_unavailable(
+                        anchor,
+                        "node",
+                        |id| board_contains_entity_id(existing, id),
+                        corrections,
+                    );
+                }
+                Stmt::Assign { value, anchor, .. }
+                | Stmt::FieldAssign { value, anchor, .. }
+                | Stmt::LocalAlias { value, anchor, .. } => {
+                    visit_expr(existing, value, corrections);
+                    clear_if_unavailable(
+                        anchor,
+                        "node",
+                        |id| board_contains_entity_id(existing, id),
+                        corrections,
+                    );
+                }
+                Stmt::Return { values, anchor } => {
+                    for value in values {
+                        visit_expr(existing, value, corrections);
+                    }
+                    clear_if_unavailable(
+                        anchor,
+                        "node",
+                        |id| board_contains_entity_id(existing, id),
+                        corrections,
+                    );
+                }
+                Stmt::Local(variable) => clear_if_unavailable(
+                    &mut variable.anchor,
+                    "variable",
+                    |id| board_contains_entity_id(existing, id),
+                    corrections,
+                ),
+                Stmt::Handler(event) => visit_event(
+                    existing,
+                    event,
+                    variable_scope,
+                    inside_function,
+                    corrections,
+                ),
+                Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    fn visit_module(existing: &Board, module: &mut ModuleDecl, corrections: &mut Vec<String>) {
+        clear_if_unavailable(
+            &mut module.anchor,
+            "module layer",
+            |id| board_contains_entity_id(existing, id),
+            corrections,
+        );
+        for function in &mut module.functions {
+            visit_function(existing, function, corrections);
+        }
+        for event in &mut module.events {
+            visit_event(existing, event, None, false, corrections);
+        }
+        for block in &mut module.detached {
+            visit_block(existing, block, None, false, corrections);
+        }
+        for nested in &mut module.modules {
+            visit_module(existing, nested, corrections);
+        }
+    }
+
+    let mut corrections = Vec::new();
+    for variable in &mut ast.variables {
+        clear_if_unavailable(
+            &mut variable.anchor,
+            "variable",
+            |id| board_contains_entity_id(existing, id),
+            &mut corrections,
+        );
+    }
+    for function in &mut ast.functions {
+        visit_function(existing, function, &mut corrections);
+    }
+    for event in &mut ast.events {
+        visit_event(existing, event, None, false, &mut corrections);
+    }
+    for block in &mut ast.detached {
+        visit_block(existing, block, None, false, &mut corrections);
+    }
+    for module in &mut ast.modules {
+        visit_module(existing, module, &mut corrections);
+    }
+    corrections
+}
+
 fn reconcile_inner(
     existing: &Board,
     new: &BoardAst,
     catalog: Option<&[NodeMetadata]>,
     enricher: Option<&MetadataEnricher>,
-    mode: ReconcileMode,
+    opts: &ReconcileOptions,
 ) -> ReconcileResult {
+    // Selection-scoped applies see only the board sections their document rendered. Out-of-scope
+    // events/functions are excluded from the deletion diff below (`visible`), which is the ONLY
+    // place reconcile plans node removals — so a scoped document can never delete content it did
+    // not render. Everything else (variables, catalog resolution, structural planning) keeps the
+    // full board as context.
+    let mode = opts.mode;
+    let scope: Option<HashSet<&str>> = opts
+        .scope_anchors
+        .map(|anchors| anchors.iter().map(String::as_str).collect());
+    let scope = scope.as_ref();
     let mut result = ReconcileResult::default();
-    let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(new);
+
+    // Reject ambiguous source before normalizing unavailable anchors. Two entities that claim the
+    // same foreign id are still ambiguous, even though that id does not exist on this board.
+    let raw_submitted = FlatDocument::new(new, opts.base_module());
+    let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(&raw_submitted);
     let duplicate_anchors = duplicate_ast_anchors(new);
     preflight_diagnostics.extend(duplicate_anchors.into_iter().map(|anchor| {
-            format!(
-                "duplicate FlowScript anchor `{anchor}` identifies more than one entity; no commands were derived"
-            )
-        }));
+        format!(
+            "duplicate FlowScript anchor `{anchor}` identifies more than one entity; no commands were derived"
+        )
+    }));
     if !preflight_diagnostics.is_empty() {
         preflight_diagnostics.sort();
         preflight_diagnostics.dedup();
         result.diagnostics = preflight_diagnostics;
         return result;
     }
-    let board_ast = super::lower_to_ast(existing);
-    let variable_refs = VariableRefLookup::from_board_and_ast(existing, new);
 
-    let variable_changes = reconcile_variables(existing, &board_ast, new, mode);
+    // Anchors are board-local identities. Source copied from another board can carry perfectly
+    // valid anchor syntax whose ids have no meaning here. Treat those ids as absent so the normal
+    // name/catalog resolver can reuse a unique compatible entity or create a fresh one. Anchors
+    // that resolve on this board stay authoritative and retain the stricter compatibility checks.
+    let mut normalized = new.clone();
+    result
+        .corrections
+        .extend(normalize_unavailable_anchors(existing, &mut normalized));
+
+    // `module` blocks are organization, not content: hoist every section they hold to the top
+    // level and remember which module it came from. Every phase below then diffs one flat section
+    // list, exactly as it did before modules existed.
+    let mut submitted = FlatDocument::new(&normalized, opts.base_module());
+    let modules = resolve_modules(existing, &submitted, opts.base_module());
+    result
+        .diagnostics
+        .extend(modules.diagnostics.iter().cloned());
+    result
+        .corrections
+        .extend(modules.corrections.iter().cloned());
+    if !modules.diagnostics.is_empty() {
+        result.diagnostics.sort();
+        result.diagnostics.dedup();
+        return result;
+    }
+
+    let mut board_ast = super::lower_to_ast(existing);
+    flatten_board_sections(&mut board_ast);
+    let variable_refs = VariableRefLookup::from_board_and_ast(existing, &normalized);
+
+    // A module file carries no variables of its own, so an omission there is never a deletion.
+    // Its declarations still create/update board globals — they simply render in `main.flow`.
+    let variable_changes = reconcile_variables(
+        existing,
+        &board_ast,
+        &normalized,
+        mode,
+        !opts.is_module_file(),
+    );
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
@@ -155,33 +1404,104 @@ fn reconcile_inner(
     // explicit: an active live cache becomes `cache: None` on the layer.
     result
         .commands
-        .extend(reconcile_function_caches(existing, new));
+        .extend(reconcile_function_caches(existing, &submitted, &modules));
 
-    // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
-    // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
-    // the calls and must outlive the `new_calls`/`visible` maps that borrow them, so build them in
-    // full up front — pushing to the Vec later would reallocate and invalidate the references.
-    let new_field_assign_calls = collect_anchored_field_assign_calls(new);
-    let board_field_assign_calls = collect_anchored_field_assign_calls(&board_ast);
+    // Variable REFERENCES resolve against the live board even in a file that declares none, so
+    // the planning document carries the board's own (anchored) declarations under the submitted
+    // ones. The diffs above already ran against the submitted document.
+    if opts.is_module_file() {
+        merge_live_variables(&mut submitted.ast, &board_ast);
+    }
+    let submitted = submitted;
 
-    // 1. Index every anchored call in the new AST by node id.
+    // Anchored `base.path = value` writes and sugared loop heads carry no `&Call` with their
+    // arguments, so synthesize the equivalent `struct_set`/loop-node calls the anchor-keyed
+    // collectors below diff against / delete. These arenas own the calls and must outlive the
+    // `new_calls`/`visible` maps that borrow them, so build them in full up front — pushing to the
+    // Vec later would reallocate and invalidate the references.
+    let new_synthesized_calls = collect_anchored_synthesized_calls(&submitted.ast, None);
+    let board_synthesized_calls = collect_anchored_synthesized_calls(&board_ast, scope);
+    let catalogless_authored_scopes = catalog
+        .is_none()
+        .then(|| authored_node_scopes(existing, &submitted, &modules));
+
+    // 1. Index every anchored call in the new AST by node id. A synthesized call replaces the
+    //    argument-less placeholder a sugared loop statement registered for the same anchor.
     let mut new_calls: HashMap<String, &Call> = HashMap::new();
-    collect_calls(new, &mut new_calls);
-    for call in &new_field_assign_calls {
+    collect_calls(&submitted.ast, &mut new_calls);
+    for call in &new_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
-            new_calls.entry(anchor.to_string()).or_insert(call);
+            new_calls.insert(anchor.to_string(), call);
         }
     }
+    let unavailable_event_anchors = declared_event_anchors(&submitted.ast)
+        .into_iter()
+        .filter(|anchor| find_board_node(existing, anchor).is_none())
+        .collect::<HashSet<_>>();
 
     // 2. Configuration edits: for each anchored call that still maps to a board node, diff its
     //    literal arguments against the node's current pin defaults.
     for (anchor, call) in &new_calls {
         let Some(node) = find_board_node(existing, anchor) else {
+            // A multi-output Event repeats its header anchor on the first routing Branch. Missing
+            // Event identities are handled by specialized structural recovery below, which also
+            // remaps that Branch to the recovered or recreated entry.
+            if unavailable_event_anchors.contains(anchor) {
+                continue;
+            }
             result.diagnostics.push(format!(
                 "anchor {anchor} no longer resolves to a board node; skipped"
             ));
             continue;
         };
+        if let Some(authored_scope) = catalogless_authored_scopes
+            .as_ref()
+            .and_then(|scopes| scopes.get(anchor))
+        {
+            let actual_scope = board_node_semantic_scope(existing, node);
+            let written_scope = match authored_scope {
+                AuthoredNodeScope::Existing(expected) if actual_scope == *expected => None,
+                AuthoredNodeScope::Existing(expected) => {
+                    Some(node_scope_label(existing, expected.as_deref()))
+                }
+                AuthoredNodeScope::Planned(label) => Some(label.clone()),
+            };
+            if let Some(written_scope) = written_scope {
+                result.diagnostics.push(format!(
+                    "call `{}` keeps anchor `{anchor}`, but that node belongs to {} while the written call is in {written_scope}; no pin values were changed",
+                    call_callee(call),
+                    node_scope_label(existing, actual_scope.as_deref())
+                ));
+                continue;
+            }
+        }
+        // A hand-written method receiver or positional literal on an anchored call binds to the
+        // live node's pins exactly like the structural planner binds it.
+        let folded;
+        let call: &Call = if call.receiver.is_some() || !call.positional.is_empty() {
+            let live = node_to_metadata(node);
+            match fold_call_arguments(call, &live, live_receiver_pin(&live).as_deref()) {
+                Ok(call) => {
+                    folded = call;
+                    &folded
+                }
+                // A call that cannot bind here is not a configuration edit of THIS node: an
+                // assignment renders only its statement anchor, so an inlined value call is
+                // keyed by the `variable_set`/`struct_set` node it feeds, and a stale anchor
+                // names a node the call never was. Both belong to the structural planner, which
+                // reports them against the right node; reporting the bind failure here would
+                // preempt that with advice about the wrong one.
+                Err(diagnostic) => {
+                    if call_matches_node(call, node) {
+                        result.diagnostics.push(diagnostic);
+                    }
+                    continue;
+                }
+            }
+        } else {
+            call
+        };
+        let variable_scope = variable_scope_for_node(existing, node);
         // Multi-pins (several input pins sharing one name) pair positionally with the
         // same-named args, mirroring the order lowering emitted them in.
         let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
@@ -214,7 +1534,48 @@ fn reconcile_inner(
                 // which creates the pin and then applies the write; a genuinely unknown pin stays a
                 // (non-fatal) skip.
                 if arg_targets_predicted_dynamic_pin(node, anchor, call, arg, existing, enricher) {
-                    normalize_variable_ref_value_for_pin(&mut new_value, &arg.name, &variable_refs);
+                    if catalog.is_some() && is_variable_ref_pin_name(&arg.name) {
+                        // Structural planning knows about Function-local variables created in this
+                        // revision and owns the final ID-valued update.
+                        continue;
+                    }
+                    let normalized_variable_ref = normalize_variable_ref_value_for_pin(
+                        &mut new_value,
+                        &arg.name,
+                        &variable_refs,
+                        variable_scope.as_deref(),
+                    );
+                    match normalized_variable_ref {
+                        Err(candidates) => {
+                            let raw = literal_expr_to_value(&arg.value)
+                                .and_then(|value| value.as_str().map(str::to_string))
+                                .unwrap_or_else(|| arg.name.clone());
+                            result.diagnostics.push(variable_ref_scope_diagnostic(
+                                &raw,
+                                &candidates,
+                                &variable_target_scope_label(existing, variable_scope.as_deref()),
+                            ));
+                            continue;
+                        }
+                        Ok(false) => {
+                            if catalog.is_none() {
+                                let raw = literal_expr_to_value(&arg.value)
+                                    .and_then(|value| value.as_str().map(str::to_string))
+                                    .unwrap_or_else(|| arg.name.clone());
+                                result.diagnostics.push(format!(
+                                    "variable reference `{raw}` does not resolve in {}; no pin value was changed",
+                                    variable_target_scope_label(
+                                        existing,
+                                        variable_scope.as_deref()
+                                    )
+                                ));
+                            }
+                            // Catalog-aware structural planning may create a local variable later
+                            // in this same revision. It owns the final ID-valued pin update.
+                            continue;
+                        }
+                        Ok(true) => {}
+                    }
                     result.commands.push(BoardCommand::UpdateNodePin {
                         node_id: anchor.clone(),
                         pin_id: arg.name.clone(),
@@ -227,13 +1588,13 @@ fn reconcile_inner(
                     // selector, or a page/widget build that has not landed). Saying only "no pin
                     // named X; skipped" reads like a typo and silently drops the data binding.
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check. No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
                 } else {
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
@@ -249,7 +1610,46 @@ fn reconcile_inner(
                     pins.len(),
                 ));
             }
-            normalize_variable_ref_value_for_pin(&mut new_value, &pin.name, &variable_refs);
+            if catalog.is_some() && is_variable_ref_pin_name(&pin.name) {
+                // The structural planner resolves both live variables and locals created earlier
+                // in the same authored Function. Avoid appending a raw or duplicate update after
+                // its canonical variable ID.
+                continue;
+            }
+            let normalized_variable_ref = normalize_variable_ref_value_for_pin(
+                &mut new_value,
+                &pin.name,
+                &variable_refs,
+                variable_scope.as_deref(),
+            );
+            match normalized_variable_ref {
+                Err(candidates) => {
+                    let raw = literal_expr_to_value(&arg.value)
+                        .and_then(|value| value.as_str().map(str::to_string))
+                        .unwrap_or_else(|| arg.name.clone());
+                    result.diagnostics.push(variable_ref_scope_diagnostic(
+                        &raw,
+                        &candidates,
+                        &variable_target_scope_label(existing, variable_scope.as_deref()),
+                    ));
+                    continue;
+                }
+                Ok(false) => {
+                    if catalog.is_none() {
+                        let raw = literal_expr_to_value(&arg.value)
+                            .and_then(|value| value.as_str().map(str::to_string))
+                            .unwrap_or_else(|| arg.name.clone());
+                        result.diagnostics.push(format!(
+                            "variable reference `{raw}` does not resolve in {}; no pin value was changed",
+                            variable_target_scope_label(existing, variable_scope.as_deref())
+                        ));
+                    }
+                    // The structural planner resolves new same-revision locals and reports truly
+                    // unknown references. Never append a raw name after its ID-valued update.
+                    continue;
+                }
+                Ok(true) => {}
+            }
             let current = pin
                 .default_value
                 .as_deref()
@@ -295,8 +1695,8 @@ fn reconcile_inner(
     //    "text-visible" from the board's own lowered AST so sugared/inlined nodes (reroutes,
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
-    collect_statement_calls(&board_ast, &mut visible);
-    for call in &board_field_assign_calls {
+    collect_statement_calls(&board_ast, scope, &mut visible);
+    for call in &board_synthesized_calls {
         if let Some(anchor) = call.anchor.as_deref() {
             visible.entry(anchor.to_string()).or_insert(call);
         }
@@ -322,7 +1722,11 @@ fn reconcile_inner(
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
     //    text. Translate those to the same command format the UI already reviews/applies.
     if let Some(catalog) = catalog {
-        let structural = StructuralPlanner::new(existing, catalog, enricher).plan(new);
+        let mut planner = StructuralPlanner::new(existing, catalog, enricher);
+        planner.lowered_event_names = lowered_event_names(&board_ast);
+        planner.moves_authoritative =
+            !submitted.module_blocks.is_empty() || opts.base_module().is_some();
+        let structural = planner.plan(&submitted, &modules);
         if !structural.commands.is_empty() {
             let anchored_edits = std::mem::take(&mut result.commands);
             result.commands = structural.commands;
@@ -330,11 +1734,31 @@ fn reconcile_inner(
         }
         result.corrections.extend(structural.corrections);
         result.diagnostics.extend(structural.diagnostics);
-    } else if ast_has_unanchored_calls(new) {
-        result.diagnostics.push(
-            "FlowScript contains new unanchored calls; catalog metadata is required to turn them into board commands."
-                .to_string(),
-        );
+    } else {
+        for func in &submitted.ast.functions {
+            let Some(anchor) = func.anchor.as_deref() else {
+                continue;
+            };
+            let Some(layer) = existing
+                .layers
+                .get(anchor)
+                .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            else {
+                continue;
+            };
+            if to_camel_case(&layer.name) != to_camel_case(&func.name) {
+                result.diagnostics.push(format!(
+                    "renaming anchored Function `{}` requires catalog-aware reconciliation; no part of this revision was applied",
+                    func.name
+                ));
+            }
+        }
+        if ast_has_unanchored_calls(&submitted.ast) {
+            result.diagnostics.push(
+                "FlowScript contains new unanchored calls; catalog metadata is required to turn them into board commands."
+                    .to_string(),
+            );
+        }
     }
 
     // Bridge severed exec chains AFTER structural planning merged: when a removed statement was
@@ -363,10 +1787,12 @@ fn reconcile_inner(
         );
     }
 
-    // Layer-size gate LAST, over the merged command set: a violating edit queues nothing.
+    // Layer size is ADVICE, not a gate. A crowded layer is a readability and performance
+    // problem, not a correctness one, and refusing the whole edit over it stranded authors with
+    // a document that could not be applied at all — the edit was rejected wholesale rather than
+    // landing with a note. Report it as a correction so the work still applies.
     if let Some(violations) = layer_node_limit_violations(existing, &result.commands) {
-        result.commands.clear();
-        result.diagnostics.extend(violations);
+        result.corrections.extend(violations);
     }
 
     result.corrections.sort();
@@ -387,27 +1813,59 @@ fn function_cache_to_layer_cache(cache: &FunctionCache) -> LayerCache {
     }
 }
 
-fn matching_function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a Layer> {
+/// The board layer a `function` declaration identifies. Its anchor is authoritative; an
+/// unanchored declaration is matched by name WITHIN ITS OWN MODULE, so two modules may each own a
+/// `helper` without either claiming the other's layer.
+fn matching_function_layer<'a>(
+    existing: &'a Board,
+    func: &FnDecl,
+    module: Option<&str>,
+    claimed_layers: &HashSet<String>,
+) -> Option<&'a Layer> {
     if let Some(anchor) = func.anchor.as_deref() {
-        return existing.layers.get(anchor).filter(|layer| {
-            matches!(layer.r#type, LayerType::Function)
-                && to_camel_case(&layer.name) == to_camel_case(&func.name)
-        });
+        return existing
+            .layers
+            .get(anchor)
+            .filter(|layer| matches!(layer.r#type, LayerType::Function));
     }
 
     let normalized_name = to_camel_case(&func.name);
     let mut matches = existing.layers.values().filter(|layer| {
-        matches!(layer.r#type, LayerType::Function) && to_camel_case(&layer.name) == normalized_name
+        matches!(layer.r#type, LayerType::Function)
+            && !claimed_layers.contains(&layer.id)
+            && to_camel_case(&layer.name) == normalized_name
+            && owning_module(existing, layer.parent_id.as_deref()).as_deref() == module
     });
     let only = matches.next()?;
     matches.next().is_none().then_some(only)
 }
 
-fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardCommand> {
-    ast.functions
+fn reconcile_function_caches(
+    existing: &Board,
+    doc: &FlatDocument,
+    modules: &ModuleResolution,
+) -> Vec<BoardCommand> {
+    let claimed_layers = doc
+        .ast
+        .functions
         .iter()
-        .filter_map(|func| {
-            let layer = matching_function_layer(existing, func)?;
+        .filter_map(|func| func.anchor.as_ref())
+        .filter(|anchor| {
+            existing
+                .layers
+                .get(*anchor)
+                .is_some_and(|layer| matches!(layer.r#type, LayerType::Function))
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+    doc.ast
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, func)| {
+            let module = modules.board_module(&doc.function_scopes[index])?;
+            let layer =
+                matching_function_layer(existing, func, module.as_deref(), &claimed_layers)?;
             let desired = func.cache.as_ref().map(function_cache_to_layer_cache);
             // Disabled cache records are equivalent to an absent decorator. Preserve those dormant
             // settings unless FlowScript explicitly enables caching, avoiding a no-op rewrite.
@@ -441,7 +1899,61 @@ fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardComma
 /// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
 /// Reconcile is atomic, so an ambiguous document must produce diagnostics and zero commands rather
 /// than creating duplicate variables or an orphan Function layer before a later declaration wins.
-fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
+/// Index every event block in a LOWERED board by its entry-node anchor, so the rename check can ask
+/// what the live board is already called rather than guessing from the node's friendly name.
+fn lowered_event_names(ast: &BoardAst) -> HashMap<String, String> {
+    fn walk_block(block: &Block, out: &mut HashMap<String, String>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Handler(event) => {
+                    record(event, out);
+                    walk_block(&event.body, out);
+                }
+                Stmt::Branch { arms, .. } => {
+                    for arm in arms {
+                        walk_block(&arm.body, out);
+                    }
+                }
+                Stmt::Loop { body, .. } => walk_block(body, out),
+                _ => {}
+            }
+        }
+    }
+    fn record(event: &EventBlock, out: &mut HashMap<String, String>) {
+        if let Some(anchor) = event.anchor.as_deref() {
+            let name = event.event_name.as_deref().unwrap_or(&event.name);
+            out.insert(anchor.to_string(), name.to_string());
+        }
+    }
+    fn walk_module(module: &ModuleDecl, out: &mut HashMap<String, String>) {
+        for event in &module.events {
+            record(event, out);
+            walk_block(&event.body, out);
+        }
+        for function in &module.functions {
+            walk_block(&function.body, out);
+        }
+        for nested in &module.modules {
+            walk_module(nested, out);
+        }
+    }
+
+    let mut out = HashMap::new();
+    for event in &ast.events {
+        record(event, &mut out);
+        walk_block(&event.body, &mut out);
+    }
+    for function in &ast.functions {
+        walk_block(&function.body, &mut out);
+    }
+    for module in &ast.modules {
+        walk_module(module, &mut out);
+    }
+    out
+}
+
+fn duplicate_ast_declaration_diagnostics(doc: &FlatDocument) -> Vec<String> {
+    let ast = &doc.ast;
     fn register_duplicates<'a>(
         names: impl IntoIterator<Item = &'a str>,
         noun: &str,
@@ -520,6 +2032,7 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
                 Stmt::Loop { body, .. } => visit_block(body, scope, diagnostics),
                 Stmt::Handler(event) => visit_event(event, scope, diagnostics),
                 Stmt::Let { .. }
+                | Stmt::Destructure { .. }
                 | Stmt::Call { .. }
                 | Stmt::Assign { .. }
                 | Stmt::FieldAssign { .. }
@@ -538,12 +2051,73 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         "at the top level",
         &mut diagnostics,
     );
-    register_duplicates(
-        ast.functions.iter().map(|function| function.name.as_str()),
-        "function declaration",
-        "at the top level",
-        &mut diagnostics,
-    );
+    // Function names are unique PER MODULE: `checkout::helper` and `payments::helper` are two
+    // different functions, but one module may not declare `helper` twice.
+    let mut by_scope: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    let mut scope_order: Vec<&ModulePath> = Vec::new();
+    for (index, function) in ast.functions.iter().enumerate() {
+        let scope = &doc.function_scopes[index];
+        let slot = match scope_order.iter().position(|known| *known == scope) {
+            Some(slot) => slot,
+            None => {
+                scope_order.push(scope);
+                scope_order.len() - 1
+            }
+        };
+        by_scope
+            .entry(slot)
+            .or_default()
+            .push(function.name.as_str());
+    }
+    for (slot, names) in by_scope {
+        register_duplicates(
+            names.iter().copied(),
+            "function declaration",
+            &scope_order[slot].label(),
+            &mut diagnostics,
+        );
+        register_normalized_boundary_duplicates(
+            names.iter().copied(),
+            "function declaration",
+            &scope_order[slot].label(),
+            &mut diagnostics,
+        );
+    }
+    // Two `module` blocks with the same name in the same place are one module written twice.
+    let mut modules_by_parent: BTreeMap<Vec<String>, Vec<&str>> = BTreeMap::new();
+    for scope in &doc.module_blocks {
+        let Some((block, prefix)) = scope.blocks.split_last() else {
+            continue;
+        };
+        modules_by_parent
+            .entry(
+                prefix
+                    .iter()
+                    .map(|block| to_camel_case(&block.name))
+                    .collect(),
+            )
+            .or_default()
+            .push(block.name.as_str());
+    }
+    for (prefix, names) in modules_by_parent {
+        let scope = if prefix.is_empty() {
+            "at the top level".to_string()
+        } else {
+            format!("in module `{}`", prefix.join("::"))
+        };
+        register_duplicates(
+            names.iter().copied(),
+            "module declaration",
+            &scope,
+            &mut diagnostics,
+        );
+        register_normalized_boundary_duplicates(
+            names.iter().copied(),
+            "module declaration",
+            &scope,
+            &mut diagnostics,
+        );
+    }
     // Named events and functions are both registered as same-batch aliases by the apply planner.
     // Two named events (even of different catalog types), or a function and named event sharing a
     // name, therefore make `SetNodeFunctionRefs` resolution ambiguous. Reject that document here
@@ -697,6 +2271,10 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         let scope = format!("in event `{}` #{}", event.name, index + 1);
         visit_event(event, &scope, &mut diagnostics);
     }
+    for (index, block) in ast.detached.iter().enumerate() {
+        let scope = format!("in detached block #{}", index + 1);
+        visit_block(block, &scope, &mut diagnostics);
+    }
 
     diagnostics.sort();
     diagnostics.dedup();
@@ -720,6 +2298,20 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
         duplicate: &mut HashSet<String>,
     ) {
         register(call.anchor.as_deref().or(fallback_anchor), seen, duplicate);
+        visit_call_operands(call, seen, duplicate);
+    }
+
+    fn visit_call_operands(
+        call: &Call,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        if let Some(receiver) = &call.receiver {
+            visit_expr(receiver, None, seen, duplicate);
+        }
+        for value in &call.positional {
+            visit_expr(value, None, seen, duplicate);
+        }
         for argument in &call.args {
             visit_expr(&argument.value, None, seen, duplicate);
         }
@@ -768,6 +2360,12 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 visit_expr(then, None, seen, duplicate);
                 visit_expr(otherwise, None, seen, duplicate);
             }
+            Expr::Template { parts } => {
+                register(fallback_anchor, seen, duplicate);
+                for part in template_exprs(parts) {
+                    visit_expr(part, None, seen, duplicate);
+                }
+            }
             Expr::Ref(_) | Expr::Literal(_) => register(fallback_anchor, seen, duplicate),
         }
     }
@@ -807,9 +2405,7 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 .map(str::trim)
                 .filter(|anchor| !anchor.is_empty());
             if branch_anchor == Some(event_anchor) {
-                for argument in &call.args {
-                    visit_expr(&argument.value, None, seen, duplicate);
-                }
+                visit_call_operands(call, seen, duplicate);
                 if let Some(condition) = condition {
                     visit_expr(condition, None, seen, duplicate);
                 }
@@ -832,9 +2428,9 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
 
     fn visit_stmt(statement: &Stmt, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
         match statement {
-            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                visit_call(call, anchor.as_deref(), seen, duplicate)
-            }
+            Stmt::Let { call, anchor, .. }
+            | Stmt::Destructure { call, anchor, .. }
+            | Stmt::Call { call, anchor } => visit_call(call, anchor.as_deref(), seen, duplicate),
             Stmt::Branch {
                 call,
                 condition,
@@ -851,9 +2447,16 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
                 }
             }
             Stmt::Loop {
-                call, body, anchor, ..
+                call,
+                iterable,
+                body,
+                anchor,
+                ..
             } => {
                 visit_call(call, anchor.as_deref(), seen, duplicate);
+                if let Some(iterable) = iterable {
+                    visit_expr(iterable, None, seen, duplicate);
+                }
                 visit_block(body, seen, duplicate);
             }
             Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
@@ -875,17 +2478,53 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
         }
     }
 
+    fn visit_function(
+        function: &FnDecl,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        register(function.anchor.as_deref(), seen, duplicate);
+        visit_block(&function.body, seen, duplicate);
+    }
+
+    fn visit_module(
+        module: &ModuleDecl,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        register(module.anchor.as_deref(), seen, duplicate);
+        for function in &module.functions {
+            visit_function(function, seen, duplicate);
+        }
+        for event in &module.events {
+            visit_event(event, seen, duplicate);
+        }
+        for block in &module.detached {
+            visit_block(block, seen, duplicate);
+        }
+        for nested in &module.modules {
+            visit_module(nested, seen, duplicate);
+        }
+    }
+
     let mut seen = HashSet::new();
     let mut duplicate = HashSet::new();
     for variable in &ast.variables {
         register(variable.anchor.as_deref(), &mut seen, &mut duplicate);
     }
     for function in &ast.functions {
-        register(function.anchor.as_deref(), &mut seen, &mut duplicate);
-        visit_block(&function.body, &mut seen, &mut duplicate);
+        visit_function(function, &mut seen, &mut duplicate);
     }
     for event in &ast.events {
         visit_event(event, &mut seen, &mut duplicate);
+    }
+    // A `detached` block has no header anchor of its own, so it gets no entry/arm-routing
+    // exemption: every anchor inside it must be unique like any other statement's.
+    for block in &ast.detached {
+        visit_block(block, &mut seen, &mut duplicate);
+    }
+    for module in &ast.modules {
+        visit_module(module, &mut seen, &mut duplicate);
     }
     let mut duplicate = duplicate.into_iter().collect::<Vec<_>>();
     duplicate.sort();
@@ -997,9 +2636,9 @@ fn bridge_removed_exec_chains(
     }
 }
 
-/// Enforce [`MAX_NODES_PER_LAYER`]: existing per-layer populations plus the edit's additions
-/// (minus its removals) must stay within the cap. Returns violation diagnostics, or `None` when
-/// the edit fits.
+/// Check the [`MAX_NODES_PER_LAYER`] guideline: existing per-layer populations plus the edit's
+/// additions (minus its removals). Returns advisory messages, or `None` when the edit fits.
+/// This is a lint, NOT a gate — an over-budget edit still applies.
 fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> Option<Vec<String>> {
     let mut counts: HashMap<Option<String>, i64> = HashMap::new();
     let mut layer_names: HashMap<String, String> = HashMap::new();
@@ -1031,6 +2670,15 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
         *counts.entry(layer.clone()).or_default() += 1;
     }
 
+    // Module layers are FILES, not frames: their content is a document of its own, so the
+    // per-frame budget that keeps a function readable does not apply to them.
+    let mut exempt: HashSet<String> = existing
+        .layers
+        .values()
+        .filter(|layer| matches!(layer.r#type, LayerType::Module))
+        .map(|layer| layer.id.clone())
+        .collect();
+
     let mut net_added: HashMap<Option<String>, i64> = HashMap::new();
     for command in commands {
         match command {
@@ -1041,9 +2689,13 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
             BoardCommand::CreateLayer {
                 ref_id: Some(ref_id),
                 name,
+                layer_type,
                 ..
             } => {
                 layer_names.insert(ref_id.clone(), name.clone());
+                if matches!(layer_type.as_deref(), Some("Module") | Some("module")) {
+                    exempt.insert(ref_id.clone());
+                }
             }
             BoardCommand::RemoveNode { node_id, .. } => {
                 if let Some(layer) = node_layers.get(node_id) {
@@ -1063,6 +2715,7 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
         .filter(|(layer, count)| {
             **count > MAX_NODES_PER_LAYER as i64
                 && net_added.get(*layer).copied().unwrap_or_default() > 0
+                && !layer.as_deref().is_some_and(|id| exempt.contains(id))
         })
         .map(|(layer, count)| {
             let scope = match layer {
@@ -1073,7 +2726,7 @@ fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> O
                 None => "the root layer".to_string(),
             };
             format!(
-                "this edit would leave {scope} with {count} nodes (max {MAX_NODES_PER_LAYER}). Nothing was queued. Split the logic into smaller `function name(...) {{ ... }}` declarations — each function layer has its own {MAX_NODES_PER_LAYER}-node budget — and call them instead"
+                "{scope} now holds {count} nodes, over the {MAX_NODES_PER_LAYER}-node guideline. The edit was applied. Consider splitting the logic into smaller `function name(...) {{ ... }}` declarations — each function layer has its own budget — and calling them instead"
             )
         })
         .collect();
@@ -1117,21 +2770,46 @@ fn literal_to_value(lit: &Literal) -> flow_like_types::Value {
     }
 }
 
+/// Carry the board's own variable declarations (with their `//@v` anchors) into a document that
+/// declares none of its own, so `myVar` in a module file still resolves to the board global.
+/// Declarations the document DID write win — they are the create/update the author asked for.
+fn merge_live_variables(planning: &mut BoardAst, board_ast: &BoardAst) {
+    let declared: HashSet<&str> = planning
+        .variables
+        .iter()
+        .map(|var| var.name.as_str())
+        .collect();
+    let inherited = board_ast
+        .variables
+        .iter()
+        .filter(|var| !declared.contains(var.name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    planning.variables.extend(inherited);
+}
+
 fn reconcile_variables(
     live_board: &Board,
     existing: &BoardAst,
     new: &BoardAst,
     mode: ReconcileMode,
+    remove_missing: bool,
 ) -> ReconcileResult {
     let mut result = ReconcileResult::default();
     let mut existing_by_anchor: HashMap<&str, &VarDecl> = HashMap::new();
-    let mut existing_by_name: HashMap<&str, &VarDecl> = HashMap::new();
+    let mut existing_by_name: HashMap<&str, Vec<&VarDecl>> = HashMap::new();
 
     for var in &existing.variables {
         if let Some(anchor) = var.anchor.as_deref() {
             existing_by_anchor.insert(anchor, var);
         }
-        existing_by_name.insert(var.name.as_str(), var);
+        existing_by_name
+            .entry(var.name.as_str())
+            .or_default()
+            .push(var);
+    }
+    for matches in existing_by_name.values_mut() {
+        matches.sort_by_key(|var| var.anchor.as_deref().unwrap_or_default());
     }
 
     let mut seen_existing = HashSet::new();
@@ -1143,18 +2821,60 @@ fn reconcile_variables(
             ));
             continue;
         }
+        if let Some(anchor) = var.anchor.as_deref() {
+            let locations = variable_location_labels(live_board, anchor);
+            if locations.len() > 1 {
+                result.diagnostics.push(format!(
+                    "top-level variable `{}` keeps anchor `{anchor}`, but that variable ID appears in {}; variable IDs must be unique across Board and layer scopes",
+                    var.name,
+                    locations.join(" and ")
+                ));
+                continue;
+            }
+        }
         let matched = match var.anchor.as_deref() {
             Some(anchor) => match existing_by_anchor.get(anchor).copied() {
                 Some(existing) => Some(existing),
                 None => {
+                    if board_contains_variable_id(live_board, anchor) {
+                        result.diagnostics.push(format!(
+                            "top-level variable `{}` keeps anchor `{anchor}`, but that live variable belongs to {}; a Board-global declaration cannot claim a layer-local identity",
+                            var.name,
+                            variable_location_labels(live_board, anchor).join(" and ")
+                        ));
+                    } else if board_contains_entity_id(live_board, anchor) {
+                        result.diagnostics.push(format!(
+                            "top-level variable `{}` keeps anchor `{anchor}`, but that ID identifies {}; a `//@v:` anchor must identify a Board-global variable",
+                            var.name,
+                            board_entity_location_labels(live_board, anchor).join(" and ")
+                        ));
+                    } else {
+                        result.diagnostics.push(format!(
+                            "variable `{}` anchors to `{anchor}`, which no longer exists on the board; the explicit anchor was not replaced by a name match",
+                            var.name
+                        ));
+                    }
+                    continue;
+                }
+            },
+            None => match existing_by_name.get(var.name.as_str()).map(Vec::as_slice) {
+                None | Some([]) => None,
+                Some([only]) => Some(*only),
+                Some(matches) => {
                     result.diagnostics.push(format!(
-                        "variable `{}` anchors to `{anchor}`, which no longer exists on the board; the explicit anchor was not replaced by a name match",
-                        var.name
+                        "unanchored variable `{}` matches {} live variables; add the intended `//@v:<variable id>` anchor ({})",
+                        var.name,
+                        matches.len(),
+                        quoted_list(
+                            &matches
+                                .iter()
+                                .filter_map(|candidate| candidate.anchor.clone())
+                                .collect::<Vec<_>>()
+                        )
                     ));
                     continue;
                 }
             },
-            None => existing_by_name.get(var.name.as_str()).copied(),
         };
 
         match matched {
@@ -1187,12 +2907,14 @@ fn reconcile_variables(
                 }
             }
             None => {
-                result.commands.push(create_variable_command(new, var));
+                result
+                    .commands
+                    .push(create_variable_command(live_board, new, var));
             }
         }
     }
 
-    if mode == ReconcileMode::Replace {
+    if mode == ReconcileMode::Replace && remove_missing {
         for var in &existing.variables {
             let Some(anchor) = var.anchor.as_deref() else {
                 continue;
@@ -1217,9 +2939,9 @@ fn reconcile_variables(
     result
 }
 
-fn create_variable_command(ast: &BoardAst, var: &VarDecl) -> BoardCommand {
+fn create_variable_command(board: &Board, ast: &BoardAst, var: &VarDecl) -> BoardCommand {
     BoardCommand::CreateVariable {
-        variable_id: Some(variable_id_for_decl(var)),
+        variable_id: Some(variable_id_for_decl_against_board(board, var)),
         name: var.name.clone(),
         data_type: variable_data_type(var).to_string(),
         value_type: variable_value_type(var).to_string(),
@@ -1464,16 +3186,30 @@ const CALL_FUNCTION_NODE_TYPE: &str = "control_call_function";
 /// this catalog type, so anchored display validation must treat it as intentional sugar.
 const CALL_REFERENCE_NODE_TYPE: &str = "control_call_reference";
 const FUNCTION_LAYER_ID_PIN: &str = "function_layer_id";
+/// The node a `cond ? a : b` ternary lowers from and materializes to (`lower.rs::TYPES_SELECT`).
+const TYPES_SELECT_NODE_TYPE: &str = "utils_types_select";
+
+/// `string_format`'s output pin, read by a template literal.
+const FORMATTED_STRING_PIN: &str = "formatted_string";
 
 /// Catalog nodes that FlowScript renders as binary operators. This is the write-side counterpart
 /// of `lower.rs::BINARY_OPS`: every two-data-input operator the reader emits must be materializable
 /// again, including Boolean composition and arithmetic nested inside a condition or call argument.
 ///
-/// Float equality nodes deliberately are not listed: unlike the two-operand sugar they also
-/// require a tolerance input, so silently inventing one would change the authored semantics.
+/// A trailing input is only spellable by the operator form when it carries a default, which the
+/// operator leaves untouched — `equal_string`'s `ignore_case` and the float comparisons'
+/// `tolerance` (default `0.0`, i.e. exact equality, which is what `==` renders and re-parses as).
+/// A node whose trailing input has no default is rejected by `binary_data_inputs` and keeps the
+/// call form.
+///
+/// The third column is the RESULT type, which is not always the operand type: `int_divide` is
+/// true division and yields a `Float` (`int::div` is the truncating Integer form, and is not an
+/// operator). `lint_catalog::binary_operator_rows_resolve_against_the_catalog` pins every row
+/// against the real catalog.
 const BINARY_OPERATOR_NODES: &[(&str, &str, &str, &str)] = &[
     ("==", "String", "Boolean", "equal_string"),
     ("!=", "String", "Boolean", "not_equal_string"),
+    ("+", "String", "String", "string_concat"),
     ("==", "Boolean", "Boolean", "bool_equal"),
     ("&&", "Boolean", "Boolean", "bool_and"),
     ("||", "Boolean", "Boolean", "bool_or"),
@@ -1487,9 +3223,11 @@ const BINARY_OPERATOR_NODES: &[(&str, &str, &str, &str)] = &[
     ("+", "Integer", "Integer", "int_add"),
     ("-", "Integer", "Integer", "int_subtract"),
     ("*", "Integer", "Integer", "int_multiply"),
-    ("/", "Integer", "Integer", "int_divide"),
+    ("/", "Integer", "Float", "int_divide"),
     ("%", "Integer", "Integer", "int_modulo"),
     ("**", "Integer", "Integer", "int_power"),
+    ("==", "Float", "Boolean", "float_equal"),
+    ("!=", "Float", "Boolean", "float_unequal"),
     (">", "Float", "Boolean", "float_greater_than"),
     (">=", "Float", "Boolean", "float_greater_than_or_equal"),
     ("<", "Float", "Boolean", "float_less_than"),
@@ -1500,6 +3238,13 @@ const BINARY_OPERATOR_NODES: &[(&str, &str, &str, &str)] = &[
     ("/", "Float", "Float", "float_divide"),
     ("**", "Float", "Float", "float_power"),
 ];
+
+/// The operator table above, for catalog lints that must check it against the real catalog.
+/// Rows are `(operator, operand type, result type, node type)`.
+pub fn binary_operator_rows() -> &'static [(&'static str, &'static str, &'static str, &'static str)]
+{
+    BINARY_OPERATOR_NODES
+}
 
 fn canonical_binary_op(op: &str) -> &str {
     match op {
@@ -1516,13 +3261,20 @@ fn binary_operator_op(node_type: &str) -> Option<&'static str> {
         .map(|(op, _, _, _)| *op)
 }
 
+/// The two operand pins of a binary-operator node: its first two data inputs. Trailing inputs
+/// (`ignore_case` on `equal_string`) are allowed only when they carry a default, which the
+/// operator form leaves untouched; a node with a required third input cannot be an operator.
 fn binary_data_inputs(meta: &NodeMetadata) -> Option<Vec<&PinMetadata>> {
     let inputs = meta
         .inputs
         .iter()
         .filter(|pin| pin.data_type != "Execution")
         .collect::<Vec<_>>();
-    (inputs.len() == 2).then_some(inputs)
+    let (operands, extras) = inputs.split_at_checked(2)?;
+    extras
+        .iter()
+        .all(|pin| pin.default_value.is_some())
+        .then(|| operands.to_vec())
 }
 
 fn binary_operator_call(
@@ -1534,6 +3286,9 @@ fn binary_operator_call(
     Call {
         node_type: meta.name.clone(),
         display: to_camel_case(&meta.name),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: [lhs, rhs]
             .into_iter()
             .zip(inputs)
@@ -1667,6 +3422,75 @@ fn param_output_pin_def(
     }
 }
 
+/// The concrete re-homing plan for one cross-module event move.
+struct EventMovePlan {
+    /// Node and container-layer ids to re-parent into the destination module.
+    ids: Vec<String>,
+    /// Every event-owned node whose semantic module changes, including nodes carried inside a
+    /// moved Collapsed container.
+    members: HashSet<String>,
+    /// Containers that also hold foreign nodes and therefore stay behind with their contents.
+    kept_in_place: Vec<String>,
+}
+
+/// Scope-qualified identity of a FlowScript `function`: the module that owns it (`None` = the
+/// board root, "main") plus its declared name. Names are unique per module, never board-wide.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FnKey {
+    /// Module layer id, or the same-batch `$ref` of a module this document creates.
+    module: Option<String>,
+    name: String,
+}
+
+impl FnKey {
+    fn global(name: &str) -> Self {
+        Self {
+            module: None,
+            name: name.to_string(),
+        }
+    }
+
+    fn in_module(module: Option<&str>, name: &str) -> Self {
+        Self {
+            module: module.map(str::to_string),
+            name: name.to_string(),
+        }
+    }
+
+    /// Recursion-guard identity for the purity / resolution prescans.
+    fn seen_id(&self) -> String {
+        format!("{}::{}", self.module.as_deref().unwrap_or(""), self.name)
+    }
+}
+
+/// The boundary contract of a Function layer that lives on the board: its data parameters and
+/// returns in pin order, and whether it carries an execution boundary (an impure function).
+fn existing_function_layer_contract(layer: &Layer) -> (Vec<PinMetadata>, Vec<PinMetadata>, bool) {
+    let boundary = |pin_type: PinType| {
+        let mut pins = layer
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == pin_type && pin.data_type != VariableType::Execution)
+            .collect::<Vec<_>>();
+        pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        pins.into_iter().map(boundary_pin_metadata).collect()
+    };
+    let impure = layer
+        .pins
+        .values()
+        .any(|pin| pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution);
+    (boundary(PinType::Input), boundary(PinType::Output), impure)
+}
+
+/// The layer id (or same-batch `$ref`) a resolved module target names; `None` is the board root.
+fn module_target_id(target: &ModuleTarget, created: &[String]) -> Option<String> {
+    match target {
+        ModuleTarget::Root => None,
+        ModuleTarget::Existing(id) => Some(id.clone()),
+        ModuleTarget::New(index) => created.get(*index).cloned(),
+    }
+}
+
 /// A FlowScript `function` declaration resolved to its (existing or planned) layer, captured
 /// before events/bodies are planned so call sites anywhere in the document can target it.
 #[derive(Clone)]
@@ -1781,6 +3605,137 @@ fn find_board_node<'a>(board: &'a Board, node_id: &str) -> Option<&'a Node> {
     })
 }
 
+fn board_contains_variable_id(board: &Board, variable_id: &str) -> bool {
+    board.variables.contains_key(variable_id)
+        || board
+            .layers
+            .values()
+            .any(|layer| layer.variables.contains_key(variable_id))
+}
+
+fn board_contains_entity_id(board: &Board, entity_id: &str) -> bool {
+    find_board_node(board, entity_id).is_some()
+        || board.layers.contains_key(entity_id)
+        || board_contains_variable_id(board, entity_id)
+}
+
+fn variable_location_labels(board: &Board, variable_id: &str) -> Vec<String> {
+    let mut locations = Vec::new();
+    if board.variables.contains_key(variable_id) {
+        locations.push("the Board globals".to_string());
+    }
+    let mut layers = board
+        .layers
+        .values()
+        .filter(|layer| layer.variables.contains_key(variable_id))
+        .collect::<Vec<_>>();
+    layers.sort_by(|left, right| left.id.cmp(&right.id));
+    locations.extend(layers.into_iter().map(|layer| match layer.r#type {
+        LayerType::Function => format!("Function layer `{}`", layer.name),
+        LayerType::Module => format!("module layer `{}`", layer.name),
+        LayerType::Macro => format!("Macro layer `{}`", layer.name),
+        LayerType::Collapsed => format!("layer `{}`", layer.name),
+    }));
+    locations
+}
+
+fn variable_target_scope_label(board: &Board, target_layer: Option<&str>) -> String {
+    let Some(layer_id) = target_layer else {
+        return "the Board globals".to_string();
+    };
+    match board.layers.get(layer_id) {
+        Some(layer) if matches!(layer.r#type, LayerType::Function) => {
+            format!("Function layer `{}`", layer.name)
+        }
+        Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+            format!("module layer `{}`", layer.name)
+        }
+        Some(layer) if matches!(layer.r#type, LayerType::Macro) => {
+            format!("Macro layer `{}`", layer.name)
+        }
+        Some(layer) => format!("layer `{}`", layer.name),
+        None => format!("planned layer `{layer_id}`"),
+    }
+}
+
+fn board_node_semantic_scope(board: &Board, node: &Node) -> Option<String> {
+    let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
+    let mut current = if board.nodes.contains_key(&node.id) {
+        direct_layer
+    } else {
+        direct_layer.or_else(|| {
+            board
+                .layers
+                .values()
+                .find(|layer| layer.nodes.contains_key(&node.id))
+                .map(|layer| layer.id.as_str())
+        })
+    };
+    let mut seen = HashSet::new();
+    while let Some(layer_id) = current {
+        if !seen.insert(layer_id) {
+            return Some(layer_id.to_string());
+        }
+        let Some(layer) = board.layers.get(layer_id) else {
+            return Some(layer_id.to_string());
+        };
+        match layer.r#type {
+            LayerType::Collapsed | LayerType::Macro => current = layer.parent_id.as_deref(),
+            LayerType::Function | LayerType::Module => {
+                return Some(layer.id.clone());
+            }
+        }
+    }
+    None
+}
+
+fn node_scope_label(board: &Board, scope: Option<&str>) -> String {
+    let Some(layer_id) = scope else {
+        return "the board root".to_string();
+    };
+    match board.layers.get(layer_id) {
+        Some(layer) if matches!(layer.r#type, LayerType::Function) => {
+            format!("Function layer `{}`", layer.name)
+        }
+        Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+            format!("module layer `{}`", layer.name)
+        }
+        Some(layer) if matches!(layer.r#type, LayerType::Macro) => {
+            format!("Macro layer `{}`", layer.name)
+        }
+        Some(layer) => format!("layer `{}`", layer.name),
+        None => format!("layer `{layer_id}`"),
+    }
+}
+
+fn variable_scope_for_node(board: &Board, node: &Node) -> Option<String> {
+    board_node_semantic_scope(board, node)
+}
+
+fn variable_ref_scope_diagnostic(raw: &str, candidates: &[String], scope: &str) -> String {
+    format!(
+        "variable reference `{raw}` does not resolve uniquely in {scope}; matching variable IDs outside or ambiguous in that scope are {}",
+        quoted_list(candidates)
+    )
+}
+
+fn board_entity_location_labels(board: &Board, entity_id: &str) -> Vec<String> {
+    let mut locations = Vec::new();
+    if let Some(node) = find_board_node(board, entity_id) {
+        locations.push(format!("node `{}` of type `{}`", node.id, node.name));
+    }
+    if let Some(layer) = board.layers.get(entity_id) {
+        locations.push(match layer.r#type {
+            LayerType::Function => format!("Function layer `{}`", layer.name),
+            LayerType::Module => format!("module layer `{}`", layer.name),
+            LayerType::Macro => format!("Macro layer `{}`", layer.name),
+            LayerType::Collapsed => format!("layer `{}`", layer.name),
+        });
+    }
+    locations.extend(variable_location_labels(board, entity_id));
+    locations
+}
+
 /// Return one semantic node per id in deterministic id order.
 ///
 /// Canonical boards store nodes in `board.nodes` and use `node.layer` for membership. Legacy
@@ -1838,6 +3793,7 @@ fn describe_expr(expr: &Expr) -> String {
             Expr::Index { base, .. } => format!("{}[...]", render(base)),
             Expr::Binary { op, lhs, rhs } => format!("{} {op} {}", render(lhs), render(rhs)),
             Expr::Ternary { cond, .. } => format!("{} ? ... : ...", render(cond)),
+            Expr::Template { .. } => "`...`".to_string(),
             Expr::Object(_) => "{...}".to_string(),
             Expr::Array(_) => "[...]".to_string(),
             Expr::Literal(literal) => match literal {
@@ -1861,18 +3817,20 @@ fn describe_expr(expr: &Expr) -> String {
 
 #[derive(Debug, Default, Clone)]
 struct VariableRefLookup {
-    by_ref: HashMap<String, String>,
+    ids: HashSet<String>,
+    globals_by_name: HashMap<String, Vec<String>>,
+    locals_by_layer: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 impl VariableRefLookup {
     fn from_board(board: &Board) -> Self {
         let mut lookup = Self::default();
         for variable in board.variables.values() {
-            lookup.insert(&variable.id, &variable.name);
+            lookup.insert(&variable.id, &variable.name, None);
         }
         for layer in board.layers.values() {
             for variable in layer.variables.values() {
-                lookup.insert(&variable.id, &variable.name);
+                lookup.insert(&variable.id, &variable.name, Some(&layer.id));
             }
         }
         lookup
@@ -1882,22 +3840,74 @@ impl VariableRefLookup {
         let mut lookup = Self::from_board(board);
         for variable in &ast.variables {
             let id = variable_id_for_decl_against_board(board, variable);
-            lookup.insert(&id, &variable.name);
+            lookup.insert(&id, &variable.name, None);
         }
         lookup
     }
 
-    fn insert(&mut self, id: &str, name: &str) {
-        self.by_ref.insert(id.to_string(), id.to_string());
-        self.by_ref.insert(name.to_string(), id.to_string());
-        self.by_ref.insert(to_camel_case(name), id.to_string());
+    fn insert(&mut self, id: &str, name: &str, layer: Option<&str>) {
+        self.ids.insert(id.to_string());
+        let names = match layer {
+            Some(layer) => self.locals_by_layer.entry(layer.to_string()).or_default(),
+            None => &mut self.globals_by_name,
+        };
+        let candidates = names.entry(to_camel_case(name)).or_default();
+        if !candidates.iter().any(|candidate| candidate == id) {
+            candidates.push(id.to_string());
+            candidates.sort();
+        }
     }
 
-    fn resolve(&self, value: &str) -> Option<String> {
-        self.by_ref
-            .get(value)
+    /// Resolve an exact ID globally, or a written name lexically. A Function-local name is visible
+    /// only in its own layer and shadows a Board global of the same name.
+    fn resolve(&self, value: &str, layer: Option<&str>) -> Result<Option<String>, Vec<String>> {
+        if self.ids.contains(value) {
+            return Ok(Some(value.to_string()));
+        }
+        let name = to_camel_case(value);
+        if let Some(layer) = layer
+            && let Some(candidates) = self
+                .locals_by_layer
+                .get(layer)
+                .and_then(|names| names.get(&name))
+        {
+            return match candidates.as_slice() {
+                [only] => Ok(Some(only.clone())),
+                many => Err(many.to_vec()),
+            };
+        }
+        if let Some(candidates) = self.globals_by_name.get(&name) {
+            return match candidates.as_slice() {
+                [only] => Ok(Some(only.clone())),
+                many => Err(many.to_vec()),
+            };
+        }
+
+        let mut out_of_scope = self
+            .locals_by_layer
+            .iter()
+            .filter(|(candidate_layer, _)| Some(candidate_layer.as_str()) != layer)
+            .filter_map(|(_, names)| names.get(&name))
+            .flatten()
             .cloned()
-            .or_else(|| self.by_ref.get(&to_camel_case(value)).cloned())
+            .collect::<Vec<_>>();
+        out_of_scope.sort();
+        out_of_scope.dedup();
+        if out_of_scope.is_empty() {
+            Ok(None)
+        } else {
+            Err(out_of_scope)
+        }
+    }
+
+    fn contains_global_name_or_id(&self, value: &str) -> bool {
+        let name = to_camel_case(value);
+        self.globals_by_name.contains_key(&name)
+            || self
+                .globals_by_name
+                .values()
+                .flatten()
+                .any(|id| id == value)
     }
 }
 
@@ -1906,25 +3916,25 @@ fn variable_id_for_decl_against_board(board: &Board, var: &VarDecl) -> String {
         return anchor.to_string();
     }
 
-    if let Some(existing) = board
+    let mut matches = board
         .variables
         .values()
-        .find(|existing| existing.name == var.name)
-    {
-        return existing.id.clone();
+        .filter(|existing| existing.name == var.name)
+        .map(|existing| existing.id.clone())
+        .collect::<Vec<_>>();
+    matches.sort();
+    if let [only] = matches.as_slice() {
+        return only.clone();
     }
 
-    for layer in board.layers.values() {
-        if let Some(existing) = layer
-            .variables
-            .values()
-            .find(|existing| existing.name == var.name)
-        {
-            return existing.id.clone();
-        }
+    let base = variable_id_for_decl(var);
+    let mut candidate = base.clone();
+    let mut suffix = 2;
+    while board_contains_variable_id(board, &candidate) {
+        candidate = format!("{base}_{suffix}");
+        suffix += 1;
     }
-
-    variable_id_for_decl(var)
+    candidate
 }
 
 fn is_variable_ref_pin_name(name: &str) -> bool {
@@ -1935,17 +3945,22 @@ fn normalize_variable_ref_value_for_pin(
     value: &mut flow_like_types::Value,
     pin_name: &str,
     lookup: &VariableRefLookup,
-) {
+    layer: Option<&str>,
+) -> Result<bool, Vec<String>> {
     if !is_variable_ref_pin_name(pin_name) {
-        return;
+        return Ok(true);
     }
 
     let flow_like_types::Value::String(raw) = value else {
-        return;
+        return Ok(true);
     };
 
-    if let Some(variable_id) = lookup.resolve(raw) {
-        *raw = variable_id;
+    match lookup.resolve(raw, layer)? {
+        Some(variable_id) => {
+            *raw = variable_id;
+            Ok(true)
+        }
+        None => Ok(false),
     }
 }
 
@@ -1965,7 +3980,7 @@ fn find_input_pin_by_ref<'a>(node: &'a Node, pin_ref: &str) -> Option<&'a Pin> {
             .values()
             .filter(|pin| pin.pin_type == PinType::Input && node_pin_name_matches(pin, name))
             .collect::<Vec<_>>();
-        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
         return matching.get(occurrence).copied();
     }
     find_input_pin(node, pin_ref)
@@ -1984,7 +3999,7 @@ fn find_boundary_pin_by_ref<'a>(
         .values()
         .filter(|pin| pin.pin_type == expected && node_pin_name_matches(pin, name))
         .collect::<Vec<_>>();
-    matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
     matching.get(occurrence).copied()
 }
 
@@ -2022,7 +4037,12 @@ fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
         .collect();
     matching.sort_by_key(|p| {
         let populated = !p.depends_on.is_empty() || p.default_value.is_some();
-        (!populated, p.index, p.id.clone())
+        (
+            node_pin_match_rank(p, name),
+            !populated,
+            p.index,
+            p.id.clone(),
+        )
     });
     matching
 }
@@ -2038,7 +4058,13 @@ fn node_input_occurrence_ref(node: &Node, pin: &Pin) -> String {
             candidate.pin_type == PinType::Input && node_pin_name_matches(candidate, &pin.name)
         })
         .collect::<Vec<_>>();
-    matching.sort_by_key(|candidate| (candidate.index, candidate.id.clone()));
+    matching.sort_by_key(|candidate| {
+        (
+            node_pin_match_rank(candidate, &pin.name),
+            candidate.index,
+            candidate.id.clone(),
+        )
+    });
     if matching.len() <= 1 {
         return pin.name.clone();
     }
@@ -2055,7 +4081,7 @@ fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
         .values()
         .filter(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
         .collect();
-    matching.sort_by_key(|p| (p.index, p.id.clone()));
+    matching.sort_by_key(|p| (node_pin_match_rank(p, name), p.index, p.id.clone()));
     matching.first().copied()
 }
 
@@ -2073,12 +4099,32 @@ pub(crate) fn pin_name_matches(raw: &str, requested: &str) -> bool {
     raw == requested || to_camel_case(raw) == requested
 }
 
+/// How closely a pin answers to `requested`: `0` when its own name matches, `1` when only its
+/// friendly name does, `None` when neither. A pin's own name must outrank another pin's friendly
+/// name — `string_format`'s config pin is named `format_string` but presented as "Input", so a
+/// `{input}` placeholder resolves to the format string itself, and its value overwrites the
+/// template, unless the real name wins.
+fn pin_name_match_rank(name: &str, friendly_name: &str, requested: &str) -> Option<u8> {
+    if pin_name_matches(name, requested) {
+        return Some(0);
+    }
+    pin_name_matches(friendly_name, requested).then_some(1)
+}
+
+fn node_pin_match_rank(pin: &Pin, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
+fn metadata_pin_match_rank(pin: &PinMetadata, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
 fn node_pin_name_matches(pin: &Pin, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn metadata_pin_name_matches(pin: &PinMetadata, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn authored_arg_name_matches(raw: &str, canonical: &str) -> bool {
@@ -2138,17 +4184,37 @@ fn input_arg_alias_correction(
     )
 }
 
+/// Whether a call names `node` in any accepted spelling: the flat name or friendly name, or
+/// the node's own `alias` (bare, in method form, or under its own `::` namespace path).
 fn call_matches_node(call: &Call, node: &Node) -> bool {
     if !call.node_type.trim().is_empty() {
         return call.node_type == node.name;
     }
 
     let display = safe_catalog_call_alias(&call.display).unwrap_or(&call.display);
-    pin_name_matches(&node.name, display) || pin_name_matches(&node.friendly_name, display)
+    if call.path.is_empty()
+        && (pin_name_matches(&node.name, display) || pin_name_matches(&node.friendly_name, display))
+    {
+        return true;
+    }
+    node.flowscript_alias().eq_ignore_ascii_case(display)
+        && (call.path.is_empty()
+            || path_key(&call.path) == namespace_key(&node.flowscript_namespace()))
 }
 
 fn is_exec_pin(pin: &Pin) -> bool {
     pin.data_type == VariableType::Execution
+}
+
+/// Names the catalog uses for a node's PRIMARY data output. Consulted wherever a multi-output
+/// node has to be reduced to one pin without the author naming it. Kept in one place because
+/// three call sites had drifted apart — one of them still omitted `batch` and `response`, so
+/// `const x = ai::extract(...)` could not choose between `response` and `stats`.
+fn is_primary_output_name(name: &str) -> bool {
+    matches!(
+        name,
+        "result" | "value" | "output" | "out" | "batch" | "response"
+    )
 }
 
 fn default_node_output_pin(node: &Node) -> Option<String> {
@@ -2162,11 +4228,19 @@ fn default_node_output_pin(node: &Node) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| {
-                matches!(
-                    p.name.as_str(),
-                    "result" | "value" | "output" | "out" | "batch"
-                )
+            .find(|p| is_primary_output_name(&p.name))
+            .or_else(|| {
+                // A method-form node returns its transformed receiver, and the catalog spells
+                // that consistently: `map_in` -> `map_out`, `array_in` -> `array_out`,
+                // `struct_in` -> `struct_out`, `session` -> `session_out`. Without this a
+                // multi-output node like `map_set` (`map_out` + `replaced`) has NO default
+                // output, so `const filled = registry.set(k, v)` binds a source with no pin,
+                // the receiver's container type never reaches method resolution, and the next
+                // call on it is rejected as ambiguous across every namespace sharing the name.
+                let receiver = node.flowscript_receiver()?;
+                let stem = receiver.strip_suffix("_in").unwrap_or(&receiver);
+                let chained = format!("{stem}_out");
+                many.iter().find(|p| p.name == chained)
             })
             .map(|p| p.name.clone()),
     }
@@ -2206,10 +4280,20 @@ fn metadata_input_pin_at<'a>(
     name: &str,
     occurrence: usize,
 ) -> Option<&'a PinMetadata> {
-    meta.inputs
+    metadata_input_index_at(meta, name, occurrence).map(|index| &meta.inputs[index])
+}
+
+/// Index into `meta.inputs` of the `occurrence`-th input pin matching `name`.
+fn metadata_input_index_at(meta: &NodeMetadata, name: &str, occurrence: usize) -> Option<usize> {
+    let mut matching: Vec<(usize, &PinMetadata)> = meta
+        .inputs
         .iter()
-        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
-        .nth(occurrence)
+        .enumerate()
+        .filter(|(_, p)| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .collect();
+    // Stable, so pins of equal rank keep their catalog order (`node_to_metadata` sorts by index).
+    matching.sort_by_key(|(_, p)| metadata_pin_match_rank(p, name));
+    matching.get(occurrence).map(|(index, _)| *index)
 }
 
 /// Encode an occurrence of a same-named pin in a board-command pin reference. Catalog nodes can
@@ -2258,27 +4342,112 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
     match node_type {
         "string_format" => Some("format_string"),
         "string_render_template" => Some("template"),
-        node_type if sql_param_node(node_type) => Some("query"),
+        node_type => sql_param_config_pin(node_type),
+    }
+}
+
+/// Nodes that derive one input pin per `$placeholder` in their SQL literal, paired with the
+/// pin that carries that literal. Kept in one place because the same list gates prediction
+/// here, enrichment in `apply`, and the required-input lint in `executability`.
+///
+/// The two families do not share a config pin or a dialect: a DataFusion node parameterizes
+/// its `query` and binds through the planner, while a LanceDB node parameterizes the `filter`
+/// it hands to `only_if` and has its values substituted before the predicate is parsed.
+pub(crate) fn sql_param_config_pin(node_type: &str) -> Option<&'static str> {
+    match node_type {
+        "df_sql_query"
+        | "df_sql_query_cached"
+        | "df_execute_sql"
+        | "df_write_delta"
+        | "graph_sql_query" => Some("query"),
+        "filter_local_db"
+        | "count_local_db"
+        | "filter_delete_local_db"
+        | "vector_search_local_db"
+        | "fts_search_local_db"
+        | "hybrid_search_local_db" => Some("filter"),
         _ => None,
     }
 }
 
-/// Nodes that derive one input pin per `$placeholder` in their SQL literal. Kept in one
-/// place because the same list gates prediction here, enrichment in `apply`, and the
-/// required-input lint in `executability`.
 pub(crate) fn sql_param_node(node_type: &str) -> bool {
-    matches!(
-        node_type,
-        "df_sql_query"
-            | "df_sql_query_cached"
-            | "df_execute_sql"
-            | "df_write_delta"
-            | "graph_sql_query"
-    )
+    sql_param_config_pin(node_type).is_some()
+}
+
+/// Why an argument did not resolve to an input pin, and what has to change for it to.
+///
+/// Every diagnostic aborts the whole revision (`reconcile_is_safe_to_apply`), so the wording must
+/// never imply the rest of the call went through. The old "skipped that argument" said exactly
+/// that, and the cheapest repair it invited — delete the argument and re-commit — leaves the value
+/// producer on the canvas as a statement of its own, wired to nothing, next to a dynamic input pin
+/// that stayed empty. Naming the config value that declares these pins is what lets the author fix
+/// the cause instead.
+fn missing_input_pin_diagnostic(meta: &NodeMetadata, call: &Call, arg: &Arg) -> String {
+    let head = format!(
+        "node `{}` has no input pin named `{}`",
+        call.display, arg.name
+    );
+    let Some(config_pin) = dynamic_placeholder_config_pin(&meta.name) else {
+        return format!("{head}; no part of this revision was applied");
+    };
+
+    let config = to_camel_case(config_pin);
+    let declares = if sql_param_node(&meta.name) {
+        format!("Each `$placeholder` in `{config}` becomes one `param<Name>` pin")
+    } else {
+        format!("Each placeholder in `{config}` becomes one pin")
+    };
+    let alternative = if sql_param_node(&meta.name) {
+        ", so bind values through the `params` object instead"
+    } else {
+        ""
+    };
+
+    let config_value = call.args.iter().find_map(|candidate| {
+        metadata_input_pin(meta, &candidate.name)
+            .is_some_and(|pin| pin.name == config_pin)
+            .then_some(&candidate.value)
+    });
+    match config_value {
+        Some(Expr::Literal(Literal::String(_))) => format!(
+            "{head}. {declares}, and `{config}` on this call does not declare `{}`. Add it there, or drop the argument. No part of this revision was applied.",
+            arg.name
+        ),
+        Some(_) => format!(
+            "{head}. {declares}, and only when `{config}` is a plain string literal on this same call — a computed or wired `{config}` declares nothing{alternative}. No part of this revision was applied."
+        ),
+        None => format!(
+            "{head}. {declares}, and this call does not set `{config}`. Set it to a plain string literal on this same call. No part of this revision was applied."
+        ),
+    }
+}
+
+/// Whether `pin_name` on `node_type` is a pin that node's `on_update` both mints AND then re-types
+/// from its source via [`Node::match_type`].
+///
+/// `match_type` copies the data type, value type and schema of whatever is wired into the pin ONTO
+/// the pin, so a minted pin's stored shape describes its current source rather than its own
+/// contract — the pin is always minted `Generic`. Deliberately decided from the node type and pin
+/// name alone: a catalog lookup would make the rule depend on the catalog carrying this node type,
+/// and silently stop applying wherever it does not.
+///
+/// The widget nodes are NOT here. Their `dyn_*` pins are typed once from the widget's contract and
+/// never re-derived from the wire, so their type IS a contract and rejecting a mismatch is right.
+fn minted_wire_typed_pin(node_type: &str, pin_name: &str) -> bool {
+    if sql_param_node(node_type) {
+        // `param_<placeholder>`. The static `params` object pin does not match this prefix.
+        return pin_name.starts_with("param_");
+    }
+    // Every input except the template itself is a minted placeholder pin.
+    match node_type {
+        "string_format" => !pin_name_matches("format_string", pin_name),
+        "string_render_template" => !pin_name_matches("template", pin_name),
+        _ => false,
+    }
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
-fn format_string_placeholders(template: &str) -> Vec<String> {
+pub(crate) fn format_string_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut names = Vec::new();
     let mut seen = HashSet::new();
@@ -2313,13 +4482,22 @@ fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<
         // here and the pins the node actually mints cannot disagree — unlike the
         // hand-rolled `format_string` mirror above, which has to be kept in sync by eye.
         node_type if sql_param_node(node_type) => Some(
-            flow_like_storage::databases::sql_params::declared_placeholders(template)
-                .unwrap_or_default()
-                .iter()
-                .map(|placeholder| {
-                    flow_like_storage::databases::sql_params::param_pin_name(placeholder)
-                })
-                .collect(),
+            match sql_param_config_pin(node_type) {
+                // A LanceDB filter is tokenized with Lance's dialect, not DataFusion's, so
+                // prediction has to ask the same module the node's `on_update` asks.
+                Some("filter") => {
+                    flow_like_storage::databases::lance_filter_params::declared_placeholders(
+                        template,
+                    )
+                }
+                _ => flow_like_storage::databases::sql_params::declared_placeholders(template),
+            }
+            .unwrap_or_default()
+            .iter()
+            .map(|placeholder| {
+                flow_like_storage::databases::sql_params::param_pin_name(placeholder)
+            })
+            .collect(),
         ),
         "string_format" => Some(format_string_placeholders(template)),
         "string_render_template" => {
@@ -2580,9 +4758,13 @@ fn synthetic_fn_ref_targets(arg: &Arg) -> Vec<String> {
 }
 
 fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinMetadata> {
-    meta.outputs
+    let mut matching: Vec<&PinMetadata> = meta
+        .outputs
         .iter()
-        .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
+    matching.first().copied()
 }
 
 fn canonical_schema_value(value: &flow_like_types::Value) -> String {
@@ -2625,12 +4807,64 @@ fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -
         .map(String::as_str)
         .unwrap_or(schema)
         .trim();
+    // An open-object schema declares that the shape is open, so it carries no constraint and must
+    // compare as an absent schema rather than as a contract a real schema would have to equal.
+    if crate::flow::pin::is_open_object_schema(expanded) {
+        return None;
+    }
     flow_like_types::json::from_str::<flow_like_types::Value>(expanded)
         .map(|value| canonical_schema_value(&value))
         .ok()
         .or_else(|| Some(expanded.to_string()))
 }
 
+/// The class identity of the sole non-`null` variant of a nullable union schema
+/// (`anyOf[T, null]`), or `None` when the schema is not one. A `$ref` is resolved through the
+/// root's `$defs`, falling back to the pointer's last segment when the definition carries no
+/// title of its own.
+fn nullable_union_title(schema: &str) -> Option<String> {
+    let root: flow_like_types::Value = flow_like_types::json::from_str(schema).ok()?;
+    let variants = ["anyOf", "oneOf"]
+        .iter()
+        .find_map(|key| root.get(*key).and_then(flow_like_types::Value::as_array))?;
+    let mut non_null = variants.iter().filter(|variant| {
+        variant.get("type").and_then(flow_like_types::Value::as_str) != Some("null")
+    });
+    let only = non_null.next()?;
+    if non_null.next().is_some() {
+        return None;
+    }
+    if let Some(reference) = only.get("$ref").and_then(flow_like_types::Value::as_str) {
+        let pointer = reference.strip_prefix('#')?;
+        let name = reference.rsplit('/').next().map(str::to_string);
+        return root
+            .pointer(pointer)
+            .and_then(|target| {
+                target
+                    .get("title")
+                    .and_then(flow_like_types::Value::as_str)
+                    .map(str::to_string)
+            })
+            .or(name);
+    }
+    only.get("title")
+        .and_then(flow_like_types::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Whether two declared contracts describe the same class once an `anyOf[T, null]` wrapper is
+/// discounted. `email_get_headers.from` is declared `Option<MailAddress>` and is the only pin in
+/// the catalog shaped that way, so without this it could not be connected to ANY consumer of a
+/// `MailAddress` — there is no conversion node to insert either.
+fn nullable_contract_matches(left: &str, right: &str) -> bool {
+    let same_as = |schema: &str, other: &str| {
+        nullable_union_title(schema)
+            .is_some_and(|title| flow_like_ast::schema_title(other).as_deref() == Some(&title))
+    };
+    same_as(left, right) || same_as(right, left)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn schema_constraints_are_compatible(
     input_name: &str,
     input_data_type: &str,
@@ -2669,7 +4903,9 @@ fn schema_constraints_are_compatible(
             // Two declared contracts: they must be the same one. This is what catches a genuinely
             // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
             // `CachedEmbeddingModel` input without loading the model first.
-            (Some(input), Some(output)) => input == output,
+            (Some(input), Some(output)) => {
+                input == output || nullable_contract_matches(input, output)
+            }
             // Only one side declares a contract, so there is nothing to contradict. An untyped
             // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
             // return — adopts the connected schema, exactly like the struct_make/break/set boundary
@@ -2799,11 +5035,14 @@ fn default_metadata_output_pin(meta: &NodeMetadata) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| {
-                matches!(
-                    p.name.as_str(),
-                    "result" | "value" | "output" | "out" | "batch"
-                )
+            .find(|p| is_primary_output_name(&p.name))
+            .or_else(|| {
+                // Mirrors `default_node_output_pin`: a method-form node's chained output is its
+                // transformed receiver (`map_in` -> `map_out`).
+                let receiver = catalog_names(meta).receiver?;
+                let stem = receiver.strip_suffix("_in").unwrap_or(&receiver);
+                let chained = format!("{stem}_out");
+                many.iter().find(|p| p.name == chained)
             })
             .map(|p| p.name.clone()),
     }
@@ -3226,42 +5465,384 @@ enum SymbolValue {
     VariableRef { variable_id: String },
 }
 
+/// The method class a receiver pin puts a node in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReceiverClass {
+    /// A value-type namespace (`string`, `array`, …) or a struct schema title (`HttpResponse`).
+    Named(String),
+    /// A `Generic` receiver: the node is a method of every class.
+    Universal,
+}
+
+/// Effective FlowScript names of one catalog entry — explicit metadata fields or the derived
+/// defaults — as the resolver indexes them.
+#[derive(Debug, Clone)]
+pub(crate) struct CatalogNames {
+    /// Dotted namespace path (`ai.ml`), empty for a node without a category.
+    pub(crate) namespace: String,
+    pub(crate) alias: String,
+    /// Legacy flat spelling (`stringTrim`).
+    pub(crate) flat: String,
+    /// `namespace::alias`, or the bare alias for a node without a namespace.
+    pub(crate) qualified: String,
+    /// Input pin the receiver binds to in method form; `None` for static-only nodes.
+    pub(crate) receiver: Option<String>,
+    pub(crate) class: Option<ReceiverClass>,
+}
+
+pub(crate) fn catalog_names(meta: &NodeMetadata) -> CatalogNames {
+    let category = meta.category.as_deref().unwrap_or_default();
+    let flow_like_ast::EffectiveNames {
+        namespace,
+        alias,
+        receiver,
+    } = flow_like_ast::effective_names(
+        &meta.name,
+        category,
+        flow_like_ast::NameFields {
+            namespace: meta.namespace.as_deref(),
+            alias: meta.alias.as_deref(),
+            receiver: meta.receiver.as_deref(),
+        },
+        meta.inputs.iter().map(|pin| {
+            (
+                pin.name.as_str(),
+                pin.data_type.as_str(),
+                pin.value_type.as_str(),
+            )
+        }),
+    );
+    let class = receiver
+        .as_deref()
+        .and_then(|pin| metadata_input_pin(meta, pin))
+        .and_then(|pin| {
+            if pin.data_type == "Generic" && pin.value_type == "Normal" {
+                return Some(ReceiverClass::Universal);
+            }
+            flow_like_ast::receiver_class_of(&pin.data_type, &pin.value_type, pin.schema.as_deref())
+                .map(ReceiverClass::Named)
+        });
+    let qualified = if namespace.is_empty() {
+        alias.clone()
+    } else {
+        flow_like_ast::qualified_name(&namespace, &alias)
+    };
+    CatalogNames {
+        namespace,
+        alias,
+        flat: flow_like_ast::legacy_display(&meta.name),
+        qualified,
+        receiver,
+        class,
+    }
+}
+
+/// Lowercase `::`-joined key of a dotted namespace path.
+fn namespace_key(namespace: &str) -> String {
+    flow_like_ast::naming::namespace_segments(namespace)
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn path_key(path: &[String]) -> String {
+    path.iter()
+        .map(|segment| segment.trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn qualified_key(namespace_key: &str, alias: &str) -> String {
+    format!("{namespace_key}::{}", alias.to_lowercase())
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (i, l) in left.iter().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, r) in right.iter().enumerate() {
+            let substitution = previous[j] + usize::from(l != r);
+            current.push(substitution.min(previous[j + 1] + 1).min(current[j] + 1));
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
+/// Up to three names close to `needle` (case-insensitive prefix or small edit distance),
+/// closest first.
+fn closest_names<'a>(needle: &str, haystack: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let needle = needle.to_lowercase();
+    let tolerance = (needle.chars().count() / 3).clamp(1, 3);
+    let mut scored: Vec<(usize, String)> = haystack
+        .filter_map(|candidate| {
+            let lower = candidate.to_lowercase();
+            if lower == needle {
+                return None;
+            }
+            let distance = edit_distance(&needle, &lower);
+            let related = distance <= tolerance
+                || lower.starts_with(&needle)
+                || needle.starts_with(&lower)
+                || lower.ends_with(&needle)
+                || needle.ends_with(&lower);
+            related.then(|| (distance, candidate.to_string()))
+        })
+        .collect();
+    scored.sort();
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored.into_iter().map(|(_, name)| name).take(3).collect()
+}
+
+/// Qualified spellings for a diagnostic list; candidates that share a spelling (two node types
+/// under one key) are told apart by their node type.
+fn disambiguated_labels(items: &[(String, String)]) -> Vec<String> {
+    items
+        .iter()
+        .map(|(qualified, node_type)| {
+            let shared = items.iter().filter(|(other, _)| other == qualified).count();
+            if shared > 1 {
+                format!("{qualified} ({node_type})")
+            } else {
+                qualified.clone()
+            }
+        })
+        .collect()
+}
+
+fn quoted_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct CatalogIndex {
-    by_display: HashMap<String, Vec<NodeMetadata>>,
-    by_display_lower: HashMap<String, Vec<NodeMetadata>>,
+    entries: Vec<NodeMetadata>,
+    names: Vec<CatalogNames>,
+    /// Legacy flat spelling, exact and lowercased.
+    by_display: HashMap<String, Vec<usize>>,
+    by_display_lower: HashMap<String, Vec<usize>>,
     // Catalogs can contain one entry per installed package or live board instance. Keep every
     // declaration for an internal name: selecting the last HashMap insertion makes reconciliation
     // depend on provider iteration order when two packages expose conflicting contracts.
     by_type: HashMap<String, Vec<NodeMetadata>>,
+    /// `ns::alias` (lowercase) → entries.
+    by_qualified: HashMap<String, Vec<usize>>,
+    /// Alias (lowercase) → every entry carrying it, in any namespace.
+    by_alias: HashMap<String, Vec<usize>>,
+    /// Every namespace path and every proper prefix (lowercase key → display spelling).
+    namespaces: HashMap<String, String>,
+    /// Alias (lowercase) → entries callable in method form; the class is in `names`.
+    methods: HashMap<String, Vec<usize>>,
 }
 
 impl CatalogIndex {
     fn new(catalog: &[NodeMetadata]) -> Self {
-        let mut by_display: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
-        let mut by_display_lower: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
-        let mut by_type: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
+        let mut index = Self {
+            entries: Vec::with_capacity(catalog.len()),
+            names: Vec::with_capacity(catalog.len()),
+            by_display: HashMap::new(),
+            by_display_lower: HashMap::new(),
+            by_type: HashMap::new(),
+            by_qualified: HashMap::new(),
+            by_alias: HashMap::new(),
+            namespaces: HashMap::new(),
+            methods: HashMap::new(),
+        };
         for meta in catalog {
-            let display = to_camel_case(&meta.name);
-            by_display
-                .entry(display.clone())
+            let idx = index.entries.len();
+            let names = catalog_names(meta);
+            index
+                .by_display
+                .entry(names.flat.clone())
                 .or_default()
-                .push(meta.clone());
-            by_display_lower
-                .entry(display.to_lowercase())
+                .push(idx);
+            index
+                .by_display_lower
+                .entry(names.flat.to_lowercase())
                 .or_default()
-                .push(meta.clone());
-            by_type
+                .push(idx);
+            index
+                .by_type
                 .entry(meta.name.clone())
                 .or_default()
                 .push(meta.clone());
+            index.register_names(idx, &names.namespace, &names.alias, names.class.is_some());
+            index.entries.push(meta.clone());
+            index.names.push(names);
         }
-        Self {
-            by_display,
-            by_display_lower,
-            by_type,
+        index.register_derived_names();
+        index
+    }
+
+    /// Index one spelling of an entry: its alias, its `ns::alias` key (plus every namespace
+    /// prefix) and, when the node is callable in method form, its method-table entry.
+    fn register_names(&mut self, idx: usize, namespace: &str, alias: &str, method: bool) {
+        self.by_alias
+            .entry(alias.to_lowercase())
+            .or_default()
+            .push(idx);
+        if !namespace.is_empty() {
+            let key = namespace_key(namespace);
+            self.by_qualified
+                .entry(qualified_key(&key, alias))
+                .or_default()
+                .push(idx);
+            let segments: Vec<&str> =
+                flow_like_ast::naming::namespace_segments(namespace).collect();
+            for depth in 1..=segments.len() {
+                let display = segments[..depth].join("::");
+                self.namespaces
+                    .entry(display.to_lowercase())
+                    .or_insert(display);
+            }
+        }
+        if method {
+            self.methods
+                .entry(alias.to_lowercase())
+                .or_default()
+                .push(idx);
         }
     }
 
+    /// A placed node that predates an explicit `namespace`/`alias` still renders with the
+    /// names derived from its category, so that derived spelling stays resolvable as a
+    /// secondary key of the same node type — unless it is another node's real name, in which
+    /// case that node keeps it (fail closed).
+    fn register_derived_names(&mut self) {
+        let owners: HashMap<String, HashSet<String>> = self
+            .names
+            .iter()
+            .zip(&self.entries)
+            .filter(|(names, _)| !names.namespace.is_empty())
+            .fold(HashMap::new(), |mut owners, (names, meta)| {
+                owners
+                    .entry(qualified_key(
+                        &namespace_key(&names.namespace),
+                        &names.alias,
+                    ))
+                    .or_default()
+                    .insert(meta.name.clone());
+                owners
+            });
+        let derived: Vec<(usize, String, String, bool)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, meta)| {
+                let category = meta.category.as_deref().unwrap_or_default();
+                let namespace = flow_like_ast::derive_namespace(category);
+                let alias = flow_like_ast::derive_alias(&meta.name, category);
+                let names = &self.names[idx];
+                if namespace.is_empty()
+                    || (namespace_key(&namespace) == namespace_key(&names.namespace)
+                        && alias.eq_ignore_ascii_case(&names.alias))
+                {
+                    return None;
+                }
+                let key = qualified_key(&namespace_key(&namespace), &alias);
+                let taken = owners
+                    .get(&key)
+                    .is_some_and(|types| types.iter().any(|owner| *owner != meta.name));
+                (!taken).then_some((idx, namespace, alias, names.class.is_some()))
+            })
+            .collect();
+        for (idx, namespace, alias, method) in derived {
+            self.register_names(idx, &namespace, &alias, method);
+        }
+    }
+
+    fn entries_of(&self, indices: &[usize]) -> Vec<NodeMetadata> {
+        indices
+            .iter()
+            .map(|idx| self.entries[*idx].clone())
+            .collect()
+    }
+
+    fn one_match(&self, display: &str, indices: &[usize]) -> Result<NodeMetadata, String> {
+        one_catalog_match(display, &self.entries_of(indices))
+    }
+
+    fn indices<'a>(map: &'a HashMap<String, Vec<usize>>, key: &str) -> &'a [usize] {
+        map.get(key).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Flat-name entries: the exact spelling, else the case-insensitive one.
+    fn flat_matches(&self, display: &str) -> &[usize] {
+        let exact = Self::indices(&self.by_display, display);
+        if !exact.is_empty() {
+            return exact;
+        }
+        Self::indices(&self.by_display_lower, &display.to_lowercase())
+    }
+
+    fn qualified_matches(&self, namespace_key: &str, alias: &str) -> &[usize] {
+        Self::indices(&self.by_qualified, &qualified_key(namespace_key, alias))
+    }
+
+    fn alias_matches(&self, alias: &str) -> &[usize] {
+        Self::indices(&self.by_alias, &alias.to_lowercase())
+    }
+
+    fn method_matches(&self, alias: &str) -> &[usize] {
+        Self::indices(&self.methods, &alias.to_lowercase())
+    }
+
+    fn namespace_known(&self, namespace_key: &str) -> bool {
+        self.namespaces.contains_key(namespace_key)
+    }
+
+    fn namespace_display(&self, namespace_key: &str) -> String {
+        self.namespaces
+            .get(namespace_key)
+            .cloned()
+            .unwrap_or_else(|| namespace_key.to_string())
+    }
+
+    fn closest_namespaces(&self, namespace_key: &str) -> Vec<String> {
+        closest_names(namespace_key, self.namespaces.values().map(String::as_str))
+    }
+
+    /// Distinct qualified spellings of `indices`, in index order.
+    fn qualified_names(&self, indices: &[usize]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for idx in indices {
+            let qualified = &self.names[*idx].qualified;
+            if !out.contains(qualified) {
+                out.push(qualified.clone());
+            }
+        }
+        out
+    }
+
+    /// Members of one namespace (direct members only), for did-you-mean.
+    fn namespace_member_aliases(&self, key: &str) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .names
+            .iter()
+            .filter(|names| namespace_key(&names.namespace) == key)
+            .map(|names| names.alias.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The first indexed entry of a node type, for anchored calls whose live node carries no
+    /// explicit names.
+    fn names_for_type(&self, node_type: &str) -> Option<&CatalogNames> {
+        self.entries
+            .iter()
+            .position(|meta| meta.name == node_type)
+            .map(|idx| &self.names[idx])
+    }
+
+    /// Legacy resolution of a bare call: the flat spelling (exact, then case-insensitive), then
+    /// the `RENAMES` table guarded by argument-shape compatibility.
     fn resolve_call(&self, call: &Call) -> Result<NodeMetadata, String> {
         if !call.node_type.trim().is_empty() {
             return self.resolve_type(&call.node_type).map_err(|reason| {
@@ -3339,18 +5920,562 @@ impl CatalogIndex {
             return Err("empty call display cannot be resolved to a catalog node".to_string());
         }
 
-        if let Some(matches) = self.by_display.get(display) {
-            return one_catalog_match(display, matches);
-        }
-
-        if let Some(matches) = self.by_display_lower.get(&display.to_lowercase()) {
-            return one_catalog_match(display, matches);
+        let matches = self.flat_matches(display);
+        if !matches.is_empty() {
+            return self.one_match(display, matches);
         }
 
         Err(format!(
             "FlowScript call `{display}` does not match a catalog declaration; call `get_declarations` and use the exact function name"
         ))
     }
+}
+
+/// The scope a document's `use` declarations open for call resolution. Keys are lowercase;
+/// `use` indices point into `BoardAst.uses` so unused imports can be reported.
+#[derive(Debug, Default)]
+struct UseScope {
+    /// `use a::b` → `b`, `use a::b as x` → `x`: name → (namespace key, use index).
+    namespaces: HashMap<String, (String, usize)>,
+    /// `use a::b::*`: (namespace key, use index).
+    globs: Vec<(String, usize)>,
+    /// `use a::b::{ x, y as z }`: LOCAL name (the alias when renamed) → (namespace key, the
+    /// member's real name inside that namespace, use index).
+    members: HashMap<String, (String, String, usize)>,
+    /// Rendered source of every `use` line, by index.
+    rendered: Vec<String>,
+    /// Lines that already produced a diagnostic (never reported as unused).
+    invalid: HashSet<usize>,
+}
+
+impl UseScope {
+    /// The `use` line that opens `namespace_key`'s member `alias`, if any: globs and namespace
+    /// imports open a namespace (and everything nested below it), member lists open one name.
+    fn opens(&self, namespace_key: &str, alias: &str) -> Option<usize> {
+        let alias = alias.to_lowercase();
+        let nested_in = |opened: &str| {
+            namespace_key == opened || namespace_key.starts_with(&format!("{opened}::"))
+        };
+        self.globs
+            .iter()
+            .filter(|(opened, _)| nested_in(opened))
+            .map(|(_, idx)| *idx)
+            .chain(
+                self.namespaces
+                    .values()
+                    .filter(|(opened, _)| nested_in(opened))
+                    .map(|(_, idx)| *idx),
+            )
+            .chain(
+                self.members
+                    .get(&alias)
+                    .filter(|(opened, _, _)| opened == namespace_key)
+                    .map(|(_, _, idx)| *idx),
+            )
+            .min()
+    }
+}
+
+fn render_use_decl(decl: &UseDecl) -> String {
+    let mut out = format!("use {}", decl.path.join("::"));
+    match &decl.kind {
+        UseKind::Namespace => {}
+        UseKind::Glob => out.push_str("::*"),
+        UseKind::Alias(alias) => {
+            out.push_str(" as ");
+            out.push_str(alias);
+        }
+        UseKind::Members(members) => {
+            out.push_str("::{ ");
+            out.push_str(
+                &members
+                    .iter()
+                    .map(UseMember::render)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            out.push_str(" }");
+        }
+    }
+    out
+}
+
+/// What a FlowScript call resolved to.
+#[derive(Debug, Clone)]
+enum CallTarget {
+    Catalog(NodeMetadata),
+    /// A FlowScript `function`, by its (module, name) identity.
+    Function(FnKey),
+}
+
+/// A resolved call: its target plus the call rewritten so the receiver and positional
+/// arguments are ordinary named arguments.
+#[derive(Debug, Clone)]
+struct ResolvedCall {
+    target: CallTarget,
+    call: Call,
+    /// Non-blocking notes (lenient spellings, shadowed catalog methods).
+    corrections: Vec<String>,
+    /// `use` declarations this resolution relied on.
+    used_uses: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+enum CandidateKind {
+    /// Every catalog entry of one node type.
+    Catalog(Vec<usize>),
+    Function(FnKey),
+}
+
+/// One candidate of a method or opened-member lookup before narrowing.
+#[derive(Debug, Clone)]
+struct CallCandidate {
+    kind: CandidateKind,
+    receiver_pin: Option<String>,
+    /// Qualified spelling for diagnostics (`string::contains`, ``function `parseName` ``).
+    qualified: String,
+    node_type: String,
+    opened_by: Option<usize>,
+}
+
+fn candidate_labels(candidates: &[CallCandidate]) -> Vec<String> {
+    disambiguated_labels(
+        &candidates
+            .iter()
+            .map(|candidate| (candidate.qualified.clone(), candidate.node_type.clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The receiver's type as far as the planner can tell, mirroring a pin contract.
+#[derive(Debug, Clone)]
+struct ReceiverHint {
+    data_type: String,
+    value_type: String,
+    schema: Option<String>,
+}
+
+/// The method class a receiver value dispatches on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReceiverKind {
+    Unknown,
+    /// A value-type class (`string`, `int`, `array`, …).
+    Value(String),
+    /// A struct, with its schema title when the hint carried one.
+    Struct(Option<String>),
+}
+
+impl ReceiverKind {
+    /// Spelling for diagnostics; `None` when the type is unknown.
+    fn display(&self) -> Option<String> {
+        match self {
+            Self::Unknown => None,
+            Self::Value(class) => Some(class.clone()),
+            Self::Struct(Some(title)) => Some(title.clone()),
+            Self::Struct(None) => Some("struct".to_string()),
+        }
+    }
+
+    /// Whether a node of `class` is a method of this receiver. An untitled struct considers
+    /// the plain `struct` table and every interface class; a titled one its own title and the
+    /// plain `struct` table.
+    fn accepts(&self, class: Option<&ReceiverClass>) -> bool {
+        match class {
+            None => false,
+            Some(ReceiverClass::Universal) => true,
+            Some(ReceiverClass::Named(class)) => match self {
+                Self::Unknown => true,
+                Self::Value(value) => class.eq_ignore_ascii_case(value),
+                Self::Struct(Some(title)) => {
+                    class.eq_ignore_ascii_case(title) || class.eq_ignore_ascii_case("struct")
+                }
+                Self::Struct(None) => {
+                    class.eq_ignore_ascii_case("struct")
+                        || !flow_like_ast::is_value_type_namespace(class)
+                }
+            },
+        }
+    }
+}
+
+fn pin_receiver_hint(pin: &PinMetadata) -> ReceiverHint {
+    ReceiverHint {
+        data_type: pin.data_type.clone(),
+        value_type: pin.value_type.clone(),
+        schema: pin.schema.clone(),
+    }
+}
+
+fn shape_receiver_hint(shape: OutputShape) -> ReceiverHint {
+    ReceiverHint {
+        data_type: shape.data_type,
+        value_type: shape.value_type,
+        schema: shape.schema,
+    }
+}
+
+fn literal_receiver_hint(value: &flow_like_types::Value) -> ReceiverHint {
+    let (data_type, value_type) = infer_variable_types(Some(value));
+    ReceiverHint {
+        data_type,
+        value_type,
+        schema: None,
+    }
+}
+
+/// The contract of one property of an object schema, for `a.b.c` receiver typing. Follows local
+/// `$ref`s and strips `null` from unions; an object property keeps its schema (with the root's
+/// `$defs`) so a nested title still classes it.
+fn schema_property_hint(schema: &str, field: &str) -> Option<ReceiverHint> {
+    use flow_like_types::Value;
+
+    fn deref<'a>(schema: &'a Value, root: &'a Value, depth: usize) -> Option<&'a Value> {
+        if depth > 8 {
+            return None;
+        }
+        if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+            && let Some(pointer) = reference.strip_prefix('#')
+        {
+            return deref(root.pointer(pointer)?, root, depth + 1);
+        }
+        for union in ["anyOf", "oneOf"] {
+            if let Some(variants) = schema.get(union).and_then(Value::as_array) {
+                let mut non_null = variants
+                    .iter()
+                    .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"));
+                let candidate = non_null.next()?;
+                if non_null.next().is_some() {
+                    return None;
+                }
+                return deref(candidate, root, depth + 1);
+            }
+        }
+        Some(schema)
+    }
+
+    fn type_name(schema: &Value) -> Option<String> {
+        // A string-literal union (`"a" | "b"`) projects to a bare `{ "enum": [...] }` with no
+        // `type` key, so without this every comparison against such a field typed as the
+        // containing `Struct` instead of the field itself. Infer the kind from the members,
+        // ignoring `null`, and only when they agree.
+        if schema.get("type").is_none()
+            && let Some(values) = schema.get("enum").and_then(Value::as_array)
+        {
+            let mut kinds =
+                values
+                    .iter()
+                    .filter(|value| !value.is_null())
+                    .map(|value| match value {
+                        Value::String(_) => "string",
+                        Value::Bool(_) => "boolean",
+                        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+                        Value::Number(_) => "number",
+                        _ => "object",
+                    });
+            let first = kinds.next()?;
+            return kinds.all(|kind| kind == first).then(|| first.to_string());
+        }
+        match schema.get("type")? {
+            Value::String(kind) => Some(kind.clone()),
+            Value::Array(kinds) => {
+                let mut named = kinds
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|kind| *kind != "null");
+                let kind = named.next()?;
+                named.next().is_none().then(|| kind.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn with_defs(property: &Value, root: &Value) -> String {
+        let mut property = property.clone();
+        if let Value::Object(object) = &mut property {
+            for defs in ["$defs", "definitions"] {
+                if let Some(shared) = root.get(defs)
+                    && !object.contains_key(defs)
+                {
+                    object.insert(defs.to_string(), shared.clone());
+                }
+            }
+        }
+        property.to_string()
+    }
+
+    let root = flow_like_types::json::from_str::<Value>(schema).ok()?;
+    let object = deref(&root, &root, 0)?;
+    let properties = object.get("properties").and_then(Value::as_object)?;
+    let property = properties.get(field).or_else(|| {
+        properties
+            .iter()
+            .find(|(key, _)| pin_name_matches(key, field))
+            .map(|(_, value)| value)
+    })?;
+    let property = deref(property, &root, 0)?;
+    let scalar = |data_type: &str| {
+        Some(ReceiverHint {
+            data_type: data_type.to_string(),
+            value_type: "Normal".to_string(),
+            schema: None,
+        })
+    };
+    match type_name(property)?.as_str() {
+        "string" => scalar("String"),
+        "integer" => scalar("Integer"),
+        "number" => scalar("Float"),
+        "boolean" => scalar("Boolean"),
+        "object" => Some(ReceiverHint {
+            data_type: "Struct".to_string(),
+            value_type: "Normal".to_string(),
+            schema: Some(with_defs(property, &root)),
+        }),
+        "array" => {
+            let items = property
+                .get("items")
+                .and_then(|items| deref(items, &root, 0));
+            let data_type = match items.and_then(type_name).as_deref() {
+                Some("string") => "String",
+                Some("integer") => "Integer",
+                Some("number") => "Float",
+                Some("boolean") => "Boolean",
+                Some("object") => "Struct",
+                _ => "Generic",
+            };
+            Some(ReceiverHint {
+                data_type: data_type.to_string(),
+                value_type: "Array".to_string(),
+                schema: items
+                    .filter(|_| data_type == "Struct")
+                    .map(|items| with_defs(items, &root)),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The plain identifier chain of a receiver expression (`a`, `a.b`, `a.b.c`), or `None` when it
+/// contains anything else. Used for the lenient `ns.member(...)` spelling of a namespace path.
+fn identifier_chain(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Ref(name) => Some(vec![name.clone()]),
+        Expr::Field { base, pin } => {
+            let mut chain = identifier_chain(base)?;
+            chain.push(pin.clone());
+            Some(chain)
+        }
+        Expr::Member { base, field } => {
+            let mut chain = identifier_chain(base)?;
+            chain.push(field.clone());
+            Some(chain)
+        }
+        _ => None,
+    }
+}
+
+/// How a call is spelled in the source, for diagnostics.
+fn call_callee(call: &Call) -> String {
+    if !call.path.is_empty() {
+        return format!("{}::{}", call.path.join("::"), call.display);
+    }
+    match &call.receiver {
+        Some(receiver) => format!("{}.{}", describe_expr(receiver), call.display),
+        None => call.display.clone(),
+    }
+}
+
+/// Metadata standing in for a declared function's call shape: its parameters as data inputs
+/// and its returns as outputs, so the same binding and typing code serves both targets.
+fn function_shape_metadata(
+    name: &str,
+    params: &[PinMetadata],
+    returns: &[PinMetadata],
+) -> NodeMetadata {
+    NodeMetadata {
+        name: CALL_FUNCTION_NODE_TYPE.to_string(),
+        friendly_name: format!("Call {name}"),
+        description: String::new(),
+        inputs: params.to_vec(),
+        outputs: returns.to_vec(),
+        category: None,
+        required_inputs: Vec::new(),
+        companion_nodes: Vec::new(),
+        capability_tags: Vec::new(),
+        namespace: None,
+        alias: None,
+        receiver: None,
+    }
+}
+
+/// Nodes whose `on_update` mints input pins the static catalog cannot list, so an unknown named
+/// argument is not evidence against them during candidate narrowing.
+pub(crate) fn accepts_dynamic_named_args(node_type: &str) -> bool {
+    dynamic_placeholder_config_pin(node_type).is_some() || widget_dynamic_pin_node(node_type)
+}
+
+/// Whether the authored named/positional arguments can bind to `meta`'s data inputs, excluding
+/// the receiver pin. Used only to narrow several candidates; a sole candidate is never rejected
+/// here so the argument planner reports the precise pin problem.
+fn call_shape_fits(call: &Call, meta: &NodeMetadata, receiver_pin: Option<&str>) -> bool {
+    let receiver_index = receiver_pin.and_then(|pin| metadata_input_index_at(meta, pin, 0));
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    let mut claimed: HashSet<usize> = HashSet::new();
+    for arg in &call.args {
+        if is_synthetic_fn_ref_arg(arg) {
+            continue;
+        }
+        let occurrence = {
+            let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+            let current = *seen;
+            *seen += 1;
+            current
+        };
+        match metadata_input_index_at(meta, &arg.name, occurrence) {
+            Some(index) if Some(index) == receiver_index => return false,
+            Some(index) => {
+                claimed.insert(index);
+            }
+            None if accepts_dynamic_named_args(&meta.name) => {}
+            None => return false,
+        }
+    }
+    let free = meta
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(index, pin)| {
+            pin.data_type != "Execution"
+                && Some(*index) != receiver_index
+                && !claimed.contains(index)
+        })
+        .count();
+    call.positional.len() <= free
+}
+
+/// Fold a call's method receiver and positional arguments into named arguments against
+/// `meta`'s data inputs, so the rest of the planner only ever sees `{ name: value }` bindings.
+/// The receiver takes `receiver_pin`; positionals fill the remaining data inputs in pin order
+/// (Python semantics: naming a pin a positional already filled is an error). Same-named pins keep
+/// their occurrence order because the result is sorted by pin index.
+fn fold_call_arguments(
+    call: &Call,
+    meta: &NodeMetadata,
+    receiver_pin: Option<&str>,
+) -> Result<Call, String> {
+    let mut folded = call.clone();
+    folded.path = Vec::new();
+    folded.receiver = None;
+    folded.positional = Vec::new();
+    if call.receiver.is_none() && call.positional.is_empty() {
+        return Ok(folded);
+    }
+    let callee = call_callee(call);
+    let node = if meta.name == CALL_FUNCTION_NODE_TYPE {
+        format!("function `{}`", call.display)
+    } else {
+        format!("`{}`", catalog_names(meta).qualified)
+    };
+
+    // Named arguments keep their pin index so the final order pairs same-named pins by
+    // occurrence; arguments that bind no static pin (dynamic pins, fn refs) sort last.
+    let mut bound: Vec<(usize, Arg)> = Vec::new();
+    let mut claimed_by_name: HashSet<usize> = HashSet::new();
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    for arg in &call.args {
+        let occurrence = {
+            let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+            let current = *seen;
+            *seen += 1;
+            current
+        };
+        let index = metadata_input_index_at(meta, &arg.name, occurrence).unwrap_or(usize::MAX);
+        if index != usize::MAX {
+            claimed_by_name.insert(index);
+        }
+        bound.push((index, arg.clone()));
+    }
+
+    let mut receiver_index = None;
+    if let Some(receiver) = &call.receiver {
+        let Some(pin) = receiver_pin else {
+            return Err(format!(
+                "`{callee}(...)` cannot be written in method form: {node} has no receiver pin; write `{}({{ ... }})` with every argument named",
+                call.display
+            ));
+        };
+        let Some(index) = metadata_input_index_at(meta, pin, 0) else {
+            return Err(format!(
+                "`{callee}(...)` cannot be written in method form: {node} has no input pin `{pin}` to bind the receiver to"
+            ));
+        };
+        if claimed_by_name.contains(&index) {
+            return Err(format!(
+                "`{callee}(...)` binds its receiver to `{}`, which is also given as a named argument; remove one of them",
+                to_camel_case(pin)
+            ));
+        }
+        receiver_index = Some(index);
+        bound.push((
+            index,
+            Arg {
+                name: meta.inputs[index].name.clone(),
+                value: receiver.as_ref().clone(),
+            },
+        ));
+    }
+
+    let bindable = |index: usize, pin: &PinMetadata| {
+        pin.data_type != "Execution"
+            && Some(index) != receiver_index
+            && !(meta.name == CALL_FUNCTION_NODE_TYPE && pin.name == FUNCTION_LAYER_ID_PIN)
+    };
+    let mut free = meta
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(index, pin)| bindable(*index, pin));
+    for (position, value) in call.positional.iter().enumerate() {
+        let Some((index, pin)) = free.next() else {
+            let data_inputs = meta
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|(index, pin)| bindable(*index, pin))
+                .map(|(_, pin)| to_camel_case(&pin.name))
+                .collect::<Vec<_>>();
+            return Err(format!(
+                "`{callee}(...)` has {} positional arguments, but {node} only has {} to bind them to ({})",
+                call.positional.len(),
+                match data_inputs.len() {
+                    1 => "1 data input".to_string(),
+                    n => format!("{n} data inputs"),
+                },
+                if data_inputs.is_empty() {
+                    "none".to_string()
+                } else {
+                    data_inputs.join(", ")
+                },
+            ));
+        };
+        if claimed_by_name.contains(&index) {
+            return Err(format!(
+                "positional argument {} of `{callee}(...)` fills `{}`, which is also given by name; remove one of them",
+                position + 1,
+                to_camel_case(&pin.name)
+            ));
+        }
+        bound.push((
+            index,
+            Arg {
+                name: pin.name.clone(),
+                value: value.clone(),
+            },
+        ));
+    }
+
+    bound.sort_by_key(|(index, _)| *index);
+    folded.args = bound.into_iter().map(|(_, arg)| arg).collect();
+    Ok(folded)
 }
 
 /// Deliberately tiny catalog migration table. These are historical/obvious names with exactly one
@@ -3542,9 +6667,9 @@ fn reconcile_schema_contract_eq_with_refs(
 }
 
 /// Project `schema` through the FULL text surface: interface generation, rendering to FlowScript,
-/// and re-parsing. Parsing normalizes strictly more than [`interface_representable_schema`]'s
-/// in-memory projection (e.g. an optional `anyOf[enum, null]` folds into an enum containing
-/// `null`), and an authored roundtrip schema is by construction in THIS fixed point.
+/// and re-parsing. Parsing normalizes strictly more than a purely in-memory interface projection
+/// would (e.g. an optional `anyOf[enum, null]` folds into an enum containing `null`), and an
+/// authored roundtrip schema is by construction in THIS fixed point.
 fn text_projected_schema(schema: &str) -> Option<String> {
     let source = VarDecl {
         name: "boundary".to_string(),
@@ -3583,28 +6708,6 @@ fn text_projected_schema(schema: &str) -> Option<String> {
     parsed.variables.first()?.schema.clone()
 }
 
-fn interface_representable_schema(schema: &str) -> Option<String> {
-    let source = VarDecl {
-        name: "boundary".to_string(),
-        ty: TypeRef::new("Struct", Container::Normal),
-        default: None,
-        exposed: false,
-        secret: false,
-        editable: true,
-        runtime_configured: false,
-        category: None,
-        description: None,
-        schema: Some(schema.to_string()),
-        anchor: None,
-    };
-    let interfaces = flow_like_ast::interfaces_for_variables(&[source]);
-    let interface_name = flow_like_ast::interface_name_for_schema(&interfaces, schema)?;
-    let interface = interfaces
-        .iter()
-        .find(|interface| interface.name == interface_name)?;
-    flow_like_ast::schema_from_interface_with_defs(interface, &interfaces)
-}
-
 fn function_boundary_contract_matches(
     live: &PinMetadata,
     authored: &PinMetadata,
@@ -3624,7 +6727,7 @@ fn function_boundary_contract_matches(
     // schema to that representable projection while retaining the exact live schema for wiring.
     // The authored schema went through the render→parse text surface, so compare against the
     // live schema's projection through that same surface (`text_projected_schema` subsumes the
-    // in-memory `interface_representable_schema` projection and its extra parse normalizations).
+    // in-memory interface projection and adds the extra parse normalizations).
     match authored.schema.as_deref() {
         Some(schema) => {
             authored.enforce_schema
@@ -3689,6 +6792,10 @@ fn deterministic_catalog_match(matches: &[NodeMetadata]) -> NodeMetadata {
 struct BoardIndex<'a> {
     pin_owner: HashMap<&'a str, (&'a Node, &'a Pin)>,
     boundary_sources: HashMap<&'a str, ValueSource>,
+    /// Boundary pins of PRESENTATIONAL layers (collapsed/macro), which are pure wire-bends: an edge
+    /// entering one continues out the other side to a real producer. Function-layer boundary pins
+    /// are deliberately excluded — those ARE the value (a parameter read), not a bridge to one.
+    boundary_bridges: HashMap<&'a str, &'a Pin>,
 }
 
 impl<'a> BoardIndex<'a> {
@@ -3704,7 +6811,9 @@ impl<'a> BoardIndex<'a> {
         }
         let mut layers = board.layers.values().collect::<Vec<_>>();
         layers.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut boundary_bridges = HashMap::new();
         for layer in layers {
+            let bridges = !matches!(layer.r#type, LayerType::Function);
             let mut pins = layer.pins.values().collect::<Vec<_>>();
             pins.sort_by(|left, right| left.id.cmp(&right.id));
             for pin in pins {
@@ -3715,11 +6824,15 @@ impl<'a> BoardIndex<'a> {
                         output_pin: Some(pin.name.clone()),
                     },
                 );
+                if bridges {
+                    boundary_bridges.insert(pin.id.as_str(), pin);
+                }
             }
         }
         Self {
             pin_owner,
             boundary_sources,
+            boundary_bridges,
         }
     }
 
@@ -3773,11 +6886,25 @@ impl<'a> BoardIndex<'a> {
 
     fn data_source_for_pin_id(&self, source_pin_id: &str) -> Option<ValueSource> {
         let mut source_pin_id = source_pin_id;
-        // Reroutes are pure wire-bends that the renderer collapses; trace through them so the
-        // reuse path sees the real origin node — the one the FlowScript text actually shows.
-        // Otherwise every inline chain behind a reroute is re-created on reconcile.
+        // Reroutes and presentational layer boundaries are both pure wire-bends that the renderer
+        // collapses; trace through them so the reuse path sees the real origin node — the one the
+        // FlowScript text actually shows. Otherwise every inline chain behind one is re-created on
+        // reconcile.
+        //
+        // Stopping at the layer is what made a board with collapsed layers churn forever: lowering
+        // renders the edge as coming from the producer OUTSIDE the layer, reconcile resolved the
+        // same edge to the layer itself, decided it was not wired yet, and planned a connect. Each
+        // apply then routed that connect through a FRESH boundary pin, so the board gained one more
+        // boundary pin per edge on every single Apply and the next pass planned them all again.
         for _ in 0..64 {
             let Some((source_node, source_pin)) = self.pin_owner.get(source_pin_id) else {
+                // A bridge pin carries the edge onward; a function-boundary pin is the value.
+                if let Some(bridge) = self.boundary_bridges.get(source_pin_id)
+                    && let Some(upstream) = bridge.depends_on.iter().next()
+                {
+                    source_pin_id = upstream;
+                    continue;
+                }
                 return self.boundary_sources.get(source_pin_id).cloned();
             };
             if source_node.name != "reroute" {
@@ -3806,10 +6933,23 @@ struct StructuralPlanner<'a> {
     /// only rebind to an unclaimed live entry; otherwise two declarations could silently collapse
     /// onto the same trigger node.
     claimed_event_entries: HashSet<String>,
+    /// Missing Event header anchors that recovered to a live or newly planned entry. A multi-arm
+    /// Event repeats its header anchor on the first routing Branch; this map lets that Branch use
+    /// the recovered entry instead of trying to resolve the obsolete id again.
+    recovered_event_anchors: HashMap<String, NodeEntity>,
+    /// Existing Event-body nodes that an earlier `MoveToLayer` in this plan will re-home. Their
+    /// anchors remain valid while the Event moves between modules.
+    planned_scope_moves: HashMap<String, Option<String>>,
     disconnect_commands: Vec<BoardCommand>,
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
     symbols: Vec<HashMap<String, SymbolValue>>,
+    /// Bindings made inside a loop body or a branch arm, kept resolvable after that block
+    /// closes. FlowScript blocks are lexical, but the board they render is one flat node
+    /// scope: a value produced inside a loop and read after it is an ordinary data edge, and
+    /// `lower` emits exactly that text from such a board. Consulted only when the lexical
+    /// chain has no such name, so an enclosing binding still wins.
+    closed_block_symbols: HashMap<String, SymbolValue>,
     variable_refs: VariableRefLookup,
     /// Exact data contract of every board variable visible to this planned source revision. New
     /// variable get/set nodes start Generic in the static catalog, but their `on_update` handlers
@@ -3843,9 +6983,59 @@ struct StructuralPlanner<'a> {
     /// nodes. Held separately so they emit after the add/connect commands (the applier resolves the
     /// referenced targets — function layers, events — once those nodes exist).
     fn_ref_commands: Vec<BoardCommand>,
-    /// Declared FlowScript functions by camelCase name, pre-created before events/bodies are
-    /// planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
-    planned_functions: HashMap<String, PlannedFunction>,
+    /// Declared FlowScript functions by (module, camelCase name), pre-created before events/bodies
+    /// are planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
+    /// Also holds the board's OWN function layers that this document does not declare, so a
+    /// module file can call a global helper it never had to reproduce.
+    planned_functions: HashMap<FnKey, PlannedFunction>,
+    /// Live Function layers that collapse to the same callable name in one module. Keep their
+    /// multiplicity so a call or Function reference diagnoses the conflict instead of selecting
+    /// whichever layer happened to be seeded first.
+    ambiguous_function_layers: HashMap<FnKey, Vec<String>>,
+    /// Every callable function's boundary, available from the start of planning (the impurity
+    /// prescan runs before `planned_functions` is filled) and replaced by the live layer contract
+    /// once a function is planned.
+    function_sigs: HashMap<FnKey, FunctionSig>,
+    /// Index into the flattened document's `functions` for each DECLARED function, so the purity
+    /// and resolution prescans can walk a callee's body.
+    function_decl_index: HashMap<FnKey, usize>,
+    /// Lowercase `a::b::name` → the functions reachable under that absolute module path.
+    functions_by_qualified: HashMap<String, Vec<FnKey>>,
+    /// Anchored function layers whose written module differs from the board: the layer moves to
+    /// the written module. `(layer id, written module target, display name)`; the layer ids also
+    /// gate `seed_existing_function_signatures` so a moved function is never double-seeded at its
+    /// old location.
+    pending_function_moves: Vec<(String, Option<String>, String)>,
+    /// Anchored Function layers whose written name differs from the board. The layer id also
+    /// prevents `seed_existing_function_signatures` from publishing the obsolete name while this
+    /// revision is planned. Entries are `(layer id, old name, written name)`.
+    pending_function_renames: Vec<(String, String, String)>,
+    /// Every live Function layer explicitly identified by this document. Claimed layers are
+    /// published only at their written final identity, even when a collision diagnostic prevents
+    /// a move or rename command from being queued.
+    claimed_function_layers: HashSet<String>,
+    /// Names removed by an anchored Function rename. The apply planner starts with aliases from
+    /// the live board, so an uncorrected old name could otherwise keep resolving during the same
+    /// batch even though ordinary Function calls already use the new identity.
+    retired_function_names: Vec<(String, String)>,
+    /// Whether the written position of anchored sections is authoritative: true when the
+    /// document is module-aware (it contains a `module { }` block, or it IS a module file). A
+    /// source that expresses no module structure at all — typed Flow IR cannot, and a full
+    /// rewrite that lost every wrapper must not — never relocates anchored functions/events.
+    moves_authoritative: bool,
+    /// The module owning the section currently being planned; `None` is the board root.
+    current_module: Option<String>,
+    /// Module layer id (or same-batch `$ref`) for every `module` scope of this document.
+    module_layers: HashMap<ModulePath, Option<String>>,
+    /// Lowercase `::` path of every module, keyed by layer id / `$ref`.
+    module_name_paths: HashMap<String, Vec<String>>,
+    /// The document's interface declarations (with generated schemas), the class identity of
+    /// struct receivers whose schema carries no title.
+    interfaces: Vec<InterfaceDecl>,
+    /// What the document's `use` lines bring into scope.
+    use_scope: UseScope,
+    /// `use` lines at least one resolution relied on; the rest are reported as unused.
+    use_hits: HashSet<usize>,
     /// Literal-return sources materialized during THIS plan, keyed by the deterministic
     /// `var_{function}_{pin}` id, so repeated literal returns (branch arms, re-planned bodies)
     /// share one variable + `variable_get` instead of minting suffixed duplicates.
@@ -3859,9 +7049,29 @@ struct StructuralPlanner<'a> {
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
     enricher: Option<&'a MetadataEnricher>,
+    /// Entry node id -> the event name the LIVE board currently lowers to.
+    ///
+    /// The rename check cannot re-derive this from `friendly_name`: lowering allocates event names
+    /// per scope, so a second entry whose friendly name camelizes onto a taken name renders with a
+    /// disambiguating suffix. Comparing the text against a fresh camelization then saw a rename on
+    /// every pass. Empty for callers that do not lower (the targeted unit tests), which leaves the
+    /// old friendly-name comparison as the fallback.
+    lowered_event_names: HashMap<String, String>,
 }
 
 impl<'a> StructuralPlanner<'a> {
+    /// Whether the live board already renders this entry under `desired`.
+    ///
+    /// The friendly-name comparison alone cannot answer this: lowering allocates event names per
+    /// scope, so a second entry whose friendly name camelizes onto a taken name renders with a
+    /// disambiguating suffix that no re-derivation from `friendly_name` can predict. Without this,
+    /// every pass over such a board planned a rename to a name it already had.
+    fn event_already_named(&self, node_id: &str, desired: &str) -> bool {
+        self.lowered_event_names
+            .get(node_id)
+            .is_some_and(|current| current == desired)
+    }
+
     fn new(
         existing: &'a Board,
         catalog: &[NodeMetadata],
@@ -3875,10 +7085,14 @@ impl<'a> StructuralPlanner<'a> {
             add_commands: Vec::new(),
             event_entry_refs: HashSet::new(),
             claimed_event_entries: HashSet::new(),
+            recovered_event_anchors: HashMap::new(),
+            planned_scope_moves: HashMap::new(),
             disconnect_commands: Vec::new(),
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
+            lowered_event_names: HashMap::new(),
             symbols: Vec::new(),
+            closed_block_symbols: HashMap::new(),
             variable_refs: VariableRefLookup::from_board(existing),
             variable_value_contracts: HashMap::new(),
             function_return_targets: Vec::new(),
@@ -3891,6 +7105,21 @@ impl<'a> StructuralPlanner<'a> {
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
+            ambiguous_function_layers: HashMap::new(),
+            function_sigs: HashMap::new(),
+            function_decl_index: HashMap::new(),
+            functions_by_qualified: HashMap::new(),
+            pending_function_moves: Vec::new(),
+            pending_function_renames: Vec::new(),
+            claimed_function_layers: HashSet::new(),
+            retired_function_names: Vec::new(),
+            moves_authoritative: true,
+            current_module: None,
+            module_layers: HashMap::new(),
+            module_name_paths: HashMap::new(),
+            interfaces: Vec::new(),
+            use_scope: UseScope::default(),
+            use_hits: HashSet::new(),
             planned_literal_return_sources: HashMap::new(),
             planned_boundary_passthroughs: HashMap::new(),
             enricher,
@@ -3922,8 +7151,21 @@ impl<'a> StructuralPlanner<'a> {
         enricher(&meta, &literal_args, self.existing).unwrap_or(meta)
     }
 
-    fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
+    fn plan(mut self, doc: &FlatDocument, modules: &ModuleResolution) -> ReconcileResult {
+        let ast = &doc.ast;
         self.interface_schemas = interface_schema_map(ast);
+        self.interfaces = ast.interfaces.clone();
+        // Modules are the outermost context: every later phase (which layer a section plans into,
+        // which functions a bare name can see) is decided relative to them. They are prepared
+        // BEFORE `use`, because a `use` line may name a module namespace declared in this
+        // document and the validation needs `module_name_paths` populated to accept it.
+        self.prepare_modules(modules);
+        self.prepare_uses(ast);
+        self.prepare_function_sigs(doc);
+        // A call may target a function this document never declares — a global helper called from
+        // a module file, or any function outside a selection-scoped render.
+        self.seed_existing_function_signatures();
+        self.index_qualified_functions();
         // Reserve every still-live explicit event anchor before planning. A stale declaration that
         // appears earlier in the document must not steal the entry owned by a later declaration.
         self.reserve_declared_event_entries(ast);
@@ -3931,18 +7173,29 @@ impl<'a> StructuralPlanner<'a> {
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
         // events and other functions resolve regardless of declaration order.
-        self.prepare_functions(ast);
-        for event in &ast.events {
-            self.plan_event(event, None);
+        self.prepare_functions(doc);
+        for (index, event) in ast.events.iter().enumerate() {
+            self.current_module = self.declared_event_module(doc, index);
+            let target_layer = self.current_module.clone();
+            self.plan_event(event, target_layer);
         }
-        for func in &ast.functions {
-            self.plan_function_body(func);
+        for (index, func) in ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            self.current_module = key.module.clone();
+            self.plan_function_body(func, &key);
         }
+        for (index, block) in ast.detached.iter().enumerate() {
+            self.current_module = self.scope_module(&doc.detached_scopes[index]);
+            let target_layer = self.current_module.clone();
+            self.plan_detached(block, target_layer);
+        }
+        self.current_module = None;
         self.pop_scope();
 
         self.check_new_function_structure();
         self.check_function_ref_targets();
         self.check_dangling_impure_execution();
+        self.report_unused_uses();
 
         // The entry node is the registration target for the outer app Event. Materialize every
         // layer, variable and workflow node first, then add the entry node last. Connections are
@@ -3969,24 +7222,78 @@ impl<'a> StructuralPlanner<'a> {
         self.result
     }
 
-    fn prepare_functions(&mut self, ast: &BoardAst) {
-        for func in &ast.functions {
+    fn prepare_functions(&mut self, doc: &FlatDocument) {
+        // The written module block is authoritative: an anchored function written elsewhere
+        // moves there (detected in `prepare_function_sigs`).
+        let changed_layers: HashSet<String> = self
+            .pending_function_moves
+            .iter()
+            .map(|(layer_id, ..)| layer_id.clone())
+            .chain(
+                self.pending_function_renames
+                    .iter()
+                    .map(|(layer_id, ..)| layer_id.clone()),
+            )
+            .collect();
+        for (layer_id, target, name) in std::mem::take(&mut self.pending_function_moves) {
+            let destination = self.module_move_label(target.as_deref());
+            self.update_commands.push(BoardCommand::MoveToLayer {
+                ids: vec![layer_id],
+                target_layer: target,
+                summary: Some(format!("Move function {name} to {destination}")),
+            });
+            self.result.corrections.push(format!(
+                "Moved function `{name}` to {destination} to match its written position."
+            ));
+        }
+        for (layer_id, old_name, new_name) in std::mem::take(&mut self.pending_function_renames) {
+            self.update_commands.push(BoardCommand::RenameLayer {
+                layer_id,
+                name: new_name.clone(),
+                summary: Some(format!("Rename function {old_name} to {new_name}")),
+            });
+            self.result
+                .corrections
+                .push(format!("Renamed function `{old_name}` to `{new_name}`."));
+        }
+        let ast = &doc.ast;
+        for (index, func) in ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            self.current_module = key.module.clone();
             let mut seen = HashSet::new();
-            seen.insert(func.name.clone());
+            seen.insert(key.seen_id());
             let impure = self.function_body_is_impure(ast, &func.body, &mut seen);
             let mut resolution_seen = HashSet::new();
-            resolution_seen.insert(func.name.clone());
+            resolution_seen.insert(key.seen_id());
             let has_unresolved_calls =
                 self.function_body_has_unresolved_calls(ast, &func.body, &mut resolution_seen);
-            let Some(entity) = self.function_layer_entity(func, impure) else {
+            let Some(entity) = self.function_layer_entity(func, impure, key.module.as_deref())
+            else {
+                self.function_sigs.remove(&key);
                 continue;
             };
             let Some((params, returns)) = self.function_contract_metadata(func, &entity, impure)
             else {
+                self.function_sigs.remove(&key);
                 continue;
             };
+            if matches!(entity, NodeEntity::Layer { .. })
+                || func
+                    .anchor
+                    .as_deref()
+                    .is_some_and(|anchor| changed_layers.contains(anchor))
+            {
+                self.check_introduced_function_shadow(&key);
+            }
+            self.function_sigs.insert(
+                key.clone(),
+                FunctionSig {
+                    params: params.clone(),
+                    returns: returns.clone(),
+                },
+            );
             self.planned_functions.insert(
-                func.name.clone(),
+                key,
                 PlannedFunction {
                     entity,
                     impure,
@@ -3996,6 +7303,49 @@ impl<'a> StructuralPlanner<'a> {
                 },
             );
         }
+        self.current_module = None;
+        self.index_qualified_functions();
+    }
+
+    /// A module-local function silently wins over a global of the same name on read-back, so a
+    /// document may keep a shadow the board already has, but must never introduce one.
+    fn check_introduced_function_shadow(&mut self, key: &FnKey) {
+        let normalized = to_camel_case(&key.name);
+        let shadowed = self
+            .function_sigs
+            .keys()
+            .filter(|other| {
+                to_camel_case(&other.name) == normalized
+                    && other.module != key.module
+                    && (other.module.is_none() || key.module.is_none())
+            })
+            .filter_map(|other| match &other.module {
+                Some(module) => self
+                    .module_name_paths
+                    .get(module)
+                    .map(|path| format!("`{}::{}`", path.join("::"), other.name)),
+                None => Some(format!("the global function `{}`", other.name)),
+            })
+            .collect::<Vec<_>>();
+        if shadowed.is_empty() {
+            return;
+        }
+        let mut shadowed = shadowed;
+        shadowed.sort();
+        shadowed.dedup();
+        let scope = match key
+            .module
+            .as_deref()
+            .and_then(|module| self.module_name_paths.get(module))
+        {
+            Some(path) => format!("module `{}`", path.join("::")),
+            None => "the board root".to_string(),
+        };
+        self.result.diagnostics.push(format!(
+            "new function `{}` in {scope} shadows {}; a module-local function always wins on read-back, so the shadowed call sites would silently retarget. Rename one of them",
+            key.name,
+            shadowed.join(" and ")
+        ));
     }
 
     fn function_contract_metadata(
@@ -4112,21 +7462,50 @@ impl<'a> StructuralPlanner<'a> {
         block: &Block,
         seen: &mut HashSet<String>,
     ) -> bool {
+        fn collect_local_variables(block: &Block, names: &mut HashSet<String>) {
+            for stmt in &block.stmts {
+                match stmt {
+                    Stmt::Local(variable) => {
+                        names.insert(to_camel_case(&variable.name));
+                    }
+                    Stmt::Branch { arms, .. } => {
+                        for arm in arms {
+                            collect_local_variables(&arm.body, names);
+                        }
+                    }
+                    Stmt::Loop { body, .. } => collect_local_variables(body, names),
+                    // A nested handler has its own execution and symbol scope.
+                    Stmt::Handler(_)
+                    | Stmt::Let { .. }
+                    | Stmt::Destructure { .. }
+                    | Stmt::Call { .. }
+                    | Stmt::Assign { .. }
+                    | Stmt::FieldAssign { .. }
+                    | Stmt::LocalAlias { .. }
+                    | Stmt::Return { .. }
+                    | Stmt::Comment(_) => {}
+                }
+            }
+        }
+
+        let mut local_variables = HashSet::new();
+        collect_local_variables(block, &mut local_variables);
         block.stmts.iter().any(|stmt| match stmt {
             Stmt::Branch { .. } | Stmt::Loop { .. } => true,
-            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
                 self.call_is_impure(ast, call, seen)
             }
             Stmt::Assign { target, value, .. } => {
-                self.assignment_targets_board_variable(ast, target)
+                self.assignment_targets_board_variable(ast, target, &local_variables)
                     || self.expr_contains_impure_call(ast, value, seen)
             }
-            // `base.path = value` plans as an Assign to `base` (struct_set accumulator) — a
-            // board-variable base ends in an impure variable_set node just like a plain Assign.
-            Stmt::FieldAssign { base, value, .. } => {
-                self.assignment_targets_board_variable(ast, base)
-                    || self.expr_contains_impure_call(ast, value, seen)
-            }
+            // `base.path = value` always plans a `struct_set`, and `struct_set` carries exec pins.
+            // Testing the BASE (board variable vs local) was the wrong question: it decided a
+            // function whose whole body is `const s = struct::make()` followed by field writes was
+            // pure, so the layer was created with no exec boundary pins — and reconcile then
+            // refused the very function it had just built, because an impure body has nowhere to
+            // start. The base only decides whether a `variable_set` joins the chain too.
+            Stmt::FieldAssign { .. } => true,
             Stmt::LocalAlias { value, .. } => self.expr_contains_impure_call(ast, value, seen),
             Stmt::Return { values, .. } => values
                 .iter()
@@ -4138,26 +7517,48 @@ impl<'a> StructuralPlanner<'a> {
     fn call_is_impure(&self, ast: &BoardAst, call: &Call, seen: &mut HashSet<String>) -> bool {
         // Impure calls hidden inside the ARGUMENTS make the enclosing statement impure no matter
         // what the callee is — they get exec-spliced ahead of it at plan time.
-        let args_impure = call
-            .args
-            .iter()
-            .any(|arg| self.expr_contains_impure_call(ast, &arg.value, seen));
-        if let Some(func) = ast.functions.iter().find(|func| func.name == call.display) {
-            let body_impure = seen.insert(func.name.clone())
-                && self.function_body_is_impure(ast, &func.body, seen);
-            return body_impure || args_impure;
-        }
-        let impure_by_meta = match self.catalog.resolve_call(call) {
-            Ok(meta) => metadata_exec_input_pin(&meta).is_some(),
+        let args_impure =
+            call_operands(call).any(|operand| self.expr_contains_impure_call(ast, operand, seen));
+        let impure_by_meta = match self
+            .resolve_call_target(call)
+            .map(|resolved| resolved.target)
+        {
+            Ok(CallTarget::Function(key)) => {
+                self
+                .function_decl_index
+                .get(&key)
+                .and_then(|index| ast.functions.get(*index))
+                .is_some_and(|func| {
+                    seen.insert(key.seen_id()) && self.function_body_is_impure(ast, &func.body, seen)
+                })
+                // A function this document does not declare is already on the board: its live
+                // boundary pins say whether calling it needs an execution chain.
+                || (!self.function_decl_index.contains_key(&key)
+                    && self
+                        .planned_functions
+                        .get(&key)
+                        .is_some_and(|planned| planned.impure))
+            }
+            Ok(CallTarget::Catalog(meta)) => metadata_exec_input_pin(&meta).is_some(),
             // An unresolvable call (e.g. conflicting same-type declarations in a board-derived
-            // catalog) must not silently classify as pure: the anchored live node knows whether
-            // it carries an execution input, and misclassifying flips the function layer's
-            // exec-boundary contract.
-            Err(_) => call
-                .anchor
-                .as_deref()
-                .and_then(|anchor| find_board_node(self.existing, anchor))
-                .is_some_and(|node| exec_input_pin(node).is_some()),
+            // catalog, or a method call whose receiver type the prescan cannot see) must not
+            // silently classify as pure: the anchored live node knows whether it carries an
+            // execution input, any impure method candidate is evidence, and misclassifying
+            // flips the function layer's exec-boundary contract.
+            Err(_) => {
+                call.anchor
+                    .as_deref()
+                    .and_then(|anchor| find_board_node(self.existing, anchor))
+                    .is_some_and(|node| exec_input_pin(node).is_some())
+                    || (call.receiver.is_some()
+                        && self
+                            .catalog
+                            .method_matches(&call.display)
+                            .iter()
+                            .any(|idx| {
+                                metadata_exec_input_pin(&self.catalog.entries[*idx]).is_some()
+                            }))
+            }
         };
         impure_by_meta || args_impure
     }
@@ -4196,6 +7597,9 @@ impl<'a> StructuralPlanner<'a> {
                 self.expr_contains_impure_call(ast, lhs, seen)
                     || self.expr_contains_impure_call(ast, rhs, seen)
             }
+            Expr::Template { parts } => {
+                template_exprs(parts).any(|part| self.expr_contains_impure_call(ast, part, seen))
+            }
             Expr::Ref(_) | Expr::Literal(_) => false,
         }
     }
@@ -4210,7 +7614,7 @@ impl<'a> StructuralPlanner<'a> {
         seen: &mut HashSet<String>,
     ) -> bool {
         block.stmts.iter().any(|stmt| match stmt {
-            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
                 self.call_has_unresolved_target(ast, call, seen)
             }
             Stmt::Assign { value, .. } | Stmt::LocalAlias { value, .. } => {
@@ -4231,8 +7635,16 @@ impl<'a> StructuralPlanner<'a> {
                         .iter()
                         .any(|arm| self.function_body_has_unresolved_calls(ast, &arm.body, seen))
             }
-            Stmt::Loop { call, body, .. } => {
-                self.call_has_unresolved_target(ast, call, seen)
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
+                (!is_placeholder_call(call) && self.call_has_unresolved_target(ast, call, seen))
+                    || iterable
+                        .as_ref()
+                        .is_some_and(|iterable| self.expr_has_unresolved_call(ast, iterable, seen))
                     || self.function_body_has_unresolved_calls(ast, body, seen)
             }
             Stmt::Return { values, .. } => values
@@ -4249,26 +7661,32 @@ impl<'a> StructuralPlanner<'a> {
         call: &Call,
         seen: &mut HashSet<String>,
     ) -> bool {
-        let args_unresolved = call
-            .args
-            .iter()
-            .any(|arg| self.expr_has_unresolved_call(ast, &arg.value, seen));
-        if let Some(function) = ast
-            .functions
-            .iter()
-            .find(|function| function.name == call.display)
-        {
-            return args_unresolved
-                || (seen.insert(function.name.clone())
-                    && self.function_body_has_unresolved_calls(ast, &function.body, seen));
-        }
-        if args_unresolved {
-            return true;
-        }
-        let Ok(meta) = self.catalog.resolve_call(call) else {
+        let args_unresolved =
+            call_operands(call).any(|operand| self.expr_has_unresolved_call(ast, operand, seen));
+        let Ok(resolved) = self.resolve_call_target(call) else {
             return true;
         };
-        unsafe_catalog_call_shape_diagnostic(call, &meta).is_some()
+        match resolved.target {
+            CallTarget::Function(key) => {
+                args_unresolved
+                    || self
+                        .function_decl_index
+                        .get(&key)
+                        .and_then(|index| ast.functions.get(*index))
+                        .is_some_and(|function| {
+                            seen.insert(key.seen_id())
+                                && self.function_body_has_unresolved_calls(
+                                    ast,
+                                    &function.body,
+                                    seen,
+                                )
+                        })
+            }
+            CallTarget::Catalog(meta) => {
+                args_unresolved
+                    || unsafe_catalog_call_shape_diagnostic(&resolved.call, &meta).is_some()
+            }
+        }
     }
 
     fn expr_has_unresolved_call(
@@ -4305,19 +7723,30 @@ impl<'a> StructuralPlanner<'a> {
                 self.expr_has_unresolved_call(ast, lhs, seen)
                     || self.expr_has_unresolved_call(ast, rhs, seen)
             }
+            Expr::Template { parts } => {
+                template_exprs(parts).any(|part| self.expr_has_unresolved_call(ast, part, seen))
+            }
             Expr::Ref(_) | Expr::Literal(_) => false,
         }
     }
 
-    fn assignment_targets_board_variable(&self, ast: &BoardAst, target: &str) -> bool {
-        ast.variables.iter().any(|var| var.name == target)
-            || self.variable_refs.resolve(target).is_some()
+    fn assignment_targets_board_variable(
+        &self,
+        ast: &BoardAst,
+        target: &str,
+        local_variables: &HashSet<String>,
+    ) -> bool {
+        let normalized = to_camel_case(target);
+        ast.variables
+            .iter()
+            .any(|variable| to_camel_case(&variable.name) == normalized)
+            || local_variables.contains(&normalized)
+            || self.variable_refs.contains_global_name_or_id(target)
     }
 
     /// Resolve the exact catalog identity carried by an event declaration without invoking the
-    /// Generic/Simple fallback. A stale anchor may only create a replacement when this succeeds;
-    /// an alias-only header such as `wikiExplorerLoad()` does not retain enough type information
-    /// to decide whether the deleted node was Simple, Generic, or package-defined.
+    /// Generic/Simple fallback. Recovery uses this identity to prefer a compatible live entry. If
+    /// none exists, the ordinary unanchored Event path may still choose its standard fallback.
     fn exact_event_metadata(&self, event: &EventBlock) -> Result<Option<NodeMetadata>, String> {
         if !event.node_type.trim().is_empty() {
             self.catalog
@@ -4335,20 +7764,210 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn node_is_in_target_layer(&self, node: &Node, target_layer: Option<&str>) -> bool {
-        let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
-        // Canonical flat storage is authoritative even when `layer` is None (root). Consult a
-        // containing layer only for legacy nested-only nodes; mirrored layer clones may be stale.
-        if self.existing.nodes.contains_key(&node.id) {
-            return direct_layer == target_layer;
-        }
+        board_node_semantic_scope(self.existing, node).as_deref() == target_layer
+    }
 
-        let nested_layer = self
-            .existing
-            .layers
-            .values()
-            .find(|layer| layer.nodes.contains_key(&node.id))
-            .map(|layer| layer.id.as_str());
-        nested_layer == target_layer
+    /// The executable scope that owns a node. Collapsed and Macro layers are transparent
+    /// containers; Function and Module layers are semantic boundaries.
+    fn node_semantic_scope(&self, node: &Node) -> Option<String> {
+        board_node_semantic_scope(self.existing, node)
+    }
+
+    fn semantic_scope_label(&self, scope: Option<&str>) -> String {
+        let Some(id) = scope else {
+            return "the board root".to_string();
+        };
+        match self.existing.layers.get(id) {
+            Some(layer) if matches!(layer.r#type, LayerType::Module) => {
+                self.module_move_label(Some(id))
+            }
+            Some(layer) if matches!(layer.r#type, LayerType::Function) => {
+                format!("Function layer `{}`", layer.name)
+            }
+            Some(layer) if matches!(layer.r#type, LayerType::Macro) => {
+                format!("Macro layer `{}`", layer.name)
+            }
+            Some(layer) => format!("layer `{}`", layer.name),
+            None => format!("layer `{id}`"),
+        }
+    }
+
+    /// True when `start_layer`'s chain reaches a Function layer before any Module layer. Macro and
+    /// Collapsed layers are presentational containers in that chain.
+    fn inside_function_layer(&self, start_layer: Option<&str>) -> bool {
+        let mut current = start_layer;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                return false;
+            }
+            let Some(layer) = self.existing.layers.get(id) else {
+                return false;
+            };
+            match layer.r#type {
+                LayerType::Function => return true,
+                LayerType::Module => return false,
+                LayerType::Collapsed | LayerType::Macro => current = layer.parent_id.as_deref(),
+            }
+        }
+        false
+    }
+
+    /// The nodes belonging to one event on the existing board: exec-reachable from the entry,
+    /// plus the pure data sources feeding those nodes, restricted to nodes owned by `module` and
+    /// not inside a Function layer. Other event entries bound the walk.
+    fn event_subgraph_ids(&self, entry_id: &str, module: Option<&str>) -> HashSet<String> {
+        let mut visited: HashSet<String> = HashSet::new();
+        let Some(entry) = find_board_node(self.existing, entry_id) else {
+            return visited;
+        };
+        visited.insert(entry_id.to_string());
+        let mut queue: Vec<&Node> = vec![entry];
+        while let Some(node) = queue.pop() {
+            for pin in node.pins.values() {
+                let candidates: Vec<&Node> = if pin.pin_type == PinType::Output && is_exec_pin(pin)
+                {
+                    pin.connected_to
+                        .iter()
+                        .filter_map(|pin_id| self.board_index.pin_owner.get(pin_id.as_str()))
+                        .map(|(owner, _)| *owner)
+                        .collect()
+                } else if pin.pin_type == PinType::Input && !is_exec_pin(pin) {
+                    pin.depends_on
+                        .iter()
+                        .filter_map(|pin_id| self.board_index.pin_owner.get(pin_id.as_str()))
+                        .map(|(owner, _)| *owner)
+                        // An impure source reached through a data edge belongs to whichever
+                        // execution chain drives it; only pure nodes travel with a data edge.
+                        .filter(|owner| !owner.pins.values().any(is_exec_pin))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for owner in candidates {
+                    if owner.id != entry_id && is_trigger_entry(owner) {
+                        continue;
+                    }
+                    if owning_module(self.existing, owner.layer.as_deref()).as_deref() != module
+                        || self.inside_function_layer(owner.layer.as_deref())
+                    {
+                        continue;
+                    }
+                    if visited.insert(owner.id.clone()) {
+                        queue.push(owner);
+                    }
+                }
+            }
+        }
+        visited
+    }
+
+    /// The last non-module layer on the chain from `start_layer` up to its owning module (or the
+    /// root): the container a cross-module move must re-parent so the grouping survives.
+    fn topmost_container_below_module(&self, start_layer: &str) -> Option<String> {
+        let mut current = Some(start_layer);
+        let mut top: Option<&str> = None;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                break;
+            }
+            let Some(layer) = self.existing.layers.get(id) else {
+                break;
+            };
+            if matches!(layer.r#type, LayerType::Module) {
+                break;
+            }
+            top = Some(id);
+            current = layer.parent_id.as_deref();
+        }
+        top.map(str::to_string)
+    }
+
+    /// True when `target` appears on the layer parent chain starting at `start`.
+    fn layer_chain_contains(&self, start: Option<&str>, target: &str) -> bool {
+        let mut current = start;
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(id) = current {
+            if id == target {
+                return true;
+            }
+            if !seen.insert(id) {
+                return false;
+            }
+            current = self
+                .existing
+                .layers
+                .get(id)
+                .and_then(|layer| layer.parent_id.as_deref());
+        }
+        false
+    }
+
+    /// True when every node contained (transitively) in `container` is in `movable` — the
+    /// condition for re-parenting the whole container instead of flattening it.
+    fn layer_subtree_all_movable(&self, container: &str, movable: &HashSet<String>) -> bool {
+        all_board_nodes(self.existing).into_iter().all(|node| {
+            movable.contains(&node.id)
+                || !self.layer_chain_contains(node.layer.as_deref(), container)
+        })
+    }
+
+    /// What a cross-module event move re-homes: the event's own subgraph minus any node also
+    /// belonging to another event of the same module (a shared pure source stays put — either
+    /// event renders it inline regardless of where it lives). Nodes grouped inside a
+    /// Collapsed layer move as that layer (topmost container under the module) so the grouping
+    /// survives; a container that also holds non-movable nodes stays behind with its members
+    /// (returned in `kept_in_place` for a correction).
+    fn event_move_ids(&self, entry_id: &str, module: Option<&str>) -> EventMovePlan {
+        let mine = self.event_subgraph_ids(entry_id, module);
+        let mut shared: HashSet<String> = HashSet::new();
+        for node in all_board_nodes(self.existing) {
+            if node.id != entry_id
+                && is_trigger_entry(node)
+                && owning_module(self.existing, node.layer.as_deref()).as_deref() == module
+            {
+                shared.extend(self.event_subgraph_ids(&node.id, module));
+            }
+        }
+        let movable: HashSet<String> = mine
+            .into_iter()
+            .filter(|id| id == entry_id || !shared.contains(id))
+            .collect();
+        let mut ids: Vec<String> = Vec::new();
+        let mut containers: BTreeSet<String> = BTreeSet::new();
+        for id in &movable {
+            let Some(node) = find_board_node(self.existing, id) else {
+                continue;
+            };
+            let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
+            match direct_layer {
+                Some(layer_id) if direct_layer != module => {
+                    match self.topmost_container_below_module(layer_id) {
+                        Some(container) => {
+                            containers.insert(container);
+                        }
+                        None => ids.push(id.clone()),
+                    }
+                }
+                _ => ids.push(id.clone()),
+            }
+        }
+        let mut kept_in_place: Vec<String> = Vec::new();
+        for container in containers {
+            if self.layer_subtree_all_movable(&container, &movable) {
+                ids.push(container);
+            } else {
+                kept_in_place.push(container);
+            }
+        }
+        ids.sort();
+        kept_in_place.sort();
+        EventMovePlan {
+            ids,
+            members: movable,
+            kept_in_place,
+        }
     }
 
     fn event_entry_targets_node(&self, entry: &Node, target_node_id: &str) -> bool {
@@ -4384,7 +8003,7 @@ impl<'a> StructuralPlanner<'a> {
             .filter(|node| {
                 !self.claimed_event_entries.contains(&node.id)
                     && self.node_is_in_target_layer(node, target_layer)
-                    && node.start == Some(true)
+                    && is_trigger_entry(node)
                     && event_entry_incompatibility(&node_to_metadata(node)).is_none()
                     && exact_meta
                         .as_ref()
@@ -4405,7 +8024,9 @@ impl<'a> StructuralPlanner<'a> {
         let entry_friendly = entry.friendly_name.clone();
         self.claimed_event_entries.insert(entry_id.clone());
         let desired_name = event.event_name.as_deref().unwrap_or(&event.name);
-        if !pin_name_matches(&entry_friendly, desired_name) {
+        if !self.event_already_named(&entry_id, desired_name)
+            && !pin_name_matches(&entry_friendly, desired_name)
+        {
             self.update_commands.push(BoardCommand::RenameNode {
                 node_id: entry_id.clone(),
                 friendly_name: desired_name.to_string(),
@@ -4423,8 +8044,9 @@ impl<'a> StructuralPlanner<'a> {
     ///
     /// Recovery is deliberately deterministic:
     /// - one compatible, unclaimed entry in the same scope is rebound;
-    /// - no live match is recreated only when the catalog type is exact;
-    /// - incompatible or ambiguous matches stay blocking conflicts.
+    /// - zero or several compatible entries create a fresh entry instead of guessing;
+    /// - invalid Event metadata remains a diagnostic, while an empty copied handler can still
+    ///   receive a fresh entry.
     fn recover_missing_event_entry(
         &mut self,
         event: &EventBlock,
@@ -4448,34 +8070,23 @@ impl<'a> StructuralPlanner<'a> {
                 .filter(|display| !pin_name_matches(display, &event.name))
                 .map(|_| event.name.as_str())
         });
+        let desired_friendly_name = match &exact_meta {
+            Some(meta) => desired_alias.unwrap_or(&meta.friendly_name),
+            None => event.event_name.as_deref().unwrap_or(&event.name),
+        };
 
-        let mut identity_matches = all_board_nodes(self.existing)
+        let mut scope_matches = all_board_nodes(self.existing)
             .into_iter()
             .filter(|node| {
                 !self.claimed_event_entries.contains(&node.id)
                     && self.node_is_in_target_layer(node, target_layer.as_deref())
-                    && node.start == Some(true)
+                    && is_trigger_entry(node)
                     && event_entry_incompatibility(&node_to_metadata(node)).is_none()
-                    && match &exact_meta {
-                        Some(meta) => {
-                            node.name == meta.name
-                                && desired_alias.is_none_or(|alias| {
-                                    pin_name_matches(&node.friendly_name, alias)
-                                })
-                        }
-                        None => {
-                            (pin_name_matches(&node.name, &event.name)
-                                || pin_name_matches(&node.friendly_name, &event.name))
-                                && event.event_name.as_deref().is_none_or(|alias| {
-                                    pin_name_matches(&node.friendly_name, alias)
-                                })
-                        }
-                    }
             })
             .collect::<Vec<_>>();
-        identity_matches.sort_by(|left, right| left.id.cmp(&right.id));
+        scope_matches.sort_by(|left, right| left.id.cmp(&right.id));
 
-        let mut compatible = identity_matches
+        let compatible_by_scope = scope_matches
             .iter()
             .copied()
             .filter(|node| {
@@ -4487,100 +8098,158 @@ impl<'a> StructuralPlanner<'a> {
                 )
             })
             .collect::<Vec<_>>();
+        let compatible_by_type = compatible_by_scope
+            .iter()
+            .copied()
+            .filter(|node| match &exact_meta {
+                Some(meta) => node.name == meta.name,
+                None => {
+                    (pin_name_matches(&node.name, &event.name)
+                        || pin_name_matches(&node.friendly_name, &event.name))
+                        && event
+                            .event_name
+                            .as_deref()
+                            .is_none_or(|alias| pin_name_matches(&node.friendly_name, alias))
+                }
+            })
+            .collect::<Vec<_>>();
 
-        // Several entries may legitimately share one event type. The old body's still-live first
-        // execution node is a stronger identity signal than name alone, so use it to narrow the
-        // candidates when exactly one entry currently drives that body.
-        if compatible.len() > 1
-            && let Some(first_body_node) = first_existing_exec_body_node(self.existing, &event.body)
-        {
-            let connected = compatible
-                .iter()
-                .copied()
-                .filter(|entry| self.event_entry_targets_node(entry, &first_body_node.id))
-                .collect::<Vec<_>>();
-            if connected.len() == 1 {
-                compatible = connected;
+        // A canonical typed header without an explicit alias describes the catalog's default
+        // friendly name. It must not claim the sole differently named handler merely because the
+        // node type and parameter contract happen to match.
+        let compatible_by_name = compatible_by_type
+            .iter()
+            .copied()
+            .filter(|node| match &exact_meta {
+                Some(_) => pin_name_matches(&node.friendly_name, desired_friendly_name),
+                None => true,
+            })
+            .collect::<Vec<_>>();
+
+        // Several entries may legitimately share one Event type. The old body's still-live first
+        // execution node is independent identity evidence, so a unique connection can recover an
+        // entry even when its friendly name changed. Conflicting unique name and connection
+        // evidence is not enough to choose either entry.
+        let compatible_by_connection = first_existing_exec_body_node(self.existing, &event.body)
+            .map_or_else(Vec::new, |body| {
+                compatible_by_scope
+                    .iter()
+                    .copied()
+                    .filter(|entry| {
+                        exact_meta
+                            .as_ref()
+                            .is_none_or(|meta| entry.name == meta.name)
+                    })
+                    .filter(|entry| self.event_entry_targets_node(entry, &body.id))
+                    .collect::<Vec<_>>()
+            });
+
+        let name_choice = match compatible_by_name.as_slice() {
+            [entry] => Some(*entry),
+            _ => None,
+        };
+        let connection_choice = match compatible_by_connection.as_slice() {
+            [entry] => Some(*entry),
+            _ => None,
+        };
+        let recovered = match (name_choice, connection_choice) {
+            (Some(by_name), Some(by_connection)) if by_name.id != by_connection.id => None,
+            (Some(entry), _) | (None, Some(entry)) => Some(entry),
+            (None, None) => None,
+        };
+
+        if let Some(entry) = recovered {
+            self.claimed_event_entries.insert(entry.id.clone());
+            if !self.event_already_named(&entry.id, desired_friendly_name)
+                && !pin_name_matches(&entry.friendly_name, desired_friendly_name)
+            {
+                self.update_commands.push(BoardCommand::RenameNode {
+                    node_id: entry.id.clone(),
+                    friendly_name: desired_friendly_name.to_string(),
+                    summary: Some(format!("Rename event to {desired_friendly_name}")),
+                });
             }
+            self.result.corrections.push(format!(
+                "Re-anchored event `{}` from missing `{stale_anchor}` to live entry `{}`.",
+                event.name, entry.id
+            ));
+            return Some(NodeEntity::Existing(entry.id.clone()));
         }
 
-        match compatible.as_slice() {
-            [entry] => {
-                self.claimed_event_entries.insert(entry.id.clone());
-                self.result.corrections.push(format!(
-                    "Re-anchored event `{}` from missing `{stale_anchor}` to live entry `{}`.",
-                    event.name, entry.id
-                ));
-                return Some(NodeEntity::Existing(entry.id.clone()));
-            }
-            entries @ [_, _, ..] => {
-                self.result.diagnostics.push(format!(
-                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; {} compatible live entries in the same scope make automatic re-anchoring ambiguous ({})",
-                    event.name,
-                    entries.len(),
-                    entries
-                        .iter()
-                        .map(|entry| format!("`{}`", entry.id))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                return None;
-            }
-            [] => {}
-        }
-
-        // A strong alias found the intended live entry but its payload changed. Recreating a
-        // sibling would hide a real contract conflict and leave two identically named triggers.
-        if desired_alias.is_some() && !identity_matches.is_empty() {
-            self.result.diagnostics.push(format!(
-                "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; the matching live entry has an incompatible parameter contract and cannot be re-anchored automatically",
+        // The missing ID cannot prove which live entry was copied. When compatibility does not
+        // identify exactly one entry, create a new entry and let the ordinary Event constraints
+        // decide whether the authored handler itself is valid.
+        let recreated = self.add_entry_node(
+            &event.name,
+            &event.node_type,
+            event.event_name.as_deref(),
+            target_layer,
+            &event.params,
+        );
+        if recreated.is_some() {
+            self.result.corrections.push(format!(
+                "Recreated event `{}` because anchor `{stale_anchor}` no longer exists; the applied board will assign a new anchor.",
                 event.name
             ));
-            return None;
         }
-
-        if exact_meta.is_some() {
-            if block_has_no_executable_statements(&event.body) {
-                self.result.diagnostics.push(format!(
-                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; refusing to recreate an event with no executable body nodes",
-                    event.name
-                ));
-                return None;
-            }
-            let recreated = self.add_entry_node(
-                &event.name,
-                &event.node_type,
-                event.event_name.as_deref(),
-                target_layer,
-                &event.params,
-            );
-            if recreated.is_some() {
-                self.result.corrections.push(format!(
-                    "Recreated event `{}` because anchor `{stale_anchor}` no longer exists; the applied board will assign a new anchor.",
-                    event.name
-                ));
-            }
-            return recreated;
-        }
-
-        self.result.diagnostics.push(format!(
-            "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; no unique compatible live entry was found and the alias-only header does not preserve an exact event type. Refresh FlowScript, or declare an explicit type such as `eventsGeneric {}(...)` before removing the stale anchor",
-            event.name, event.name
-        ));
-        None
+        recreated
     }
 
     fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
-        if event.anchor.is_none() && block_has_no_executable_statements(&event.body) {
-            self.result.diagnostics.push(format!(
-                "new event `{}` has no executable body nodes; an Event entry is a registration target, not a complete workflow",
-                event.name
-            ));
+        let unavailable_anchor = event
+            .anchor
+            .as_deref()
+            .filter(|anchor| !board_contains_entity_id(self.existing, anchor))
+            .map(str::to_string);
+        if block_has_no_executable_statements(&event.body) {
+            if event.anchor.is_none() {
+                self.result.diagnostics.push(format!(
+                    "new event `{}` has no executable body nodes; an Event entry is a registration target, not a complete workflow",
+                    event.name
+                ));
+            }
         }
         let entry = match &event.anchor {
             Some(anchor) => match find_board_node(self.existing, anchor) {
                 Some(node) => {
-                    if !event.node_type.trim().is_empty() && node.name != event.node_type {
+                    let live_meta = node_to_metadata(node);
+                    let is_module_context = target_layer
+                        .as_deref()
+                        .is_none_or(|id| self.module_name_paths.contains_key(id));
+                    let actual_scope = self.node_semantic_scope(node);
+                    let actual_is_function_scope = actual_scope
+                        .as_deref()
+                        .and_then(|id| self.existing.layers.get(id))
+                        .is_some_and(|layer| {
+                            matches!(layer.r#type, LayerType::Function | LayerType::Macro)
+                        });
+                    let ownership_mismatch = if is_module_context {
+                        actual_is_function_scope
+                    } else {
+                        actual_scope.as_deref() != target_layer.as_deref()
+                    };
+
+                    if !is_trigger_entry(node) {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` keeps anchor `{anchor}`, but that node is not registered as an Event entry",
+                            event.name
+                        ));
+                        None
+                    } else if let Some(reason) = event_entry_incompatibility(&live_meta) {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` keeps anchor `{anchor}`, but that node cannot be an Event entry because {reason}",
+                            event.name
+                        ));
+                        None
+                    } else if ownership_mismatch {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` keeps anchor `{anchor}`, but that entry belongs to {} while this handler is in {}; remove the anchor to create an entry in this scope",
+                            event.name,
+                            self.semantic_scope_label(actual_scope.as_deref()),
+                            self.semantic_scope_label(target_layer.as_deref())
+                        ));
+                        None
+                    } else if !event.node_type.trim().is_empty() && node.name != event.node_type {
                         self.result.diagnostics.push(format!(
                             "event `{}` declares exact node_type `{}`, but anchor `{anchor}` resolves to `{}`",
                             event.name, event.node_type, node.name
@@ -4611,6 +8280,7 @@ impl<'a> StructuralPlanner<'a> {
                             .event_name
                             .as_deref()
                             .filter(|name| !name.trim().is_empty())
+                            && !self.event_already_named(anchor, event_name)
                             && !pin_name_matches(&node.friendly_name, event_name)
                         {
                             self.update_commands.push(BoardCommand::RenameNode {
@@ -4619,9 +8289,53 @@ impl<'a> StructuralPlanner<'a> {
                                 summary: Some(format!("Rename event to {event_name}")),
                             });
                         }
+                        // The module the event is WRITTEN in is authoritative: an anchored event
+                        // in a different module block moves there — entry and body together. Only
+                        // a top-level section can move (a handler nested in a function body plans
+                        // with the function layer as its target, which is not a module context),
+                        // and an entry parked inside a Function layer stays with that function.
+                        let actual_module = owning_module(self.existing, node.layer.as_deref());
+                        if self.moves_authoritative
+                            && is_module_context
+                            && actual_module.as_deref() != target_layer.as_deref()
+                            && !self.inside_function_layer(node.layer.as_deref())
+                        {
+                            let plan = self.event_move_ids(anchor, actual_module.as_deref());
+                            let destination = self.module_move_label(target_layer.as_deref());
+                            let display = event.event_name.as_deref().unwrap_or(&event.name);
+                            for node_id in &plan.members {
+                                // A member of a mixed Collapsed group can remain physically in
+                                // place while the Event entry moves. It is still part of this
+                                // Event's authored body, so its anchor remains valid in the moved
+                                // block even when the grouping correction keeps its layer behind.
+                                self.planned_scope_moves
+                                    .insert(node_id.clone(), target_layer.clone());
+                            }
+                            self.update_commands.push(BoardCommand::MoveToLayer {
+                                ids: plan.ids,
+                                target_layer: target_layer.clone(),
+                                summary: Some(format!("Move event {display} to {destination}")),
+                            });
+                            self.result.corrections.push(format!(
+                                "Moved event `{display}` to {destination} to match its written position."
+                            ));
+                            for container in plan.kept_in_place {
+                                self.result.corrections.push(format!(
+                                    "Group `{container}` also holds nodes outside event `{display}` and stayed where it is together with its contents."
+                                ));
+                            }
+                        }
                         self.claimed_event_entries.insert(anchor.clone());
                         Some(NodeEntity::Existing(anchor.clone()))
                     }
+                }
+                None if board_contains_entity_id(self.existing, anchor) => {
+                    self.result.diagnostics.push(format!(
+                        "event `{}` keeps anchor `{anchor}`, but that ID identifies {}, not a node that can be an Event entry",
+                        event.name,
+                        board_entity_location_labels(self.existing, anchor).join(" and ")
+                    ));
+                    None
                 }
                 None => self.recover_missing_event_entry(event, anchor, target_layer.clone()),
             },
@@ -4642,20 +8356,46 @@ impl<'a> StructuralPlanner<'a> {
         if let Some(entry) = &entry {
             self.seed_params_from_entity(&event.params, entry);
         }
+        if let (Some(anchor), Some(entry)) = (unavailable_anchor.as_ref(), entry.as_ref()) {
+            self.recovered_event_anchors
+                .insert(anchor.clone(), entry.clone());
+        }
         // A handler body is an independent entry point: a `return` inside it is the event-return
         // sugar (`events_generic_return_result`), never a return of the enclosing function whose
         // layer the handler happens to live in.
         let enclosing_function_returns = std::mem::take(&mut self.function_return_targets);
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         self.plan_block(&event.body, entry.map(ExecCursor::new), target_layer);
+        if let Some(anchor) = unavailable_anchor {
+            self.recovered_event_anchors.remove(&anchor);
+        }
         self.function_return_targets = enclosing_function_returns;
+        self.closed_block_symbols = enclosing_blocks;
         self.pop_scope();
     }
 
-    fn plan_function_body(&mut self, func: &FnDecl) {
-        let Some(planned) = self.planned_functions.get(&func.name).cloned() else {
+    /// Plan a `detached { … }` block: an execution chain with no entry to drive it.
+    ///
+    /// There is no cursor to seed from, exactly as for a pure function body, which is also what
+    /// exempts the first statement from the dangling-execution check — `plan_block` keys that
+    /// exemption on having no execution predecessor. The chain tail is discarded: nothing closes
+    /// onto it. `function_return_targets` is taken for the same reason a handler body takes it:
+    /// a `return` here is the event-return sugar, never a return of some enclosing function.
+    fn plan_detached(&mut self, block: &Block, target_layer: Option<String>) {
+        self.push_scope();
+        let enclosing_function_returns = std::mem::take(&mut self.function_return_targets);
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
+        self.plan_block(block, None, target_layer);
+        self.function_return_targets = enclosing_function_returns;
+        self.closed_block_symbols = enclosing_blocks;
+        self.pop_scope();
+    }
+
+    fn plan_function_body(&mut self, func: &FnDecl, key: &FnKey) {
+        let Some(planned) = self.planned_functions.get(key).cloned() else {
             return;
         };
-        if func.anchor.is_none() {
+        if matches!(planned.entity, NodeEntity::Layer { .. }) {
             if block_has_no_executable_statements(&func.body) {
                 self.result.diagnostics.push(format!(
                     "new function `{}` has no executable body nodes; empty helper layers are not actionable FlowScript",
@@ -4682,12 +8422,14 @@ impl<'a> StructuralPlanner<'a> {
         } else {
             None
         };
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         let final_cursors = self.plan_block(&func.body, entry, target_layer);
         if planned.impure {
             for cursor in final_cursors {
                 self.wire_function_exit(&layer, cursor);
             }
         }
+        self.closed_block_symbols = enclosing_blocks;
         self.function_return_targets.pop();
         self.pop_scope();
     }
@@ -4700,9 +8442,9 @@ impl<'a> StructuralPlanner<'a> {
         let new_functions = self
             .planned_functions
             .iter()
-            .filter_map(|(name, planned)| match &planned.entity {
+            .filter_map(|(key, planned)| match &planned.entity {
                 NodeEntity::Layer { ref_id, pins } => Some((
-                    name.clone(),
+                    key.name.clone(),
                     ref_id.clone(),
                     pins.clone(),
                     planned.has_unresolved_calls,
@@ -4809,8 +8551,14 @@ impl<'a> StructuralPlanner<'a> {
             })
             .flatten()
             .filter_map(
-                |name| match self.planned_functions.get(&name).map(|p| &p.entity) {
-                    Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
+                |reference| match self.planned_function_by_reference(&reference) {
+                    Some((
+                        key,
+                        PlannedFunction {
+                            entity: NodeEntity::Layer { ref_id, .. },
+                            ..
+                        },
+                    )) => Some((key.name.clone(), ref_id.clone())),
                     _ => None,
                 },
             )
@@ -4944,6 +8692,16 @@ impl<'a> StructuralPlanner<'a> {
             // exec chain ahead of the statement that consumes their outputs, innermost first,
             // so they actually execute at runtime.
             for splice in std::mem::take(&mut self.pending_exec_splices) {
+                if previous_execs.is_empty() {
+                    // No execution predecessor yet — the spliced call is the body's FIRST node
+                    // (`return struct::set(...)` as a function's only statement). The statement
+                    // path below exempts that case; without the same exemption here the node was
+                    // reported as "has no incoming execution connection and will not run", which
+                    // made every impure call in return position unusable.
+                    if let NodeEntity::New { ref_id, .. } = &splice {
+                        self.exec_check_exempt.insert(ref_id.clone());
+                    }
+                }
                 for previous in &previous_execs {
                     let connected_edge =
                         self.connect_exec(previous, &splice, insertion_origin.as_ref());
@@ -5056,6 +8814,44 @@ impl<'a> StructuralPlanner<'a> {
                 );
                 Some(PlannedStmt::with_input_sources(entity, input_sources))
             }
+            Stmt::Destructure {
+                fields,
+                call,
+                anchor,
+            } => {
+                let (entity, input_sources) =
+                    self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer)?;
+                for field in fields {
+                    let output = self
+                        .resolve_entity_output_pin(&entity, Some(&field.pin))
+                        .filter(|pin| {
+                            self.entity_output_data_type(&entity, Some(pin)).as_deref()
+                                != Some("Execution")
+                        });
+                    let Some(output) = output else {
+                        let outputs = self.entity_data_output_names(&entity);
+                        self.result.diagnostics.push(format!(
+                            "`{}` has no data output `{}` to destructure; its outputs are {}",
+                            call_callee(call),
+                            field.pin,
+                            if outputs.is_empty() {
+                                "none".to_string()
+                            } else {
+                                quoted_list(&outputs)
+                            }
+                        ));
+                        continue;
+                    };
+                    self.insert_symbol(
+                        field.name.clone(),
+                        SymbolValue::Source(ValueSource {
+                            node: entity.clone(),
+                            output_pin: Some(output),
+                        }),
+                    );
+                }
+                Some(PlannedStmt::with_input_sources(entity, input_sources))
+            }
             Stmt::Call { call, anchor } => {
                 let (entity, input_sources) =
                     self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer)?;
@@ -5068,7 +8864,12 @@ impl<'a> StructuralPlanner<'a> {
             } => {
                 if let Some(anchor) = anchor {
                     if let Some(variable_id) = self.variable_id_for_assignment_target(target) {
-                        let entity = NodeEntity::Existing(anchor.clone());
+                        let entity = self.anchored_node_for_stmt(
+                            anchor,
+                            target_layer.as_deref(),
+                            &format!("assignment to variable `{target}`"),
+                            Some("variable_set"),
+                        )?;
                         self.plan_existing_variable_set_node(
                             &entity,
                             &variable_id,
@@ -5085,9 +8886,7 @@ impl<'a> StructuralPlanner<'a> {
                     }
 
                     if let Some((call, output_pin)) = assigned_call_expr(value) {
-                        let entity = self
-                            .plan_call_statement(call, Some(anchor), target_layer)
-                            .unwrap_or_else(|| NodeEntity::Existing(anchor.clone()));
+                        let entity = self.plan_call_statement(call, Some(anchor), target_layer)?;
                         let output_pin = output_pin
                             .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)));
                         self.insert_symbol(
@@ -5100,7 +8899,10 @@ impl<'a> StructuralPlanner<'a> {
                         return Some(PlannedStmt::new(entity));
                     }
 
-                    return Some(PlannedStmt::new(NodeEntity::Existing(anchor.clone())));
+                    self.result.diagnostics.push(format!(
+                        "assignment to `{target}` carries node anchor `{anchor}`, but its value is not an anchored call or variable-set operation; remove that node anchor"
+                    ));
+                    return None;
                 }
 
                 if let Some(variable_id) = self.variable_id_for_assignment_target(target) {
@@ -5179,9 +8981,7 @@ impl<'a> StructuralPlanner<'a> {
             } => {
                 if let Some(anchor) = anchor {
                     if let Some((call, output_pin)) = assigned_call_expr(value) {
-                        let entity = self
-                            .plan_call_statement(call, Some(anchor), target_layer)
-                            .unwrap_or_else(|| NodeEntity::Existing(anchor.clone()));
+                        let entity = self.plan_call_statement(call, Some(anchor), target_layer)?;
                         let output_pin = output_pin
                             .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)));
                         self.insert_symbol(
@@ -5194,7 +8994,10 @@ impl<'a> StructuralPlanner<'a> {
                         return Some(PlannedStmt::new(entity));
                     }
 
-                    return Some(PlannedStmt::new(NodeEntity::Existing(anchor.clone())));
+                    self.result.diagnostics.push(format!(
+                        "local alias `{name}` carries node anchor `{anchor}`, but its value is not an anchored call; remove that node anchor"
+                    ));
+                    return None;
                 }
 
                 if promote_local_alias {
@@ -5268,6 +9071,9 @@ impl<'a> StructuralPlanner<'a> {
                     let branch_call = Call {
                         node_type: "control_branch".to_string(),
                         display: "controlBranch".to_string(),
+                        path: Vec::new(),
+                        receiver: None,
+                        positional: Vec::new(),
                         args: vec![Arg {
                             name: "condition".to_string(),
                             value: condition.clone().expect("condition checked above"),
@@ -5303,6 +9109,9 @@ impl<'a> StructuralPlanner<'a> {
                         let condition_call = Call {
                             node_type: node.name.clone(),
                             display: to_camel_case(&node.name),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: vec![Arg {
                                 name: "condition".to_string(),
                                 value: cond.clone(),
@@ -5365,7 +9174,7 @@ impl<'a> StructuralPlanner<'a> {
                     // (exec inputs are fan-in points). An empty arm's tail is the labelled pin
                     // itself — the pass-through case.
                     arm_tails.extend(self.plan_block(&arm.body, arm_cursor, target_layer.clone()));
-                    self.pop_scope();
+                    self.pop_block_scope();
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
@@ -5397,43 +9206,78 @@ impl<'a> StructuralPlanner<'a> {
                 })
             }
             Stmt::Loop {
+                keyword,
                 bind,
                 call,
+                iterable,
+                element,
+                index,
                 body,
                 anchor,
-                ..
             } => {
+                let head = self.loop_head(
+                    keyword,
+                    bind.as_deref(),
+                    call,
+                    iterable.as_ref(),
+                    element.as_deref(),
+                    index.as_deref(),
+                )?;
                 let entity =
-                    self.plan_call_statement(call, anchor.as_deref(), target_layer.clone());
+                    self.plan_call_statement(&head.call, anchor.as_deref(), target_layer.clone());
                 // The loop's own argument splices must chain BEFORE the loop node, not inside
                 // its body — stash them across the nested plan_block.
                 let mut stashed_splices = std::mem::take(&mut self.pending_exec_splices);
                 self.push_scope();
-                if let (Some(bind), Some(entity)) = (bind, entity.as_ref()) {
-                    self.insert_symbol(
-                        bind.clone(),
-                        SymbolValue::Source(ValueSource {
-                            node: entity.clone(),
-                            output_pin: None,
-                        }),
-                    );
+                if let Some(entity) = entity.as_ref() {
+                    if let Some(bind) = head.bind {
+                        self.insert_symbol(
+                            bind,
+                            SymbolValue::Source(ValueSource {
+                                node: entity.clone(),
+                                output_pin: None,
+                            }),
+                        );
+                    }
+                    for (name, output) in [
+                        (head.element, LOOP_VALUE_OUTPUT),
+                        (head.index, LOOP_INDEX_OUTPUT),
+                    ] {
+                        let Some(name) = name else {
+                            continue;
+                        };
+                        let Some(output_pin) = self.resolve_entity_output_pin(entity, Some(output))
+                        else {
+                            self.result.diagnostics.push(format!(
+                                "loop binding `{name}` needs a `{output}` output, which `{}` does not have",
+                                head.call.display
+                            ));
+                            continue;
+                        };
+                        self.insert_symbol(
+                            name,
+                            SymbolValue::Source(ValueSource {
+                                node: entity.clone(),
+                                output_pin: Some(output_pin),
+                            }),
+                        );
+                    }
                 }
                 if let Some(entity) = entity.as_ref() {
-                    let body_pin =
-                        self.entity_exec_output_pin_named(entity, &["exec_out", "loop", "body"]);
+                    let body_pin = self.entity_exec_output_pin_named(entity, LOOP_BODY_EXEC_PINS);
                     self.plan_block(
                         body,
                         Some(ExecCursor::with_output(entity.clone(), body_pin)),
                         target_layer,
                     );
                 }
-                self.pop_scope();
+                self.pop_block_scope();
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
                 entity.map(|entity| {
                     PlannedStmt::with_next_exec_pin(
                         entity.clone(),
-                        self.entity_exec_output_pin_named(&entity, &["done", "exec_done"]),
+                        self.entity_exec_output_pin_named(&entity, LOOP_DONE_EXEC_PINS),
                     )
                 })
             }
@@ -5455,28 +9299,93 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     /// Register a function-local `let name: Type` declaration as a variable symbol when it
-    /// identifies a live variable (by `//@v:` anchor, else by name — the current layer first).
+    /// identifies a live variable (by `//@v:` anchor, else by name in the current layer).
     /// The lowered form of a promoted local is this declaration plus an anchored seed
     /// assignment; without the symbol that assignment can no longer resolve as a `variable_set`
     /// and the board's own round-trip stops applying.
     fn register_local_variable_decl(&mut self, var: &VarDecl, target_layer: Option<&str>) {
-        let variable_id = var.anchor.clone().or_else(|| {
-            let name_matches = |existing: &&Variable| {
-                existing.name == var.name || to_camel_case(&existing.name) == var.name
+        let variable_id = if let Some(anchor) = var.anchor.as_deref() {
+            let in_target_scope = match target_layer {
+                Some(layer_id) => self
+                    .existing
+                    .layers
+                    .get(layer_id)
+                    .is_some_and(|layer| layer.variables.contains_key(anchor)),
+                None => self.existing.variables.contains_key(anchor),
             };
-            target_layer
-                .and_then(|layer_id| self.existing.layers.get(layer_id))
-                .and_then(|layer| layer.variables.values().find(name_matches))
-                .or_else(|| {
-                    self.existing
-                        .layers
-                        .values()
-                        .find_map(|layer| layer.variables.values().find(name_matches))
-                })
-                .or_else(|| self.existing.variables.values().find(name_matches))
-                .map(|existing| existing.id.clone())
-        });
+            let locations = variable_location_labels(self.existing, anchor);
+            if in_target_scope && locations.len() == 1 {
+                Some(anchor.to_string())
+            } else if board_contains_variable_id(self.existing, anchor) {
+                self.result.diagnostics.push(format!(
+                    "local variable `{}` keeps anchor `{anchor}`, but that live variable belongs to {} while this declaration is in {}; a variable identity cannot cross scopes",
+                    var.name,
+                    locations.join(" and "),
+                    variable_target_scope_label(self.existing, target_layer)
+                ));
+                return;
+            } else if board_contains_entity_id(self.existing, anchor) {
+                self.result.diagnostics.push(format!(
+                    "local variable `{}` keeps anchor `{anchor}`, but that ID identifies {}; a `//@v:` anchor must identify a variable in {}",
+                    var.name,
+                    board_entity_location_labels(self.existing, anchor).join(" and "),
+                    variable_target_scope_label(self.existing, target_layer)
+                ));
+                return;
+            } else {
+                None
+            }
+        } else {
+            let normalized = to_camel_case(&var.name);
+            let mut matches = match target_layer {
+                Some(layer_id) => self
+                    .existing
+                    .layers
+                    .get(layer_id)
+                    .into_iter()
+                    .flat_map(|layer| layer.variables.values())
+                    .filter(|existing| to_camel_case(&existing.name) == normalized)
+                    .map(|existing| existing.id.clone())
+                    .collect::<Vec<_>>(),
+                None => self
+                    .existing
+                    .variables
+                    .values()
+                    .filter(|existing| to_camel_case(&existing.name) == normalized)
+                    .map(|existing| existing.id.clone())
+                    .collect::<Vec<_>>(),
+            };
+            matches.sort();
+            match matches.as_slice() {
+                [only] => Some(only.clone()),
+                [] => None,
+                many => {
+                    self.result.diagnostics.push(format!(
+                        "unanchored local variable `{}` matches {} live variables in {} ({}); add the intended `//@v:<variable id>` anchor",
+                        var.name,
+                        many.len(),
+                        variable_target_scope_label(self.existing, target_layer),
+                        quoted_list(many)
+                    ));
+                    return;
+                }
+            }
+        };
+        // Nothing live matches, so this is a NEW declaration in hand-written text rather than
+        // the readback of an already-promoted variable. Returning here (as this did) registered
+        // no symbol and emitted no diagnostic, so the declaration was silently inert and every
+        // later read of `name` failed with an unrelated "not a resolvable node output" error
+        // several lines away. Create the variable the declaration describes instead.
         let Some(variable_id) = variable_id else {
+            let variable_id = self.create_typed_local_variable(
+                &var.name,
+                var.default.as_ref().map(literal_to_value),
+                type_ref_data_type(&var.ty).to_string(),
+                type_ref_value_type(&var.ty).to_string(),
+                var.schema.clone(),
+                target_layer.map(str::to_string),
+            );
+            self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
             return;
         };
         self.variable_value_contracts.insert(
@@ -5488,13 +9397,19 @@ impl<'a> StructuralPlanner<'a> {
                 var.schema.clone(),
             ),
         );
-        self.variable_refs.insert(&variable_id, &var.name);
+        self.variable_refs
+            .insert(&variable_id, &var.name, target_layer);
         self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
     }
 
-    fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> Option<NodeEntity> {
+    fn function_layer_entity(
+        &mut self,
+        func: &FnDecl,
+        impure: bool,
+        module: Option<&str>,
+    ) -> Option<NodeEntity> {
         if let Some(anchor) = &func.anchor {
-            let Some(existing) = self
+            let Some(_existing) = self
                 .existing
                 .layers
                 .get(anchor)
@@ -5506,34 +9421,43 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 return None;
             };
-            if to_camel_case(&existing.name) != to_camel_case(&func.name) {
-                self.result.diagnostics.push(format!(
-                    "function `{}` anchors to Function layer `{anchor}` named `{}`; anchored function identity cannot be retargeted",
-                    func.name, existing.name
-                ));
-                return None;
-            }
             return Some(NodeEntity::Existing(anchor.clone()));
         }
 
-        // An unanchored declaration still has a stable identity: its name. FlowScript forbids two
-        // top-level functions sharing one name, so a same-named Function layer IS this function.
-        // Without this, a fresh full-document draft (a repair, or any run that did not carry the
-        // `//@n` anchors) re-creates every layer, and the board's own canonical readback then holds
-        // duplicate declarations that no longer reconcile — the board stops round-tripping.
+        // An unanchored declaration still has a stable identity: its name IN ITS MODULE.
+        // FlowScript forbids two functions of one module sharing a name, so a same-named Function
+        // layer of that module IS this function. Without this, a fresh full-document draft (a
+        // repair, or any run that did not carry the `//@n` anchors) re-creates every layer, and
+        // the board's own canonical readback then holds duplicate declarations that no longer
+        // reconcile — the board stops round-tripping. The match never crosses a module boundary:
+        // two modules may each own a `helper`.
         let normalized_name = to_camel_case(&func.name);
-        let existing_by_name: Vec<String> = self
+        let mut existing_by_name: Vec<String> = self
             .existing
             .layers
             .iter()
             .filter(|(_, layer)| {
                 matches!(layer.r#type, LayerType::Function)
+                    && !self.claimed_function_layers.contains(&layer.id)
                     && to_camel_case(&layer.name) == normalized_name
+                    && owning_module(self.existing, layer.parent_id.as_deref()).as_deref() == module
             })
             .map(|(id, _)| id.clone())
             .collect();
-        if let [only] = existing_by_name.as_slice() {
-            return Some(NodeEntity::Existing(only.clone()));
+        existing_by_name.sort();
+        match existing_by_name.as_slice() {
+            [only] => return Some(NodeEntity::Existing(only.clone())),
+            [] => {}
+            many => {
+                self.result.diagnostics.push(format!(
+                    "unanchored function `{}` matches {} Function layers in {}; add the intended `//@l:<layer id>` anchor ({})",
+                    func.name,
+                    many.len(),
+                    self.module_move_label(module),
+                    quoted_list(many)
+                ));
+                return None;
+            }
         }
 
         let ref_id = format!("${}", self.next_ref);
@@ -5561,7 +9485,9 @@ impl<'a> StructuralPlanner<'a> {
             ),
             position: Some(position),
             color: None,
-            target_layer: None,
+            // A module-local function is created INSIDE its module; a global one keeps falling
+            // back to the caller's current layer.
+            target_layer: module.map(str::to_string),
             cache: func.cache.as_ref().map(function_cache_to_layer_cache),
             summary: Some(format!("Create function {}", func.name)),
         });
@@ -5812,15 +9738,18 @@ impl<'a> StructuralPlanner<'a> {
     ) -> Option<PlannedStmt> {
         if values.len() > 1 {
             self.result.diagnostics.push(format!(
-                "event returns accept a single value; got {} — wrap the extra values in a struct and return that",
+                "event returns accept a single value; got {}. Wrap the extra values in a struct and return that",
                 values.len()
             ));
         }
         let entity = match anchor {
-            Some(anchor) if find_board_node(self.existing, anchor).is_some() => {
-                NodeEntity::Existing(anchor.to_string())
-            }
-            _ => {
+            Some(anchor) => self.anchored_node_for_stmt(
+                anchor,
+                target_layer.as_deref(),
+                "event return",
+                Some(EVENT_RETURN_RESULT_TYPE),
+            )?,
+            None => {
                 let meta =
                     self.resolve_variable_node(EVENT_RETURN_RESULT_TYPE, "returnGenericResult")?;
                 self.queue_add_node(meta, target_layer.clone())
@@ -5848,11 +9777,17 @@ impl<'a> StructuralPlanner<'a> {
         };
         let Some(meta) = meta else { return };
         let Some(input) = metadata_input_pin(&meta, EVENT_RESPONSE_PIN) else {
+            self.result.diagnostics.push(format!(
+                "event return node `{}` has no `{EVENT_RESPONSE_PIN}` input",
+                entity.node_ref()
+            ));
             return;
         };
 
         if let Some(mut literal) = literal_expr_to_value(value) {
-            self.normalize_input_value(input, &mut literal);
+            if !self.normalize_input_value(input, &mut literal, target_layer.as_deref()) {
+                return;
+            }
             self.queue_update_input(entity, input, literal, &meta);
             return;
         }
@@ -5891,6 +9826,135 @@ impl<'a> StructuralPlanner<'a> {
             .map(|(entity, _)| entity)
     }
 
+    /// Normalize a loop statement's two surface forms to the loop-node call it plans plus the
+    /// names bound in its body. A sugared head (`for (const item of xs)`, `while (cond)`)
+    /// synthesizes the loop node; an explicit head keeps its call and handle binding unless
+    /// the call resolves to something other than a loop node (a method returning an array, a
+    /// boolean condition), in which case it is the iterable and the handle is the element.
+    /// Returns `None` after pushing a diagnostic.
+    fn loop_head(
+        &mut self,
+        keyword: &str,
+        bind: Option<&str>,
+        call: &Call,
+        iterable: Option<&Expr>,
+        element: Option<&str>,
+        index: Option<&str>,
+    ) -> Option<LoopHead> {
+        let Some(node_type) = sugared_loop_node_type(keyword) else {
+            if iterable.is_some() {
+                self.result.diagnostics.push(format!(
+                    "loop keyword `{keyword}` has no sugared form; write the loop-node call explicitly"
+                ));
+                return None;
+            }
+            return Some(LoopHead {
+                call: call.clone(),
+                bind: bind.map(str::to_string),
+                element: None,
+                index: None,
+            });
+        };
+        let (head, element, index) = match iterable {
+            Some(head) => (head.clone(), element, index),
+            None => {
+                let is_loop_call = match self.resolve_call_target(call) {
+                    Ok(resolved) => match &resolved.target {
+                        CallTarget::Catalog(meta) => {
+                            loop_node_keyword(&meta.name).is_some() || metadata_is_loop_shaped(meta)
+                        }
+                        CallTarget::Function(_) => false,
+                    },
+                    // Leave the diagnostic to the call planner.
+                    Err(_) => true,
+                };
+                if is_loop_call {
+                    return Some(LoopHead {
+                        call: call.clone(),
+                        bind: bind.map(str::to_string),
+                        element: None,
+                        index: None,
+                    });
+                }
+                (Expr::Call(call.clone()), bind, None)
+            }
+        };
+        if node_type == WHILE_LOOP {
+            if element.is_some() || index.is_some() {
+                self.result.diagnostics.push(
+                    "a `while` loop binds no element or index; use `for (const item of …)` to iterate an array"
+                        .to_string(),
+                );
+                return None;
+            }
+        } else if let Some(hint) = self.expr_receiver_hint(&head)
+            && hint.value_type != "Array"
+            && !(hint.data_type == "Generic" && hint.value_type == "Normal")
+        {
+            let shape = match hint.value_type.as_str() {
+                "Map" => format!("a map of `{}`", hint.data_type),
+                "Set" => format!("a set of `{}`", hint.data_type),
+                _ => format!("a `{}` value", hint.data_type),
+            };
+            self.result.diagnostics.push(format!(
+                "`for…of` iterates `{}`, which is {shape}, not an array",
+                describe_expr(&head)
+            ));
+            return None;
+        }
+        Some(LoopHead {
+            call: sugared_loop_call(node_type, head, None),
+            bind: None,
+            element: element.map(str::to_string),
+            index: index.map(str::to_string),
+        })
+    }
+
+    fn anchored_node_for_stmt(
+        &mut self,
+        anchor: &str,
+        target_layer: Option<&str>,
+        subject: &str,
+        expected_type: Option<&str>,
+    ) -> Option<NodeEntity> {
+        let Some(node) = find_board_node(self.existing, anchor) else {
+            if board_contains_entity_id(self.existing, anchor) {
+                self.result.diagnostics.push(format!(
+                    "{subject} keeps node anchor `{anchor}`, but that ID identifies {}",
+                    board_entity_location_labels(self.existing, anchor).join(" and ")
+                ));
+            } else {
+                self.result.diagnostics.push(format!(
+                    "{subject} anchors to `{anchor}`, which no longer exists on the board"
+                ));
+            }
+            return None;
+        };
+        if let Some(expected_type) = expected_type
+            && node.name != expected_type
+        {
+            self.result.diagnostics.push(format!(
+                "{subject} keeps anchor `{anchor}`, but that node has type `{}` instead of `{expected_type}`",
+                node.name
+            ));
+            return None;
+        }
+        let actual_scope = self.node_semantic_scope(node);
+        let moves_with_enclosing_event = self
+            .planned_scope_moves
+            .get(anchor)
+            .is_some_and(|planned| planned.as_deref() == target_layer);
+        if actual_scope.as_deref() != target_layer && !moves_with_enclosing_event {
+            self.result.diagnostics.push(format!(
+                "{subject} keeps anchor `{anchor}`, but that node belongs to {} while this statement is in {}; remove the anchor to place a node in this scope",
+                self.semantic_scope_label(actual_scope.as_deref()),
+                self.semantic_scope_label(target_layer)
+            ));
+            return None;
+        }
+        Some(NodeEntity::Existing(anchor.to_string()))
+    }
+
     fn plan_call_statement_with_sources(
         &mut self,
         call: &Call,
@@ -5898,13 +9962,17 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
         if let Some(anchor) = anchor {
-            let Some(node) = find_board_node(self.existing, anchor) else {
-                self.result.diagnostics.push(format!(
-                    "call `{}` anchors to `{anchor}`, which no longer exists on the board",
-                    call.display
-                ));
-                return None;
-            };
+            if let Some(entity) = self.recovered_event_anchors.get(anchor).cloned() {
+                return Some((entity, Vec::new()));
+            }
+            let entity = self.anchored_node_for_stmt(
+                anchor,
+                target_layer.as_deref(),
+                &format!("call `{}`", call.display),
+                None,
+            )?;
+            let node = find_board_node(self.existing, anchor)
+                .expect("anchored-node guard resolved an existing node");
             // Validate anchored calls against their live instance pins/defaults while retaining
             // any explicit catalog requirements (including repeated names). Dynamic instance
             // pins exist only in the live metadata, so neither source can safely replace the
@@ -5912,8 +9980,13 @@ impl<'a> StructuralPlanner<'a> {
             let mut meta = node_to_metadata(node);
             self.merge_catalog_required_inputs(&mut meta);
             let planned_function_target = self
-                .planned_functions
-                .get(&call.display)
+                .resolve_call_target(call)
+                .ok()
+                .and_then(|resolved| match resolved.target {
+                    CallTarget::Function(key) => Some(key),
+                    CallTarget::Catalog(_) => None,
+                })
+                .and_then(|key| self.planned_functions.get(&key))
                 .map(|planned| planned.entity.node_ref());
             let expected_node_type = if planned_function_target.is_some() {
                 CALL_FUNCTION_NODE_TYPE
@@ -5930,7 +10003,7 @@ impl<'a> StructuralPlanner<'a> {
             if expected_node_type.trim().is_empty()
                 && meta.name != CALL_REFERENCE_NODE_TYPE
                 && !(is_placeholder_call(call) && meta.name == "control_branch")
-                && !call_matches_node(call, node)
+                && !self.anchored_call_matches_node(call, node, &meta)
             {
                 self.result.diagnostics.push(format!(
                     "call `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the node type",
@@ -5948,9 +10021,40 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 return None;
             }
-            let entity = NodeEntity::Existing(anchor.to_string());
-            let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, false);
-            self.check_required_inputs_after_planning(call, &entity, &meta);
+            let receiver_pin = live_receiver_pin(&meta);
+            // An anchor pins node identity, not the receiver's type. Without this the method
+            // form binds any expression to the receiver pin and the mismatch only surfaces
+            // later as an opaque pin-type error naming a pin the author never typed — while
+            // the identical unanchored spelling is rejected here by `resolve_method_call`.
+            // Compare value-type classes only: schema identity stays with the schema checks.
+            if let Some(receiver) = call.receiver.as_deref()
+                && let Some(pin_name) = receiver_pin.as_deref()
+                && let Some(pin) = metadata_input_pin(&meta, pin_name)
+                && let Some(pin_class) =
+                    flow_like_ast::receiver_class(&pin.data_type, &pin.value_type)
+                && let Some(hint) = self.expr_receiver_hint(receiver)
+                && let Some(value_class) =
+                    flow_like_ast::receiver_class(&hint.data_type, &hint.value_type)
+                && value_class != pin_class
+            {
+                self.result.diagnostics.push(format!(
+                    "no method `{}` on `{value_class}`: anchor `{anchor}` is `{}`, whose receiver `{}` is a `{pin_class}`; remove the anchor to place a different node",
+                    call.display,
+                    meta.name,
+                    to_camel_case(pin_name)
+                ));
+                return None;
+            }
+            let call = match fold_call_arguments(call, &meta, receiver_pin.as_deref()) {
+                Ok(call) => call,
+                Err(diagnostic) => {
+                    self.result.diagnostics.push(diagnostic);
+                    return None;
+                }
+            };
+            let input_sources =
+                self.plan_call_arguments(&call, &entity, &meta, target_layer, false);
+            self.check_required_inputs_after_planning(&call, &entity, &meta);
             return Some((entity, input_sources));
         }
 
@@ -6102,18 +10206,23 @@ impl<'a> StructuralPlanner<'a> {
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
+        let resolved = match self.resolve_call_target(call) {
+            Ok(resolved) => resolved,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        self.note_resolution(&resolved);
+        let call = &resolved.call;
         // `functionName(...)` calling a FlowScript `function` declaration: create a
         // `control_call_function` node targeting that function's layer instead of resolving
         // against the catalog.
-        if self.planned_functions.contains_key(&call.display) {
-            return self.add_function_call_node(call, target_layer);
-        }
-        let meta = match self.catalog.resolve_call(call) {
-            Ok(meta) => meta,
-            Err(err) => {
-                self.result.diagnostics.push(err);
-                return None;
+        let meta = match &resolved.target {
+            CallTarget::Function(key) => {
+                return self.add_function_call_node(key, call, target_layer);
             }
+            CallTarget::Catalog(meta) => meta.clone(),
         };
         if let Some(diagnostic) = unsafe_catalog_call_shape_diagnostic(call, &meta) {
             self.result.diagnostics.push(diagnostic);
@@ -6131,10 +10240,13 @@ impl<'a> StructuralPlanner<'a> {
         // Materialize this call's dynamic (`on_update`-generated) pins so its args resolve against
         // real pins; a no-op when no enricher is supplied (falls back to `synthesize_dynamic_input_pin`).
         let meta = self.enrich_meta(meta, call);
-        let entity = self.queue_add_node(meta.clone(), target_layer.clone());
+        let mut entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
         let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
         self.check_required_inputs_after_planning(call, &entity, &meta);
+        self.specialize_container_element_output(&mut entity, call);
+        self.specialize_struct_field_output(&mut entity, call);
+        self.synthesize_schema_driven_outputs(&mut entity, call);
 
         Some((entity, input_sources))
     }
@@ -6191,6 +10303,174 @@ impl<'a> StructuralPlanner<'a> {
     /// retained a catalog default or planning actually queued a literal/update or incoming edge.
     /// Pair duplicate pin names positionally so one `value:` argument cannot accidentally satisfy
     /// every same-named required input.
+    /// `struct::break` mints one output per field of the schema its `structIn` peer carries. That
+    /// happens in `on_update` by reading the WIRED peer off the board, so the literal-args
+    /// enricher (which runs against a scratch node with nothing connected) cannot see it and the
+    /// node planned with no outputs at all — every destructure of it failed with "its outputs are
+    /// none". The authored call already names the source, so derive the fields from its schema
+    /// here instead.
+    fn synthesize_schema_driven_outputs(&mut self, entity: &mut NodeEntity, call: &Call) {
+        let node_type = match &entity {
+            NodeEntity::New { meta, .. } => meta.name.clone(),
+            _ => return,
+        };
+        if node_type != "struct_break" {
+            return;
+        }
+        let has_data_output = matches!(
+            &entity,
+            NodeEntity::New { meta, .. } if meta.outputs.iter().any(|pin| pin.data_type != "Execution")
+        );
+        if has_data_output {
+            return;
+        }
+        let Some(arg) = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("struct_in", &arg.name))
+        else {
+            return;
+        };
+        let Some(schema) = self
+            .expr_receiver_hint(&arg.value)
+            .and_then(|hint| hint.schema)
+        else {
+            return;
+        };
+        let normalized = normalized_pin_schema(Some(schema.as_str()), &self.existing.refs);
+        let Some(root) = normalized.as_deref().and_then(|schema| {
+            flow_like_types::json::from_str::<flow_like_types::Value>(schema).ok()
+        }) else {
+            return;
+        };
+        let Some(properties) = root
+            .get("properties")
+            .and_then(flow_like_types::Value::as_object)
+        else {
+            return;
+        };
+        let fields: Vec<PinMetadata> = properties
+            .iter()
+            .map(|(name, property)| {
+                let hint = schema_property_hint(&schema, name);
+                let (data_type, value_type, schema) = hint
+                    .map(|hint| (hint.data_type, hint.value_type, hint.schema))
+                    .unwrap_or_else(|| {
+                        let _ = property;
+                        ("Generic".to_string(), "Normal".to_string(), None)
+                    });
+                let is_generic = data_type == "Generic";
+                PinMetadata {
+                    name: name.clone(),
+                    friendly_name: name.clone(),
+                    description: String::new(),
+                    data_type,
+                    value_type,
+                    default_value: None,
+                    schema,
+                    is_generic,
+                    valid_values: None,
+                    enforce_schema: false,
+                }
+            })
+            .collect();
+        if fields.is_empty() {
+            return;
+        }
+        if let NodeEntity::New { meta, .. } = entity {
+            meta.outputs.extend(fields);
+        }
+    }
+
+    /// Emulate the `harmonize_type(container, element)` these nodes run in their own `on_update`:
+    /// `map::get` and `array::get` declare their element output `Generic` and specialise it from
+    /// the container at runtime. The planner has to do the same, or an element read is `Generic`
+    /// forever — `map::get(...).value == "x"` then reports "ambiguous operand type" even though
+    /// the map is declared `Map<string, string>`.
+    /// `struct::get(struct, field).value` is declared `Generic`; its real type is the named
+    /// property of the struct's schema. Without this a field read off a typed struct stays
+    /// `Generic` forever and anything downstream that needs an exact contract — `array::sumField`,
+    /// a function return pin — refuses the connection.
+    fn specialize_struct_field_output(&mut self, entity: &mut NodeEntity, call: &Call) {
+        let is_struct_get =
+            matches!(&entity, NodeEntity::New { meta, .. } if meta.name == "struct_get");
+        if !is_struct_get {
+            return;
+        }
+        let field = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("field", &arg.name))
+            .and_then(|arg| literal_expr_to_value(&arg.value))
+            .and_then(|value| value.as_str().map(str::to_string));
+        let schema = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("struct", &arg.name))
+            .and_then(|arg| self.expr_receiver_hint(&arg.value))
+            .and_then(|hint| hint.schema);
+        let (Some(field), Some(schema)) = (field, schema) else {
+            return;
+        };
+        let Some(property) = schema_property_hint(&schema, &field) else {
+            return;
+        };
+        if let NodeEntity::New { meta, .. } = entity {
+            for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "value") {
+                pin.data_type = property.data_type.clone();
+                pin.value_type = property.value_type.clone();
+                // Deliberately NOT the property's schema. Refining the type is what downstream
+                // contracts need; attaching a schema as well would turn a previously permissive
+                // "only one side declares a contract" connection into a strict two-contract
+                // comparison, and refuse edges that are fine (a struct field feeding a pin that
+                // enforces a different named shape).
+                pin.is_generic = property.data_type == "Generic";
+            }
+        }
+    }
+
+    fn specialize_container_element_output(&mut self, entity: &mut NodeEntity, call: &Call) {
+        const CONTAINER_ELEMENT_OUTPUTS: &[(&str, &str, &str)] = &[
+            ("map_get", "map_in", "value"),
+            ("array_get", "array_in", "element"),
+        ];
+        let node_type = match &entity {
+            NodeEntity::New { meta, .. } => meta.name.clone(),
+            _ => return,
+        };
+        let Some((_, container_pin, element_pin)) = CONTAINER_ELEMENT_OUTPUTS
+            .iter()
+            .find(|(candidate, _, _)| *candidate == node_type)
+        else {
+            return;
+        };
+        let Some(arg) = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches(container_pin, &arg.name))
+        else {
+            return;
+        };
+        let Some(hint) = self.expr_receiver_hint(&arg.value) else {
+            return;
+        };
+        if hint.value_type == "Normal" || hint.data_type == "Generic" {
+            return;
+        }
+        if let NodeEntity::New { meta, .. } = entity {
+            for pin in meta
+                .outputs
+                .iter_mut()
+                .filter(|pin| pin.name == *element_pin)
+            {
+                pin.data_type = hint.data_type.clone();
+                pin.value_type = "Normal".to_string();
+                pin.schema = hint.schema.clone();
+                pin.is_generic = false;
+            }
+        }
+    }
+
     fn check_required_inputs_after_planning(
         &mut self,
         call: &Call,
@@ -6254,10 +10534,23 @@ impl<'a> StructuralPlanner<'a> {
         }
 
         let mut claimed_inputs = HashSet::new();
+        // A SQL node exposes TWO ways to bind a `$placeholder`: the minted `param_<name>` pin and
+        // the node's own `params` object (which `missing_input_pin_diagnostic` explicitly tells
+        // authors to use). Supplying `params` must therefore satisfy the minted pins, or the
+        // engine contradicts its own advice.
+        let params_supplied = sql_param_node(&meta.name)
+            && call
+                .args
+                .iter()
+                .any(|arg| pin_name_matches("params", &arg.name));
+
         let mut missing = Vec::new();
         let mut required_seen: HashMap<&str, usize> = HashMap::new();
 
         for required in &meta.required_inputs {
+            if params_supplied && required.starts_with("param_") {
+                continue;
+            }
             let required_occurrence = {
                 let occurrence = required_seen.entry(required.as_str()).or_insert(0);
                 let current = *occurrence;
@@ -6389,10 +10682,17 @@ impl<'a> StructuralPlanner<'a> {
     /// the pins that will exist at apply time.
     fn add_function_call_node(
         &mut self,
+        key: &FnKey,
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
-        let planned = self.planned_functions.get(&call.display).cloned()?;
+        let Some(planned) = self.planned_functions.get(key).cloned() else {
+            self.result.diagnostics.push(format!(
+                "cannot call function `{}`: its declaration did not plan",
+                key.name
+            ));
+            return None;
+        };
         let base = match self.catalog.resolve_type(CALL_FUNCTION_NODE_TYPE) {
             Ok(meta) => meta,
             Err(reason) => {
@@ -6509,7 +10809,7 @@ impl<'a> StructuralPlanner<'a> {
                         // live board.
                         if is_synthetic_fn_ref_arg(arg) {
                             if let NodeEntity::New { .. } = entity {
-                                let refs = synthetic_fn_ref_targets(arg);
+                                let refs = self.resolved_synthetic_fn_ref_targets(arg);
                                 if !refs.is_empty() {
                                     self.fn_ref_commands
                                         .push(BoardCommand::SetNodeFunctionRefs {
@@ -6542,17 +10842,31 @@ impl<'a> StructuralPlanner<'a> {
                                 // actual cause is that these pins only exist once the
                                 // widget is persisted and the instance is wired up.
                                 self.result.diagnostics.push(format!(
-                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself, or split the update into a later call once the instance exists. `ui_inspect` with operation `widget` lists a widget's exact pin names.",
+                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself — every connection in a revision is applied after every pin write, so a later call in the same revision cannot see them either. `ui_inspect` with operation `widget` lists a widget's exact pin names. No part of this revision was applied.",
                                         call.display, arg.name
                                     ));
                                 continue;
                             }
                             None => {
-                                self.result.diagnostics.push(format!(
-                                    "node `{}` has no input pin named `{}`; skipped that argument",
-                                    call.display, arg.name
-                                ));
-                                continue;
+                                // A NEW node only ever got the placeholder-driven synthesizer,
+                                // so a MODE-driven node — the `ml` family's `source` dropdown,
+                                // `control_switch`'s cases — reported its real pins as unknown
+                                // and the whole revision was refused. The enricher already
+                                // knows how to answer this (it runs the node's own `on_update`
+                                // on a scratch copy); it was simply never asked here, only on
+                                // the anchored path in `arg_targets_predicted_dynamic_pin`.
+                                match self.enriched_input_pin(meta, call, &arg.name) {
+                                    Some(pin) => {
+                                        synthesized_pin = pin;
+                                        (&synthesized_pin, occurrence)
+                                    }
+                                    None => {
+                                        self.result
+                                            .diagnostics
+                                            .push(missing_input_pin_diagnostic(meta, call, arg));
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     }
@@ -6572,8 +10886,10 @@ impl<'a> StructuralPlanner<'a> {
                 ) {
                     continue;
                 }
-                self.normalize_input_value(input, &mut value);
-                if include_direct_literals {
+                if !self.normalize_input_value(input, &mut value, target_layer.as_deref()) {
+                    continue;
+                }
+                if include_direct_literals || is_variable_ref_pin_name(&input.name) {
                     self.queue_update_input_at(entity, input, &input_command_ref, value, meta);
                 }
                 continue;
@@ -6602,7 +10918,9 @@ impl<'a> StructuralPlanner<'a> {
             };
             let source = match source {
                 SymbolValue::Literal(mut value) => {
-                    self.normalize_input_value(input, &mut value);
+                    if !self.normalize_input_value(input, &mut value, target_layer.as_deref()) {
+                        continue;
+                    }
                     self.queue_update_input_at(entity, input, &input_command_ref, value, meta);
                     continue;
                 }
@@ -6632,7 +10950,14 @@ impl<'a> StructuralPlanner<'a> {
                     source
                 }
             };
-            let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
+            // Same reason as in `queue_validated_data_connection`: selecting the source's output
+            // by the dynamic pin's CURRENT specialization hides every output of a differently
+            // typed replacement, and reports it as a node with no usable output.
+            let rewirable_target = self.rewirable_dynamic_input(entity, input);
+            let selector_input = rewirable_target.as_ref().unwrap_or(input);
+            let Some(output_pin) =
+                self.resolve_source_output_pin_for_input(&source, selector_input)
+            else {
                 self.result.diagnostics.push(format!(
                     "could not choose an output pin for argument `{}` on `{}`",
                     arg.name, call.display
@@ -6855,6 +11180,31 @@ impl<'a> StructuralPlanner<'a> {
     /// Queue one newly authored DATA edge only after resolving both endpoints to concrete live or
     /// planned contracts. Exact pre-existing endpoints are retained without re-validating legacy
     /// wiring; every changed endpoint must pass type, container, and schema checks.
+    /// The `Generic` shape a wire-typed dynamic pin is actually minted with, when `input` is one.
+    ///
+    /// A pin minted by [`respecializes_dynamic_pins_from_their_source`] stores the contract of the
+    /// source currently feeding it, because `on_update` re-runs `match_type` on every board pass.
+    /// Validating a REPLACEMENT source against that stored shape rejects every rewire — and makes
+    /// the output-pin picker report that the new source node has no usable output at all — even
+    /// though the pin re-specializes to the new source the moment the edge lands.
+    fn rewirable_dynamic_input(
+        &self,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+    ) -> Option<PinMetadata> {
+        if input.is_generic || input.data_type == "Generic" {
+            return None;
+        }
+        let node_type = match target_entity {
+            NodeEntity::Existing(node_id) => find_board_node(self.existing, node_id)?.name.as_str(),
+            NodeEntity::New { meta, .. } => meta.name.as_str(),
+            NodeEntity::Layer { .. } => return None,
+        };
+        minted_wire_typed_pin(node_type, &input.name)
+            .then(|| generic_input_pin_metadata(&input.name))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn queue_validated_data_connection(
         &mut self,
         source: &ValueSource,
@@ -6896,6 +11246,12 @@ impl<'a> StructuralPlanner<'a> {
             return true;
         }
 
+        // Past the already-wired guards, `input` is only used to validate a NEW edge. A dynamic
+        // pin's stored type is a copy of the source it holds today, so check the replacement
+        // against the `Generic` pin the node really mints instead.
+        let rewirable = self.rewirable_dynamic_input(target_entity, input);
+        let input = rewirable.as_ref().unwrap_or(input);
+
         let resolved_source = ValueSource {
             node: source.node.clone(),
             output_pin: Some(output_pin.clone()),
@@ -6911,14 +11267,46 @@ impl<'a> StructuralPlanner<'a> {
             && (!variable_schema_contract
                 || variable_assignment_schemas_are_compatible(input, &output, &self.existing.refs));
         if !compatible {
+            // The rejection has three possible grounds and the reader has to be told WHICH one.
+            // When only the schemas differ, naming just `data_type/value_type` prints the same
+            // contract on both sides ("`Struct/Normal` ... requires `Struct/Normal`") — a
+            // self-contradiction that sends people hunting a phantom engine bug.
+            let types_differ =
+                input.data_type != output.data_type || input.value_type != output.value_type;
+            let reason = if types_differ {
+                format!(
+                    "source `{}` is `{}/{}`, but input `{}` requires `{}/{}`",
+                    output.source,
+                    output.data_type,
+                    output.value_type,
+                    input.name,
+                    input.data_type,
+                    input.value_type
+                )
+            } else {
+                let describe = |schema: Option<&str>| match schema {
+                    Some(schema) => flow_like_ast::schema_title(schema)
+                        .map(|title| format!("`{title}`"))
+                        .unwrap_or_else(|| "an untitled schema".to_string()),
+                    None => "no schema".to_string(),
+                };
+                format!(
+                    "source `{}` and input `{}` are both `{}/{}`, but their schemas differ: the source declares {}, the input requires {}{}",
+                    output.source,
+                    input.name,
+                    input.data_type,
+                    input.value_type,
+                    describe(output.schema.as_deref()),
+                    describe(input.schema.as_deref()),
+                    if input.enforce_schema {
+                        " and enforces it"
+                    } else {
+                        ""
+                    }
+                )
+            };
             self.result.diagnostics.push(format!(
-                "{context} has incompatible pin types or schemas: source `{}` is `{}/{}`, but input `{}` requires `{}/{}`; use a catalog-declared conversion before connecting it",
-                output.source,
-                output.data_type,
-                output.value_type,
-                input.name,
-                input.data_type,
-                input.value_type
+                "{context} has incompatible pin types or schemas: {reason}; use a catalog-declared conversion before connecting it"
             ));
             return false;
         }
@@ -6976,6 +11364,9 @@ impl<'a> StructuralPlanner<'a> {
             } => self.reuse_existing_select_source(cond, then, otherwise, source, target_layer),
             Expr::Binary { op, lhs, rhs } => {
                 self.reuse_existing_binary_source(op, lhs, rhs, source, target_layer)
+            }
+            Expr::Template { parts } => {
+                self.reuse_existing_format_source(parts, source, target_layer)
             }
             Expr::Object(fields) => {
                 self.reuse_existing_struct_make_source(fields, source, target_layer)
@@ -7187,7 +11578,7 @@ impl<'a> StructuralPlanner<'a> {
             return None;
         };
         let node = find_board_node(self.existing, node_id)?;
-        if node.name != "utils_types_select" {
+        if node.name != TYPES_SELECT_NODE_TYPE {
             return None;
         }
         let meta = node_to_metadata(node);
@@ -7204,6 +11595,31 @@ impl<'a> StructuralPlanner<'a> {
             }
         }
         Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `string_format` node a template literal lowered from, diffing its
+    /// format string in place and re-planning the placeholder pins.
+    fn reuse_existing_format_source(
+        &mut self,
+        parts: &[TemplatePart],
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != STRING_FORMAT_NODE_TYPE {
+            return None;
+        }
+        let call = match template_format_call(parts, None) {
+            Ok(call) => call,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        self.reuse_existing_call_source(&call, source, Some(FORMATTED_STRING_PIN), target_layer)
     }
 
     /// Reuse the pure comparison node that an existing binary expression lowered from. Besides
@@ -7256,26 +11672,42 @@ impl<'a> StructuralPlanner<'a> {
         // A call to a declared FlowScript function reuses the existing `control_call_function`
         // node that targets that function's layer (catalog resolution can never match it, and
         // recreating it on every reconcile would duplicate call nodes).
-        let is_function_call_reuse = source_node.name == CALL_FUNCTION_NODE_TYPE
-            && self
-                .planned_functions
-                .get(&call.display)
-                .is_some_and(|planned| {
+        let resolved = self.resolve_call_target(call).ok();
+        let live = node_to_metadata(source_node);
+        let (meta, call) = match &resolved {
+            Some(ResolvedCall {
+                target: CallTarget::Function(key),
+                call: folded,
+                ..
+            }) if source_node.name == CALL_FUNCTION_NODE_TYPE
+                && self.planned_functions.get(key).is_some_and(|planned| {
                     node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
                         .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
-                });
-        let meta = if is_function_call_reuse {
-            node_to_metadata(source_node)
-        } else {
-            match self.catalog.resolve_call(call) {
-                Ok(meta) if meta.name == source_node.name => node_to_metadata(source_node),
-                Ok(_) => return None,
-                Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
-                Err(_) => return None,
+                }) =>
+            {
+                (live, folded.clone())
             }
+            Some(ResolvedCall {
+                target: CallTarget::Catalog(meta),
+                ..
+            }) if meta.name == source_node.name => {
+                let receiver_pin = live_receiver_pin(&live);
+                let folded = fold_call_arguments(call, &live, receiver_pin.as_deref()).ok()?;
+                (live, folded)
+            }
+            Some(_) => return None,
+            None if call_matches_node(call, source_node) => {
+                let receiver_pin = live_receiver_pin(&live);
+                let folded = fold_call_arguments(call, &live, receiver_pin.as_deref()).ok()?;
+                (live, folded)
+            }
+            None => return None,
         };
+        if let Some(resolved) = &resolved {
+            self.note_resolution(resolved);
+        }
         let entity = NodeEntity::Existing(source_node_id.clone());
-        self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+        self.plan_call_arguments(&call, &entity, &meta, target_layer, true);
 
         let output_pin = requested_output
             .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)))
@@ -7288,18 +11720,34 @@ impl<'a> StructuralPlanner<'a> {
         }))
     }
 
-    fn normalize_input_value(&mut self, input: &PinMetadata, value: &mut flow_like_types::Value) {
+    fn normalize_input_value(
+        &mut self,
+        input: &PinMetadata,
+        value: &mut flow_like_types::Value,
+        target_layer: Option<&str>,
+    ) -> bool {
         if !is_variable_ref_pin_name(&input.name) {
-            return;
+            return true;
         }
 
         let flow_like_types::Value::String(raw) = value else {
-            return;
+            return true;
         };
 
-        if let Some(variable_id) = self.variable_refs.resolve(raw) {
-            *raw = variable_id;
-            return;
+        match self.variable_refs.resolve(raw, target_layer) {
+            Ok(Some(variable_id)) => {
+                *raw = variable_id;
+                return true;
+            }
+            Err(candidates) => {
+                self.result.diagnostics.push(variable_ref_scope_diagnostic(
+                    raw,
+                    &candidates,
+                    &variable_target_scope_label(self.existing, target_layer),
+                ));
+                return false;
+            }
+            Ok(None) => {}
         }
 
         if self.unresolved_variable_refs.insert(raw.clone()) {
@@ -7307,6 +11755,7 @@ impl<'a> StructuralPlanner<'a> {
                 "variable reference `{raw}` does not resolve to a board or FlowScript variable; declare it as a top-level FlowScript variable so it can be created"
             ));
         }
+        false
     }
 
     fn queue_update_input(
@@ -7521,9 +11970,7 @@ impl<'a> StructuralPlanner<'a> {
             }
             return None;
         };
-        let Some(to_pin) = self.entity_exec_input_pin(current) else {
-            return None;
-        };
+        let to_pin = self.entity_exec_input_pin(current)?;
 
         if let Some((origin_node, origin_pin)) = insertion_origin
             && let NodeEntity::Existing(node_id) = current
@@ -7621,6 +12068,29 @@ impl<'a> StructuralPlanner<'a> {
     /// Resolve the catalog/board shape of the exact data output represented by `source`. An
     /// unselected call result uses the same deterministic default-output rule as connection
     /// planning, so validation never guesses among several unrelated outputs.
+    /// The pin `arg_name` names once this node's own `on_update` has run against the literal
+    /// arguments of this call. Mirrors `arg_targets_predicted_dynamic_pin`, which does the same
+    /// for a node that already exists on the board.
+    fn enriched_input_pin(
+        &self,
+        meta: &NodeMetadata,
+        call: &Call,
+        arg_name: &str,
+    ) -> Option<PinMetadata> {
+        let enricher = self.enricher?;
+        let literal_args: Vec<(String, flow_like_types::Value)> = call
+            .args
+            .iter()
+            .filter_map(|arg| literal_expr_to_value(&arg.value).map(|v| (arg.name.clone(), v)))
+            .collect();
+        let enriched = enricher(meta, &literal_args, self.existing)?;
+        enriched
+            .inputs
+            .iter()
+            .find(|pin| metadata_pin_name_matches(pin, arg_name))
+            .cloned()
+    }
+
     fn source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
         match &source.node {
             NodeEntity::Existing(id) => {
@@ -8018,6 +12488,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "struct_get".to_string(),
             display: "structGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8083,6 +12556,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "array_length".to_string(),
             display: "arrayLength".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8131,6 +12607,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: node_type.to_string(),
             display: display.to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8202,6 +12681,9 @@ impl<'a> StructuralPlanner<'a> {
         let probe = Call {
             node_type: "map_get".to_string(),
             display: "mapGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -8276,6 +12758,9 @@ impl<'a> StructuralPlanner<'a> {
         let call = Call {
             node_type: "array_get".to_string(),
             display: "arrayGet".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![
                 Arg {
                     name: "array_in".to_string(),
@@ -8331,7 +12816,18 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     SymbolValue::Literal(_) => return None,
                 };
-                match self.resolve_entity_output_pin(&source.node, Some(pin)) {
+                // Only a symbol that is NOT already narrowed to one output pin can select a
+                // sibling output with `.field`. A function parameter, a destructured binding or a
+                // `for…of` element already names its pin, so `x.field` on one of those is a struct
+                // DATA key — resolving it as an output pin let a function's own RETURN pin shadow
+                // a field of its parameter (`raw.stops` inside `normalize(raw): (stops, …)`).
+                // `const x = call(...)` binds `output_pin: None`, so `x.response` still works.
+                match source
+                    .output_pin
+                    .is_none()
+                    .then(|| self.resolve_entity_output_pin(&source.node, Some(pin)))
+                    .flatten()
+                {
                     Some(output) => {
                         source.output_pin = Some(output);
                         Some(SymbolValue::Source(source))
@@ -8364,9 +12860,100 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Index { base, index } => self.lower_array_index_access(base, index, target_layer),
             Expr::Binary { op, lhs, rhs } => self.lower_binary_operator(op, lhs, rhs, target_layer),
-            Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } => None,
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => self.lower_ternary_select(cond, then, otherwise, target_layer),
+            Expr::Template { parts } => self.lower_template_format(parts, target_layer),
+            // A composite literal whose elements are all constants was already handled by
+            // `literal_expr_to_value` above. One that carries a computed element has to become
+            // real nodes instead — returning None here is what produced "argument `x` is not a
+            // literal or resolvable node output" for every `[a, b]` holding a call result.
+            Expr::Array(items) => self.lower_array_literal(items, target_layer),
+            Expr::Object(fields) => self.lower_object_literal(fields, target_layer),
             Expr::Literal(_) => None,
         }
+    }
+
+    /// Materialize the `string_format` node a template literal lowers to, reading its
+    /// `formatted_string` output. Placeholder pins are the node's `on_update`-minted dynamic
+    /// pins, predicted from the synthesized format string exactly like a hand-written
+    /// `stringFormat({ formatString: "…{x}…", x })`.
+    fn lower_template_format(
+        &mut self,
+        parts: &[TemplatePart],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = match template_format_call(parts, None) {
+            Ok(call) => call,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        let entity = self.add_call_node(&call, target_layer)?;
+        let output = self
+            .resolve_entity_output_pin(&entity, Some(FORMATTED_STRING_PIN))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    /// Materialize a `utils_types_select` node for a `cond ? then : otherwise` ternary, reading
+    /// its `result` output. Literal arms become pin values, wired arms connections — both through
+    /// the standard argument planner. (An EXISTING select node is reused upstream by
+    /// `reuse_existing_select_source`; this is the path for a new one.)
+    fn lower_ternary_select(
+        &mut self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = Call {
+            node_type: TYPES_SELECT_NODE_TYPE.to_string(),
+            display: to_camel_case(TYPES_SELECT_NODE_TYPE),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
+            args: [("condition", cond), ("a", then), ("b", otherwise)]
+                .into_iter()
+                .map(|(name, value)| Arg {
+                    name: name.to_string(),
+                    value: value.clone(),
+                })
+                .collect(),
+            anchor: None,
+        };
+        let mut entity = self.add_call_node(&call, target_layer)?;
+        // `types_select`'s `result` is declared Generic because it can carry either arm. When BOTH
+        // arms have the same shape the result HAS that shape, and saying so is what lets a method
+        // call on a ternary dispatch: without it `(a ? b : c).clamp(...)` sees a Generic receiver
+        // and is rejected as "ambiguous between `datetime::clamp`, `int::clamp`, `float::clamp`".
+        if let (Some(then_hint), Some(else_hint)) = (
+            self.expr_receiver_hint(then),
+            self.expr_receiver_hint(otherwise),
+        ) && then_hint.data_type == else_hint.data_type
+            && then_hint.value_type == else_hint.value_type
+            && let NodeEntity::New { meta, .. } = &mut entity
+        {
+            for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "result") {
+                pin.data_type = then_hint.data_type.clone();
+                pin.value_type = then_hint.value_type.clone();
+                pin.schema = then_hint.schema.clone();
+                pin.is_generic = false;
+            }
+        }
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("result"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
     }
 
     /// Materialize the catalog node represented by a FlowScript binary expression and return its
@@ -8398,6 +12985,78 @@ impl<'a> StructuralPlanner<'a> {
         }))
     }
 
+    /// Lower `{ k: expr, … }` whose values are not all constant into `struct::make()` followed
+    /// by one `struct::set` per field, folded into a nested call expression so the existing
+    /// argument-resolution path wires each step (and splices the exec chain, since `struct_set`
+    /// is impure). This is exactly the chain fixture authors were writing by hand as a
+    /// workaround; there is no reason the literal should not lower to it directly.
+    fn lower_object_literal(
+        &mut self,
+        fields: &[ObjectField],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let mut make = Call::placeholder();
+        make.node_type = "struct_make".to_string();
+        make.display = "make".to_string();
+
+        let built = fields.iter().fold(Expr::Call(make), |current, field| {
+            let mut set = Call::placeholder();
+            set.node_type = "struct_set".to_string();
+            set.display = "set".to_string();
+            set.args = vec![
+                Arg {
+                    name: "struct_in".to_string(),
+                    value: current,
+                },
+                Arg {
+                    name: "field".to_string(),
+                    value: Expr::Literal(Literal::String(field.key.clone())),
+                },
+                Arg {
+                    name: "value".to_string(),
+                    value: field.value.clone(),
+                },
+            ];
+            Expr::Call(set)
+        });
+        self.resolve_expr(&built, target_layer)
+    }
+
+    /// Lower `[a, b, …]` whose elements are not all constant into a real `construct_array`
+    /// node, one `element` argument per item. `construct_array` is pure and mints one further
+    /// `element` pin per connected pin, so it composes in expression position without needing
+    /// an execution chain — unlike `array::push`, which is impure.
+    fn lower_array_literal(
+        &mut self,
+        items: &[Expr],
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let mut call = Call::placeholder();
+        if items.is_empty() {
+            call.node_type = "make_array".to_string();
+            call.display = "make".to_string();
+        } else {
+            call.node_type = "construct_array".to_string();
+            call.display = "construct".to_string();
+            call.args = items
+                .iter()
+                .map(|item| Arg {
+                    name: "element".to_string(),
+                    value: item.clone(),
+                })
+                .collect();
+        }
+        self.add_call_node(&call, target_layer).map(|node| {
+            let output_pin = self
+                .resolve_entity_output_pin(&node, None)
+                .unwrap_or_else(|| "array_out".to_string());
+            SymbolValue::Source(ValueSource {
+                node,
+                output_pin: Some(output_pin),
+            })
+        })
+    }
+
     fn resolve_binary_operator_meta(
         &mut self,
         op: &str,
@@ -8415,18 +13074,14 @@ impl<'a> StructuralPlanner<'a> {
             return None;
         }
 
-        let lhs_type = self.expr_data_type_hint(lhs);
-        let rhs_type = self.expr_data_type_hint(rhs);
-        let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
-            (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs.to_string()),
-            (Some(lhs), Some(rhs)) => {
+        let operand_type = match self.binary_operand_type(lhs, rhs) {
+            Ok(operand_type) => operand_type,
+            Err((lhs, rhs)) => {
                 self.result.diagnostics.push(format!(
                     "binary operator `{op}` has incompatible operand types `{lhs}` and `{rhs}`"
                 ));
                 return None;
             }
-            (Some(known), None) | (None, Some(known)) => Some(known.to_string()),
-            (None, None) => None,
         };
 
         let candidates = BINARY_OPERATOR_NODES
@@ -8472,6 +13127,50 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// The common operand type of a binary expression, or the mismatched pair. An Integer
+    /// LITERAL adopts Float when the other side is Float: `0 - x` is the lowered form of `-x`
+    /// and `x * 2` is natural on a Float. Typed refs and calls keep strict matching.
+    fn binary_operand_type(
+        &self,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<Option<String>, (String, String)> {
+        // `Generic` is not a type, it is the absence of one: a Generic pin specialises to
+        // whatever it is wired to. `struct::get`, `map::get`, `array::get`, an index and a
+        // ternary all produce it, so treating it as a concrete type made every comparison
+        // against such a value fail ("incompatible operand types `Generic` and `String`") even
+        // though connection validation itself specialises a Generic side happily
+        // (`planned_output_is_compatible`). Fold it into the unknown case, which already lets
+        // the other operand decide.
+        let ungeneric = |hint: Option<String>| hint.filter(|ty| ty != "Generic");
+        // Prefer the receiver oracle: it walks struct schemas, so `verdict.disposition` on an
+        // interface-typed value types as its FIELD (`String`) rather than as the containing
+        // `Struct`. `expr_data_type_hint` stops at the base and made every comparison against a
+        // struct field fail with "incompatible operand types `Struct` and `String`".
+        let operand_type = |expr: &Expr| {
+            ungeneric(
+                self.expr_receiver_hint(expr)
+                    .map(|hint| hint.data_type)
+                    .or_else(|| self.expr_data_type_hint(expr)),
+            )
+        };
+        let lhs_type = operand_type(lhs);
+        let rhs_type = operand_type(rhs);
+        let is_int_literal = |expr: &Expr| matches!(expr, Expr::Literal(Literal::Int(_)));
+        match (lhs_type.as_deref(), rhs_type.as_deref()) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => Ok(Some(lhs.to_string())),
+            (Some("Integer"), Some("Float")) if is_int_literal(lhs) => {
+                Ok(Some("Float".to_string()))
+            }
+            (Some("Float"), Some("Integer")) if is_int_literal(rhs) => {
+                Ok(Some("Float".to_string()))
+            }
+            (Some(lhs), Some(rhs)) => Err((lhs.to_string(), rhs.to_string())),
+            (Some(known), None) | (None, Some(known)) => Ok(Some(known.to_string())),
+            (None, None) => Ok(None),
+        }
+    }
+
     fn expr_data_type_hint(&self, expr: &Expr) -> Option<String> {
         if let Some(value) = literal_expr_to_value(expr) {
             return value_data_type(&value).map(str::to_string);
@@ -8482,15 +13181,13 @@ impl<'a> StructuralPlanner<'a> {
                 .lookup_symbol(name)
                 .and_then(|symbol| self.symbol_data_type_hint(&symbol)),
             Expr::Call(call) => {
-                let meta = self.catalog.resolve_call(call).ok()?;
+                let meta = self.call_output_metadata(call)?;
                 let output = default_metadata_output_pin(&meta)?;
                 metadata_output_pin(&meta, &output).map(|pin| pin.data_type.clone())
             }
             Expr::Field { base, pin } => match base.as_ref() {
                 Expr::Call(call) => self
-                    .catalog
-                    .resolve_call(call)
-                    .ok()
+                    .call_output_metadata(call)
                     .and_then(|meta| metadata_output_pin(&meta, pin).cloned())
                     .map(|output| output.data_type),
                 Expr::Ref(name) => self.lookup_symbol(name).and_then(|symbol| match symbol {
@@ -8510,18 +13207,14 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Binary { op, lhs, rhs } => {
                 let op = canonical_binary_op(op);
-                let lhs_type = self.expr_data_type_hint(lhs);
-                let rhs_type = self.expr_data_type_hint(rhs);
-                let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
-                    (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
-                    (Some(_), Some(_)) => return None,
-                    (Some(known), None) | (None, Some(known)) => Some(known),
-                    (None, None) => None,
-                };
+                let operand_type = self.binary_operand_type(lhs, rhs).ok()?;
                 let mut result_types = BINARY_OPERATOR_NODES
                     .iter()
                     .filter(|(candidate_op, data_type, _, _)| {
-                        *candidate_op == op && operand_type.is_none_or(|known| known == *data_type)
+                        *candidate_op == op
+                            && operand_type
+                                .as_deref()
+                                .is_none_or(|known| known == *data_type)
                     })
                     .map(|(_, _, result_type, _)| *result_type)
                     .collect::<Vec<_>>();
@@ -8534,6 +13227,7 @@ impl<'a> StructuralPlanner<'a> {
             }
             Expr::Object(_) => Some("Struct".to_string()),
             Expr::Array(_) => Some("Generic".to_string()),
+            Expr::Template { .. } => Some("String".to_string()),
             Expr::Member { .. } | Expr::Index { .. } | Expr::Literal(_) => None,
         }
     }
@@ -8552,7 +13246,13 @@ impl<'a> StructuralPlanner<'a> {
                         .values()
                         .find_map(|layer| layer.variables.get(variable_id))
                 })
-                .map(|variable| format!("{:?}", variable.data_type)),
+                .map(|variable| format!("{:?}", variable.data_type))
+                .or_else(|| {
+                    // A variable declared in this document but not yet on the board.
+                    self.variable_value_contracts
+                        .get(variable_id)
+                        .map(|contract| contract.data_type.clone())
+                }),
         }
     }
 
@@ -8789,7 +13489,9 @@ impl<'a> StructuralPlanner<'a> {
             ) {
                 return;
             }
-            self.normalize_input_value(&target_input, &mut literal);
+            if !self.normalize_input_value(&target_input, &mut literal, target_layer.as_deref()) {
+                return;
+            }
             self.queue_update_input(entity, input, literal, &meta);
             return;
         }
@@ -8853,33 +13555,56 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> String {
         let default_value = literal_expr_to_value(value);
-        let (data_type, value_type) = if default_value.is_some() {
-            infer_variable_types(default_value.as_ref())
+        // A non-literal initializer carries no default, but its output contract still types the
+        // variable so downstream connections are validated against it. Take the FULL shape:
+        // hardcoding `Normal` here flattened every container, so `let lines = string::lines(x)`
+        // became `String/Normal` and the next `array::length({ array: lines })` was refused
+        // against a variable that should have been `String/Array`. The schema was dropped too,
+        // which mis-classed struct aliases for method dispatch.
+        let (data_type, value_type, schema) = if default_value.is_some() {
+            let (data_type, value_type) = infer_variable_types(default_value.as_ref());
+            (data_type, value_type, None)
+        } else if let Some(hint) = self.expr_receiver_hint(value) {
+            (hint.data_type, hint.value_type, hint.schema)
         } else {
-            // A non-literal initializer carries no default, but its output contract still
-            // types the variable so downstream connections are validated against it.
             (
                 self.expr_data_type_hint(value)
                     .unwrap_or_else(|| "Generic".to_string()),
                 "Normal".to_string(),
+                None,
             )
         };
-        self.create_typed_local_variable(name, default_value, data_type, value_type, target_layer)
+        self.create_typed_local_variable(
+            name,
+            default_value,
+            data_type,
+            value_type,
+            schema,
+            target_layer,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_typed_local_variable(
         &mut self,
         name: &str,
         default_value: Option<flow_like_types::Value>,
         data_type: String,
         value_type: String,
+        schema: Option<String>,
         target_layer: Option<String>,
     ) -> String {
         let variable_id = self.unique_local_variable_id(name);
-        self.variable_refs.insert(&variable_id, name);
+        self.variable_refs
+            .insert(&variable_id, name, target_layer.as_deref());
         self.variable_value_contracts.insert(
             variable_id.clone(),
-            variable_value_pin_metadata("value_in", data_type.clone(), value_type.clone(), None),
+            variable_value_pin_metadata(
+                "value_in",
+                data_type.clone(),
+                value_type.clone(),
+                schema.clone(),
+            ),
         );
         self.add_commands.push(BoardCommand::CreateVariable {
             variable_id: Some(variable_id.clone()),
@@ -8889,7 +13614,7 @@ impl<'a> StructuralPlanner<'a> {
             default_value,
             description: None,
             category: None,
-            schema: None,
+            schema,
             exposed: Some(false),
             secret: Some(false),
             editable: Some(true),
@@ -9053,6 +13778,7 @@ impl<'a> StructuralPlanner<'a> {
             Some(literal),
             data_type,
             value_type,
+            None,
             target_layer.clone(),
         );
         self.add_variable_get_source(&variable_id, target_layer)
@@ -9131,29 +13857,41 @@ impl<'a> StructuralPlanner<'a> {
                     [pin] => Some(pin.name.clone()),
                     many => many
                         .iter()
-                        .find(|pin| {
-                            matches!(pin.name.as_str(), "result" | "value" | "output" | "out")
-                        })
+                        .find(|pin| is_primary_output_name(&pin.name))
+                        // A GENERIC consuming pin (`variable_set.value_in`) accepts every output,
+                        // so "several are compatible" says nothing about which is meant — the
+                        // ambiguity is manufactured by the wildcard, not real. Take the first the
+                        // catalog declares, which is the node's principal result. Returning `None`
+                        // dropped the connection SILENTLY: `acc = set::insert(…)` applied with no
+                        // diagnostic and left `value_in` unwired, so the value was lost and the
+                        // document re-rendered as `acc = null`. `set::make` escaped only by having
+                        // one output. A concretely typed consumer keeps the strict behaviour — two
+                        // equally valid `string` outputs really are ambiguous and are diagnosed.
+                        .or_else(|| input.is_generic.then(|| many.first()).flatten())
                         .map(|pin| pin.name.clone()),
                 }
             }
-            NodeEntity::Existing(id) => self.resolve_source_output_pin(source).or_else(|| {
-                // Multi-output live node without a default alias: the consuming pin's type can
-                // still disambiguate (e.g. `return user` into a `bool` return pin selects the one
-                // Boolean output).
-                let node = find_board_node(self.existing, id)?;
-                let meta = node_to_metadata(node);
-                let compatible: Vec<&PinMetadata> = meta
-                    .outputs
-                    .iter()
-                    .filter(|pin| pin.data_type != "Execution")
-                    .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
-                    .collect();
-                match compatible.as_slice() {
-                    [pin] => Some(pin.name.clone()),
-                    _ => None,
-                }
-            }),
+            NodeEntity::Existing(id) => {
+                // The consuming pin's type disambiguates FIRST: `return probe` into a `bool`
+                // return pin selects the one Boolean output even when the node also carries a
+                // conventionally-named default like `response`. Falling back to the default
+                // alias before checking types picked a pin the consumer cannot accept.
+                let by_type = find_board_node(self.existing, id).and_then(|node| {
+                    let meta = node_to_metadata(node);
+                    let compatible: Vec<String> = meta
+                        .outputs
+                        .iter()
+                        .filter(|pin| pin.data_type != "Execution")
+                        .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
+                        .map(|pin| pin.name.clone())
+                        .collect();
+                    match compatible.as_slice() {
+                        [pin] => Some(pin.clone()),
+                        _ => None,
+                    }
+                });
+                by_type.or_else(|| self.resolve_source_output_pin(source))
+            }
             NodeEntity::Layer { .. } => self.resolve_source_output_pin(source),
         }
     }
@@ -9207,6 +13945,26 @@ impl<'a> StructuralPlanner<'a> {
 
     fn seed_top_level_variables(&mut self, ast: &BoardAst) {
         for var in &ast.variables {
+            let valid_identity = match var.anchor.as_deref() {
+                Some(anchor) => {
+                    self.existing.variables.contains_key(anchor)
+                        && variable_location_labels(self.existing, anchor).len() == 1
+                }
+                None => {
+                    self.existing
+                        .variables
+                        .values()
+                        .filter(|existing| existing.name == var.name)
+                        .take(2)
+                        .count()
+                        <= 1
+                }
+            };
+            if !valid_identity {
+                // `reconcile_variables` already emitted the attributable diagnostic. Do not let
+                // the structural planner turn that rejected declaration into a usable runtime ID.
+                continue;
+            }
             let variable_id = self.variable_id_for_decl(var);
             self.variable_value_contracts.insert(
                 variable_id.clone(),
@@ -9217,7 +13975,7 @@ impl<'a> StructuralPlanner<'a> {
                     visible_variable_schema(ast, var).or_else(|| var.schema.clone()),
                 ),
             );
-            self.variable_refs.insert(&variable_id, &var.name);
+            self.variable_refs.insert(&variable_id, &var.name, None);
             self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
         }
     }
@@ -9227,26 +13985,19 @@ impl<'a> StructuralPlanner<'a> {
             return anchor.to_string();
         }
 
-        if let Some(existing) = self
+        let mut matches = self
             .existing
             .variables
             .values()
-            .find(|existing| existing.name == var.name)
-        {
-            return existing.id.clone();
+            .filter(|existing| existing.name == var.name)
+            .map(|existing| existing.id.clone())
+            .collect::<Vec<_>>();
+        matches.sort();
+        if let [only] = matches.as_slice() {
+            return only.clone();
         }
 
-        for layer in self.existing.layers.values() {
-            if let Some(existing) = layer
-                .variables
-                .values()
-                .find(|existing| existing.name == var.name)
-            {
-                return existing.id.clone();
-            }
-        }
-
-        variable_id_for_decl(var)
+        variable_id_for_decl_against_board(self.existing, var)
     }
 
     fn push_scope(&mut self) {
@@ -9255,6 +14006,14 @@ impl<'a> StructuralPlanner<'a> {
 
     fn pop_scope(&mut self) {
         self.symbols.pop();
+    }
+
+    /// Close a loop body or branch arm, retiring its bindings into [`Self::closed_block_symbols`]
+    /// instead of dropping them.
+    fn pop_block_scope(&mut self) {
+        if let Some(scope) = self.symbols.pop() {
+            self.closed_block_symbols.extend(scope);
+        }
     }
 
     fn insert_symbol(&mut self, name: String, source: SymbolValue) {
@@ -9281,6 +14040,1646 @@ impl<'a> StructuralPlanner<'a> {
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).cloned())
+            .or_else(|| self.closed_block_symbols.get(name).cloned())
+    }
+}
+
+/// A declared FlowScript function's boundary, as the resolver needs it: its parameters (the
+/// first is the UFCS receiver) and returns.
+#[derive(Debug, Clone)]
+struct FunctionSig {
+    params: Vec<PinMetadata>,
+    returns: Vec<PinMetadata>,
+}
+
+fn use_name_diagnostic(
+    rendered: &str,
+    name: &str,
+    functions: &HashSet<String>,
+    previous: Option<&str>,
+) -> Option<String> {
+    if flow_like_ast::is_keyword(name) {
+        return Some(format!(
+            "`{rendered}`: `{name}` is a FlowScript keyword and cannot be imported under that name"
+        ));
+    }
+    if functions.contains(&name.to_lowercase()) {
+        return Some(format!(
+            "`{rendered}`: `{name}` is also a `function` declared in this file; rename one of them"
+        ));
+    }
+    if let Some(previous) = previous {
+        return Some(format!(
+            "`{rendered}`: `{name}` is already imported by `{previous}`; remove one of them"
+        ));
+    }
+    None
+}
+
+/// The input pin a live node binds a method receiver to. A `control_call_function` node's
+/// receiver is its first parameter, never the `function_layer_id` config pin.
+fn live_receiver_pin(meta: &NodeMetadata) -> Option<String> {
+    if meta.name == CALL_FUNCTION_NODE_TYPE {
+        return meta
+            .inputs
+            .iter()
+            .find(|pin| pin.data_type != "Execution" && pin.name != FUNCTION_LAYER_ID_PIN)
+            .map(|pin| pin.name.clone());
+    }
+    catalog_names(meta).receiver
+}
+
+/// One node type's opened-member candidates: every catalog entry of that type plus the `use`
+/// lines that opened it.
+#[derive(Debug, Clone)]
+struct OpenedGroup {
+    node_type: String,
+    indices: Vec<usize>,
+    uses: Vec<usize>,
+}
+
+fn group_opened(
+    groups: &mut Vec<OpenedGroup>,
+    catalog: &CatalogIndex,
+    indices: &[usize],
+    use_idx: usize,
+) {
+    for idx in indices {
+        let node_type = &catalog.entries[*idx].name;
+        match groups
+            .iter_mut()
+            .find(|group| group.node_type == *node_type)
+        {
+            Some(group) => {
+                group.indices.push(*idx);
+                if !group.uses.contains(&use_idx) {
+                    group.uses.push(use_idx);
+                }
+            }
+            None => groups.push(OpenedGroup {
+                node_type: node_type.clone(),
+                indices: vec![*idx],
+                uses: vec![use_idx],
+            }),
+        }
+    }
+}
+
+impl<'a> StructuralPlanner<'a> {
+    /// Build the `use` scope for this document: unknown namespaces, duplicate or reserved import
+    /// names and members that do not exist are diagnostics; unused lines are reported at the end.
+    fn prepare_uses(&mut self, ast: &BoardAst) {
+        let functions: HashSet<String> = ast
+            .functions
+            .iter()
+            .map(|func| func.name.to_lowercase())
+            .collect();
+        let mut scope = UseScope::default();
+        for (idx, decl) in ast.uses.iter().enumerate() {
+            let rendered = render_use_decl(decl);
+            scope.rendered.push(rendered.clone());
+            let key = path_key(&decl.path);
+            if decl.path.is_empty()
+                || !(self.catalog.namespace_known(&key) || self.module_namespace_known(&key))
+            {
+                scope.invalid.insert(idx);
+                let suggestions = self.catalog.closest_namespaces(&key);
+                self.result.diagnostics.push(if suggestions.is_empty() {
+                    format!(
+                        "`{rendered}`: namespace `{}` is unknown; call `get_declarations` to list the available namespaces",
+                        decl.path.join("::")
+                    )
+                } else {
+                    format!(
+                        "`{rendered}`: namespace `{}` is unknown; did you mean {}?",
+                        decl.path.join("::"),
+                        quoted_list(&suggestions)
+                    )
+                });
+                continue;
+            }
+            match &decl.kind {
+                UseKind::Namespace | UseKind::Alias(_) => {
+                    let name = match &decl.kind {
+                        UseKind::Alias(alias) => alias.clone(),
+                        _ => decl.path.last().cloned().unwrap_or_default(),
+                    };
+                    let lower = name.to_lowercase();
+                    let previous = scope
+                        .namespaces
+                        .get(&lower)
+                        .map(|(_, previous)| scope.rendered[*previous].clone());
+                    if let Some(diagnostic) =
+                        use_name_diagnostic(&rendered, &name, &functions, previous.as_deref())
+                    {
+                        scope.invalid.insert(idx);
+                        self.result.diagnostics.push(diagnostic);
+                        continue;
+                    }
+                    scope.namespaces.insert(lower, (key.clone(), idx));
+                }
+                UseKind::Glob => scope.globs.push((key.clone(), idx)),
+                UseKind::Members(members) => {
+                    for entry in members {
+                        let member = &entry.name;
+                        // The catalog is searched by the member's REAL name; the scope is keyed
+                        // by the LOCAL one, so `use jira::{ createIssue as createJiraIssue }`
+                        // makes `createJiraIssue(...)` resolve to `jira::createIssue`.
+                        let lower = entry.local().to_lowercase();
+                        if self.catalog.qualified_matches(&key, member).is_empty() {
+                            scope.invalid.insert(idx);
+                            let aliases = self.catalog.namespace_member_aliases(&key);
+                            let suggestions =
+                                closest_names(member, aliases.iter().map(String::as_str));
+                            self.result.diagnostics.push(if suggestions.is_empty() {
+                                format!(
+                                    "`{rendered}`: `{}::{member}` is not a function; call `get_declarations` for the members of `{}`",
+                                    decl.path.join("::"),
+                                    decl.path.join("::")
+                                )
+                            } else {
+                                format!(
+                                    "`{rendered}`: `{}::{member}` is not a function; did you mean {}?",
+                                    decl.path.join("::"),
+                                    quoted_list(&suggestions)
+                                )
+                            });
+                            continue;
+                        }
+                        let previous = scope
+                            .members
+                            .get(&lower)
+                            .map(|(_, _, previous)| scope.rendered[*previous].clone());
+                        if let Some(diagnostic) = use_name_diagnostic(
+                            &rendered,
+                            entry.local(),
+                            &functions,
+                            previous.as_deref(),
+                        ) {
+                            scope.invalid.insert(idx);
+                            self.result.diagnostics.push(diagnostic);
+                            continue;
+                        }
+                        scope
+                            .members
+                            .insert(lower, (key.clone(), member.clone(), idx));
+                    }
+                }
+            }
+        }
+        self.use_scope = scope;
+    }
+
+    fn report_unused_uses(&mut self) {
+        for (idx, rendered) in self.use_scope.rendered.iter().enumerate() {
+            if self.use_scope.invalid.contains(&idx) || self.use_hits.contains(&idx) {
+                continue;
+            }
+            self.result
+                .corrections
+                .push(format!("`{rendered}` is unused."));
+        }
+    }
+
+    fn prepare_function_sigs(&mut self, doc: &FlatDocument) {
+        self.function_sigs.clear();
+        self.function_decl_index.clear();
+        self.pending_function_moves.clear();
+        self.pending_function_renames.clear();
+        self.claimed_function_layers.clear();
+        self.retired_function_names.clear();
+        self.ambiguous_function_layers.clear();
+        let declared_destinations: HashMap<String, (Option<String>, String)> = doc
+            .ast
+            .functions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, func)| {
+                let anchor = func.anchor.as_deref()?;
+                self.existing
+                    .layers
+                    .get(anchor)
+                    .filter(|layer| matches!(layer.r#type, LayerType::Function))?;
+                let key = self.declared_function_key(doc, index);
+                Some((anchor.to_string(), (key.module, to_camel_case(&func.name))))
+            })
+            .collect();
+        for (index, func) in doc.ast.functions.iter().enumerate() {
+            let key = self.declared_function_key(doc, index);
+            if let Some(anchor) = func.anchor.as_deref()
+                && let Some(layer) = self.existing.layers.get(anchor)
+                && matches!(layer.r#type, LayerType::Function)
+            {
+                self.claimed_function_layers.insert(anchor.to_string());
+                let normalized = to_camel_case(&func.name);
+                let actual_module = owning_module(self.existing, layer.parent_id.as_deref());
+                let moves = actual_module != key.module;
+                let renames = to_camel_case(&layer.name) != normalized;
+                let occupied = self.existing.layers.values().find(|candidate| {
+                    candidate.id != anchor
+                        && matches!(candidate.r#type, LayerType::Function)
+                        && to_camel_case(&candidate.name) == normalized
+                        && owning_module(self.existing, candidate.parent_id.as_deref())
+                            == key.module
+                        && declared_destinations.get(&candidate.id).is_none_or(
+                            |(destination, written_name)| {
+                                destination == &key.module && written_name == &normalized
+                            },
+                        )
+                });
+                if let Some(existing) = occupied {
+                    self.result.diagnostics.push(format!(
+                        "function `{}` cannot use that name in {}: Function layer `{}` already uses it; rename one of them first",
+                        func.name,
+                        self.module_move_label(key.module.as_deref()),
+                        existing.id
+                    ));
+                } else {
+                    // The written module and name are authoritative. Record both changes before
+                    // seeding existing signatures so the old qualified name is not callable in
+                    // the same revision.
+                    if moves {
+                        self.pending_function_moves.push((
+                            anchor.to_string(),
+                            key.module.clone(),
+                            func.name.clone(),
+                        ));
+                    }
+                    if renames {
+                        self.pending_function_renames.push((
+                            anchor.to_string(),
+                            layer.name.clone(),
+                            func.name.clone(),
+                        ));
+                        self.retired_function_names
+                            .push((layer.name.clone(), func.name.clone()));
+                    }
+                }
+            }
+            self.function_sigs.insert(
+                key.clone(),
+                FunctionSig {
+                    params: func
+                        .params
+                        .iter()
+                        .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                        .collect(),
+                    returns: func
+                        .returns
+                        .iter()
+                        .map(|param| param_pin_metadata(param, &self.interface_schemas))
+                        .collect(),
+                },
+            );
+            self.function_decl_index.insert(key, index);
+        }
+    }
+
+    /// Resolve this document's `module` blocks to board layers, creating the ones that do not
+    /// exist yet. Runs before anything that needs a module context.
+    fn prepare_modules(&mut self, modules: &ModuleResolution) {
+        self.module_name_paths = modules.board_paths.clone();
+        let mut created: Vec<String> = Vec::new();
+        for module in &modules.created {
+            let parent = module_target_id(&module.parent, &created);
+            let ref_id = format!("${}", self.next_ref);
+            self.next_ref += 1;
+            let position = self.next_position(None);
+            self.add_commands.push(BoardCommand::CreateLayer {
+                name: module.name.clone(),
+                ref_id: Some(ref_id.clone()),
+                layer_type: Some("Module".to_string()),
+                node_ids: Vec::new(),
+                pins: None,
+                position: Some(position),
+                color: None,
+                target_layer: parent,
+                cache: None,
+                summary: Some(format!("Create module {}", module.name)),
+            });
+            self.module_name_paths
+                .insert(ref_id.clone(), module.path.clone());
+            created.push(ref_id);
+        }
+        // The written text is authoritative for module names and nesting: anchored blocks whose
+        // written name or position differs from the board become explicit rename/move commands.
+        for (layer_id, name) in &modules.renames {
+            let old_name = self
+                .existing
+                .layers
+                .get(layer_id)
+                .map(|layer| layer.name.clone())
+                .unwrap_or_else(|| layer_id.clone());
+            self.update_commands.push(BoardCommand::RenameLayer {
+                layer_id: layer_id.clone(),
+                name: name.clone(),
+                summary: Some(format!("Rename module {old_name} to {name}")),
+            });
+            self.result
+                .corrections
+                .push(format!("Renamed module `{old_name}` to `{name}`."));
+        }
+        for (layer_id, parent) in &modules.reparents {
+            let target = module_target_id(parent, &created);
+            let module_name = self
+                .existing
+                .layers
+                .get(layer_id)
+                .map(|layer| layer.name.clone())
+                .unwrap_or_else(|| layer_id.clone());
+            let destination = self.module_move_label(target.as_deref());
+            self.update_commands.push(BoardCommand::MoveToLayer {
+                ids: vec![layer_id.clone()],
+                target_layer: target,
+                summary: Some(format!("Move module {module_name} to {destination}")),
+            });
+            self.result.corrections.push(format!(
+                "Moved module `{module_name}` to {destination} to match its written position."
+            ));
+        }
+        for (scope, target) in &modules.scopes {
+            self.module_layers
+                .insert(scope.clone(), module_target_id(target, &created));
+        }
+    }
+
+    /// Human-readable destination of a module-membership move: the module's `::` path, or the
+    /// board root.
+    fn module_move_label(&self, target: Option<&str>) -> String {
+        match target {
+            Some(id) => match self.module_name_paths.get(id) {
+                Some(path) if !path.is_empty() => format!("module `{}`", path.join("::")),
+                _ => format!("module `{id}`"),
+            },
+            None => "the top level".to_string(),
+        }
+    }
+
+    /// The module layer a document scope plans into.
+    fn scope_module(&self, scope: &ModulePath) -> Option<String> {
+        self.module_layers.get(scope).cloned().flatten()
+    }
+
+    /// The module a top-level Event plans into. A module-aware document controls placement. A
+    /// wrapper-less document preserves the live anchor's module because it cannot express a move.
+    fn declared_event_module(&self, doc: &FlatDocument, index: usize) -> Option<String> {
+        let event = &doc.ast.events[index];
+        let written = self.scope_module(&doc.event_scopes[index]);
+        if self.moves_authoritative {
+            return written;
+        }
+
+        event
+            .anchor
+            .as_deref()
+            .and_then(|anchor| find_board_node(self.existing, anchor))
+            .map(|node| owning_module(self.existing, node.layer.as_deref()))
+            .unwrap_or(written)
+    }
+
+    /// Identity of the `function` at `index` of the flattened document: its name in the module it
+    /// was written in. The anchor keeps a function's IDENTITY; the written position decides the
+    /// module it belongs to — an anchored function written in a different module block moves
+    /// there (see `prepare_function_sigs`, which records the move).
+    fn declared_function_key(&self, doc: &FlatDocument, index: usize) -> FnKey {
+        let func = &doc.ast.functions[index];
+        let written = self.scope_module(&doc.function_scopes[index]);
+        let module = if self.moves_authoritative {
+            written
+        } else {
+            // A module-unaware document cannot restructure: an anchored function keeps the
+            // module its layer actually lives in on the board, whatever scope the text used.
+            func.anchor
+                .as_deref()
+                .and_then(|anchor| self.existing.layers.get(anchor))
+                .filter(|layer| matches!(layer.r#type, LayerType::Function))
+                .map(|layer| owning_module(self.existing, layer.parent_id.as_deref()))
+                .unwrap_or(written)
+        };
+        FnKey {
+            module,
+            name: func.name.clone(),
+        }
+    }
+
+    /// Make the board's own Function layers callable even when this document does not declare
+    /// them: a module file is a partial view of the board, and a call to a helper it never had to
+    /// reproduce is not an unknown name.
+    fn seed_existing_function_signatures(&mut self) {
+        let board = self.existing;
+        let declared = self
+            .function_sigs
+            .keys()
+            .map(|key| (key.module.clone(), to_camel_case(&key.name)))
+            .collect::<HashSet<_>>();
+        let layers = board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            // A layer this document declares is published only at its final written identity.
+            // Seeding it here as well would keep the old name callable, including when a
+            // collision diagnostic prevented the identity command from being queued.
+            .filter(|layer| !self.claimed_function_layers.contains(&layer.id))
+            .collect::<Vec<_>>();
+        let mut grouped = HashMap::<FnKey, Vec<&Layer>>::new();
+        for layer in layers {
+            let module = owning_module(board, layer.parent_id.as_deref());
+            let name = to_camel_case(&layer.name);
+            grouped
+                .entry(FnKey { module, name })
+                .or_default()
+                .push(layer);
+        }
+        let mut grouped = grouped.into_iter().collect::<Vec<_>>();
+        grouped.sort_by_key(|(key, _)| key.seen_id());
+        for (key, mut layers) in grouped {
+            layers.sort_by(|left, right| left.id.cmp(&right.id));
+            if layers.len() > 1 {
+                self.ambiguous_function_layers
+                    .insert(key, layers.iter().map(|layer| layer.id.clone()).collect());
+                continue;
+            }
+            if declared.contains(&(key.module.clone(), key.name.clone())) {
+                continue;
+            }
+            let layer = layers[0];
+            let (params, returns, impure) = existing_function_layer_contract(layer);
+            self.function_sigs.insert(
+                key.clone(),
+                FunctionSig {
+                    params: params.clone(),
+                    returns: returns.clone(),
+                },
+            );
+            self.planned_functions.insert(
+                key,
+                PlannedFunction {
+                    entity: NodeEntity::Existing(layer.id.clone()),
+                    impure,
+                    has_unresolved_calls: false,
+                    params,
+                    returns,
+                },
+            );
+        }
+    }
+
+    /// Index every callable function by its ABSOLUTE `::` path, so `checkout::payments::helper()`
+    /// resolves the same from any file.
+    fn index_qualified_functions(&mut self) {
+        self.functions_by_qualified.clear();
+        let keys = self.function_sigs.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let Some(module) = key.module.as_deref() else {
+                continue;
+            };
+            let Some(path) = self.module_name_paths.get(module) else {
+                continue;
+            };
+            let qualified = format!("{}::{}", path.join("::"), key.name.to_lowercase());
+            self.functions_by_qualified
+                .entry(qualified)
+                .or_default()
+                .push(key);
+        }
+        for keys in self.functions_by_qualified.values_mut() {
+            keys.sort_by_key(|key| key.seen_id());
+        }
+    }
+
+    /// The function a BARE name refers to from the current module: the current module's own
+    /// declaration/layer first, then a global one. A bare name never crosses into another module
+    /// — that always needs the qualified spelling.
+    fn lookup_bare_function(&self, name: &str) -> Option<FnKey> {
+        let local = FnKey::in_module(self.current_module.as_deref(), name);
+        if self.function_sigs.contains_key(&local) {
+            return Some(local);
+        }
+        let global = FnKey::global(name);
+        (self.current_module.is_some() && self.function_sigs.contains_key(&global))
+            .then_some(global)
+    }
+
+    fn ambiguous_function_in_module(
+        &self,
+        module: Option<&str>,
+        name: &str,
+    ) -> Option<(FnKey, Vec<String>)> {
+        let normalized = to_camel_case(name);
+        self.ambiguous_function_layers
+            .iter()
+            .find(|(key, _)| {
+                key.module.as_deref() == module && to_camel_case(&key.name) == normalized
+            })
+            .map(|(key, ids)| (key.clone(), ids.clone()))
+    }
+
+    /// Duplicate live Function layers must participate in lexical lookup. Otherwise their shared
+    /// key disappears from `function_sigs` and resolution can fall through to a global Function or
+    /// a catalog node with the same spelling.
+    fn bare_function_ambiguity(&self, name: &str) -> Option<(FnKey, Vec<String>)> {
+        let local = FnKey::in_module(self.current_module.as_deref(), name);
+        if let Some(ambiguous) =
+            self.ambiguous_function_in_module(self.current_module.as_deref(), name)
+        {
+            return Some(ambiguous);
+        }
+        if self.function_sigs.contains_key(&local) {
+            return None;
+        }
+        if self.current_module.is_some() {
+            if let Some(ambiguous) = self.ambiguous_function_in_module(None, name) {
+                return Some(ambiguous);
+            }
+            if self.function_sigs.contains_key(&FnKey::global(name)) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// A duplicate Function name also participates in method lookup when at least one duplicate
+    /// accepts the receiver type. Letting it disappear from the Function index would allow a
+    /// same-named catalog method to win by accident.
+    fn method_function_ambiguity(
+        &self,
+        name: &str,
+        kind: &ReceiverKind,
+    ) -> Option<(FnKey, Vec<String>)> {
+        let (key, ids) = self.bare_function_ambiguity(name)?;
+        let any_callable = ids.iter().any(|id| {
+            let Some(layer) = self.existing.layers.get(id) else {
+                return false;
+            };
+            let (params, _, _) = existing_function_layer_contract(layer);
+            let Some(first) = params.first() else {
+                return false;
+            };
+            let class = self.pin_class(first);
+            kind.accepts(class.as_ref())
+        });
+        any_callable.then_some((key, ids))
+    }
+
+    fn qualified_function_ambiguity(
+        &self,
+        path: &[String],
+        name: &str,
+    ) -> Option<(FnKey, Vec<String>)> {
+        let mut segments = path
+            .iter()
+            .map(|segment| segment.to_lowercase())
+            .collect::<Vec<_>>();
+        if let Some(first) = segments.first().cloned()
+            && let Some((expanded, _)) = self.use_scope.namespaces.get(&first)
+        {
+            let mut rest = segments.split_off(1);
+            segments = expanded.split("::").map(str::to_string).collect();
+            segments.append(&mut rest);
+        }
+        let normalized = to_camel_case(name);
+        self.ambiguous_function_layers
+            .iter()
+            .find(|(key, _)| {
+                to_camel_case(&key.name) == normalized
+                    && key
+                        .module
+                        .as_deref()
+                        .and_then(|module| self.module_name_paths.get(module))
+                        .is_some_and(|module_path| module_path == &segments)
+            })
+            .map(|(key, ids)| (key.clone(), ids.clone()))
+    }
+
+    fn ambiguous_function_diagnostic(&self, subject: &str, key: &FnKey, ids: &[String]) -> String {
+        format!(
+            "{subject} is ambiguous: {} live Function layers in {} use the name `{}` ({}); add an anchored Function declaration or rename the duplicate layers",
+            ids.len(),
+            self.module_move_label(key.module.as_deref()),
+            key.name,
+            quoted_list(ids)
+        )
+    }
+
+    /// The qualified spellings of a name that is only reachable from ANOTHER module.
+    fn foreign_function_spellings(&self, name: &str) -> Vec<String> {
+        let mut spellings = self
+            .function_sigs
+            .keys()
+            .filter(|key| key.name == name && key.module != self.current_module)
+            .filter_map(|key| {
+                let path = self.module_name_paths.get(key.module.as_deref()?)?;
+                Some(format!("{}::{}", path.join("::"), key.name))
+            })
+            .collect::<Vec<_>>();
+        spellings.sort();
+        spellings.dedup();
+        spellings
+    }
+
+    /// The function an absolute `a::b::name` path names, if any.
+    /// Whether `key` (a lowercased `::`-joined path) names a module declared in this document.
+    fn module_namespace_known(&self, key: &str) -> bool {
+        self.module_name_paths
+            .values()
+            .any(|path| path.join("::") == key)
+    }
+
+    fn lookup_qualified_function(&self, path: &[String], name: &str) -> Option<FnKey> {
+        let mut segments: Vec<String> = path
+            .iter()
+            .map(|segment| segment.to_lowercase())
+            .collect::<Vec<_>>();
+        // `use ingest::pdfs as pdfIngest` puts the alias in the namespace scope; expand it back
+        // to the real module path so `pdfIngest::extract(...)` finds the module's function.
+        if let Some(first) = segments.first().cloned()
+            && let Some((expanded, _)) = self.use_scope.namespaces.get(&first)
+        {
+            let mut rest = segments.split_off(1);
+            segments = expanded.split("::").map(str::to_string).collect();
+            segments.append(&mut rest);
+        }
+        let key = format!("{}::{}", segments.join("::"), name.to_lowercase());
+        self.functions_by_qualified.get(&key)?.first().cloned()
+    }
+
+    /// Resolve a Function-reference name in its lexical module. If neither the current module nor
+    /// the board root owns it, accept a board-wide match only when one concrete layer remains.
+    fn resolve_function_reference_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<(&FnKey, &PlannedFunction)>, String> {
+        let normalized = to_camel_case(name);
+        let matching = |module: Option<&str>| -> Result<_, String> {
+            let mut planned = self
+                .planned_functions
+                .iter()
+                .filter(|(key, _)| {
+                    key.module.as_deref() == module && to_camel_case(&key.name) == normalized
+                })
+                .collect::<Vec<_>>();
+            planned.sort_by_key(|(key, _)| key.seen_id());
+            let mut ambiguous_ids = self
+                .ambiguous_function_layers
+                .iter()
+                .filter(|(key, _)| {
+                    key.module.as_deref() == module && to_camel_case(&key.name) == normalized
+                })
+                .flat_map(|(_, ids)| ids.iter().cloned())
+                .collect::<Vec<_>>();
+            ambiguous_ids.sort();
+            ambiguous_ids.dedup();
+            if !ambiguous_ids.is_empty() || planned.len() > 1 {
+                let mut candidates = ambiguous_ids;
+                candidates.extend(
+                    planned
+                        .iter()
+                        .map(|(_, function)| function.entity.node_ref()),
+                );
+                candidates.sort();
+                candidates.dedup();
+                let key = FnKey::in_module(module, name);
+                return Err(self.ambiguous_function_diagnostic(
+                    &format!("function reference `{name}`"),
+                    &key,
+                    &candidates,
+                ));
+            }
+            Ok(planned.pop())
+        };
+
+        if let Some(local) = matching(self.current_module.as_deref())? {
+            return Ok(Some(local));
+        }
+        if self.current_module.is_some()
+            && let Some(global) = matching(None)?
+        {
+            return Ok(Some(global));
+        }
+
+        let mut planned = self
+            .planned_functions
+            .iter()
+            .filter(|(key, _)| to_camel_case(&key.name) == normalized)
+            .collect::<Vec<_>>();
+        planned.sort_by_key(|(key, _)| key.seen_id());
+        let mut candidates = self
+            .ambiguous_function_layers
+            .iter()
+            .filter(|(key, _)| to_camel_case(&key.name) == normalized)
+            .flat_map(|(_, ids)| ids.iter().cloned())
+            .collect::<Vec<_>>();
+        candidates.extend(
+            planned
+                .iter()
+                .map(|(_, function)| function.entity.node_ref()),
+        );
+        candidates.sort();
+        candidates.dedup();
+        match (planned.as_slice(), candidates.len()) {
+            ([only], 1) => Ok(Some(*only)),
+            (_, 0) => Ok(None),
+            _ => Err(format!(
+                "function reference `{name}` is ambiguous across {} callable Function layers ({}); use a unique Function or handler name",
+                candidates.len(),
+                quoted_list(&candidates)
+            )),
+        }
+    }
+
+    /// Resolve either a written name or the stable layer id / same-batch `$ref` already emitted
+    /// for that Function.
+    fn planned_function_by_reference(&self, reference: &str) -> Option<(&FnKey, &PlannedFunction)> {
+        self.planned_functions
+            .iter()
+            .find(|(_, planned)| planned.entity.node_ref() == reference)
+            .or_else(|| {
+                self.resolve_function_reference_name(reference)
+                    .ok()
+                    .flatten()
+            })
+    }
+
+    /// Function references are executable identities, so encode a resolved Function as its
+    /// stable layer id instead of a mutable name. Handler/event aliases remain names for the
+    /// apply planner to resolve to their concrete entry nodes.
+    fn resolved_synthetic_fn_ref_targets(&mut self, arg: &Arg) -> Vec<String> {
+        synthetic_fn_ref_targets(arg)
+            .into_iter()
+            .filter_map(|name| {
+                match self.resolve_function_reference_name(&name) {
+                    Ok(Some((_, planned))) => return Some(planned.entity.node_ref()),
+                    Err(diagnostic) => {
+                        self.result.diagnostics.push(diagnostic);
+                        return None;
+                    }
+                    Ok(None) => {}
+                }
+
+                let mut replacements = self
+                    .retired_function_names
+                    .iter()
+                    .filter(|(old, _)| to_camel_case(old) == to_camel_case(&name))
+                    .map(|(_, new)| new.clone())
+                    .collect::<Vec<_>>();
+                replacements.sort();
+                replacements.dedup();
+                if !replacements.is_empty() {
+                    self.result.diagnostics.push(format!(
+                        "function reference `{name}` uses a name retired by this revision; use {}",
+                        quoted_list(&replacements)
+                    ));
+                }
+                Some(name)
+            })
+            .collect()
+    }
+
+    /// Record the side effects of a resolution the planner committed to.
+    fn note_resolution(&mut self, resolved: &ResolvedCall) {
+        self.result
+            .corrections
+            .extend(resolved.corrections.iter().cloned());
+        self.use_hits.extend(resolved.used_uses.iter().copied());
+    }
+
+    /// Resolve a call to its target without side effects, in this order: a declared `function`
+    /// named by a flat call; an exact `node_type`; a `::` path; method dispatch on a receiver;
+    /// the bare name (flat spelling, opened members, renames).
+    fn resolve_call_target(&self, call: &Call) -> Result<ResolvedCall, String> {
+        if call.path.is_empty()
+            && call.receiver.is_none()
+            && let Some((key, ids)) = self.bare_function_ambiguity(&call.display)
+        {
+            return Err(self.ambiguous_function_diagnostic(
+                &format!("call `{}`", call.display),
+                &key,
+                &ids,
+            ));
+        }
+        if call.path.is_empty()
+            && call.receiver.is_none()
+            && let Some(key) = self.lookup_bare_function(&call.display)
+        {
+            return self.finish_function_call(call, &key, Vec::new(), Vec::new());
+        }
+        if !call.node_type.trim().is_empty() {
+            let meta = self
+                .catalog
+                .resolve_type(&call.node_type)
+                .map_err(|reason| {
+                    format!(
+                        "FlowScript call `{}` declares exact node_type `{}`: {reason}",
+                        call.display, call.node_type
+                    )
+                })?;
+            let receiver_pin = catalog_names(&meta).receiver;
+            return self.finish_catalog_call(
+                call,
+                meta,
+                receiver_pin.as_deref(),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+        if !call.path.is_empty() {
+            return self.resolve_path_call(call);
+        }
+        if call.receiver.is_some() {
+            return self.resolve_method_call(call);
+        }
+        self.resolve_bare_call(call)
+    }
+
+    /// The metadata a call's outputs are typed by (no diagnostics): the catalog node, or a
+    /// declared function's returns.
+    fn call_output_metadata(&self, call: &Call) -> Option<NodeMetadata> {
+        match self.resolve_call_target(call).ok()?.target {
+            CallTarget::Catalog(meta) => Some(meta),
+            CallTarget::Function(key) => self
+                .function_sigs
+                .get(&key)
+                .map(|sig| function_shape_metadata(&key.name, &sig.params, &sig.returns)),
+        }
+    }
+
+    fn finish_catalog_call(
+        &self,
+        call: &Call,
+        meta: NodeMetadata,
+        receiver_pin: Option<&str>,
+        corrections: Vec<String>,
+        used_uses: Vec<usize>,
+    ) -> Result<ResolvedCall, String> {
+        let folded = fold_call_arguments(call, &meta, receiver_pin)?;
+        Ok(ResolvedCall {
+            target: CallTarget::Catalog(meta),
+            call: folded,
+            corrections,
+            used_uses,
+        })
+    }
+
+    fn finish_function_call(
+        &self,
+        call: &Call,
+        key: &FnKey,
+        corrections: Vec<String>,
+        used_uses: Vec<usize>,
+    ) -> Result<ResolvedCall, String> {
+        let name = key.name.as_str();
+        let Some(sig) = self.function_sigs.get(key) else {
+            return Err(format!(
+                "cannot call function `{name}`: its declaration did not plan"
+            ));
+        };
+        let shape = function_shape_metadata(name, &sig.params, &sig.returns);
+        let receiver_pin = call
+            .receiver
+            .as_ref()
+            .and_then(|_| sig.params.first().map(|param| param.name.clone()));
+        let folded = fold_call_arguments(call, &shape, receiver_pin.as_deref())?;
+        Ok(ResolvedCall {
+            target: CallTarget::Function(key.clone()),
+            call: folded,
+            corrections,
+            used_uses,
+        })
+    }
+
+    fn finish_candidate(
+        &self,
+        call: &Call,
+        candidate: CallCandidate,
+        corrections: Vec<String>,
+    ) -> Result<ResolvedCall, String> {
+        let used = candidate.opened_by.into_iter().collect();
+        match candidate.kind {
+            CandidateKind::Catalog(indices) => {
+                let meta = self.catalog.one_match(&call_callee(call), &indices)?;
+                self.finish_catalog_call(
+                    call,
+                    meta,
+                    candidate.receiver_pin.as_deref(),
+                    corrections,
+                    used,
+                )
+            }
+            CandidateKind::Function(name) => {
+                self.finish_function_call(call, &name, corrections, used)
+            }
+        }
+    }
+
+    /// Expand a `::` path through the `use` scope: an imported namespace name (`use a::b`,
+    /// `use a::b as x`), the path itself, or a sub-namespace of a globbed one.
+    fn expand_path(&self, path: &[String]) -> Result<(String, Option<usize>), String> {
+        let Some(first) = path.first() else {
+            return Ok((String::new(), None));
+        };
+        if let Some((full, idx)) = self.use_scope.namespaces.get(&first.trim().to_lowercase()) {
+            let rest = path_key(&path[1..]);
+            let key = if rest.is_empty() {
+                full.clone()
+            } else {
+                format!("{full}::{rest}")
+            };
+            return Ok((key, Some(*idx)));
+        }
+        let raw = path_key(path);
+        if self.catalog.namespace_known(&raw) {
+            return Ok((raw, None));
+        }
+        let via_globs: Vec<(String, usize)> = self
+            .use_scope
+            .globs
+            .iter()
+            .filter_map(|(glob, idx)| {
+                let key = format!("{glob}::{raw}");
+                self.catalog.namespace_known(&key).then_some((key, *idx))
+            })
+            .collect();
+        match via_globs.as_slice() {
+            [] => Ok((raw, None)),
+            [(key, idx)] => Ok((key.clone(), Some(*idx))),
+            many => Err(format!(
+                "namespace `{}` is ambiguous: it could be {}; write the full path",
+                path.join("::"),
+                quoted_list(
+                    &many
+                        .iter()
+                        .map(|(key, _)| self.catalog.namespace_display(key))
+                        .collect::<Vec<_>>()
+                )
+            )),
+        }
+    }
+
+    /// A `::` path is EITHER a catalog namespace OR an absolute module path. Try both and fail
+    /// closed when it is both: one spelling must never silently mean two different things.
+    fn resolve_path_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        if let Some((key, ids)) = self.qualified_function_ambiguity(&call.path, &call.display) {
+            return Err(self.ambiguous_function_diagnostic(
+                &format!("call `{}`", call_callee(call)),
+                &key,
+                &ids,
+            ));
+        }
+        let module_target = self.lookup_qualified_function(&call.path, &call.display);
+        let catalog = self.resolve_catalog_path_call(call);
+        match (module_target, catalog) {
+            (Some(key), Ok(resolved)) => Err(format!(
+                "call `{}` is ambiguous: it names the function `{}` in module `{}` and the catalog node `{}`; rename the module or the function so one spelling means one thing",
+                call_callee(call),
+                key.name,
+                call.path.join("::"),
+                match &resolved.target {
+                    CallTarget::Catalog(meta) => {
+                        format!("{} (`{}`)", catalog_names(meta).qualified, meta.name)
+                    }
+                    CallTarget::Function(other) => other.name.clone(),
+                }
+            )),
+            (Some(key), Err(_)) => self.finish_function_call(call, &key, Vec::new(), Vec::new()),
+            (None, catalog) => catalog,
+        }
+    }
+
+    fn resolve_catalog_path_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        let (key, used) = self.expand_path(&call.path)?;
+        let matches = self.catalog.qualified_matches(&key, &call.display);
+        if matches.is_empty() {
+            return Err(self.path_miss_diagnostic(&call.path, &key, &call.display));
+        }
+        let meta = self.catalog.one_match(&call_callee(call), matches)?;
+        self.finish_catalog_call(call, meta, None, Vec::new(), used.into_iter().collect())
+    }
+
+    fn path_miss_diagnostic(&self, path: &[String], key: &str, display: &str) -> String {
+        let namespace = path.join("::");
+        let callee = format!("{namespace}::{display}");
+        if !self.catalog.namespace_known(key) {
+            let suggestions = self.catalog.closest_namespaces(key);
+            return if suggestions.is_empty() {
+                format!(
+                    "namespace `{namespace}` in call `{callee}` is unknown; call `get_declarations` to list the available namespaces"
+                )
+            } else {
+                format!(
+                    "namespace `{namespace}` in call `{callee}` is unknown; did you mean {}?",
+                    quoted_list(&suggestions)
+                )
+            };
+        }
+        let mut alternatives = self
+            .catalog
+            .qualified_names(self.catalog.alias_matches(display));
+        for qualified in self
+            .catalog
+            .qualified_names(self.catalog.flat_matches(display))
+        {
+            if !alternatives.contains(&qualified) {
+                alternatives.push(qualified);
+            }
+        }
+        if alternatives.is_empty() {
+            let members = self.catalog.namespace_member_aliases(key);
+            let display_namespace = self.catalog.namespace_display(key);
+            alternatives = closest_names(display, members.iter().map(String::as_str))
+                .into_iter()
+                .map(|member| format!("{display_namespace}::{member}"))
+                .collect();
+            if alternatives.is_empty() {
+                return format!(
+                    "`{callee}` is not a function; call `get_declarations` for the members of `{display_namespace}`"
+                );
+            }
+        }
+        format!(
+            "`{callee}` is not a function; did you mean {}?",
+            quoted_list(&alternatives)
+        )
+    }
+
+    /// `ns.member(...)` with an unbound root that names a namespace path: resolve it as the
+    /// `::` call and note the spelling.
+    fn resolve_lenient_path_call(
+        &self,
+        call: &Call,
+        receiver: &Expr,
+    ) -> Option<Result<ResolvedCall, String>> {
+        let chain = identifier_chain(receiver)?;
+        let root = chain.first()?;
+        if self.lookup_symbol(root).is_some() || self.lookup_bare_function(root).is_some() {
+            return None;
+        }
+        let (key, used) = self.expand_path(&chain).ok()?;
+        let matches = self.catalog.qualified_matches(&key, &call.display);
+        if matches.is_empty() {
+            return None;
+        }
+        let correction = format!(
+            "Resolved `{}.{}(...)` as the namespace call `{}::{}(...)`; write `::` between namespace segments (`.` is the member/method operator).",
+            chain.join("."),
+            call.display,
+            self.catalog.namespace_display(&key),
+            call.display
+        );
+        let mut flat = call.clone();
+        flat.receiver = None;
+        Some(
+            self.catalog
+                .one_match(&call_callee(call), matches)
+                .and_then(|meta| {
+                    self.finish_catalog_call(
+                        &flat,
+                        meta,
+                        None,
+                        vec![correction],
+                        used.into_iter().collect(),
+                    )
+                }),
+        )
+    }
+
+    fn resolve_method_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        let Some(receiver) = call.receiver.as_deref() else {
+            return self.resolve_bare_call(call);
+        };
+        if let Some(resolved) = self.resolve_lenient_path_call(call, receiver) {
+            return resolved;
+        }
+        let callee = call_callee(call);
+        let alias = call.display.as_str();
+        let hint = self.expr_receiver_hint(receiver);
+        let kind = self.receiver_kind(hint.as_ref());
+        if let Some((key, ids)) = self.method_function_ambiguity(alias, &kind) {
+            return Err(self.ambiguous_function_diagnostic(
+                &format!("method call `{callee}`"),
+                &key,
+                &ids,
+            ));
+        }
+
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for idx in self.catalog.method_matches(alias) {
+            let names = &self.catalog.names[*idx];
+            if !kind.accepts(names.class.as_ref()) {
+                continue;
+            }
+            let node_type = &self.catalog.entries[*idx].name;
+            match groups.iter_mut().find(|(known, _)| known == node_type) {
+                Some((_, indices)) => indices.push(*idx),
+                None => groups.push((node_type.clone(), vec![*idx])),
+            }
+        }
+        let catalog: Vec<CallCandidate> = groups
+            .into_iter()
+            .map(|(_, indices)| {
+                let names = &self.catalog.names[indices[0]];
+                CallCandidate {
+                    kind: CandidateKind::Catalog(indices.clone()),
+                    receiver_pin: names.receiver.clone(),
+                    qualified: names.qualified.clone(),
+                    node_type: self.catalog.entries[indices[0]].name.clone(),
+                    opened_by: self
+                        .use_scope
+                        .opens(&namespace_key(&names.namespace), &names.alias),
+                }
+            })
+            .collect();
+
+        let mut corrections = Vec::new();
+        let mut function_param_class = None;
+        let function_key = self.lookup_bare_function(alias);
+        let function = function_key
+            .as_ref()
+            .and_then(|key| self.function_sigs.get(key))
+            .and_then(|sig| sig.params.first())
+            .and_then(|first| {
+                let class = self.pin_class(first);
+                if kind.accepts(class.as_ref()) {
+                    return Some(CallCandidate {
+                        kind: CandidateKind::Function(function_key.clone()?),
+                        receiver_pin: Some(first.name.clone()),
+                        qualified: format!("function `{alias}`"),
+                        node_type: CALL_FUNCTION_NODE_TYPE.to_string(),
+                        opened_by: None,
+                    });
+                }
+                function_param_class = Some(match class {
+                    Some(ReceiverClass::Named(class)) => class,
+                    _ => "any".to_string(),
+                });
+                None
+            });
+        let mut candidates = match function {
+            Some(function) => {
+                if !catalog.is_empty() {
+                    corrections.push(format!(
+                        "`{callee}(...)` calls function `{alias}`, which shadows catalog method {}.",
+                        quoted_list(&candidate_labels(&catalog))
+                    ));
+                }
+                vec![function]
+            }
+            None => catalog,
+        };
+
+        if candidates.is_empty() {
+            return Err(self.no_method_diagnostic(call, &kind, function_param_class));
+        }
+        if candidates.len() > 1 {
+            let fitting: Vec<CallCandidate> = candidates
+                .iter()
+                .filter(|candidate| self.candidate_shape_fits(call, candidate))
+                .cloned()
+                .collect();
+            if fitting.is_empty() {
+                return Err(format!(
+                    "`{callee}(...)` matches {}, but none of them accepts the given arguments; write the qualified form with every argument named",
+                    quoted_list(&candidate_labels(&candidates))
+                ));
+            }
+            candidates = fitting;
+        }
+        if candidates.len() > 1 {
+            let opened: Vec<CallCandidate> = candidates
+                .iter()
+                .filter(|candidate| candidate.opened_by.is_some())
+                .cloned()
+                .collect();
+            if !opened.is_empty() && opened.len() < candidates.len() {
+                candidates = opened;
+            }
+        }
+        match candidates.as_slice() {
+            [single] => self.finish_candidate(call, single.clone(), corrections),
+            many => {
+                let first = &many[0];
+                let receiver_pin = first
+                    .receiver_pin
+                    .as_deref()
+                    .map(to_camel_case)
+                    .unwrap_or_else(|| "receiver".to_string());
+                Err(format!(
+                    "`{callee}(...)` is ambiguous between {}; write the qualified form, for example `{}({{ {receiver_pin}: {}, ... }})`",
+                    quoted_list(&candidate_labels(many)),
+                    first.qualified,
+                    describe_expr(receiver)
+                ))
+            }
+        }
+    }
+
+    fn candidate_shape_fits(&self, call: &Call, candidate: &CallCandidate) -> bool {
+        match &candidate.kind {
+            CandidateKind::Catalog(indices) => call_shape_fits(
+                call,
+                &self.catalog.entries[indices[0]],
+                candidate.receiver_pin.as_deref(),
+            ),
+            CandidateKind::Function(key) => self.function_sigs.get(key).is_some_and(|sig| {
+                call_shape_fits(
+                    call,
+                    &function_shape_metadata(&key.name, &sig.params, &sig.returns),
+                    candidate.receiver_pin.as_deref(),
+                )
+            }),
+        }
+    }
+
+    fn no_method_diagnostic(
+        &self,
+        call: &Call,
+        kind: &ReceiverKind,
+        function_param_class: Option<String>,
+    ) -> String {
+        let alias = call.display.as_str();
+        let mut classes: Vec<String> = Vec::new();
+        for idx in self.catalog.method_matches(alias) {
+            let class = match &self.catalog.names[*idx].class {
+                Some(ReceiverClass::Named(class)) => class.clone(),
+                Some(ReceiverClass::Universal) => "any".to_string(),
+                None => continue,
+            };
+            if !classes.contains(&class) {
+                classes.push(class);
+            }
+        }
+        if let Some(class) = function_param_class {
+            classes.push(format!("{class} (function `{alias}`)"));
+        }
+        let did_you_mean = {
+            let suggestions = closest_names(
+                alias,
+                self.catalog
+                    .names
+                    .iter()
+                    .filter(|names| names.class.is_some())
+                    .map(|names| names.alias.as_str())
+                    .chain(
+                        self.function_sigs
+                            .iter()
+                            .filter(|(_, sig)| !sig.params.is_empty())
+                            .map(|(key, _)| key.name.as_str()),
+                    ),
+            );
+            if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!("; did you mean {}?", quoted_list(&suggestions))
+            }
+        };
+        match kind.display() {
+            Some(class) if !classes.is_empty() => format!(
+                "no method `{alias}` on `{class}`; `{alias}` is a method of {}",
+                quoted_list(&classes)
+            ),
+            Some(class) => format!("no method `{alias}` on `{class}`{did_you_mean}"),
+            None => format!("`{alias}` is not a method of any type{did_you_mean}"),
+        }
+    }
+
+    fn resolve_bare_call(&self, call: &Call) -> Result<ResolvedCall, String> {
+        if let Some(key) = self.lookup_bare_function(&call.display) {
+            return self.finish_function_call(call, &key, Vec::new(), Vec::new());
+        }
+        let display = call.display.as_str();
+        let flat = self.catalog.flat_matches(display);
+
+        let mut opened: Vec<OpenedGroup> = Vec::new();
+        for (glob, idx) in &self.use_scope.globs {
+            group_opened(
+                &mut opened,
+                &self.catalog,
+                self.catalog.qualified_matches(glob, display),
+                *idx,
+            );
+        }
+        if let Some((namespace, member, idx)) = self.use_scope.members.get(&display.to_lowercase())
+        {
+            group_opened(
+                &mut opened,
+                &self.catalog,
+                self.catalog.qualified_matches(namespace, member),
+                *idx,
+            );
+        }
+
+        if !flat.is_empty() {
+            let meta = self.catalog.one_match(display, flat)?;
+            let foreign: Vec<String> = opened
+                .iter()
+                .filter(|group| group.node_type != meta.name)
+                .map(|group| self.catalog.names[group.indices[0]].qualified.clone())
+                .collect();
+            if !foreign.is_empty() {
+                return Err(format!(
+                    "call `{display}` is ambiguous: it is the flat name of `{}` and the member {} opened by `use`; write the qualified form",
+                    catalog_names(&meta).qualified,
+                    quoted_list(&foreign)
+                ));
+            }
+            let used = opened
+                .iter()
+                .flat_map(|group| group.uses.iter().copied())
+                .collect();
+            return self.finish_catalog_call(call, meta, None, Vec::new(), used);
+        }
+
+        if !opened.is_empty() {
+            let qualified = |groups: &[OpenedGroup]| {
+                disambiguated_labels(
+                    &groups
+                        .iter()
+                        .map(|group| {
+                            (
+                                self.catalog.names[group.indices[0]].qualified.clone(),
+                                group.node_type.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let mut candidates = opened;
+            if candidates.len() > 1 {
+                let fitting: Vec<OpenedGroup> = candidates
+                    .iter()
+                    .filter(|group| {
+                        call_shape_fits(call, &self.catalog.entries[group.indices[0]], None)
+                    })
+                    .cloned()
+                    .collect();
+                if fitting.is_empty() {
+                    return Err(format!(
+                        "call `{display}` matches {} (opened by `use`), but none of them accepts the given arguments; write the qualified form with every argument named",
+                        quoted_list(&qualified(&candidates))
+                    ));
+                }
+                candidates = fitting;
+            }
+            return match candidates.as_slice() {
+                [group] => {
+                    let meta = self.catalog.one_match(display, &group.indices)?;
+                    self.finish_catalog_call(call, meta, None, Vec::new(), group.uses.clone())
+                }
+                many => {
+                    let names = qualified(many);
+                    Err(format!(
+                        "call `{display}` is ambiguous between {} (opened by `use`); write the qualified form, for example `{}(...)`",
+                        quoted_list(&names),
+                        names[0]
+                    ))
+                }
+            };
+        }
+
+        match self.catalog.resolve_call(call) {
+            Ok(meta) => self.finish_catalog_call(call, meta, None, Vec::new(), Vec::new()),
+            Err(original) => {
+                // A bare name never crosses a module boundary. Say so with the spelling that
+                // does, instead of reporting the function as an unknown catalog node.
+                let foreign = self.foreign_function_spellings(display);
+                if !foreign.is_empty() {
+                    return Err(format!(
+                        "call `{display}` does not name a function of this module or a global one; `{display}` is declared in another module — write the qualified form {}",
+                        quoted_list(
+                            &foreign
+                                .iter()
+                                .map(|spelling| format!("{spelling}(...)"))
+                                .collect::<Vec<_>>()
+                        )
+                    ));
+                }
+                let indices = self.catalog.alias_matches(display);
+                let alternatives = self.catalog.qualified_names(indices);
+                if alternatives.is_empty() {
+                    return Err(original);
+                }
+                let namespace = self
+                    .catalog
+                    .names
+                    .get(indices[0])
+                    .map(|names| names.namespace.replace('.', "::"))
+                    .unwrap_or_default();
+                Err(format!(
+                    "FlowScript call `{display}` does not match a catalog declaration; did you mean {} (or add `use {namespace}::*` to call it bare)?",
+                    quoted_list(&alternatives)
+                ))
+            }
+        }
+    }
+
+    /// The class identity of a struct schema: its `title`, else the declared interface whose
+    /// generated schema it is (interface schemas carry no title of their own).
+    ///
+    /// A board stores repeated pin schemas by reference — the pin holds a hash key into
+    /// `Board::refs` rather than the JSON. Parsing that key as a schema yields no title, which made
+    /// every ref-encoded struct receiver dispatch as an UNTITLED struct: `session.info()` on an
+    /// `NodeOnnxSession` then accepted `ml::info` as readily as `onnx::info`, picked the wrong
+    /// overload, and reported the two schemas as incompatible on a wire nobody had touched.
+    fn struct_class(&self, schema: &str) -> Option<String> {
+        let schema = self
+            .existing
+            .refs
+            .get(schema)
+            .map(String::as_str)
+            .unwrap_or(schema);
+        flow_like_ast::schema_title(schema).or_else(|| {
+            flow_like_ast::interface_name_for_schema(&self.interfaces, schema).map(str::to_string)
+        })
+    }
+
+    /// The method class a pin contract (a parameter, variable or output) belongs to.
+    fn pin_class(&self, pin: &PinMetadata) -> Option<ReceiverClass> {
+        if pin.data_type == "Generic" && pin.value_type == "Normal" {
+            return Some(ReceiverClass::Universal);
+        }
+        let class = flow_like_ast::receiver_class(&pin.data_type, &pin.value_type)?;
+        if class == "struct"
+            && let Some(title) = pin
+                .schema
+                .as_deref()
+                .and_then(|schema| self.struct_class(schema))
+        {
+            return Some(ReceiverClass::Named(title));
+        }
+        Some(ReceiverClass::Named(class.to_string()))
+    }
+
+    fn receiver_kind(&self, hint: Option<&ReceiverHint>) -> ReceiverKind {
+        let Some(hint) = hint else {
+            return ReceiverKind::Unknown;
+        };
+        if hint.data_type == "Generic" && hint.value_type == "Normal" {
+            return ReceiverKind::Unknown;
+        }
+        match flow_like_ast::receiver_class(&hint.data_type, &hint.value_type) {
+            None => ReceiverKind::Unknown,
+            Some("struct") => ReceiverKind::Struct(
+                hint.schema
+                    .as_deref()
+                    .and_then(|schema| self.struct_class(schema)),
+            ),
+            Some(class) => ReceiverKind::Value(class.to_string()),
+        }
+    }
+
+    /// Type a receiver expression as a pin-like contract for method dispatch: literals,
+    /// declared variables/params, call outputs (with schema), and interface fields walked
+    /// through `a.b.c`. No diagnostics.
+    fn expr_receiver_hint(&self, expr: &Expr) -> Option<ReceiverHint> {
+        if let Some(value) = literal_expr_to_value(expr) {
+            return Some(literal_receiver_hint(&value));
+        }
+        match expr {
+            Expr::Ref(name) => self.symbol_receiver_hint(&self.lookup_symbol(name)?),
+            Expr::Call(call) => {
+                let meta = self.call_output_metadata(call)?;
+                let output = default_metadata_output_pin(&meta)?;
+                metadata_output_pin(&meta, &output).map(pin_receiver_hint)
+            }
+            Expr::Field { base, pin } => match base.as_ref() {
+                Expr::Call(call) => self
+                    .call_output_metadata(call)
+                    .and_then(|meta| metadata_output_pin(&meta, pin).map(pin_receiver_hint))
+                    .or_else(|| self.member_receiver_hint(base, pin)),
+                Expr::Ref(name) => {
+                    if let Some(SymbolValue::Source(source)) = self.lookup_symbol(name)
+                        && let Some(output) =
+                            self.resolve_entity_output_pin(&source.node, Some(pin))
+                    {
+                        return self
+                            .source_output_shape(&ValueSource {
+                                node: source.node,
+                                output_pin: Some(output),
+                            })
+                            .map(shape_receiver_hint);
+                    }
+                    self.member_receiver_hint(base, pin)
+                }
+                other => self.member_receiver_hint(other, pin),
+            },
+            Expr::Member { base, field } => self.member_receiver_hint(base, field),
+            Expr::Index { base, .. } => {
+                let base = self.expr_receiver_hint(base)?;
+                (base.value_type == "Array").then_some(ReceiverHint {
+                    data_type: base.data_type,
+                    value_type: "Normal".to_string(),
+                    schema: base.schema,
+                })
+            }
+            Expr::Ternary {
+                then, otherwise, ..
+            } => {
+                let then = self.expr_receiver_hint(then)?;
+                let otherwise = self.expr_receiver_hint(otherwise)?;
+                (then.data_type == otherwise.data_type && then.value_type == otherwise.value_type)
+                    .then_some(then)
+            }
+            Expr::Binary { .. } => self
+                .expr_data_type_hint(expr)
+                .map(|data_type| ReceiverHint {
+                    data_type,
+                    value_type: "Normal".to_string(),
+                    schema: None,
+                }),
+            Expr::Object(_) => Some(ReceiverHint {
+                data_type: "Struct".to_string(),
+                value_type: "Normal".to_string(),
+                schema: None,
+            }),
+            Expr::Array(_) => Some(ReceiverHint {
+                data_type: "Generic".to_string(),
+                value_type: "Array".to_string(),
+                schema: None,
+            }),
+            Expr::Template { .. } => Some(ReceiverHint {
+                data_type: "String".to_string(),
+                value_type: "Normal".to_string(),
+                schema: None,
+            }),
+            Expr::Literal(_) => None,
+        }
+    }
+
+    fn symbol_receiver_hint(&self, symbol: &SymbolValue) -> Option<ReceiverHint> {
+        match symbol {
+            SymbolValue::Source(source) => {
+                self.source_output_shape(source).map(shape_receiver_hint)
+            }
+            SymbolValue::Literal(value) => Some(literal_receiver_hint(value)),
+            SymbolValue::VariableRef { variable_id } => self
+                .variable_value_contract(variable_id, "value_ref")
+                .map(|contract| pin_receiver_hint(&contract)),
+        }
+    }
+
+    fn member_receiver_hint(&self, base: &Expr, field: &str) -> Option<ReceiverHint> {
+        let base = self.expr_receiver_hint(base)?;
+        if base.data_type != "Struct" || base.value_type != "Normal" {
+            return None;
+        }
+        schema_property_hint(base.schema.as_deref()?, field)
+    }
+
+    /// Whether an anchored call still names the live node it anchors to, in any accepted
+    /// spelling: exact `node_type`, flat name, friendly name, `::` path or member alias.
+    fn anchored_call_matches_node(&self, call: &Call, node: &Node, meta: &NodeMetadata) -> bool {
+        if !call.node_type.trim().is_empty() {
+            return call.node_type == node.name;
+        }
+        // The catalog's names for the type and the live node's own (possibly stale, derived)
+        // names are both the node: lower renders whichever the placed node carries.
+        let mut names = vec![catalog_names(meta)];
+        if let Some(catalog) = self.catalog.names_for_type(&node.name) {
+            names.push(catalog.clone());
+        }
+        if !call.path.is_empty() {
+            return self.expand_path(&call.path).ok().is_some_and(|(key, _)| {
+                names.iter().any(|names| {
+                    qualified_key(&key, &call.display)
+                        == qualified_key(&namespace_key(&names.namespace), &names.alias)
+                })
+            });
+        }
+        call_matches_node(call, node)
+            || names
+                .iter()
+                .any(|names| names.alias.eq_ignore_ascii_case(&call.display))
+    }
+
+    /// Camel-cased data outputs of an entity, for destructuring diagnostics.
+    fn entity_data_output_names(&self, entity: &NodeEntity) -> Vec<String> {
+        let mut names: Vec<String> = match entity {
+            NodeEntity::Existing(id) => find_board_node(self.existing, id)
+                .map(|node| {
+                    let mut pins: Vec<&Pin> = node
+                        .pins
+                        .values()
+                        .filter(|pin| pin.pin_type == PinType::Output && !is_exec_pin(pin))
+                        .collect();
+                    pins.sort_by_key(|pin| (pin.index, pin.name.clone()));
+                    pins.into_iter()
+                        .map(|pin| to_camel_case(&pin.name))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            NodeEntity::New { meta, .. } => meta
+                .outputs
+                .iter()
+                .filter(|pin| pin.data_type != "Execution")
+                .map(|pin| to_camel_case(&pin.name))
+                .collect(),
+            NodeEntity::Layer { pins, .. } => pins
+                .iter()
+                .filter(|pin| pin.pin_type == "Output" && pin.data_type != "Execution")
+                .map(|pin| to_camel_case(&pin.name))
+                .collect(),
+        };
+        names.dedup();
+        names
     }
 }
 
@@ -9303,6 +15702,7 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
                 Stmt::Loop { body, .. } => visit_block(body, anchors),
                 Stmt::Handler(event) => visit_event(event, anchors),
                 Stmt::Let { .. }
+                | Stmt::Destructure { .. }
                 | Stmt::Call { .. }
                 | Stmt::Assign { .. }
                 | Stmt::FieldAssign { .. }
@@ -9321,6 +15721,9 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
     for function in &ast.functions {
         visit_block(&function.body, &mut anchors);
     }
+    for block in &ast.detached {
+        visit_block(block, &mut anchors);
+    }
     anchors
 }
 
@@ -9329,9 +15732,9 @@ fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
 fn first_existing_exec_body_node<'a>(board: &'a Board, block: &Block) -> Option<&'a Node> {
     for statement in &block.stmts {
         let anchor = match statement {
-            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                anchor.as_deref().or(call.anchor.as_deref())
-            }
+            Stmt::Let { call, anchor, .. }
+            | Stmt::Destructure { call, anchor, .. }
+            | Stmt::Call { call, anchor } => anchor.as_deref().or(call.anchor.as_deref()),
             Stmt::Branch { call, anchor, .. } | Stmt::Loop { call, anchor, .. } => {
                 anchor.as_deref().or(call.anchor.as_deref())
             }
@@ -9368,6 +15771,11 @@ fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
             return true;
         }
     }
+    for block in &ast.detached {
+        if block_has_unanchored_calls(block) {
+            return true;
+        }
+    }
     false
 }
 
@@ -9379,6 +15787,7 @@ fn block_has_no_executable_statements(block: &Block) -> bool {
         Stmt::Comment(_) | Stmt::Local(_) => true,
         Stmt::LocalAlias { value, .. } => !expr_has_unanchored_calls(value),
         Stmt::Let { .. }
+        | Stmt::Destructure { .. }
         | Stmt::Call { .. }
         | Stmt::Assign { .. }
         | Stmt::FieldAssign { .. }
@@ -9395,9 +15804,9 @@ fn block_has_unanchored_calls(block: &Block) -> bool {
 
 fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            anchor.is_none() || call_args_have_unanchored_calls(call)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => anchor.is_none() || call_args_have_unanchored_calls(call),
         Stmt::Branch {
             call,
             condition,
@@ -9411,10 +15820,15 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
                 || arms.iter().any(|arm| block_has_unanchored_calls(&arm.body))
         }
         Stmt::Loop {
-            call, body, anchor, ..
+            call,
+            iterable,
+            body,
+            anchor,
+            ..
         } => {
             anchor.is_none()
                 || call_args_have_unanchored_calls(call)
+                || iterable.as_ref().is_some_and(expr_has_unanchored_calls)
                 || block_has_unanchored_calls(body)
         }
         Stmt::Assign { value, anchor, .. }
@@ -9429,9 +15843,16 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
 }
 
 fn call_args_have_unanchored_calls(call: &Call) -> bool {
-    call.args
+    call_operands(call).any(expr_has_unanchored_calls)
+}
+
+/// Every expression a call evaluates: the method receiver, positional values and named values.
+fn call_operands(call: &Call) -> impl Iterator<Item = &Expr> {
+    call.receiver
         .iter()
-        .any(|arg| expr_has_unanchored_calls(&arg.value))
+        .map(|receiver| receiver.as_ref())
+        .chain(call.positional.iter())
+        .chain(call.args.iter().map(|arg| &arg.value))
 }
 
 fn expr_has_unanchored_calls(expr: &Expr) -> bool {
@@ -9455,7 +15876,64 @@ fn expr_has_unanchored_calls(expr: &Expr) -> bool {
         Expr::Binary { lhs, rhs, .. } => {
             expr_has_unanchored_calls(lhs) || expr_has_unanchored_calls(rhs)
         }
+        Expr::Template { parts } => template_exprs(parts).any(expr_has_unanchored_calls),
         Expr::Ref(_) | Expr::Literal(_) => false,
+    }
+}
+
+/// The interpolated expressions of a template literal, in source order.
+fn template_exprs(parts: &[TemplatePart]) -> impl Iterator<Item = &Expr> {
+    parts.iter().filter_map(|part| match part {
+        TemplatePart::Expr(expr) => Some(expr),
+        TemplatePart::Text(_) => None,
+    })
+}
+
+/// A loop statement normalized to the call it plans and the names its body binds.
+struct LoopHead {
+    call: Call,
+    bind: Option<String>,
+    element: Option<String>,
+    index: Option<String>,
+}
+
+/// Loop node outputs a sugared `for…of` binds by name.
+const LOOP_VALUE_OUTPUT: &str = "value";
+const LOOP_INDEX_OUTPUT: &str = "index";
+
+/// Exec outputs that make a node a loop for the planner: one opening the body and one
+/// continuing the chain (the same names `plan_stmt` wires a `Stmt::Loop` through).
+const LOOP_BODY_EXEC_PINS: &[&str] = &["exec_out", "loop", "body"];
+const LOOP_DONE_EXEC_PINS: &[&str] = &["done", "exec_done"];
+
+/// Whether a node's pin shape is that of a loop, independent of its catalog name: an exec
+/// input plus body and done exec outputs. Lets package/custom loop nodes keep the explicit
+/// `for (const h of loopCall(…))` handle form.
+fn metadata_is_loop_shaped(meta: &NodeMetadata) -> bool {
+    let has_exec_output = |names: &[&str]| {
+        meta.outputs
+            .iter()
+            .any(|pin| pin.data_type == "Execution" && names.contains(&pin.name.as_str()))
+    };
+    metadata_exec_input_pin(meta).is_some()
+        && has_exec_output(LOOP_BODY_EXEC_PINS)
+        && has_exec_output(LOOP_DONE_EXEC_PINS)
+}
+
+/// Synthesize the loop-node [`Call`] a sugared loop head lowers to:
+/// `controlForEach({ array: head })` / `controlParForEach(…)` / `controlWhileLoop({ condition: head })`.
+fn sugared_loop_call(node_type: &str, head: Expr, anchor: Option<&str>) -> Call {
+    Call {
+        node_type: node_type.to_string(),
+        display: to_camel_case(node_type),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
+        args: vec![Arg {
+            name: sugared_loop_head_pin(node_type).to_string(),
+            value: head,
+        }],
+        anchor: anchor.map(str::to_string),
     }
 }
 
@@ -9474,6 +15952,9 @@ fn field_assign_struct_set_call(
     Call {
         node_type: String::new(),
         display: "structSet".to_string(),
+        path: Vec::new(),
+        receiver: None,
+        positional: Vec::new(),
         args: vec![
             Arg {
                 name: "structIn".to_string(),
@@ -9492,29 +15973,53 @@ fn field_assign_struct_set_call(
     }
 }
 
-/// Materialize the synthesized `struct_set` [`Call`] for every *anchored* `Stmt::FieldAssign` in
-/// `ast`, at any nesting depth. `FieldAssign` carries no `&Call`, so without this the config-edit
-/// (`new_calls`) and deletion (`visible`) collectors would never see a `base.path = value` write's
-/// underlying `struct_set` node. The returned owned calls back the `&Call` entries those maps key
-/// by anchor. Anchorless writes are fresh (handled by the structural planner) and are skipped.
-fn collect_anchored_field_assign_calls(ast: &BoardAst) -> Vec<Call> {
+/// Materialize the synthesized [`Call`] behind every *anchored* sugared statement in `ast`, at
+/// any nesting depth: the `struct_set` of a `base.path = value` write and the loop node of a
+/// `for (const item of xs)` / `while (cond)` head. Neither carries a `&Call` with arguments, so
+/// without this the config-edit (`new_calls`) and deletion (`visible`) collectors would never
+/// diff their literal inputs. The returned owned calls back the `&Call` entries those maps key by
+/// anchor. Anchorless statements are fresh (handled by the structural planner) and are skipped.
+fn collect_anchored_synthesized_calls(ast: &BoardAst, scope: Option<&HashSet<&str>>) -> Vec<Call> {
     let mut out = Vec::new();
     for ev in &ast.events {
-        collect_field_assign_calls_in_block(&ev.body, &mut out);
+        if !section_in_scope(scope, ev.anchor.as_deref()) {
+            continue;
+        }
+        collect_synthesized_calls_in_block(&ev.body, &mut out);
     }
     for f in &ast.functions {
-        collect_field_assign_calls_in_block(&f.body, &mut out);
+        if !section_in_scope(scope, f.anchor.as_deref()) {
+            continue;
+        }
+        collect_synthesized_calls_in_block(&f.body, &mut out);
+    }
+    for block in &ast.detached {
+        if !section_in_scope(scope, block.root_anchor()) {
+            continue;
+        }
+        collect_synthesized_calls_in_block(block, &mut out);
     }
     out
 }
 
-fn collect_field_assign_calls_in_block(block: &Block, out: &mut Vec<Call>) {
-    for stmt in &block.stmts {
-        collect_field_assign_calls_in_stmt(stmt, out);
+/// Whether a top-level event/function/detached section belongs to the reconcile scope. `None`
+/// (whole-document semantics) admits every section; an explicit scope admits only sections whose
+/// anchor is listed, so an anchor-less section can never be mistaken for in-scope content and
+/// deleted.
+fn section_in_scope(scope: Option<&HashSet<&str>>, anchor: Option<&str>) -> bool {
+    match scope {
+        None => true,
+        Some(scope) => anchor.is_some_and(|anchor| scope.contains(anchor)),
     }
 }
 
-fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
+fn collect_synthesized_calls_in_block(block: &Block, out: &mut Vec<Call>) {
+    for stmt in &block.stmts {
+        collect_synthesized_calls_in_stmt(stmt, out);
+    }
+}
+
+fn collect_synthesized_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
     match stmt {
         Stmt::FieldAssign {
             base,
@@ -9529,11 +16034,24 @@ fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
         )),
         Stmt::Branch { arms, .. } => {
             for arm in arms {
-                collect_field_assign_calls_in_block(&arm.body, out);
+                collect_synthesized_calls_in_block(&arm.body, out);
             }
         }
-        Stmt::Loop { body, .. } => collect_field_assign_calls_in_block(body, out),
-        Stmt::Handler(event) => collect_field_assign_calls_in_block(&event.body, out),
+        Stmt::Loop {
+            keyword,
+            iterable,
+            body,
+            anchor,
+            ..
+        } => {
+            if let (Some(iterable), Some(anchor)) = (iterable, anchor)
+                && let Some(node_type) = sugared_loop_node_type(keyword)
+            {
+                out.push(sugared_loop_call(node_type, iterable.clone(), Some(anchor)));
+            }
+            collect_synthesized_calls_in_block(body, out);
+        }
+        Stmt::Handler(event) => collect_synthesized_calls_in_block(&event.body, out),
         _ => {}
     }
 }
@@ -9546,6 +16064,9 @@ fn collect_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
     for f in &ast.functions {
         collect_block(&f.body, out);
     }
+    for block in &ast.detached {
+        collect_block(block, out);
+    }
 }
 
 fn collect_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
@@ -9557,12 +16078,28 @@ fn collect_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
 /// Walk only statement-owned calls. This is intentionally shallower than [`collect_calls`]:
 /// inlined helper expressions are render conveniences, not standalone text-visible statements,
 /// and must not be removed just because their anchors are absent from edited FlowScript.
-fn collect_statement_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
+fn collect_statement_calls<'a>(
+    ast: &'a BoardAst,
+    scope: Option<&HashSet<&str>>,
+    out: &mut HashMap<String, &'a Call>,
+) {
     for ev in &ast.events {
+        if !section_in_scope(scope, ev.anchor.as_deref()) {
+            continue;
+        }
         collect_statement_block(&ev.body, out);
     }
     for f in &ast.functions {
+        if !section_in_scope(scope, f.anchor.as_deref()) {
+            continue;
+        }
         collect_statement_block(&f.body, out);
+    }
+    for block in &ast.detached {
+        if !section_in_scope(scope, block.root_anchor()) {
+            continue;
+        }
+        collect_statement_block(block, out);
     }
 }
 
@@ -9574,9 +16111,9 @@ fn collect_statement_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a C
 
 fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            collect_call_anchor_only(call, anchor.as_deref(), out)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => collect_call_anchor_only(call, anchor.as_deref(), out),
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
@@ -9630,9 +16167,9 @@ fn collect_call_anchor_only<'a>(
 
 fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
     match stmt {
-        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-            collect_call_with_anchor(call, anchor.as_deref(), out)
-        }
+        Stmt::Let { call, anchor, .. }
+        | Stmt::Destructure { call, anchor, .. }
+        | Stmt::Call { call, anchor } => collect_call_with_anchor(call, anchor.as_deref(), out),
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
@@ -9646,9 +16183,16 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             }
         }
         Stmt::Loop {
-            call, body, anchor, ..
+            call,
+            iterable,
+            body,
+            anchor,
+            ..
         } => {
             collect_call_with_anchor(call, anchor.as_deref(), out);
+            if let Some(iterable) = iterable {
+                collect_expr(iterable, out);
+            }
             collect_block(body, out);
         }
         Stmt::Assign { value, anchor, .. } => {
@@ -9693,8 +16237,8 @@ fn collect_call_with_anchor<'a>(
     if let Some(anchor) = call.anchor.as_deref().or(fallback_anchor) {
         out.insert(anchor.to_string(), call);
     }
-    for arg in &call.args {
-        collect_expr(&arg.value, out);
+    for operand in call_operands(call) {
+        collect_expr(operand, out);
     }
 }
 
@@ -9728,6 +16272,11 @@ fn collect_expr<'a>(expr: &'a Expr, out: &mut HashMap<String, &'a Call>) {
         Expr::Binary { lhs, rhs, .. } => {
             collect_expr(lhs, out);
             collect_expr(rhs, out);
+        }
+        Expr::Template { parts } => {
+            for part in template_exprs(parts) {
+                collect_expr(part, out);
+            }
         }
         Expr::Ref(_) | Expr::Literal(_) => {}
     }
@@ -9765,7 +16314,7 @@ fn assigned_call_expr(expr: &Expr) -> Option<(&Call, Option<&str>)> {
 }
 
 fn is_placeholder_call(call: &Call) -> bool {
-    call.node_type.is_empty() && call.display.is_empty() && call.args.is_empty()
+    call.is_placeholder()
 }
 
 fn promoted_local_aliases(block: &Block) -> HashSet<String> {
@@ -9880,16 +16429,39 @@ pub fn reconcile_text_with_catalog(
     text: &str,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
-    match flow_like_ast::parse(text) {
-        Ok(ast) => reconcile_with_catalog(existing, &ast, catalog),
-        Err(err) => ReconcileResult {
-            commands: Vec::new(),
-            corrections: Vec::new(),
-            diagnostics: vec![format!(
-                "FlowScript parse error at line {}, col {}: {}",
-                err.line, err.col, err.message
-            )],
+    reconcile_text_with_catalog_scoped(existing, text, catalog, None)
+}
+
+/// Like [`reconcile_text_with_catalog`] but with an editing scope (see
+/// [`reconcile_with_catalog_scoped`]).
+pub fn reconcile_text_with_catalog_scoped(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
+    reconcile_text_with_catalog_opts(
+        existing,
+        text,
+        catalog,
+        &ReconcileOptions {
+            scope_anchors,
+            ..ReconcileOptions::default()
         },
+    )
+}
+
+/// Parse FlowScript text and reconcile it with catalog metadata under explicit document options
+/// (scope, mode, and which virtual file the text is — see [`ReconcileOptions`]).
+pub fn reconcile_text_with_catalog_opts(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    opts: &ReconcileOptions,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_inner(existing, &ast, Some(catalog), None, opts),
+        Err(err) => parse_error_result(&err),
     }
 }
 
@@ -9903,14 +16475,52 @@ pub fn reconcile_text_with_catalog_enriched(
 ) -> ReconcileResult {
     match flow_like_ast::parse(text) {
         Ok(ast) => reconcile_with_catalog_enriched(existing, &ast, catalog, enricher),
-        Err(err) => ReconcileResult {
-            commands: Vec::new(),
-            corrections: Vec::new(),
-            diagnostics: vec![format!(
-                "FlowScript parse error at line {}, col {}: {}",
-                err.line, err.col, err.message
-            )],
+        Err(err) => parse_error_result(&err),
+    }
+}
+
+/// Enriched text reconcile with an editing scope (see [`reconcile_with_catalog_scoped`]).
+pub fn reconcile_text_with_catalog_enriched_scoped(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+    scope_anchors: Option<&[String]>,
+) -> ReconcileResult {
+    reconcile_text_with_catalog_enriched_opts(
+        existing,
+        text,
+        catalog,
+        enricher,
+        &ReconcileOptions {
+            scope_anchors,
+            ..ReconcileOptions::default()
         },
+    )
+}
+
+/// Enriched text reconcile under explicit document options (see [`ReconcileOptions`]).
+pub fn reconcile_text_with_catalog_enriched_opts(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+    opts: &ReconcileOptions,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_inner(existing, &ast, Some(catalog), Some(enricher), opts),
+        Err(err) => parse_error_result(&err),
+    }
+}
+
+fn parse_error_result(err: &flow_like_ast::ParseError) -> ReconcileResult {
+    ReconcileResult {
+        commands: Vec::new(),
+        corrections: Vec::new(),
+        diagnostics: vec![format!(
+            "FlowScript parse error at line {}, col {}: {}",
+            err.line, err.col, err.message
+        )],
     }
 }
 
@@ -10016,6 +16626,69 @@ mod tests {
     }
 
     #[test]
+    fn an_open_object_schema_never_constrains_an_enforcing_peer() {
+        // `Pin::set_open_schema()` declares "the shape is open", not a contract. On a pin whose
+        // name is outside the struct_in/struct_out/struct hatch — `rows` from a DataFusion query
+        // into a typed `body` — it must compare as an absent schema, the way it did before those
+        // pins carried any schema at all.
+        assert!(schema_constraints_are_compatible(
+            "body",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"RequestBody\"}"),
+            true,
+            "rows",
+            "Struct",
+            "Normal",
+            Some(crate::flow::pin::OPEN_OBJECT_SCHEMA),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn an_open_object_schema_is_recognized_through_a_ref() {
+        // Boards persist schemas as ref hashes, so the marker usually arrives indirected.
+        let mut refs = HashMap::new();
+        refs.insert(
+            "hash1".to_string(),
+            crate::flow::pin::OPEN_OBJECT_SCHEMA.to_string(),
+        );
+        assert!(schema_constraints_are_compatible(
+            "body",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"RequestBody\"}"),
+            true,
+            "rows",
+            "Struct",
+            "Normal",
+            Some("hash1"),
+            false,
+            &refs,
+        ));
+    }
+
+    #[test]
+    fn an_object_schema_with_properties_is_not_the_open_marker() {
+        // Only the bare two-key marker is a wildcard. An `additionalProperties` object that also
+        // declares fields is a real contract and must still be enforced.
+        assert!(!schema_constraints_are_compatible(
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            true,
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"type\":\"object\",\"additionalProperties\":true,\"properties\":{\"x\":{}}}"),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
     fn non_canonical_forward_pins_are_still_never_guessed() {
         // Custom/package nodes keep the "do not guess" stance: only the catalog's own `exec_out`
         // convention is recognized, everything else needs an explicit policy or explicit arms.
@@ -10091,6 +16764,7 @@ mod tests {
             board_dir: Path::from("/test"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 
@@ -10404,6 +17078,18 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+
+    /// Give a hand-built catalog the categories of the board's placed nodes, as a real catalog
+    /// (the source the nodes were placed from) carries them: lowered text names nodes by the
+    /// namespace derived from that category.
+    fn with_board_categories(mut catalog: Vec<NodeMetadata>, board: &Board) -> Vec<NodeMetadata> {
+        for meta in &mut catalog {
+            if let Some(node) = board.nodes.values().find(|node| node.name == meta.name) {
+                meta.category = Some(node.category.clone());
+            }
+        }
+        catalog
     }
 
     #[test]
@@ -10845,6 +17531,560 @@ mod tests {
         ));
     }
 
+    fn add_function_local_variable(
+        board: &mut Board,
+        layer_id: &str,
+        function_name: &str,
+        variable_id: &str,
+        variable_name: &str,
+    ) {
+        board.layers.entry(layer_id.to_string()).or_insert_with(|| {
+            Layer::new(
+                layer_id.to_string(),
+                function_name.to_string(),
+                LayerType::Function,
+            )
+        });
+        let mut variable = Variable::new(variable_name, VariableType::Integer, ValueType::Normal);
+        variable.id = variable_id.to_string();
+        board
+            .layers
+            .get_mut(layer_id)
+            .expect("Function layer")
+            .variables
+            .insert(variable.id.clone(), variable);
+    }
+
+    fn integer_variable_read_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "sink",
+                "Sink",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("value", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn top_level_variable_cannot_claim_a_function_local_anchor() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "worker", "var-local", "count");
+        let ast = flow_like_ast::parse(
+            "const count: int = 0   //@v:var-local\n\neventsSimple() {\n    sink({ value: count })\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(
+            &board,
+            &ast,
+            &integer_variable_read_catalog(),
+            ReconcileMode::Additive,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("top-level variable `count` keeps anchor `var-local`")
+                && diagnostic.contains("Function layer `worker`")
+        }));
+        assert!(!result.corrections.iter().any(|correction| {
+            correction.contains("var-local") && correction.contains("Ignored unavailable")
+        }));
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::CreateVariable {
+                    variable_id: Some(variable_id),
+                    ..
+                } if variable_id == "var-local"
+            ) || matches!(
+                command,
+                BoardCommand::UpdateVariable { variable_id, .. }
+                    if variable_id == "var-local"
+            )
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if variable_id == "var-local"
+        )));
+    }
+
+    #[test]
+    fn live_wrong_kind_variable_anchor_is_not_treated_as_foreign() {
+        let mut board = empty_board();
+        let mut node = Node::new("log", "Log", "", "debug");
+        node.id = "occupied-id".to_string();
+        board.nodes.insert(node.id.clone(), node);
+        let ast = flow_like_ast::parse(
+            "const count: int = 0   //@v:occupied-id\n\neventsSimple() {\n    sink({ value: count })\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(
+            &board,
+            &ast,
+            &integer_variable_read_catalog(),
+            ReconcileMode::Additive,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("top-level variable `count` keeps anchor `occupied-id`")
+                && diagnostic.contains("node `occupied-id` of type `log`")
+                && diagnostic.contains("must identify a Board-global variable")
+        }));
+        assert!(!result.corrections.iter().any(|correction| {
+            correction.contains("occupied-id") && correction.contains("Ignored unavailable")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateVariable { .. }))
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if variable_id == "occupied-id"
+        )));
+    }
+
+    #[test]
+    fn function_local_variable_anchor_cannot_cross_function_scope() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "first", "var-a", "count");
+        board.layers.insert(
+            "fn-b".to_string(),
+            Layer::new(
+                "fn-b".to_string(),
+                "second".to_string(),
+                LayerType::Function,
+            ),
+        );
+        let ast = flow_like_ast::parse(
+            "function second() {   //@l:fn-b\n    let count: int = 0   //@v:var-a\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("local variable `count` keeps anchor `var-a`")
+                && diagnostic.contains("Function layer `first`")
+                && diagnostic.contains("Function layer `second`")
+                && diagnostic.contains("cannot cross scopes")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateVariable { .. }))
+        );
+    }
+
+    #[test]
+    fn anchored_variable_assignment_cannot_cross_function_scope() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "first", "var-a", "count");
+        add_function_local_variable(&mut board, "fn-b", "second", "var-b", "count");
+
+        let mut boundary = Node::new("boundary", "Boundary", "", "test");
+        let exec_in = boundary
+            .add_input_pin("exec_in", "Exec In", "", VariableType::Execution)
+            .clone();
+        let exec_out = boundary
+            .add_output_pin("exec_out", "Exec Out", "", VariableType::Execution)
+            .clone();
+        let second = board.layers.get_mut("fn-b").expect("second Function");
+        second.pins.insert(exec_in.id.clone(), exec_in);
+        second.pins.insert(exec_out.id.clone(), exec_out);
+
+        let mut setter = Node::new("variable_set", "Set Variable", "", "variables");
+        setter.id = "set-a".to_string();
+        setter.layer = Some("fn-a".to_string());
+        setter.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        setter.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        setter.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        setter.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        setter.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        board.nodes.insert(setter.id.clone(), setter);
+
+        let ast = flow_like_ast::parse(
+            "function second() {   //@l:fn-b\n    let count: int = 0   //@v:var-b\n    count = 1   //@n:set-a\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("assignment to variable `count` keeps anchor `set-a`")
+                    && diagnostic.contains("Function layer `first`")
+                    && diagnostic.contains("Function layer `second`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn unanchored_function_can_reuse_its_own_anchored_local() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-worker", "worker", "var-local", "count");
+        let ast = flow_like_ast::parse(
+            "function worker() {\n    let count: int = 0   //@v:var-local\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateVariable { .. }))
+        );
+    }
+
+    #[test]
+    fn duplicate_function_local_names_require_an_anchor() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-worker", "worker", "var-a", "count");
+        add_function_local_variable(&mut board, "fn-worker", "worker", "var-b", "count");
+        let ast = flow_like_ast::parse(
+            "function worker() {   //@l:fn-worker\n    let count: int = 0\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("unanchored local variable `count` matches 2 live variables")
+                && diagnostic.contains("var-a")
+                && diagnostic.contains("var-b")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateVariable { .. }))
+        );
+    }
+
+    #[test]
+    fn top_level_variable_never_reuses_an_unrelated_function_local() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-worker", "worker", "var_count", "count");
+        let catalog = integer_variable_read_catalog();
+        let ast = flow_like_ast::parse(
+            "const count: int = 0\n\neventsSimple() {\n    sink({ value: count })\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &catalog, ReconcileMode::Additive);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateVariable {
+                variable_id: Some(variable_id),
+                name,
+                target_layer: None,
+                ..
+            } if variable_id == "var_count_2" && name == "count"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                pin_id,
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if pin_id == "var_ref" && variable_id == "var_count_2"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                pin_id,
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if pin_id == "var_ref" && variable_id == "var_count"
+        )));
+    }
+
+    #[test]
+    fn root_variable_ref_name_does_not_guess_between_function_locals() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "first", "var-a", "count");
+        add_function_local_variable(&mut board, "fn-b", "second", "var-b", "count");
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Integer", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    variableGet({ varRef: \"count\" })\n}\n",
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("variable reference `count` does not resolve uniquely")
+                && diagnostic.contains("var-a")
+                && diagnostic.contains("var-b")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                pin_id,
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if pin_id == "var_ref" && matches!(variable_id.as_str(), "var-a" | "var-b")
+        )));
+    }
+
+    #[test]
+    fn catalogless_unknown_variable_ref_does_not_persist_a_raw_name() {
+        let mut board = empty_board();
+        let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+        reader.id = "reader".to_string();
+        reader
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(b"\"old-variable\"".to_vec());
+        reader.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        board.nodes.insert(reader.id.clone(), reader);
+
+        let ast = flow_like_ast::parse(
+            "detached {\n    variableGet({ varRef: \"missing\" })   //@n:reader\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("variable reference `missing` does not resolve")
+                    && diagnostic.contains("no pin value was changed")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                node_id,
+                pin_id,
+                ..
+            } if node_id == "reader" && pin_id == "var_ref"
+        )));
+    }
+
+    #[test]
+    fn same_revision_function_local_owns_the_final_variable_ref_update() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-worker".to_string(),
+            Layer::new(
+                "fn-worker".to_string(),
+                "worker".to_string(),
+                LayerType::Function,
+            ),
+        );
+        let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+        reader.id = "reader".to_string();
+        reader.layer = Some("fn-worker".to_string());
+        reader
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(b"\"old-variable\"".to_vec());
+        reader.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        board.nodes.insert(reader.id.clone(), reader);
+        let catalog = vec![catalog_meta(
+            "variable_get",
+            "Get Variable",
+            vec![pin_meta("var_ref", "String", PinType::Input)],
+            vec![pin_meta("value_ref", "Generic", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function worker() {   //@l:fn-worker
+    let count: int = 0
+    variableGet({ varRef: "count" })   //@n:reader
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let created_variable = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateVariable {
+                    variable_id: Some(variable_id),
+                    name,
+                    target_layer: Some(target_layer),
+                    ..
+                } if name == "count" && target_layer == "fn-worker" => Some(variable_id.clone()),
+                _ => None,
+            })
+            .expect("new Function-local variable");
+        let updates = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value: flow_like_types::Value::String(value),
+                    ..
+                } if node_id == "reader" && pin_id == "var_ref" => Some(value.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(updates, vec![created_variable], "{:?}", result.commands);
+    }
+
+    #[test]
+    fn unavailable_variable_anchor_is_treated_as_unanchored() {
+        let mut ast = flow_like_ast::parse("const apiKey: string = \"secret\"\n").expect("parse");
+        ast.variables[0].anchor = Some("variable-from-another-board".to_string());
+
+        let result = reconcile(&empty_board(), &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("variable-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateVariable { name, .. } if name == "apiKey"
+        )));
+    }
+
+    /// Two live variables sharing a name used to render two identical `const apiKey` declarations,
+    /// which reconcile could not tell apart: it refused to guess and derived nothing, so the board
+    /// silently stopped accepting edits. Lowering now allocates declaration names from one set per
+    /// scope, so the second renders as `apiKey2` and each name denotes exactly one variable.
+    ///
+    /// The "matches N live variables" guard below it still stands for an AST that did not come from
+    /// lowering (a model-authored or hand-edited document can still carry duplicates); what changed
+    /// is that the product's own rendering no longer produces that input.
+    #[test]
+    fn duplicate_live_variable_names_are_disambiguated_by_lowering() {
+        let mut board = empty_board();
+        for id in ["var-a", "var-b"] {
+            let mut variable = Variable::new("apiKey", VariableType::String, ValueType::Normal);
+            variable.id = id.to_string();
+            board.variables.insert(variable.id.clone(), variable);
+        }
+
+        let lowered = crate::flow::ast::lower_to_ast(&board);
+        let mut names: Vec<&str> = lowered
+            .variables
+            .iter()
+            .map(|var| var.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["apiKey", "apiKey2"],
+            "both variables must be reachable by a distinct name"
+        );
+
+        // With distinct names an unanchored declaration is no longer ambiguous, so it resolves
+        // instead of freezing the document.
+        let mut ast = flow_like_ast::parse("const apiKey: string = \"secret\"\n").expect("parse");
+        ast.variables[0].anchor = Some("variable-from-another-board".to_string());
+        for mode in [ReconcileMode::Replace, ReconcileMode::Additive] {
+            let result = reconcile_with_catalog_mode(&board, &ast, &[], mode);
+            assert!(
+                !result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| { diagnostic.contains("matches 2 live variables") }),
+                "{mode:?}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    /// The ambiguity guard itself, on an AST lowering can no longer produce but a model or a
+    /// hand-edit still can.
+    ///
+    /// The declaration is unanchored because that is the state the guard sees: `reconcile_inner`
+    /// runs `normalize_unavailable_anchors` first, which clears an anchor naming nothing on the
+    /// board (a copy-paste from another board) and leaves the name as the only thing to match on.
+    #[test]
+    fn unanchored_variable_matching_duplicate_declarations_is_refused() {
+        let mut existing = flow_like_ast::BoardAst::default();
+        for id in ["var-a", "var-b"] {
+            existing.variables.push(flow_like_ast::VarDecl {
+                name: "apiKey".to_string(),
+                ty: flow_like_ast::TypeRef::new("string", flow_like_ast::Container::Normal),
+                default: None,
+                exposed: false,
+                secret: false,
+                editable: true,
+                runtime_configured: false,
+                category: None,
+                description: None,
+                schema: None,
+                anchor: Some(id.to_string()),
+            });
+        }
+        let mut new = flow_like_ast::parse("const apiKey: string = \"secret\"\n").expect("parse");
+        new.variables[0].anchor = None;
+
+        let result = reconcile_variables(
+            &empty_board(),
+            &existing,
+            &new,
+            ReconcileMode::Replace,
+            true,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("unanchored variable `apiKey` matches 2 live variables")
+                    && diagnostic.contains("var-a")
+                    && diagnostic.contains("var-b")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
     #[test]
     fn new_secret_variable_accepts_empty_placeholder_without_storing_it() {
         let ast = flow_like_ast::parse("@secret\nconst apiKey: string = \"\"\n").expect("parse");
@@ -11210,7 +18450,7 @@ eventTimer event() {   //@n:event_b
         )
         .expect("parse");
 
-        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        let diagnostics = duplicate_ast_declaration_diagnostics(&FlatDocument::new(&ast, None));
         assert!(
             diagnostics.is_empty(),
             "persisted entries may share a friendly alias when no new callable must resolve it: {diagnostics:?}"
@@ -11262,7 +18502,7 @@ eventsWidgetAction deleteAdventureCard(widgetInstanceId: string) {
         )
         .expect("parse");
 
-        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        let diagnostics = duplicate_ast_declaration_diagnostics(&FlatDocument::new(&ast, None));
         assert!(
             diagnostics.is_empty(),
             "unique callable names must remain valid: {diagnostics:?}"
@@ -11323,6 +18563,26 @@ function helper(ticket: string, ticket: string): (ticket: string) {
     }
 
     #[test]
+    fn normalized_function_declaration_collisions_are_rejected_per_module() {
+        let ast = flow_like_ast::parse(
+            r#"function foo_bar() {
+}
+
+function fooBar() {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+        assert!(result.commands.is_empty());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function declaration names")
+                && diagnostic.contains("normalized boundary name `fooBar`")
+        }));
+    }
+
+    #[test]
     fn anchored_call_display_cannot_silently_reuse_a_different_node_type() {
         let mut board = empty_board();
         let mut event = Node::new("events_simple", "Simple Event", "", "events");
@@ -11345,6 +18605,112 @@ function helper(ticket: string, ticket: string): (ticket: string) {
         assert!(result.diagnostics.iter().any(|diagnostic| {
             diagnostic.contains("call `mailImapConnect` keeps anchor `log`")
         }));
+    }
+
+    #[test]
+    fn catalogless_anchored_call_cannot_cross_function_scope() {
+        let mut board = empty_board();
+        for (id, name) in [("fn-a", "first"), ("fn-b", "second")] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(id.to_string(), name.to_string(), LayerType::Function),
+            );
+        }
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log-a".to_string();
+        log.layer = Some("fn-a".to_string());
+        log.add_input_pin("text", "Text", "", VariableType::String)
+            .default_value = Some(b"\"old\"".to_vec());
+        board.nodes.insert(log.id.clone(), log);
+
+        let ast = flow_like_ast::parse(
+            r#"function second() {   //@l:fn-b
+    log({ text: "new" })   //@n:log-a
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("call `log` keeps anchor `log-a`")
+                    && diagnostic.contains("Function layer `first`")
+                    && diagnostic.contains("Function layer `second`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, .. } if node_id == "log-a"
+        )));
+    }
+
+    #[test]
+    fn macro_container_is_transparent_to_function_anchor_and_variable_scope() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "first", "var-a", "count");
+        add_function_local_variable(&mut board, "fn-b", "second", "var-b", "count");
+        let mut macro_layer = Layer::new(
+            "macro-a".to_string(),
+            "details".to_string(),
+            LayerType::Macro,
+        );
+        macro_layer.parent_id = Some("fn-a".to_string());
+        board.layers.insert(macro_layer.id.clone(), macro_layer);
+
+        let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+        reader.id = "reader-a".to_string();
+        reader.layer = Some("macro-a".to_string());
+        reader
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(b"\"var-a\"".to_vec());
+        reader.add_output_pin("value_ref", "Value", "", VariableType::Integer);
+        board.nodes.insert(reader.id.clone(), reader);
+        let catalog = vec![catalog_meta(
+            "variable_get",
+            "Get Variable",
+            vec![pin_meta("var_ref", "String", PinType::Input)],
+            vec![pin_meta("value_ref", "Integer", PinType::Output)],
+        )];
+
+        let unchanged = reconcile_text_with_catalog(
+            &board,
+            r#"function first() {   //@l:fn-a
+    let count: int = 0   //@v:var-a
+    variableGet({ varRef: "count" })   //@n:reader-a
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            unchanged.diagnostics.is_empty(),
+            "{:?}",
+            unchanged.diagnostics
+        );
+        assert!(unchanged.commands.is_empty(), "{:?}", unchanged.commands);
+
+        let copied = reconcile_text_with_catalog(
+            &board,
+            r#"function second() {   //@l:fn-b
+    let count: int = 0   //@v:var-b
+    variableGet({ varRef: "count" })   //@n:reader-a
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            copied.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("reader-a")
+                    && diagnostic.contains("Function layer `first`")
+                    && diagnostic.contains("Function layer `second`")
+            }),
+            "{:?}",
+            copied.diagnostics
+        );
     }
 
     #[test]
@@ -11406,6 +18772,148 @@ simpleEvent() {   //@n:event
 
         assert!(result.diagnostics.iter().any(|diagnostic| {
             diagnostic.contains("function call `helperB` keeps anchor `call`")
+        }));
+    }
+
+    #[test]
+    fn anchored_function_call_keeps_its_target_across_a_function_rename() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "old helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut call = Node::new(CALL_FUNCTION_NODE_TYPE, "Call Function", "", "control");
+        call.id = "call".to_string();
+        call.add_input_pin(FUNCTION_LAYER_ID_PIN, "Function", "", VariableType::String)
+            .default_value = Some(b"\"fn-1\"".to_vec());
+        board.nodes.insert(call.id.clone(), call);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function newHelper() {   //@l:fn-1
+}
+
+simpleEvent() {   //@n:event
+    newHelper()   //@n:call
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("fn-1".to_string(), "newHelper".to_string())]
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                if node_id == "call" && pin_id == FUNCTION_LAYER_ID_PIN
+        )));
+    }
+
+    #[test]
+    fn anchored_qualified_function_call_cannot_retarget_across_modules() {
+        let mut board = empty_board();
+        for (module_id, module_name) in [("mod-a", "Alpha"), ("mod-b", "Beta")] {
+            board.layers.insert(
+                module_id.to_string(),
+                Layer::new(
+                    module_id.to_string(),
+                    module_name.to_string(),
+                    LayerType::Module,
+                ),
+            );
+        }
+        for (layer_id, module_id) in [("fn-a", "mod-a"), ("fn-b", "mod-b")] {
+            let mut layer = Layer::new(
+                layer_id.to_string(),
+                "helper".to_string(),
+                LayerType::Function,
+            );
+            layer.parent_id = Some(module_id.to_string());
+            board.layers.insert(layer.id.clone(), layer);
+        }
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut call = Node::new(CALL_FUNCTION_NODE_TYPE, "Call Function", "", "control");
+        call.id = "call".to_string();
+        call.add_input_pin(FUNCTION_LAYER_ID_PIN, "Function", "", VariableType::String)
+            .default_value = Some(b"\"fn-a\"".to_vec());
+        board.nodes.insert(call.id.clone(), call);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+    function helper() {   //@l:fn-a
+    }
+}
+
+module beta {   //@l:mod-b
+    function helper() {   //@l:fn-b
+    }
+}
+
+simpleEvent() {   //@n:event
+    beta::helper()   //@n:call
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function call `helper` keeps anchor `call`")
+                && diagnostic.contains("different Function layer")
+        }));
+    }
+
+    #[test]
+    fn anchored_call_from_another_function_scope_is_rejected() {
+        let mut board = empty_board();
+        for id in ["fn-a", "fn-b"] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(id.to_string(), id.to_string(), LayerType::Function),
+            );
+        }
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log-a".to_string();
+        log.layer = Some("fn-a".to_string());
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        board.nodes.insert(log.id.clone(), log);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function fnA() {   //@l:fn-a
+}
+
+function fnB() {   //@l:fn-b
+    log({ text: "copied" })   //@n:log-a
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("call `log` keeps anchor `log-a`")
+                && diagnostic.contains("Function layer `fn-a`")
+                && diagnostic.contains("Function layer `fn-b`")
         }));
     }
 
@@ -11586,6 +19094,98 @@ simpleEvent() {   //@n:event
         assert_eq!(removed, vec!["log"], "absent text-visible node is removed");
     }
 
+    /// `board_with_log` minus the event: the log node is left as an unreachable chain, which
+    /// lowers into a `detached` block.
+    fn board_with_orphan_log(text_default: &str) -> Board {
+        let mut board = board_with_log(text_default);
+        board.nodes.remove("event");
+        for pin in board
+            .nodes
+            .get_mut("log")
+            .expect("log node")
+            .pins
+            .values_mut()
+        {
+            pin.depends_on.clear();
+        }
+        board
+    }
+
+    #[test]
+    fn detached_block_roundtrip_derives_no_commands() {
+        let board = board_with_orphan_log("hello");
+        let ast = super::super::lower_to_ast(&board);
+        assert_eq!(ast.detached.len(), 1, "the orphan chain lowers as detached");
+        assert!(ast.events.is_empty(), "a catalog node is not an entry");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    /// The deletion diff and the config diff must learn about `detached` together: if only one
+    /// does, an unchanged round-trip deletes every unreachable node.
+    #[test]
+    fn deleting_a_detached_statement_removes_its_node() {
+        let board = board_with_orphan_log("hello");
+        let mut ast = super::super::lower_to_ast(&board);
+        for block in &mut ast.detached {
+            block.stmts.retain(
+                |s| !matches!(s, Stmt::Call { call, .. } if call.anchor.as_deref() == Some("log")),
+            );
+        }
+
+        let result = reconcile(&board, &ast);
+
+        let removed: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::RemoveNode { node_id, .. } => Some(node_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, vec!["log"], "{:?}", result.commands);
+    }
+
+    #[test]
+    fn detached_literal_edit_emits_update_pin() {
+        let board = board_with_orphan_log("hello");
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+        .replace("\"hello\"", "\"world\"");
+
+        let result = reconcile_text(&board, &text);
+
+        assert_eq!(result.commands.len(), 1, "{:?}", result.commands);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "log"
+                    && pin_id == "text"
+                    && value == &flow_like_types::Value::String("world".to_string())
+        ));
+    }
+
+    #[test]
+    fn duplicate_anchor_inside_a_detached_block_fails_closed() {
+        let source = concat!(
+            "detached {\n",
+            "    logInfo({ message: \"a\" })   //@n:same\n",
+            "    logInfo({ message: \"b\" })   //@n:same\n",
+            "}\n",
+        );
+        let ast = flow_like_ast::parse(source).expect("parse");
+
+        assert_eq!(duplicate_ast_anchors(&ast), vec!["same".to_string()]);
+    }
+
     #[test]
     fn parse_error_yields_diagnostic_no_commands() {
         let board = empty_board();
@@ -11663,6 +19263,9 @@ simpleEvent() {   //@n:event
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: None,
+            alias: None,
+            receiver: None,
         }
     }
 
@@ -11952,7 +19555,7 @@ simpleEvent() {   //@n:event
     /// `const file: Struct` declaration supplies its own title-less `{"type":"object"}` schema
     /// (`packages/ast/src/schema.rs:386`), and that authored contract wins over the board
     /// variable's real schema in `variable_value_contract`, so there is no `FlowPath` title left to
-    /// match. Fixing it means propagating pin schemas onto variable contracts — a separate change.
+    /// match. Fixing it means propagating pin schemas onto variable contracts in a separate change.
     /// Node-output sources, which is how file values normally flow, are covered.
     #[test]
     #[ignore = "variable contracts drop the FlowPath schema; needs schema propagation first"]
@@ -12065,7 +19668,7 @@ eventsSimple() {
     #[test]
     fn unchanged_struct_member_roundtrip_reuses_accessor() {
         // A sugared struct_get (`base.field` in text) must reuse the existing accessor on a
-        // no-op apply — not rewire the consumer to the bare base value or add a duplicate.
+        // no-op apply. It must not rewire the consumer to the bare base value or add a duplicate.
         let board = board_with_struct_member_chain();
         let text = anchored_text(&board);
         let result = reconcile_text_with_catalog(&board, &text, &member_chain_catalog());
@@ -12555,7 +20158,11 @@ eventsSimple() {
             result.commands
         );
 
-        let changed_text = text.replacen("greeting: string", "greeting: Date", 1);
+        let changed_text = text.replacen(
+            "const greeting = \"hi\"",
+            "const greeting: Date = \"hi\"",
+            1,
+        );
         assert_ne!(
             changed_text, text,
             "the lowered variable type must be editable"
@@ -12743,6 +20350,60 @@ eventsSimple() {
                     && to_node == "$1"
                     && to_pin == "exec_in"
         ));
+    }
+
+    #[test]
+    fn unavailable_call_anchor_is_treated_as_unanchored() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    log({ text: "hello" })   //@n:node-from-another-board
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("node-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "log"
+        )));
+        assert!(!result.commands.iter().any(|command| match command {
+            BoardCommand::UpdateNodePin { node_id, .. }
+            | BoardCommand::RemoveNode { node_id, .. }
+            | BoardCommand::RenameNode { node_id, .. } => node_id == "node-from-another-board",
+            BoardCommand::ConnectPins {
+                from_node, to_node, ..
+            }
+            | BoardCommand::DisconnectPins {
+                from_node, to_node, ..
+            } => {
+                from_node == "node-from-another-board" || to_node == "node-from-another-board"
+            }
+            _ => false,
+        }));
     }
 
     #[test]
@@ -13019,7 +20680,8 @@ eventsSimple() {
     fn catalog_required_input_accepts_retained_anchored_connection() {
         let board = board_with_anchored_required_sink(None, true);
         let text = anchored_text(&board);
-        let result = reconcile_text_with_catalog(&board, &text, &anchored_required_sink_catalog());
+        let catalog = with_board_categories(anchored_required_sink_catalog(), &board);
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
 
         assert!(
             result.diagnostics.is_empty(),
@@ -13081,6 +20743,9 @@ eventsSimple() {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -13159,6 +20824,9 @@ eventsSimple() {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -13547,17 +21215,261 @@ eventsSimple() {
         );
     }
 
+    fn board_with_duplicate_root_functions() -> Board {
+        let mut board = empty_board();
+        for id in ["fn-a", "fn-b"] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(id.to_string(), "helper".to_string(), LayerType::Function),
+            );
+        }
+        board
+    }
+
+    #[test]
+    fn duplicate_live_function_names_do_not_guess_a_call_target() {
+        let board = board_with_duplicate_root_functions();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                Vec::new(),
+            ),
+        ];
+
+        let result =
+            reconcile_text_with_catalog(&board, "eventsSimple() {\n    helper()\n}\n", &catalog);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("call `helper` is ambiguous")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if node_type == "control_call_function"
+        )));
+    }
+
+    #[test]
+    fn duplicate_live_function_names_do_not_guess_a_function_reference() {
+        let board = board_with_duplicate_root_functions();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [helper] })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function reference `helper` is ambiguous")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::SetNodeFunctionRefs { .. }))
+        );
+    }
+
+    #[test]
+    fn foreign_anchored_function_does_not_hide_duplicate_live_identity() {
+        let board = board_with_duplicate_root_functions();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                Vec::new(),
+            ),
+            catalog_meta("helper", "Helper Catalog Node", Vec::new(), Vec::new()),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function helper() {   //@l:function-from-another-board
+}
+
+eventsSimple() {
+    helper()
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [helper] })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("function-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("unanchored function `helper` matches 2 Function layers")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("call `helper` is ambiguous")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function reference `helper` is ambiguous")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if node_type == "helper" || node_type == "control_call_function"
+        )));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::SetNodeFunctionRefs { .. }))
+        );
+    }
+
+    fn renamed_function_reference_fixture() -> (Board, Vec<NodeMetadata>) {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "old helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+        let mut handler = Node::new("events_generic", "Function entry", "", "events");
+        handler.id = "function-entry".to_string();
+        handler.layer = Some("fn-1".to_string());
+        handler.set_start(true);
+        handler.set_can_be_referenced_by_fns(true);
+        handler.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(handler.id.clone(), handler);
+
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        (board, catalog)
+    }
+
+    #[test]
+    fn renamed_function_reference_is_emitted_as_the_stable_layer_id() {
+        let (board, catalog) = renamed_function_reference_fixture();
+        let ast = flow_like_ast::parse(
+            r#"function newHelper() {   //@l:fn-1
+}
+
+eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [newHelper] })
+    logInfo({ message: "registered" })
+}
+"#,
+        )
+        .expect("parse");
+        let result = reconcile_with_catalog_mode(&board, &ast, &catalog, ReconcileMode::Additive);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::SetNodeFunctionRefs { fn_refs, .. }
+                if fn_refs == &vec!["fn-1".to_string()]
+        )));
+    }
+
+    #[test]
+    fn retired_function_name_is_rejected_in_function_references() {
+        let (board, catalog) = renamed_function_reference_fixture();
+        let ast = flow_like_ast::parse(
+            r#"function newHelper() {   //@l:fn-1
+}
+
+eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [oldHelper] })
+    logInfo({ message: "registered" })
+}
+"#,
+        )
+        .expect("parse");
+        let result = reconcile_with_catalog_mode(&board, &ast, &catalog, ReconcileMode::Additive);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function reference `oldHelper` uses a name retired")
+                && diagnostic.contains("newHelper")
+        }));
+    }
+
     /// A top-level `function` used as an agent tool materializes as `CreateLayer` + boundary pins
     /// and nothing else, while apply requires each `SetNodeFunctionRefs` target to resolve to a
     /// node carrying `fn_refs.can_be_referenced_by_fns`. Without a reconcile-side check, `check`
     /// says `valid`, `commit` says `queued` with zero diagnostics, and the apply dies with
     /// "Function layer `X` has no referenceable event/handler entry", rolling the whole document
-    /// back — a failure the model can neither see nor attribute.
+    /// back. The model can neither see nor attribute that failure.
     ///
     /// Minting an `events_generic` entry to make it apply is NOT the remedy: that entry exposes
     /// only `payload`, so the tool advertises a `{payload}` schema the model's named arguments
     /// never bind to, and `execute_tool_call` reads the `set_result` that only
-    /// `events_generic_return_result` writes — a function's `return` wires to layer boundary pins,
+    /// `events_generic_return_result` writes. A function's `return` wires to layer boundary pins,
     /// which the tool path never reads. It would apply clean and return the literal
     /// "Tool executed successfully".
     #[test]
@@ -14101,6 +22013,34 @@ eventsSimple() {
     }
 
     #[test]
+    fn catalogless_function_rename_blocks_a_cache_only_partial_apply() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Old Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+        let ast = flow_like_ast::parse(
+            "@cache({ namespace: \"new\" })\nfunction newLookup() {   //@l:cached-function\n}\n",
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("requires catalog-aware reconciliation")
+                && diagnostic.contains("no part of this revision was applied")
+        }));
+        assert!(rename_layer_commands(&result).is_empty());
+    }
+
+    #[test]
     fn permanent_cached_function_board_roundtrips_without_commands() {
         for (index, persisted_ttl) in [None, Some(0)].into_iter().enumerate() {
             let mut board = empty_board();
@@ -14380,6 +22320,42 @@ eventsSimple() {
             BoardCommand::CreateLayer { pins: Some(pins), .. }
                 if pins.iter().all(|pin| pin.data_type != "Execution")
         ));
+    }
+
+    #[test]
+    fn unrelated_function_local_does_not_make_a_new_function_impure() {
+        let mut board = empty_board();
+        add_function_local_variable(&mut board, "fn-a", "first", "var-a", "count");
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function second() {
+    count = 1
+}
+"#,
+            &[],
+        );
+
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::CreateLayer {
+                    name,
+                    pins: Some(pins),
+                    ..
+                } if name == "second"
+                    && pins.iter().all(|pin| pin.data_type != "Execution")
+            )),
+            "{:?}",
+            result.commands
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin {
+                value: flow_like_types::Value::String(variable_id),
+                ..
+            } if variable_id == "var-a"
+        )));
     }
 
     #[test]
@@ -14873,6 +22849,9 @@ eventsSimple() {
         let call = Call {
             node_type: "date_sink".to_string(),
             display: "dateSink".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![Arg {
                 name: "date".to_string(),
                 value: Expr::Ref("existingValue".to_string()),
@@ -15176,6 +23155,85 @@ function constantFlag(): (flag: bool) {
     }
 
     #[tokio::test]
+    async fn applied_loop_body_return_roundtrip_is_idempotent() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut for_each = Node::new("control_for_each", "For Each", "", "control");
+        for_each.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        for_each
+            .add_input_pin("array", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        for_each.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        for_each.add_output_pin("value", "Value", "", VariableType::Generic);
+        for_each.add_output_pin("index", "Index", "", VariableType::Integer);
+        for_each.add_output_pin("done", "Done", "", VariableType::Execution);
+
+        let mut push = Node::new("array_push", "Push", "", "array");
+        push.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        push.add_input_pin("array_in", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        push.add_input_pin("value", "Value", "", VariableType::Generic);
+        push.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        push.add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+
+        let catalog_nodes = vec![for_each, push];
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"function parseRssXml(items: Generic[]): (rows: Generic[]) {
+    for (const item of controlForEach({ array: items })) {
+        const batchPush = arrayPush({ arrayIn: items, value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("loop accumulator script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // The lowerer names the single-output binding after the pin, not after the binding the
+        // script authored, so find the accumulator's rendered name instead of assuming the
+        // authored one survived.
+        let text = anchored_text(&board);
+        let local = text
+            .lines()
+            .find_map(|line| {
+                let (name, call) = line.trim().strip_prefix("const ")?.split_once(" = ")?;
+                if name.contains('{') || !call.starts_with("items.push(") {
+                    return None;
+                }
+                Some(name.to_string())
+            })
+            .unwrap_or_else(|| panic!("the accumulator must lower as a pin-named binding inside the loop body:\n{text}"));
+        assert!(
+            text.contains(&format!("return {local}")),
+            "the lowered board must still read the loop-local accumulator:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "re-applying the board's own lowered script must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
     async fn applied_literal_return_roundtrip_is_idempotent() {
         use crate::state::{FlowLikeConfig, FlowLikeState};
         use crate::utils::http::HTTPClient;
@@ -15377,6 +23435,158 @@ function constantFlag(): (flag: bool) {
         assert!(
             result.commands.is_empty(),
             "promoted-local roundtrip must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
+    async fn variable_assignment_from_method_call_roundtrips() {
+        use crate::flow::pin::ValueType;
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "Variable");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_get.set_flowscript_name("variable", "get");
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "Variable");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_set.set_flowscript_name("variable", "set");
+
+        let mut set_to_array = Node::new("set_to_array", "Set to Array", "", "Utils/Set");
+        set_to_array
+            .add_input_pin("set_in", "Set", "", VariableType::Generic)
+            .set_value_type(ValueType::HashSet);
+        set_to_array
+            .add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .set_value_type(ValueType::Array);
+        set_to_array.set_flowscript_name("set", "toArray");
+        set_to_array.set_receiver("set_in");
+
+        let catalog_nodes = vec![variable_get, variable_set, set_to_array];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"let links: Set<string> = []
+let urls: string[] = []
+
+function collect() {
+    urls = links.toArray()
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("method-call assignment applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let text = anchored_text(&board);
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "the board's own lowered script must keep applying:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "method-call assignment roundtrip must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
+    async fn variable_assignment_from_method_call_with_selected_output_applies() {
+        use crate::flow::pin::ValueType;
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "Variable");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_get.set_flowscript_name("variable", "get");
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "Variable");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        variable_set.set_flowscript_name("variable", "set");
+
+        let mut set_to_array = Node::new("set_to_array", "Set to Array", "", "Utils/Set");
+        set_to_array
+            .add_input_pin("set_in", "Set", "", VariableType::Generic)
+            .set_value_type(ValueType::HashSet);
+        set_to_array
+            .add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .set_value_type(ValueType::Array);
+        set_to_array.set_flowscript_name("set", "toArray");
+        set_to_array.set_receiver("set_in");
+
+        let catalog_nodes = vec![variable_get, variable_set, set_to_array];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"let links: Set<string> = []
+let urls: string[] = []
+
+function collect() {
+    urls = links.toArray()
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("method-call assignment applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // Selecting the sole output pin explicitly is a legal spelling; the assignment still
+        // renders with only the `variable_set` statement anchor, so the inlined value call is
+        // keyed by an anchor that identifies a DIFFERENT node.
+        let text = anchored_text(&board).replace("links.toArray()", "links.toArray().arrayOut");
+        assert!(
+            text.contains("links.toArray().arrayOut"),
+            "probe must patch the lowered assignment:\n{text}"
+        );
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "an explicit output selection must not be folded against the variable_set anchor:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::AddNode { .. })),
+            "the value call must reuse the wired node instead of adding a second one:\n{text}\n{:?}",
             result.commands
         );
     }
@@ -15910,6 +24120,72 @@ function second(): (result: int) {
     }
 
     #[test]
+    fn stale_alias_event_anchor_uses_unique_body_connection_after_live_rename() {
+        let mut board = empty_board();
+        let renamed = stale_event_entry("renamed-event", "renamedLoad", None, None);
+        let event_out = renamed
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_out")
+            .expect("event execution output")
+            .id
+            .clone();
+        board.nodes.insert(renamed.id.clone(), renamed);
+        let mut body = Node::new("notify", "Notify", "", "events");
+        body.id = "body-notify".to_string();
+        let body_exec = body
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        body.add_input_pin("message", "Message", "", VariableType::String);
+        body.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(body.id.clone(), body);
+        connect(
+            &mut board,
+            "renamed-event",
+            &event_out,
+            "body-notify",
+            &body_exec,
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad() {   //@n:gone-event
+    notify({})   //@n:body-notify
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("gone-event") && correction.contains("renamed-event")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::RenameNode {
+                        node_id,
+                        friendly_name,
+                        ..
+                    } if node_id == "renamed-event" && friendly_name == "wikiExplorerLoad"
+                ))
+                .count(),
+            1,
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
     fn stale_typed_event_anchor_recreates_exact_catalog_entry_when_no_live_match() {
         let ast = BoardAst {
             events: vec![EventBlock {
@@ -15922,6 +24198,9 @@ function second(): (result: int) {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -16016,6 +24295,9 @@ function second(): (result: int) {
                         call: Call {
                             node_type: "notify".to_string(),
                             display: "notify".to_string(),
+                            path: Vec::new(),
+                            receiver: None,
+                            positional: Vec::new(),
                             args: Vec::new(),
                             anchor: None,
                         },
@@ -16039,6 +24321,100 @@ function second(): (result: int) {
             command,
             BoardCommand::ConnectPins { from_node, .. } if from_node == "live-event"
         )));
+    }
+
+    #[test]
+    fn live_event_anchor_must_identify_a_registered_entry() {
+        let mut board = empty_board();
+        let mut ordinary = Node::new("notify", "Notify", "", "events");
+        ordinary.id = "ordinary-node".to_string();
+        ordinary.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        ordinary.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(ordinary.id.clone(), ordinary);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"notify() {   //@n:ordinary-node
+    notify({ message: "body" })
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("ordinary-node")
+                && diagnostic.contains("not registered as an Event entry")
+        }));
+    }
+
+    #[test]
+    fn live_event_anchor_cannot_cross_function_scope() {
+        let mut board = empty_board();
+        for id in ["fn-a", "fn-b"] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(id.to_string(), id.to_string(), LayerType::Function),
+            );
+        }
+        board.nodes.insert(
+            "function-entry".to_string(),
+            stale_event_entry("function-entry", "Copied Handler", Some("fn-a"), None),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function fnA() {   //@l:fn-a
+}
+
+function fnB() {   //@l:fn-b
+    eventsGeneric copiedHandler() {   //@n:function-entry
+        notify({ message: "body" })
+    }
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function-entry")
+                && diagnostic.contains("Function layer `fn-a`")
+                && diagnostic.contains("Function layer `fn-b`")
+        }));
+    }
+
+    #[test]
+    fn anchored_event_return_cannot_cross_function_scope() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-a".to_string(),
+            Layer::new("fn-a".to_string(), "first".to_string(), LayerType::Function),
+        );
+
+        let mut event_return = Node::new(EVENT_RETURN_RESULT_TYPE, "Return Result", "", "events");
+        event_return.id = "return-a".to_string();
+        event_return.layer = Some("fn-a".to_string());
+        event_return.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        event_return.add_input_pin("response", "Response", "", VariableType::Generic);
+        board.nodes.insert(event_return.id.clone(), event_return);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    return "value"   //@n:return-a
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("event return keeps anchor `return-a`")
+                    && diagnostic.contains("Function layer `first`")
+                    && diagnostic.contains("board root")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
     }
 
     #[test]
@@ -16067,7 +24443,83 @@ function second(): (result: int) {
     }
 
     #[test]
-    fn stale_event_anchor_does_not_guess_between_compatible_live_entries() {
+    fn stale_canonical_event_anchor_does_not_claim_differently_named_live_handler() {
+        let mut board = empty_board();
+        let mut unrelated = Node::new("events_simple", "billingWebhook", "", "events");
+        unrelated.id = "billing-event".to_string();
+        unrelated.set_start(true);
+        unrelated.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(unrelated.id.clone(), unrelated);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {   //@n:foreign-event
+    notify({ message: "copied" })
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("Recreated event") && correction.contains("foreign-event")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "billing-event"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::RenameNode { node_id, .. } if node_id == "billing-event"
+        )));
+    }
+
+    #[test]
+    fn recreated_stale_event_keeps_first_arm_routing_on_the_new_entry() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {   //@n:gone-event
+    if (eventsSimple()) { // exec_out   //@n:gone-event
+        notify({ message: "routed" })
+    }
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+                ))
+                .count(),
+            1
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins {
+                from_node,
+                from_pin,
+                to_node,
+                to_pin,
+                ..
+            } if from_node == "$0"
+                && from_pin == "exec_out"
+                && to_node == "$1"
+                && to_pin == "exec_in"
+        )));
+    }
+
+    #[test]
+    fn stale_event_anchor_recreates_instead_of_guessing_between_live_entries() {
         let mut board = empty_board();
         for id in ["event-a", "event-b"] {
             board.nodes.insert(
@@ -16085,20 +24537,14 @@ function second(): (result: int) {
             &stale_event_catalog(),
         );
 
-        assert!(
-            result.diagnostics.iter().any(|diagnostic| {
-                diagnostic.contains("gone-event")
-                    && diagnostic.contains("ambiguous")
-                    && diagnostic.contains("event-a")
-                    && diagnostic.contains("event-b")
-            }),
-            "{:?}",
-            result.diagnostics
-        );
-        assert!(!result.commands.iter().any(|command| matches!(
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("Recreated event") && correction.contains("gone-event")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
             command,
             BoardCommand::AddNode { node_type, .. }
-                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+                if node_type == "events_simple"
         )));
         assert!(!result.commands.iter().any(|command| matches!(
             command,
@@ -16108,7 +24554,40 @@ function second(): (result: int) {
     }
 
     #[test]
-    fn stale_alias_event_anchor_without_live_match_remains_blocking() {
+    fn stale_event_anchor_recreates_instead_of_claiming_an_incompatible_alias() {
+        let mut board = empty_board();
+        board.nodes.insert(
+            "incompatible-event".to_string(),
+            stale_event_entry(
+                "incompatible-event",
+                "Wiki Explorer Load",
+                None,
+                Some(VariableType::Integer),
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad(query: string) {   //@n:gone-event
+    notify({ message: query })
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "events_generic"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "incompatible-event"
+        )));
+    }
+
+    #[test]
+    fn stale_alias_event_anchor_without_live_match_recreates_through_standard_fallback() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"wikiExplorerLoad() {   //@n:gone-event
@@ -16118,20 +24597,39 @@ function second(): (result: int) {
             &stale_event_catalog(),
         );
 
-        assert!(
-            result.diagnostics.iter().any(|diagnostic| {
-                diagnostic.contains("gone-event")
-                    && diagnostic.contains("alias-only")
-                    && diagnostic.contains("exact event type")
-            }),
-            "{:?}",
-            result.diagnostics
-        );
-        assert!(!result.commands.iter().any(|command| matches!(
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("Recreated event") && correction.contains("gone-event")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
             command,
             BoardCommand::AddNode { node_type, .. }
-                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+                if node_type == "events_simple"
         )));
+    }
+
+    #[test]
+    fn stale_empty_event_anchor_recreates_an_entry() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {   //@n:gone-event\n}\n",
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+                ))
+                .count(),
+            1,
+            "{:?}",
+            result.commands
+        );
     }
 
     #[test]
@@ -16191,6 +24689,56 @@ function second(): (result: int) {
         assert!(!result.commands.iter().any(|command| matches!(
             command,
             BoardCommand::ConnectPins { from_node, .. } if from_node == "root-event"
+        )));
+    }
+
+    #[test]
+    fn stale_event_rebinds_through_a_collapsed_function_container() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "helper-layer".to_string(),
+            Layer::new(
+                "helper-layer".to_string(),
+                "helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+        let mut collapsed = Layer::new(
+            "collapsed".to_string(),
+            "group".to_string(),
+            LayerType::Collapsed,
+        );
+        collapsed.parent_id = Some("helper-layer".to_string());
+        board.layers.insert(collapsed.id.clone(), collapsed);
+        board.nodes.insert(
+            "nested-event".to_string(),
+            stale_event_entry(
+                "nested-event",
+                "Wiki Explorer Load",
+                Some("collapsed"),
+                None,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function helper() {   //@l:helper-layer
+    wikiExplorerLoad() {   //@n:gone-event
+        notify({})
+    }
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("gone-event") && correction.contains("nested-event")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
         )));
     }
 
@@ -16638,10 +25186,10 @@ function brokenTwo(): (tag: string) {
         // The model binds the anchored call and returns the binding — the anchor keeps the
         // statement resolving to the LIVE node, so the return source is an Existing entity.
         let text = anchored_text(&board);
-        assert!(text.contains("    httpProbe()   //@n:"), "{text}");
+        assert!(text.contains("    web::httpProbe()   //@n:"), "{text}");
         let rebound = text.replace(
-            "    httpProbe()   //@n:",
-            "    const probe = httpProbe()   //@n:",
+            "    web::httpProbe()   //@n:",
+            "    const probe = web::httpProbe()   //@n:",
         );
         let insert_at = rebound.rfind("\n}").expect("function closing brace");
         let with_return = format!(
@@ -17105,6 +25653,9 @@ eventsSimple() {
         let call = Call {
             node_type: "shared_source".to_string(),
             display: "sharedSource".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -17135,6 +25686,9 @@ eventsSimple() {
         let schema_call = Call {
             node_type: "schema_source".to_string(),
             display: "schemaSource".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: Vec::new(),
             anchor: None,
         };
@@ -17193,6 +25747,9 @@ eventsSimple() {
         let call = Call {
             node_type: "bool_or".to_string(),
             display: "boolOr".to_string(),
+            path: Vec::new(),
+            receiver: None,
+            positional: Vec::new(),
             args: vec![
                 Arg {
                     name: "boolean".to_string(),
@@ -18355,6 +26912,354 @@ eventsSimple() {
         )));
     }
 
+    fn added_node_ref<'a>(result: &'a ReconcileResult, node_type: &str) -> Option<&'a str> {
+        result.commands.iter().find_map(|command| match command {
+            BoardCommand::AddNode {
+                node_type: added,
+                ref_id: Some(ref_id),
+                ..
+            } if added == node_type => Some(ref_id.as_str()),
+            _ => None,
+        })
+    }
+
+    fn phase0_operator_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_float",
+                "Log Float",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("value", "Float", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            // `string_concat` follows the repeatable-pin convention: both inputs share a name.
+            catalog_meta(
+                "string_concat",
+                "Concat Strings",
+                vec![
+                    pin_meta("string", "String", PinType::Input),
+                    pin_meta("string", "String", PinType::Input),
+                ],
+                vec![pin_meta("concatenated", "String", PinType::Output)],
+            ),
+            catalog_meta(
+                "int_subtract",
+                "Subtract Integers",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("difference", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "float_subtract",
+                "Subtract Floats",
+                vec![
+                    pin_meta("float1", "Float", PinType::Input),
+                    pin_meta("float2", "Float", PinType::Input),
+                ],
+                vec![pin_meta("difference", "Float", PinType::Output)],
+            ),
+            catalog_meta(
+                "int_equal",
+                "Integer Equal",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("equal", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "utils_types_select",
+                "Select",
+                vec![
+                    pin_meta("a", "Generic", PinType::Input),
+                    pin_meta("b", "Generic", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Generic", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn string_equality_tolerates_a_defaulted_trailing_input() {
+        let mut catalog = phase0_operator_catalog();
+        let mut ignore_case = pin_meta("ignore_case", "Boolean", PinType::Input);
+        ignore_case.default_value = Some("false".to_string());
+        catalog.push(catalog_meta(
+            "equal_string",
+            "Equal Strings",
+            vec![
+                pin_meta("string", "String", PinType::Input),
+                pin_meta("string", "String", PinType::Input),
+                ignore_case,
+            ],
+            vec![pin_meta("equal", "Boolean", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "float_equal",
+            "Equal Floats",
+            vec![
+                pin_meta("float1", "Float", PinType::Input),
+                pin_meta("float2", "Float", PinType::Input),
+                pin_meta("tolerance", "Float", PinType::Input),
+            ],
+            vec![pin_meta("equal", "Boolean", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "log_bool",
+            "Log Bool",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("value", "Boolean", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "run() {\n    logBool({ value: \"a\" == \"b\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let equal = added_node_ref(&result, "equal_string").expect("equal_string node");
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                    if node_id == equal && pin_id == "ignore_case"
+            )),
+            "the operator form must leave the defaulted trailing pin untouched: {:?}",
+            result.commands
+        );
+
+        let floats = reconcile_text_with_catalog(
+            &empty_board(),
+            "const a: float = 1.0\n\nrun() {\n    logBool({ value: a == 2.0 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            floats.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains(
+                    "binary operator `==` for `Float` has no suitable two-input catalog node",
+                )
+            }),
+            "a required trailing input disqualifies the operator form: {:?}",
+            floats.diagnostics
+        );
+    }
+
+    #[test]
+    fn string_plus_materializes_string_concat_with_occurrence_bound_pins() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const greeting: string = \"hi\"\n\nrun() {\n    log({ message: \"a\" + \"b\" })\n    log({ message: greeting + \"!\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let concats = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_concat" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [literal_concat, wired_concat] = concats.as_slice() else {
+            panic!("expected two string_concat nodes: {:?}", result.commands);
+        };
+        for (pin, text) in [("string[#1]", "a"), ("string[#2]", "b")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if node_id == literal_concat
+                            && pin_id == pin
+                            && value == &flow_like_types::Value::String(text.to_string())
+                )),
+                "literal operand must land on {pin}: {:?}",
+                result.commands
+            );
+        }
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == reader
+                    && from_pin == "value_ref"
+                    && to_node == wired_concat
+                    && to_pin == "string[#1]"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == wired_concat
+                    && pin_id == "string[#2]"
+                    && value == &flow_like_types::Value::String("!".to_string())
+        )));
+        let concat_to_log = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if concats.contains(&from_node.as_str())
+                            && from_pin == "concatenated"
+                            && to_pin == "message"
+                )
+            })
+            .count();
+        assert_eq!(concat_to_log, 2, "{:?}", result.commands);
+
+        let mixed = reconcile_text_with_catalog(
+            &empty_board(),
+            "run() {\n    log({ message: \"a\" + 1 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            mixed.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("incompatible operand types `String` and `Integer`")
+            }),
+            "{:?}",
+            mixed.diagnostics
+        );
+        assert!(added_node_ref(&mixed, "string_concat").is_none());
+    }
+
+    #[test]
+    fn unary_minus_on_a_float_variable_lowers_to_float_subtract() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const ratio: float = 1.5\n\nrun() {\n    logFloat({ value: -ratio })\n    logFloat({ value: 0 - ratio })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "int_subtract").is_none());
+
+        let subtractions = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "float_subtract" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(subtractions.len(), 2, "{:?}", result.commands);
+        for node in &subtractions {
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == node
+                        && pin_id == "float1"
+                        && value == &flow_like_types::Value::from(0)
+            )));
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_node, to_pin, .. }
+                    if from_pin == "value_ref" && to_node == node && to_pin == "float2"
+            )));
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                    if from_node == node && from_pin == "difference" && to_pin == "value"
+            )));
+        }
+
+        // Only a literal adopts the other side's type; typed operands stay strict.
+        let strict = reconcile_text_with_catalog(
+            &empty_board(),
+            "const ratio: float = 1.5\nconst n: int = 1\n\nrun() {\n    logFloat({ value: n - ratio })\n}\n",
+            &catalog,
+        );
+        assert!(
+            strict.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("incompatible operand types `Integer` and `Float`")
+            }),
+            "{:?}",
+            strict.diagnostics
+        );
+    }
+
+    #[test]
+    fn ternary_with_literal_arms_materializes_a_select_node() {
+        let catalog = phase0_operator_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const n: int = 1\n\nrun() {\n    log({ message: n == 1 ? \"one\" : \"other\" })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let select = added_node_ref(&result, "utils_types_select").expect("select node");
+        let comparator = added_node_ref(&result, "int_equal").expect("int_equal node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        for (pin, text) in [("a", "one"), ("b", "other")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if node_id == select
+                            && pin_id == pin
+                            && value == &flow_like_types::Value::String(text.to_string())
+                )),
+                "literal arm must land on `{pin}`: {:?}",
+                result.commands
+            );
+        }
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == comparator
+                    && from_pin == "equal"
+                    && to_node == select
+                    && to_pin == "condition"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == select
+                    && from_pin == "result"
+                    && to_node == log
+                    && to_pin == "message"
+        )));
+    }
+
     #[test]
     fn editing_existing_binary_condition_reuses_comparator() {
         let mut board = empty_board();
@@ -18758,13 +27663,13 @@ eventsSimple() {
         let diagnostics = layer_node_limit_violations(&board, &root_adds)
             .expect("empty layer ids and explicit root additions share one budget");
         assert!(diagnostics[0].contains(&format!(
-            "the root layer with {} nodes",
+            "the root layer now holds {} nodes",
             MAX_NODES_PER_LAYER + 1
         )));
     }
 
     #[test]
-    fn layer_node_limit_rejects_oversized_edit() {
+    fn layer_node_limit_warns_on_oversized_edit() {
         let board = empty_board();
         let catalog = vec![
             catalog_meta(
@@ -18791,17 +27696,26 @@ eventsSimple() {
         flowscript.push_str("}\n");
 
         let result = reconcile_text_with_catalog(&board, &flowscript, &catalog);
+        // The layer budget is a LINT, not a gate: the edit still applies and the advice arrives
+        // as a correction. Blocking it stranded authors with a document that could not be
+        // applied at all.
         assert!(
-            result.commands.is_empty(),
-            "oversized edit must queue nothing"
+            !result.commands.is_empty(),
+            "an oversized edit must still queue its work"
+        );
+        assert!(
+            result.diagnostics.is_empty(),
+            "the layer budget must not block: {:?}",
+            result.diagnostics
         );
         assert!(
             result
-                .diagnostics
+                .corrections
                 .iter()
-                .any(|diagnostic| diagnostic.contains(&format!("max {MAX_NODES_PER_LAYER}"))),
+                .any(|correction| correction
+                    .contains(&format!("{MAX_NODES_PER_LAYER}-node guideline"))),
             "{:?}",
-            result.diagnostics
+            result.corrections
         );
     }
 
@@ -19092,7 +28006,7 @@ eventsSimple() {
     return true
 }
 "#,
-            &vec![catalog_meta(
+            &[catalog_meta(
                 "a2ui_widget_update_inputs",
                 "Update Widget Inputs",
                 vec![pin_meta("element_ref", "Struct", PinType::Input)],
@@ -19790,17 +28704,35 @@ eventsSimple() {   //@n:event
         variable.id = "var_rows".to_string();
         board.variables.insert(variable.id.clone(), variable);
 
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
         let mut push = Node::new("array_push", "Push", "", "array");
         push.id = "push".to_string();
-        push.add_input_pin("exec_in", "In", "", VariableType::Execution);
-        push.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let push_in = push
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let push_out = push
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
         push.add_output_pin("array_out", "Array", "", VariableType::Struct)
             .value_type = ValueType::Array;
         board.nodes.insert(push.id.clone(), push);
 
         let mut set_rows = Node::new("variable_set", "Set rows", "", "variables");
         set_rows.id = "set_rows".to_string();
-        set_rows.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        let set_rows_in = set_rows
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
         set_rows.add_input_pin("var_ref", "rows", "", VariableType::String);
         let value_pin = set_rows.add_input_pin("value_in", "Value", "", VariableType::Struct);
         value_pin.value_type = ValueType::Array;
@@ -19809,13 +28741,16 @@ eventsSimple() {   //@n:event
             .add_output_pin("value_ref", "New Value", "", VariableType::Struct)
             .value_type = ValueType::Array;
         board.nodes.insert(set_rows.id.clone(), set_rows);
+        connect(&mut board, "event", &event_out, "push", &push_in);
+        connect(&mut board, "push", &push_out, "set_rows", &set_rows_in);
 
         let result = reconcile_text_with_catalog(
             &board,
             r#"const rows: Struct[] = []   //@v:var_rows
 
-push(arrayOut: Struct[]) {   //@n:push
-    rows = arrayOut   //@n:set_rows
+eventsSimple() {   //@n:event
+    const pushResult = arrayPush()   //@n:push
+    rows = pushResult.arrayOut   //@n:set_rows
 }
 "#,
             &accumulator_catalog(),
@@ -19841,6 +28776,128 @@ push(arrayOut: Struct[]) {   //@n:push
                         && to_pin == "value_in"
             )
         }));
+    }
+
+    #[test]
+    fn function_return_resolves_a_binding_declared_inside_a_loop_body() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the accumulator inside the loop must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn function_return_resolves_a_binding_declared_inside_a_branch_arm() {
+        let mut catalog = accumulator_catalog();
+        catalog.push(catalog_meta(
+            "control_branch",
+            "Branch",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("condition", "Boolean", PinType::Input),
+            ],
+            vec![
+                pin_meta("true", "Execution", PinType::Output),
+                pin_meta("false", "Execution", PinType::Output),
+            ],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    if (true) {
+        const batchPush = arrayPush({ arrayIn: [], value: "one" })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the arm-local accumulator must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_closed_block_binding_never_shadows_an_enclosing_one() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    const batchPush = arrayPush({ arrayIn: [], value: "outer" })
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let outer = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value,
+                    ..
+                } if pin_id == "value"
+                    && value == &flow_like_types::Value::String("outer".to_string()) =>
+                {
+                    Some(node_id.clone())
+                }
+                _ => None,
+            })
+            .expect("the enclosing push must be materialized");
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if from_node == &outer && from_pin == "array_out" && to_pin == "rows"
+                )
+            }),
+            "the enclosing binding must still win over the loop-local one: {:?}",
+            result.commands
+        );
     }
 
     #[test]
@@ -20446,6 +29503,7 @@ eventsSimple() {
 
         if wired_field {
             let mut cuid = Node::new("cuid", "CUID v2", "", "std");
+            cuid.set_flowscript_name("random", "cuid");
             cuid.id = "cuid".to_string();
             let cuid_out = cuid
                 .add_output_pin("cuid", "CUID", "", VariableType::String)
@@ -20491,7 +29549,7 @@ eventsSimple() {
     #[test]
     fn explicit_null_struct_set_value_roundtrips_and_satisfies_required_input() {
         let board = board_with_null_struct_accumulator();
-        let catalog = required_struct_set_value_catalog();
+        let catalog = with_board_categories(required_struct_set_value_catalog(), &board);
         let anchored = super::super::board_to_flowscript(
             &board,
             &flow_like_ast::RenderOptions {
@@ -20555,7 +29613,7 @@ eventsSimple() {
         // Reconciling the rendered text against an empty board recreates the same struct_set shape:
         // a struct_set with a literal `field`, `struct_in` fed by the seed (base's prior source),
         // `struct_out` rebound into the consumer, and no self-connection.
-        let catalog = struct_accumulator_catalog();
+        let catalog = with_board_categories(struct_accumulator_catalog(), &board);
         let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(
@@ -20612,7 +29670,7 @@ eventsSimple() {
         // A wired (non-literal) `field` cannot be a `row.<field> = value` write, so lowering
         // conservatively keeps BOTH struct_sets in the explicit `structSet({…})` form.
         assert!(
-            text.contains("field: cuid()"),
+            text.contains("field: random::cuid()"),
             "a wired-field struct_set must keep its explicit call:\n{text}"
         );
         assert_eq!(
@@ -22213,6 +31271,3287 @@ eventsSimple() {
             flow_like_ast::normalize_schema(&first),
             flow_like_ast::normalize_schema(&second),
             "projection must be idempotent on its own output"
+        );
+    }
+
+    // ---- Phase 2b: namespaces, `use`, method dispatch, positional args, destructuring ----
+
+    fn categorized(mut meta: NodeMetadata, category: &str) -> NodeMetadata {
+        meta.category = Some(category.to_string());
+        meta
+    }
+
+    fn named(mut meta: NodeMetadata, namespace: &str, alias: &str) -> NodeMetadata {
+        meta.namespace = Some(namespace.to_string());
+        meta.alias = Some(alias.to_string());
+        meta
+    }
+
+    const MAIL_SCHEMA: &str = r#"{"title":"Mail","type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"}}}"#;
+
+    /// A catalog mixing derived names (`category` only), explicit names, explicit receivers, a
+    /// universal method and a titled-struct method.
+    fn namespaced_catalog() -> Vec<NodeMetadata> {
+        let mut ignore_case = pin_meta("ignore_case", "Boolean", PinType::Input);
+        ignore_case.default_value = Some("false".to_string());
+        let mut mail = pin_meta("mail", "Struct", PinType::Input);
+        mail.schema = Some(MAIL_SCHEMA.to_string());
+        let mut is_null = named(
+            catalog_meta(
+                "types_is_null",
+                "Is Null",
+                vec![pin_meta("value", "Generic", PinType::Input)],
+                vec![pin_meta("is_null", "Boolean", PinType::Output)],
+            ),
+            "types",
+            "isNull",
+        );
+        is_null.receiver = Some("value".to_string());
+        let mut subject_of = named(
+            catalog_meta(
+                "email_subject_of",
+                "Subject Of",
+                vec![mail],
+                vec![pin_meta("subject", "String", PinType::Output)],
+            ),
+            "email",
+            "subjectOf",
+        );
+        subject_of.receiver = Some("mail".to_string());
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            categorized(
+                catalog_meta(
+                    "struct_get",
+                    "Get Field",
+                    vec![
+                        pin_meta("struct", "Struct", PinType::Input),
+                        pin_meta("field", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("value", "Generic", PinType::Output)],
+                ),
+                "Structs",
+            ),
+            categorized(
+                catalog_meta(
+                    "log",
+                    "Log",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("text", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Logging",
+            ),
+            categorized(
+                catalog_meta(
+                    "log_bool",
+                    "Log Bool",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("value", "Boolean", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Logging",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_trim",
+                    "Trim",
+                    vec![pin_meta("string", "String", PinType::Input)],
+                    vec![pin_meta("trimmed", "String", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            named(
+                catalog_meta(
+                    "string_to_upper",
+                    "Upper Case",
+                    vec![pin_meta("string", "String", PinType::Input)],
+                    vec![pin_meta("upper", "String", PinType::Output)],
+                ),
+                "string",
+                "toUpperCase",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_contains",
+                    "Contains",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("substring", "String", PinType::Input),
+                        ignore_case,
+                    ],
+                    vec![pin_meta("contains", "Boolean", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_concat",
+                    "Concat",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("concatenated", "String", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "string_say",
+                    "Say",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "equal_string",
+                    "Equal Strings",
+                    vec![
+                        pin_meta("string", "String", PinType::Input),
+                        pin_meta("string", "String", PinType::Input),
+                    ],
+                    vec![pin_meta("equal", "Boolean", PinType::Output)],
+                ),
+                "Utils/String",
+            ),
+            categorized(
+                catalog_meta(
+                    "int_equal",
+                    "Equal Integers",
+                    vec![
+                        pin_meta("integer1", "Integer", PinType::Input),
+                        pin_meta("integer2", "Integer", PinType::Input),
+                    ],
+                    vec![pin_meta("equal", "Boolean", PinType::Output)],
+                ),
+                "Math/Int",
+            ),
+            categorized(
+                catalog_meta(
+                    "array_contains",
+                    "Array Contains",
+                    vec![
+                        pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                        pin_meta("value", "Generic", PinType::Input),
+                    ],
+                    vec![pin_meta("contains", "Boolean", PinType::Output)],
+                ),
+                "Utils/Array",
+            ),
+            named(
+                catalog_meta(
+                    "ai_ml_read",
+                    "Read Model",
+                    vec![pin_meta("path", "String", PinType::Input)],
+                    vec![pin_meta("model", "Struct", PinType::Output)],
+                ),
+                "ai.ml",
+                "read",
+            ),
+            named(
+                catalog_meta(
+                    "ai_invoke",
+                    "Invoke",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("prompt", "String", PinType::Input),
+                    ],
+                    vec![
+                        pin_meta("exec_out", "Execution", PinType::Output),
+                        pin_meta("text", "String", PinType::Output),
+                        pin_meta("usage", "Struct", PinType::Output),
+                    ],
+                ),
+                "ai",
+                "invoke",
+            ),
+            is_null,
+            subject_of,
+        ]
+    }
+
+    fn connected(
+        result: &ReconcileResult,
+        from: &str,
+        from_pin: &str,
+        to: &str,
+        to_pin: &str,
+    ) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin: fp, to_node, to_pin: tp, .. }
+                    if from_node == from && fp == from_pin && to_node == to && tp == to_pin
+            )
+        })
+    }
+
+    fn pin_set_to(
+        result: &ReconcileResult,
+        node: &str,
+        pin: &str,
+        expected: flow_like_types::Value,
+    ) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == node && pin_id == pin && value == &expected
+            )
+        })
+    }
+
+    fn diagnostic_containing<'a>(result: &'a ReconcileResult, needle: &str) -> Option<&'a str> {
+        result
+            .diagnostics
+            .iter()
+            .map(String::as_str)
+            .find(|diagnostic| diagnostic.contains(needle))
+    }
+
+    const TRIMMED_VARIABLE: &str = "const s: string = \" x \"\n\n";
+
+    #[test]
+    fn path_call_resolves_the_qualified_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", trim, "string"));
+        assert!(connected(&result, trim, "trimmed", log, "text"));
+    }
+
+    #[test]
+    fn legacy_flat_name_still_resolves_the_same_node() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = stringTrim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+    }
+
+    #[test]
+    fn glob_use_opens_members_bare_and_counts_as_used() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::*\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert!(
+            result.corrections.is_empty(),
+            "a used glob must not be reported: {:?}",
+            result.corrections
+        );
+    }
+
+    /// A package (WASM) node ships only a `category`; its FlowScript spelling is derived from it.
+    /// The rendered `use` line, the editor-facing explicit fields and the reconcile path must all
+    /// agree on that derivation, or the editor rejects text the renderer itself produced.
+    #[test]
+    fn category_only_package_node_renders_and_reconciles_under_derived_namespace() {
+        fn limit_feed_items() -> Node {
+            let mut node = Node::new("limit_feed_items", "Limit Feed Items", "", "RSS/Items");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            node.add_input_pin("items", "Items", "", VariableType::Struct)
+                .default_value = Some(b"{}".to_vec());
+            node.add_input_pin("limit", "Limit", "", VariableType::Integer)
+                .default_value = Some(b"3".to_vec());
+            node.add_output_pin("limited_items", "Limited Items", "", VariableType::Struct);
+            node
+        }
+
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+        let mut limit = limit_feed_items();
+        limit.id = "limit".to_string();
+        let limit_in = limit
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_in")
+            .map(|pin| pin.id.clone())
+            .expect("exec_in");
+        board.nodes.insert(limit.id.clone(), limit);
+        connect(&mut board, "event", &event_out, "limit", &limit_in);
+
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(text.contains("rss::items::limitFeedItems("), "{text}");
+
+        // The registry stamps the derived spelling as explicit fields for the editor.
+        let mut catalog_node = limit_feed_items();
+        catalog_node.ensure_flowscript_names();
+        assert_eq!(catalog_node.namespace.as_deref(), Some("rss.items"));
+        assert_eq!(catalog_node.alias.as_deref(), Some("limitFeedItems"));
+        assert_eq!(catalog_node.receiver, None);
+
+        let mut start = Node::new("events_simple", "Start", "", "events");
+        start.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let catalog = [start, catalog_node]
+            .iter()
+            .map(crate::flow::copilot::node_to_metadata)
+            .collect::<Vec<_>>();
+
+        let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "limit_feed_items").is_some());
+
+        let glob = reconcile_text_with_catalog(
+            &empty_board(),
+            "use rss::items::*\n\neventsSimple() {\n    limitFeedItems({ limit: 3 })\n}\n",
+            &catalog,
+        );
+        assert!(glob.diagnostics.is_empty(), "{:?}", glob.diagnostics);
+        assert!(added_node_ref(&glob, "limit_feed_items").is_some());
+    }
+
+    #[test]
+    fn unused_use_is_a_correction_note_only() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result.corrections,
+            vec!["`use ai::ml` is unused.".to_string()]
+        );
+    }
+
+    #[test]
+    fn namespace_use_brings_the_last_segment_into_scope() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml\n\neventsSimple() {\n    const m = ml::read({ path: \"model.onnx\" })\n    log({ text: \"ok\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let read = added_node_ref(&result, "ai_ml_read").expect("ai_ml_read node");
+        assert!(pin_set_to(
+            &result,
+            read,
+            "path",
+            flow_like_types::Value::String("model.onnx".to_string())
+        ));
+        assert!(result.corrections.is_empty(), "{:?}", result.corrections);
+    }
+
+    #[test]
+    fn aliased_use_renames_the_namespace() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml as models\n\neventsSimple() {\n    const m = models::read({ path: \"p\" })\n    log({ text: \"ok\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "ai_ml_read").is_some());
+    }
+
+    #[test]
+    fn members_only_use_leaves_other_members_unresolved() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::{{ trim }}\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = trim({{ string: s }})\n    const u = toUpperCase({{ string: t }})\n    log({{ text: u }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert!(added_node_ref(&result, "string_to_upper").is_none());
+        let diagnostic = diagnostic_containing(
+            &result,
+            "FlowScript call `toUpperCase` does not match a catalog declaration",
+        )
+        .expect("unopened member diagnostic");
+        assert!(
+            diagnostic.contains(
+                "did you mean `string::toUpperCase` (or add `use string::*` to call it bare)?"
+            ),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn unknown_namespace_in_use_has_a_did_you_mean() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "use strng::*\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &namespaced_catalog(),
+        );
+        let diagnostic = diagnostic_containing(&result, "namespace `strng` is unknown")
+            .expect("unknown namespace diagnostic");
+        assert!(diagnostic.starts_with("`use strng::*`:"), "{diagnostic}");
+        assert!(diagnostic.contains("did you mean `string`"), "{diagnostic}");
+        assert!(
+            !result
+                .corrections
+                .iter()
+                .any(|note| note.contains("unused")),
+            "{:?}",
+            result.corrections
+        );
+    }
+
+    #[test]
+    fn unknown_path_call_has_a_did_you_mean() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = ai::ml::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        let diagnostic = diagnostic_containing(&result, "`ai::ml::trim` is not a function")
+            .expect("path miss diagnostic");
+        assert!(
+            diagnostic.contains("did you mean `string::trim`"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn use_name_collisions_and_keywords_are_diagnostics() {
+        let catalog = namespaced_catalog();
+        let duplicate = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::{ contains }\nuse array::{ contains }\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            duplicate.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use array::{ contains }`: `contains` is already imported by `use string::{ contains }`; remove one of them"),
+            "{:?}",
+            duplicate.diagnostics
+        );
+
+        let keyword = reconcile_text_with_catalog(
+            &empty_board(),
+            "use ai::ml as if\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            keyword.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use ai::ml as if`: `if` is a FlowScript keyword and cannot be imported under that name"),
+            "{:?}",
+            keyword.diagnostics
+        );
+
+        let shadowed = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::{ trim }\n\nfunction trim(s: string): (out: string) {\n    return s\n}\n\neventsSimple() {\n    log({ text: \"hi\" })\n}\n",
+            &catalog,
+        );
+        assert!(
+            shadowed.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`use string::{ trim }`: `trim` is also a `function` declared in this file; rename one of them"),
+            "{:?}",
+            shadowed.diagnostics
+        );
+    }
+
+    #[test]
+    fn two_globs_sharing_a_member_resolve_by_argument_shape() {
+        let catalog = namespaced_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "use string::*\nuse array::*\n\n{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: contains({{ string: s, substring: \"?\" }}) }})\n    logBool({{ value: contains({{ value: 1 }}) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_contains").is_some());
+        assert!(added_node_ref(&result, "array_contains").is_some());
+
+        let ambiguous = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::*\nuse array::*\n\neventsSimple() {\n    logBool({ value: contains() })\n}\n",
+            &catalog,
+        );
+        assert!(
+            ambiguous.diagnostics.iter().any(|diagnostic| diagnostic
+                == "call `contains` is ambiguous between `string::contains`, `array::contains` (opened by `use`); write the qualified form, for example `string::contains(...)`"),
+            "{:?}",
+            ambiguous.diagnostics
+        );
+    }
+
+    #[test]
+    fn method_call_on_a_string_variable_wires_the_receiver_pin() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", trim, "string"));
+        assert!(connected(&result, trim, "trimmed", log, "text"));
+    }
+
+    #[test]
+    fn method_call_with_unknown_receiver_type_resolves_a_unique_alias() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const v: any = \"x\"\n\neventsSimple() {\n    const t = v.trim()\n    log({ text: t })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+    }
+
+    #[test]
+    fn contains_on_an_unknown_receiver_is_ambiguous_until_a_use_breaks_the_tie() {
+        let catalog = namespaced_catalog();
+        let ambiguous = reconcile_text_with_catalog(
+            &empty_board(),
+            "const v: any = \"x\"\n\neventsSimple() {\n    logBool({ value: v.contains(\"?\") })\n}\n",
+            &catalog,
+        );
+        assert!(
+            ambiguous.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`v.contains(...)` is ambiguous between `string::contains`, `array::contains`; write the qualified form, for example `string::contains({ string: v, ... })`"),
+            "{:?}",
+            ambiguous.diagnostics
+        );
+        assert!(added_node_ref(&ambiguous, "string_contains").is_none());
+
+        let tied = reconcile_text_with_catalog(
+            &empty_board(),
+            "use string::*\n\nconst v: any = \"x\"\n\neventsSimple() {\n    logBool({ value: v.contains(\"?\") })\n}\n",
+            &catalog,
+        );
+        assert!(tied.diagnostics.is_empty(), "{:?}", tied.diagnostics);
+        let contains = added_node_ref(&tied, "string_contains").expect("string_contains node");
+        assert!(pin_set_to(
+            &tied,
+            contains,
+            "substring",
+            flow_like_types::Value::String("?".to_string())
+        ));
+    }
+
+    #[test]
+    fn typed_receiver_rejects_methods_of_other_classes() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\n\neventsSimple() {\n    const t = count.trim()\n    log({ text: t })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "no method `trim` on `int`; `trim` is a method of `string`"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn universal_methods_apply_to_every_class() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\nconst s: string = \"x\"\n\neventsSimple() {\n    logBool({ value: count.isNull() })\n    logBool({ value: s.isNull() })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "types_is_null"
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn titled_struct_receiver_dispatches_on_the_schema_title() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "interface Mail {\n    to: string\n    subject: string\n}\n\nconst draft: Mail = {}\n\neventsSimple() {\n    log({ text: draft.subjectOf() })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let subject = added_node_ref(&result, "email_subject_of").expect("email_subject_of node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", subject, "mail"));
+    }
+
+    #[test]
+    fn duplicate_live_function_names_do_not_fall_through_to_a_catalog_method() {
+        let mut board = board_with_duplicate_root_functions();
+        for layer in board.layers.values_mut() {
+            layer.name = "trim".to_string();
+            let mut boundary = Node::new("boundary", "Boundary", "", "test");
+            let receiver = boundary
+                .add_input_pin("text", "Text", "", VariableType::String)
+                .clone();
+            layer.pins.insert(receiver.id.clone(), receiver);
+        }
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            &format!("{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim()\n}}\n"),
+            &namespaced_catalog(),
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("method call `s.trim` is ambiguous")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(added_node_ref(&result, "string_trim").is_none());
+        assert!(added_node_ref(&result, "control_call_function").is_none());
+    }
+
+    #[test]
+    fn user_functions_join_the_method_tables() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const full: string = \"a b\"\n\nfunction parseName(name: string): (first: string) {\n    const t = name.trim()\n    return t\n}\n\neventsSimple() {\n    const n = full.parseName()\n    log({ text: n.first })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, reader, "value_ref", call, "name"));
+        assert!(connected(&result, call, "first", log, "text"));
+        assert!(result.corrections.is_empty(), "{:?}", result.corrections);
+    }
+
+    #[test]
+    fn user_functions_shadow_catalog_methods_with_a_note() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}function trim(text: string): (out: string) {{\n    const u = text.toUpperCase()\n    return u\n}}\n\neventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_none());
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", call, "text"));
+        assert_eq!(
+            result.corrections,
+            vec![
+                "`s.trim(...)` calls function `trim`, which shadows catalog method `string::trim`."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn interface_typed_variable_is_a_receiver_for_user_functions() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "interface Mail {\n    to: string\n    subject: string\n}\n\nconst draft: Mail = {}\n\nfunction sendMail(mail: Mail) {\n    log({ text: mail.subject })\n}\n\neventsSimple() {\n    draft.sendMail()\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let call = added_node_ref(&result, "control_call_function").expect("call node");
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", call, "mail"));
+        let event = added_node_ref(&result, "events_simple").expect("event node");
+        assert!(connected(&result, event, "exec_out", call, "exec_in"));
+    }
+
+    #[test]
+    fn user_function_receiver_type_is_checked() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "const count: int = 3\n\nfunction parseName(name: string): (first: string) {\n    return name\n}\n\neventsSimple() {\n    const n = count.parseName()\n    log({ text: n.first })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "no method `parseName` on `int`; `parseName` is a method of `string (function `parseName`)`"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn positional_arguments_bind_in_pin_order() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    log(\"hi\")\n    logBool({{ value: s.contains(\"?\") }})\n    logBool({{ value: s.contains(\"!\", {{ ignoreCase: true }}) }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(pin_set_to(
+            &result,
+            log,
+            "text",
+            flow_like_types::Value::String("hi".to_string())
+        ));
+        let contains = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_contains" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [first, second] = contains.as_slice() else {
+            panic!("expected two string_contains nodes: {:?}", result.commands);
+        };
+        assert!(pin_set_to(
+            &result,
+            first,
+            "substring",
+            flow_like_types::Value::String("?".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            second,
+            "substring",
+            flow_like_types::Value::String("!".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            second,
+            "ignore_case",
+            flow_like_types::Value::Bool(true)
+        ));
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(&result, reader, "value_ref", first, "string"));
+    }
+
+    #[test]
+    fn positional_arguments_on_repeated_pins_keep_occurrence_order() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    log({{ text: s.concat(\"!\") }})\n    log({{ text: string::concat(\"a\", \"b\") }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let concats = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "string_concat" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [method, positional] = concats.as_slice() else {
+            panic!("expected two string_concat nodes: {:?}", result.commands);
+        };
+        let reader = added_node_ref(&result, "variable_get").expect("variable_get node");
+        assert!(connected(
+            &result,
+            reader,
+            "value_ref",
+            method,
+            "string[#1]"
+        ));
+        assert!(pin_set_to(
+            &result,
+            method,
+            "string[#2]",
+            flow_like_types::Value::String("!".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            positional,
+            "string[#1]",
+            flow_like_types::Value::String("a".to_string())
+        ));
+        assert!(pin_set_to(
+            &result,
+            positional,
+            "string[#2]",
+            flow_like_types::Value::String("b".to_string())
+        ));
+    }
+
+    #[test]
+    fn positional_argument_misuse_is_a_diagnostic() {
+        let catalog = namespaced_catalog();
+        let duplicate = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: s.contains(\"?\", {{ substring: \"x\" }}) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            duplicate.diagnostics.iter().any(|diagnostic| diagnostic
+                == "positional argument 1 of `s.contains(...)` fills `substring`, which is also given by name; remove one of them"),
+            "{:?}",
+            duplicate.diagnostics
+        );
+
+        let too_many = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    logBool({{ value: s.contains(\"?\", true, 1) }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            too_many.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.contains(...)` has 3 positional arguments, but `string::contains` only has 2 data inputs to bind them to (substring, ignoreCase)"),
+            "{:?}",
+            too_many.diagnostics
+        );
+
+        let receiver_twice = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            receiver_twice.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.trim(...)` binds its receiver to `string`, which is also given as a named argument; remove one of them"),
+            "{:?}",
+            receiver_twice.diagnostics
+        );
+    }
+
+    #[test]
+    fn object_destructuring_binds_output_pins_by_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const { text, usage: u } = ai::invoke({ prompt: \"hi\" })\n    log({ text: text })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let invoke = added_node_ref(&result, "ai_invoke").expect("ai_invoke node");
+        let log = added_node_ref(&result, "log").expect("log node");
+        assert!(connected(&result, invoke, "text", log, "text"));
+        assert!(connected(&result, invoke, "exec_out", log, "exec_in"));
+
+        let unknown = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const { text, tokens } = ai::invoke({ prompt: \"hi\" })\n    log({ text: text })\n}\n",
+            &namespaced_catalog(),
+        );
+        assert!(
+            unknown.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`ai::invoke` has no data output `tokens` to destructure; its outputs are `text`, `usage`"),
+            "{:?}",
+            unknown.diagnostics
+        );
+    }
+
+    #[test]
+    fn lenient_dotted_namespace_call_resolves_with_a_note() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string.trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "string_trim").is_some());
+        assert_eq!(
+            result.corrections,
+            vec!["Resolved `string.trim(...)` as the namespace call `string::trim(...)`; write `::` between namespace segments (`.` is the member/method operator).".to_string()]
+        );
+    }
+
+    #[test]
+    fn impure_method_call_in_statement_position_joins_the_exec_chain() {
+        let catalog = namespaced_catalog();
+        let method = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    s.say()\n    log({{ text: \"done\" }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(method.diagnostics.is_empty(), "{:?}", method.diagnostics);
+        let flat = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    stringSay({{ string: s }})\n    log({{ text: \"done\" }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(flat.diagnostics.is_empty(), "{:?}", flat.diagnostics);
+        let say = added_node_ref(&method, "string_say").expect("string_say node");
+        let event = added_node_ref(&method, "events_simple").expect("event node");
+        let log = added_node_ref(&method, "log").expect("log node");
+        let reader = added_node_ref(&method, "variable_get").expect("variable_get node");
+        assert!(connected(&method, event, "exec_out", say, "exec_in"));
+        assert!(connected(&method, say, "exec_out", log, "exec_in"));
+        assert!(connected(&method, reader, "value_ref", say, "string"));
+        assert_eq!(
+            format!("{:?}", method.commands),
+            format!("{:?}", flat.commands),
+            "the method form must plan exactly like the flat form"
+        );
+    }
+
+    #[test]
+    fn chained_method_calls_type_each_link() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const u = s.trim().toUpperCase()\n    log({{ text: u }})\n    logBool({{ value: s.trim() == s.trim() }})\n}}\n"
+            ),
+            &namespaced_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let upper = added_node_ref(&result, "string_to_upper").expect("string_to_upper node");
+        let trim = added_node_ref(&result, "string_trim").expect("string_trim node");
+        assert!(connected(&result, trim, "trimmed", upper, "string"));
+        assert!(
+            added_node_ref(&result, "equal_string").is_some(),
+            "`==` must pick the String operator from the method call's output type: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_key_mapping_to_two_node_types_fails_closed() {
+        let mut catalog = namespaced_catalog();
+        catalog.push(named(
+            catalog_meta(
+                "string_trim_legacy",
+                "Trim (legacy)",
+                vec![pin_meta("string", "String", PinType::Input)],
+                vec![pin_meta("trimmed", "String", PinType::Output)],
+            ),
+            "string",
+            "trim",
+        ));
+        let path = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = string::trim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            path.diagnostics.iter().any(|diagnostic| diagnostic
+                == "FlowScript call `string::trim` is ambiguous; matched string_trim, string_trim_legacy"),
+            "{:?}",
+            path.diagnostics
+        );
+        assert!(added_node_ref(&path, "string_trim").is_none());
+        assert!(added_node_ref(&path, "string_trim_legacy").is_none());
+
+        let method = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = s.trim()\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            method.diagnostics.iter().any(|diagnostic| diagnostic
+                == "`s.trim(...)` is ambiguous between `string::trim (string_trim)`, `string::trim (string_trim_legacy)`; write the qualified form, for example `string::trim({ string: s, ... })`"),
+            "{:?}",
+            method.diagnostics
+        );
+
+        let flat = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!(
+                "{TRIMMED_VARIABLE}eventsSimple() {{\n    const t = stringTrim({{ string: s }})\n    log({{ text: t }})\n}}\n"
+            ),
+            &catalog,
+        );
+        assert!(
+            flat.diagnostics.is_empty(),
+            "the flat spelling names one node type and stays unambiguous: {:?}",
+            flat.diagnostics
+        );
+    }
+
+    // ---- phase 3: sugared loops -------------------------------------------------------------
+
+    fn variable_get_meta() -> NodeMetadata {
+        catalog_meta(
+            "variable_get",
+            "Get Variable",
+            vec![pin_meta("var_ref", "String", PinType::Input)],
+            vec![pin_meta("value_ref", "Generic", PinType::Output)],
+        )
+    }
+
+    fn loop_sugar_catalog() -> Vec<NodeMetadata> {
+        let loop_outputs = || {
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("value", "Generic", PinType::Output),
+                pin_meta("index", "Integer", PinType::Output),
+                pin_meta("done", "Execution", PinType::Output),
+            ]
+        };
+        vec![
+            variable_get_meta(),
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_for_each",
+                "For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                ],
+                loop_outputs(),
+            ),
+            catalog_meta(
+                "control_par_for_each",
+                "Parallel For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                    pin_meta("max_concurrent", "Integer", PinType::Input),
+                ],
+                loop_outputs(),
+            ),
+            catalog_meta(
+                "control_while_loop",
+                "While Loop",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                    pin_meta("max_iter", "Integer", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("iter", "Integer", PinType::Output),
+                    pin_meta("done", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "int_less_than",
+                "Less Than",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("less_than", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "array_chunk",
+                "Chunk Array",
+                vec![
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                    pin_meta("size", "Integer", PinType::Input),
+                ],
+                vec![pin_meta_friendly(
+                    "chunks",
+                    "Chunks",
+                    "Generic",
+                    "Array",
+                    PinType::Output,
+                )],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    fn has_connection(result: &ReconcileResult, from: (&str, &str), to: (&str, &str)) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == from.0 && from_pin == from.1 && to_node == to.0 && to_pin == to.1
+            )
+        })
+    }
+
+    fn added_node_types(result: &ReconcileResult) -> Vec<String> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode { node_type, .. } => Some(node_type.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sugared_for_of_synthesizes_control_for_each_and_binds_the_element() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const item of items) {\n        log({ text: item })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(types.contains(&"control_for_each".to_string()), "{types:?}");
+        let loop_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "control_for_each" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("loop node");
+        let log_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "log" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("log node");
+        assert!(
+            has_connection(&result, (&loop_ref, "value"), (&log_ref, "text")),
+            "element binding must read the loop's `value` output: {:?}",
+            result.commands
+        );
+        assert!(
+            has_connection(&result, (&loop_ref, "exec_out"), (&log_ref, "exec_in")),
+            "body must hang off `exec_out`: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("variable_get")
+                        && from_pin == "value_ref"
+                        && to_node == &loop_ref
+                        && to_pin == "array"
+            )),
+            "the iterable must feed `array`: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn sugared_index_binding_and_parallel_decorator_pick_the_loop_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    @parallel\n    for (const [i, item] of items) {\n        log({ text: i })\n        log({ text: item })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_par_for_each".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            !types.contains(&"control_for_each".to_string()),
+            "{types:?}"
+        );
+        let loop_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(id),
+                    ..
+                } if node_type == "control_par_for_each" => Some(id.clone()),
+                _ => None,
+            })
+            .expect("loop node");
+        let wired_outputs: Vec<&str> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_pin,
+                    ..
+                } if from_node == &loop_ref && to_pin == "text" => Some(from_pin.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            wired_outputs.contains(&"index") && wired_outputs.contains(&"value"),
+            "{wired_outputs:?}"
+        );
+    }
+
+    #[test]
+    fn sugared_while_wires_the_condition_into_control_while_loop() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const i: int = 0\n\neventsSimple() {\n    while (i < 3) {\n        log({ text: i })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_while_loop".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("int_less_than")
+                        && from_pin == "less_than"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("control_while_loop")
+                        && to_pin == "condition"
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn handle_form_over_a_non_loop_call_is_an_iterable() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const chunk of arrayChunk({ array: items, size: 2 })) {\n        log({ text: chunk })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let types = added_node_types(&result);
+        assert!(
+            types.contains(&"control_for_each".to_string())
+                && types.contains(&"array_chunk".to_string()),
+            "{types:?}"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("array_chunk")
+                        && from_pin == "chunks"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("control_for_each")
+                        && to_pin == "array"
+            )),
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("control_for_each")
+                        && from_pin == "value"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("log")
+                        && to_pin == "text"
+            )),
+            "the handle of a non-loop head is the element: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn explicit_loop_call_head_keeps_the_handle_binding() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const items: any[] = []\n\neventsSimple() {\n    for (const h of controlForEach({ array: items })) {\n        log({ text: h.index })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            added_node_types(&result)
+                .iter()
+                .filter(|node_type| node_type.starts_with("control_"))
+                .count(),
+            1
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_pin, .. }
+                    if from_pin == "index" && to_pin == "text"
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn non_array_iterable_and_while_bindings_are_diagnosed() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const name: string = \"x\"\n\neventsSimple() {\n    for (const c of name) {\n        log({ text: c })\n    }\n}\n",
+            &loop_sugar_catalog(),
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("not an array")),
+            "{:?}",
+            result.diagnostics
+        );
+
+        let mut ast = flow_like_ast::parse("eventsSimple() {\n    while (true) {\n    }\n}\n")
+            .expect("parses");
+        if let Some(Stmt::Loop { element, .. }) = ast.events[0].body.stmts.first_mut() {
+            *element = Some("item".to_string());
+        }
+        let result = reconcile_with_catalog(&board, &ast, &loop_sugar_catalog());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("`while` loop binds no element")),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    /// Lower a board with a `while` loop and a `for…of` whose handle is only read as
+    /// `value`/`index`, render anchored text, and reconcile it back: the sugared forms must be
+    /// a no-op against their own board.
+    #[test]
+    fn sugared_loops_round_trip_against_their_own_board() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut less = Node::new("int_less_than", "Less Than", "", "math");
+        less.id = "less".to_string();
+        less.add_input_pin("integer1", "A", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(1)));
+        less.add_input_pin("integer2", "B", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(3)));
+        let less_out = less
+            .add_output_pin("less_than", "Less", "", VariableType::Boolean)
+            .id
+            .clone();
+        board.nodes.insert(less.id.clone(), less);
+
+        let mut while_loop = Node::new("control_while_loop", "While Loop", "", "control");
+        while_loop.id = "while".to_string();
+        let while_in = while_loop
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let condition = while_loop
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .id
+            .clone();
+        while_loop
+            .add_input_pin("max_iter", "Max", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(15)));
+        let while_body = while_loop
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        while_loop.add_output_pin("iter", "Iter", "", VariableType::Integer);
+        let while_done = while_loop
+            .add_output_pin("done", "Done", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(while_loop.id.clone(), while_loop);
+
+        let mut for_each = Node::new("control_for_each", "For Each", "", "control");
+        for_each.id = "loop".to_string();
+        let for_in = for_each
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let array = for_each.add_input_pin("array", "Array", "", VariableType::Generic);
+        array.value_type = ValueType::Array;
+        array.default_value = Some(b"[1,2]".to_vec());
+        let for_body = for_each
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        let value = for_each
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        let index = for_each
+            .add_output_pin("index", "Index", "", VariableType::Integer)
+            .id
+            .clone();
+        for_each.add_output_pin("done", "Done", "", VariableType::Execution);
+        board.nodes.insert(for_each.id.clone(), for_each);
+
+        let mut log_value = Node::new("log", "Log", "", "debug");
+        log_value.id = "log_value".to_string();
+        let log_value_in = log_value
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let log_value_text = log_value
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        let log_value_out = log_value
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(log_value.id.clone(), log_value);
+
+        let mut log_index = Node::new("log", "Log", "", "debug");
+        log_index.id = "log_index".to_string();
+        let log_index_in = log_index
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let log_index_text = log_index
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        log_index.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log_index.id.clone(), log_index);
+
+        let mut log_while = Node::new("log", "Log", "", "debug");
+        log_while.id = "log_while".to_string();
+        let log_while_in = log_while
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log_while
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .set_default_value(Some(flow_like_types::json::json!("tick")));
+        log_while.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log_while.id.clone(), log_while);
+
+        connect(&mut board, "event", &event_out, "while", &while_in);
+        connect(&mut board, "less", &less_out, "while", &condition);
+        connect(&mut board, "while", &while_body, "log_while", &log_while_in);
+        connect(&mut board, "while", &while_done, "loop", &for_in);
+        connect(&mut board, "loop", &for_body, "log_value", &log_value_in);
+        connect(&mut board, "loop", &value, "log_value", &log_value_text);
+        connect(
+            &mut board,
+            "log_value",
+            &log_value_out,
+            "log_index",
+            &log_index_in,
+        );
+        connect(&mut board, "loop", &index, "log_index", &log_index_text);
+
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..flow_like_ast::RenderOptions::default()
+            },
+        );
+        assert!(
+            text.contains("while (1 < 3) {   //@n:while"),
+            "a wired condition with default max_iter renders as `while (cond)`:\n{text}"
+        );
+        assert!(
+            text.contains("for (const [index, item] of [1,2]) {   //@n:loop"),
+            "value+index reads render as the destructured head:\n{text}"
+        );
+        assert!(
+            text.contains("log({ text: item })") && text.contains("log({ text: index })"),
+            "{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "sugared loops must round-trip as a no-op: {:?}",
+            result.commands
+        );
+
+        // Editing the literal iterable on the anchored loop is a plain pin update.
+        let edited = text.replace("of [1,2]", "of [1,2,3]");
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                    if node_id == "loop" && pin_id == "array"
+            )),
+            "{:?}",
+            result.commands
+        );
+
+        // A non-default max_iter keeps the explicit call form.
+        let max_iter = board.nodes["while"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "max_iter")
+            .map(|pin| pin.id.clone())
+            .expect("max_iter");
+        board
+            .nodes
+            .get_mut("while")
+            .unwrap()
+            .pins
+            .get_mut(&max_iter)
+            .unwrap()
+            .default_value = Some(b"100".to_vec());
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("while (control::whileLoop({ condition: 1 < 3, maxIter: 100 })) {"),
+            "{text}"
+        );
+    }
+
+    // ---- phase 3: template literals ----------------------------------------------------------
+
+    fn template_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = string_format_dynamic_catalog();
+        catalog.push(variable_get_meta());
+        catalog.push(catalog_meta(
+            "events_simple",
+            "Simple Event",
+            Vec::new(),
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        ));
+        catalog.push(catalog_meta(
+            "make_data",
+            "Make Data",
+            vec![pin_meta("exec_in", "Execution", PinType::Input)],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("data", "Struct", PinType::Output),
+            ],
+        ));
+        catalog
+    }
+
+    #[test]
+    fn template_literal_lowers_to_one_string_format_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "const label: string = \"\"\n\neventsSimple() {\n    const source = makeData()\n    log({ text: `Topic ${label}\nGoal: ${source.data} ${label}` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let formats: Vec<&BoardCommand> = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "string_format")
+            })
+            .collect();
+        assert_eq!(formats.len(), 1, "{:?}", result.commands);
+        let format_ref = match formats[0] {
+            BoardCommand::AddNode {
+                ref_id: Some(id), ..
+            } => id.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == &format_ref
+                        && pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Topic {label}\nGoal: {data} {label}".to_string())
+            )),
+            "{:?}",
+            result.commands
+        );
+        let placeholder_targets: Vec<&str> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    to_node, to_pin, ..
+                } if to_node == &format_ref => Some(to_pin.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            placeholder_targets,
+            vec!["label", "data"],
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                    if from_node == &format_ref && from_pin == "value" && to_pin == "text"
+            )),
+            "the template value feeds the consumer: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn template_literal_with_literal_placeholder_text_is_rejected() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    log({ text: `literal {name} braces` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("literal `{name}` inside a template literal")
+                    && diagnostic.contains("string::format({ formatString: … })")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !added_node_types(&result).contains(&"string_format".to_string()),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn zero_placeholder_template_still_creates_a_format_node() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    log({ text: `Successfully Added` })\n}\n",
+            &template_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            added_node_types(&result).contains(&"string_format".to_string()),
+            "{:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Successfully Added".to_string())
+            )),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    /// A `string_format` node renders as a template literal only when the template
+    /// re-synthesizes the same node; an unchanged document is then a no-op and a text edit of
+    /// the static part is a single pin update.
+    #[test]
+    fn string_format_template_round_trips_and_edits_in_place() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut producer = Node::new("make_data", "Make Data", "", "data");
+        producer.id = "producer".to_string();
+        let producer_in = producer
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let producer_out = producer
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let path_out = producer
+            .add_output_pin("path", "Path", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(producer.id.clone(), producer);
+
+        let mut format = Node::new("string_format", "Format String", "", "Utils/String");
+        format.id = "format".to_string();
+        format
+            .add_input_pin("format_string", "Input", "", VariableType::String)
+            .set_default_value(Some(flow_like_types::json::json!("Path {path} missing")));
+        let path_in = format
+            .add_input_pin("path", "path", "", VariableType::Generic)
+            .id
+            .clone();
+        let formatted = format
+            .add_output_pin("formatted_string", "Formatted", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(format.id.clone(), format);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "producer", &producer_in);
+        connect(&mut board, "producer", &producer_out, "log", &log_in);
+        connect(&mut board, "producer", &path_out, "format", &path_in);
+        connect(&mut board, "format", &formatted, "log", &text_in);
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..flow_like_ast::RenderOptions::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        assert!(
+            text.contains("const path = data::makeData()")
+                && text.contains("debug::log({ text: `Path ${path} missing` })"),
+            "{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+
+        let edited = text.replace("missing`", "not found`");
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1, "{:?}", result.commands);
+        assert!(
+            matches!(
+                &result.commands[0],
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "format"
+                        && pin_id == "format_string"
+                        && value == &flow_like_types::Value::String("Path {path} not found".to_string())
+            ),
+            "{:?}",
+            result.commands
+        );
+
+        // A placeholder whose pin name the template cannot reproduce keeps the call form.
+        let pin = board.nodes["format"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "format_string")
+            .map(|pin| pin.id.clone())
+            .expect("format_string");
+        board
+            .nodes
+            .get_mut("format")
+            .unwrap()
+            .pins
+            .get_mut(&pin)
+            .unwrap()
+            .default_value = Some(b"\"Path {p} missing\"".to_vec());
+        let renamed = board.nodes["format"]
+            .pins
+            .values()
+            .find(|pin| pin.name == "path")
+            .map(|pin| pin.id.clone())
+            .expect("placeholder pin");
+        board
+            .nodes
+            .get_mut("format")
+            .unwrap()
+            .pins
+            .get_mut(&renamed)
+            .unwrap()
+            .name = "p".to_string();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("\"Path {p} missing\".format({ p: path })"),
+            "{text}"
+        );
+    }
+
+    /// `control_par_for_each` renders as `@parallel for (…)` only while `max_concurrent` holds
+    /// its catalog default; the sugared text reconciles back to the same node as a no-op.
+    #[test]
+    fn parallel_for_each_sugar_depends_on_the_default_concurrency() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut loop_node = Node::new("control_par_for_each", "Parallel For Each", "", "control");
+        loop_node.set_flowscript_name("control", "parallelForEach");
+        loop_node.id = "loop".to_string();
+        let loop_in = loop_node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let array = loop_node.add_input_pin("array", "Array", "", VariableType::Generic);
+        array.value_type = ValueType::Array;
+        array.default_value = Some(b"[\"a\"]".to_vec());
+        let max_concurrent = loop_node
+            .add_input_pin("max_concurrent", "Max", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(30)))
+            .id
+            .clone();
+        let body = loop_node
+            .add_output_pin("exec_out", "Body", "", VariableType::Execution)
+            .id
+            .clone();
+        let value = loop_node
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        loop_node.add_output_pin("index", "Index", "", VariableType::Integer);
+        loop_node.add_output_pin("done", "Done", "", VariableType::Execution);
+        board.nodes.insert(loop_node.id.clone(), loop_node);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::Generic)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "loop", &loop_in);
+        connect(&mut board, "loop", &body, "log", &log_in);
+        connect(&mut board, "loop", &value, "log", &text_in);
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..flow_like_ast::RenderOptions::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        assert!(
+            text.contains("    @parallel\n    for (const item of [\"a\"]) {   //@n:loop\n        debug::log({ text: item })"),
+            "{text}"
+        );
+        let catalog: Vec<NodeMetadata> = board.nodes.values().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+
+        // Dropping `@parallel` on the anchored loop asks for a different node type.
+        let sequential = text.replace("    @parallel\n", "");
+        let result = reconcile_text_with_catalog(&board, &sequential, &catalog);
+        assert!(
+            result.diagnostics.iter().any(
+                |diagnostic| diagnostic.contains("declares exact node_type `control_for_each`")
+            ),
+            "{:?}",
+            result.diagnostics
+        );
+
+        board
+            .nodes
+            .get_mut("loop")
+            .unwrap()
+            .pins
+            .get_mut(&max_concurrent)
+            .unwrap()
+            .default_value = Some(b"15".to_vec());
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains(
+                "for (const parallelForEach of control::parallelForEach({ array: [\"a\"], maxConcurrent: 15 })) {\n        debug::log({ text: parallelForEach.value })"
+            ),
+            "{text}"
+        );
+    }
+
+    // ---- phase 4: stale placed nodes keep their derived spelling resolvable ----------------
+
+    fn delay_meta() -> NodeMetadata {
+        catalog_meta(
+            "rpa_delay",
+            "Delay",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("seconds", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )
+    }
+
+    fn renamed_delay_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            named(categorized(delay_meta(), "Automation/RPA"), "rpa", "wait"),
+        ]
+    }
+
+    /// A board whose placed `rpa_delay` predates the explicit `rpa::wait` name: it carries the
+    /// category but no `namespace`/`alias`, so it lowers with the derived spelling `rpa::delay`.
+    fn stale_delay_board() -> Board {
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Start", "", "Events");
+        event.id = "event".to_string();
+        event.start = Some(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+        let mut delay = Node::new("rpa_delay", "Delay", "", "Automation/RPA");
+        delay.id = "delay".to_string();
+        let delay_in = delay
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        delay
+            .add_input_pin("seconds", "Seconds", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(2)));
+        delay.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(delay.id.clone(), delay);
+        connect(&mut board, "event", &event_out, "delay", &delay_in);
+        board
+    }
+
+    #[test]
+    fn stale_placed_node_renders_and_resolves_its_derived_name() {
+        let board = stale_delay_board();
+        let catalog = renamed_delay_catalog();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        assert!(
+            text.contains("rpa::delay({ seconds: 2 })"),
+            "a placed node without explicit names lowers with the derived spelling:\n{text}"
+        );
+
+        let anchored = anchored_text(&board);
+        let roundtrip = reconcile_text_with_catalog(&board, &anchored, &catalog);
+        assert!(
+            roundtrip.diagnostics.is_empty(),
+            "{:?}",
+            roundtrip.diagnostics
+        );
+        assert!(roundtrip.commands.is_empty(), "{:?}", roundtrip.commands);
+
+        let recreated = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(
+            recreated.diagnostics.is_empty(),
+            "{:?}",
+            recreated.diagnostics
+        );
+        assert!(added_node_ref(&recreated, "rpa_delay").is_some());
+
+        let explicit = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    rpa::wait({ seconds: 2 })\n}\n",
+            &catalog,
+        );
+        assert!(
+            explicit.diagnostics.is_empty(),
+            "{:?}",
+            explicit.diagnostics
+        );
+        assert!(added_node_ref(&explicit, "rpa_delay").is_some());
+    }
+
+    #[test]
+    fn derived_secondary_name_never_shadows_another_nodes_real_name() {
+        let mut catalog = renamed_delay_catalog();
+        let mut pause = catalog_meta(
+            "rpa_pause",
+            "Pause",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("seconds", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        );
+        pause.category = Some("Automation/RPA".to_string());
+        catalog.push(named(pause, "rpa", "delay"));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    rpa::delay({ seconds: 2 })\n}\n",
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(added_node_ref(&result, "rpa_pause").is_some());
+        assert!(added_node_ref(&result, "rpa_delay").is_none());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Written module structure is authoritative: anchored renames/moves become explicit commands.
+    // ------------------------------------------------------------------------------------------
+
+    fn module_layer(board: &mut Board, id: &str, name: &str, parent: Option<&str>) {
+        let mut layer = Layer::new(id.to_string(), name.to_string(), LayerType::Module);
+        layer.parent_id = parent.map(str::to_string);
+        board.layers.insert(layer.id.clone(), layer);
+    }
+
+    /// Event entry + anchored `log` body node, both members of `module_id` (None = root).
+    fn event_with_log_in_module(
+        board: &mut Board,
+        event_id: &str,
+        log_id: &str,
+        module_id: Option<&str>,
+    ) {
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = event_id.to_string();
+        event.set_start(true);
+        event.layer = module_id.map(str::to_string);
+        let exec_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = log_id.to_string();
+        log.layer = module_id.map(str::to_string);
+        let exec_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(board, event_id, &exec_out, log_id, &exec_in);
+    }
+
+    fn move_commands(result: &ReconcileResult) -> Vec<(Vec<String>, Option<String>)> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::MoveToLayer {
+                    ids, target_layer, ..
+                } => Some((ids.clone(), target_layer.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rename_layer_commands(result: &ReconcileResult) -> Vec<(String, String)> {
+        result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::RenameLayer { layer_id, name, .. } => {
+                    Some((layer_id.clone(), name.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_anchored_function_written_with_a_new_name_is_renamed() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "old helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function incidentHelper() {   //@l:fn-1\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("fn-1".to_string(), "incidentHelper".to_string())]
+        );
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("old helper") && correction.contains("incidentHelper")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. }))
+        );
+    }
+
+    #[test]
+    fn anchored_function_rename_rejects_an_occupied_name_in_the_module() {
+        let mut board = empty_board();
+        for (id, name) in [("fn-1", "old helper"), ("fn-2", "incident helper")] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(id.to_string(), name.to_string(), LayerType::Function),
+            );
+        }
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function incidentHelper() {   //@l:fn-1\n}\n",
+            &[],
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.contains("Function layer `fn-2` already uses it") })
+        );
+        assert!(rename_layer_commands(&result).is_empty());
+    }
+
+    #[test]
+    fn anchored_function_move_and_rename_compose_on_the_same_layer_id() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "old helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+}
+
+module beta {   //@l:mod-b
+    function newHelper() {   //@l:fn-1
+    }
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("fn-1".to_string(), "newHelper".to_string())]
+        );
+    }
+
+    #[test]
+    fn anchored_function_rename_and_cache_update_compose() {
+        let mut board = empty_board();
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "old helper".to_string(),
+            LayerType::Function,
+        );
+        function.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(function.id.clone(), function);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"@cache({ namespace: "fresh", ttlSeconds: 300, scope: "user" })
+function newHelper() {   //@l:fn-1
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("fn-1".to_string(), "newHelper".to_string())]
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: Some(LayerCache {
+                    prefix,
+                    ttl_seconds: Some(300),
+                    scope: LayerCacheScope::User,
+                    ..
+                }),
+                ..
+            } if layer_id == "fn-1" && prefix == "fresh"
+        )));
+    }
+
+    #[test]
+    fn function_rename_can_recreate_the_retired_name_on_a_new_layer() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "oldHelper".to_string(),
+                LayerType::Function,
+            ),
+        );
+        let catalog = vec![catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function newHelper() {   //@l:fn-1
+}
+
+@cache({ namespace: "replacement" })
+function oldHelper() {
+    log({ text: "replacement" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("fn-1".to_string(), "newHelper".to_string())]
+        );
+        let replacement = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    name,
+                    ref_id: Some(ref_id),
+                    cache: Some(LayerCache { prefix, .. }),
+                    ..
+                } if name == "oldHelper" && prefix == "replacement" => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("the retired name must receive a new Function layer");
+        assert_ne!(replacement, "fn-1");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, target_layer: Some(target), .. }
+                if node_type == "log" && target == &replacement
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: Some(LayerCache { prefix, .. }),
+                ..
+            } if layer_id == "fn-1" && prefix == "replacement"
+        )));
+    }
+
+    #[test]
+    fn function_move_can_recreate_the_old_module_identity() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+        let catalog = vec![catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+    function helper() {
+        log({ text: "replacement" })
+    }
+}
+
+module beta {   //@l:mod-b
+    function helper() {   //@l:fn-1
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+        let replacement = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    name,
+                    ref_id: Some(ref_id),
+                    target_layer: Some(target),
+                    ..
+                } if name == "helper" && target == "mod-a" => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("Alpha must receive a new helper layer");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, target_layer: Some(target), .. }
+                if node_type == "log" && target == &replacement
+        )));
+    }
+
+    #[test]
+    fn unavailable_function_anchor_creates_a_function_layer() {
+        let catalog = vec![catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function importedHelper() {   //@l:function-from-another-board
+    log({ text: "imported" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("function-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                name,
+                layer_type: Some(layer_type),
+                ..
+            } if name == "importedHelper" && layer_type == "Function"
+        )));
+    }
+
+    #[test]
+    fn unavailable_function_anchor_does_not_guess_between_same_named_layers() {
+        let mut board = empty_board();
+        for id in ["fn-a", "fn-b"] {
+            board.layers.insert(
+                id.to_string(),
+                Layer::new(
+                    id.to_string(),
+                    "imported helper".to_string(),
+                    LayerType::Function,
+                ),
+            );
+        }
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function importedHelper() {   //@l:function-from-another-board\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("matches 2 Function layers")
+                && diagnostic.contains("fn-a")
+                && diagnostic.contains("fn-b")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. }))
+        );
+    }
+
+    #[test]
+    fn unavailable_module_anchor_creates_a_module_layer() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "module imported {   //@l:module-from-another-board\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("module-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                name,
+                layer_type: Some(layer_type),
+                ..
+            } if name == "imported" && layer_type == "Module"
+        )));
+    }
+
+    #[test]
+    fn duplicate_foreign_module_anchors_still_fail_preflight() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "module alpha {   //@l:foreign-layer\n}\n\nmodule beta {   //@l:foreign-layer\n}\n",
+            &[],
+        );
+
+        assert!(result.commands.is_empty());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("duplicate FlowScript anchor `foreign-layer`")
+        }));
+    }
+
+    #[test]
+    fn an_anchored_module_written_with_a_new_name_is_renamed() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+
+        let result =
+            reconcile_text_with_catalog(&board, "module payments {   //@l:mod-a\n}\n", &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("mod-a".to_string(), "payments".to_string())]
+        );
+        assert!(move_commands(&result).is_empty());
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. })),
+            "an anchored rename must not create a second module"
+        );
+    }
+
+    #[test]
+    fn module_rename_can_recreate_the_retired_name_in_either_source_order() {
+        for source in [
+            "module current {   //@l:mod-1\n}\n\nmodule legacy {\n}\n",
+            "module legacy {\n}\n\nmodule current {   //@l:mod-1\n}\n",
+        ] {
+            let mut board = empty_board();
+            module_layer(&mut board, "mod-1", "legacy", None);
+
+            let result = reconcile_text_with_catalog(&board, source, &[]);
+
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(
+                rename_layer_commands(&result),
+                vec![("mod-1".to_string(), "current".to_string())]
+            );
+            let replacements = result
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    BoardCommand::CreateLayer {
+                        name,
+                        ref_id: Some(ref_id),
+                        layer_type: Some(layer_type),
+                        ..
+                    } if name == "legacy" && layer_type == "Module" => Some(ref_id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(replacements.len(), 1, "{:?}", result.commands);
+            assert_ne!(replacements[0], "mod-1");
+        }
+    }
+
+    #[test]
+    fn module_move_can_recreate_the_old_nested_identity() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "alpha", None);
+        module_layer(&mut board, "mod-b", "beta", None);
+        module_layer(&mut board, "mod-child", "legacy", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+    module legacy {
+    }
+}
+
+module beta {   //@l:mod-b
+    module current {   //@l:mod-child
+    }
+}
+"#,
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            rename_layer_commands(&result),
+            vec![("mod-child".to_string(), "current".to_string())]
+        );
+        assert!(
+            move_commands(&result)
+                .contains(&(vec!["mod-child".to_string()], Some("mod-b".to_string())))
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                name,
+                layer_type: Some(layer_type),
+                target_layer: Some(target),
+                ..
+            } if name == "legacy" && layer_type == "Module" && target == "mod-a"
+        )));
+    }
+
+    #[test]
+    fn unavailable_module_anchor_can_reuse_one_compatible_local_module() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-local", "imported", None);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module imported {   //@l:module-from-another-board\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("module-from-another-board")
+                && correction.contains("treated the entity as unanchored")
+        }));
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. }))
+        );
+        assert!(rename_layer_commands(&result).is_empty());
+    }
+
+    #[test]
+    fn normalized_sibling_module_name_collision_fails_preflight() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "module foo_bar {\n}\n\nmodule fooBar {\n}\n",
+            &[],
+        );
+
+        assert!(result.commands.is_empty());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("module declaration names")
+                && diagnostic.contains("fooBar")
+                && diagnostic.contains("foo_bar")
+                && diagnostic.contains("normalized boundary name `fooBar`")
+        }));
+    }
+
+    #[test]
+    fn anchored_module_rename_rejects_an_occupied_final_path() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "alpha", None);
+        module_layer(&mut board, "mod-b", "beta", None);
+
+        let result = reconcile_text_with_catalog(&board, "module beta {   //@l:mod-a\n}\n", &[]);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("module path `beta`")
+                && diagnostic.contains("mod-a")
+                && diagnostic.contains("mod-b")
+        }));
+    }
+
+    #[test]
+    fn anchored_module_move_rejects_an_occupied_nested_path() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "alpha", None);
+        module_layer(&mut board, "mod-b", "beta", None);
+        module_layer(&mut board, "worker-a", "worker", Some("mod-a"));
+        module_layer(&mut board, "worker-b", "worker", Some("mod-b"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+}
+
+module beta {   //@l:mod-b
+    module worker {   //@l:worker-a
+    }
+}
+"#,
+            &[],
+        );
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("module path `beta::worker`")
+                && diagnostic.contains("worker-a")
+                && diagnostic.contains("worker-b")
+        }));
+    }
+
+    #[test]
+    fn parent_module_rename_checks_inherited_descendant_paths() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "alpha", None);
+        module_layer(&mut board, "mod-b", "beta", None);
+        module_layer(&mut board, "worker-a", "worker", Some("mod-a"));
+        module_layer(&mut board, "worker-b", "worker", Some("mod-b"));
+
+        let result = reconcile_text_with_catalog(&board, "module beta {   //@l:mod-a\n}\n", &[]);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("module path `beta::worker`")
+                && diagnostic.contains("worker-a")
+                && diagnostic.contains("worker-b")
+        }));
+    }
+
+    #[test]
+    fn parent_module_move_checks_inherited_descendant_paths() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "alpha", None);
+        module_layer(&mut board, "mod-b", "beta", None);
+        module_layer(&mut board, "group-a", "group", Some("mod-a"));
+        module_layer(&mut board, "group-b", "group", Some("mod-b"));
+        module_layer(&mut board, "worker-a", "worker", Some("group-a"));
+        module_layer(&mut board, "worker-b", "worker", Some("group-b"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module alpha {   //@l:mod-a
+}
+
+module beta {   //@l:mod-b
+    module group {   //@l:group-a
+    }
+}
+"#,
+            &[],
+        );
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("module path `beta::group::worker`")
+                && diagnostic.contains("worker-a")
+                && diagnostic.contains("worker-b")
+        }));
+    }
+
+    #[test]
+    fn ambiguous_module_identity_does_not_plan_its_contents_at_root() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "imported", None);
+        module_layer(&mut board, "mod-b", "imported", None);
+        let catalog = vec![catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("text", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"module imported {   //@l:module-from-another-board
+    function helper() {
+        log({ text: "must stay scoped" })
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("matches 2 module layers by name")
+                && diagnostic.contains("mod-a")
+                && diagnostic.contains("mod-b")
+        }));
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
+    fn a_matching_module_roundtrip_emits_no_structure_commands() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", Some("mod-a"));
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let text = "module alpha {   //@l:mod-a\n    start() {   //@n:event\n        log()   //@n:log\n    }\n\n    module beta {   //@l:mod-b\n    }\n}\n";
+        let result = reconcile_text_with_catalog(&board, text, &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(move_commands(&result).is_empty(), "{:?}", result.commands);
+        assert!(rename_layer_commands(&result).is_empty());
+    }
+
+    #[test]
+    fn an_anchored_module_written_under_a_new_parent_moves_there() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n    module beta {   //@l:mod-b\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["mod-b".to_string()], Some("mod-a".to_string()))]
+        );
+    }
+
+    #[test]
+    fn swapping_two_anchored_modules_moves_both() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module beta {   //@l:mod-b\n    module alpha {   //@l:mod-a\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let moves = move_commands(&result);
+        assert!(
+            moves.contains(&(vec!["mod-b".to_string()], None)),
+            "{moves:?}"
+        );
+        assert!(
+            moves.contains(&(vec!["mod-a".to_string()], Some("mod-b".to_string()))),
+            "{moves:?}"
+        );
+    }
+
+    #[test]
+    fn an_anchored_function_written_in_another_module_moves_there() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { .. })),
+            "moving an anchored function must not recreate its layer: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_anchored_function_written_in_a_new_module_moves_into_the_created_layer() {
+        let mut board = empty_board();
+        board.layers.insert(
+            "fn-1".to_string(),
+            Layer::new(
+                "fn-1".to_string(),
+                "helper".to_string(),
+                LayerType::Function,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module gamma {\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let created_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    ref_id: Some(ref_id),
+                    layer_type,
+                    ..
+                } if layer_type.as_deref() == Some("Module") => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("the new module layer is created");
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some(created_ref))]
+        );
+    }
+
+    #[test]
+    fn an_anchored_event_written_in_another_module_moves_with_its_body() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(
+                vec!["event".to_string(), "log".to_string()],
+                Some("mod-b".to_string())
+            )]
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::RemoveNode { .. } | BoardCommand::AddNode { .. }
+            )),
+            "a cross-module event move must not recreate the event: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_event_moved_to_the_root_takes_its_body_along() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "start() {   //@n:event\n    log()   //@n:log\n}\n\nmodule alpha {   //@l:mod-a\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["event".to_string(), "log".to_string()], None)]
+        );
+    }
+
+    #[test]
+    fn a_pure_source_shared_between_two_events_stays_behind_on_a_move() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        event_with_log_in_module(&mut board, "event2", "log2", Some("mod-a"));
+
+        // A pure node (no exec pins) feeding both logs' text inputs, plus one feeding only the
+        // moved event's log.
+        for (id, consumers) in [("shared", vec!["log", "log2"]), ("solo", vec!["log"])] {
+            let mut source = Node::new("make_text", "Make Text", "", "data");
+            source.id = id.to_string();
+            source.layer = Some("mod-a".to_string());
+            let out_pin = source
+                .add_output_pin("value", "Value", "", VariableType::String)
+                .id
+                .clone();
+            board.nodes.insert(source.id.clone(), source);
+            for consumer in consumers {
+                let text_pin_id = board
+                    .nodes
+                    .get(consumer)
+                    .expect("consumer")
+                    .pins
+                    .values()
+                    .find(|pin| pin.name == "text")
+                    .expect("text pin")
+                    .id
+                    .clone();
+                board
+                    .nodes
+                    .get_mut(consumer)
+                    .expect("consumer")
+                    .pins
+                    .get_mut(&text_pin_id)
+                    .expect("text pin")
+                    .depends_on
+                    .insert(out_pin.clone());
+                board
+                    .nodes
+                    .get_mut(id)
+                    .expect("source")
+                    .pins
+                    .get_mut(&out_pin)
+                    .expect("out pin")
+                    .connected_to
+                    .insert(text_pin_id);
+            }
+        }
+        module_layer(&mut board, "mod-b", "Beta", None);
+
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        // Move the first event's block from alpha into beta by reparsing and relocating it.
+        let mut ast = flow_like_ast::parse(&text).expect("rendered board parses");
+        // The render derives `use <category>::*` lines from node categories; the empty test
+        // catalog knows no namespaces, and unknown-namespace diagnostics are not under test.
+        ast.uses.clear();
+        let alpha = ast
+            .modules
+            .iter()
+            .position(|module| module.anchor.as_deref() == Some("mod-a"))
+            .expect("alpha block");
+        let event_index = ast.modules[alpha]
+            .events
+            .iter()
+            .position(|event| event.anchor.as_deref() == Some("event"))
+            .expect("moved event");
+        let event = ast.modules[alpha].events.remove(event_index);
+        let beta = ast
+            .modules
+            .iter()
+            .position(|module| module.anchor.as_deref() == Some("mod-b"))
+            .expect("beta block");
+        ast.modules[beta].events.push(event);
+
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let moves = move_commands(&result);
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        let (ids, target) = &moves[0];
+        assert_eq!(target.as_deref(), Some("mod-b"));
+        assert!(ids.contains(&"event".to_string()), "{ids:?}");
+        assert!(ids.contains(&"log".to_string()), "{ids:?}");
+        assert!(
+            ids.contains(&"solo".to_string()),
+            "an exclusive pure source travels with its event: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"shared".to_string()),
+            "a source shared with another event stays behind: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"event2".to_string()) && !ids.contains(&"log2".to_string()),
+            "the other event must not move: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn a_module_unaware_document_moves_nothing_in_either_mode() {
+        // Typed Flow IR cannot express `module` wrappers, and a full rewrite that lost every
+        // wrapper is corrupt, not a restructuring: neither may relocate anchored sections.
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let ast = flow_like_ast::parse(
+            "start() {   //@n:event\n    log()   //@n:log\n}\n\nfunction helper() {   //@l:fn-1\n}\n",
+        )
+        .expect("wrapper-less source parses");
+        for mode in [ReconcileMode::Additive, ReconcileMode::Replace] {
+            let result = reconcile_with_catalog_mode(&board, &ast, &[], mode);
+            assert!(
+                result.diagnostics.is_empty(),
+                "{mode:?}: {:?}",
+                result.diagnostics
+            );
+            assert!(
+                move_commands(&result).is_empty(),
+                "a module-unaware document must not relocate anchored sections ({mode:?}): {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn a_module_aware_additive_document_still_moves() {
+        // FlowPilot's write_flowscript drafts default to additive; a retained full document that
+        // kept its `module` wrappers is module-aware and may restructure.
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut function = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        function.parent_id = Some("mod-a".to_string());
+        board.layers.insert(function.id.clone(), function);
+
+        let ast = flow_like_ast::parse(
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+        )
+        .expect("module-aware source parses");
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["fn-1".to_string()], Some("mod-b".to_string()))]
+        );
+    }
+
+    #[test]
+    fn a_function_move_into_an_occupied_name_is_refused() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        let mut moving = Layer::new(
+            "fn-1".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        moving.parent_id = Some("mod-a".to_string());
+        board.layers.insert(moving.id.clone(), moving);
+        let mut occupant = Layer::new(
+            "fn-2".to_string(),
+            "Helper".to_string(),
+            LayerType::Function,
+        );
+        occupant.parent_id = Some("mod-b".to_string());
+        board.layers.insert(occupant.id.clone(), occupant);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    function helper() {   //@l:fn-1\n    }\n}\n",
+            &[],
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("cannot use that name")
+                    && diagnostic.contains("fn-2")),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            move_commands(&result).is_empty(),
+            "an occupied destination refuses the move: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_grouped_event_body_moves_its_collapsed_container_intact() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut group = Layer::new("grp".to_string(), "Group".to_string(), LayerType::Collapsed);
+        group.parent_id = Some("mod-a".to_string());
+        board.layers.insert(group.id.clone(), group);
+        board.nodes.get_mut("log").expect("log node exists").layer = Some("grp".to_string());
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(
+                vec!["event".to_string(), "grp".to_string()],
+                Some("mod-b".to_string())
+            )],
+            "the grouping layer moves; its member nodes stay inside it"
+        );
+    }
+
+    #[test]
+    fn a_mixed_collapsed_group_stays_behind_on_an_event_move() {
+        let mut board = empty_board();
+        module_layer(&mut board, "mod-a", "Alpha", None);
+        module_layer(&mut board, "mod-b", "Beta", None);
+        event_with_log_in_module(&mut board, "event", "log", Some("mod-a"));
+        let mut group = Layer::new("grp".to_string(), "Group".to_string(), LayerType::Collapsed);
+        group.parent_id = Some("mod-a".to_string());
+        board.layers.insert(group.id.clone(), group);
+        board.nodes.get_mut("log").expect("log node exists").layer = Some("grp".to_string());
+        // A foreign node in the same group that is no part of the moving event.
+        let mut foreign = Node::new("string_trim", "Trim", "", "utils");
+        foreign.id = "foreign".to_string();
+        foreign.layer = Some("grp".to_string());
+        foreign.add_input_pin("string", "String", "", VariableType::String);
+        board.nodes.insert(foreign.id.clone(), foreign);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "module alpha {   //@l:mod-a\n}\n\nmodule beta {   //@l:mod-b\n    start() {   //@n:event\n        log()   //@n:log\n    }\n}\n",
+            &[],
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            move_commands(&result),
+            vec![(vec!["event".to_string()], Some("mod-b".to_string()))],
+            "a group holding foreign nodes stays behind with its contents"
+        );
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("grp")),
+            "{:?}",
+            result.corrections
         );
     }
 }

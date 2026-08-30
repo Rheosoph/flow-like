@@ -59,6 +59,7 @@ impl NodeLogic for GrabRtspFrameNode {
             "Captures one frame from an RTSP camera stream",
             "Web/Camera",
         );
+        node.set_flowscript_name("camera", "grabRtspFrame");
 
         node.set_long_running(true);
         node.add_icon("/flow/icons/cctv.svg");

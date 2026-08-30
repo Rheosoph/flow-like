@@ -59,6 +59,7 @@ pub trait EventSink: Send + Sync {
     async fn start(&self, app_handle: &AppHandle, db: DbConnection) -> anyhow::Result<()>;
 
     /// Shutdown sink infrastructure and cleanup resources
+    #[allow(dead_code)] // lifecycle contract: implemented by every sink, no shutdown path invokes it yet
     async fn stop(&self, app_handle: &AppHandle, db: DbConnection) -> anyhow::Result<()>;
 
     /// Called when a new event registration is added for this sink

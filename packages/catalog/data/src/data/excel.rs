@@ -1,17 +1,24 @@
 use std::sync::Arc;
 
-use flow_like_types::{Result, Value as JsonValue, anyhow, bail};
+use flow_like_types::Value as JsonValue;
+#[cfg(feature = "execute")]
+use flow_like_types::{Result, anyhow, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "execute")]
 use flow_like_storage::arrow::array::{
     ArrayRef, BooleanBuilder, Date64Builder, Float64Builder, Int64Builder, LargeStringBuilder,
     StringBuilder,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+#[cfg(feature = "execute")]
 use flow_like_storage::arrow::record_batch::RecordBatch;
 
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::datasource::memory::MemTable;
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::prelude::SessionContext;
 
 use crate::data::path::FlowPath;
@@ -38,6 +45,7 @@ pub mod try_extract_tables_ai;
 pub mod write_cell;
 pub mod write_cell_html;
 
+#[cfg(feature = "execute")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ColKind {
     #[default]
@@ -49,6 +57,7 @@ enum ColKind {
     Utf8, // any non-coercible string observed
 }
 
+#[cfg(feature = "execute")]
 #[inline]
 fn merge_kind(cur: ColKind, obs: ColKind) -> ColKind {
     use ColKind::*;
@@ -69,6 +78,7 @@ fn merge_kind(cur: ColKind, obs: ColKind) -> ColKind {
     }
 }
 
+#[cfg(feature = "execute")]
 #[inline]
 fn is_bool_str(s: &str) -> Option<bool> {
     match s.trim() {
@@ -80,12 +90,14 @@ fn is_bool_str(s: &str) -> Option<bool> {
     }
 }
 
+#[cfg(feature = "execute")]
 #[inline]
 fn is_nullish(s: &str) -> bool {
     matches!(s.trim(), "" | "null" | "NULL" | "NaN" | "N/A" | "na" | "Na")
 }
 
 /// "00420"-style values parse as integers but would lose their leading zeros.
+#[cfg(feature = "execute")]
 #[inline]
 fn has_leading_zero(s: &str) -> bool {
     let t = s.trim().trim_start_matches(['+', '-']);
@@ -348,6 +360,7 @@ impl CSVTable {
     }
 
     /// Infer per-column kind, and collect string byte stats for LargeUtf8 decisions.
+    #[cfg(feature = "execute")]
     fn infer_col_kind_and_string_stats(
         &self,
         col_idx: usize,
@@ -405,6 +418,7 @@ impl CSVTable {
         (kind, total_bytes, max_len)
     }
 
+    #[cfg(feature = "execute")]
     fn inferred_arrow_type(&self, col_idx: usize) -> DataType {
         const I32_MAX: u64 = i32::MAX as u64;
         let (kind, total_bytes, max_len) = self.infer_col_kind_and_string_stats(col_idx);
@@ -423,6 +437,7 @@ impl CSVTable {
         }
     }
 
+    #[cfg(feature = "execute")]
     pub fn arrow_schema(&self) -> Arc<ArrowSchema> {
         let fields = (0..self.ncols())
             .map(|col_idx| {
@@ -434,6 +449,7 @@ impl CSVTable {
         Arc::new(ArrowSchema::new(fields))
     }
 
+    #[cfg(feature = "execute")]
     pub fn to_record_batch(&self) -> Result<RecordBatch> {
         use DataType::*;
 
@@ -586,6 +602,7 @@ impl CSVTable {
         RecordBatch::try_new(schema, arrays).map_err(|e| anyhow!(e))
     }
 
+    #[cfg(feature = "execute")]
     pub fn to_memtable(&self) -> Result<Arc<MemTable>> {
         let batch = self.to_record_batch()?;
         let schema = batch.schema();
@@ -593,6 +610,7 @@ impl CSVTable {
         Ok(Arc::new(mem))
     }
 
+    #[cfg(feature = "execute")]
     pub fn register_with_datafusion(&self, ctx: &SessionContext, table_name: &str) -> Result<()> {
         let mem = self.to_memtable()?;
         ctx.register_table(table_name, mem)?;
@@ -657,6 +675,8 @@ pub fn parse_col_1_based(s: &str) -> flow_like_types::Result<u32> {
 /// Cached workbook stored in the execution context.
 /// Supports both umya-spreadsheet (read/write, xlsx only) and calamine
 /// (read-only fallback for xls, xlsb, ods, etc.).
+#[allow(clippy::large_enum_variant)]
+// every construction site is Arc::new(..); boxing would only add a second hop on the per-cell read path
 #[cfg(feature = "execute")]
 pub enum CachedExcelWorkbook {
     Umya {

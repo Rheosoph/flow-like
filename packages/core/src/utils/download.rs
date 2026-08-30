@@ -195,8 +195,7 @@ async fn process_download_bit(
     let client = client.ok_or(anyhow!("No client for download"))?;
     let remote_size = get_remote_size(&client, &url).await;
 
-    if remote_size.is_err() {
-        let err = remote_size.unwrap_err();
+    if let Err(err) = &remote_size {
         println!(
             "Error getting remote size for {}: {}. Falling back to cached files if available.",
             url, err

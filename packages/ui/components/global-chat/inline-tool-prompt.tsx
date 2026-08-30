@@ -194,7 +194,7 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 				className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-3"
 				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
 			>
-				{isApproval ? (
+				{isApproval && prompt.rememberable !== false ? (
 					<label
 						htmlFor="inline-tool-prompt-remember"
 						className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
@@ -228,7 +228,10 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						onClick={() => {
 							if (isApproval) {
-								prompt.respond({ approved: true, remember });
+								prompt.respond({
+									approved: true,
+									remember: prompt.rememberable !== false && remember,
+								});
 							} else {
 								submit();
 							}

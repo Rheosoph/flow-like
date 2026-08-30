@@ -19,8 +19,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, ExecutionJwtParams, TokenType, fetch_profile_for_dispatch,
-        is_jwt_configured, payload_storage, resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType,
+        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, resolve_wasm_packages,
+        sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -303,6 +304,8 @@ pub async fn invoke_board_async(
         user_context: Some(permission.to_user_context()),
         profile,
         wasm_packages,
+        channel: None,
+        trigger: DispatchTrigger::User,
     };
 
     let response = state

@@ -184,11 +184,17 @@ export function ProjectUserSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && projectMembers.length === 0 && (
-							<SelectLabel>{t('loadingUsers', 'Loading users...')}</SelectLabel>
+							<SelectLabel>{t("loadingUsers", "Loading users...")}</SelectLabel>
 						)}
-						{error && <SelectLabel>{t('couldNotLoadProjectUsers', 'Could not load project users')}</SelectLabel>}
+						{error && (
+							<SelectLabel>
+								{t("couldNotLoadProjectUsers", "Could not load project users")}
+							</SelectLabel>
+						)}
 						{!loading && !error && projectMembers.length === 0 && (
-							<SelectLabel>{t('noProjectUsersFound', 'No project users found')}</SelectLabel>
+							<SelectLabel>
+								{t("noProjectUsersFound", "No project users found")}
+							</SelectLabel>
 						)}
 						{projectMembers.map((member) => {
 							const user = usersBySub[member.user_id];

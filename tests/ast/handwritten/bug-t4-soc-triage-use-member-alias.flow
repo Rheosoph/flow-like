@@ -1,0 +1,11 @@
+// BUG: FLOWSCRIPT.md documents `use jira::{ createIssue as createJiraIssue }`
+// (aliased member import), but parser.rs::use_tree only accepts bare idents inside
+// `{ … }` — `as` is only handled for a whole path. Parsing dies with
+//   expected `RBrace`, found `Ident("as")`
+// at the `as`. UseKind has no member-alias variant, so the alias is unrepresentable.
+use jira::{ createIssue as createJiraIssue }
+
+eventsSimple openCase() {
+    const { issueKey } = createJiraIssue({ provider: atlassian::providerOauth({ baseUrl: "https://example.atlassian.net" }), projectKey: "SOC", issueType: "Incident", summary: "aliased member import" })
+    log::info({ message: issueKey, toast: false })
+}

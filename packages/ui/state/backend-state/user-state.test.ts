@@ -5,10 +5,17 @@
 import { describe, expect, test } from "bun:test";
 import {
 	LOCAL_USER_SUB,
+	USER_LOOKUP_BATCH_LIMIT,
+	accountIdFromValue,
+	chunkLookupIds,
 	isLocalUserSub,
+	partitionLookupIds,
 	resolveAccountId,
 	userLookupFromClaims,
 } from "./user-state";
+
+const SUB = "42c52474-5081-70d7-2b23-4bd8c38d8fb0";
+const OTHER_SUB = "32a5a414-a001-70d1-7b23-570b1c9d4e2f";
 
 describe("isLocalUserSub", () => {
 	test("matches the local sub regardless of casing or padding", () => {
@@ -67,5 +74,86 @@ describe("userLookupFromClaims", () => {
 
 	test("keeps a signed-in account nameless rather than labeling it You", () => {
 		expect(userLookupFromClaims({ sub: "user-1" }).name).toBeUndefined();
+	});
+});
+
+describe("accountIdFromValue", () => {
+	test("reads an account id out of stored text", () => {
+		expect(accountIdFromValue(SUB)).toBe(SUB);
+		expect(accountIdFromValue(` ${SUB} `)).toBe(SUB);
+		expect(accountIdFromValue("google_110293847561029384756")).toBe(
+			"google_110293847561029384756",
+		);
+	});
+
+	test("keeps the local placeholder, which no shape rule would recognise", () => {
+		expect(accountIdFromValue(LOCAL_USER_SUB)).toBe(LOCAL_USER_SUB);
+		expect(accountIdFromValue(` ${LOCAL_USER_SUB} `)).toBe(LOCAL_USER_SUB);
+	});
+
+	test("does not read the word Local as the signed-in user", () => {
+		// An ACL export whose `owner` column reads Local/LOCAL is text, not a person.
+		expect(accountIdFromValue("Local")).toBeNull();
+		expect(accountIdFromValue("LOCAL")).toBeNull();
+	});
+
+	test("leaves values that name no account", () => {
+		expect(accountIdFromValue("system")).toBeNull();
+		expect(accountIdFromValue("")).toBeNull();
+		expect(accountIdFromValue("   ")).toBeNull();
+	});
+
+	test("only reads text", () => {
+		expect(accountIdFromValue(42)).toBeNull();
+		expect(accountIdFromValue(null)).toBeNull();
+		expect(accountIdFromValue(undefined)).toBeNull();
+		expect(accountIdFromValue({ id: SUB })).toBeNull();
+		expect(accountIdFromValue([SUB])).toBeNull();
+	});
+});
+
+describe("partitionLookupIds", () => {
+	test("dedupes and drops what the directory cannot be asked about", () => {
+		expect(
+			partitionLookupIds([SUB, SUB, ` ${SUB} `, OTHER_SUB, "", "   "]),
+		).toEqual({ subs: [SUB, OTHER_SUB], local: false });
+	});
+
+	test("lifts the local placeholder out of the batch", () => {
+		expect(partitionLookupIds([SUB, LOCAL_USER_SUB, "LOCAL"])).toEqual({
+			subs: [SUB],
+			local: true,
+		});
+	});
+
+	test("has nothing to send for an empty request", () => {
+		expect(partitionLookupIds([])).toEqual({ subs: [], local: false });
+		expect(partitionLookupIds([LOCAL_USER_SUB])).toEqual({
+			subs: [],
+			local: true,
+		});
+	});
+});
+
+describe("chunkLookupIds", () => {
+	test("slices to what the hub answers rather than truncates", () => {
+		const subs = Array.from({ length: 250 }, (_, index) => `sub-${index}`);
+		expect(chunkLookupIds(subs).map((chunk) => chunk.length)).toEqual([
+			100, 100, 50,
+		]);
+		expect(chunkLookupIds(subs).flat()).toEqual(subs);
+	});
+
+	test("leaves a request that already fits alone", () => {
+		expect(chunkLookupIds([SUB, OTHER_SUB])).toEqual([[SUB, OTHER_SUB]]);
+		expect(chunkLookupIds([])).toEqual([]);
+	});
+
+	test("honours a smaller size", () => {
+		expect(chunkLookupIds(["a", "b", "c"], 2)).toEqual([["a", "b"], ["c"]]);
+	});
+
+	test("matches the cap the hub enforces", () => {
+		expect(USER_LOOKUP_BATCH_LIMIT).toBe(100);
 	});
 });

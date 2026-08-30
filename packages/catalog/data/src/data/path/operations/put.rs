@@ -26,6 +26,8 @@ impl NodeLogic for PutNode {
             "Writes bytes to a file",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "put");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

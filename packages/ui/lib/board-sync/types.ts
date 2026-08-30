@@ -121,6 +121,9 @@ export interface ISyncNode {
 	only_offline?: boolean | null;
 	oauth_providers?: string[] | null;
 	required_oauth_scopes?: Record<string, string[]> | null;
+	namespace?: string | null;
+	alias?: string | null;
+	receiver?: string | null;
 }
 
 /**

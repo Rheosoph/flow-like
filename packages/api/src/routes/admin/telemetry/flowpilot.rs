@@ -3,23 +3,36 @@
 //! Windows of at most 48 hours fold the raw counter events. Longer windows read
 //! `TelemetryFlowpilotDaily`, which stores one pre-summed row per UTC day, so a
 //! 30 day funnel is 30 rows instead of a capped scan over every counter event.
+//!
+//! Alongside the funnel counters the response carries the window's grouped
+//! failure causes — failed specialist dispatches, failed FlowScript applies,
+//! failed widget applies and the rest — so an admin sees not just that runs are
+//! failing but why. Those strings are redacted and generalized on the client
+//! before they are sent; see `crate::telemetry::flowpilot`.
 
 use super::overview::{GRANULARITY_DAILY, GRANULARITY_RAW, day_window, reads_raw, window_bucket};
 use super::{bucket_slots, bucket_step, trunc_to_bucket};
-use crate::entity::{telemetry_event, telemetry_flowpilot_daily};
+use crate::entity::{
+    telemetry_event, telemetry_flowpilot_daily, telemetry_flowpilot_failure_daily,
+};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::telemetry::flowpilot::{FLOWPILOT_METRICS_EVENT, parse_failure_signatures};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 
-const FLOWPILOT_METRICS_EVENT: &str = "flowpilot_generation_metrics";
+/// Upper bound on the failure groups one response returns, highest count first.
+const FLOWPILOT_FAILURE_LIMIT: usize = 25;
+/// Upper bound on the pre-grouped daily failure rows a window loads. Rows are
+/// read count-first, so a truncated read still surfaces the loudest causes.
+const FLOWPILOT_FAILURE_ROW_CAP: u64 = 5_000;
 /// Safety bound on the raw fold, which only ever runs inside the 48 hour raw
 /// window now that longer windows read the rollup.
 const FLOWPILOT_ROW_CAP: u64 = 100_000;
@@ -53,6 +66,14 @@ macro_rules! flowpilot_counters {
                 validation_regressions,
                 boards_inspected,
                 empty_boards_after_run,
+                failures_total,
+                subagent_dispatch_failures,
+                flowscript_apply_failures,
+                widget_apply_failures,
+                data_apply_failures,
+                page_apply_failures,
+                tool_failures,
+                run_failures,
             ]
         )
     };
@@ -90,6 +111,29 @@ pub struct FlowPilotTotals {
     pub validation_regressions: i64,
     pub boards_inspected: i64,
     pub empty_boards_after_run: i64,
+    pub failures_total: i64,
+    pub subagent_dispatch_failures: i64,
+    pub flowscript_apply_failures: i64,
+    pub widget_apply_failures: i64,
+    pub data_apply_failures: i64,
+    pub page_apply_failures: i64,
+    pub tool_failures: i64,
+    pub run_failures: i64,
+}
+
+/// One grouped failure cause. Strings are the client-redacted, generalized
+/// values described by `crate::telemetry::flowpilot`; `installs` is how many
+/// distinct anonymous installs hit this exact signature, which separates one
+/// loud install from a real regression.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowPilotFailureGroup {
+    pub kind: String,
+    pub tool: String,
+    pub code: String,
+    pub message: String,
+    pub count: i64,
+    pub installs: i64,
 }
 
 #[derive(Debug, PartialEq, Serialize, ToSchema)]
@@ -112,6 +156,8 @@ pub struct TelemetryFlowPilotResponse {
     pub installs: i64,
     pub totals: FlowPilotTotals,
     pub trend: Vec<FlowPilotTrendPoint>,
+    /// Why runs failed, most frequent first. Empty when nothing failed in the window.
+    pub failures: Vec<FlowPilotFailureGroup>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -190,6 +236,84 @@ fn fold_flowpilot_trend(
         .collect()
 }
 
+/// Rank grouped failures so the loudest cause is first, then the widest blast
+/// radius, then a stable key so equal groups do not shuffle between requests.
+fn rank_failures(mut groups: Vec<FlowPilotFailureGroup>) -> Vec<FlowPilotFailureGroup> {
+    groups.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| right.installs.cmp(&left.installs))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.tool.cmp(&right.tool))
+            .then_with(|| left.code.cmp(&right.code))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    groups.truncate(FLOWPILOT_FAILURE_LIMIT);
+    groups
+}
+
+/// Group the failure signatures carried by raw counter events. Install counts
+/// are exact here because every contributing event's `anon_id` is in hand.
+fn fold_flowpilot_failures(rows: &[FlowPilotRow]) -> Vec<FlowPilotFailureGroup> {
+    let mut grouped: HashMap<(String, String, String, String), (i64, HashSet<&str>)> =
+        HashMap::new();
+    for row in rows {
+        for signature in parse_failure_signatures(row.props.as_ref()) {
+            let entry = grouped
+                .entry(signature.key())
+                .or_insert_with(|| (0, HashSet::new()));
+            entry.0 = entry.0.saturating_add(signature.count);
+            entry.1.insert(row.anon_id.as_str());
+        }
+    }
+    rank_failures(
+        grouped
+            .into_iter()
+            .map(
+                |((kind, tool, code, message), (count, installs))| FlowPilotFailureGroup {
+                    kind,
+                    tool,
+                    code,
+                    message,
+                    count,
+                    installs: installs.len() as i64,
+                },
+            )
+            .collect(),
+    )
+}
+
+/// Sum the pre-grouped days. Like the window install count, `installs` adds up
+/// the daily distinct installs and is therefore an upper bound.
+fn fold_daily_failures(
+    rows: Vec<telemetry_flowpilot_failure_daily::Model>,
+) -> Vec<FlowPilotFailureGroup> {
+    let mut grouped: HashMap<(String, String, String, String), (i64, i64)> = HashMap::new();
+    for row in rows {
+        let entry = grouped
+            .entry((row.kind, row.tool, row.code, row.message))
+            .or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(row.count.max(0));
+        entry.1 = entry.1.saturating_add(i64::from(row.installs.max(0)));
+    }
+    rank_failures(
+        grouped
+            .into_iter()
+            .map(
+                |((kind, tool, code, message), (count, installs))| FlowPilotFailureGroup {
+                    kind,
+                    tool,
+                    code,
+                    message,
+                    count,
+                    installs,
+                },
+            )
+            .collect(),
+    )
+}
+
 /// Sums the pre-aggregated days. `installs` adds up the daily distinct installs
 /// and is therefore an upper bound on the distinct installs over the window.
 fn fold_daily_totals(rows: &[telemetry_flowpilot_daily::Model]) -> (FlowPilotTotals, i64) {
@@ -245,7 +369,7 @@ fn fold_daily_trend(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
-    description = "FlowPilot workflow-generation funnel: run outcomes, plan feasibility, attempt validity, review dispositions and diagnostics, aggregated from anonymous counter events. Windows of up to 48 hours fold individual events (granularity \"raw\"); longer windows sum the daily rollup (granularity \"daily\") and are aligned to whole UTC days. In \"daily\" mode the install count is the sum of the daily distinct installs, an upper bound on the distinct installs over the whole window. Requires Admin permission."
+    description = "FlowPilot workflow-generation funnel: run outcomes, plan feasibility, attempt validity, review dispositions and diagnostics, aggregated from anonymous counter events, plus the window's most frequent failure causes (failed specialist dispatches, FlowScript applies, widget applies and other tool errors) with their redacted messages. Windows of up to 48 hours fold individual events (granularity \"raw\"); longer windows sum the daily rollup (granularity \"daily\") and are aligned to whole UTC days. In \"daily\" mode the install counts are sums of the daily distinct installs, an upper bound on the distinct installs over the whole window. Requires Admin permission."
 )]
 #[tracing::instrument(name = "GET /admin/telemetry/flowpilot", skip_all)]
 pub async fn telemetry_flowpilot(
@@ -294,6 +418,7 @@ pub async fn telemetry_flowpilot(
             installs,
             totals: fold_flowpilot_totals(&rows),
             trend: fold_flowpilot_trend(&rows, cutoff, now, bucket),
+            failures: fold_flowpilot_failures(&rows),
         }));
     }
 
@@ -306,6 +431,13 @@ pub async fn telemetry_flowpilot(
         .await?;
 
     let (totals, installs) = fold_daily_totals(&rows);
+    let failure_rows = telemetry_flowpilot_failure_daily::Entity::find()
+        .filter(telemetry_flowpilot_failure_daily::Column::Day.gte(start))
+        .filter(telemetry_flowpilot_failure_daily::Column::Day.lte(end))
+        .order_by_desc(telemetry_flowpilot_failure_daily::Column::Count)
+        .limit(FLOWPILOT_FAILURE_ROW_CAP)
+        .all(&state.db)
+        .await?;
 
     Ok(Json(TelemetryFlowPilotResponse {
         hours,
@@ -313,6 +445,7 @@ pub async fn telemetry_flowpilot(
         installs,
         totals,
         trend: fold_daily_trend(&rows, start, end),
+        failures: fold_daily_failures(failure_rows),
     }))
 }
 
@@ -376,6 +509,14 @@ mod tests {
             validation_regressions: 0,
             boards_inspected: 0,
             empty_boards_after_run: 0,
+            failures_total: 0,
+            subagent_dispatch_failures: 0,
+            flowscript_apply_failures: 0,
+            widget_apply_failures: 0,
+            data_apply_failures: 0,
+            page_apply_failures: 0,
+            tool_failures: 0,
+            run_failures: 0,
             installs,
             created_at: ts(y, m, d, 0, 0),
             updated_at: ts(y, m, d, 0, 0),
@@ -500,6 +641,122 @@ mod tests {
         ];
         let (totals, _) = fold_daily_totals(&rows);
         assert_eq!(totals.runs_started, i64::MAX);
+    }
+
+    fn failure_daily(
+        y: i32,
+        m: u32,
+        d: u32,
+        kind: &str,
+        code: &str,
+        count: i64,
+        installs: i32,
+    ) -> telemetry_flowpilot_failure_daily::Model {
+        telemetry_flowpilot_failure_daily::Model {
+            id: format!("{y}-{m}-{d}-{kind}-{code}"),
+            day: ts(y, m, d, 0, 0),
+            kind: kind.to_string(),
+            tool: "flowpilot_widget".to_string(),
+            code: code.to_string(),
+            message: "The delegated UI build returned no components.".to_string(),
+            count,
+            installs,
+            created_at: ts(y, m, d, 0, 0),
+            updated_at: ts(y, m, d, 0, 0),
+        }
+    }
+
+    #[test]
+    fn raw_failures_group_by_signature_and_count_distinct_installs() {
+        let failure = |kind: &str, code: &str| json!({ "kind": kind, "tool": "flowpilot_board", "code": code, "message": "boom", "count": 1 });
+        let rows = vec![
+            flowpilot_row(
+                "install-a",
+                Some(json!({ "failures": [failure("flowscript_apply", "FS_PARSE_ERROR")] })),
+                ts(2026, 7, 26, 10, 0),
+            ),
+            flowpilot_row(
+                "install-b",
+                Some(json!({ "failures": [failure("flowscript_apply", "FS_PARSE_ERROR")] })),
+                ts(2026, 7, 26, 10, 5),
+            ),
+            flowpilot_row(
+                "install-a",
+                Some(json!({ "failures": [failure("subagent_dispatch", "timeout")] })),
+                ts(2026, 7, 26, 10, 9),
+            ),
+        ];
+
+        let failures = fold_flowpilot_failures(&rows);
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].code, "FS_PARSE_ERROR");
+        assert_eq!(failures[0].count, 2);
+        assert_eq!(failures[0].installs, 2);
+        assert_eq!(failures[1].code, "timeout");
+        assert_eq!(failures[1].installs, 1);
+    }
+
+    #[test]
+    fn a_run_without_failures_contributes_no_groups() {
+        let rows = vec![
+            flowpilot_row(
+                "a",
+                Some(json!({ "runs_started": 1, "runs_succeeded": 1 })),
+                ts(2026, 7, 26, 10, 0),
+            ),
+            flowpilot_row("b", None, ts(2026, 7, 26, 10, 1)),
+        ];
+        assert!(fold_flowpilot_failures(&rows).is_empty());
+    }
+
+    #[test]
+    fn daily_failure_days_are_summed_per_signature() {
+        let rows = vec![
+            failure_daily(2026, 7, 24, "widget_apply", "NO_COMPONENTS", 3, 2),
+            failure_daily(2026, 7, 25, "widget_apply", "NO_COMPONENTS", 4, 1),
+            failure_daily(2026, 7, 25, "run_error", "STREAM_FAILED", 9, 5),
+        ];
+        let failures = fold_daily_failures(rows);
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].code, "STREAM_FAILED");
+        assert_eq!(failures[0].count, 9);
+        assert_eq!(failures[1].code, "NO_COMPONENTS");
+        assert_eq!(failures[1].count, 7);
+        assert_eq!(failures[1].installs, 3);
+    }
+
+    #[test]
+    fn failure_groups_are_ranked_and_capped() {
+        let groups: Vec<FlowPilotFailureGroup> = (0..FLOWPILOT_FAILURE_LIMIT + 10)
+            .map(|index| FlowPilotFailureGroup {
+                kind: "tool_error".to_string(),
+                tool: "other".to_string(),
+                code: format!("C{index}"),
+                message: "unknown".to_string(),
+                count: index as i64,
+                installs: 1,
+            })
+            .collect();
+        let ranked = rank_failures(groups);
+        assert_eq!(ranked.len(), FLOWPILOT_FAILURE_LIMIT);
+        assert_eq!(ranked[0].count, (FLOWPILOT_FAILURE_LIMIT + 9) as i64);
+        assert!(ranked.windows(2).all(|pair| pair[0].count >= pair[1].count));
+    }
+
+    #[test]
+    fn equal_groups_rank_by_blast_radius_then_stable_key() {
+        let group = |code: &str, installs: i64| FlowPilotFailureGroup {
+            kind: "flowscript_apply".to_string(),
+            tool: "commit_flowscript".to_string(),
+            code: code.to_string(),
+            message: "unknown".to_string(),
+            count: 5,
+            installs,
+        };
+        let ranked = rank_failures(vec![group("B_CODE", 1), group("A_CODE", 1), group("C", 4)]);
+        assert_eq!(ranked[0].code, "C");
+        assert_eq!(ranked[1].code, "A_CODE");
+        assert_eq!(ranked[2].code, "B_CODE");
     }
 
     #[test]

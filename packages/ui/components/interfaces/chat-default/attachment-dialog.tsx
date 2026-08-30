@@ -1,51 +1,55 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import {
-	CheckIcon,
-	ChevronLeftIcon,
-	Download,
-	ExternalLink,
-	FileText,
-	FilterIcon,
-	GlobeIcon,
-	GridIcon,
-	ImageIcon,
-	ListIcon,
-	MaximizeIcon,
-	MinimizeIcon,
-	Music,
-	SearchIcon,
-	SortAscIcon,
-	VideoIcon,
-	XIcon,
-} from "lucide-react";
+import CheckIcon from "lucide-react/dist/esm/icons/check.js";
+import ChevronLeftIcon from "lucide-react/dist/esm/icons/chevron-left.js";
+import Download from "lucide-react/dist/esm/icons/download.js";
+import ExternalLink from "lucide-react/dist/esm/icons/external-link.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
+import FilterIcon from "lucide-react/dist/esm/icons/funnel.js";
+import GlobeIcon from "lucide-react/dist/esm/icons/globe.js";
+import GridIcon from "lucide-react/dist/esm/icons/grid-3x3.js";
+import ImageIcon from "lucide-react/dist/esm/icons/image.js";
+import ListIcon from "lucide-react/dist/esm/icons/list.js";
+import MaximizeIcon from "lucide-react/dist/esm/icons/maximize.js";
+import MinimizeIcon from "lucide-react/dist/esm/icons/minimize.js";
+import Music from "lucide-react/dist/esm/icons/music.js";
+import SearchIcon from "lucide-react/dist/esm/icons/search.js";
+import SortAscIcon from "lucide-react/dist/esm/icons/arrow-up-narrow-wide.js";
+import VideoIcon from "lucide-react/dist/esm/icons/video.js";
+import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "../../../hooks/use-mobile";
-import { cn, humanFileSize } from "../../../lib";
+import { cn, humanFileSize } from "../../../lib/utils";
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
 import {
-	Badge,
-	Button,
 	Dialog,
 	DialogClose,
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
 	DialogTrigger,
+} from "../../ui/dialog";
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
-	Input,
+} from "../../ui/dropdown-menu";
+import { Input } from "../../ui/input";
+import {
 	ResizableHandle,
 	ResizablePanel,
 	ResizablePanelGroup,
-	Separator,
+} from "../../ui/resizable";
+import { Separator } from "../../ui/separator";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
 	TooltipTrigger,
-} from "../../ui";
+} from "../../ui/tooltip";
 import {
 	FilePreviewer,
 	PdfFrame,
@@ -120,7 +124,9 @@ export async function downloadFile(file: ProcessedAttachment): Promise<void> {
 
 			const filePath = await save({
 				defaultPath: file.name,
-				filters: [{ name: i18next.t('allFiles', 'All Files'), extensions: ["*"] }],
+				filters: [
+					{ name: i18next.t("allFiles", "All Files"), extensions: ["*"] },
+				],
 			});
 
 			if (filePath) {
@@ -349,7 +355,9 @@ export function FileDialog({
 										onClick={() => setSelectedFile(null)}
 									>
 										<ChevronLeftIcon className="size-5" />
-										<span className="sr-only">{t('backToFiles', 'Back to files')}</span>
+										<span className="sr-only">
+											{t("backToFiles", "Back to files")}
+										</span>
 									</Button>
 								)}
 								<DialogTitle className="flex min-w-0 flex-1 items-center gap-2 text-base md:text-lg">
@@ -360,7 +368,11 @@ export function FileDialog({
 									) : (
 										<>
 											<FileText className="size-4 shrink-0" />
-											<span className="truncate">{t('referencesLength', 'References ({{length}})', { length: files.length })}</span>
+											<span className="truncate">
+												{t("referencesLength", "References ({{length}})", {
+													length: files.length,
+												})}
+											</span>
 										</>
 									)}
 								</DialogTitle>
@@ -384,7 +396,7 @@ export function FileDialog({
 										className="size-10 shrink-0 md:size-9"
 									>
 										<XIcon className="size-4" />
-										<span className="sr-only">{t('close', 'Close')}</span>
+										<span className="sr-only">{t("close", "Close")}</span>
 									</Button>
 								</DialogClose>
 							</div>
@@ -394,12 +406,20 @@ export function FileDialog({
 						{!previewTakesOver && (
 							<div className="flex shrink-0 flex-col gap-2 px-3 pt-2 md:gap-4 md:px-0 md:pt-0">
 								<div className="-mx-1 flex flex-row items-center gap-2 overflow-x-auto px-1 pb-0.5 text-sm text-muted-foreground md:mx-0 md:flex-wrap md:overflow-x-visible md:px-0">
-									<Badge variant="secondary" className="shrink-0 px-2 py-1">{t('lengthFiles', '{{length}} files', { length: filteredFiles.length })}</Badge>
+									<Badge variant="secondary" className="shrink-0 px-2 py-1">
+										{t("lengthFiles", "{{length}} files", {
+											length: filteredFiles.length,
+										})}
+									</Badge>
 									{filterType !== "all" && (
 										<Badge
 											variant="default"
 											className="shrink-0 px-2 py-1 capitalize"
-										>{t('filterFiltertype', 'Filter: {{filterType}}', { filterType })}</Badge>
+										>
+											{t("filterFiltertype", "Filter: {{filterType}}", {
+												filterType,
+											})}
+										</Badge>
 									)}
 									{Object.entries(fileTypeCount).map(([type, count]) => (
 										<Badge
@@ -417,7 +437,7 @@ export function FileDialog({
 									<div className="relative min-w-0 flex-1">
 										<SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 										<Input
-											placeholder={t('searchFiles', 'Search files...')}
+											placeholder={t("searchFiles", "Search files...")}
 											className="h-10 pl-10 md:h-9"
 											value={searchQuery}
 											onChange={(e) => setSearchQuery(e.target.value)}
@@ -425,7 +445,7 @@ export function FileDialog({
 									</div>
 
 									<div className="hidden items-center gap-1 text-sm text-muted-foreground lg:flex">
-										<span>{t('sortBy', 'Sort by:')}</span>
+										<span>{t("sortBy", "Sort by:")}</span>
 										<span className="font-medium text-foreground capitalize">
 											{sortBy}
 										</span>
@@ -443,7 +463,9 @@ export function FileDialog({
 												className="size-10 shrink-0 md:size-9"
 											>
 												<SortAscIcon className="h-4 w-4" />
-												<span className="sr-only">{t('sortFiles', 'Sort files')}</span>
+												<span className="sr-only">
+													{t("sortFiles", "Sort files")}
+												</span>
 											</Button>
 										</DropdownMenuTrigger>
 										<DropdownMenuContent align="end">
@@ -481,12 +503,14 @@ export function FileDialog({
 													<GridIcon className="h-4 w-4" />
 												)}
 												<span className="sr-only">
-													{t('switchTo', 'Switch to')} {viewMode === "grid" ? "list" : "grid"} view
+													{t("switchTo", "Switch to")}{" "}
+													{viewMode === "grid" ? "list" : "grid"} view
 												</span>
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>
-											{t('switchTo', 'Switch to')} {viewMode === "grid" ? "list" : "grid"} view
+											{t("switchTo", "Switch to")}{" "}
+											{viewMode === "grid" ? "list" : "grid"} view
 										</TooltipContent>
 									</Tooltip>
 
@@ -504,11 +528,15 @@ export function FileDialog({
 												className="size-10 shrink-0 md:size-9"
 											>
 												<FilterIcon className="h-4 w-4" />
-												<span className="sr-only">{t('filterFiles', 'Filter files')}</span>
+												<span className="sr-only">
+													{t("filterFiles", "Filter files")}
+												</span>
 											</Button>
 										</DropdownMenuTrigger>
 										<DropdownMenuContent align="end">
-											<DropdownMenuLabel>{t('filterByType', 'Filter by Type')}</DropdownMenuLabel>
+											<DropdownMenuLabel>
+												{t("filterByType", "Filter by Type")}
+											</DropdownMenuLabel>
 											<DropdownMenuSeparator />
 											{FILTER_OPTIONS.map(({ key, label }) => (
 												<DropdownMenuItem
@@ -537,7 +565,8 @@ export function FileDialog({
 								<div className="fixed inset-0 z-50 bg-background flex grow flex-col h-full">
 									<div className="p-4 border-b bg-background flex items-center justify-between">
 										<h3 className="font-medium text-lg">
-											{t('preview', 'Preview -')} {getDisplayFileName(selectedFile.name)}
+											{t("preview", "Preview -")}{" "}
+											{getDisplayFileName(selectedFile.name)}
 										</h3>
 										<Button
 											variant="ghost"
@@ -581,7 +610,7 @@ export function FileDialog({
 									>
 										<div className="flex flex-col flex-1 min-h-0 gap-2">
 											<h3 className="font-medium text-sm text-muted-foreground mb-2 shrink-0">
-												{t('filesReferences', 'Files & References')}
+												{t("filesReferences", "Files & References")}
 											</h3>
 											<div className="flex flex-col gap-2 flex-1 min-h-0 overflow-auto">
 												{fileList}
@@ -595,7 +624,9 @@ export function FileDialog({
 									>
 										<div className="flex flex-col flex-1 min-h-0 bg-muted/50 rounded-md border">
 											<div className="p-2 border-b bg-background rounded-t-md flex items-center justify-between shrink-0">
-												<h3 className="font-medium text-sm">{t('preview2', 'Preview')}</h3>
+												<h3 className="font-medium text-sm">
+													{t("preview2", "Preview")}
+												</h3>
 												<Button
 													variant="ghost"
 													size="sm"
@@ -619,7 +650,7 @@ export function FileDialog({
 							{!isMobile && !selectedFile && (
 								<div className="flex flex-col grow overflow-auto gap-2 border rounded-lg p-4 bg-background">
 									<h3 className="font-medium text-sm text-muted-foreground mb-2">
-										{t('filesReferences', 'Files & References')}
+										{t("filesReferences", "Files & References")}
 									</h3>
 									{fileList}
 								</div>
@@ -654,7 +685,9 @@ function FileList({
 		return (
 			<div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
 				<FileText className="h-6 w-6 text-muted-foreground" />
-				<p className="text-sm text-muted-foreground">{t('noMatchingFiles', 'No matching files')}</p>
+				<p className="text-sm text-muted-foreground">
+					{t("noMatchingFiles", "No matching files")}
+				</p>
 			</div>
 		);
 	}
@@ -751,7 +784,11 @@ const FileMetaBadges = ({
 			{file.type}
 		</Badge>
 		{file.pageNumber !== undefined && (
-			<Badge variant="secondary" className="text-xs px-1 py-0 h-4">{i18next.t('pagePagenumber', 'Page {{pageNumber}}', { pageNumber: file.pageNumber })}</Badge>
+			<Badge variant="secondary" className="text-xs px-1 py-0 h-4">
+				{i18next.t("pagePagenumber", "Page {{pageNumber}}", {
+					pageNumber: file.pageNumber,
+				})}
+			</Badge>
 		)}
 		{file.size && (
 			<Badge variant="secondary" className="text-xs px-1 py-0 h-4">
@@ -778,8 +815,7 @@ function FileItem({
 
 	// Touch devices never get :hover, so the action button stays visible there and
 	// only fades in on pointer devices.
-	const actionVisibility =
-		`opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100`;
+	const actionVisibility = `opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100`;
 
 	if (grid) {
 		return (
@@ -954,7 +990,10 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 				<div className={fallbackClasses}>
 					{getFileIcon(file.type)}
 					<p className="text-sm text-muted-foreground">
-						{t('previewNotAvailableForThisFileType', 'Preview not available for this file type')}
+						{t(
+							"previewNotAvailableForThisFileType",
+							"Preview not available for this file type",
+						)}
 					</p>
 					<Button
 						variant="outline"
@@ -971,7 +1010,10 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 				<div className={fallbackClasses}>
 					{getFileIcon(file.type)}
 					<p className="text-sm text-muted-foreground">
-						{t('previewNotAvailableForThisFileType', 'Preview not available for this file type')}
+						{t(
+							"previewNotAvailableForThisFileType",
+							"Preview not available for this file type",
+						)}
 					</p>
 					<Button
 						variant="outline"

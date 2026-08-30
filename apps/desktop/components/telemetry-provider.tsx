@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type ITelemetryClient,
 	TelemetryConsentPrompt,
@@ -30,10 +29,12 @@ import {
 } from "@flow-like/flow-like-ui";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { setFlowPilotProductionMetricsSink } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
+import { useTranslation } from "@flow-like/locales";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { desktopPlatform } from "../lib/platform";
 import {
 	type ITelemetrySettings,
 	getTelemetrySettings,
@@ -219,16 +220,6 @@ function installGlobalErrorHandlers(): () => void {
 	};
 }
 
-function desktopPlatform(): string {
-	const ua = navigator.userAgent.toLowerCase();
-	if (ua.includes("android")) return "android";
-	if (/ipad|iphone|ipod/.test(ua)) return "ios";
-	if (ua.includes("mac")) return "macos";
-	if (ua.includes("win")) return "windows";
-	if (ua.includes("linux")) return "linux";
-	return "desktop";
-}
-
 export function TelemetryProvider({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
@@ -353,7 +344,10 @@ export function TelemetryProvider({
 						platform,
 						events,
 					}),
-					failureMessage: t('failedToDeliverBufferedTelemetryEvents', 'Failed to deliver buffered telemetry events:'),
+					failureMessage: t(
+						"failedToDeliverBufferedTelemetryEvents",
+						"Failed to deliver buffered telemetry events:",
+					),
 				});
 				await drainBuffer<IQueuedTelemetryError>({
 					drainCommand: "drain_telemetry_errors",
@@ -370,7 +364,10 @@ export function TelemetryProvider({
 						platform,
 						errors,
 					}),
-					failureMessage: t('failedToDeliverBufferedCrashReports', 'Failed to deliver buffered crash reports:'),
+					failureMessage: t(
+						"failedToDeliverBufferedCrashReports",
+						"Failed to deliver buffered crash reports:",
+					),
 				});
 			};
 

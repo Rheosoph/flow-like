@@ -68,6 +68,8 @@ impl NodeLogic for RegisterPostgresNode {
             "Register a PostgreSQL table for federated queries. Uses real database connection for full SQL push-down.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerPostgres");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -180,6 +182,7 @@ impl NodeLogic for RegisterPostgresNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -276,6 +279,13 @@ impl NodeLogic for RegisterPostgresNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -301,6 +311,8 @@ impl NodeLogic for RegisterMysqlNode {
             "Register a MySQL table for federated queries. Uses real database connection for full SQL push-down.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerMysql");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -396,6 +408,7 @@ impl NodeLogic for RegisterMysqlNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -489,6 +502,13 @@ impl NodeLogic for RegisterMysqlNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -514,6 +534,8 @@ impl NodeLogic for RegisterSqliteNode {
             "Register a SQLite database table for federated queries. Uses real database connection.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerSqlite");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -580,6 +602,7 @@ impl NodeLogic for RegisterSqliteNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -657,6 +680,13 @@ impl NodeLogic for RegisterSqliteNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -682,6 +712,8 @@ impl NodeLogic for RegisterDuckdbNode {
             "Register a DuckDB database table for federated queries. Uses real database connection.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerDuckdb");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -749,6 +781,7 @@ impl NodeLogic for RegisterDuckdbNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -827,6 +860,13 @@ impl NodeLogic for RegisterDuckdbNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -852,6 +892,8 @@ impl NodeLogic for RegisterClickhouseNode {
             "Register a ClickHouse table for federated queries. Uses real database connection for full SQL push-down.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerClickhouse");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -953,6 +995,7 @@ impl NodeLogic for RegisterClickhouseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -1049,6 +1092,13 @@ impl NodeLogic for RegisterClickhouseNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -1074,6 +1124,8 @@ impl NodeLogic for RegisterOracleNode {
             "Register an Oracle database table for federated queries via ODBC. Requires Oracle Instant Client with ODBC driver installed.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerOracle");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -1341,6 +1393,8 @@ impl NodeLogic for RegisterFlightSqlNode {
             "Register a table via Arrow Flight SQL protocol. High-performance columnar data transfer (10-100x faster than JDBC/ODBC). Supports Dremio, InfluxDB, DuckDB Flight, ClickHouse Flight, and more.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerFlightsql");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -1442,6 +1496,7 @@ impl NodeLogic for RegisterFlightSqlNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -1518,6 +1573,13 @@ impl NodeLogic for RegisterFlightSqlNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
+    }
 }
 
 // ============================================================================
@@ -1568,6 +1630,8 @@ impl NodeLogic for RegisterAthenaNode {
             "Register an AWS Athena table for federated queries via ODBC. Query data in S3 using serverless SQL.",
             "Data/DataFusion/Databases",
         );
+        node.set_flowscript_name("df", "registerAthena");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/aws.svg");
 
         node.add_input_pin(

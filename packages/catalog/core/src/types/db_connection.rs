@@ -1,4 +1,6 @@
+#[cfg(feature = "execute")]
 use flow_like::flow::execution::{InternalRun, context::ExecutionContext};
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::{
     VectorStore,
     buffered::{
@@ -7,12 +9,15 @@ use flow_like_storage::databases::vector::{
     },
     lancedb::LanceDBVectorStore,
 };
+#[cfg(feature = "execute")]
+use flow_like_types::{Cacheable, Value, anyhow, async_trait, sync::RwLock};
 use flow_like_types::{
-    Cacheable, JsonSchema, Value, anyhow, async_trait,
+    JsonSchema,
     json::{Deserialize, Serialize},
-    sync::RwLock,
 };
+#[cfg(feature = "execute")]
 use std::collections::BTreeMap;
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 #[derive(Default, Debug, Serialize, Deserialize, JsonSchema, Clone)]
@@ -20,6 +25,7 @@ pub struct NodeDBConnection {
     pub cache_key: String,
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 pub struct CachedDB {
     pub db: Arc<RwLock<BufferedVectorStore<LanceDBVectorStore>>>,
@@ -31,6 +37,7 @@ pub struct CachedDB {
 /// remote database can install a hook under the companion cache key so every
 /// consumer gets a cheap freshness check before loading the cached store. The
 /// hook owns any single-flight state needed to replace an expiring store.
+#[cfg(feature = "execute")]
 #[async_trait]
 pub trait CachedDBRefresher: Send + Sync {
     async fn refresh(&self, context: &ExecutionContext) -> flow_like_types::Result<()>;
@@ -43,11 +50,13 @@ pub trait CachedDBRefresher: Send + Sync {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 pub struct CachedDBRefreshHook {
     refresher: Arc<dyn CachedDBRefresher>,
 }
 
+#[cfg(feature = "execute")]
 impl CachedDBRefreshHook {
     pub fn new(refresher: Arc<dyn CachedDBRefresher>) -> Self {
         Self { refresher }
@@ -62,6 +71,7 @@ impl CachedDBRefreshHook {
     }
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedDBRefreshHook {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -72,6 +82,7 @@ impl Cacheable for CachedDBRefreshHook {
     }
 }
 
+#[cfg(feature = "execute")]
 impl Cacheable for CachedDB {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -82,6 +93,7 @@ impl Cacheable for CachedDB {
     }
 }
 
+#[cfg(feature = "execute")]
 impl CachedDB {
     pub fn write_origin(context: &ExecutionContext) -> BufferedWriteOrigin {
         BufferedWriteOrigin::new(context.id.clone(), Some(context.trace.id.clone()))
@@ -225,6 +237,7 @@ impl CachedDB {
     }
 }
 
+#[cfg(feature = "execute")]
 impl NodeDBConnection {
     pub fn refresh_cache_key(cache_key: &str) -> String {
         format!("{cache_key}::refresh")

@@ -33,6 +33,7 @@ impl NodeLogic for DocxAddParagraphNode {
             "Append a styled paragraph to a DOCX document",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addParagraph");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()
@@ -201,6 +202,7 @@ impl NodeLogic for DocxAddParagraphNode {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 fn build_paragraph(
     text: &str,
     style: &ParagraphStyle,

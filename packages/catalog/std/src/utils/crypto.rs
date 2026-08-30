@@ -60,6 +60,7 @@ impl NodeLogic for GenerateEncryptionKeyNode {
             "Generates a 256-bit symmetric key for AES-256-GCM and XChaCha20-Poly1305.",
             "Utils/Crypto",
         );
+        node.set_flowscript_name("crypto", "generateKey");
         node.add_icon("/flow/icons/key.svg");
         set_crypto_scores(&mut node);
 
@@ -109,11 +110,13 @@ impl AesEncryptBytesNode {
 #[async_trait]
 impl NodeLogic for AesEncryptBytesNode {
     fn get_node(&self) -> Node {
-        encrypt_node(
+        let mut node = encrypt_node(
             "crypto_aes_encrypt_bytes",
             "AES-256-GCM Encrypt",
             "Encrypts bytes with AES-256-GCM. A fresh nonce is generated internally for every encryption.",
-        )
+        );
+        node.set_flowscript_name("crypto", "aesEncryptBytes");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -134,11 +137,13 @@ impl AesDecryptBytesNode {
 #[async_trait]
 impl NodeLogic for AesDecryptBytesNode {
     fn get_node(&self) -> Node {
-        decrypt_node(
+        let mut node = decrypt_node(
             "crypto_aes_decrypt_bytes",
             "AES-256-GCM Decrypt",
             "Decrypts an AES-256-GCM encrypted payload and verifies its authentication tag.",
-        )
+        );
+        node.set_flowscript_name("crypto", "aesDecryptBytes");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -159,11 +164,13 @@ impl AesEncryptValueNode {
 #[async_trait]
 impl NodeLogic for AesEncryptValueNode {
     fn get_node(&self) -> Node {
-        encrypt_struct_node(
+        let mut node = encrypt_struct_node(
             "crypto_aes_encrypt_value",
             "AES-256-GCM Encrypt Value",
             "Serializes and encrypts a struct with AES-256-GCM. A fresh nonce is generated internally for every encryption.",
-        )
+        );
+        node.set_flowscript_name("crypto", "aesEncryptValue");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -184,11 +191,13 @@ impl AesDecryptValueNode {
 #[async_trait]
 impl NodeLogic for AesDecryptValueNode {
     fn get_node(&self) -> Node {
-        decrypt_struct_node(
+        let mut node = decrypt_struct_node(
             "crypto_aes_decrypt_value",
             "AES-256-GCM Decrypt Value",
             "Decrypts an AES-256-GCM payload and parses the plaintext as a struct.",
-        )
+        );
+        node.set_flowscript_name("crypto", "aesDecryptValue");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -209,11 +218,13 @@ impl XChaCha20EncryptBytesNode {
 #[async_trait]
 impl NodeLogic for XChaCha20EncryptBytesNode {
     fn get_node(&self) -> Node {
-        encrypt_node(
+        let mut node = encrypt_node(
             "crypto_xchacha20_encrypt_bytes",
             "XChaCha20-Poly1305 Encrypt",
             "Encrypts bytes with XChaCha20-Poly1305. A fresh 192-bit nonce is generated internally for every encryption.",
-        )
+        );
+        node.set_flowscript_name("crypto", "xchacha20EncryptBytes");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -234,11 +245,13 @@ impl XChaCha20DecryptBytesNode {
 #[async_trait]
 impl NodeLogic for XChaCha20DecryptBytesNode {
     fn get_node(&self) -> Node {
-        decrypt_node(
+        let mut node = decrypt_node(
             "crypto_xchacha20_decrypt_bytes",
             "XChaCha20-Poly1305 Decrypt",
             "Decrypts an XChaCha20-Poly1305 encrypted payload and verifies its authentication tag.",
-        )
+        );
+        node.set_flowscript_name("crypto", "xchacha20DecryptBytes");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -259,11 +272,13 @@ impl XChaCha20EncryptValueNode {
 #[async_trait]
 impl NodeLogic for XChaCha20EncryptValueNode {
     fn get_node(&self) -> Node {
-        encrypt_struct_node(
+        let mut node = encrypt_struct_node(
             "crypto_xchacha20_encrypt_value",
             "XChaCha20-Poly1305 Encrypt Value",
             "Serializes and encrypts a struct with XChaCha20-Poly1305. A fresh 192-bit nonce is generated internally for every encryption.",
-        )
+        );
+        node.set_flowscript_name("crypto", "xchacha20EncryptValue");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -284,11 +299,13 @@ impl XChaCha20DecryptValueNode {
 #[async_trait]
 impl NodeLogic for XChaCha20DecryptValueNode {
     fn get_node(&self) -> Node {
-        decrypt_struct_node(
+        let mut node = decrypt_struct_node(
             "crypto_xchacha20_decrypt_value",
             "XChaCha20-Poly1305 Decrypt Value",
             "Decrypts an XChaCha20-Poly1305 payload and parses the plaintext as a struct.",
-        )
+        );
+        node.set_flowscript_name("crypto", "xchacha20DecryptValue");
+        node
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -324,7 +341,8 @@ fn encrypt_node(name: &str, friendly_name: &str, description: &str) -> Node {
         "Optional authenticated metadata stored alongside the ciphertext",
         VariableType::Struct,
     )
-    .set_default_value(Some(json!({})));
+    .set_default_value(Some(json!({})))
+    .set_open_schema();
 
     node.add_output_pin(
         "exec_out",
@@ -359,6 +377,7 @@ fn encrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         .set_value_type(ValueType::Array)
         .set_options(PinOptions::new().set_sensitive(true).build());
     node.add_input_pin("value", "Value", "Struct to encrypt", VariableType::Struct)
+        .set_open_schema()
         .set_options(PinOptions::new().set_sensitive(true).build());
     node.add_input_pin(
         "associated_data",
@@ -366,7 +385,8 @@ fn encrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         "Optional authenticated metadata stored alongside the ciphertext",
         VariableType::Struct,
     )
-    .set_default_value(Some(json!({})));
+    .set_default_value(Some(json!({})))
+    .set_open_schema();
 
     node.add_output_pin(
         "exec_out",
@@ -457,6 +477,7 @@ fn decrypt_struct_node(name: &str, friendly_name: &str, description: &str) -> No
         VariableType::Execution,
     );
     node.add_output_pin("value", "Value", "Decrypted struct", VariableType::Struct)
+        .set_open_schema()
         .set_options(PinOptions::new().set_sensitive(true).build());
 
     node

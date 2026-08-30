@@ -28,6 +28,7 @@ impl NodeLogic for PushChunkNode {
             "Pushes a response chunk to the chat",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushChunk");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

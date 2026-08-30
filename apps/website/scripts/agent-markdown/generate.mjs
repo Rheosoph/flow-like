@@ -26,12 +26,16 @@ const CLIENT_DIR = resolve(
 	"dist",
 	"client",
 );
-const SKIPPED_DIRS = new Set(["_astro", "pagefind"]);
+const SKIPPED_DIRS = new Set(["pagefind"]);
+
+function shouldSkipDirectory(name) {
+	return name.startsWith("_astro") || SKIPPED_DIRS.has(name);
+}
 
 async function* walk(dir) {
 	for (const entry of await readdir(dir, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
-			if (SKIPPED_DIRS.has(entry.name)) continue;
+			if (shouldSkipDirectory(entry.name)) continue;
 			yield* walk(join(dir, entry.name));
 			continue;
 		}

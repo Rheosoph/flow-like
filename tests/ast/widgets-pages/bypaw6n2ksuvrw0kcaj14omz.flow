@@ -1,3 +1,21 @@
+use agent::*
+use chat::*
+use control::*
+use datetime::*
+use db::*
+use df::*
+use files::*
+use hash::*
+use history::*
+use http::*
+use json::*
+use notify::*
+use random::*
+use rss::items::*
+use rss::parsing::*
+use string::*
+use ui::*
+
 interface Metadata {
     name: string;
     description: string;
@@ -159,28 +177,28 @@ interface Elements {
 const model: Bit
 const rSSHistory: History = {"model":"","messages":[]}
 @category("Prompts")
-const rSSPrompt: string = "# News Research Agent\n\nYou process an RSS feed for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Max 5 tool calls total.** Budget aggressively, skip aggressively.\n- **Recency: today or yesterday only.** Drop everything else, including no-date entries. Apply before anything else — feeds carry weeks of backlog.\n- **Only `add_news` for articles you fetched.** Never summarize from RSS metadata alone.\n\n## Workflow\nFor each RSS entry:\n1. **Triage from metadata** (title, snippet, date). Stale or clearly off-Goal → skip, no fetch.\n2. **Fetch** via `fetch_page(url)` only if plausibly relevant.\n3. **Judge** post-fetch: substantive AND on-Goal? Yes → `add_news(...)`. No → move on.\n\nBe strict. Marginal relevance ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- RSS feed: titles, URLs, dates\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."
+const rSSPrompt = "# News Research Agent\n\nYou process an RSS feed for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Max 5 tool calls total.** Budget aggressively, skip aggressively.\n- **Recency: today or yesterday only.** Drop everything else, including no-date entries. Apply before anything else — feeds carry weeks of backlog.\n- **Only `add_news` for articles you fetched.** Never summarize from RSS metadata alone.\n\n## Workflow\nFor each RSS entry:\n1. **Triage from metadata** (title, snippet, date). Stale or clearly off-Goal → skip, no fetch.\n2. **Fetch** via `fetch_page(url)` only if plausibly relevant.\n3. **Judge** post-fetch: substantive AND on-Goal? Yes → `add_news(...)`. No → move on.\n\nBe strict. Marginal relevance ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- RSS feed: titles, URLs, dates\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."
 @category("Report")
-const reportCreated: bool = false
+const reportCreated = false
 @category("Report")
 const reportDB: NodeDBConnection = {}
 @category("Report")
 const reportEntry: ReportEntry[] = []
 @category("Report")
-const reportID: string = ""
+const reportID = ""
 const searchHistory: History = {"model":"","messages":[]}
 @category("Prompts")
-const searchPrompt: string = "# News Research Agent\n\nYou research a topic for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Recency: today or yesterday only.** Encode into every query (`after:YYYY-MM-DD`, `\"Month YYYY\"`). Discard anything not demonstrably recent. No visible date → skip.\n- **Only `add_news` for pages you fetched.** Never summarize from search snippets alone.\n- **Depth over breadth.** Three well-sourced detailed entries beat ten shallow ones.\n\n## Workflow\n\n### Phase 1 — Search\n1. Formulate 1–3 SearXNG queries covering different angles (latest developments, key actors, data/stats). Use operators where useful: `\"exact phrase\"`, `site:`, `after:`.\n2. Call `search(query)` for each. Scan titles, snippets, dates.\n3. Pick promising URLs. Prioritise primary sources (official statements, wire services, major outlets) over aggregators and opinion.\n\n### Phase 2 — Fetch & Evaluate\n4. `fetch_page(url)` on each candidate.\n5. Decide:\n   - Relevant + recent + substantive → `add_news(title, uri, summary, date)`\n   - Irrelevant, duplicate, stale → discard\n6. If coverage is thin after round 1, run one refined query and repeat. Stop there.\n\nBe strict on relevance — marginal ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- Topic: subject to research\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."
+const searchPrompt = "# News Research Agent\n\nYou research a topic for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Recency: today or yesterday only.** Encode into every query (`after:YYYY-MM-DD`, `\"Month YYYY\"`). Discard anything not demonstrably recent. No visible date → skip.\n- **Only `add_news` for pages you fetched.** Never summarize from search snippets alone.\n- **Depth over breadth.** Three well-sourced detailed entries beat ten shallow ones.\n\n## Workflow\n\n### Phase 1 — Search\n1. Formulate 1–3 SearXNG queries covering different angles (latest developments, key actors, data/stats). Use operators where useful: `\"exact phrase\"`, `site:`, `after:`.\n2. Call `search(query)` for each. Scan titles, snippets, dates.\n3. Pick promising URLs. Prioritise primary sources (official statements, wire services, major outlets) over aggregators and opinion.\n\n### Phase 2 — Fetch & Evaluate\n4. `fetch_page(url)` on each candidate.\n5. Decide:\n   - Relevant + recent + substantive → `add_news(title, uri, summary, date)`\n   - Irrelevant, duplicate, stale → discard\n6. If coverage is thin after round 1, run one refined query and repeat. Stop there.\n\nBe strict on relevance — marginal ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- Topic: subject to research\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."
 const userConfiguration: UserConfiguration = {"general":{},"sources":[]}
 
 function filterSources(hash: string) {
     let elements: Elements[] = []
     elements = []
-    for (const forEach3 of controlForEach({ array: userConfiguration.sources })) {
-        const mD5Hash = utilsHashMd5({ input: forEach3.value.content })
-        if (hash != mD5Hash.hash) {
-            const push3 = arrayPush({ arrayIn: elements, value: forEach3.value })
-            elements = push3.arrayOut
+    for (const item3 of userConfiguration.sources) {
+        const hash2 = md5({ input: item3.content })
+        if (hash != hash2) {
+            const arrayOut3 = elements.push(item3)
+            elements = arrayOut3
         }
     }
     userConfiguration = { general: userConfiguration.general, sources: elements }
@@ -188,97 +206,97 @@ function filterSources(hash: string) {
 
 function perpareNews(source: Struct) {
     let label: string = ""
-    logInfo({ message: source, toast: false })
+    log::info({ message: source, toast: false })
     label = source.label
     if (source.type == "Search") {
-        const pushMessage3 = aiGenerativeAddHistoryMessage({ history: searchHistory, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}", goal: source.goal, label: source.label, query: source.content }) }) })
-        const invokeAgent2 = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [search, fetchPage, addNews] }), history: pushMessage3.historyOut })
-        eventsChatPushStat({ stepName: source.label, stat: invokeAgent2.stats })
+        const historyOut3 = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))
+        const { stats: stats2 } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [search, fetchPage, addNews] }).invoke(historyOut3)
+        pushStat({ stepName: source.label, stat: stats2 })
     } else {
-        const aPICall2 = httpFetch({ request: httpMakeRequest({ method: "GET", url: (source.type == "Reddit") ? stringFormat({ formatString: "https://www.reddit.com/{subreddit}/.rss?limit=30", subreddit: source.content }) : (stringContains({ string: source.content, substring: "?" }) ? stringFormat({ formatString: "{url}&limit=30", url: source.content }) : stringFormat({ formatString: "{url}?limit=30", url: source.content })) }) })
-        const toText2 = httpResponseToText({ response: aPICall2.response })
-        const now3 = utilsDatetimeNow()
-        if (filterFeedItemsByDate({ items: parseFeed({ feedBody: toText2.text, sourceUrl: (source.type == "Reddit") ? stringFormat({ formatString: "https://www.reddit.com/{subreddit}/.rss?limit=30", subreddit: source.content }) : (stringContains({ string: source.content, substring: "?" }) ? stringFormat({ formatString: "{url}&limit=30", url: source.content }) : stringFormat({ formatString: "{url}?limit=30", url: source.content })) }).items, releasedFrom: utilsDatetimeDuration({ date: now3.date, days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: now3.date, dateField: "release_date", includeUndated: false }).filteredItems.length > 0) {
-            const pushMessage = aiGenerativeAddHistoryMessage({ history: rSSHistory, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n", goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: toText2.text, sourceUrl: (source.type == "Reddit") ? stringFormat({ formatString: "https://www.reddit.com/{subreddit}/.rss?limit=30", subreddit: source.content }) : (stringContains({ string: source.content, substring: "?" }) ? stringFormat({ formatString: "{url}&limit=30", url: source.content }) : stringFormat({ formatString: "{url}?limit=30", url: source.content })) }).items, releasedFrom: utilsDatetimeDuration({ date: now3.date, days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: now3.date, dateField: "release_date", includeUndated: false }).filteredItems }) }) })
-            const invokeAgent = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [fetchPage, addNews] }), history: pushMessage.historyOut })
-            eventsChatPushStat({ stepName: source.label, stat: invokeAgent.stats })
+        const response = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()
+        const text2 = response.toText()
+        const date4 = now()
+        if (filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems.length > 0) {
+            const historyOut = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: filterFeedItemsByDate({ items: parseFeed({ feedBody: text2, sourceUrl: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).items, releasedFrom: date4.add({ days: -2, hours: 0, minutes: 0, seconds: 0 }), releasedTo: date4, dateField: "release_date", includeUndated: false }).filteredItems }) }))
+            const { stats } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [fetchPage, addNews] }).invoke(historyOut)
+            pushStat({ stepName: source.label, stat: stats })
         }
     }
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {
-        const push2 = arrayPush({ arrayIn: reportEntry, value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })
-        reportEntry = push2.arrayOut
-        return stringFormat({ formatString: "Successfully Added" })
+        const arrayOut2 = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })
+        reportEntry = arrayOut2
+        return `Successfully Added`
     }
     eventsGeneric fetchPage(url: string, payload: Struct) {
-        eventsChatPushStep({ title: "Reading Website", description: url })
-        const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
+        pushStep({ title: "Reading Website", description: url })
+        const aPICall = request({ method: "GET", url: url }).fetch()
         aPICall {
             execSuccess: {
-                const toText = httpResponseToText({ response: aPICall.response })
-                const hTMLToMarkdown = utilsMdHtmlToMd({ html: toText.text, skippedTags: ["script","style","iframe"] })
-                return hTMLToMarkdown.markdown
+                const text = aPICall.response.toText()
+                const markdown = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })
+                return markdown
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO FETCH WEBSITE - SKIP" })
+                return `FAILED TO FETCH WEBSITE - SKIP`
             }
         }
     }
     eventsGeneric search(query: string, language: string, page: int, payload: Struct) {
-        eventsChatPushStep({ title: "Searching Internet", description: query })
-        const aPICall3 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })
+        pushStep({ title: "Searching Internet", description: query })
+        const aPICall3 = request({ method: "GET", url: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}".format({ page: page.fallback(1).result, lang: language.fallback("en-US").result, q: urlEncode({ input: query }) }) }).fetch()
         aPICall3 {
             execSuccess: {
-                const toStruct = httpResponseToJson({ response: aPICall3.response })
-                return toStruct.struct
+                const struct2 = aPICall3.response.toJson()
+                return struct2
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO SEARCH" })
+                return `FAILED TO SEARCH`
             }
         }
     }
 }
 
 function saveConfig(config: Struct) {
-    writeString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }), content: valToString({ value: config, pretty: true }) })
+    userDir({ nodeScope: false }).child("config.json").writeString(stringify({ value: config, pretty: true }))
 }
 
 eventsSimple clickLatestOverview() {
-    const openDatabase2 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const createDataFusionSession2 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
-    dfRegisterLance({ session: createDataFusionSession2.session, database: openDatabase2.database, tableName: "reports" })
-    const sQLQuery2 = dfSqlQuery({ session: createDataFusionSession2.session, query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })
-    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: sQLQuery2.rows[0].report_id }) })
+    const database2 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const session2 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    session2.registerLance({ database: database2, tableName: "reports" })
+    const { rows: rows2 } = session2.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })
+    navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })
 }
 
 eventsSimple loadOverview() {
-    const openDatabase = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const createDataFusionSession = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
-    dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase.database, tableName: "reports" })
-    const sQLQuery3 = dfSqlQuery({ session: createDataFusionSession.session, query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })
-    a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: sQLQuery3.rows.length }) })
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: sQLQuery3.rows[0].title })
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: sQLQuery3.rows[0].description })
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: utilsDatetimeFormat({ date: sQLQuery3.rows[0].created, format: "%A, %B %-d, %Y" }) })
-    const now5 = utilsDatetimeNow()
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: utilsDatetimeFormat({ date: now5.date, format: "%A, %B %-d, %Y" }) })
-    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
-    for (const forEach2 of controlForEach({ array: sQLQuery3.rows })) {
-        if (forEach2.index > 0) {
-            const instantiateReport = a2uiInstantiateWidget({ widgetSelector: "Report", instanceId: forEach2.value.report_id, dynPathDate: utilsDatetimeFormat({ date: forEach2.value.created, format: "%A, %B %-d, %Y" }), dynPathSummary: forEach2.value.description, dynPathTitle: forEach2.value.title, fnRefs: [widgetActionEvent2] })
-            a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: instantiateReport.elementRef, position: -1 })
+    const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+    const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    session.registerLance({ database: database, tableName: "reports" })
+    const { rows: rows3 } = session.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })
+    setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: "{num} Briefing(s)".format({ num: rows3.length }) })
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: rows3[0].title })
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: rows3[0].description })
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: format({ date: rows3[0].created, format: "%A, %B %-d, %Y" }) })
+    const date6 = now()
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: date6.format("%A, %B %-d, %Y") })
+    clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
+    for (const [index, item2] of rows3) {
+        if (index > 0) {
+            const elementRef2 = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })
+            pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef2, position: -1 })
         }
     }
-    a2uiShowScreen()
+    showScreen()
 }
 
 eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
-    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
+    navigateTo({ route: "/briefing?report_id={id}".format({ id: widgetInstanceId }) })
 }
 
 eventsSimple loadConfig() {
-    if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
-        const readToString = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
-        userConfiguration = valFromString({ string: readToString.content })
+    if (exists({ path: userDir({ nodeScope: false }).child("config.json") })) { // exec_out_exists
+        const content = userDir({ nodeScope: false }).child("config.json").readToString()
+        userConfiguration = parse({ string: content })
     } else { // exec_out_missing
         userConfiguration = { general: { arXiv: false, hn: false, news: false }, sources: [] }
         saveConfig({ config: userConfiguration })
@@ -286,103 +304,104 @@ eventsSimple loadConfig() {
 }
 
 eventsSimple generateFeed() {
-    const findModel = aiGenerativeFindModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
-    model = findModel.model
-    const cUIDV22 = cuid()
-    reportID = cUIDV22.cuid
-    const openDatabase3 = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-    reportDB = openDatabase3.database
+    const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
+    model = model2
+    const cuid3 = cuid()
+    reportID = cuid3
+    const database3 = open({ name: "reports", userScoped: true, batchSize: 1000 })
+    reportDB = database3
     loadConfig()
-    const now = utilsDatetimeNow()
-    const setSystemMessage2 = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: stringFormat({ formatString: "{prompt}\n\nTODAY: {today}", prompt: rSSPrompt, today: now.date }) })
-    rSSHistory = setSystemMessage2.historyOut
-    const setSystemMessage = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: stringFormat({ formatString: "{prompt}\n\nTODAY: {today}", prompt: searchPrompt, today: now.date }) })
-    searchHistory = setSystemMessage.historyOut
-    const now4 = utilsDatetimeNow()
-    for (const parallelForEach of controlParForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {
-        perpareNews({ source: parallelForEach.value })
+    const date2 = now()
+    const historyOut5 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))
+    rSSHistory = historyOut5
+    const historyOut4 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))
+    searchHistory = historyOut4
+    const date5 = now()
+    for (const parallelForEach2 of parallelForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {
+        perpareNews({ source: parallelForEach2.value })
     }
-    batchInsertLocalDb({ database: reportDB, value: reportEntry })
-    const setSystemMessage3 = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: "You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section" })
-    const pushMessage2 = aiGenerativeAddHistoryMessage({ history: setSystemMessage3.historyOut, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "## News\n{news}\n\nToday: {today}", news: reportEntry, today: now4.date }) }) })
-    const invokeAgent3 = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }), tools: [writeReport] }), history: pushMessage2.historyOut })
-    eventsChatPushStat({ stepName: "Briefing", stat: invokeAgent3.stats })
+    reportDB.batchInsert(reportEntry)
+    const historyOut6 = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")
+    const historyOut2 = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date5 }) }))
+    const { stats: stats3 } = fromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [writeReport] }).invoke(historyOut2)
+    pushStat({ stepName: "Briefing", stat: stats3 })
 }
 
 eventsSimple simpleEvent() {
-    notifyUser({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })
+    user({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })
 }
 
 eventsSimple setupNewElement() {
     loadConfig()
-    const push = arrayPush({ arrayIn: userConfiguration.sources, value: { label: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })
-    userConfiguration = { general: userConfiguration.general, sources: push.arrayOut }
+    const arrayOut = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })
+    userConfiguration = { general: userConfiguration.general, sources: arrayOut }
     saveConfig({ config: userConfiguration })
     loadConfigDashboard()
 }
 
 eventsSimple loadConfigDashboard() {
-    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })
+    clearChildren({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })
     loadConfig()
-    for (const forEach4 of controlForEach({ array: userConfiguration.sources })) {
-        const mD5Hash2 = utilsHashMd5({ input: forEach4.value.content })
-        const instantiateConfigElement = a2uiInstantiateWidget({ widgetSelector: "Config Element", instanceId: mD5Hash2.hash, dynPathTitle: forEach4.value.label, dynPathDescription: forEach4.value.content, dynPathLabel: forEach4.value.type, fnRefs: [widgetActionEvent] })
-        a2uiPushChild({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: instantiateConfigElement.elementRef })
+    for (const item4 of userConfiguration.sources) {
+        const hash3 = md5({ input: item4.content })
+        const elementRef = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })
+        pushChild({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: elementRef })
     }
 }
 
 eventsSimple showBriefing() {
-    const getQueryParams = a2uiGetQueryParams({ paramName: "report_id" })
-    if (getQueryParams.exists) {
-        if (controlParExecution({ threadModel: "tasks" })) { // exec_out
-            const openDatabase4 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-            const sQLFilterDatabase = filterLocalDb({ database: openDatabase4.database, filter: stringFormat({ formatString: "`report_id` = '{id}'", id: getQueryParams.value }), limit: 10, offset: 0 })
-            if (arrayGet({ arrayIn: sQLFilterDatabase.values, index: 0 }).success) {
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: sQLFilterDatabase.values[0].report_id })
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: utilsDatetimeFormat({ date: sQLFilterDatabase.values[0].created, format: "%A, %B %-d, %Y" }) })
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/content", text: sQLFilterDatabase.values[0].report })
-                a2uiShowScreen()
+    const { value, exists: exists2 } = getQueryParam({ paramName: "report_id" })
+    if (exists2) {
+        if (parallel({ threadModel: "tasks" })) { // exec_out
+            const database4 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+            const values = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })
+            if (values.get(0).success) {
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: values[0].report_id })
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: format({ date: values[0].created, format: "%A, %B %-d, %Y" }) })
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/content", text: values[0].report })
+                showScreen()
             }
         } else { // exec_out[#2]
-            a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })
-            const openDatabase5 = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-            const createDataFusionSession3 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
-            dfRegisterLance({ session: createDataFusionSession3.session, database: openDatabase5.database, tableName: "reports" })
-            const sQLQuery = dfSqlQuery({ session: createDataFusionSession3.session, query: stringFormat({ formatString: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;", id: getQueryParams.value }) })
-            a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: stringFormat({ formatString: "{cnt} Stories", cnt: sQLQuery.rowCount }) })
-            for (const forEach of controlForEach({ array: sQLQuery.rows })) {
-                const cUIDV2 = cuid()
-                const instantiateArticle = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: cUIDV2.cuid, dynPathDate: (stringLength({ string: forEach.value.date }) > 10) ? utilsDatetimeFormat({ date: utilsTypesTryTransform({ typeIn: forEach.value.date }).typeOut, format: "%B %-d, %Y" }) : forEach.value.date, dynPathSummary: forEach.value.summary, dynPathTitle: forEach.value.title, dynPathInterest: forEach.value.interest })
-                a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: instantiateArticle.elementRef, position: -1 })
+            clearChildren({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })
+            const database5 = open({ name: "reports", userScoped: true, batchSize: 1000 })
+            const session3 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+            session3.registerLance({ database: database5, tableName: "reports" })
+            const { rows, rowCount } = session3.sqlQuery({ query: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;".format({ id: value }) })
+            setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: "{cnt} Stories".format({ cnt: rowCount }) })
+            for (const item of rows) {
+                const cuid2 = cuid()
+                const elementRef3 = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })
+                pushToContainer({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: elementRef3, position: -1 })
             }
         }
     }
 }
 
-notifyProjectUser(success: bool) {
-}
-
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {
     if (reportCreated) {
-        return stringFormat({ formatString: "Already created a report" })
+        return `Already created a report`
     } else {
         reportCreated = true
-        const now2 = utilsDatetimeNow()
-        let record = structSet({ structIn: {}, field: "created", value: now2.date }).structOut
+        const date3 = now()
+        let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut
         record.title = title
         record.report = report
         record.description = shortSummary
         record.report_id = reportID
-        const openDatabase6 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-        insertLocalDb({ database: openDatabase6.database, value: record })
-        notifyUser({ title: title, description: "", link: stringFormat({ formatString: "/briefing?report_id={id}", id: reportID }), showDesktop: true })
-        return stringFormat({ formatString: "Successfully created Report. You are done now!" })
+        const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
+        database6.insertOne(record)
+        user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })
+        return `Successfully created Report. You are done now!`
     }
 }
 
-eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     loadConfig()
     filterSources({ hash: widgetInstanceId })
     saveConfig({ config: userConfiguration })
     loadConfigDashboard()
+}
+
+detached {
+    projectUser({ flowUserSub: "32a5a414-a001-70d1-7b23-570f65ba772b", title: "Notification", description: "", link: "/case" })
 }

@@ -17,6 +17,8 @@ export interface IComment {
 	timestamp: ISystemTime;
 	width?: number | null;
 	z_index?: number | null;
+	/** Board node this comment is attached to (presentation only — may dangle if the node is deleted; missing node = unanchored). */
+	node_id?: null | string;
 	[property: string]: any;
 }
 

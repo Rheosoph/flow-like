@@ -1,0 +1,26 @@
+// BUG: assigning to a quoted (non-identifier) struct key round-trips into text that no longer
+// parses. `row["dataset-id"] = ...` is the exact bracket form the PARSER documents and accepts
+// (parser.rs: "The renderer uses bracketed string syntax for struct keys that cannot be written as
+// a plain identifier (`value[\"row-rejection-reason\"]`)"), and it lowers to
+// `Stmt::FieldAssign { base: "row", path: "dataset-id" }`.
+//
+// Reading such a key is rendered correctly — `render_member` requotes into `base["dataset-id"]`.
+// Writing one is not: `Stmt::FieldAssign` in render.rs unconditionally dot-joins the path, so it
+// emits `row.dataset-id = "eu-news-index"`, and re-parsing that fails with
+//     RENDERED OUTPUT DOES NOT PARSE: ParseError { message: "assignment target must be a variable
+//     or a struct field path (e.g. `x.field`)" }
+// because `dataset-id` lexes as `dataset` `-` `id`.
+//
+// The read below is fine on its own; delete the assignment line and the fixture round-trips.
+// Workaround used in t4-scraper-runtime.flow: write quoted keys with an explicit
+// `struct::set({ structIn: ..., field: "dataset-id", value: ... })` instead of the bracket lvalue.
+use log::{ info }
+
+let activeDatasetId = "eu-news-index"
+
+eventsSimple quotedFieldAssign() {
+    const row = struct::make()
+    row["dataset-id"] = activeDatasetId
+    const tag = row["dataset-id"]
+    info({ message: `${tag}`, toast: false })
+}

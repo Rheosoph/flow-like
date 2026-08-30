@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use super::copilot_sdk_tools::{
     SideEffectCommandQueue, flow_ir_draft_snapshot_dir, persist_recovery_snapshot,
     retained_flow_ir_draft_store, retained_flow_ir_draft_store_for_board,
@@ -41,6 +43,10 @@ use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like_catalog::get_catalog;
+use flow_like_types::channel::{
+    Channel as _, ChannelHandle, ChannelPush, ChannelPushKind, InProcessChannel,
+    InProcessPushResult, MAX_TTL,
+};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -267,11 +273,64 @@ pub fn cancel_copilot_chat(request_id: String) -> Result<bool, String> {
     if request_id.is_empty() {
         return Err("FlowPilot cancellation requires a non-empty request id".to_string());
     }
+    Ok(cancel_registered_copilot_run(request_id))
+}
+
+fn cancel_registered_copilot_run(request_id: &str) -> bool {
     let Some(run) = ACTIVE_COPILOT_RUNS.get(request_id) else {
-        return Ok(false);
+        return false;
     };
     run.cancellation.cancel();
-    Ok(true)
+    true
+}
+
+/// Handles on the run's channel live as long as the longest run the desktop hosts (external
+/// agent phases earn wall clock up to hours); registry entries die with the last `Arc`.
+const COPILOT_RUN_CHANNEL_LIFETIME: Duration = MAX_TTL;
+
+/// The `InProcessChannel` a run's frontend tool requests are answered on.
+///
+/// Nested and delegated runs join the chat channel `global_chat` registered under the owning run
+/// id, so one channel per chat run carries every tool reply, steering message and cancel. Runs
+/// without an owner register their own channel under the frontend's stable request id (or a
+/// fresh id when none was supplied).
+async fn frontend_tool_channel(
+    tool_context: Option<&FrontendToolContext>,
+    request_id: Option<&str>,
+) -> Arc<InProcessChannel> {
+    let candidates = [
+        tool_context.and_then(|context| context.run_id.as_deref()),
+        request_id,
+    ];
+    let mut ids = candidates
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let mut first = None;
+    for id in ids.by_ref() {
+        if let Some(channel) = InProcessChannel::lookup(id).await {
+            return channel;
+        }
+        first.get_or_insert(id);
+    }
+    let channel_id = first
+        .map(str::to_string)
+        .unwrap_or_else(flow_like_types::create_id);
+    InProcessChannel::register(channel_id, COPILOT_RUN_CHANNEL_LIFETIME).await
+}
+
+/// Unsolicited channel messages are steering text; anything non-string is forwarded verbatim as
+/// JSON so a malformed push is visible to the model instead of silently dropped.
+fn steering_messages(inbound: Vec<serde_json::Value>) -> Vec<String> {
+    inbound
+        .into_iter()
+        .map(|value| match value {
+            serde_json::Value::String(text) => text,
+            other => other.to_string(),
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -430,6 +489,7 @@ const BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 /// expand to an undo command containing an entire large node, so this is checked on the actual
 /// executed GenericCommand before persistence. The shared validator also checks JSON-string
 /// escaping for the Lambda request event and echoed command response.
+#[cfg_attr(not(test), allow(dead_code))]
 const BOARD_EDIT_JOB_MAX_REMOTE_COMMAND_BYTES: usize =
     crate::functions::flow::board::REMOTE_BOARD_COMMAND_BATCH_MAX_BYTES;
 /// Bound the full durable replay payload independently from compact BoardCommand input size.
@@ -2511,6 +2571,9 @@ fn node_to_metadata(node: &Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(node.flowscript_namespace()),
+        alias: Some(node.flowscript_alias()),
+        receiver: node.flowscript_receiver(),
     })
 }
 
@@ -2528,7 +2591,7 @@ impl CatalogProvider for DesktopCatalogProvider {
             }
         }
 
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored_matches
             .into_iter()
             .take(10)
@@ -2564,14 +2627,18 @@ impl CatalogProvider for DesktopCatalogProvider {
     }
 
     async fn filter_by_category(&self, category_prefix: &str) -> Vec<NodeMetadata> {
-        let category_prefix = category_prefix.to_lowercase();
+        let category_prefix = category_prefix.to_lowercase().replace("::", "/");
         let mut matches = Vec::new();
 
         for node in self.nodes.iter() {
+            let category = node.category.to_lowercase();
+            let namespace = node.flowscript_namespace().to_lowercase().replace('.', "/");
             let name_lower = node.name.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
 
-            if category.starts_with(&category_prefix) || name_lower.contains(&category_prefix) {
+            if category.contains(&category_prefix)
+                || namespace.contains(&category_prefix)
+                || name_lower.contains(&category_prefix)
+            {
                 matches.push(node_to_metadata(node));
             }
             if matches.len() >= 15 {
@@ -3168,13 +3235,21 @@ async fn run_bits_specialist_chat(
     };
 
     let context = specialist_host_context(tool_context.as_ref(), host_context_guidance.as_deref());
+    let tool_channel = frontend_tool_channel(
+        tool_context.as_ref(),
+        request_id
+            .as_deref()
+            .or(stream_parent_request_id.as_deref()),
+    )
+    .await;
     let frontend_bridge = if nested {
         super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
             app_handle.clone(),
             super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+            tool_channel,
         )
     } else {
-        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone())
+        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone(), tool_channel)
     }
     .with_context(tool_context);
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
@@ -3185,7 +3260,7 @@ async fn run_bits_specialist_chat(
         },
         cancellation: run_cancellation.clone(),
         // A delegated specialist is not steerable; the user steers the orchestrator that called it.
-        run_id: None,
+        steerable: false,
     });
 
     let on_token = move |token: String| {
@@ -3510,6 +3585,7 @@ pub async fn copilot_chat(
                     Some(app_id.to_string())
                 },
                 run_id: run_context.as_ref().map(|context| context.run_id.clone()),
+                api_base_url: None,
             })
         }
         None => None,
@@ -3551,13 +3627,21 @@ pub async fn copilot_chat(
     } else {
         None
     };
+    let tool_channel = frontend_tool_channel(
+        tool_context.as_ref(),
+        request_id
+            .as_deref()
+            .or(stream_parent_request_id.as_deref()),
+    )
+    .await;
     let runtime_frontend_bridge = if nested {
         super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
             app_handle.clone(),
             super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+            tool_channel,
         )
     } else {
-        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone())
+        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone(), tool_channel)
     }
     .with_context(tool_context);
     let runtime_bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
@@ -3565,7 +3649,7 @@ pub async fn copilot_chat(
         tool_set: FrontendPlatformToolSet::BoardRuntime,
         cancellation: run_cancellation.clone(),
         // Board runtime tools belong to a board/widget run, which is not steerable.
-        run_id: None,
+        steerable: false,
     });
 
     let mut run_summary = WorkflowRunSummaryEmitter::new(
@@ -3874,34 +3958,83 @@ impl GlobalChatRunBuffer {
 struct GlobalChatRun {
     buffer: StdMutex<GlobalChatRunBuffer>,
     live: StdMutex<Option<Channel<String>>>,
-    /// Instructions the user sent while this turn was generating, waiting to be folded in at the
-    /// next round boundary. Drained by the backend, never replayed.
-    steering: StdMutex<Vec<String>>,
+    /// The run's `InProcessChannel`, registered under the run id. Tool replies, steering text
+    /// (unsolicited inbound pushes, folded in at the next round boundary) and cancel all arrive
+    /// here through `channel_push`; kept alive for the resumable TTL so a client can still take
+    /// back unconsumed steering after the turn ended.
+    channel: Arc<InProcessChannel>,
     done_tx: watch::Sender<bool>,
     done_rx: watch::Receiver<bool>,
 }
 
-/// Cap on unconsumed steering messages per run. A user hammering the composer while a slow round
-/// is in flight must not grow the prompt without bound; the oldest are dropped, since the most
-/// recent instruction is the one that reflects what they now want.
-const GLOBAL_CHAT_MAX_PENDING_STEERING: usize = 8;
+/// Announces the channel a `global_chat` run answers on, so the frontend can push through
+/// `channel_push` with the channel-level handle (steer/cancel) as well as per-request handles.
+pub const GLOBAL_CHAT_CHANNEL_EVENT: &str = "flowpilot://global-chat-channel";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalChatChannelAnnouncement {
+    run_id: String,
+    channel: ChannelHandle,
+}
 
 /// Registry of live global-chat runs, keyed by the assistant message id the frontend generated.
 static GLOBAL_CHAT_RUNS: LazyLock<DashMap<String, Arc<GlobalChatRun>>> =
     LazyLock::new(DashMap::new);
 
 /// Register a new run and take ownership of its initial live channel.
-fn register_global_chat_run(run_id: &str, live: Channel<String>) -> Arc<GlobalChatRun> {
+fn register_global_chat_run(
+    run_id: &str,
+    live: Channel<String>,
+    channel: Arc<InProcessChannel>,
+) -> Arc<GlobalChatRun> {
     let (done_tx, done_rx) = watch::channel(false);
     let run = Arc::new(GlobalChatRun {
         buffer: StdMutex::new(GlobalChatRunBuffer::default()),
         live: StdMutex::new(Some(live)),
-        steering: StdMutex::new(Vec::new()),
+        channel,
         done_tx,
         done_rx,
     });
     GLOBAL_CHAT_RUNS.insert(run_id.to_string(), run.clone());
     run
+}
+
+/// Unregister a channel unless a newer channel has since claimed the same id (a retry of the
+/// same message re-registers under it and must keep its registry entry).
+async fn release_run_channel(channel: &Arc<InProcessChannel>) {
+    let registered = InProcessChannel::lookup(channel.channel_id()).await;
+    if registered.is_none_or(|registered| Arc::ptr_eq(&registered, channel)) {
+        channel.close().await;
+    }
+}
+
+/// A `cancel` pushed onto the run's channel must stop the run the way `cancel_copilot_chat`
+/// does — the SDK/CLI backends only observe the run token, not the channel flag.
+fn forward_channel_cancel_to_run(
+    run_id: String,
+    channel: Arc<InProcessChannel>,
+    mut done_rx: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if *done_rx.borrow() {
+                return;
+            }
+            if channel.is_cancelled().await {
+                cancel_registered_copilot_run(&run_id);
+                return;
+            }
+            tokio::select! {
+                changed = done_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+            }
+        }
+    });
 }
 
 /// A `Channel<String>` whose sends are mirrored into the run (buffer + live forward) instead of
@@ -3931,65 +4064,73 @@ fn finish_global_chat_run(run_id: String, run: &Arc<GlobalChatRun>) {
         tokio::time::sleep(Duration::from_secs(GLOBAL_CHAT_RUN_TTL_SECS)).await;
         // Only evict if THIS run is still registered — a retry / regeneration of the same message
         // id may have re-registered the run_id meanwhile, and we must not drop that newer run.
-        GLOBAL_CHAT_RUNS.remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run));
+        if GLOBAL_CHAT_RUNS
+            .remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run))
+            .is_some()
+        {
+            release_run_channel(&run.channel).await;
+        }
     });
 }
 
+fn global_chat_run(run_id: &str) -> Option<Arc<GlobalChatRun>> {
+    GLOBAL_CHAT_RUNS
+        .get(run_id)
+        .map(|entry| entry.value().clone())
+}
+
 /// Queue a user instruction for a turn that is already generating. Returns false when the run is
-/// unknown or already finished, so the frontend can restore the text instead of silently losing it.
+/// unknown, already finished, or its inbound buffer is full, so the frontend can restore the text
+/// instead of silently losing it. Equivalent to `channel_push` with kind `inbound` on the run's
+/// channel.
 #[tauri::command]
-pub fn global_chat_steer(run_id: String, message: String) -> Result<bool, String> {
+pub async fn global_chat_steer(run_id: String, message: String) -> Result<bool, String> {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return Ok(false);
     }
-    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
-        Some(entry) => entry.value().clone(),
-        None => return Ok(false),
+    let Some(run) = global_chat_run(&run_id) else {
+        return Ok(false);
     };
     // A finished run would never drain the queue; refusing is what lets the UI say so.
     if *run.done_rx.borrow() {
         return Ok(false);
     }
-    let mut steering = run
-        .steering
-        .lock()
-        .map_err(|_| "The steering queue lock was poisoned.".to_string())?;
-    steering.push(trimmed.to_string());
-    let overflow = steering
-        .len()
-        .saturating_sub(GLOBAL_CHAT_MAX_PENDING_STEERING);
-    if overflow > 0 {
-        steering.drain(0..overflow);
-    }
-    Ok(true)
+    let result = run
+        .channel
+        .push(ChannelPush {
+            channel_id: run_id,
+            request_id: None,
+            kind: ChannelPushKind::Inbound,
+            value: serde_json::Value::String(trimmed.to_string()),
+        })
+        .await;
+    Ok(result == InProcessPushResult::Delivered)
 }
 
 /// Hand back instructions the run never got to consume — a turn that ended before reaching a
 /// round/idle boundary, or an external CLI run that never restarted a phase. The frontend re-sends
 /// them as their own turn, so a steering message is never silently swallowed.
 #[tauri::command]
-pub fn global_chat_take_unconsumed_steering(run_id: String) -> Vec<String> {
-    drain_global_chat_steering(&run_id)
+pub async fn global_chat_take_unconsumed_steering(run_id: String) -> Vec<String> {
+    drain_global_chat_steering(&run_id).await
 }
 
-/// Take everything queued for a run, leaving the queue empty. Unknown runs drain to nothing.
-fn drain_global_chat_steering(run_id: &str) -> Vec<String> {
-    let Some(entry) = GLOBAL_CHAT_RUNS.get(run_id) else {
-        return Vec::new();
-    };
-    let run = entry.value().clone();
-    drop(entry);
-    let Ok(mut steering) = run.steering.lock() else {
-        return Vec::new();
-    };
-    std::mem::take(&mut *steering)
+/// Take everything pushed onto a run's channel since the last drain. Unknown runs drain to nothing.
+async fn drain_global_chat_steering(run_id: &str) -> Vec<String> {
+    match global_chat_run(run_id) {
+        Some(run) => steering_messages(run.channel.drain_inbound().await),
+        None => Vec::new(),
+    }
 }
 
 #[derive(Serialize)]
 pub struct GlobalChatResumeResult {
     /// True when a live/recent run was found and its transcript replayed onto the new channel.
     pub attached: bool,
+    /// Channel-level handle of the re-attached run for `channel_push` (steer/cancel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelHandle>,
 }
 
 /// Re-attach a reloaded webview to an in-flight (or just-finished) `global_chat` run: swaps the
@@ -4002,9 +4143,11 @@ pub async fn global_chat_resume(
     run_id: String,
     channel: Channel<String>,
 ) -> Result<GlobalChatResumeResult, String> {
-    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
-        Some(entry) => entry.value().clone(),
-        None => return Ok(GlobalChatResumeResult { attached: false }),
+    let Some(run) = global_chat_run(&run_id) else {
+        return Ok(GlobalChatResumeResult {
+            attached: false,
+            channel: None,
+        });
     };
 
     {
@@ -4022,7 +4165,10 @@ pub async fn global_chat_resume(
         let _ = done_rx.wait_for(|done| *done).await;
     }
 
-    Ok(GlobalChatResumeResult { attached: true })
+    Ok(GlobalChatResumeResult {
+        attached: true,
+        channel: Some(run.channel.handle()),
+    })
 }
 
 /// Reuses the same backend selection as `copilot_chat` (profile Bits models plus the GitHub Copilot,
@@ -4080,37 +4226,68 @@ pub async fn global_chat(
     // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
     // Shared by every backend so recall and the memory tools behave identically regardless of
     // the selected model.
-    let memory = if let (Some(profile_arc), Some(embedding_id)) =
-        (&profile, embedding_model_id.as_ref())
-    {
-        match profile_arc
-            .find_bit(embedding_id, state.0.http_client.clone())
-            .await
-        {
-            Ok(bit) => {
-                match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
-                    Ok(memory) => Some(Arc::new(memory)),
-                    Err(error) => {
-                        eprintln!("[global_chat] memory init failed: {error}");
-                        None
+    let memory =
+        if let (Some(profile_arc), Some(embedding_id)) = (&profile, embedding_model_id.as_ref()) {
+            match profile_arc
+                .find_bit(embedding_id, state.0.http_client.clone())
+                .await
+            {
+                Ok(bit) => {
+                    let usage_context = run_id.as_ref().map(|run_id| ModelUsageContext {
+                        app_id: None,
+                        run_id: Some(run_id.clone()),
+                        api_base_url: None,
+                    });
+                    match AssistantMemory::open(
+                        state.0.clone(),
+                        None,
+                        &profile_arc.id,
+                        &bit,
+                        token.clone(),
+                        usage_context,
+                    )
+                    .await
+                    {
+                        Ok(memory) => Some(Arc::new(memory)),
+                        Err(error) => {
+                            eprintln!("[global_chat] memory init failed: {error}");
+                            None
+                        }
                     }
                 }
+                Err(error) => {
+                    eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
+                    None
+                }
             }
-            Err(error) => {
-                eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     // Register the run (if the frontend gave a run id) and stream through a mirror channel that
     // buffers every chunk + forwards to the live webview channel, so a reload can re-attach and
     // replay via `global_chat_resume`. Without a run id, stream straight to the raw channel.
+    // The run's channel is registered under the frontend run id before any backend starts, so
+    // every nested/delegated run joins it and the frontend can address it from the first frame.
+    let chat_channel = InProcessChannel::register(
+        run_id.clone().unwrap_or_else(flow_like_types::create_id),
+        COPILOT_RUN_CHANNEL_LIFETIME,
+    )
+    .await;
     let run = run_id
         .as_ref()
-        .map(|id| register_global_chat_run(id, channel.clone()));
+        .map(|id| register_global_chat_run(id, channel.clone(), chat_channel.clone()));
+    if let (Some(run_id), Some(run)) = (run_id.as_ref(), run.as_ref()) {
+        forward_channel_cancel_to_run(run_id.clone(), chat_channel.clone(), run.done_rx.clone());
+        crate::utils::emit_to_ui(
+            &app_handle,
+            GLOBAL_CHAT_CHANNEL_EVENT,
+            GlobalChatChannelAnnouncement {
+                run_id: run_id.clone(),
+                channel: chat_channel.handle(),
+            },
+        );
+    }
     let sink = match &run {
         Some(run) => global_chat_run_channel(run.clone()),
         None => channel,
@@ -4219,12 +4396,13 @@ pub async fn global_chat(
                     bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
                         app_handle.clone(),
                         super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+                        chat_channel.clone(),
                     )
                     .with_context(Some(global_tool_context)),
                     tool_set: FrontendPlatformToolSet::Global,
                     cancellation: run_cancellation.clone(),
-                    // Lets the core loop drain this run's steering queue between tool rounds.
-                    run_id: run_id.clone(),
+                    // Lets the core loop drain this run's channel inbox between tool rounds.
+                    steerable: true,
                 });
 
                 let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
@@ -4278,8 +4456,10 @@ pub async fn global_chat(
 
     // Mark the run finished (unblocking any resumer waiting on completion) and schedule its removal
     // after the resumable TTL. Runs on both the success and error paths so the registry never leaks.
-    if let (Some(run_id), Some(run)) = (run_id, run) {
-        finish_global_chat_run(run_id, &run);
+    match (run_id, run) {
+        (Some(run_id), Some(run)) => finish_global_chat_run(run_id, &run),
+        // Nothing can address an unregistered run after it ends; drop the channel right away.
+        _ => release_run_channel(&chat_channel).await,
     }
 
     result
@@ -4409,21 +4589,22 @@ struct DesktopPlatformBridge {
     bridge: super::frontend_tool_bridge::FrontendToolBridge,
     tool_set: FrontendPlatformToolSet,
     cancellation: CancellationToken,
-    /// Set for global-chat runs, which are steerable; board/widget runs leave it None.
-    run_id: Option<String>,
+    /// True for global-chat runs, which drain steering text pushed onto their channel;
+    /// board/widget runs share a channel with their owner and must not consume its inbox.
+    steerable: bool,
 }
 
 #[async_trait]
 impl PlatformToolBridge for DesktopPlatformBridge {
     async fn drain_steering(&self) -> Vec<String> {
-        match &self.run_id {
-            Some(run_id) => drain_global_chat_steering(run_id),
-            None => Vec::new(),
+        if !self.steerable {
+            return Vec::new();
         }
+        steering_messages(self.bridge.channel().drain_inbound().await)
     }
 
     async fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
+        self.cancellation.is_cancelled() || self.bridge.channel().is_cancelled().await
     }
 
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
@@ -4492,6 +4673,9 @@ const EXTERNAL_AGENT_TOOL_CALL_ID: &str = "external-agent";
 struct ExternalAgentRunOutput {
     text: String,
     error: Option<String>,
+    /// Claude Code session id captured from the stream's init/result frames; lets the phase loop
+    /// resume the CLI transcript on continuation phases. Always the latest observed id.
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5196,6 +5380,7 @@ async fn external_code_agent_chat_internal(
     };
     // Started after the same-board gate so serialized queue time does not consume the budget.
     let nested_wall_clock_deadline = nested.then(|| Instant::now() + NESTED_RUN_WALL_CLOCK_BUDGET);
+    let tool_channel = frontend_tool_channel(tool_context.as_ref(), request_id.as_deref()).await;
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -5205,6 +5390,7 @@ async fn external_code_agent_chat_internal(
         tool_context,
         memory,
         &raw_user_prompt,
+        tool_channel,
     );
     if read_only {
         tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
@@ -5261,13 +5447,28 @@ async fn external_code_agent_chat_internal(
     let mut continuation = 0u8;
     let mut zero_activity_restarts = 0u8;
     let mut previous_exhausted_budget: Option<String> = None;
-    let mut prompt = build_external_agent_prompt(
-        &surface.system_content,
-        &user_prompt,
-        scope,
-        workflow_edit_request,
-        global_agent,
-    );
+    let mut previous_exhausted_progress: Option<WorkflowProgressMark> = None;
+    // Claude Code receives the bounded role/lifecycle appendix through --append-system-prompt so
+    // it lands in the real system prompt; other backends keep it inline in the stdin prompt.
+    let claude_role_appendix = matches!(backend, FlowPilotAgentBackendKind::ClaudeCode)
+        .then(|| external_agent_role_appendix(scope, workflow_edit_request, global_agent));
+    // The latest Claude session id observed on a finished phase; every later phase in this run
+    // (continuation or transport restart) resumes it so the model keeps its own transcript
+    // instead of a lossy host reconstruction. Phases with no captured id fall back to the full
+    // re-wrapped prompt in a fresh session.
+    let mut resume_session_id: Option<String> = None;
+    let mut next_phase_resume: Option<String> = None;
+    let mut prompt = if claude_role_appendix.is_some() {
+        build_external_agent_prompt_body(&surface.system_content, &user_prompt)
+    } else {
+        build_external_agent_prompt(
+            &surface.system_content,
+            &user_prompt,
+            scope,
+            workflow_edit_request,
+            global_agent,
+        )
+    };
     let agent_result = loop {
         if nested_wall_clock_exhausted(
             nested_wall_clock_deadline
@@ -5304,6 +5505,8 @@ async fn external_code_agent_chat_internal(
             prompt,
             tool_names.clone(),
             current_images.as_deref().unwrap_or_default(),
+            next_phase_resume.take().as_deref(),
+            claude_role_appendix.as_deref(),
         ) {
             Ok(invocation) => invocation,
             Err(error) => {
@@ -5467,6 +5670,11 @@ async fn external_code_agent_chat_internal(
             invocation_cancellation,
         )
         .await;
+        if let Ok(output) = run_result.as_ref()
+            && let Some(session) = output.session_id.as_deref()
+        {
+            resume_session_id = Some(session.to_string());
+        }
         if let Some(watchdog) = wall_clock_watchdog {
             watchdog.abort();
         }
@@ -5540,12 +5748,23 @@ async fn external_code_agent_chat_internal(
             .and_then(|snapshot| snapshot.exhausted_budget.clone());
         if exhausted_budget.is_some() && exhausted_budget == previous_exhausted_budget {
             // The previous continuation already received a fresh bounded slice for this exact
-            // budget and burned it again. Another phase would arrive equally dead; stop honestly.
-            run_summary.mark_budget_incomplete();
-            break Err(external_workflow_incomplete_error(
-                final_workflow_snapshot.as_ref(),
-                continuation,
-            ));
+            // budget and burned it again. Terminal only when the progress ledger ALSO failed to
+            // advance across that slice: a run that spent the slice moving forward earns another,
+            // a circling run stops honestly here.
+            let current_progress = workflow_state
+                .as_ref()
+                .and_then(|state| state.lock().ok().map(|state| state.progress_mark()));
+            let progressed = matches!(
+                (current_progress.as_ref(), previous_exhausted_progress.as_ref()),
+                (Some(mark), Some(previous)) if mark.advanced_beyond(previous)
+            );
+            if !progressed {
+                run_summary.mark_budget_incomplete();
+                break Err(external_workflow_incomplete_error(
+                    final_workflow_snapshot.as_ref(),
+                    continuation,
+                ));
+            }
         }
 
         let phase_tool_calls =
@@ -5587,6 +5806,9 @@ async fn external_code_agent_chat_internal(
                 state.grant_continuation_slice();
             }
             previous_exhausted_budget = exhausted_budget;
+            previous_exhausted_progress = workflow_state
+                .as_ref()
+                .and_then(|state| state.lock().ok().map(|state| state.progress_mark()));
         }
 
         if run_failure.is_some() {
@@ -5611,7 +5833,7 @@ async fn external_code_agent_chat_internal(
         // still queued when the run ends is handed back to the frontend and re-sent as its own
         // turn, so a steer is never silently dropped on a single-phase run.
         if let Some(run_id) = request_id.as_deref() {
-            let steering = drain_global_chat_steering(run_id);
+            let steering = drain_global_chat_steering(run_id).await;
             if !steering.is_empty() {
                 repair_request.push_str(&format!(
                     "\n\nThe user sent this while you were working. Treat it as part of the current request and adjust course now:\n{}",
@@ -5642,13 +5864,24 @@ async fn external_code_agent_chat_internal(
                 flow_like::flow::copilot::stream::safe_text_preview(error, 600),
             ));
         }
-        prompt = build_external_agent_prompt(
-            &surface.system_content,
-            &repair_request,
-            scope,
-            true,
-            global_agent,
-        );
+        prompt = match (claude_role_appendix.as_deref(), resume_session_id.as_deref()) {
+            // Resumed continuation: the session already holds the platform prompt and the
+            // model's own transcript — send only the compact continuation payload.
+            (Some(_), Some(session)) => {
+                next_phase_resume = Some(session.to_string());
+                repair_request
+            }
+            (Some(_), None) => {
+                build_external_agent_prompt_body(&surface.system_content, &repair_request)
+            }
+            (None, _) => build_external_agent_prompt(
+                &surface.system_content,
+                &repair_request,
+                scope,
+                true,
+                global_agent,
+            ),
+        };
         send_external_progress_event(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
@@ -5703,10 +5936,12 @@ async fn external_code_agent_chat_internal(
                     .expect("guarded by is_some"),
             ),
             error: Some(error),
+            session_id: None,
         },
         Err(error) if workflow_edit_request && has_retained_candidate => ExternalAgentRunOutput {
             text: String::new(),
             error: Some(error),
+            session_id: None,
         },
         Err(error) => return Err(actionable_external_agent_failure(backend, &error)),
     };
@@ -5747,7 +5982,7 @@ async fn external_code_agent_chat_internal(
         .emitted_surfaces
         .lock()
         .ok()
-        .and_then(|mut surfaces| surfaces.drain(..).last());
+        .and_then(|mut surfaces| surfaces.drain(..).next_back());
     let (components, canvas_settings, root_component_id) = match emitted_surface {
         Some(emitted) => (
             serde_json::from_value::<Vec<SurfaceComponent>>(emitted.components).unwrap_or_default(),
@@ -5894,6 +6129,7 @@ async fn copilot_sdk_chat_internal(
     run_summary.attach_workflow_state(workflow_state.clone());
     run_summary.record_phase();
 
+    let tool_channel = frontend_tool_channel(tool_context.as_ref(), request_id.as_deref()).await;
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -5903,6 +6139,7 @@ async fn copilot_sdk_chat_internal(
         tool_context,
         memory,
         &raw_user_prompt,
+        tool_channel,
     );
     if read_only {
         tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
@@ -6526,7 +6763,7 @@ async fn copilot_sdk_chat_internal(
                             let emitted = emitted_surfaces
                                 .lock()
                                 .ok()
-                                .and_then(|mut surfaces| surfaces.drain(..).last());
+                                .and_then(|mut surfaces| surfaces.drain(..).next_back());
                             let (components, canvas, root_id) = match emitted {
                                 Some(surface) => (
                                     serde_json::from_value::<Vec<SurfaceComponent>>(
@@ -6622,7 +6859,7 @@ async fn copilot_sdk_chat_internal(
                     // process never answers. Anything the user typed while this turn ran gets
                     // folded in here, before any host-generated continuation is considered.
                     if let Some(run_id) = global_run_id.as_deref() {
-                        let steering = drain_global_chat_steering(run_id);
+                        let steering = drain_global_chat_steering(run_id).await;
                         if !steering.is_empty() {
                             let prompt = format!(
                                 "The user sent this while you were working. Treat it as part of the current request and continue accordingly:\n{}",
@@ -6886,7 +7123,7 @@ async fn copilot_sdk_chat_internal(
         && let Some(surface) = emitted_surfaces
             .lock()
             .ok()
-            .and_then(|mut surfaces| surfaces.drain(..).last())
+            .and_then(|mut surfaces| surfaces.drain(..).next_back())
     {
         let components =
             serde_json::from_value::<Vec<SurfaceComponent>>(surface.components).unwrap_or_default();
@@ -7453,6 +7690,12 @@ fn summarize_tool_arguments(tool_name: &str, arguments: Option<&serde_json::Valu
             .and_then(|value| value.as_str())
             .map(|event_id| format!("event: {event_id}"))
             .unwrap_or_else(|| "Executing event".to_string()),
+        "run_board_tests" => arguments
+            .get("board_id")
+            .or_else(|| arguments.get("boardId"))
+            .and_then(|value| value.as_str())
+            .map(|board_id| format!("board tests: {board_id}"))
+            .unwrap_or_else(|| "Running board tests".to_string()),
         "ask_user" => arguments
             .get("questions")
             .and_then(|value| value.as_array())
@@ -7901,6 +8144,7 @@ fn specialist_tool_policy(
             "execute_event",
             "execute_node",
             "query_execution_logs",
+            "run_board_tests",
             // End-to-end verification of persisted work: drive a live page's inputs/buttons and
             // invoke the app's chat event, observing the runs they start.
             "interact_app_page",
@@ -8007,6 +8251,7 @@ fn build_flowpilot_sdk_tools(
     tool_context: Option<FrontendToolContext>,
     memory: Option<Arc<AssistantMemory>>,
     user_prompt: &str,
+    channel: Arc<InProcessChannel>,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
         copilot_sdk_tools::{
@@ -8026,9 +8271,9 @@ fn build_flowpilot_sdk_tools(
     // Build the runtime bridge once so every path carries the owning run context. Global and
     // nested tools share the global event listener; ordinary board tools keep the board listener.
     let runtime_bridge = if global || nested {
-        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT)
+        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT, channel)
     } else {
-        FrontendToolBridge::new(app_handle)
+        FrontendToolBridge::new(app_handle, channel)
     }
     .with_context(tool_context);
 
@@ -8378,6 +8623,11 @@ const EXTERNAL_EXTENSION_OPERATION_GRANT: u16 = 6;
 const EXTERNAL_EXTENSION_CHECK_GRANT: u8 = 3;
 const EXTERNAL_EXTENSION_COMMIT_GRANT: u8 = 1;
 const EXTERNAL_EXTENSION_CONTINUATION_GRANT: u8 = 1;
+// A big board pays more operations/edits for the same amount of behavior change, so the volume
+// budgets scale with node count (one op per 8 nodes, one edit per 16), bounded so size never buys
+// unbounded circling headroom. Stall/circuit cut-offs are unaffected.
+const EXTERNAL_BOARD_SIZE_OPERATION_ALLOWANCE_CAP: u16 = 12;
+const EXTERNAL_BOARD_SIZE_EDIT_ALLOWANCE_CAP: u8 = 6;
 const MAX_RETAINED_STRUCTURED_DIAGNOSTICS: usize = 12;
 const MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES: usize = 12_000;
 // A typed build gets fixed lifecycle overhead plus roughly three operations per declared module
@@ -8541,6 +8791,7 @@ struct WorkflowToolLoopSnapshot {
     typed_revision: Option<u64>,
     typed_operation_attempts: u16,
     typed_operation_budget: u16,
+    #[allow(dead_code)] // carried across the phase handoff; no consumer restores them yet
     typed_stalled_attempts: u8,
     typed_missing_modules: Vec<String>,
     mutation_path: Option<WorkflowMutationPath>,
@@ -8550,6 +8801,7 @@ struct WorkflowToolLoopSnapshot {
     scope_plan: Option<BoardScopePlan>,
     /// Set when a staged plan was told to commit the prefix it already validated because the wall
     /// clock is running out. The bridge continues the remaining segments in a fresh run.
+    #[allow(dead_code)]
     staged_prefix_commit_requested: bool,
     /// Wall-clock slices this run earned by demonstrating progress, and the total they bought.
     granted_time_extensions: u8,
@@ -8622,6 +8874,12 @@ struct WorkflowToolLoopState {
     /// The model's own account of what advanced and what remains, from its last extension request.
     /// Recorded for the user and telemetry; it never influences whether a grant is made.
     last_extension_rationale: Option<String>,
+    /// Node count of the board this run edits; sizes the operation/edit budgets so large boards
+    /// earn more headroom up front instead of failing by exhaustion.
+    board_node_count: usize,
+    /// Progress mark at the last SDK idle-continuation slice; the next repeat of the same
+    /// exhausted budget is terminal only when progress did not advance beyond this mark.
+    last_idle_continuation_progress: Option<WorkflowProgressMark>,
 }
 
 impl WorkflowToolLoopState {
@@ -8691,6 +8949,7 @@ impl WorkflowToolLoopState {
         let Some(manifest) = manifest else {
             return;
         };
+        self.board_node_count = manifest.board.graph.nodes.len();
         let mut session = WorkflowSession::new(manifest, WorkflowSessionPolicy::default());
         let _ = session.mark_manifest_ready(0);
         let _ = session.begin_discovery(0);
@@ -8821,18 +9080,37 @@ impl WorkflowToolLoopState {
         }
     }
 
+    /// Extra source operations a large board earns: one per 8 nodes, bounded so a huge board
+    /// cannot buy unbounded circling headroom.
+    fn board_size_operation_allowance(&self) -> u16 {
+        u16::try_from(self.board_node_count / 8)
+            .unwrap_or(u16::MAX)
+            .min(EXTERNAL_BOARD_SIZE_OPERATION_ALLOWANCE_CAP)
+    }
+
+    /// Extra edit attempts a large board earns: one per 16 nodes, bounded.
+    fn board_size_edit_allowance(&self) -> u8 {
+        u8::try_from(self.board_node_count / 16)
+            .unwrap_or(u8::MAX)
+            .min(EXTERNAL_BOARD_SIZE_EDIT_ALLOWANCE_CAP)
+    }
+
     fn flowscript_operation_budget(&self) -> u16 {
-        scoped_operation_budget(self.scope_plan.as_ref()).saturating_add(
-            u16::from(self.granted_time_extensions)
-                .saturating_mul(EXTERNAL_EXTENSION_OPERATION_GRANT),
-        )
+        scoped_operation_budget(self.scope_plan.as_ref())
+            .saturating_add(
+                u16::from(self.granted_time_extensions)
+                    .saturating_mul(EXTERNAL_EXTENSION_OPERATION_GRANT),
+            )
+            .saturating_add(self.board_size_operation_allowance())
     }
 
     fn edit_attempt_budget(&self) -> u8 {
-        scoped_edit_budget(self.scope_plan.as_ref()).saturating_add(
-            self.granted_time_extensions
-                .saturating_mul(EXTERNAL_EXTENSION_CHECK_GRANT),
-        )
+        scoped_edit_budget(self.scope_plan.as_ref())
+            .saturating_add(
+                self.granted_time_extensions
+                    .saturating_mul(EXTERNAL_EXTENSION_CHECK_GRANT),
+            )
+            .saturating_add(self.board_size_edit_allowance())
     }
 
     fn commit_attempt_budget(&self) -> u8 {
@@ -9672,10 +9950,20 @@ fn prepare_sdk_idle_continuation_budget(
         return IdleContinuationBudget::Executable;
     };
     if Some(exhausted.as_str()) == previous_exhausted_budget {
-        return IdleContinuationBudget::Terminal(format!(
-            "the {exhausted} was exhausted again after its granted continuation slice"
-        ));
+        // Terminal only when the progress ledger also failed to advance since the previous
+        // slice — a run that spent the slice moving forward earns another one.
+        let mark = state.progress_mark();
+        let progressed = state
+            .last_idle_continuation_progress
+            .as_ref()
+            .is_some_and(|previous| mark.advanced_beyond(previous));
+        if !progressed {
+            return IdleContinuationBudget::Terminal(format!(
+                "the {exhausted} was exhausted again after its granted continuation slice"
+            ));
+        }
     }
+    state.last_idle_continuation_progress = Some(state.progress_mark());
     state.grant_continuation_slice();
     IdleContinuationBudget::SliceGranted(exhausted)
 }
@@ -9869,10 +10157,8 @@ fn workflow_predraft_context_preflight_with_lease(
                         } else {
                             "plan_board_scope"
                         }
-                    } else if state.current_reads > 0 {
-                        "get_declarations"
                     } else {
-                        "get_current_flowscript_then_get_declarations"
+                        "get_declarations"
                     },
                     "inspection_calls": state.predraft_context_reads,
                     "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
@@ -10540,7 +10826,7 @@ fn workflow_tool_preflight_with_args(
                     "code": "FLOWSCRIPT_RETAINED_REVISION_REQUIRED",
                     "retryable": true,
                     "next_action": match state.last_status.as_deref() {
-                        Some("valid") => "commit_flowscript",
+                        Some("valid" | "draft_started" | "draft_updated") => "commit_flowscript",
                         Some("validation_errors" | "error" | "no_changes") => "patch_flowscript",
                         _ => "check_flowscript",
                     },
@@ -11011,7 +11297,7 @@ fn workflow_tool_preflight_with_args(
                     } else {
                         "write_flowscript"
                     },
-                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch/check the retained source, and commit_flowscript."
+                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. The embedded FlowScript render IS the current board. Use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch the retained source, and commit_flowscript once diagnostics are clear."
                 }),
                 true,
             ))
@@ -11778,7 +12064,7 @@ fn declaration_result_is_usable(result_text: &str) -> bool {
 
 fn declaration_line_is_complete(line: &str) -> bool {
     let line = line.trim();
-    line.starts_with("declare function ")
+    flow_like::flow::ast::is_signature_line(line)
         && line.contains('(')
         && line.contains(')')
         && line.contains(';')
@@ -12326,7 +12612,16 @@ fn workflow_tool_record_with_outcome(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .or_else(|| submitted_flowscript(args).map(str::to_string))
-            .or(interrupted_source);
+            .or(interrupted_source)
+            .or_else(|| {
+                // Envelope results replace `source` with `source_bytes` but never change the
+                // retained bytes, so the last recorded source still describes this revision.
+                parsed
+                    .as_ref()
+                    .is_some_and(|value| value.get("source_bytes").is_some())
+                    .then(|| state.last_flowscript.clone())
+                    .flatten()
+            });
         let current_draft_id = state.flowscript_draft_id.clone();
         state.flowscript_draft_id = response_draft_id
             .clone()
@@ -12745,6 +13040,7 @@ fn flowscript_source_fingerprint(source: &str) -> String {
 /// - `write_flowscript`: the response source is byte-identical to the submitted document.
 /// - `check_flowscript` / `commit_flowscript`: the response revision equals `expected_revision`;
 ///   neither operation mutates the retained source.
+///
 /// `patch_flowscript` keeps its echo because the merged result is host-computed. This runs after
 /// `workflow_tool_record`, so host retention/continuation state keeps the complete source.
 fn suppress_unchanged_flowscript_source_echo(
@@ -12852,14 +13148,14 @@ fn flowpilot_mcp_server_instructions<'a>(
     let has_global = names.contains("list_apps") && names.contains("flowpilot_board");
 
     if has_global {
-        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either use mode, begin app work with list_apps. Active configured chat/page/headless Events, including REST/API and MCP, are primary: choose the best match and exact consumer. Use data_studio_agent only after prior inventory for an explicit raw schema/table/ontology/SQL/DataFusion request, no suitable Event, or a successfully called Event that reports insufficient capability; set routing_reason and never bypass a failed, declined, timed-out, or approval-blocked Event. Use the sealed no-argument research_agent only after a complete inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
+        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either use mode, begin app work with list_apps. Active configured chat/page/headless Events, including REST/API and MCP, are primary: choose the best match and exact consumer. Call data_studio_agent directly for any work about an app's data — schema, queries, analytics, corrections, migrations, ontologies — on existing apps as well as during a build; it needs no preflight, and a failed, declined, timed-out, or approval-blocked Event is a stop to report rather than work to redo through raw data. Use the sealed no-argument research_agent only after a returned inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
     }
 
     if workflow_mutation && has_ui {
-        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
+        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, the FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections.";
     }
     if workflow_mutation {
-        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
+        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. The FlowScript render embedded in the system prompt IS the current board — do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript and use structured compiler diagnostics for focused declaration follow-ups; once a write or patch returns zero diagnostics, finish with commit_flowscript directly at that revision — commit validates inline and returns the same validation_errors on failure. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
     }
     match (has_board, has_ui, has_data) {
         (false, true, false) => {
@@ -13431,6 +13727,7 @@ fn explicit_reasoning_effort(reasoning_effort: Option<&str>) -> Option<&str> {
 }
 
 impl ExternalAgentInvocation {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         backend: FlowPilotAgentBackendKind,
         cli: CliResolution,
@@ -13440,8 +13737,12 @@ impl ExternalAgentInvocation {
         prompt: String,
         tool_names: Vec<String>,
         images: &[ChatImage],
+        resume_session: Option<&str>,
+        append_system_prompt: Option<&str>,
     ) -> Result<Self, String> {
         match backend {
+            // Codex has no session-resume or system-prompt-append surface; both options are
+            // Claude-only and deliberately ignored here.
             FlowPilotAgentBackendKind::Codex => Self::codex(
                 backend,
                 cli,
@@ -13460,6 +13761,8 @@ impl ExternalAgentInvocation {
                 prompt,
                 tool_names,
                 images,
+                resume_session,
+                append_system_prompt,
             ),
             FlowPilotAgentBackendKind::GithubCopilot => Err(
                 "GitHub Copilot uses the direct SDK backend, not the external runner.".to_string(),
@@ -13556,6 +13859,7 @@ impl ExternalAgentInvocation {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn claude(
         backend: FlowPilotAgentBackendKind,
         cli: CliResolution,
@@ -13565,6 +13869,8 @@ impl ExternalAgentInvocation {
         prompt: String,
         tool_names: Vec<String>,
         images: &[ChatImage],
+        resume_session: Option<&str>,
+        append_system_prompt: Option<&str>,
     ) -> Result<Self, String> {
         let mcp_config_path = std::env::temp_dir().join(format!(
             "flowpilot-claude-mcp-{}.json",
@@ -13637,6 +13943,18 @@ impl ExternalAgentInvocation {
         if let Some(effort) = explicit_reasoning_effort(reasoning_effort) {
             args.extend(["--effort".to_string(), effort.to_string()]);
         }
+        // The bounded role/lifecycle appendix belongs in the real system prompt, not the user
+        // message; the board-embedding platform content stays on stdin because argv has OS
+        // length limits.
+        if let Some(appendix) = append_system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+            args.extend(["--append-system-prompt".to_string(), appendix.to_string()]);
+        }
+        // Continuation phases within one run resume the previous phase's session so the model
+        // keeps its own transcript instead of a lossy host reconstruction. Each resumed print
+        // run mints a NEW session id; the phase loop always resumes the latest captured one.
+        if let Some(session) = resume_session.map(str::trim).filter(|s| !s.is_empty()) {
+            args.extend(["--resume".to_string(), session.to_string()]);
+        }
 
         // Text-only turns deliver the prompt via stdin as plain text (`-p` reads
         // stdin when no positional prompt is given): the prompt embeds the whole
@@ -13704,17 +14022,20 @@ impl ExternalAgentInvocation {
             envs,
             // The global surface relies on Claude's supported-model default ToolSearch behavior.
             // Do not let an ambient desktop/shell override force eager loading or disable it.
-            env_removals: defer_tool_schemas
-                .then(|| vec!["ENABLE_TOOL_SEARCH".to_string()])
-                .unwrap_or_default(),
+            env_removals: if defer_tool_schemas {
+                vec!["ENABLE_TOOL_SEARCH".to_string()]
+            } else {
+                Default::default()
+            },
             final_output_path: Some(mcp_config_path),
         })
     }
 }
 
-fn build_external_agent_prompt(
-    system_content: &str,
-    user_prompt: &str,
+/// The role + workflow-loop appendix for external code-agent CLIs. On the Claude Code backend it
+/// travels as `--append-system-prompt` so it lands in the real system prompt; other backends
+/// receive it inline in the stdin prompt.
+fn external_agent_role_appendix(
     scope: CopilotScope,
     workflow_edit_request: bool,
     global_agent: bool,
@@ -13723,11 +14044,11 @@ fn build_external_agent_prompt(
         r#"
 THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
-2. Read get_current_flowscript once. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
+2. The system prompt already embeds the current board as anchored FlowScript — that render IS the board, so do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
 3. After any usable declaration result and BEFORE the first source write, call plan_board_scope exactly ONCE. Use one `single` segment for an ordinary edit; split only work too large to compose safely in one pass. Once the host accepts a plan, never call plan_board_scope again unless the host explicitly rejects the plan or a source repair proves the active segment impossible and the tool explicitly permits one revision.
 4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
-5. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
-6. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
+5. If the write/patch result carries diagnostics, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment — a zero-diagnostic write/patch needs no separate check round.
+6. Call commit_flowscript directly at the latest zero-diagnostic revision — commit runs the identical validation inline and returns the same structured validation_errors on failure. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
 7. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
 
 Helper rule: every helper declaration requires the literal keyword `function`, for example `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper. Keep each helper declaration in the same full document as its calls; never invent helper calls and expect them to resolve as catalog nodes. If a helper returns a value, declare a named return signature such as `function classify(...): (isSupport: bool) { ...; return result.value }`.
@@ -13762,17 +14083,42 @@ Entry-node rule: cron/schedules are app Event setup on an `eventsSimple()` entry
         }
     };
     format!(
+        r#"You are running through an external code-agent CLI connected to a role-scoped FlowPilot MCP server. Do not use shell/file-edit tools for FlowPilot artifacts; use only the provided FlowPilot MCP tools.
+
+{role_contract}
+{workflow_loop}"#,
+        role_contract = role_contract,
+    )
+}
+
+fn build_external_agent_prompt(
+    system_content: &str,
+    user_prompt: &str,
+    scope: CopilotScope,
+    workflow_edit_request: bool,
+    global_agent: bool,
+) -> String {
+    let appendix = external_agent_role_appendix(scope, workflow_edit_request, global_agent);
+    format!(
         r#"SYSTEM INSTRUCTIONS
 {system_content}
 
-You are running through an external code-agent CLI connected to a role-scoped FlowPilot MCP server. Do not use shell/file-edit tools for FlowPilot artifacts; use only the provided FlowPilot MCP tools.
-
-{role_contract}
-{workflow_loop}
+{appendix}
 
 USER REQUEST
-{user_prompt}"#,
-        role_contract = role_contract,
+{user_prompt}"#
+    )
+}
+
+/// Prompt body without the role appendix, for the Claude Code backend where the appendix rides
+/// `--append-system-prompt` instead of the user message.
+fn build_external_agent_prompt_body(system_content: &str, user_prompt: &str) -> String {
+    format!(
+        r#"SYSTEM INSTRUCTIONS
+{system_content}
+
+USER REQUEST
+{user_prompt}"#
     )
 }
 
@@ -13941,7 +14287,7 @@ fn build_external_workflow_continuation_prompt(
     let continuation_action = if typed_mode {
         "Continue only the typed-IR lifecycle selected by the retained state. Repair the same module/draft, validate it, and call commit_flow_ir_draft at the latest revision. Do not switch to FlowScript text or another mutation representation."
     } else if retained_source_mode {
-        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
+        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript and call commit_flowscript at the latest zero-diagnostic revision — commit validates inline and returns the same validation_errors on failure; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
     } else if has_accepted_scope_plan {
         "The host already accepted and retained the scope plan. DO NOT call plan_board_scope again. Call write_flowscript now for the returned active segment, then check and commit according to its strategy_rule."
     } else if snapshot.is_some_and(|state| state.last_declarations.is_some()) {
@@ -14277,6 +14623,17 @@ async fn run_external_agent_invocation(
                         fatal_error.get_or_insert(safe_error);
                     }
 
+                    // Claude's init and result frames both carry the session id; keep the latest
+                    // (resumed print runs mint a new id per run) so continuation phases can
+                    // `--resume` the transcript instead of replaying the whole platform prompt.
+                    if invocation.backend == FlowPilotAgentBackendKind::ClaudeCode
+                        && let Some(session_id) =
+                            value.get("session_id").and_then(serde_json::Value::as_str)
+                        && !session_id.is_empty()
+                    {
+                        stream_state.session_id = Some(session_id.to_string());
+                    }
+
                     // A failed FlowPilot MCP connection leaves the agent tool-less: it will answer
                     // in plain text and "succeed" without editing. Treat that as a terminal failure.
                     if let Some(error) = external_agent_mcp_connect_failure(&value) {
@@ -14442,12 +14799,17 @@ async fn run_external_agent_invocation(
 
     match (text.is_empty(), error) {
         (true, Some(error)) => Err(error),
-        (_, error) => Ok(ExternalAgentRunOutput { text, error }),
+        (_, error) => Ok(ExternalAgentRunOutput {
+            text,
+            error,
+            session_id: stream_state.session_id.clone(),
+        }),
     }
 }
 
 #[derive(Default)]
 struct ExternalAgentStreamState {
+    session_id: Option<String>,
     agent_message_text_by_id: HashMap<String, String>,
     last_agent_message_id: Option<String>,
     has_streamed_assistant_text: bool,
@@ -15578,7 +15940,7 @@ fn workflow_edit_continuation_prompt(
 {workspace_note}
 {failure_note}
 Do not ask the user to confirm. Do not say "Create draft", "go ahead", "tell me if", or similar.
-Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript, check_flowscript, and end with commit_flowscript creating the exact review claim; UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
+Use placeholders for unknown credentials/data. Your next assistant turn must call tools: workflow behavior must proceed through write_flowscript/patch_flowscript and end with commit_flowscript creating the exact review claim (commit validates inline once diagnostics are clear; check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment); UI work must end with emit_ui rendering. The turn is not complete until that succeeds or blocking compiler diagnostics identify an actual unavailable capability.
 
 Original user request:
 {original_user_prompt}"#
@@ -15789,6 +16151,7 @@ impl NestedCopilotPool {
         removed
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn is_registered(&self, client: &Arc<Client>) -> bool {
         self.registered
             .lock()
@@ -16204,6 +16567,7 @@ fn pending_flowscript_redelivery_response(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn append_typed_ir_recovery_context(
     system_content: &mut String,
     recovery: &flow_like::flow::copilot::FlowIrDraftRecovery,
@@ -16907,8 +17271,7 @@ fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
             .collect();
         // Sort by parsed version (numeric, newest first) — a lexical sort would
         // rank "2.1.9" above "2.1.204".
-        extension_dirs
-            .sort_by(|a, b| claude_extension_version_key(b).cmp(&claude_extension_version_key(a)));
+        extension_dirs.sort_by_key(|dir| std::cmp::Reverse(claude_extension_version_key(dir)));
         for dir in extension_dirs {
             let candidate = dir
                 .join("resources")
@@ -20858,9 +21221,11 @@ event onTicket() {
             default_flowscript_module_templates(),
         )
         .expect("checkpoint test manifest");
-        let mut loop_state = WorkflowToolLoopState::default();
-        loop_state.initial_declaration_lookup_usable = true;
-        loop_state.scope_plan = Some(single_segment_plan());
+        let mut loop_state = WorkflowToolLoopState {
+            initial_declaration_lookup_usable: true,
+            scope_plan: Some(single_segment_plan()),
+            ..Default::default()
+        };
         loop_state.attach_shared_session(Some(manifest));
         let state = Arc::new(StdMutex::new(loop_state));
         let args = serde_json::json!({
@@ -22576,7 +22941,12 @@ event onTicket() {
     fn workflow_edit_session_defers_runtime_verification_until_persisted() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
 
-        for tool in ["execute_event", "execute_node", "query_execution_logs"] {
+        for tool in [
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+            "run_board_tests",
+        ] {
             let result = workflow_tool_preflight(&state, tool)
                 .expect("mutation sessions must return an explicit runtime deferral");
             assert_eq!(result.is_error, Some(true));
@@ -25973,9 +26343,9 @@ eventsSimple() {
         assert!(global.contains("at least three apps/interfaces"));
         assert!(global.contains("Active configured chat/page/headless Events"));
         assert!(global.contains("including REST/API and MCP"));
-        assert!(global.contains("Use data_studio_agent only after prior inventory"));
-        assert!(global.contains("set routing_reason"));
-        assert!(global.contains("never bypass a failed, declined"));
+        assert!(global.contains("Call data_studio_agent directly"));
+        assert!(global.contains("on existing apps as well as during a build"));
+        assert!(global.contains("it needs no preflight"));
         assert!(global.contains("BUILD"));
         assert!(global.contains("sealed no-argument research_agent"));
         assert!(global.len() < 2_000);
@@ -26014,6 +26384,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26110,6 +26482,8 @@ eventsSimple() {
                 "hello".to_string(),
                 tool_names,
                 &[],
+                None,
+                None,
             )
             .expect("codex invocation should build");
 
@@ -26150,6 +26524,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26310,6 +26686,82 @@ eventsSimple() {
     }
 
     #[test]
+    fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/claude"),
+                CliResolutionSource::Path,
+            ),
+            "sonnet",
+            None,
+            "http://127.0.0.1:23456/mcp",
+            "continuation payload".to_string(),
+            vec!["write_flowscript".to_string()],
+            &[],
+            Some("session-1234"),
+            Some("ROLE APPENDIX"),
+        )
+        .expect("claude invocation should build");
+
+        let resume_index = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--resume")
+            .expect("claude must resume the captured session");
+        assert_eq!(invocation.args[resume_index + 1], "session-1234");
+        let append_index = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .expect("claude must append the role prompt");
+        assert_eq!(invocation.args[append_index + 1], "ROLE APPENDIX");
+        assert_eq!(
+            invocation.prompt, "continuation payload",
+            "a resumed continuation sends only its compact payload on stdin"
+        );
+
+        let codex = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::Codex,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/codex"),
+                CliResolutionSource::Path,
+            ),
+            "default",
+            None,
+            "http://127.0.0.1:12345/mcp",
+            "hello".to_string(),
+            vec!["edit_flowscript".to_string()],
+            &[],
+            Some("session-1234"),
+            Some("ROLE APPENDIX"),
+        )
+        .expect("codex invocation should build");
+        assert!(
+            !codex.args.iter().any(|arg| arg == "--resume"
+                || arg == "--append-system-prompt"
+                || arg.contains("session-1234")),
+            "codex has no resume/append surface; both options must be ignored"
+        );
+    }
+
+    #[test]
+    fn external_agent_prompt_split_keeps_the_full_wrap_byte_identical() {
+        let full = build_external_agent_prompt("SYS", "USER", CopilotScope::Board, true, false);
+        let appendix = external_agent_role_appendix(CopilotScope::Board, true, false);
+        assert_eq!(
+            full,
+            format!("SYSTEM INSTRUCTIONS\nSYS\n\n{appendix}\n\nUSER REQUEST\nUSER")
+        );
+        assert_eq!(
+            build_external_agent_prompt_body("SYS", "USER"),
+            "SYSTEM INSTRUCTIONS\nSYS\n\nUSER REQUEST\nUSER"
+        );
+        assert!(appendix.contains("BOARD specialist"));
+        assert!(appendix.contains("WORKFLOW MUTATION RUN"));
+    }
+
+    #[test]
     fn claude_invocation_uses_shared_mcp_config() {
         let invocation = ExternalAgentInvocation::new(
             FlowPilotAgentBackendKind::ClaudeCode,
@@ -26329,6 +26781,8 @@ eventsSimple() {
                 "commit_flowscript".to_string(),
             ],
             &[],
+            None,
+            None,
         )
         .expect("claude invocation should build");
 
@@ -26438,6 +26892,8 @@ eventsSimple() {
                 "flowpilot_board".to_string(),
             ],
             &[],
+            None,
+            None,
         )
         .expect("global Claude invocation should build");
 
@@ -26488,6 +26944,8 @@ eventsSimple() {
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
             &[test_chat_image()],
+            None,
+            None,
         )
         .expect("codex invocation should build");
 
@@ -26521,6 +26979,8 @@ eventsSimple() {
             "hello".to_string(),
             vec![],
             &[test_chat_image()],
+            None,
+            None,
         )
         .expect("claude invocation should build");
 

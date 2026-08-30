@@ -8,8 +8,10 @@ import {
 	formatRelativeTime,
 	parseTemporalValue,
 } from "../../../../lib/date";
+import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
+import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
 import { ScrollArea } from "../../../ui/scroll-area";
 import {
@@ -19,7 +21,14 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../../../ui/sheet";
-import { cellToString, classifyColumn, isNullish } from "./column-types";
+import { StorageFileCell } from "../../../ui/storage-file-cell";
+import { UserIdentityCard } from "../../../ui/user-identity";
+import {
+	type ColumnKind,
+	cellToString,
+	classifyColumn,
+	isNullish,
+} from "./column-types";
 
 /** A row detail has room for the exact instant, with the relative reading under it. */
 function TemporalValue({ value }: Readonly<{ value: unknown }>) {
@@ -36,13 +45,37 @@ function TemporalValue({ value }: Readonly<{ value: unknown }>) {
 	);
 }
 
+/** Everything the temporal path does not claim, read for what it holds. */
+function RowValue({
+	kind,
+	name,
+	value,
+	appId,
+}: Readonly<{
+	kind: ColumnKind;
+	name: string;
+	value: unknown;
+	appId?: string;
+}>) {
+	const userId = kind === "user" ? accountIdFromValue(value) : null;
+	if (userId) return <UserIdentityCard userId={userId} className="mt-1" />;
+
+	const file = appId ? resolveStorageFile(name, value, appId) : null;
+	if (file && appId)
+		return <StorageFileCell appId={appId} file={file} className="-ml-2 mt-1" />;
+
+	return <>{cellToString(value)}</>;
+}
+
 export function RowInspectorSheet({
 	row,
 	columns,
+	appId,
 	onOpenChange,
 }: Readonly<{
 	row: Record<string, unknown> | null;
 	columns: QueryColumn[];
+	appId?: string;
 	onOpenChange: (open: boolean) => void;
 }>) {
 	const { t } = useTranslation("settings");
@@ -56,15 +89,21 @@ export function RowInspectorSheet({
 		<Sheet open={row !== null} onOpenChange={onOpenChange}>
 			<SheetContent className="w-full gap-0 p-0 sm:max-w-md">
 				<SheetHeader className="border-b">
-					<SheetTitle>{t('rowDetails', 'Row details')}</SheetTitle>
-					<SheetDescription>{t('countColumns', { defaultValue_one: '{{count}} column', defaultValue_other: '{{count}} columns', count: columns.length })}</SheetDescription>
+					<SheetTitle>{t("rowDetails", "Row details")}</SheetTitle>
+					<SheetDescription>
+						{t("countColumns", {
+							defaultValue_one: "{{count}} column",
+							defaultValue_other: "{{count}} columns",
+							count: columns.length,
+						})}
+					</SheetDescription>
 					<Button
 						variant="outline"
 						size="sm"
 						className="mt-1 w-fit gap-1.5"
 						onClick={copyRow}
 					>
-						<Braces className="h-3.5 w-3.5" /> {t('copyAsJson', 'Copy as JSON')}
+						<Braces className="h-3.5 w-3.5" /> {t("copyAsJson", "Copy as JSON")}
 					</Button>
 				</SheetHeader>
 				<ScrollArea className="h-[calc(100%-8rem)]">
@@ -97,7 +136,12 @@ export function RowInspectorSheet({
 												) : kind === "temporal" ? (
 													<TemporalValue value={value} />
 												) : (
-													cellToString(value)
+													<RowValue
+														kind={kind}
+														name={column.name}
+														value={value}
+														appId={appId}
+													/>
 												)}
 											</dd>
 										</div>
@@ -106,7 +150,9 @@ export function RowInspectorSheet({
 												variant="ghost"
 												size="icon"
 												className="h-7 w-7 shrink-0 self-start text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-												aria-label={t('copyName', 'Copy {{name}}', { name: column.name })}
+												aria-label={t("copyName", "Copy {{name}}", {
+													name: column.name,
+												})}
 												onClick={() => {
 													void navigator.clipboard.writeText(
 														cellToString(value),

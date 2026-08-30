@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Caller surfaces converge on one shared Incident decision</title>
+  <desc id="desc">Page, Quick Action, Cron, and REST callers use surface-specific configuration and event-node adapters before calling the shared decideIncident Function. REST uses a setup Event that registers a Generic handler.</desc>
+  <defs>
+    <marker id="arrow-events" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 z" fill="#9d311f"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, Arial, sans-serif; }
+      .eyebrow { font-size: 25px; font-weight: 760; letter-spacing: 2.5px; }
+      .title { font-size: 36px; font-weight: 740; letter-spacing: -0.7px; }
+      .body { font-size: 28px; font-weight: 610; }
+      .small { font-size: 24px; font-weight: 500; }
+      .code { font-family: "JetBrains Mono", Menlo, monospace; font-size: 26px; font-weight: 650; }
+      .arrow { fill: none; stroke: #9d311f; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow-events); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1040" rx="30" fill="#fbfaf8"/>
+  <rect x="40" y="36" width="1520" height="968" rx="28" fill="#ffffff" stroke="#cfc7c0" stroke-width="3"/>
+  <rect x="72" y="36" width="230" height="9" rx="4.5" fill="#e95335"/>
+
+  <text x="70" y="104" class="sans eyebrow" fill="#625e66">CALLER</text>
+  <text x="336" y="104" class="sans eyebrow" fill="#625e66">SURFACE SETUP</text>
+  <text x="738" y="104" class="sans eyebrow" fill="#625e66">BOARD ENTRY</text>
+  <text x="1194" y="104" class="sans eyebrow" fill="#625e66">SHARED LOGIC</text>
+  <text x="336" y="143" class="sans small" fill="#625e66">Version, location, settings, and overrides</text>
+
+  <rect x="70" y="184" width="220" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="180" y="243" text-anchor="middle" class="sans body" fill="#18171b">Page action</text>
+  <text x="180" y="282" text-anchor="middle" class="sans small" fill="#625e66">interface state</text>
+  <rect x="336" y="184" width="344" height="142" rx="20" fill="#f8eee8" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="508" y="241" text-anchor="middle" class="sans body" fill="#18171b">Page action binding</text>
+  <text x="508" y="280" text-anchor="middle" class="sans small" fill="#625e66">selects an Event node</text>
+  <rect x="738" y="184" width="392" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="934" y="241" text-anchor="middle" class="sans body" fill="#18171b">Selected Event node</text>
+  <text x="934" y="280" text-anchor="middle" class="sans small" fill="#625e66">adapts Page input</text>
+
+  <rect x="70" y="352" width="220" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="180" y="411" text-anchor="middle" class="sans body" fill="#18171b">Quick Action</text>
+  <text x="180" y="450" text-anchor="middle" class="sans small" fill="#625e66">form fields</text>
+  <rect x="336" y="352" width="344" height="142" rx="20" fill="#f8eee8" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="508" y="411" text-anchor="middle" class="sans body" fill="#18171b">App Event</text>
+  <text x="508" y="450" text-anchor="middle" class="sans small" fill="#625e66">Quick Action setup</text>
+  <rect x="738" y="352" width="392" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="934" y="411" text-anchor="middle" class="sans body" fill="#18171b">Simple Event</text>
+  <text x="934" y="450" text-anchor="middle" class="sans small" fill="#625e66">reads exposed variables</text>
+
+  <rect x="70" y="520" width="220" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="180" y="579" text-anchor="middle" class="sans body" fill="#18171b">Cron</text>
+  <text x="180" y="618" text-anchor="middle" class="sans small" fill="#625e66">schedule</text>
+  <rect x="336" y="520" width="344" height="142" rx="20" fill="#f8eee8" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="508" y="579" text-anchor="middle" class="sans body" fill="#18171b">App Event</text>
+  <text x="508" y="618" text-anchor="middle" class="sans small" fill="#625e66">schedule and overrides</text>
+  <rect x="738" y="520" width="392" height="142" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="934" y="579" text-anchor="middle" class="sans body" fill="#18171b">Simple Event</text>
+  <text x="934" y="618" text-anchor="middle" class="sans small" fill="#625e66">reuses the adapter</text>
+
+  <rect x="70" y="688" width="220" height="220" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <text x="180" y="770" text-anchor="middle" class="sans body" fill="#18171b">REST route</text>
+  <text x="180" y="809" text-anchor="middle" class="sans small" fill="#625e66">HTTP request</text>
+  <rect x="336" y="688" width="344" height="220" rx="20" fill="#f8eee8" stroke="#d9b3a4" stroke-width="3"/>
+  <text x="508" y="770" text-anchor="middle" class="sans body" fill="#18171b">REST App Event</text>
+  <text x="508" y="809" text-anchor="middle" class="sans small" fill="#625e66">route and authentication</text>
+  <rect x="738" y="688" width="392" height="220" rx="20" fill="#f7f3ef" stroke="#cfc7c0" stroke-width="3"/>
+  <rect x="770" y="716" width="328" height="66" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="934" y="758" text-anchor="middle" class="sans small" fill="#18171b">Simple setup Event</text>
+  <path d="M 934 790 L 934 824" class="arrow"/>
+  <rect x="770" y="830" width="328" height="54" rx="14" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="934" y="866" text-anchor="middle" class="sans small" fill="#18171b">Generic handler</text>
+
+  <rect x="1194" y="184" width="332" height="724" rx="24" fill="#f7f3ef" stroke="#9d311f" stroke-width="3"/>
+  <text x="1360" y="249" text-anchor="middle" class="sans eyebrow" fill="#9d311f">FUNCTION</text>
+  <text x="1360" y="306" text-anchor="middle" class="sans code" fill="#18171b">decideIncident()</text>
+  <text x="1360" y="357" text-anchor="middle" class="sans small" fill="#625e66">One business decision</text>
+  <rect x="1230" y="421" width="260" height="112" rx="18" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1360" y="467" text-anchor="middle" class="sans eyebrow" fill="#625e66">OUTPUT</text>
+  <text x="1360" y="507" text-anchor="middle" class="sans code" fill="#9d311f">IncidentResult</text>
+  <rect x="1230" y="575" width="260" height="112" rx="18" fill="#ffffff" stroke="#d7d0ca" stroke-width="3"/>
+  <text x="1360" y="621" text-anchor="middle" class="sans eyebrow" fill="#625e66">EVIDENCE</text>
+  <text x="1360" y="661" text-anchor="middle" class="sans small" fill="#3f3b40">Attributed to run nodes</text>
+  <text x="1360" y="770" text-anchor="middle" class="sans small" fill="#625e66">The Function has no trigger.</text>
+  <text x="1360" y="806" text-anchor="middle" class="sans small" fill="#625e66">Event nodes call it.</text>
+
+  <path d="M 290 255 L 322 255" class="arrow"/>
+  <path d="M 680 255 L 724 255" class="arrow"/>
+  <path d="M 1130 255 L 1180 255" class="arrow"/>
+  <path d="M 290 423 L 322 423" class="arrow"/>
+  <path d="M 680 423 L 724 423" class="arrow"/>
+  <path d="M 1130 423 L 1180 423" class="arrow"/>
+  <path d="M 290 591 L 322 591" class="arrow"/>
+  <path d="M 680 591 L 724 591" class="arrow"/>
+  <path d="M 1130 591 L 1180 591" class="arrow"/>
+  <path d="M 290 798 L 322 798" class="arrow"/>
+  <path d="M 680 798 L 724 798" class="arrow"/>
+  <path d="M 1130 857 L 1180 857" class="arrow"/>
+
+  <text x="800" y="966" text-anchor="middle" class="sans small" fill="#625e66">Surface-specific adapters keep caller details outside the shared decision.</text>
+</svg>

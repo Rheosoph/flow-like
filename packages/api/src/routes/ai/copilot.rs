@@ -109,12 +109,6 @@ pub struct CopilotChatRequest {
     #[serde(default)]
     pub action_context: Option<UIActionContext>,
 
-    /// Global-chat run that owns this request. A delegated Data Studio / Scout specialist rides it
-    /// so its browser tool calls reach the endpoint the client already posts results to, and a stop
-    /// of that chat run also stops the specialist.
-    #[serde(default)]
-    pub run_id: Option<String>,
-
     /// Ontology/overlay the calling Data Studio page has selected, so the specialist defaults to it.
     #[serde(default)]
     pub overlay_id: Option<String>,
@@ -342,6 +336,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         .nth(1)
         .unwrap_or("")
         .to_string();
+    let namespace = node.flowscript_namespace();
+    let alias = node.flowscript_alias();
+    let receiver = node.flowscript_receiver();
 
     enrich_node_metadata(NodeMetadata {
         name: node.name,
@@ -363,6 +360,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(namespace),
+        alias: Some(alias),
+        receiver,
     })
 }
 
@@ -380,7 +380,7 @@ impl CatalogProvider for ServerCatalogProvider {
             }
         }
 
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored_matches
             .into_iter()
             .take(10)
@@ -416,14 +416,18 @@ impl CatalogProvider for ServerCatalogProvider {
     }
 
     async fn filter_by_category(&self, category_prefix: &str) -> Vec<NodeMetadata> {
-        let category_prefix = category_prefix.to_lowercase();
+        let category_prefix = category_prefix.to_lowercase().replace("::", "/");
         let mut matches = Vec::new();
 
         for node in self.nodes() {
+            let category = node.category.to_lowercase();
+            let namespace = node.flowscript_namespace().to_lowercase().replace('.', "/");
             let name_lower = node.name.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
 
-            if category.starts_with(&category_prefix) || name_lower.contains(&category_prefix) {
+            if category.contains(&category_prefix)
+                || namespace.contains(&category_prefix)
+                || name_lower.contains(&category_prefix)
+            {
                 matches.push(node_to_metadata(node));
             }
             if matches.len() >= 15 {
@@ -648,6 +652,7 @@ pub async fn copilot_chat(
                     .run_context
                     .as_ref()
                     .map(|context| context.run_id.clone()),
+                api_base_url: None,
             })
         }
         None => None,
@@ -680,7 +685,15 @@ pub async fn copilot_chat(
     // resolves against their own Bits instead of the server default. With a hosted Bit + the user's
     // token, the model call loops through this server's metered `/chat/completions`, so tier
     // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
-    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
+    let profile = match super::global_chat::load_user_profile_access(&state, &sub, None).await? {
+        Some((profile, access)) => {
+            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
+                return Err(rejection);
+            }
+            Some(profile)
+        }
+        None => None,
+    };
     let flow_ir_draft_store = payload.board.as_ref().and_then(|board| {
         (!matches!(payload.scope, CopilotScope::Frontend)).then(|| {
             let app_id = retained_app_id
@@ -865,10 +878,11 @@ fn specialist_host_context(app_id: Option<&str>, overlay_id: Option<&str>) -> St
 /// Run one nested specialist (`data_studio_agent` / `project_scout`) for the browser.
 ///
 /// Every specialist tool executes in the browser, so this is meaningful only as a stream: the SSE
-/// response carries `tool_request` frames alongside tokens, and the client answers them through the
-/// same `/ai/global-chat/{run_id}/tool-result` endpoint the orchestrator's own tools use. The run id
-/// belongs to the owning chat turn, which is why this never mints or sweeps run rows itself — and
-/// why stopping that turn also stops the specialist.
+/// response opens with a `run` frame (`{ runId, channel }`) and carries `tool_request` frames
+/// alongside tokens; the client answers each through the ticket embedded in the frame. The
+/// specialist gets its own channel keyed by its own run id, so ownership needs no owner row —
+/// which also means stopping the orchestrator's turn no longer stops a delegated specialist; the
+/// client cancels the specialist's channel itself.
 async fn specialist_chat(
     state: AppState,
     sub: String,
@@ -881,20 +895,6 @@ async fn specialist_chat(
             "The Data Studio and Scout specialists execute their tools in the browser, so they are available only on the streaming endpoint.",
         ));
     }
-    let run_id = payload
-        .run_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|run_id| !run_id.is_empty())
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "A delegated specialist run requires the id of the chat run that owns it.",
-            )
-        })?
-        .to_string();
-    if !super::global_chat::run_owned_by(&state.db, &run_id, &sub).await {
-        return Err(ApiError::FORBIDDEN);
-    }
     // Same requirement as the orchestrator turn: a hosted Bit bills its model calls against the
     // user's own session, and without that token the metered proxy 401s mid-run.
     if token.is_none() {
@@ -904,13 +904,21 @@ async fn specialist_chat(
     }
 
     let flow_like_state = master_flow_like_state(&state).await?;
-    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
+    let profile = match super::global_chat::load_user_profile_access(&state, &sub, None).await? {
+        Some((profile, access)) => {
+            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
+                return Err(rejection);
+            }
+            Some(profile)
+        }
+        None => None,
+    };
 
+    let run_id = super::global_chat::next_run_id();
+    let channel = super::global_chat::build_chat_channel(&state, &run_id, &sub).await?;
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::specialist(
-        state.db.clone(),
-        run_id,
-        sub,
+        channel.clone(),
         frames_tx.clone(),
         specialist,
     ));
@@ -921,6 +929,7 @@ async fn specialist_chat(
     let context = specialist_host_context(payload.app_id.as_deref(), payload.overlay_id.as_deref());
     let scope = payload.scope;
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
+    let channel_for_task = channel.clone();
     flow_like_types::tokio::spawn(async move {
         let result = run_specialist_chat(
             flow_like_state,
@@ -946,10 +955,17 @@ async fn specialist_chat(
             active_scope: scope,
         })
         .map_err(|error| error.to_string());
+        channel_for_task.close().await;
         let _ = done_tx.send(result);
     });
 
     let stream = async_stream::stream! {
+        yield Ok::<Event, Infallible>(
+            Event::default()
+                .event("run")
+                .data(serde_json::json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
+        );
+
         let mut frame_stream_open = true;
         loop {
             flow_like_types::tokio::select! {

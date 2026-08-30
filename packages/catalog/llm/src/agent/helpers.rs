@@ -1,5 +1,6 @@
 #[cfg(feature = "execute")]
 use crate::generative::agent::lazy_register_tools::CachedLazyToolDB;
+#[cfg(feature = "execute")]
 use crate::generative::agent::{Agent, ContextManagementMode};
 #[cfg(feature = "execute")]
 use crate::generative::embedding::CachedEmbeddingModelObject;
@@ -10,11 +11,13 @@ use crate::generative::embedding::CachedEmbeddingModelObject;
 use ahash::AHashSet;
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::LogLevel;
+#[cfg(feature = "execute")]
 use flow_like::flow::{
     execution::{context::ExecutionContext, internal_node::InternalNode},
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_model_provider::{
     history::{
         Content, ContentType, History, HistoryMessage, MessageContent, Role, Tool,
@@ -23,6 +26,7 @@ use flow_like_model_provider::{
     response::{LLMUsageStats, Response, Usage as ResponseUsage},
     response_chunk::ResponseChunk,
 };
+#[cfg(feature = "execute")]
 use flow_like_types::{
     Value, anyhow, async_trait, json,
     sync::{DashMap, Mutex},
@@ -47,9 +51,12 @@ use rmcp::{
         PaginatedRequestParams,
     },
 };
+#[cfg(feature = "execute")]
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
+#[cfg(feature = "execute")]
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
+#[cfg(feature = "execute")]
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 
 /// Bound network waits on remote MCP servers so a hung peer can never stall the
@@ -858,11 +865,11 @@ pub async fn execute_tool_call(
     let argument_names = assign_sanitized_argument_names(
         referenced_node
             .pins
-            .values()
+            .iter()
             .filter(|pin| {
                 pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
             })
-            .map(|pin| (pin.index, pin.name.clone()))
+            .map(|pin| (pin.index, pin.name.to_string()))
             .collect(),
     );
 
@@ -912,19 +919,19 @@ pub async fn execute_tool_call(
     // Also set values on the referenced function's OUTPUT pins (shared storage
     // + override map) so that both override-aware and non-override code paths
     // resolve correctly regardless of old/new layer format.
-    for pin in referenced_node.pins.values() {
+    for pin in referenced_node.pins.iter() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
 
         let sanitized_name = argument_names
-            .get(&pin.name)
+            .get(pin.name.as_ref())
             .cloned()
             .unwrap_or_else(|| sanitize_tool_identifier(&pin.name));
 
         if let Some(value) = args_obj
             .get(&sanitized_name)
-            .or_else(|| args_obj.get(&pin.name))
+            .or_else(|| args_obj.get(pin.name.as_ref()))
         {
             sub_context.override_pin_value(&pin.id, value.clone());
             pin.set_value(value.clone()).await;

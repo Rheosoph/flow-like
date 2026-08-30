@@ -26,6 +26,8 @@ impl NodeLogic for HashFileNode {
             "Hashes a file",
             "Data/Files/Operations",
         );
+        node.set_flowscript_name("files", "hashFile");
+        node.set_receiver("path");
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(

@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
@@ -26,6 +26,9 @@ pub struct A2UIFileInputFile {
     pub size: Option<u64>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Path of the file inside the picked folder, when the upload came from a folder selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,6 +107,12 @@ fn value_to_file(value: Value) -> Option<A2UIFileInputFile> {
                     .get("type")
                     .or_else(|| obj.get("mimeType"))
                     .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                relative_path: obj
+                    .get("relativePath")
+                    .or_else(|| obj.get("relative_path"))
+                    .and_then(|v| v.as_str())
+                    .filter(|value| !value.is_empty())
                     .map(str::to_string),
                 url: obj
                     .get("url")
@@ -321,20 +330,55 @@ async fn download_file_input_url(
     Ok((bytes, content_type))
 }
 
-async fn flow_path_exists(
+/// Existence checks per flight. A folder upload can hand us thousands of files, and
+/// one round trip at a time would dominate the node's runtime.
+const FLOW_PATH_CHECK_CONCURRENCY: usize = 16;
+
+/// Checks every supplied FlowPath concurrently. Store resolution stays sequential
+/// because it needs the execution context, but it only reads the context cache.
+async fn existing_flow_paths(
     context: &mut ExecutionContext,
-    flow_path: &FlowPath,
-) -> flow_like_types::Result<bool> {
-    let runtime = flow_path.to_runtime(context).await?;
-    match runtime.store.as_generic().head(&runtime.path).await {
-        Ok(_) => Ok(true),
-        Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok(false),
-        Err(error) => Err(flow_like_types::anyhow!(
-            "Failed to check uploaded file at {}: {}",
-            flow_path.path,
-            error
-        )),
+    files: &[A2UIFileInputFile],
+) -> flow_like_types::Result<Vec<bool>> {
+    use futures::StreamExt;
+
+    let mut runtimes = Vec::with_capacity(files.len());
+    for file in files {
+        match file.flow_path.as_ref() {
+            Some(flow_path) => runtimes.push(Some((
+                flow_path.path.clone(),
+                flow_path.to_runtime(context).await?,
+            ))),
+            None => runtimes.push(None),
+        }
     }
+
+    let mut present = vec![false; files.len()];
+    let mut checks = futures::stream::iter(runtimes.into_iter().enumerate().map(
+        |(index, runtime)| async move {
+            let Some((path, runtime)) = runtime else {
+                return Ok::<(usize, bool), flow_like_types::Error>((index, false));
+            };
+
+            match runtime.store.as_generic().head(&runtime.path).await {
+                Ok(_) => Ok((index, true)),
+                Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok((index, false)),
+                Err(error) => Err(flow_like_types::anyhow!(
+                    "Failed to check uploaded file at {}: {}",
+                    path,
+                    error
+                )),
+            }
+        },
+    ))
+    .buffer_unordered(FLOW_PATH_CHECK_CONCURRENCY);
+
+    while let Some(result) = checks.next().await {
+        let (index, exists) = result?;
+        present[index] = exists;
+    }
+
+    Ok(present)
 }
 
 async fn materialize_missing_flow_paths(
@@ -353,12 +397,13 @@ async fn materialize_missing_flow_paths(
     };
     let client = reqwest::Client::new();
     let mut flow_paths = Vec::new();
+    let present = existing_flow_paths(context, files).await?;
 
     for (index, file) in files.iter_mut().enumerate() {
         let supplied_flow_path = file.flow_path.clone();
 
         if let Some(flow_path) = supplied_flow_path.clone()
-            && flow_path_exists(context, &flow_path).await?
+            && present[index]
         {
             flow_paths.push(flow_path);
             continue;
@@ -436,6 +481,7 @@ impl NodeLogic for GetFileInputFiles {
             "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element",
             "UI/Elements/Files",
         );
+        node.set_flowscript_name("ui", "getFileInputFiles");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -444,7 +490,8 @@ impl NodeLogic for GetFileInputFiles {
             "File or voice input element ID or element object from Get Element",
             VariableType::Struct,
         )
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_output_pin(
             "files",
@@ -492,11 +539,10 @@ impl NodeLogic for GetFileInputFiles {
             )
         })?;
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         if let Some((_found_id, element_value)) = element {
-            let mut files = extract_files(element_value);
+            let mut files = extract_files(&element_value);
             let signed_urls: Vec<String> = files
                 .iter()
                 .filter_map(|file| file.url.clone().or_else(|| file.backend_url.clone()))
@@ -580,7 +626,7 @@ mod tests {
         }
 
         let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
-        for pin in internal.pins.values() {
+        for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
             pin.init_connected_to(Vec::new());
             pin.init_depends_on(Vec::new());
@@ -616,6 +662,7 @@ mod tests {
             None,
             None,
             Arc::new(AHashMap::new()),
+            None,
         )
         .await
     }

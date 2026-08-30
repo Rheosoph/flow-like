@@ -24,6 +24,8 @@ impl NodeLogic for CopilotGetVersionNode {
             "Gets the version of the Copilot CLI",
             "AI/GitHub/Copilot/Utilities",
         );
+        node.set_flowscript_name("github.copilot", "getVersion");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -105,6 +107,8 @@ impl NodeLogic for CopilotGetModelsNode {
             "Lists available Copilot models",
             "AI/GitHub/Copilot/Utilities",
         );
+        node.set_flowscript_name("github.copilot", "getModels");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -188,6 +192,8 @@ impl NodeLogic for CopilotGetAuthStatusNode {
             "Gets the authentication status of the Copilot client",
             "AI/GitHub/Copilot/Utilities",
         );
+        node.set_flowscript_name("github.copilot", "getAuthStatus");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -282,6 +288,8 @@ impl NodeLogic for CopilotClientStatusNode {
             "Checks if a Copilot client is connected and ready",
             "AI/GitHub/Copilot/Utilities",
         );
+        node.set_flowscript_name("github.copilot", "status");
+        node.set_receiver("client");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

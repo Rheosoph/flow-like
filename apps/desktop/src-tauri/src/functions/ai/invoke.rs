@@ -38,6 +38,7 @@ async fn resolve_model_usage_context(
     Ok(Some(ModelUsageContext {
         app_id: model_usage_app_id(app_id, &app.visibility),
         run_id: None,
+        api_base_url: None,
     }))
 }
 
@@ -70,14 +71,16 @@ pub async fn chat_completion(
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
 
     let preferences = BitModelPreference::default();
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let capabilities =
+        flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await;
 
     let best_model = current_profile
         .hub_profile
-        .get_best_model(&preferences, false, false, http_client)
+        .resolve_completion_model(None, &preferences, false, capabilities, http_client)
         .await?;
 
     let model = {
-        let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
         let usage_context =
             resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();
@@ -119,14 +122,16 @@ pub async fn stream_chat_completion(
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
 
     let preferences = BitModelPreference::default();
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let capabilities =
+        flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await;
 
     let best_model = current_profile
         .hub_profile
-        .get_best_model(&preferences, false, false, http_client)
+        .resolve_completion_model(None, &preferences, false, capabilities, http_client)
         .await?;
 
     let model = {
-        let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
         let usage_context =
             resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();

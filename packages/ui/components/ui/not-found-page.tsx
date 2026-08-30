@@ -93,8 +93,11 @@ export function NotFoundPage({
 	onGoBack,
 	onGoHome,
 	homeHref = "/",
-	title = i18next.t('pageNotFound', 'Page Not Found'),
-	subtitle = i18next.t('thePageYoureLookingForDoesntExistOrHasBeenMoved', 'The page you\'re looking for doesn\'t exist or has been moved.'),
+	title = i18next.t("pageNotFound", "Page Not Found"),
+	subtitle = i18next.t(
+		"thePageYoureLookingForDoesntExistOrHasBeenMoved",
+		"The page you're looking for doesn't exist or has been moved.",
+	),
 	showRefresh = true,
 }: NotFoundPageProps) {
 	const { t } = useTranslation("common");
@@ -295,7 +298,7 @@ export function NotFoundPage({
 					>
 						<span className="absolute inset-0 bg-white/10 -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
 						<ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
-						{t('goBack', 'Go Back')}
+						{t("goBack", "Go Back")}
 					</Button>
 
 					<Button
@@ -306,7 +309,7 @@ export function NotFoundPage({
 					>
 						<span className="absolute inset-0 bg-primary/5 -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
 						<Home className="w-4 h-4 transition-transform group-hover:scale-110" />
-						{t('home', 'Home')}
+						{t("home", "Home")}
 					</Button>
 
 					{showRefresh && (
@@ -317,7 +320,7 @@ export function NotFoundPage({
 							className="group min-w-40 gap-2"
 						>
 							<RefreshCw className="w-4 h-4 transition-transform group-hover:rotate-180 duration-500" />
-							{t('refresh', 'Refresh')}
+							{t("refresh", "Refresh")}
 						</Button>
 					)}
 				</div>
@@ -329,7 +332,10 @@ export function NotFoundPage({
 						mounted ? "opacity-100" : "opacity-0",
 					)}
 				>
-					{t('lostInTheFlowDontWorryEvenTheBestWorkflowsTakeUnexpectedTurnsSometimes', "Lost in the flow? Don't worry, even the best workflows take unexpected turns sometimes.")}
+					{t(
+						"lostInTheFlowDontWorryEvenTheBestWorkflowsTakeUnexpectedTurnsSometimes",
+						"Lost in the flow? Don't worry, even the best workflows take unexpected turns sometimes.",
+					)}
 				</p>
 			</div>
 

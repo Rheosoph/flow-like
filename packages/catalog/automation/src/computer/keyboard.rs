@@ -25,6 +25,7 @@ impl NodeLogic for ComputerKeyPressNode {
             "Presses a keyboard key or key combination",
             "Automation/Computer/Keyboard",
         );
+        node.set_flowscript_name("computer", "keyPress");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(
@@ -196,6 +197,7 @@ impl NodeLogic for ComputerKeyTypeNode {
             "Types text using the keyboard",
             "Automation/Computer/Keyboard",
         );
+        node.set_flowscript_name("computer", "typeText");
         node.add_icon("/flow/icons/computer.svg");
 
         node.set_scores(

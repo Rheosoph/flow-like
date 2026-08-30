@@ -13,10 +13,9 @@ COPY . .
 
 ENV CARGO_BUILD_JOBS=2
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
-    --mount=type=cache,target=/app/target,id=cargo-target-gcp-executor \
-    cargo build --locked --release --package gcp-executor \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-gcp-executor,sharing=locked \
+    CARGO_HOME=/cargo-home cargo build --locked --release --package gcp-executor \
     && strip -s /app/target/release/gcp-executor \
     && cp /app/target/release/gcp-executor /tmp/gcp-executor
 

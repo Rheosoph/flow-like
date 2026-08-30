@@ -75,6 +75,7 @@ impl NodeLogic for DocxSetMetadataNode {
             "Set title, author, subject, keywords, description in document metadata",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "setMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()
@@ -174,6 +175,7 @@ impl NodeLogic for DocxGetMetadataNode {
             "Read document metadata from docProps/core.xml",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "getMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

@@ -1,4 +1,3 @@
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IBit,
 	type IBitModelClassification,
@@ -21,6 +20,7 @@ import {
 	CardTitle,
 } from "@flow-like/flow-like-ui";
 import { Label } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import type { Dispatch, SetStateAction } from "react";
 
 export function LLMConfiguration({
@@ -62,7 +62,7 @@ export function LLMConfiguration({
 			<Card className="w-full">
 				<CardHeader className="w-full">
 					<CardTitle className="flex items-center justify-between w-full">
-						<p>{t('llmConfiguration', 'LLM Configuration')}</p>
+						<p>{t("llmConfiguration", "LLM Configuration")}</p>
 						{bit.size && (
 							<small className="font-normal text-muted-foreground">
 								{humanFileSize(bit.size)}
@@ -70,12 +70,17 @@ export function LLMConfiguration({
 						)}
 					</CardTitle>
 					<CardDescription>
-						{t('configureModelContextAndProcessingCapabilities', 'Configure model context and processing capabilities')}
+						{t(
+							"configureModelContextAndProcessingCapabilities",
+							"Configure model context and processing capabilities",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="context-length">{t('contextLength', 'Context Length')}</Label>
+						<Label htmlFor="context-length">
+							{t("contextLength", "Context Length")}
+						</Label>
 						<Input
 							id="context-length"
 							type="number"
@@ -91,7 +96,10 @@ export function LLMConfiguration({
 							max="2000000"
 						/>
 						<p className="text-xs text-muted-foreground">
-							{t('maximumNumberOfTokensTheModelCanProcess', 'Maximum number of tokens the model can process')}
+							{t(
+								"maximumNumberOfTokensTheModelCanProcess",
+								"Maximum number of tokens the model can process",
+							)}
 						</p>
 					</div>
 				</CardContent>
@@ -99,15 +107,20 @@ export function LLMConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('providerSettings', 'Provider Settings')}</CardTitle>
+					<CardTitle>{t("providerSettings", "Provider Settings")}</CardTitle>
 					<CardDescription>
-						{t('configureTheModelProviderAndIdentification', 'Configure the model provider and identification')}
+						{t(
+							"configureTheModelProviderAndIdentification",
+							"Configure the model provider and identification",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="provider-name">{t('providerName', 'Provider Name *')}</Label>
+							<Label htmlFor="provider-name">
+								{t("providerName", "Provider Name *")}
+							</Label>
 							<Select
 								value={parameters?.provider?.provider_name || "Local"}
 								onValueChange={(value) =>
@@ -115,18 +128,22 @@ export function LLMConfiguration({
 								}
 							>
 								<SelectTrigger id="provider-name">
-									<SelectValue placeholder={t('selectProvider', 'Select provider')} />
+									<SelectValue
+										placeholder={t("selectProvider", "Select provider")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="Local">{t('local', 'Local')}</SelectItem>
+									<SelectItem value="Local">{t("local", "Local")}</SelectItem>
 									<SelectItem value="MLX">MLX</SelectItem>
-									<SelectItem value="Premium">{t('premium', 'Premium')}</SelectItem>
+									<SelectItem value="Premium">
+										{t("premium", "Premium")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="model-id">{t('modelId', 'Model ID')}</Label>
+							<Label htmlFor="model-id">{t("modelId", "Model ID")}</Label>
 							<Input
 								disabled={parameters?.provider?.provider_name === "Local"}
 								id="model-id"
@@ -134,12 +151,15 @@ export function LLMConfiguration({
 								onChange={(e) =>
 									updateProvider("model_id", e.target.value || null)
 								}
-								placeholder={t('optionalModelIdentifier', 'Optional model identifier')}
+								placeholder={t(
+									"optionalModelIdentifier",
+									"Optional model identifier",
+								)}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="version">{t('version', 'Version')}</Label>
+							<Label htmlFor="version">{t("version", "Version")}</Label>
 							<Input
 								disabled={parameters?.provider?.provider_name === "Local"}
 								id="version"
@@ -147,7 +167,7 @@ export function LLMConfiguration({
 								onChange={(e) =>
 									updateProvider("version", e.target.value || null)
 								}
-								placeholder={t('optionalVersion', 'Optional version')}
+								placeholder={t("optionalVersion", "Optional version")}
 							/>
 						</div>
 					</div>
@@ -156,7 +176,9 @@ export function LLMConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>{t('modelClassification', 'Model Classification')}</CardTitle>
+					<CardTitle>
+						{t("modelClassification", "Model Classification")}
+					</CardTitle>
 					<CardDescription>
 						{`Rate each capability from 0.0 (poor) to 1.0 (excellent)`}
 					</CardDescription>
@@ -193,8 +215,8 @@ export function LLMConfiguration({
 											}
 										/>
 										<div className="flex justify-between text-xs text-muted-foreground">
-											<span>{t('poor', 'Poor')}</span>
-											<span>{t('excellent', 'Excellent')}</span>
+											<span>{t("poor", "Poor")}</span>
+											<span>{t("excellent", "Excellent")}</span>
 										</div>
 									</div>
 								);

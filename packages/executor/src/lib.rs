@@ -28,6 +28,7 @@
 //! let app = executor_router(state);
 //! ```
 
+pub mod channel;
 pub mod config;
 pub mod error;
 pub mod execute;

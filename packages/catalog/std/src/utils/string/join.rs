@@ -25,6 +25,8 @@ impl NodeLogic for StringJoinNode {
             "Joins multiple strings together",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "join");
+        node.set_receiver("strings");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin(

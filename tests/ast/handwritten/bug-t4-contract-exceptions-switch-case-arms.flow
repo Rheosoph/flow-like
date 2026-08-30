@@ -1,0 +1,38 @@
+// BUG: `control::switch` case arms cannot be wired from text — only `default` ever resolves.
+//
+// `SwitchNode::on_update` mints one execution OUTPUT pin per case, named `case_<sanitized>`
+// (packages/catalog/std/src/control/switch.rs), and `control_switch` is listed in
+// `flow::node::mints_pins_on_update` (packages/core/src/flow/node.rs:889) whose contract is that
+// the FlowScript reconciler predicts those pins instead of reporting an unknown pin.
+//
+// It does not. Arm labels are resolved by `Reconciler::resolve_arm_exec_pin`
+// (packages/core/src/flow/ast/reconcile.rs:10101), which for a NEW node walks
+// `NodeEntity::New { meta, .. }` — the STATIC catalog metadata. `control_switch`'s static metadata
+// declares exactly one execution output, `default`, so every `case*` arm is dropped:
+//
+//   branch arm label `caseWaive` does not match an execution output on `$1`
+//   (available execution outputs: default); its body was not wired
+//   ... the same for `caseEscalate` and `caseBlock`
+//
+// A switch authored from text can therefore only ever take its default branch. The workaround
+// used by t4-contract-exceptions.flow is to keep the switch, wire only `default`, and re-test the
+// switched value with an if/else-if ladder inside that arm — which defeats the node.
+use log::{ info, warn }
+
+eventsSimple routeDisposition() {
+    const routed = control::switch({ value: "escalate", cases: "waive,escalate,block" })
+    routed {
+        caseWaive: {
+            info({ message: "waived inside the notice window", toast: false })
+        }
+        caseEscalate: {
+            info({ message: "escalated to the reviewer", toast: false })
+        }
+        caseBlock: {
+            info({ message: "blocked pending legal sign-off", toast: false })
+        }
+        default: {
+            warn({ message: "unrouted disposition", toast: false })
+        }
+    }
+}

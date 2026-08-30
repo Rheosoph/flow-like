@@ -23,6 +23,7 @@ impl NodeLogic for SearchUsersNode {
             "Search Users",
             "Searches project users by exposed profile fields. Email is only searchable when the platform returns email in user lookup results.",
         );
+        node.set_flowscript_name("user", "search");
         add_app_pin(&mut node);
         node.add_input_pin(
             "query",

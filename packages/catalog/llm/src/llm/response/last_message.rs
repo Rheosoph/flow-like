@@ -26,6 +26,8 @@ impl NodeLogic for LastMessageNode {
             "Extracts the last assistant message from a response",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "lastMessage");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

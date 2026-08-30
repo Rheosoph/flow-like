@@ -1,13 +1,12 @@
 use std::sync::RwLock;
 
-const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
+const DEFAULT_API_BASE_URL: &str = "http://localhost:8080";
 
 /// Runtime override for the API base URL used by proxied model calls.
 ///
-/// Executors (AWS Lambda, Kubernetes) receive the base URL through the
-/// `API_BASE_URL` environment variable. Hosts that only learn their backend at
-/// runtime — the desktop app, which resolves it from the active hub profile and
-/// can switch profiles mid-session — set it through [`set_api_base_url`].
+/// Executors receive the base URL through `API_BASE_URL`. Older deployments
+/// may still provide `API_URL`, which remains a compatibility fallback. Hosts
+/// that learn their backend at runtime set it through [`set_api_base_url`].
 static API_BASE_URL_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
 
 /// Point proxied model calls at `url`. Empty or whitespace-only input is
@@ -23,8 +22,8 @@ pub fn set_api_base_url(url: &str) {
     }
 }
 
-/// Resolve the API base URL: runtime override, then `API_BASE_URL`, then the
-/// local development default.
+/// Resolve the API base URL: runtime override, `API_BASE_URL`, legacy
+/// `API_URL`, then the local development default.
 pub fn api_base_url() -> String {
     if let Ok(guard) = API_BASE_URL_OVERRIDE.read()
         && let Some(url) = guard.as_deref()
@@ -32,10 +31,14 @@ pub fn api_base_url() -> String {
         return url.to_string();
     }
 
-    std::env::var("API_BASE_URL")
-        .ok()
-        .and_then(|url| normalize(&url))
+    resolve_environment(|name| std::env::var(name).ok())
         .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string())
+}
+
+fn resolve_environment(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["API_BASE_URL", "API_URL"]
+        .into_iter()
+        .find_map(|name| get(name).and_then(|url| normalize(&url)))
 }
 
 fn normalize(url: &str) -> Option<String> {
@@ -71,6 +74,21 @@ mod tests {
     fn normalize_rejects_blank_urls() {
         assert_eq!(normalize("   "), None);
         assert_eq!(normalize("/"), None);
+    }
+
+    #[test]
+    fn environment_prefers_api_base_url_and_accepts_legacy_api_url() {
+        let both = resolve_environment(|name| match name {
+            "API_BASE_URL" => Some("https://canonical.example".to_string()),
+            "API_URL" => Some("https://legacy.example".to_string()),
+            _ => None,
+        });
+        assert_eq!(both.as_deref(), Some("https://canonical.example"));
+
+        let legacy_only = resolve_environment(|name| {
+            (name == "API_URL").then(|| "https://legacy.example/".to_string())
+        });
+        assert_eq!(legacy_only.as_deref(), Some("https://legacy.example"));
     }
 
     #[test]

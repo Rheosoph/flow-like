@@ -56,7 +56,6 @@ The state interfaces are the important boundary. A component can request Pages, 
 | `packages/executor` | Environment-neutral remote execution runtime with callback and streaming modes |
 | `packages/compiler` / `packages/wasm` | WASM compilation and custom-node runtime |
 | `packages/model-provider` | Model-provider and local inference integrations |
-| `packages/bits` | Auxiliary Bit workspace crate; the current Bit domain model lives in `packages/core` |
 | `packages/catalog-macros` / `packages/catalog-build-helper` | Catalog registration and build support |
 | `packages/dexie-tauri-adapter` | Desktop adapter for browser/Dexie-backed data |
 

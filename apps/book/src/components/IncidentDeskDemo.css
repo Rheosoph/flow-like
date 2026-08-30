@@ -1,0 +1,308 @@
+.incident-desk {
+	--incident-accent: #60a5fa;
+	--incident-bg: var(--sl-color-bg, #ffffff);
+	--incident-text: var(--sl-color-white, #18171b);
+	--incident-muted: var(--sl-color-gray-2, #4b5563);
+	--incident-quiet: var(--sl-color-gray-3, #6b7280);
+	--incident-deep: var(--sl-color-gray-6, #f3f4f6);
+	--incident-border: color-mix(
+		in srgb,
+		var(--sl-color-gray-5, #d1d5db) 72%,
+		transparent
+	);
+	--incident-panel: color-mix(in srgb, var(--incident-deep) 72%, transparent);
+	margin-block: 2rem;
+	overflow: hidden;
+	border: 1px solid var(--incident-border);
+	border-radius: 1.25rem;
+	background: radial-gradient(
+			circle at 92% -10%,
+			rgb(37 99 235 / 22%),
+			transparent 34rem
+		), var(--incident-bg);
+	box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 16%);
+	color: var(--incident-text);
+}
+
+.incident-desk__header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1.5rem;
+	padding: 1.5rem;
+	border-bottom: 1px solid var(--incident-border);
+}
+
+.incident-desk__header h3 {
+	margin: 0.2rem 0 0.35rem;
+	font-size: clamp(1.45rem, 4vw, 2rem);
+	letter-spacing: -0.035em;
+}
+
+.incident-desk__header p {
+	margin: 0;
+	color: var(--incident-muted);
+}
+
+.incident-desk__eyebrow {
+	font-size: 0.7rem;
+	font-weight: 750;
+	letter-spacing: 0.13em;
+	text-transform: uppercase;
+	color: var(--incident-accent) !important;
+}
+
+.incident-desk__runtime {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	flex: none;
+	padding: 0.45rem 0.7rem;
+	border: 1px solid var(--incident-border);
+	border-radius: 999px;
+	background: var(--incident-panel);
+	font-size: 0.75rem;
+	font-weight: 650;
+}
+
+.incident-desk__runtime > span {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 50%;
+	background: #34d399;
+	box-shadow: 0 0 0 0.2rem rgb(52 211 153 / 13%);
+}
+
+.incident-desk__layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1.35fr) minmax(15rem, 0.65fr);
+}
+
+.incident-desk__form {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1rem;
+	padding: 1.5rem;
+}
+
+.incident-desk__field {
+	display: grid;
+	gap: 0.45rem;
+}
+
+.incident-desk__field--wide,
+.incident-desk__submit {
+	grid-column: 1 / -1;
+}
+
+.incident-desk label {
+	font-size: 0.78rem;
+	font-weight: 700;
+	color: var(--incident-muted);
+}
+
+.incident-desk input,
+.incident-desk select,
+.incident-desk textarea {
+	width: 100%;
+	box-sizing: border-box;
+	border: 1px solid var(--incident-border);
+	border-radius: 0.65rem;
+	background: color-mix(in srgb, var(--incident-bg) 74%, var(--incident-deep));
+	padding: 0.72rem 0.8rem;
+	color: var(--incident-text);
+	font: inherit;
+	font-size: 0.88rem;
+}
+
+.incident-desk textarea {
+	resize: vertical;
+	line-height: 1.55;
+}
+
+.incident-desk input:focus-visible,
+.incident-desk select:focus-visible,
+.incident-desk textarea:focus-visible,
+.incident-desk button:focus-visible {
+	outline: 3px solid color-mix(in srgb, var(--incident-accent) 42%, transparent);
+	outline-offset: 2px;
+}
+
+.incident-desk__submit {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	margin-top: 0.2rem;
+}
+
+.incident-desk__submit button {
+	flex: none;
+	border: 0;
+	border-radius: 0.7rem;
+	background: linear-gradient(135deg, #2563eb, #4f46e5);
+	padding: 0.72rem 1rem;
+	color: white;
+	font: inherit;
+	font-size: 0.84rem;
+	font-weight: 750;
+	cursor: pointer;
+	box-shadow: 0 0.6rem 1.5rem rgb(37 99 235 / 20%);
+}
+
+.incident-desk__submit button:hover {
+	filter: brightness(1.08);
+}
+
+.incident-desk__submit p {
+	margin: 0;
+	font-size: 0.72rem;
+	line-height: 1.45;
+	color: var(--incident-quiet);
+}
+
+.incident-desk__result {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	padding: 1.5rem;
+	border-left: 1px solid var(--incident-border);
+	background: var(--incident-panel);
+}
+
+.incident-desk__result-heading,
+.incident-desk__severity,
+.incident-desk__binding {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.incident-desk__result-heading {
+	font-size: 0.76rem;
+	font-weight: 750;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--incident-muted);
+}
+
+.incident-desk__mock {
+	border: 1px solid var(--incident-border);
+	border-radius: 999px;
+	padding: 0.18rem 0.45rem;
+	font-size: 0.58rem;
+	letter-spacing: 0.08em;
+}
+
+.incident-desk__severity {
+	border: 1px solid rgb(248 113 113 / 28%);
+	border-radius: 0.8rem;
+	background: rgb(127 29 29 / 13%);
+	padding: 0.85rem;
+	font-size: 0.76rem;
+	color: var(--incident-muted);
+}
+
+.incident-desk__severity strong {
+	color: #fca5a5;
+	font-size: 0.9rem;
+}
+
+.incident-desk__severity[data-severity="SEV-2"] {
+	border-color: rgb(251 191 36 / 30%);
+	background: rgb(120 53 15 / 13%);
+}
+
+.incident-desk__severity[data-severity="SEV-2"] strong {
+	color: #fcd34d;
+}
+
+.incident-desk__severity[data-severity="SEV-3"] {
+	border-color: rgb(52 211 153 / 28%);
+	background: rgb(6 78 59 / 13%);
+}
+
+.incident-desk__severity[data-severity="SEV-3"] strong {
+	color: #6ee7b7;
+}
+
+.incident-desk__result dl {
+	display: grid;
+	gap: 0.85rem;
+	margin: 0;
+}
+
+.incident-desk__result dl > div {
+	display: grid;
+	gap: 0.2rem;
+}
+
+.incident-desk__result dt {
+	font-size: 0.68rem;
+	color: var(--incident-quiet);
+}
+
+.incident-desk__result dd {
+	margin: 0;
+	font-size: 0.86rem;
+	font-weight: 650;
+}
+
+.incident-desk__result code,
+.incident-desk__binding code {
+	border: 0;
+	background: transparent;
+	padding: 0;
+	color: var(--incident-accent);
+	font-size: 0.72rem;
+}
+
+.incident-desk__binding {
+	margin-top: auto;
+	border-top: 1px solid var(--incident-border);
+	padding-top: 1rem;
+	font-size: 0.68rem;
+	color: var(--incident-quiet);
+}
+
+.incident-desk__announcement {
+	margin: 0;
+	font-size: 0.68rem;
+	line-height: 1.45;
+	color: var(--incident-quiet);
+}
+
+@media (max-width: 50rem) {
+	.incident-desk__layout {
+		grid-template-columns: 1fr;
+	}
+
+	.incident-desk__result {
+		border-top: 1px solid var(--incident-border);
+		border-left: 0;
+	}
+}
+
+@media (max-width: 34rem) {
+	.incident-desk__header,
+	.incident-desk__submit {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.incident-desk__form {
+		grid-template-columns: 1fr;
+	}
+
+	.incident-desk__field,
+	.incident-desk__submit {
+		grid-column: 1;
+	}
+}
+
+@media print {
+	.incident-desk {
+		break-inside: avoid;
+		box-shadow: none;
+	}
+}

@@ -1,3 +1,9 @@
+import {
+	type FlowScriptNamesTable,
+	getFlowScriptNamesTable,
+	loadFlowScriptNamesTable,
+} from "../../lib/flowscript/names";
+
 export interface FlowScriptWorkspaceCandidate {
 	source: string;
 	status?: string;
@@ -32,6 +38,11 @@ export interface FlowScriptCandidateRegression {
 	retained_scope_symbols: number;
 }
 
+/**
+ * Calls that do not count as domain work. Spelled as node ids (the normalised form once the
+ * names snapshot is loaded) plus every legacy flat, qualified and method spelling so the
+ * heuristic keeps working before the snapshot arrives.
+ */
 const TRIVIAL_SMOKE_CALLS = new Set([
 	"log",
 	"loginfo",
@@ -50,7 +61,45 @@ const TRIVIAL_SMOKE_CALLS = new Set([
 	"arrayget",
 	"arraylength",
 	"variableget",
+	"log_info",
+	"log_debug",
+	"log_warn",
+	"log_error",
+	"string_format",
+	"struct_make",
+	"struct_get",
+	"struct_set",
+	"array_push",
+	"array_get",
+	"array_length",
+	"variable_get",
+	"log::info",
+	"log::debug",
+	"log::warn",
+	"log::error",
+	"string::format",
+	"struct::make",
+	"struct::get",
+	"struct::set",
+	"array::push",
+	"array::get",
+	"array::length",
+	"variable::get",
+	".format",
+	".get",
+	".set",
+	".push",
+	".length",
 ]);
+
+const CONTROL_CALL_NAMES = new Set(["if", "for", "while", "switch"]);
+
+/**
+ * Opening line of a `detached { … }` container. Every other block header names a board object
+ * this profile records separately; this one has no node behind it — hence no anchor — so it is
+ * punctuation like a bare brace and only the chain inside it counts as workflow.
+ */
+const DETACHED_CONTAINER_LINE = /^detached\s*\{$/;
 
 function normalizedSymbol(value: string) {
 	return value.trim().toLowerCase();
@@ -60,10 +109,74 @@ function braceDelta(line: string) {
 	return (line.match(/{/g)?.length ?? 0) - (line.match(/}/g)?.length ?? 0);
 }
 
-function callNamesInLine(line: string) {
-	return [...line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
-		.map((match) => normalizedSymbol(match[1] ?? ""))
-		.filter((name) => name && !["if", "for", "while", "switch"].includes(name));
+interface CallNameIndex {
+	byFlat: Map<string, string>;
+	byQualified: Map<string, string>;
+	/** alias → node ids callable in method form (`x.alias()`). */
+	byAlias: Map<string, string[]>;
+}
+
+let cachedNamesTable: FlowScriptNamesTable | undefined;
+let cachedCallNameIndex: CallNameIndex | undefined;
+
+function callNameIndex(): CallNameIndex | undefined {
+	const table = getFlowScriptNamesTable();
+	if (!table) {
+		loadFlowScriptNamesTable().catch(() => undefined);
+		return undefined;
+	}
+	if (table === cachedNamesTable && cachedCallNameIndex)
+		return cachedCallNameIndex;
+	const index: CallNameIndex = {
+		byFlat: new Map(),
+		byQualified: new Map(),
+		byAlias: new Map(),
+	};
+	for (const [nodeType, names] of Object.entries(table)) {
+		index.byFlat.set(normalizedSymbol(names.flat), nodeType);
+		index.byQualified.set(normalizedSymbol(names.qualified), nodeType);
+		if (names.receiver) {
+			const alias = normalizedSymbol(names.alias);
+			index.byAlias.set(alias, [...(index.byAlias.get(alias) ?? []), nodeType]);
+		}
+	}
+	cachedNamesTable = table;
+	cachedCallNameIndex = index;
+	return index;
+}
+
+const CALL_HEAD_RE =
+	/(\.)?\s*((?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*[A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+
+/**
+ * Normalises one call head to a node id via the names snapshot when possible: flat
+ * (`logInfo`), qualified (`log::info`) and method (`s.format()`) spellings of a node collapse
+ * to the same key. Unknown names (user functions, unloaded snapshot) keep their lowercased
+ * spelling; method calls keep a leading `.`.
+ */
+export function normalizeCallName(
+	spelling: string,
+	method: boolean,
+	helpers?: ReadonlySet<string>,
+): string {
+	const name = normalizedSymbol(spelling).replace(/\s*::\s*/g, "::");
+	const index = callNameIndex();
+	if (method) {
+		if (helpers?.has(name)) return name;
+		const candidates = index?.byAlias.get(name);
+		return candidates?.length === 1 ? candidates[0] : `.${name}`;
+	}
+	if (name.includes("::")) return index?.byQualified.get(name) ?? name;
+	if (helpers?.has(name)) return name;
+	return index?.byFlat.get(name) ?? name;
+}
+
+function callNamesInLine(line: string, helpers?: ReadonlySet<string>) {
+	return [...line.matchAll(CALL_HEAD_RE)]
+		.map((match) =>
+			normalizeCallName(match[2] ?? "", match[1] === ".", helpers),
+		)
+		.filter((name) => name && !CONTROL_CALL_NAMES.has(name));
 }
 
 /** Lightweight structural profile used as a frontend safety net across provider implementations. */
@@ -97,7 +210,8 @@ export function profileFlowScriptCandidate(
 			line === "{" ||
 			line === "}" ||
 			line.startsWith("//") ||
-			line.startsWith("@")
+			line.startsWith("@") ||
+			DETACHED_CONTAINER_LINE.test(line)
 		) {
 			depth += braceDelta(rawLine);
 			if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;
@@ -139,9 +253,12 @@ export function profileFlowScriptCandidate(
 		const helperDeclarationName = normalizedSymbol(
 			helperDeclaration?.[1] ?? "",
 		);
-		const eventDeclarationType = normalizedSymbol(eventDeclaration?.[1] ?? "");
+		const eventDeclarationType = normalizeCallName(
+			eventDeclaration?.[1] ?? "",
+			false,
+		);
 		const eventDeclarationAlias = normalizedSymbol(eventDeclaration?.[2] ?? "");
-		const calls = callNamesInLine(line).filter(
+		const calls = callNamesInLine(line, helperFunctions).filter(
 			(name) =>
 				name !== helperDeclarationName &&
 				name !== eventDeclarationType &&

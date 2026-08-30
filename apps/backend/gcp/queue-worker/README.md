@@ -62,8 +62,8 @@ if the two cannot both hold — including at the default `EXECUTOR_TIMEOUT_SECS`
 Adds `BACKEND_PUB`, `BACKEND_KID`, `API_BASE_URL`, `COMPILER_TIMEOUT_SECS`,
 `COMPILER_MAX_PARALLEL_TARGETS`, `COMPILER_CALLBACK_TIMEOUT_MS`,
 `COMPILER_CALLBACK_RETRIES`, `COMPILER_STORAGE_TIMEOUT_SECS`,
-`COMPILER_MAX_WASM_BYTES`, `COMPILER_MAX_ARTIFACT_BYTES`,
-`WASM_COMPILATION_TARGETS`. `storage.googleapis.com` is already in the
+`COMPILER_MAX_WASM_BYTES`, `COMPILER_MAX_ARTIFACT_BYTES`.
+`storage.googleapis.com` is already in the
 compiler's storage-host allowlist, so `COMPILER_ALLOWED_STORAGE_HOSTS` can stay
 empty.
 

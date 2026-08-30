@@ -12,20 +12,22 @@
 //! It is the exhaustive counterpart to Auto Ordinal. Auto Ordinal compares the *families* at
 //! sensible defaults; this node takes one family and searches its hyperparameters properly.
 
-use crate::ml::{GridSearchEntry, NodeMLModel, OrdinalLevels, ParameterSpec};
+use crate::ml::ParameterSpec;
+use crate::ml::{GridSearchEntry, NodeMLModel, OrdinalLevels};
 #[cfg(feature = "execute")]
 use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, OrdinalOrdering, values_to_array1_ordinal,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_ordinal::{
@@ -37,7 +39,6 @@ use flow_like_ordinal::{
 };
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -234,7 +235,6 @@ fn score_predictions(
 }
 
 /// The ordinal family being tuned.
-#[cfg(feature = "execute")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrdinalFamily {
     Logistic,
@@ -244,7 +244,6 @@ enum OrdinalFamily {
     Neural,
 }
 
-#[cfg(feature = "execute")]
 impl OrdinalFamily {
     fn parse(model_type: &str) -> Result<Self> {
         match model_type {
@@ -297,7 +296,6 @@ impl OrdinalFamily {
 ///
 /// Kept small on purpose: every entry multiplies into the cartesian product, and each resulting
 /// configuration is refitted once per fold.
-#[cfg(feature = "execute")]
 fn default_param_grid(model_type: &str) -> Value {
     match OrdinalFamily::parse(model_type) {
         // Deliberately NOT sweeping `link` here: Auto Ordinal already decides Logit vs Probit when
@@ -826,6 +824,7 @@ impl NodeLogic for OrdinalGridSearchNode {
             "Exhaustively searches the hyperparameters of ONE ordinal model family with cross-validation, for a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Every combination in the Parameter Grid is scored on the SAME folds and ranked by an ordinal metric that knows how far a miss was. Use this rather than Grid Search, which resolves the target without its order and tunes against accuracy, scoring a five-level miss exactly like a one-level one. Model Type accepts the names Auto Ordinal reports as its best model, so the usual chain is Auto Ordinal to pick the family, then this node to tune it. Every family here is a gradient or a least-squares fit on the raw columns, so scale your features with the Fit Feature Scaler node first: unscaled columns change which hyperparameters win, not just how fast they converge.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "ordinalGridSearch");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -1382,7 +1381,6 @@ impl NodeLogic for OrdinalGridSearchNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let model_type: String = node
             .get_pin_by_name("model_type")
@@ -1471,6 +1469,14 @@ fn generate_param_combinations(grid: &[ParameterSpec]) -> Vec<HashMap<String, Va
     combinations
 }
 
+/// Training dataset, validation features and the validation row indices of one CV fold.
+#[cfg(feature = "execute")]
+type FoldSplit = (
+    DatasetBase<Array2<f64>, Array1<usize>>,
+    Array2<f64>,
+    Vec<usize>,
+);
+
 /// Materialises one cross-validation split from the shuffled row order.
 #[cfg(feature = "execute")]
 fn split_fold(
@@ -1480,11 +1486,7 @@ fn split_fold(
     fold: usize,
     fold_size: usize,
     cv_folds: usize,
-) -> (
-    DatasetBase<Array2<f64>, Array1<usize>>,
-    Array2<f64>,
-    Vec<usize>,
-) {
+) -> FoldSplit {
     let validation_start = fold * fold_size;
     // The last fold absorbs the remainder, so no row is dropped when the row count is not divisible
     // by the fold count.

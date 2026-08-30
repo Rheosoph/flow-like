@@ -9,6 +9,7 @@ import {
 	updateNodeCommand,
 	upsertLayerCommand,
 } from ".";
+import { isOpenObjectSchema } from "./flow-board-utils";
 import { isWebkitLite } from "./platform";
 import { ILayerType } from "./schema/flow/board/commands/upsert-layer";
 import type { INode } from "./schema/flow/node";
@@ -193,17 +194,30 @@ function findMatchingPin(
 		refs,
 	}: FindMatchingPinParams,
 ): IPin | undefined {
+	// An open-object schema declares that the shape is open, not a contract to match, so it counts
+	// as "no schema" here exactly as it does in `doPinsMatch`. Without this, dragging off a typed
+	// struct pin would stop offering Break Struct, whose `struct_in` accepts any struct.
+	const droppedSchema =
+		typeof schema === "string" && !isOpenObjectSchema(schema) ? schema : undefined;
+
 	return Object.values(pins).find((pin) => {
-		if (typeof schema === "string" || typeof pin.schema === "string") {
-			const pinSchema = refs?.[pin.schema ?? ""] ?? pin.schema;
-			if (
-				(pin.options?.enforce_schema || options?.enforce_schema) &&
-				schema !== pinSchema &&
-				pin.data_type !== IVariableType.Generic &&
-				pinDataType !== IVariableType.Generic
-			)
-				return false;
-		}
+		const rawPinSchema = refs?.[pin.schema ?? ""] ?? pin.schema;
+		const pinSchema =
+			typeof rawPinSchema === "string" && !isOpenObjectSchema(rawPinSchema)
+				? rawPinSchema
+				: undefined;
+
+		// Only two concrete schemas can contradict each other — the same rule `doPinsMatch` and
+		// `schemas_are_compatible` apply when the connection is actually made.
+		if (
+			droppedSchema &&
+			pinSchema &&
+			droppedSchema !== pinSchema &&
+			(pin.options?.enforce_schema || options?.enforce_schema) &&
+			pin.data_type !== IVariableType.Generic &&
+			pinDataType !== IVariableType.Generic
+		)
+			return false;
 		if (pin.pin_type !== pinType) return false;
 		if (pin.value_type !== pinValueType) {
 			if (

@@ -26,6 +26,8 @@ impl NodeLogic for SetMapNode {
             "Sets a value in a map at the given key",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "set");
+        node.set_receiver("map_in");
         node.add_icon("/flow/icons/book-key.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

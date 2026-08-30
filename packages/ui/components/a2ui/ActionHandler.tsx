@@ -8,6 +8,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -31,6 +32,9 @@ import {
 } from "../../state/backend-state/prerun-cache";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
+import { collectRunElements } from "./collect-run-elements";
+import type { ElementSource } from "./element-materializer";
+import { handleElementsRequestMessage } from "./elements-request-handler";
 import { resolveEventActions } from "./event-handlers";
 import { useElementStorage } from "./hooks/use-element-storage";
 import {
@@ -38,7 +42,11 @@ import {
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
 import { notifyLivePageRun } from "./live-page-registry";
-import { collectMicroWidgetValueKeys } from "./micro-widget-host";
+import {
+	type A2UINavigationMessageInterceptor,
+	createNavigateToMessage,
+	interceptA2UINavigationMessage,
+} from "./navigation-message";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -47,6 +55,13 @@ import type {
 	SurfaceComponent,
 } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
+import {
+	type WidgetElementScope,
+	collectEventRelevantInputValues,
+	elementValueScopeIds,
+	legacyWidgetValueSurfaceId,
+	widgetComponentsForScope,
+} from "./workflow-elements";
 import {
 	buildFrontendContextPayload,
 	compactWorkflowPayload,
@@ -65,112 +80,19 @@ type ExecuteActionFn = (
 	additionalContext?: Record<string, unknown>,
 ) => Promise<void>;
 
-function toBoundValue(value: unknown): Record<string, unknown> {
-	if (typeof value === "boolean") return { literalBool: value };
-	if (typeof value === "number") return { literalNumber: value };
-	if (typeof value === "string") return { literalString: value };
-	if (value === undefined) return { literalString: "" };
-	if (value === null || Array.isArray(value) || typeof value === "object") {
-		return { literalJson: JSON.stringify(value) };
-	}
-	return { literalString: String(value) };
-}
+const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
- * Flattens surface.components plus widget-instance inline definitions into a
- * single `surfaceId/componentId -> element` map. Widget instances expose their
- * children through `inlineWidgetDef.components`, so a plain Object.entries on
- * surface.components misses them and Get Element nodes can't resolve those ids.
+ * Page ids, element ids and state keys arrive from surface messages and the
+ * route, so a `__proto__` segment would otherwise walk straight into
+ * `Object.prototype`. Every write into the state records goes through this,
+ * and an empty key is rejected everywhere so the same-page and cross-page
+ * `setPageState` paths accept exactly the same set of keys.
  */
-function flattenSurfaceComponentsForElements(
-	components: Record<string, SurfaceComponent> | undefined,
-	surfaceId: string,
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	if (!components || !surfaceId) return result;
-
-	for (const [id, comp] of Object.entries(components)) {
-		result[`${surfaceId}/${id}`] = comp;
-
-		const compData = (comp as unknown as Record<string, unknown>).component as
-			| Record<string, unknown>
-			| undefined;
-
-		if (compData?.type !== "widgetInstance") continue;
-
-		const inlineDef = compData.inlineWidgetDef as
-			| {
-					components?: Array<{
-						id: string;
-						component: unknown;
-						style?: unknown;
-					}>;
-			  }
-			| undefined;
-
-		for (const inner of inlineDef?.components ?? []) {
-			if (!inner?.id) continue;
-			const key = `${surfaceId}/${inner.id}`;
-			if (result[key] !== undefined) continue;
-			result[key] = {
-				id: inner.id,
-				component: inner.component,
-				style: inner.style,
-			};
-		}
-	}
-
-	return result;
-}
-
-function mergeStoredElementValues(
-	elementsMap: Record<string, unknown>,
-	storedValues: Record<string, unknown>,
-	components: Record<string, SurfaceComponent> | undefined,
-	surfaceId: string,
-): Record<string, unknown> {
-	const flatComponents = flattenSurfaceComponentsForElements(
-		components,
-		surfaceId,
+function isSafeStateKey(key: unknown): key is string {
+	return (
+		typeof key === "string" && key.length > 0 && !UNSAFE_STATE_KEYS.has(key)
 	);
-	const mergedElements: Record<string, unknown> = { ...flatComponents };
-
-	for (const [elementId, element] of Object.entries(elementsMap)) {
-		mergedElements[elementId] = element;
-	}
-
-	for (const [elementId, element] of Object.entries(mergedElements)) {
-		const storedValue = storedValues[elementId];
-		if (storedValue === undefined) continue;
-		const comp = element as Record<string, unknown>;
-		const componentData = comp.component as Record<string, unknown> | undefined;
-		if (componentData) {
-			mergedElements[elementId] = {
-				...comp,
-				component: {
-					...componentData,
-					value: toBoundValue(storedValue),
-				},
-			};
-		}
-	}
-
-	// Micro widget value mirrors are keyed "{instanceId}/values" (not prefixed
-	// with the surface id), so they need their own allowlist to survive the merge.
-	const microValueKeys = collectMicroWidgetValueKeys(components);
-
-	for (const [elementId, storedValue] of Object.entries(storedValues)) {
-		if (mergedElements[elementId] !== undefined) continue;
-		const isMicroValues = microValueKeys.has(elementId);
-		if (!isMicroValues && !elementId.startsWith(`${surfaceId}/`)) continue;
-
-		mergedElements[elementId] = {
-			id: isMicroValues ? "values" : elementId.slice(`${surfaceId}/`.length),
-			component: { value: toBoundValue(storedValue) },
-		};
-	}
-
-	return mergedElements;
 }
 
 /** Stable empty state for provider-less consumers, so hook deps stay steady. */
@@ -256,6 +178,7 @@ interface ActionContextValue {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
 	getElementValues: () => Record<string, unknown>;
 	setElementValue: (elementId: string, value: unknown) => void;
 	resolveTemporaryUploadTarget: (
@@ -285,6 +208,8 @@ interface ActionProviderProps {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	/** Consume page navigation inside an embedded owner instead of changing the host router. */
+	onNavigationMessage?: A2UINavigationMessageInterceptor;
 }
 
 export function ActionProvider({
@@ -300,6 +225,7 @@ export function ActionProvider({
 	isPreviewMode = false,
 	openDialog: openDialogProp,
 	closeDialog: closeDialogProp,
+	onNavigationMessage,
 }: ActionProviderProps) {
 	const pathname = usePathname();
 	const backend = useBackend();
@@ -313,9 +239,43 @@ export function ActionProvider({
 	const [globalState, setGlobalStateMap] = useState<Record<string, unknown>>(
 		{},
 	);
-	const pageStateRef = useRef<Record<string, Record<string, unknown>>>({});
+	const pageStateRef = useRef<Record<string, Record<string, unknown>>>(
+		Object.create(null),
+	);
 	const [pageState, setPageStateLocal] = useState<Record<string, unknown>>({});
 	const [isStateLoaded, setIsStateLoaded] = useState(false);
+
+	// The only three doors into `pageStateRef`. Keeping the id check here rather
+	// than at each call site is what makes the invariant hold for every site.
+	const getPageBucket = useCallback(
+		(pageId: unknown): Record<string, unknown> | undefined =>
+			isSafeStateKey(pageId) ? pageStateRef.current[pageId] : undefined,
+		[],
+	);
+
+	const putPageBucket = useCallback(
+		(pageId: unknown, bucket: Record<string, unknown>): boolean => {
+			if (!isSafeStateKey(pageId)) return false;
+			pageStateRef.current[pageId] = bucket;
+			return true;
+		},
+		[],
+	);
+
+	const putPageBucketEntry = useCallback(
+		(
+			pageId: unknown,
+			key: unknown,
+			value: unknown,
+		): Record<string, unknown> | undefined => {
+			if (!isSafeStateKey(pageId) || !isSafeStateKey(key)) return undefined;
+			const bucket = pageStateRef.current[pageId] ?? {};
+			bucket[key] = value;
+			pageStateRef.current[pageId] = bucket;
+			return bucket;
+		},
+		[],
+	);
 
 	// Use props if provided (for portal'd dialogs), otherwise use context
 	const openDialog = openDialogProp ?? routeDialog?.openDialog;
@@ -324,29 +284,41 @@ export function ActionProvider({
 	// What the surface's inputs are currently holding, and what `_elements` carries into a
 	// workflow. Backed by storage so a surface that comes back from cache and the payload its
 	// workflows receive describe the same screen.
-	const elementValuesRef = useRef<Record<string, unknown>>({});
+	const elementValuesRef = useRef<Record<string, unknown>>(Object.create(null));
 	const { storeElementValue, restoreSurfaceValues } = useElementStorage(appId);
+	const elementValueScopeKey = useMemo(
+		() => JSON.stringify(elementValueScopeIds(components, surfaceId)),
+		[components, surfaceId],
+	);
+
+	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
+		if (!isSafeStateKey(elementId)) return false;
+		elementValuesRef.current[elementId] = value;
+		return true;
+	}, []);
 
 	useEffect(() => {
 		if (!appId || !surfaceId) return;
 		let cancelled = false;
+		const scopeIds = JSON.parse(elementValueScopeKey) as string[];
 
-		void restoreSurfaceValues(surfaceId)
-			.then((restored) => {
+		void Promise.all(scopeIds.map((scopeId) => restoreSurfaceValues(scopeId)))
+			.then((restoredByScope) => {
 				if (cancelled) return;
 				// Anything the user has already touched on this mount is newer than what was
 				// stored, so restoration fills gaps rather than overwriting.
-				elementValuesRef.current = {
-					...restored,
-					...elementValuesRef.current,
-				};
+				elementValuesRef.current = Object.assign(
+					Object.create(null),
+					...restoredByScope,
+					elementValuesRef.current,
+				);
 			})
 			.catch(() => undefined);
 
 		return () => {
 			cancelled = true;
 		};
-	}, [appId, surfaceId, restoreSurfaceValues]);
+	}, [appId, surfaceId, elementValueScopeKey, restoreSurfaceValues]);
 
 	// Getter for element values (used by useExecuteAction)
 	const getElementValues = useCallback(() => {
@@ -358,11 +330,10 @@ export function ActionProvider({
 	// under the "{instanceId}/values" elements-payload key.
 	const setElementValue = useCallback(
 		(elementId: string, value: unknown) => {
-			if (!elementId) return;
-			elementValuesRef.current[elementId] = value;
+			if (!putElementValue(elementId, value)) return;
 			storeElementValue(elementId, value);
 		},
-		[storeElementValue],
+		[putElementValue, storeElementValue],
 	);
 
 	// Ref-counted set of components that are currently triggering an async action.
@@ -464,14 +435,15 @@ export function ActionProvider({
 					? context.value
 					: context.checked;
 
-				elementValuesRef.current[elementId] = value;
-				storeElementValue(elementId, value);
+				if (putElementValue(elementId, value)) {
+					storeElementValue(elementId, value);
+				}
 			}
 
 			// Forward to original handler
 			onAction?.(message);
 		},
-		[onAction, storeElementValue],
+		[onAction, putElementValue, storeElementValue],
 	);
 
 	// Load persisted state from IndexedDB on mount
@@ -492,8 +464,10 @@ export function ActionProvider({
 				// Load page state for current page
 				const pageId = pageStateId;
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
-				if (Object.keys(persistedPage).length > 0) {
-					pageStateRef.current[pageId] = persistedPage;
+				if (
+					Object.keys(persistedPage).length > 0 &&
+					putPageBucket(pageId, persistedPage)
+				) {
 					setPageStateLocal(persistedPage);
 				}
 			} catch (error) {
@@ -504,17 +478,19 @@ export function ActionProvider({
 		};
 
 		loadPersistedState();
-	}, [appId, pageStateId]);
+	}, [appId, pageStateId, putPageBucket]);
 
 	// Load page state when the surface changes
 	useEffect(() => {
 		if (!appId || !isStateLoaded) return;
 
 		const pageId = pageStateId;
+		if (!isSafeStateKey(pageId)) return;
 
 		// Check if we already have this page's state in memory
-		if (pageStateRef.current[pageId]) {
-			setPageStateLocal(pageStateRef.current[pageId]);
+		const cached = getPageBucket(pageId);
+		if (cached) {
+			setPageStateLocal(cached);
 			return;
 		}
 
@@ -522,20 +498,21 @@ export function ActionProvider({
 		const loadPageState = async () => {
 			try {
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
-				pageStateRef.current[pageId] = persistedPage;
+				putPageBucket(pageId, persistedPage);
 				setPageStateLocal(persistedPage);
 			} catch (error) {
 				console.error("Failed to load page state:", error);
-				pageStateRef.current[pageId] = {};
+				putPageBucket(pageId, {});
 				setPageStateLocal({});
 			}
 		};
 
 		loadPageState();
-	}, [appId, pageStateId, isStateLoaded]);
+	}, [appId, pageStateId, isStateLoaded, getPageBucket, putPageBucket]);
 
 	const setGlobalState = useCallback(
 		(key: string, value: unknown) => {
+			if (!isSafeStateKey(key)) return;
 			setGlobalStateMap((prev) => {
 				const next = { ...prev, [key]: value };
 				// Persist to IndexedDB
@@ -555,11 +532,9 @@ export function ActionProvider({
 	const setPageState = useCallback(
 		(key: string, value: unknown) => {
 			const pageId = pageStateId;
-			if (!pageStateRef.current[pageId]) {
-				pageStateRef.current[pageId] = {};
-			}
-			pageStateRef.current[pageId][key] = value;
-			setPageStateLocal({ ...pageStateRef.current[pageId] });
+			const bucket = putPageBucketEntry(pageId, key, value);
+			if (!bucket) return;
+			setPageStateLocal({ ...bucket });
 
 			// Persist to IndexedDB
 			if (appId) {
@@ -568,12 +543,12 @@ export function ActionProvider({
 					.catch((err) => console.error("Failed to persist page state:", err));
 			}
 		},
-		[pageStateId, appId],
+		[pageStateId, appId, putPageBucketEntry],
 	);
 
 	const clearPageState = useCallback(() => {
 		const pageId = pageStateId;
-		pageStateRef.current[pageId] = {};
+		if (!putPageBucket(pageId, {})) return;
 		setPageStateLocal({});
 
 		// Clear from IndexedDB
@@ -582,7 +557,7 @@ export function ActionProvider({
 				.clearPage(appId, pageId)
 				.catch((err) => console.error("Failed to clear page state:", err));
 		}
-	}, [pageStateId, appId]);
+	}, [pageStateId, appId, putPageBucket]);
 
 	// Wrap onA2UIMessage to handle state updates
 	const handleA2UIMessage = useCallback(
@@ -605,10 +580,7 @@ export function ActionProvider({
 						setPageState(key, value);
 					} else {
 						// Store for other pages in memory
-						if (!pageStateRef.current[pageId]) {
-							pageStateRef.current[pageId] = {};
-						}
-						pageStateRef.current[pageId][key] = value;
+						if (!putPageBucketEntry(pageId, key, value)) break;
 						// Also persist to IndexedDB for cross-page state
 						if (appId) {
 							pageLocalState
@@ -625,7 +597,7 @@ export function ActionProvider({
 				}
 				case "clearPageState": {
 					const { pageId } = message as { pageId: string };
-					pageStateRef.current[pageId] = {};
+					if (!putPageBucket(pageId, {})) break;
 					if (pageId === pageStateId) {
 						setPageStateLocal({});
 					}
@@ -656,7 +628,15 @@ export function ActionProvider({
 					onA2UIMessage?.(message);
 			}
 		},
-		[onA2UIMessage, pageStateId, appId, setGlobalState, setPageState],
+		[
+			onA2UIMessage,
+			pageStateId,
+			appId,
+			setGlobalState,
+			setPageState,
+			putPageBucket,
+			putPageBucketEntry,
+		],
 	);
 
 	return (
@@ -678,6 +658,7 @@ export function ActionProvider({
 				isPreviewMode,
 				openDialog,
 				closeDialog,
+				onNavigationMessage,
 				getElementValues,
 				setElementValue,
 				resolveTemporaryUploadTarget,
@@ -756,25 +737,42 @@ export function useAgentActionAccess() {
  * Hook to access element values and components for building _input_values maps.
  * Used by WidgetActionHandler to collect event-relevant input values.
  */
-export function useEventRelevantValues() {
+export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const getElementValues = context?.getElementValues;
 	const components = context?.components;
 	const surfaceId = context?.surfaceId;
+	const widgetInstanceId = widgetScope?.instanceId;
+	const widgetComponents = widgetScope?.components;
 
 	const collectInputValues = useCallback((): Record<string, unknown> => {
 		if (!getElementValues || !components || !surfaceId) return {};
 		const storedValues = getElementValues();
-		const inputValues: Record<string, unknown> = {};
-		for (const [compId, comp] of Object.entries(components)) {
-			if (!comp.eventRelevant) continue;
-			const elementId = `${surfaceId}/${compId}`;
-			if (storedValues[elementId] !== undefined) {
-				inputValues[compId] = storedValues[elementId];
-			}
+		if (!widgetInstanceId) {
+			return collectEventRelevantInputValues(
+				storedValues,
+				Object.values(components),
+				surfaceId,
+			);
 		}
-		return inputValues;
-	}, [getElementValues, components, surfaceId]);
+
+		const scope: WidgetElementScope = {
+			instanceId: widgetInstanceId,
+			components: widgetComponents,
+		};
+		return collectEventRelevantInputValues(
+			storedValues,
+			widgetComponentsForScope(components, scope),
+			widgetInstanceId,
+			legacyWidgetValueSurfaceId(components, surfaceId, scope),
+		);
+	}, [
+		getElementValues,
+		components,
+		surfaceId,
+		widgetInstanceId,
+		widgetComponents,
+	]);
 
 	return collectInputValues;
 }
@@ -801,10 +799,10 @@ export function useMarkComponentTriggering() {
 }
 
 /**
- * Hook to fetch and merge frontend elements for the current surface.
+ * Hook to collect the frontend elements a run of the current surface starts with.
  * Returns a function that produces the `_elements` map sent in workflow payloads.
  */
-export function useCollectEventElements() {
+export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const backend = useBackend();
 	const appId = context?.appId;
@@ -813,51 +811,35 @@ export function useCollectEventElements() {
 	const surfaceId = context?.surfaceId;
 	const components = context?.components;
 	const getElementValues = context?.getElementValues;
+	const widgetInstanceId = widgetScope?.instanceId;
+	const widgetComponents = widgetScope?.components;
 
-	return useCallback(async (): Promise<Record<string, unknown>> => {
-		const fallbackElements = (): Record<string, unknown> =>
-			flattenSurfaceComponentsForElements(components, surfaceId ?? "");
-
-		let elementsMap: Record<string, unknown> | undefined;
-		if (appId && boardId) {
-			try {
-				elementsMap = await backend.boardState.getExecutionElements(
-					appId,
-					boardId,
-					surfaceId || "",
-					false,
-					boardVersion,
-				);
-				if (!elementsMap || Object.keys(elementsMap).length === 0) {
-					elementsMap = fallbackElements();
-				}
-			} catch (err) {
-				console.warn(
-					"[A2UI] Failed to fetch execution elements, falling back to all components:",
-					err,
-				);
-				elementsMap = fallbackElements();
-			}
-		} else {
-			elementsMap = fallbackElements();
-		}
-
-		const storedValues = getElementValues?.() ?? {};
-		return mergeStoredElementValues(
-			elementsMap,
-			storedValues,
+	return useCallback(
+		(): Promise<Record<string, unknown>> =>
+			collectRunElements({
+				backend,
+				appId,
+				boardId,
+				boardVersion,
+				surfaceId: surfaceId ?? "",
+				components,
+				storedValues: getElementValues?.() ?? {},
+				widgetScope: widgetInstanceId
+					? { instanceId: widgetInstanceId, components: widgetComponents }
+					: undefined,
+			}),
+		[
+			appId,
+			boardId,
+			boardVersion,
+			surfaceId,
 			components,
-			surfaceId || "",
-		);
-	}, [
-		appId,
-		boardId,
-		boardVersion,
-		surfaceId,
-		components,
-		getElementValues,
-		backend.boardState,
-	]);
+			getElementValues,
+			backend,
+			widgetInstanceId,
+			widgetComponents,
+		],
+	);
 }
 
 export function useActions() {
@@ -970,9 +952,27 @@ export function useExecuteAction() {
 		isPreviewMode,
 		openDialog,
 		closeDialog,
+		onNavigationMessage,
 		getElementValues,
 		markComponentTriggering,
 	} = useContext(ActionContext) ?? {};
+
+	const elementSourceRef = useRef<() => ElementSource | null>(() => null);
+	elementSourceRef.current = () =>
+		surfaceId === undefined
+			? null
+			: {
+					surfaceId,
+					components,
+					storedValues: getElementValues?.() ?? {},
+					widgetScope: widgetInstance?.instanceId
+						? {
+								instanceId: widgetInstance.instanceId,
+								components: widgetInstance.components,
+							}
+						: undefined,
+				};
+	const elementSource = useCallback(() => elementSourceRef.current(), []);
 
 	const handleA2UIEvents = useCallback(
 		(events: IIntercomEvent[]) => {
@@ -1006,6 +1006,14 @@ export function useExecuteAction() {
 					console.log("[A2UI] A2UI message:", message);
 
 					if (handleWidgetQueryMessage(message)) {
+						continue;
+					}
+
+					if (handleElementsRequestMessage(message, elementSource)) {
+						continue;
+					}
+
+					if (interceptA2UINavigationMessage(message, onNavigationMessage)) {
 						continue;
 					}
 
@@ -1160,7 +1168,16 @@ export function useExecuteAction() {
 				}
 			}
 		},
-		[router, pathname, onA2UIMessage, appId, openDialog, closeDialog],
+		[
+			router,
+			pathname,
+			onA2UIMessage,
+			onNavigationMessage,
+			appId,
+			openDialog,
+			closeDialog,
+			elementSource,
+		],
 	);
 
 	const executeAction = useCallback(
@@ -1217,6 +1234,14 @@ export function useExecuteAction() {
 							extraParams,
 						});
 						if (route) {
+							if (
+								interceptA2UINavigationMessage(
+									createNavigateToMessage(route, extraParams),
+									onNavigationMessage,
+								)
+							) {
+								break;
+							}
 							// Build query params URL for internal routes
 							if (
 								appId &&
@@ -1389,16 +1414,19 @@ export function useExecuteAction() {
 
 						if (nodeId && effectiveBoardId && effectiveAppId) {
 							try {
-								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-								let elementsMap: Record<string, unknown> | undefined;
+								const widgetScope: WidgetElementScope | undefined =
+									widgetInstance?.instanceId
+										? {
+												instanceId: widgetInstance.instanceId,
+												components: widgetInstance.components,
+											}
+										: undefined;
 
 								console.log("[A2UI] workflow_event execution context:", {
 									nodeId,
 									effectiveAppId,
 									effectiveBoardId,
 									surfaceId,
-									cacheKey,
-									hadCachedElements: false,
 									componentIds: Object.keys(components ?? {}),
 								});
 
@@ -1424,77 +1452,43 @@ export function useExecuteAction() {
 									);
 								}
 
-								// Always fetch current execution elements in preview mode.
+								// Always fetch the current element demand in preview mode.
 								// The flow graph can change without any cache invalidation signal.
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false,
-										inheritedBoardVersion,
-									);
-
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = flattenSurfaceComponentsForElements(
-											components,
-											surfaceId ?? "",
-										);
-									}
-								} catch (err) {
-									console.warn(
-										"[A2UI] Failed to fetch execution elements, falling back to all components:",
-										err,
-									);
-									elementsMap = flattenSurfaceComponentsForElements(
-										components,
-										surfaceId ?? "",
-									);
-								}
-
-								// Merge in-memory element values (user input state)
 								const storedValues = getElementValues?.() ?? {};
-								console.log("[A2UI] workflow_event merging elements:", {
-									elementsMapKeys: Object.keys(elementsMap),
-									storedValuesKeys: Object.keys(storedValues),
+								const mergedElements = await collectRunElements({
+									backend,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									boardVersion: inheritedBoardVersion,
+									surfaceId: surfaceId ?? "",
+									components,
 									storedValues,
+									widgetScope,
+									triggeringComponentId,
+									refresh: inheritedBoardVersion === undefined,
 								});
 
-								for (const [elementId, element] of Object.entries(
-									elementsMap,
-								)) {
-									const storedValue = storedValues[elementId];
-									console.log("[A2UI] Checking element:", {
-										elementId,
-										hasStoredValue: storedValue !== undefined,
-										storedValue,
-									});
-								}
-
-								const mergedElements = mergeStoredElementValues(
-									elementsMap,
+								const inputComponents = widgetScope
+									? widgetComponentsForScope(components, widgetScope)
+									: Object.values(components ?? {});
+								const inputValues = collectEventRelevantInputValues(
 									storedValues,
-									components,
-									surfaceId || "",
+									inputComponents,
+									widgetScope?.instanceId ?? surfaceId ?? "",
+									legacyWidgetValueSurfaceId(
+										components,
+										surfaceId ?? "",
+										widgetScope,
+									),
 								);
-
-								// Build _input_values from event-relevant components
-								const inputValues: Record<string, unknown> = {};
-								if (components && surfaceId) {
-									for (const [compId, comp] of Object.entries(components)) {
-										if (!comp.eventRelevant) continue;
-										const elementId = `${surfaceId}/${compId}`;
-										if (storedValues[elementId] !== undefined) {
-											inputValues[compId] = storedValues[elementId];
-										}
-									}
-								}
 
 								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
+										_elements_mode: "demand",
 										_input_values: inputValues,
+										_widget_instance_id: widgetScope?.instanceId ?? "",
 										_action_context: context,
 										_triggering_component_id: triggeringComponentId ?? "",
 										...buildFrontendContextPayload(
@@ -1677,68 +1671,53 @@ export function useExecuteAction() {
 
 						if (effectiveBoardId && effectiveAppId) {
 							try {
-								const cacheKey = `${effectiveBoardId}:${surfaceId}`;
-								let elementsMap: Record<string, unknown> | undefined;
+								const widgetScope: WidgetElementScope | undefined =
+									widgetInstance?.instanceId
+										? {
+												instanceId: widgetInstance.instanceId,
+												components: widgetInstance.components,
+											}
+										: undefined;
 
 								console.log("[A2UI] widget_event execution context:", {
 									effectiveAppId,
 									effectiveBoardId,
 									surfaceId,
-									cacheKey,
-									hadCachedElements: false,
 									componentIds: Object.keys(components ?? {}),
 								});
 
-								try {
-									elementsMap = await backend.boardState.getExecutionElements(
-										effectiveAppId,
-										effectiveBoardId,
-										surfaceId || "",
-										false,
-										inheritedBoardVersion,
-									);
+								const storedValues = getElementValues?.() ?? {};
+								const mergedElements = await collectRunElements({
+									backend,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									boardVersion: inheritedBoardVersion,
+									surfaceId: surfaceId ?? "",
+									components,
+									storedValues,
+									widgetScope,
+									triggeringComponentId,
+								});
 
-									if (!elementsMap || Object.keys(elementsMap).length === 0) {
-										elementsMap = flattenSurfaceComponentsForElements(
-											components,
-											surfaceId ?? "",
-										);
-									}
-								} catch (err) {
-									console.warn(
-										"[A2UI] Failed to fetch execution elements for widget_event:",
-										err,
-									);
-									elementsMap = flattenSurfaceComponentsForElements(
+								const inputComponents = widgetScope
+									? widgetComponentsForScope(components, widgetScope)
+									: Object.values(components ?? {});
+								const inputValues = collectEventRelevantInputValues(
+									storedValues,
+									inputComponents,
+									widgetScope?.instanceId ?? surfaceId ?? "",
+									legacyWidgetValueSurfaceId(
 										components,
 										surfaceId ?? "",
-									);
-								}
-
-								const storedValues = getElementValues?.() ?? {};
-								const mergedElements = mergeStoredElementValues(
-									elementsMap,
-									storedValues,
-									components,
-									surfaceId || "",
+										widgetScope,
+									),
 								);
-
-								// Build _input_values from event-relevant components
-								const inputValues: Record<string, unknown> = {};
-								if (components && surfaceId) {
-									for (const [compId, comp] of Object.entries(components)) {
-										if (!comp.eventRelevant) continue;
-										const elementId = `${surfaceId}/${compId}`;
-										if (storedValues[elementId] !== undefined) {
-											inputValues[compId] = storedValues[elementId];
-										}
-									}
-								}
 
 								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
+										_elements_mode: "demand",
 										_input_values: inputValues,
 										_widget_instance_id: widgetInstance?.instanceId ?? "",
 										_action_id: actionId,
@@ -1848,6 +1827,7 @@ export function useExecuteAction() {
 			widgetInstance,
 			getElementValues,
 			markComponentTriggering,
+			onNavigationMessage,
 		],
 	);
 	executeActionRef.current = executeAction;

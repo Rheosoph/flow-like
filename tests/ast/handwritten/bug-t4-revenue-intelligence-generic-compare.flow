@@ -1,0 +1,26 @@
+// BUG: `struct::get` is typed `any` (Generic) -- the only way to read a column out of a row that
+// came back from `db::filter` / `df::sqlQuery` -- but the binary-operator type check refuses to
+// compare a Generic to a String literal:
+//     binary operator `==` has incompatible operand types `Generic` and `String`
+// Generic is the deliberate "unknown yet" type and connects happily into String INPUT pins (the
+// same `band` value below wires into `string::trim`'s `string` pin with no diagnostic at all), so
+// the operator check is stricter than the connection check for no reason. The consequence is that
+// no row read back from a table can be branched on directly; every comparison has to be laundered
+// through a string node first, which is the workaround used in t4-revenue-intelligence.flow.
+use log::{ info }
+
+eventsSimple compareRowField() {
+    const signals = db::open({ name: "revenue_signals", userScoped: false })
+    const rows = db::filter({ database: signals, filter: "risk_band != 'green'", limit: 1 })
+    const row = array::get({ arrayIn: rows, index: 0 })
+    const band = struct::get({ struct: row.element, field: "risk_band" })
+
+    // wiring the very same Generic into a String input pin is accepted
+    const laundered = string::trim({ string: band })
+    info({ message: laundered, toast: false })
+
+    // comparing it to a String literal is not
+    if (band == "green") {
+        info({ message: "healthy", toast: false })
+    }
+}

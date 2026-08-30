@@ -283,6 +283,23 @@ export default {
 	"v5.control.item3": "为 EU AI Act 做好准备",
 	"v5.control.item4": "端到端可观测性",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "面向开发者的开放指南",
+	"v5.book.title": "从故障事件到落地实现的开发者指南。",
+	"v5.book.body":
+		"FlowBook 面向使用 Flow-Like 进行开发的开发者。跟随一个可执行工作流，依次查看它的带类型 FlowScript 源码、可视化画布，以及成功或失败后留下的运行证据。",
+	"v5.book.meta": "开放版 · 2026 · 英文",
+	"v5.book.read": "在线阅读 FlowBook",
+	"v5.book.download": "下载 PDF",
+	"v5.book.note": "免费阅读，无需注册。",
+	"v5.book.generalLabel": "通用指南",
+	"v5.book.generalBody":
+		"如需产品介绍和分步教程，请先查看文档或 Flow-Like YouTube 频道。",
+	"v5.book.docs": "查看文档",
+	"v5.book.youtube": "在 YouTube 上观看",
+	"v5.book.coverCta": "下载开放版",
+	"v5.book.aria": "以 PDF 格式下载 FlowBook《Flow-Like 开发者指南》",
+
 	"v5.footer.notes.kicker": "来自引擎室的手记",
 	"v5.footer.notes.title": "我们正在构建什么，又从中学到了什么。",
 	"v5.footer.notes.all": "全部手记 →",

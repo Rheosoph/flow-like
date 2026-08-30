@@ -42,7 +42,11 @@ export function InlineSpoiler({ text, className }: InlineSpoilerProps) {
 					setRevealed(true);
 				}
 			}}
-			aria-label={revealed ? text : t('hiddenContentClickToReveal', 'Hidden content. Click to reveal.')}
+			aria-label={
+				revealed
+					? text
+					: t("hiddenContentClickToReveal", "Hidden content. Click to reveal.")
+			}
 		>
 			{text}
 			{!revealed && (

@@ -6,6 +6,7 @@ use flow_like::{
         pin::PinOptions,
         variable::VariableType,
     },
+    state::FlowLikeState,
 };
 use flow_like_types::{async_trait, json::json};
 
@@ -28,6 +29,7 @@ impl NodeLogic for FindLLMNode {
             "Finds the best model based on certain selection criteria",
             "AI/Generative",
         );
+        node.set_flowscript_name("ai", "findModel");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
         node.set_scores(
@@ -78,11 +80,10 @@ impl NodeLogic for FindLLMNode {
         preference.enforce_bounds();
 
         let http_client = context.app_state.http_client.clone();
-        let only_hosted =
-            cfg!(target_os = "ios") || cfg!(target_os = "android") || !cfg!(feature = "tauri");
+        let capabilities = FlowLikeState::completion_model_capabilities(&context.app_state).await;
         let bit = context
             .profile
-            .get_best_model_filtered(&preference, false, false, only_hosted, http_client)
+            .resolve_completion_model(None, &preference, false, capabilities, http_client)
             .await?;
 
         for meta in bit.meta.values() {

@@ -2,6 +2,7 @@ use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
+    pin::schemas_are_compatible,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
@@ -32,6 +33,7 @@ impl NodeLogic for SetVariable {
             "Set Variable Value",
             "Variable",
         );
+        node.set_flowscript_name("variable", "set");
 
         node.add_icon("/flow/icons/variable.svg");
 
@@ -157,11 +159,7 @@ impl NodeLogic for SetVariable {
                     {
                         return false;
                     }
-                    // If both have schemas, they must match
-                    if mut_value.schema.is_some() && pin.schema.is_some() {
-                        return mut_value.schema == pin.schema;
-                    }
-                    true
+                    schemas_are_compatible(mut_value.schema.as_deref(), pin.schema.as_deref())
                 })
             });
 
@@ -190,11 +188,7 @@ impl NodeLogic for SetVariable {
                     {
                         return false;
                     }
-                    // If both have schemas, they must match
-                    if mut_new_value.schema.is_some() && pin.schema.is_some() {
-                        return mut_new_value.schema == pin.schema;
-                    }
-                    true
+                    schemas_are_compatible(mut_new_value.schema.as_deref(), pin.schema.as_deref())
                 })
             });
 

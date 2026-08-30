@@ -226,6 +226,7 @@ export const COMPONENT_PROPS = {
 		"helperText",
 		"accept",
 		"multiple",
+		"directory",
 		"maxSize",
 		"maxFiles",
 		"disabled",
@@ -660,6 +661,7 @@ export const COMPONENT_PROPS = {
 		"appId",
 		"exposedPropValues",
 		"actionBindings",
+		"runtimeChildUpdates",
 		"styleOverride",
 	],
 	microWidgetInstance: [

@@ -25,6 +25,7 @@ impl NodeLogic for PushGlobalSessionNode {
             "Pushes a new global session to the chat. The session persists for all chat sessions.",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushGlobalSession");
         node.add_icon("/flow/icons/paperclip.svg");
         node.set_event_callback(true);
 
@@ -41,7 +42,8 @@ impl NodeLogic for PushGlobalSessionNode {
             "Generic Struct Type",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

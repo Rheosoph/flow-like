@@ -24,6 +24,7 @@ impl NodeLogic for CuidNode {
             "Generates a Collision Resistant Unique Identifier",
             "Utils",
         );
+        node.set_flowscript_name("random", "cuid");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);

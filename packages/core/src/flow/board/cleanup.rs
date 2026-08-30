@@ -1,12 +1,12 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::flow::{
     board::{
         Board, Layer,
         cleanup::{
-            bridge_layers::BridgeLayersCleanup, fix_pin_connections::FixPinsCleanup,
-            fix_refs::FixRefsCleanup, order_pin_indices::PinIndicesCleanup,
-            sync_known_schemas::SyncKnownSchemasCleanup,
+            bridge_layers::BridgeLayersCleanup, fix_layer_parents::FixLayerParents,
+            fix_pin_connections::FixPinsCleanup, fix_refs::FixRefsCleanup,
+            order_pin_indices::PinIndicesCleanup, sync_known_schemas::SyncKnownSchemasCleanup,
         },
     },
     node::Node,
@@ -16,13 +16,34 @@ use crate::flow::{
 
 pub mod bridge_layers;
 pub mod fix_initial_coordinates;
+pub mod fix_layer_parents;
 pub mod fix_pin_connections;
 pub mod fix_refs;
 pub mod order_pin_indices;
 pub mod sync_known_schemas;
 pub mod sync_node_schema;
 
-pub type PinLookup = HashMap<String, (Arc<Pin>, NodeOrLayer)>;
+pub type PinLookup = HashMap<String, (PinEdges, NodeOrLayer)>;
+
+/// A pin's reciprocal edges, snapshotted before the main pass begins.
+///
+/// The main pass holds `&mut` on the board while steps look up *other* pins, so this cannot borrow
+/// from the board and has to own what it exposes. It carries only the two edge sets the steps read:
+/// snapshotting whole pins meant copying every schema string and default value on the board — the
+/// bulk of a pin's size — on every apply, none of which was ever looked at.
+pub struct PinEdges {
+    pub connected_to: BTreeSet<String>,
+    pub depends_on: BTreeSet<String>,
+}
+
+impl PinEdges {
+    fn of(pin: &Pin) -> Self {
+        PinEdges {
+            connected_to: pin.connected_to.clone(),
+            depends_on: pin.depends_on.clone(),
+        }
+    }
+}
 
 pub enum NodeOrLayer {
     Node(String),
@@ -88,11 +109,13 @@ impl Board {
         let mut order_pin_indices = PinIndicesCleanup::init(self);
         let mut fix_initial_coordinates =
             fix_initial_coordinates::FixInitialCoordinates::init(self);
+        let mut fix_layer_parents = FixLayerParents::init(self);
 
         let mut pins: PinLookup =
             HashMap::with_capacity((self.nodes.len() + self.layers.len()) * 4);
 
         let mut steps: Vec<&mut dyn BoardCleanupLogic> = vec![
+            &mut fix_layer_parents,
             &mut fix_initial_coordinates,
             &mut sync_known_schemas,
             &mut fix_refs,
@@ -110,7 +133,7 @@ impl Board {
             for pin in node.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), NodeOrLayer::Node(node.id.clone())),
+                    (PinEdges::of(pin), NodeOrLayer::Node(node.id.clone())),
                 );
                 for step in steps.iter_mut() {
                     (*step).initial_pin_iteration(pin, NodeOrLayerRef::Node(node));
@@ -126,7 +149,7 @@ impl Board {
             for pin in layer.pins.values() {
                 pins.insert(
                     pin.id.clone(),
-                    (Arc::new(pin.clone()), NodeOrLayer::Layer(layer.id.clone())),
+                    (PinEdges::of(pin), NodeOrLayer::Layer(layer.id.clone())),
                 );
                 for step in steps.iter_mut() {
                     (*step).initial_pin_iteration(pin, NodeOrLayerRef::Layer(layer));
@@ -141,7 +164,7 @@ impl Board {
                 for pin in node.pins.values() {
                     pins.insert(
                         pin.id.clone(),
-                        (Arc::new(pin.clone()), NodeOrLayer::Node(node.id.clone())),
+                        (PinEdges::of(pin), NodeOrLayer::Node(node.id.clone())),
                     );
                     for step in steps.iter_mut() {
                         (*step).initial_pin_iteration(pin, NodeOrLayerRef::Node(node));

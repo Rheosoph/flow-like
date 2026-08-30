@@ -229,13 +229,21 @@ pub fn score_catalog_metadata(metadata: &NodeMetadata, query: &str) -> i32 {
     let friendly_lower = metadata.friendly_name.to_lowercase();
     let desc_lower = metadata.description.to_lowercase();
     let category = metadata.category.clone().unwrap_or_default().to_lowercase();
+    let qualified_lower = metadata
+        .qualified_spelling()
+        .unwrap_or_default()
+        .to_lowercase();
     let symbol_tokens = tokenize_query_text(&metadata.name);
     let friendly_tokens = tokenize_query_text(&metadata.friendly_name);
+    let qualified_tokens = tokenize_query_text(&qualified_lower);
 
     let mut score = 0i32;
 
     if !analysis.normalized.is_empty() {
         if name_lower.contains(&analysis.normalized) {
+            score += 100;
+        }
+        if !qualified_lower.is_empty() && qualified_lower.contains(&analysis.normalized) {
             score += 100;
         }
         if friendly_lower.contains(&analysis.normalized) {
@@ -248,6 +256,9 @@ pub fn score_catalog_metadata(metadata: &NodeMetadata, query: &str) -> i32 {
 
     for token in &analysis.expanded_tokens {
         if name_lower.contains(token) {
+            score += 30;
+        }
+        if !qualified_lower.is_empty() && qualified_lower.contains(token) {
             score += 30;
         }
         if friendly_lower.contains(token) {
@@ -265,6 +276,7 @@ pub fn score_catalog_metadata(metadata: &NodeMetadata, query: &str) -> i32 {
         let fuzzy_symbol_match = symbol_tokens
             .iter()
             .chain(friendly_tokens.iter())
+            .chain(qualified_tokens.iter())
             .any(|candidate| candidate.len() > 3 && strsim::jaro_winkler(candidate, token) >= 0.9);
         if fuzzy_symbol_match {
             score += 16;

@@ -109,6 +109,7 @@ impl NodeLogic for LLMRankCandidatesNode {
             "Uses LLM to rank multiple element candidates based on match quality",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "rankCandidates");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

@@ -80,18 +80,21 @@ export function DashboardTelemetryIssuesWidget({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<Bug className="h-4 w-4 text-primary" />
-						{t('issuesReleaseHealth', 'Issues & release health')}
+						{t("issuesReleaseHealth", "Issues & release health")}
 						<Badge variant="outline" className="text-[10px]">
 							7d
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						{t('groupedCrashesAndErrorsReportedByInstalls', 'Grouped crashes and errors reported by installs')}
+						{t(
+							"groupedCrashesAndErrorsReportedByInstalls",
+							"Grouped crashes and errors reported by installs",
+						)}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/telemetry/issues">
-						{t('openIssues', 'Open Issues')}
+						{t("openIssues", "Open Issues")}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -99,29 +102,33 @@ export function DashboardTelemetryIssuesWidget({
 			<CardContent className="space-y-4">
 				<div className="grid gap-2 sm:grid-cols-3">
 					<StatTile
-						label={t('unresolvedIssues', 'Unresolved issues')}
+						label={t("unresolvedIssues", "Unresolved issues")}
 						value={issues.isLoading ? "…" : unresolved.toLocaleString()}
 						icon={<Bug className="h-4 w-4" />}
 					/>
 					<StatTile
-						label={t('crashfreeSessions', 'Crash-free sessions')}
+						label={t("crashfreeSessions", "Crash-free sessions")}
 						value={
 							health.isLoading
 								? "…"
 								: formatRatePercent(health.data?.crashFreeSessionRate)
 						}
 						icon={<ShieldCheck className="h-4 w-4" />}
-						hint={t('valSessions', '{{val}} sessions', { val: (health.data?.totalSessions ?? 0).toLocaleString() })}
+						hint={t("valSessions", "{{val}} sessions", {
+							val: (health.data?.totalSessions ?? 0).toLocaleString(),
+						})}
 					/>
 					<StatTile
-						label={t('crashedSessions', 'Crashed sessions')}
+						label={t("crashedSessions", "Crashed sessions")}
 						value={
 							health.isLoading
 								? "…"
 								: (health.data?.crashedSessions ?? 0).toLocaleString()
 						}
 						icon={<ServerCrash className="h-4 w-4" />}
-						hint={t('valInstalls', '{{val}} installs', { val: (health.data?.totalInstalls ?? 0).toLocaleString() })}
+						hint={t("valInstalls", "{{val}} installs", {
+							val: (health.data?.totalInstalls ?? 0).toLocaleString(),
+						})}
 					/>
 				</div>
 

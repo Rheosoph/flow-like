@@ -1,5 +1,3 @@
-// dnd-kit imports
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -15,6 +13,8 @@ import {
 	useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+// dnd-kit imports
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	type ColumnDef,
 	type ColumnFiltersState,
@@ -70,7 +70,10 @@ import {
 	toDateTimeInputValue,
 	toEpochNumber,
 } from "../../lib/date";
+import { resolveStorageFile } from "../../lib/storage-file";
+import { looksLikeUserColumnName } from "../../lib/user-display";
 import type { IIndexConfig } from "../../state/backend-state/db-state";
+import { accountIdFromValue } from "../../state/backend-state/user-state";
 import {
 	Badge,
 	Button,
@@ -101,7 +104,9 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
+	buttonVariants,
 } from "./";
+import { StorageFileChip, StorageFilePreview } from "./storage-file-cell";
 import {
 	Table as DataTable,
 	TableBody,
@@ -116,6 +121,7 @@ import {
 	IndexTypeSelect,
 	buildAddColumnExpression,
 } from "./table-schema";
+import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
 	| "string"
@@ -155,6 +161,11 @@ export interface ArrowSchemaJSON {
 }
 
 export interface LanceDBExplorerProps {
+	/**
+	 * App the rows belong to. Cells holding storage paths open as files only when
+	 * this is set, because a path is meaningless without the app that owns it.
+	 */
+	appId?: string;
 	arrowSchema?: ArrowSchemaJSON;
 
 	// Controlled data from parent (e.g., React Query)
@@ -199,10 +210,19 @@ export interface LanceDBExplorerProps {
 	}) => Promise<void> | void;
 	className?: string;
 	tableName?: string;
+	/**
+	 * Namespace for the persisted column layout. Table names are only unique
+	 * within an app, so a host that can show more than one app must pass its id
+	 * here or the layouts collide. Omitting it keeps the legacy per-table key.
+	 */
+	settingsScope?: string;
+	/** Hosts with their own chrome disable the fullscreen overlay. */
+	allowFullscreen?: boolean;
 	children?: React.ReactNode;
 }
 
 interface LanceDBContextValue {
+	appId?: string;
 	fields?: LanceField[];
 	onUpdateItem?: (
 		filter: string,
@@ -252,6 +272,7 @@ const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_DENSITY: "compact" | "comfortable" | "spacious" = "comfortable";
 
 const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
+	appId,
 	tableName = "table",
 	children,
 	arrowSchema,
@@ -275,6 +296,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	initialMode = "table",
 	onSearch,
 	className,
+	settingsScope,
+	allowFullscreen = true,
 }) => {
 	const { t } = useTranslation("common");
 	const [schema, setSchema] = useState<LanceSchema | null>(null);
@@ -328,7 +351,10 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		"compact" | "comfortable" | "spacious"
 	>(DEFAULT_DENSITY);
 
-	const settingsId = `${tableName}_settings`;
+	const legacySettingsId = `${tableName}_settings`;
+	const settingsId = settingsScope
+		? `${settingsScope}:${legacySettingsId}`
+		: legacySettingsId;
 	const [settingsLoaded, setSettingsLoaded] = useState(false);
 	const [initialPageRequestDone, setInitialPageRequestDone] = useState(false);
 
@@ -345,7 +371,11 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		setInitialPageRequestDone(false);
 		const load = async () => {
 			try {
-				const settings = await db.tableSettings.get(settingsId);
+				let settings = await db.tableSettings.get(settingsId);
+				const adoptedLegacy = !settings && settingsId !== legacySettingsId;
+				if (adoptedLegacy) {
+					settings = await db.tableSettings.get(legacySettingsId);
+				}
 				if (settings && !cancelled) {
 					setColumnVisibility(settings.columnVisibility ?? {});
 					setColumnOrder(settings.columnOrder ?? []);
@@ -356,6 +386,12 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 					}
 					setColumnSizing(settings.columnSizing ?? {});
 					setDensity(settings.density ?? DEFAULT_DENSITY);
+					// The bare table key predates scoping and was shared by every app.
+					// The persist effect rewrites it under this scope, so retire it
+					// instead of letting every other scope inherit a foreign layout.
+					if (adoptedLegacy) {
+						await db.tableSettings.delete(legacySettingsId);
+					}
 				}
 			} catch (error) {
 				console.warn("Failed to load settings:", error);
@@ -368,7 +404,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settingsId, pageSizeDefault]);
+	}, [settingsId, legacySettingsId, pageSizeDefault]);
 
 	// Parse schema from Arrow schema when available (separate from settings)
 	useEffect(() => {
@@ -538,9 +574,11 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		? currentTo >= (total ?? 0)
 		: lastCount < pageSize;
 
+	const isFullscreen = allowFullscreen && fullscreen;
+
 	const containerCls = cn(
 		"flex h-full w-full flex-col gap-3",
-		fullscreen && "fixed inset-0 z-[60] bg-background p-4",
+		isFullscreen && "fixed inset-0 z-[60] bg-background p-4",
 		className,
 	);
 
@@ -550,8 +588,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	);
 
 	const contextValue = useMemo<LanceDBContextValue>(
-		() => ({ fields: schema?.fields, onUpdateItem }),
-		[schema?.fields, onUpdateItem],
+		() => ({ appId, fields: schema?.fields, onUpdateItem }),
+		[appId, schema?.fields, onUpdateItem],
 	);
 
 	return (
@@ -563,23 +601,29 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 					<Separator orientation="vertical" className="mx-1" />
 					<div className="ml-auto flex items-center gap-2">
 						<DensityToggle value={density} onChange={setDensity} />
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => setFullscreen((v) => !v)}
-							title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-						>
-							{fullscreen ? (
-								<>
-									<Minimize2 className="h-4 w-4 mr-2" /> {t("exit", "Exit")}
-								</>
-							) : (
-								<>
-									<Maximize2 className="h-4 w-4 mr-2" />{" "}
-									{t("fullscreen", "Fullscreen")}
-								</>
-							)}
-						</Button>
+						{allowFullscreen && (
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => setFullscreen((v) => !v)}
+								title={
+									isFullscreen
+										? t("exitFullscreen", "Exit fullscreen")
+										: t("fullscreen", "Fullscreen")
+								}
+							>
+								{isFullscreen ? (
+									<>
+										<Minimize2 className="h-4 w-4 mr-2" /> {t("exit", "Exit")}
+									</>
+								) : (
+									<>
+										<Maximize2 className="h-4 w-4 mr-2" />{" "}
+										{t("fullscreen", "Fullscreen")}
+									</>
+								)}
+							</Button>
+						)}
 						<SchemaDialog
 							schema={schema}
 							tableName={tableName}
@@ -1112,6 +1156,34 @@ const DateCell: React.FC<{
 	);
 };
 
+/**
+ * The account a cell refers to, or null when it refers to nothing resolvable.
+ *
+ * Only text is considered: a column that names a person but stores a number is a
+ * foreign key into some other table, not a sub the directory can answer for. The
+ * value has to look like an account id too — a `created_by` holding `"system"`
+ * is a word, and spending a lookup on it would only ever 404.
+ */
+export const resolveUserCell = (
+	field: LanceField,
+	value: unknown,
+): string | null =>
+	looksLikeUserColumnName(field.name) ? accountIdFromValue(value) : null;
+
+const UserCell: React.FC<{
+	userId: string;
+	onClick: () => void;
+}> = ({ userId, onClick }) => (
+	<UserInlineTag
+		userId={userId}
+		onClick={onClick}
+		className={cn(
+			buttonVariants({ variant: "ghost", size: "sm" }),
+			"h-6 px-2 justify-start max-w-[200px]",
+		)}
+	/>
+);
+
 const buildColumnForField = (
 	f: LanceField,
 ): ColumnDef<Record<string, any>> => ({
@@ -1131,9 +1203,14 @@ const Cell: React.FC<{
 	rowData: Record<string, any>;
 }> = ({ value, field, rowData }) => {
 	const { t } = useTranslation("common");
-	const { fields, onUpdateItem } = useContext(LanceDBContext);
+	const { appId, fields, onUpdateItem } = useContext(LanceDBContext);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [editValue, setEditValue] = useState("");
+	const userId = useMemo(() => resolveUserCell(field, value), [field, value]);
+	const file = useMemo(
+		() => resolveStorageFile(field.name, value, appId),
+		[appId, field.name, value],
+	);
 
 	const openDialog = useCallback(() => {
 		setEditValue(safeStringify(value, 2));
@@ -1152,6 +1229,12 @@ const Cell: React.FC<{
 					{`NULL`}
 				</Button>
 			);
+		}
+
+		// A path into this app's storage is the file it points at, whatever the
+		// column was declared as — nothing is fetched until the preview opens.
+		if (file) {
+			return <StorageFileChip file={file} onClick={openDialog} />;
 		}
 
 		switch (field.kind) {
@@ -1209,6 +1292,9 @@ const Cell: React.FC<{
 				if (field.kind === "unknown" && inferTemporalValue(field.name, value)) {
 					return <DateCell value={value} onClick={openDialog} />;
 				}
+				if (field.kind === "unknown" && userId) {
+					return <UserCell userId={userId} onClick={openDialog} />;
+				}
 				return (
 					<Button
 						variant="ghost"
@@ -1220,6 +1306,11 @@ const Cell: React.FC<{
 					</Button>
 				);
 			default: {
+				// A column that names a person reads as the person, not as the opaque
+				// sub that identifies them.
+				if (userId) {
+					return <UserCell userId={userId} onClick={openDialog} />;
+				}
 				// Check if string value looks like an ISO date
 				if (typeof value === "string" && isISODateString(value)) {
 					return <DateCell value={value} onClick={openDialog} />;
@@ -1427,12 +1518,18 @@ const CellViewDialog: React.FC<{
 	onUpdateItem,
 }) => {
 	const { t } = useTranslation("common");
+	const { appId } = useContext(LanceDBContext);
 	const [localValue, setLocalValue] = useState(valueStr);
 	const [isEditing, setIsEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const temporal = useMemo(
 		() => resolveTemporalCell(field, value),
 		[field, value],
+	);
+	const userId = useMemo(() => resolveUserCell(field, value), [field, value]);
+	const file = useMemo(
+		() => resolveStorageFile(field.name, value, appId),
+		[appId, field.name, value],
 	);
 
 	useEffect(() => {
@@ -1492,6 +1589,14 @@ const CellViewDialog: React.FC<{
 			return <DateDetail value={value} unit={temporal.unit} />;
 		}
 
+		if (userId) {
+			return <UserIdentityCard userId={userId} />;
+		}
+
+		if (file && appId) {
+			return <StorageFilePreview appId={appId} file={file} />;
+		}
+
 		switch (field.kind) {
 			case "boolean":
 				return (
@@ -1533,7 +1638,7 @@ const CellViewDialog: React.FC<{
 				);
 			}
 		}
-	}, [field.kind, field.dims, value, temporal]);
+	}, [field.kind, field.dims, value, temporal, userId, file, appId]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -1559,13 +1664,26 @@ const CellViewDialog: React.FC<{
 									onCheckedChange={setIsEditing}
 								/>
 							</div>
-							<Badge variant="outline">{temporal ? "date" : field.kind}</Badge>
+							<Badge variant="outline">
+								{temporal
+									? "date"
+									: userId
+										? "user"
+										: file
+											? "file"
+											: field.kind}
+							</Badge>
 						</div>
 					</DialogTitle>
 				</DialogHeader>
 				<div className="space-y-4 overflow-hidden">
 					{!isEditing ? (
-						<div className="max-h-[60vh] overflow-auto pr-1">
+						<div
+							className={cn(
+								"max-h-[60vh] overflow-auto pr-1",
+								file && "flex h-[60vh] flex-col overflow-hidden",
+							)}
+						>
 							{PreviewContent}
 						</div>
 					) : temporal ? (
@@ -1721,14 +1839,19 @@ const DatabaseActionsDropdown: React.FC<{
 							<Zap className="h-4 w-4 mr-2" />
 							{optimizing
 								? "Optimizing..."
-								: t("optimizeKeepVersions", "Optimize (Keep Versions)")}
+								: t("optimizeKeepVersions", "Optimize and Keep Versions")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() => handleOptimize(false)}
 							disabled={optimizing}
 						>
 							<Zap className="h-4 w-4 mr-2" />
-							{optimizing ? "Optimizing..." : "Optimize (Compact)"}
+							{optimizing
+								? "Optimizing..."
+								: t(
+										"optimizePruneOldVersions",
+										"Optimize and Prune Old Versions",
+									)}
 						</DropdownMenuItem>
 					</>
 				)}

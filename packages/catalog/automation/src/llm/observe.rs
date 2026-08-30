@@ -101,6 +101,7 @@ impl NodeLogic for LLMObserveScreenNode {
             "Uses vision LLM to comprehensively observe and describe the current screen",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "observeScreen");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 
@@ -372,6 +373,7 @@ impl NodeLogic for LLMDescribeElementNode {
             "Uses vision LLM to describe a specific UI element at given coordinates",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "describeElement");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

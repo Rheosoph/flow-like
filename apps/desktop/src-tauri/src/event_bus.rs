@@ -3,6 +3,7 @@ use crate::{
     utils::{UiEmitTarget, local_execution_environment},
 };
 use flow_like::app::App;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::Path;
@@ -13,8 +14,9 @@ use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, sync::mpsc};
 use flow_like_types::{json, tokio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Manager};
 
 // Maximum number of events to queue. 100,000 should be plenty for local handling.
@@ -57,6 +59,70 @@ impl EventBusEvent {
         app_handle: &AppHandle,
         flow_like_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
+        let started = Arc::new(AtomicBool::new(false));
+        match self
+            .execute_inner(app_handle, flow_like_state.clone(), started.clone())
+            .await
+        {
+            Ok(meta) => Ok(meta),
+            Err(error) => {
+                if !started.load(Ordering::Relaxed) {
+                    self.record_rejection(&flow_like_state, &error).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Schedules and sinks fire unattended, so a setup failure here has no
+    /// caller to report to. Give it the same run history a real execution
+    /// would have produced, with the reason as its only log line.
+    async fn record_rejection(
+        &self,
+        flow_like_state: &Arc<FlowLikeState>,
+        error: &flow_like_types::Error,
+    ) {
+        let execution_state = Arc::new(flow_like_state.for_execution_run());
+        let event = match App::load(self.app_id.clone(), execution_state.clone()).await {
+            Ok(app) => app.get_event(&self.event_id, None).await.ok(),
+            Err(_) => None,
+        };
+
+        let Some(event) = event else {
+            tracing::warn!(
+                app_id = %self.app_id,
+                event_id = %self.event_id,
+                error = %error,
+                "Event trigger failed before its board could be identified; nothing to record"
+            );
+            return;
+        };
+
+        let rejection = RejectedRun::new(
+            self.app_id.clone(),
+            event.board_id.clone(),
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .with_event_definition(&event)
+        .with_payload(self.payload.as_ref());
+
+        if let Err(error) = flow_like_state.record_rejected_run(&rejection).await {
+            tracing::warn!(
+                app_id = %self.app_id,
+                event_id = %self.event_id,
+                error = %error,
+                "Failed to record a rejected event trigger"
+            );
+        }
+    }
+
+    async fn execute_inner(
+        &self,
+        app_handle: &AppHandle,
+        flow_like_state: Arc<FlowLikeState>,
+        started: Arc<AtomicBool>,
+    ) -> flow_like_types::Result<Option<LogMeta>> {
         let execution_state = Arc::new(flow_like_state.for_execution_run());
 
         let Ok(app) = App::load(self.app_id.clone(), execution_state.clone()).await else {
@@ -74,11 +140,13 @@ impl EventBusEvent {
         let board_version = loaded_event.board_version;
         let board_id = loaded_event.board_id.clone();
 
-        let Ok(board) = app.open_board(board_id.clone(), None, board_version).await else {
-            return Err(flow_like_types::anyhow!("Board not found"));
-        };
-
-        let board = Arc::new(board.lock().await.clone());
+        let template = crate::functions::flow::run::resolve_run_template(
+            &execution_state,
+            &self.app_id,
+            &board_id,
+            board_version,
+        )
+        .await?;
         let profile = TauriSettingsState::current_profile(app_handle).await?;
 
         let app_handle_clone = app_handle.clone();
@@ -135,9 +203,9 @@ impl EventBusEvent {
         let event_name = loaded_event.name.clone();
         let event_type = loaded_event.event_type.clone();
 
-        let mut internal_run = InternalRun::new(
+        let mut internal_run = InternalRun::from_template(
             &self.app_id,
-            board,
+            template,
             Some(loaded_event),
             &execution_state,
             &profile.hub_profile,
@@ -147,6 +215,8 @@ impl EventBusEvent {
             credentials,
             self.token.clone(),
             self.oauth_tokens.clone(),
+            None,
+            None,
         )
         .await?;
 
@@ -155,7 +225,19 @@ impl EventBusEvent {
             .await;
 
         internal_run.set_execution_environment(local_execution_environment());
-        internal_run.set_local_user_context().await;
+
+        // Sink registrations authenticate with a PAT, which is not a JWT, so
+        // the subject the run derived from it is the `local` placeholder.
+        // Resolving against the hub recovers the PAT owner and their real role.
+        crate::execution_identity::apply_local_run_identity(
+            &mut internal_run,
+            &app.visibility,
+            &self.app_id,
+            self.token.as_deref(),
+            &profile.hub_profile.hub,
+            &flow_like_state,
+        )
+        .await;
 
         let run_id = internal_run.run.lock().await.id.clone();
 
@@ -180,6 +262,7 @@ impl EventBusEvent {
         );
 
         flow_like_state.register_run(&run_id, run_data);
+        started.store(true, Ordering::Relaxed);
 
         let meta = tokio::select! {
             result = internal_run.execute(execution_state.clone()) => result,
@@ -253,6 +336,8 @@ impl EventBusEvent {
 
 pub struct EventBus {
     sender: mpsc::Sender<EventBusEvent>,
+    #[allow(dead_code)]
+    // handle kept for future bus-side emits; every consumer currently passes its own AppHandle
     app_handle: AppHandle,
 }
 
@@ -263,6 +348,7 @@ impl EventBus {
         (Arc::new(new_self), receiver)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn push_event_with_token(
         &self,
         payload: Option<Value>,
@@ -290,17 +376,5 @@ impl EventBus {
         self.sender
             .try_send(event)
             .map_err(|e| format!("Failed to send event: {}", e))
-    }
-}
-
-fn event_bus_dir() -> PathBuf {
-    if let Some(dir) = dirs_next::data_dir() {
-        dir.join("flow-like").join("event-bus")
-    } else if let Some(dir) = dirs_next::cache_dir() {
-        dir.join("flow-like").join("event-bus")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join("flow-like").join("event-bus")
-    } else {
-        PathBuf::from("flow-like").join("event-bus")
     }
 }

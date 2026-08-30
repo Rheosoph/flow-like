@@ -14,9 +14,10 @@ wasmtime-wasi-http = { workspace = true }
 hyper = { workspace = true }
 
 # Flow-Like dependencies
+flow-like-wasm-schema = { workspace = true, features = ["bundle", "nodes"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["model"] }
 flow-like-model-provider.workspace = true
 flow-like-catalog-core.workspace = true
 flow-like-catalog-llm.workspace = true
@@ -31,11 +32,6 @@ serde_json = "1"
 
 # Hashing for module caching
 blake3.workspace = true
-# Hashing for widget bundle integrity
-sha2 = "0.10"
-# Widget bundle (.flwb) container
-zip = { version = "8.2.0", default-features = false, features = ["deflate"] }
-
 # Error handling
 thiserror = "2"
 anyhow = "1"
@@ -88,6 +84,9 @@ component-model = ["wasmtime/component-model"]
 # authenticated embedding proxy used by hosted/remote-capable Bits.
 model = ["flow-like/model", "flow-like/remote-ml"]
 # Enable OpenAPI schema generation
-openapi = ["utoipa", "flow-like/openapi"]
+openapi = ["dep:utoipa", "flow-like/openapi", "flow-like-wasm-schema/openapi"]
 # Enable all cranelift backends for cross-compilation
 all-arch = ["wasmtime/all-arch"]
+# Load WASM modules directly from a URL (`WasmEngine::load_module_from_url`).
+# reqwest is already an unconditional dependency, so no dep gating is needed.
+http = []

@@ -14,6 +14,18 @@ const elementValuesStore = createStore(
 	"element-values",
 );
 
+const UNSAFE_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * The `getAll` helpers rebuild a plain record from stored keys, so a row whose
+ * key segment is `__proto__` would replace that record's prototype instead of
+ * becoming an entry. Writers have rejected those keys since state validation
+ * landed; rows predating it are dropped on read, matching the writers.
+ */
+function isSafeRecordKey(key: string): boolean {
+	return key.length > 0 && !UNSAFE_RECORD_KEYS.has(key);
+}
+
 // Route storage helpers
 export const routeStorage = {
 	async getRoutes(appId: string): Promise<AppRouteRecord[]> {
@@ -128,6 +140,7 @@ export const pageLocalState = {
 			const keyStr = String(k);
 			if (keyStr.startsWith(prefix)) {
 				const shortKey = keyStr.slice(prefix.length);
+				if (!isSafeRecordKey(shortKey)) continue;
 				result[shortKey] = await get(k, pageStateStore);
 			}
 		}
@@ -171,6 +184,7 @@ export const appGlobalState = {
 			const keyStr = String(k);
 			if (keyStr.startsWith(prefix)) {
 				const shortKey = keyStr.slice(prefix.length);
+				if (!isSafeRecordKey(shortKey)) continue;
 				result[shortKey] = await get(k, globalStateStore);
 			}
 		}
@@ -236,6 +250,7 @@ export const elementValues = {
 			const keyStr = String(k);
 			if (keyStr.startsWith(prefix)) {
 				const elementId = keyStr.slice(prefix.length);
+				if (!isSafeRecordKey(elementId)) continue;
 				const value = await get<ElementValue>(k, elementValuesStore);
 				if (value) {
 					result[elementId] = value;

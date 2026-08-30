@@ -50,6 +50,7 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
             "Retrieves console messages from the browser (logs, warnings, errors)",
             "Automation/Browser/Observe",
         );
+        node.set_flowscript_name("browser", "getConsoleLogs");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -218,6 +219,7 @@ impl NodeLogic for BrowserClearConsoleLogsNode {
             "Clears the captured console log buffer",
             "Automation/Browser/Observe",
         );
+        node.set_flowscript_name("browser", "clearConsoleLogs");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -301,6 +303,7 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
             "Starts observing network requests using the Performance API",
             "Automation/Browser/Observe",
         );
+        node.set_flowscript_name("browser", "startNetworkObserver");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -427,6 +430,7 @@ impl NodeLogic for BrowserGetNetworkRequestsNode {
             "Retrieves captured network requests from the observer",
             "Automation/Browser/Observe",
         );
+        node.set_flowscript_name("browser", "getNetworkRequests");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -552,6 +556,7 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
             "Waits until no network requests are in progress for a specified duration",
             "Automation/Browser/Observe",
         );
+        node.set_flowscript_name("browser", "waitForNetworkIdle");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -649,10 +654,12 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
             let current_count = result.json().as_i64().unwrap_or(0);
 
             if current_count == last_request_count {
-                if idle_start.is_none() {
+                if let Some(started) = idle_start {
+                    if started.elapsed() >= idle_duration {
+                        break;
+                    }
+                } else {
                     idle_start = Some(Instant::now());
-                } else if idle_start.unwrap().elapsed() >= idle_duration {
-                    break;
                 }
             } else {
                 idle_start = None;

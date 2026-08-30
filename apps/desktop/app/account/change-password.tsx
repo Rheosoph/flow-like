@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Alert,
 	AlertDescription,
@@ -14,6 +13,7 @@ import {
 	Input,
 	Label,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { updatePassword } from "aws-amplify/auth";
 import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -103,7 +103,10 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 		} catch (error) {
 			console.error("Failed to change password:", error);
 			setError(
-				t('failedToChangePasswordPleaseCheckYourCurrentPassword', 'Failed to change password. Please check your current password.'),
+				t(
+					"failedToChangePasswordPleaseCheckYourCurrentPassword",
+					"Failed to change password. Please check your current password.",
+				),
 			);
 		} finally {
 			setIsLoading(false);
@@ -121,7 +124,7 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 		<Dialog open={open} onOpenChange={handleClose}>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>{t('changePassword', 'Change Password')}</DialogTitle>
+					<DialogTitle>{t("changePassword", "Change Password")}</DialogTitle>
 					<DialogDescription>
 						{`Enter your current password and choose a new one.`}
 					</DialogDescription>
@@ -135,7 +138,9 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 					)}
 
 					<div className="space-y-2">
-						<Label htmlFor="current-password">{t('currentPassword', 'Current Password')}</Label>
+						<Label htmlFor="current-password">
+							{t("currentPassword", "Current Password")}
+						</Label>
 						<div className="relative">
 							<Input
 								id="current-password"
@@ -144,7 +149,10 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 								onChange={(e) =>
 									handleInputChange("currentPassword", e.target.value)
 								}
-								placeholder={t('enterCurrentPassword', 'Enter current password')}
+								placeholder={t(
+									"enterCurrentPassword",
+									"Enter current password",
+								)}
 							/>
 							<Button
 								type="button"
@@ -163,7 +171,9 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="new-password">{t('newPassword', 'New Password')}</Label>
+						<Label htmlFor="new-password">
+							{t("newPassword", "New Password")}
+						</Label>
 						<div className="relative">
 							<Input
 								id="new-password"
@@ -191,7 +201,9 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="confirm-password">{t('confirmNewPassword', 'Confirm New Password')}</Label>
+						<Label htmlFor="confirm-password">
+							{t("confirmNewPassword", "Confirm New Password")}
+						</Label>
 						<div className="relative">
 							<Input
 								id="confirm-password"
@@ -220,7 +232,7 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 
 					<div className="flex gap-2 pt-4">
 						<Button variant="outline" onClick={handleClose} className="flex-1">
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={handleSubmit}

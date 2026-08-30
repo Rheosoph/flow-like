@@ -32,6 +32,7 @@ impl NodeLogic for DocxAddTableNode {
             "Insert a styled table from JSON data. Default: branded header with #FF4343, zebra rows.",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addTable");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

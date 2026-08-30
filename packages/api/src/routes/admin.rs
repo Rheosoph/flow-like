@@ -188,6 +188,14 @@ pub fn routes() -> Router<AppState> {
         )
         // Crash issues and release health
         .route(
+            "/telemetry/flowscript-failures",
+            get(telemetry::flowscript_failures::list_flowscript_failures),
+        )
+        .route(
+            "/telemetry/flowscript-failures/{failure_id}",
+            get(telemetry::flowscript_failures::get_flowscript_failure),
+        )
+        .route(
             "/telemetry/issues",
             get(telemetry::issues::list_telemetry_issues),
         )

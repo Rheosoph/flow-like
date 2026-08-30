@@ -1,9 +1,12 @@
+use crate::data::query_params as params;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
@@ -28,8 +31,10 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             "Delete rows from a database table and return the removed rows",
             "Data/Database/Delete",
         );
+        node.set_flowscript_name("db", "delete");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -44,10 +49,12 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         node.add_input_pin(
             "filter",
             "SQL Filter",
-            "Optional SQL filter. Leave empty to delete all rows.",
+            "Optional SQL filter on the table's columns; leave empty to delete all rows. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        params::add_params_pin(&mut node, params::SqlFlavor::LanceFilter);
 
         node.add_output_pin(
             "exec_out",
@@ -62,11 +69,18 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             "Rows that were deleted",
             VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_value_type(ValueType::Array)
+        .set_open_schema();
 
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "filter", board, params::SqlFlavor::LanceFilter);
+    }
+
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -75,6 +89,7 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
         let filter: String = context.evaluate_pin("filter").await?;
+        let filter = params::bind_lance_filter(context, &filter).await?;
 
         let normalized_filter = filter.trim().to_string();
 
@@ -105,5 +120,12 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             .await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

@@ -27,6 +27,7 @@ impl NodeLogic for DeleteJiraIssueNode {
             "Delete a Jira issue. Use with caution - this action cannot be undone.",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "deleteIssue");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

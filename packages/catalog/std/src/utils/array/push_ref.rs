@@ -26,6 +26,7 @@ impl NodeLogic for PushArrayRefNode {
             "Push an item directly into a variable array without copying. Much faster for large arrays.",
             "Utils/Array/By Reference",
         );
+        node.set_flowscript_name("array", "pushRef");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

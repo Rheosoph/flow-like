@@ -190,7 +190,7 @@ fn parse_form_node_inputs(
         expires_at: now + ttl_seconds,
         run_id: None,
         app_id: None,
-        responder_jwt: None,
+        channel: None,
     };
 
     (request, interaction_id)
@@ -644,8 +644,8 @@ async fn execute_callback_function(
             let coerced = coerce_value_for_pin(&pin, value)?;
             if let Some(internal_pin) = callback_function
                 .pins
-                .values()
-                .find(|internal_pin| internal_pin.name == pin.name)
+                .iter()
+                .find(|internal_pin| internal_pin.name.as_ref() == pin.name)
             {
                 internal_pin.set_value(coerced).await;
             }
@@ -724,6 +724,7 @@ impl NodeLogic for FormInteraction {
             "Builds a JSON Schema form from a referenced callback function's pins and executes it with typed submitted values.",
             "Events/Chat/Interaction",
         );
+        node.set_flowscript_name("chat", "askForm");
         node.add_icon("/flow/icons/interaction.svg");
         node.set_can_reference_fns(true);
 
@@ -746,6 +747,7 @@ impl NodeLogic for FormInteraction {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};

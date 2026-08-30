@@ -188,7 +188,7 @@ export type BoardCommand =
 			command_type: "CreateLayer";
 			name: string;
 			ref_id?: string;
-			layer_type?: "Collapsed" | "Function" | "Macro";
+			layer_type?: "Collapsed" | "Function" | "Macro" | "Module";
 			color?: string;
 			node_ids?: string[];
 			pins?: PlaceholderPinDef[];
@@ -216,6 +216,24 @@ export type BoardCommand =
 			command_type: "RemoveNodesFromLayer";
 			layer_id: string;
 			node_ids: string[];
+			summary?: string;
+	  }
+	| {
+			/** Rename an existing layer without touching its contents or position. */
+			command_type: "RenameLayer";
+			layer_id: string;
+			name: string;
+			summary?: string;
+	  }
+	| {
+			/**
+			 * Re-home nodes, comments, or layers into a module layer (undefined = board root).
+			 * FlowScript emits this when an anchored function, event, or module block is written
+			 * in a different module than the one it lives in on the board.
+			 */
+			command_type: "MoveToLayer";
+			ids: string[];
+			target_layer?: string;
 			summary?: string;
 	  };
 

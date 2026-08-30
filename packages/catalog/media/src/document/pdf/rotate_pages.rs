@@ -29,6 +29,7 @@ impl NodeLogic for PdfRotatePagesNode {
             "Rotate pages by 90, 180, or 270 degrees",
             "Document/PDF",
         );
+        node.set_flowscript_name("pdf", "rotatePages");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

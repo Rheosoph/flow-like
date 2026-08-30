@@ -26,6 +26,8 @@ impl NodeLogic for SetStructFieldNode {
             "Sets a field in a struct (supports dot notation and array access)",
             "Structs/Fields",
         );
+        node.set_flowscript_name("struct", "set");
+        node.set_receiver("struct_in");
         node.add_icon("/flow/icons/struct.svg");
 
         node.add_input_pin(
@@ -41,8 +43,10 @@ impl NodeLogic for SetStructFieldNode {
             "Done with the Execution",
             VariableType::Execution,
         );
-        node.add_output_pin("struct_out", "Struct", "Struct Out", VariableType::Struct);
-        node.add_input_pin("struct_in", "Struct", "Struct In", VariableType::Struct);
+        node.add_output_pin("struct_out", "Struct", "Struct Out", VariableType::Struct)
+            .set_open_schema();
+        node.add_input_pin("struct_in", "Struct", "Struct In", VariableType::Struct)
+            .set_open_schema();
 
         node.add_input_pin(
             "field",

@@ -122,7 +122,7 @@ fn prune_overlay(overlay: &mut GraphOverlayDef, table_name: &str) -> OverlayPrun
         && !overlay
             .edges
             .iter()
-            .any(|edge| edge_uses_table(edge, &target))
+            .any(|edge| edge_uses_table(edge, target))
     {
         return outcome;
     }
@@ -143,7 +143,7 @@ fn prune_overlay(overlay: &mut GraphOverlayDef, table_name: &str) -> OverlayPrun
     };
 
     overlay.edges.retain(|edge| {
-        !(edge_uses_table(edge, &target)
+        !(edge_uses_table(edge, target)
             || endpoint_removed(&edge.src_label)
             || (edge_dst_is_local(edge) && endpoint_removed(&edge.dst_label)))
     });

@@ -1,0 +1,34 @@
+// BUG: `struct::break` can never hand its fields to anything when the text is applied to an
+// empty board. `struct_break` IS listed in `mints_pins_on_update`
+// (packages/core/src/flow/node.rs:894, "Schema-driven: one pin per field of the struct schema a
+// wired peer declares"), and the peer here declares a fully concrete schema — the interface
+// `AssetSnapshot`. The reconciler still predicts nothing:
+//     `struct::break` has no data output `assetId` to destructure; its outputs are none
+//     `struct::break` has no data output `site` to destructure; its outputs are none
+//     argument `assetId` on `stringFormat` is not a literal or resolvable node output; skipped connection
+//     argument `site` on `stringFormat` is not a literal or resolvable node output; skipped connection
+//
+// This is the renderer's OWN spelling, not an invented one. Authoring the snake_case field name
+// (`const { asset_id, site } = ...`) is canonicalised by render.rs to
+// `const { assetId: asset_id, site } = struct::break({ structIn: asset })`, i.e. board -> text
+// names these outputs `assetId`/`site` — exactly what text -> board then rejects. The camelCase
+// form below is already canonical (no drift is reported), so the round trip is broken in the
+// middle.
+//
+// reconcile.rs only knows how to REUSE an existing `struct_break` node's field pins
+// (`reuse_existing_member_source`, reconcile.rs:9279 matches on
+// `lower::BREAK_STRUCT_PREFIX`); there is no path that CREATES the `__break_struct_field__*`
+// output pins for a new node, so on an empty board the node is planted with no data outputs at
+// all. The only workaround is to abandon `struct::break` and read every field with a separate
+// `value.field` member access (which lowers to `struct_get`).
+use log::{ info }
+
+interface AssetSnapshot {
+    asset_id: string;
+    site: string;
+}
+
+eventsGeneric breakTypedAsset(payload: Struct, asset: AssetSnapshot) {
+    const { assetId, site } = struct::break({ structIn: asset })
+    info({ message: `${assetId} ${site}`, toast: false })
+}

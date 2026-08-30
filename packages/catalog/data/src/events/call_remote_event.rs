@@ -372,6 +372,7 @@ fn chat_request_inputs() -> Vec<PinSpec> {
             "State local to this chat session",
             VariableType::Struct,
         )
+        .schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string())
         .default(json!({})),
         PinSpec::new(
             "global_session",
@@ -379,6 +380,7 @@ fn chat_request_inputs() -> Vec<PinSpec> {
             "State shared for the remote chat user",
             VariableType::Struct,
         )
+        .schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string())
         .default(json!({})),
         PinSpec::new(
             "tools",
@@ -472,13 +474,15 @@ fn chat_result_outputs() -> Vec<PinSpec> {
             "Local Session",
             "Latest remote local session state",
             VariableType::Struct,
-        ),
+        )
+        .schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string()),
         PinSpec::new(
             "global_session_out",
             "Global Session",
             "Latest remote global session state",
             VariableType::Struct,
-        ),
+        )
+        .schema(flow_like::flow::pin::OPEN_OBJECT_SCHEMA.to_string()),
         PinSpec::new(
             "model_id",
             "Model ID",
@@ -830,6 +834,7 @@ impl NodeLogic for CallRemoteEventNode {
             "Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.",
             "Events/Remote",
         );
+        node.set_flowscript_name("remote", "callEvent");
         node.add_icon("/flow/icons/event.svg");
         node.set_version(5);
 
@@ -1300,6 +1305,7 @@ impl NodeLogic for CallRemoteApiNode {
             "Call an internal REST API exposed by a connected project and return its status, headers and response body.",
             "Events/Remote",
         );
+        node.set_flowscript_name("remote", "callApi");
         node.add_icon("/flow/icons/event.svg");
         node.set_version(1);
 
@@ -1379,6 +1385,7 @@ impl NodeLogic for CallRemoteChatNode {
             "Call a chat event in a connected project. Chunks, complete responses, widgets, attachments and session state are exposed while the remote chat streams.",
             "Events/Remote",
         );
+        node.set_flowscript_name("remote", "callChat");
         node.add_icon("/flow/icons/event.svg");
         node.set_version(2);
 

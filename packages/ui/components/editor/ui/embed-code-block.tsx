@@ -266,7 +266,7 @@ function getPlatformConfig(
 ): PlatformConfig | null {
 	const configs: Partial<Record<EmbedType, PlatformConfig>> = {
 		twitter: {
-			name: i18next.t('xTwitter', 'X (Twitter)'),
+			name: i18next.t("xTwitter", "X (Twitter)"),
 			icon: <XIcon className="size-5" />,
 			accentColor: "text-foreground",
 			bgClass: "bg-neutral-500/5 dark:bg-neutral-500/10",
@@ -274,7 +274,7 @@ function getPlatformConfig(
 			description: () => parseTwitterUrl(url),
 		},
 		reddit: {
-			name: i18next.t('reddit', 'Reddit'),
+			name: i18next.t("reddit", "Reddit"),
 			icon: <RedditIcon className="size-5" />,
 			accentColor: "text-orange-500",
 			bgClass: "bg-orange-500/5 dark:bg-orange-500/10",
@@ -282,7 +282,7 @@ function getPlatformConfig(
 			description: () => parseRedditUrl(url),
 		},
 		github: {
-			name: i18next.t('github', 'GitHub'),
+			name: i18next.t("github", "GitHub"),
 			icon: <GitHubIcon className="size-5" />,
 			accentColor: "text-foreground",
 			bgClass: "bg-neutral-500/5 dark:bg-neutral-500/10",
@@ -290,28 +290,30 @@ function getPlatformConfig(
 			description: () => parseGitHubUrl(url),
 		},
 		stackoverflow: {
-			name: i18next.t('stackOverflow', 'Stack Overflow'),
+			name: i18next.t("stackOverflow", "Stack Overflow"),
 			icon: <StackOverflowIcon className="size-5" />,
 			accentColor: "text-orange-400",
 			bgClass: "bg-orange-500/5 dark:bg-orange-400/10",
 			borderClass: "border-orange-400/20",
-			description: () => i18next.t('questionOnStackOverflow', 'Question on Stack Overflow'),
+			description: () =>
+				i18next.t("questionOnStackOverflow", "Question on Stack Overflow"),
 		},
 		hackernews: {
-			name: i18next.t('hackerNews', 'Hacker News'),
+			name: i18next.t("hackerNews", "Hacker News"),
 			icon: <HackerNewsIcon className="size-5" />,
 			accentColor: "text-orange-500",
 			bgClass: "bg-orange-500/5 dark:bg-orange-500/10",
 			borderClass: "border-orange-500/20",
-			description: () => i18next.t('discussionOnHackerNews', 'Discussion on Hacker News'),
+			description: () =>
+				i18next.t("discussionOnHackerNews", "Discussion on Hacker News"),
 		},
 		linkedin: {
-			name: i18next.t('linkedin', 'LinkedIn'),
+			name: i18next.t("linkedin", "LinkedIn"),
 			icon: <LinkedInIcon className="size-5" />,
 			accentColor: "text-blue-600",
 			bgClass: "bg-blue-500/5 dark:bg-blue-500/10",
 			borderClass: "border-blue-500/20",
-			description: () => i18next.t('postOnLinkedin', 'Post on LinkedIn'),
+			description: () => i18next.t("postOnLinkedin", "Post on LinkedIn"),
 		},
 	};
 	return configs[type] ?? null;
@@ -323,13 +325,14 @@ function parseTwitterUrl(url: string): string {
 		const parts = u.pathname.split("/").filter(Boolean);
 		if (parts.length >= 1) {
 			const user = parts[0];
-			if (parts[1] === "status" && parts[2]) return i18next.t('postByUser', 'Post by @{{user}}', { user });
-			return i18next.t('userOnX', '@{{user}} on X', { user });
+			if (parts[1] === "status" && parts[2])
+				return i18next.t("postByUser", "Post by @{{user}}", { user });
+			return i18next.t("userOnX", "@{{user}} on X", { user });
 		}
 	} catch {
 		/* noop */
 	}
-	return i18next.t('postOnX', 'Post on X');
+	return i18next.t("postOnX", "Post on X");
 }
 
 function parseRedditUrl(url: string): string {
@@ -338,14 +341,15 @@ function parseRedditUrl(url: string): string {
 		const parts = u.pathname.split("/").filter(Boolean);
 		if (parts[0] === "r" && parts[1]) {
 			const sub = parts[1];
-			if (parts[2] === "comments") return i18next.t('rsubThread', 'r/{{sub}} thread', { sub });
+			if (parts[2] === "comments")
+				return i18next.t("rsubThread", "r/{{sub}} thread", { sub });
 			return `r/${sub}`;
 		}
 		if (parts[0] === "u" || parts[0] === "user") return `u/${parts[1]}`;
 	} catch {
 		/* noop */
 	}
-	return i18next.t('threadOnReddit', 'Thread on Reddit');
+	return i18next.t("threadOnReddit", "Thread on Reddit");
 }
 
 function parseGitHubUrl(url: string): string {
@@ -367,7 +371,7 @@ function parseGitHubUrl(url: string): string {
 	} catch {
 		/* noop */
 	}
-	return i18next.t('repositoryOnGithub', 'Repository on GitHub');
+	return i18next.t("repositoryOnGithub", "Repository on GitHub");
 }
 
 // ── Embed components ────────────────────────────────────
@@ -390,7 +394,7 @@ function YouTubeEmbed({ config }: { config: EmbedConfig }) {
 			<div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
 				<img
 					src={thumbnailUrl}
-					alt={t('youtubeVideoThumbnail', 'YouTube video thumbnail')}
+					alt={t("youtubeVideoThumbnail", "YouTube video thumbnail")}
 					className="absolute inset-0 h-full w-full object-cover"
 					loading="lazy"
 				/>
@@ -398,7 +402,7 @@ function YouTubeEmbed({ config }: { config: EmbedConfig }) {
 					type="button"
 					className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/20 transition-colors"
 					onClick={() => setLoaded(true)}
-					aria-label={t('playVideo', 'Play video')}
+					aria-label={t("playVideo", "Play video")}
 				>
 					<div className="flex size-16 items-center justify-center rounded-full bg-red-600 text-white shadow-lg">
 						<Play className="size-8 ml-1" fill="white" />
@@ -413,7 +417,7 @@ function YouTubeEmbed({ config }: { config: EmbedConfig }) {
 		<div className="relative aspect-video w-full overflow-hidden rounded-lg">
 			<iframe
 				src={iframeSrc}
-				title={t('youtubeVideo', 'YouTube video')}
+				title={t("youtubeVideo", "YouTube video")}
 				className="absolute inset-0 h-full w-full border-0"
 				allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
 				allowFullScreen
@@ -438,7 +442,7 @@ function VimeoEmbed({ config }: { config: EmbedConfig }) {
 					type="button"
 					className="absolute inset-0 flex items-center justify-center hover:bg-muted/80 transition-colors"
 					onClick={() => setLoaded(true)}
-					aria-label={t('playVimeoVideo', 'Play Vimeo video')}
+					aria-label={t("playVimeoVideo", "Play Vimeo video")}
 				>
 					<div className="flex size-16 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg">
 						<Play className="size-8 ml-1" fill="white" />
@@ -453,7 +457,7 @@ function VimeoEmbed({ config }: { config: EmbedConfig }) {
 		<div className="relative aspect-video w-full overflow-hidden rounded-lg">
 			<iframe
 				src={`https://player.vimeo.com/video/${videoId}`}
-				title={t('vimeoVideo', 'Vimeo video')}
+				title={t("vimeoVideo", "Vimeo video")}
 				className="absolute inset-0 h-full w-full border-0"
 				allow="autoplay; fullscreen; picture-in-picture"
 				allowFullScreen
@@ -477,7 +481,7 @@ function SpotifyEmbed({ config }: { config: EmbedConfig }) {
 				accentColor="text-green-500"
 				bgClass="bg-green-500/5 dark:bg-green-500/10"
 				borderClass="border-green-500/20"
-				description={t('contentOnSpotify', 'Content on Spotify')}
+				description={t("contentOnSpotify", "Content on Spotify")}
 			/>
 		);
 	}
@@ -494,7 +498,7 @@ function SpotifyEmbed({ config }: { config: EmbedConfig }) {
 		<div className="my-2 overflow-hidden rounded-xl">
 			<iframe
 				src={`${info.embedUrl}?theme=0`}
-				title={t('spotifyEmbed', 'Spotify embed')}
+				title={t("spotifyEmbed", "Spotify embed")}
 				className="w-full border-0 rounded-xl"
 				style={{ height: heights[info.type] || 152 }}
 				allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
@@ -528,7 +532,7 @@ function TwitterEmbed({ config }: { config: EmbedConfig }) {
 				<iframe
 					ref={iframeRef}
 					src={`https://platform.twitter.com/embed/Tweet.html?dnt=true&id=${tweetId}&theme=${theme}`}
-					title={t('xPost', 'X post')}
+					title={t("xPost", "X post")}
 					className="w-full border-0"
 					style={{ height }}
 					loading="lazy"
@@ -553,7 +557,7 @@ function TwitterEmbed({ config }: { config: EmbedConfig }) {
 					rel="noopener noreferrer"
 					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
 				>
-					<ExternalLink className="size-3" /> {t('open', 'Open')}
+					<ExternalLink className="size-3" /> {t("open", "Open")}
 				</a>
 			</div>
 		</div>
@@ -595,7 +599,7 @@ function RedditEmbed({ config }: { config: EmbedConfig }) {
 			<iframe
 				ref={iframeRef}
 				src={embedUrl}
-				title={t('redditThread', 'Reddit thread')}
+				title={t("redditThread", "Reddit thread")}
 				className="w-full border-0"
 				style={{ height }}
 				loading="lazy"
@@ -614,7 +618,7 @@ function RedditEmbed({ config }: { config: EmbedConfig }) {
 					rel="noopener noreferrer"
 					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
 				>
-					<ExternalLink className="size-3" /> {t('open', 'Open')}
+					<ExternalLink className="size-3" /> {t("open", "Open")}
 				</a>
 			</div>
 		</div>
@@ -661,7 +665,7 @@ function LinkedInEmbed({ config }: { config: EmbedConfig }) {
 		<div className="my-2 overflow-hidden rounded-xl border border-blue-500/20 bg-blue-500/5 dark:bg-blue-500/10">
 			<iframe
 				src={embedUrl}
-				title={t('linkedinPost', 'LinkedIn post')}
+				title={t("linkedinPost", "LinkedIn post")}
 				className="w-full border-0"
 				style={{ minHeight: 300 }}
 				loading="lazy"
@@ -671,7 +675,7 @@ function LinkedInEmbed({ config }: { config: EmbedConfig }) {
 				<div className="flex items-center gap-2">
 					<LinkedInIcon className="size-4 text-blue-600" />
 					<span className="text-xs text-muted-foreground">
-						{t('postOnLinkedin', 'Post on LinkedIn')}
+						{t("postOnLinkedin", "Post on LinkedIn")}
 					</span>
 				</div>
 				<a
@@ -680,7 +684,7 @@ function LinkedInEmbed({ config }: { config: EmbedConfig }) {
 					rel="noopener noreferrer"
 					className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 no-underline"
 				>
-					<ExternalLink className="size-3" /> {t('open', 'Open')}
+					<ExternalLink className="size-3" /> {t("open", "Open")}
 				</a>
 			</div>
 		</div>
@@ -1016,10 +1020,10 @@ function OpenExternalLink({ url }: { url: string }) {
 			target="_blank"
 			rel="noopener noreferrer"
 			className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs text-white hover:bg-black/80 transition-colors"
-			aria-label={t('openInBrowser', 'Open in browser')}
+			aria-label={t("openInBrowser", "Open in browser")}
 		>
 			<ExternalLink className="size-3" />
-			<span>{t('open', 'Open')}</span>
+			<span>{t("open", "Open")}</span>
 		</a>
 	);
 }
@@ -1035,7 +1039,7 @@ export function EmbedCodeBlock({ content, className }: EmbedCodeBlockProps) {
 	if (!config.url) {
 		return (
 			<div className={cn("p-4 text-sm text-muted-foreground", className)}>
-				{t('noUrlProvidedForEmbedBlock', 'No URL provided for embed block.')}
+				{t("noUrlProvidedForEmbedBlock", "No URL provided for embed block.")}
 			</div>
 		);
 	}

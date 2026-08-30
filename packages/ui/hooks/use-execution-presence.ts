@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	LAST_RUN_FIELD,
+	type RunStatus,
+	sanitizeLastRun,
+} from "../lib/realtime/presence-signals";
 
 export interface ExecutionPresenceState {
 	/** Nodes currently being executed by this peer */
@@ -132,6 +137,24 @@ export function useExecutionPresence({
 		};
 	}, [awareness]);
 
+	/**
+	 * Announce how a local run ended (ids, a closed status and a count — never
+	 * log content). Peers surface it as a toast / in the presence list.
+	 */
+	const broadcastRunOutcome = useCallback(
+		(runId: string, status: RunStatus, executed: number) => {
+			if (!awareness) return;
+			const payload = sanitizeLastRun({
+				runId,
+				status,
+				executed,
+				ts: Date.now(),
+			});
+			if (payload) awareness.setLocalStateField(LAST_RUN_FIELD, payload);
+		},
+		[awareness],
+	);
+
 	// Merged set of all remotely executing node IDs (for visual indicators).
 	// Stable identity when unchanged so the consuming setNodes effect can short-circuit.
 	const remoteExecutingNodeIds = useMemo(() => {
@@ -147,5 +170,6 @@ export function useExecutionPresence({
 	return {
 		remoteExecutions,
 		remoteExecutingNodeIds,
+		broadcastRunOutcome,
 	};
 }

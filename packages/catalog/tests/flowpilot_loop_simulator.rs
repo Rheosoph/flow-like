@@ -12,7 +12,6 @@
 //! oversized sources, partially satisfied acceptance contracts, and
 //! concurrent access to one draft.
 
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::SystemTime;
@@ -21,13 +20,12 @@ use flow_like::flow::ast::{
     FlowScriptDiagnosticCode, RenderOptions, apply_board_commands_to_board,
     apply_flowscript_to_board, board_to_flowscript, reconcile_text_with_catalog,
 };
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
+use flow_like::flow::board::Board;
 use flow_like::flow::copilot::{
     BoardCommand, CheckFlowScriptArgs, CommitFlowScriptArgs, FlowIrAcceptanceBinding,
     FlowIrDraftMode, FlowIrDraftStore, FlowScriptDraftResponse, NodeMetadata, PatchFlowScriptArgs,
     WriteFlowScriptArgs, node_to_metadata,
 };
-use flow_like::flow::execution::LogLevel;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::ValueType;
 use flow_like::flow::variable::{Variable, VariableType};
@@ -624,7 +622,7 @@ fn validation_repair_path() {
     assert!(
         fix.catalog_declarations
             .iter()
-            .any(|declaration| declaration.contains("stringFormat(")),
+            .any(|declaration| declaration.contains("string::format(")),
         "repair context must offer the real catalog declaration: {written:#?}"
     );
 
@@ -1358,6 +1356,7 @@ async fn staged_segments_grow_one_draft_into_a_single_commit() {
 ///      expensive and non-deterministic),
 ///   3. a transcript recorder so failures can be replayed through
 ///      [`ScriptedAgent`] as a deterministic regression scenario.
+///
 /// Until then this skeleton only documents the contract and refuses to run
 /// without the explicit `FLOWPILOT_E2E_REAL_AGENT` opt-in.
 #[test]
@@ -1511,5 +1510,116 @@ async fn reapplying_a_parameterized_query_keeps_the_same_pins() {
         identity(&board),
         first,
         "the derived pin and its edge must survive a readback round trip"
+    );
+}
+
+/// A dynamic pin's stored data type is a copy of whatever is wired into it: `string_format`,
+/// `string_render_template` and the SQL parameter nodes all end `on_update` with `match_type`,
+/// which stamps the current source's type, value type and schema onto the pin it minted as
+/// `Generic`. Reconcile must validate a REPLACEMENT source against that `Generic` shape. Checking
+/// the leftover specialization instead rejects the entire edit — and reports the new source as a
+/// node with no usable output — which is what makes FlowPilot drop the argument and strand the
+/// producer it already declared as a dead node.
+#[tokio::test]
+async fn rewiring_a_dynamic_pin_to_a_differently_typed_source_applies() {
+    let fixture = &*FIXTURE;
+    let state = catalog_state().await;
+    let mut board = empty_board("sim-dynamic-pin-rewire");
+
+    let authored = "eventsSimple() {\n    const summary = stringFormat({ formatString: \"v = {v}\", v: stringToUpper({ string: \"x\" }) })\n    logInfo({ message: summary.formattedString })\n}\n";
+
+    let applied = apply_flowscript_to_board(
+        &mut board,
+        authored,
+        &fixture.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("first apply");
+    assert!(
+        applied.diagnostics.is_empty(),
+        "first apply diagnostics: {:#?}",
+        applied.diagnostics
+    );
+
+    let placeholder = |board: &Board| {
+        board
+            .nodes
+            .values()
+            .find(|node| node.name == "string_format")
+            .expect("format node")
+            .pins
+            .values()
+            .find(|pin| pin.name == "v")
+            .cloned()
+            .expect("on_update minted the `{v}` pin")
+    };
+
+    let before = placeholder(&board);
+    assert_eq!(
+        before.data_type,
+        VariableType::String,
+        "match_type specializes the minted pin to its String source"
+    );
+
+    let anchored = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    // The renderer spells the placeholder source in method form when the receiver is a string
+    // literal; accept the static and legacy spellings too so the edit tracks the real render.
+    let upper_spelling = [
+        "\"x\".toUpper()",
+        "string::toUpper({ string: \"x\" })",
+        "stringToUpper({ string: \"x\" })",
+    ]
+    .into_iter()
+    .find(|spelling| anchored.contains(spelling))
+    .unwrap_or_else(|| panic!("no known spelling of string_to_upper in:\n{anchored}"));
+    let rewired = anchored.replace(upper_spelling, "string::length({ string: \"x\" })");
+    assert_ne!(rewired, anchored, "the rewrite must have matched");
+
+    let reapplied =
+        apply_flowscript_to_board(&mut board, &rewired, &fixture.nodes, state, None, false)
+            .await
+            .expect("rewire apply");
+    assert!(
+        reapplied.diagnostics.is_empty(),
+        "rewiring a specialized dynamic pin must not diagnose: {:#?}",
+        reapplied.diagnostics
+    );
+
+    let after = placeholder(&board);
+    assert_eq!(
+        after.id, before.id,
+        "the pin is adopted by name, so its id and its edge survive the rewire"
+    );
+    assert_eq!(
+        after.data_type,
+        VariableType::Integer,
+        "on_update re-specializes the pin from the new source"
+    );
+    let source = after
+        .depends_on
+        .iter()
+        .next()
+        .and_then(|pin_id| board.get_pin_by_id(pin_id))
+        .expect("the placeholder is wired to its new source");
+    assert_eq!(source.name, "length", "wired to the string_length output");
+    assert!(
+        !board
+            .nodes
+            .values()
+            .filter(|node| node.name == "string_to_upper")
+            .any(|node| node
+                .pins
+                .values()
+                .any(|pin| pin.connected_to.contains(&after.id))),
+        "the replaced producer must no longer feed the placeholder"
     );
 }

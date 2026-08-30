@@ -25,6 +25,7 @@ impl NodeLogic for GetCurrentRoute {
             "Gets the current page route from the execution context",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "getCurrentRoute");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

@@ -8,9 +8,11 @@
 #[cfg(feature = "execute")]
 use crate::ml::MLModel;
 use crate::ml::NodeMLModel;
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -23,9 +25,10 @@ use flow_like_storage::arrow_schema::{DataType, Field, Schema};
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
@@ -99,6 +102,8 @@ impl NodeLogic for MLApplyTransformNode {
             "Apply a fitted transformer (Feature Scaler, TF-IDF) to a table, writing one vector per row. A Feature Scaler replays the exact offsets and scales learned at fit time, so applying it to train and test gives both the same statistics. TF-IDF is different: linfa recomputes the inverse document frequencies from the table being transformed, so vectors are only comparable within a single Apply Transform run.",
             "AI/ML/Preprocessing",
         );
+        node.set_flowscript_name("ml", "applyTransform");
+        node.set_receiver("model");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -370,7 +375,6 @@ impl NodeLogic for MLApplyTransformNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

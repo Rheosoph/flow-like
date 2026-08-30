@@ -3,7 +3,9 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 #[cfg(feature = "execute")]
 use fake::{Fake, faker::address::en::*};
@@ -21,6 +23,7 @@ impl NodeLogic for FakeStreetName {
             "Generates a random street name for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "streetName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -64,6 +67,7 @@ impl NodeLogic for FakeStreetAddress {
             "Generates a random full street address for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "streetAddress");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -109,6 +113,7 @@ impl NodeLogic for FakeCityName {
             "Generates a random city name for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "cityName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -152,6 +157,7 @@ impl NodeLogic for FakeStateName {
             "Generates a random state/province name for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "stateName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -195,6 +201,7 @@ impl NodeLogic for FakeCountryName {
             "Generates a random country name for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "countryName");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -238,6 +245,7 @@ impl NodeLogic for FakeCountryCode {
             "Generates a random country code (e.g., US, DE, FR) for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "countryCode");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -281,6 +289,7 @@ impl NodeLogic for FakePostCode {
             "Generates a random postal/zip code for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "postCode");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -324,6 +333,7 @@ impl NodeLogic for FakeLatitude {
             "Generates a random latitude coordinate for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "latitude");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -368,6 +378,7 @@ impl NodeLogic for FakeLongitude {
             "Generates a random longitude coordinate for mocking data",
             "Utils/Faker/Address",
         );
+        node.set_flowscript_name("faker.address", "longitude");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

@@ -26,6 +26,8 @@ impl NodeLogic for PushChunkNode {
             "Appends a streaming chunk onto a response",
             "AI/Generative/Response",
         );
+        node.set_flowscript_name("ai.response", "pushChunk");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

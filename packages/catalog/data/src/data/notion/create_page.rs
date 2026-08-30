@@ -37,6 +37,7 @@ impl NodeLogic for CreateNotionPageNode {
             "Creates a new page under a Notion data source, database, or page",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "createPage");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

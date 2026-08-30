@@ -47,6 +47,7 @@ impl NodeLogic for TcpServerNode {
             "Binds a TCP server. Typed lifecycle events are exposed as pins; incoming data chunks are delivered to the referenced on-message handler.",
             "Web/TCP",
         );
+        node.set_flowscript_name("tcp", "server");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);

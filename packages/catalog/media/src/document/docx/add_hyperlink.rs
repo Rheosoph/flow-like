@@ -30,6 +30,7 @@ impl NodeLogic for DocxAddHyperlinkNode {
             "Append a hyperlink to a DOCX document. Default color: #FF4343.",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "addHyperlink");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

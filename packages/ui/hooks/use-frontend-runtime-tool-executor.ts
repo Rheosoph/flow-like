@@ -7,6 +7,7 @@ import { compactJson, compactLogEvents } from "../components/flowpilot/utils";
 import type { ILog, ILogMetadata, IRunPayload } from "../lib";
 import { ApiResponseError } from "../lib/api-error";
 import { runAppChatMessage } from "../lib/app-chat-run";
+import { eventAliasOf, isTestEventAlias } from "../lib/board-tests";
 import {
 	getPendingDatabaseSchemas,
 	isExplicitSchemaCreateUnavailable,
@@ -171,6 +172,7 @@ export const FRONTEND_RUNTIME_TOOL_NAMES = [
 	"ui_inspect",
 	"execute_event",
 	"execute_node",
+	"run_board_tests",
 	"query_execution_logs",
 	"interact_app_page",
 	"call_app_chat",
@@ -728,14 +730,15 @@ export async function executeNodeRuntime(
 	executeBoard: RuntimeBoardState["executeBoard"],
 	args: ExecuteNodeRuntimeArgs,
 ) {
-	const board = await boardState.getBoard(
-		args.appId,
-		args.boardId,
-		undefined,
-		true,
-	);
-	const node = board.nodes[args.nodeId];
-	if (!node) {
+	// The board read only resolves the node's display name and validates the id
+	// early. A caller who may run the board but not read it — the normal shape
+	// of a published app — has no board here; the executor escalates that run
+	// to the server, which resolves the node itself.
+	const board = await boardState
+		.getBoard(args.appId, args.boardId, undefined, true)
+		.catch(() => undefined);
+	const node = board?.nodes[args.nodeId];
+	if (board && !node) {
 		throw new Error(
 			`Node '${args.nodeId}' was not found on board '${args.boardId}'.`,
 		);
@@ -762,7 +765,7 @@ export async function executeNodeRuntime(
 		app_id: args.appId,
 		board_id: args.boardId,
 		node_id: args.nodeId,
-		node_name: node.friendly_name || node.name,
+		node_name: node ? node.friendly_name || node.name : undefined,
 		run_id: metadata?.run_id ?? runId,
 		metadata: compactLogMetadata(metadata),
 		live_event_count: liveEvents.length,
@@ -834,6 +837,150 @@ export async function queryExecutionLogsRuntime(
 		},
 		metadata: compactLogMetadata(metadata),
 		logs: compactExecutionLogs(logs, limit),
+	};
+}
+
+export interface RunBoardTestsRuntimeArgs {
+	appId: string;
+	boardId: string;
+	filter?: string;
+	maxTests?: number;
+}
+
+/**
+ * Run every `test*` event node on a board and report a per-test verdict from
+ * the `ASSERT_OK` / `ASSERT_FAIL` markers `test::assert` logs plus error-level
+ * run logs.
+ */
+export async function runBoardTestsRuntime(
+	boardState: Pick<IBoardState, "getBoard" | "queryRun" | "listRuns">,
+	executeBoard: RuntimeBoardState["executeBoard"],
+	args: RunBoardTestsRuntimeArgs,
+) {
+	const board = await boardState.getBoard(
+		args.appId,
+		args.boardId,
+		undefined,
+		true,
+	);
+	const maxTests = clampToolLimit(args.maxTests ?? 20, 20, 20);
+	const prefixFilter = (args.filter ?? "").trim().toLowerCase();
+
+	const testNodes = Object.values(board.nodes ?? {})
+		.filter((node) => node.start === true)
+		.map((node) => ({ node, alias: eventAliasOf(node) }))
+		.filter(({ alias }) => isTestEventAlias(alias))
+		.filter(
+			({ alias }) =>
+				prefixFilter === "" || alias.toLowerCase().includes(prefixFilter),
+		)
+		.sort((a, b) => a.alias.localeCompare(b.alias));
+
+	if (testNodes.length === 0) {
+		return {
+			status: "no_tests",
+			app_id: args.appId,
+			board_id: args.boardId,
+			message:
+				"No test events found. A board test is a simple event whose name starts with `test` and checks outcomes with test::assert.",
+		};
+	}
+
+	const selected = testNodes.slice(0, maxTests);
+	const tests: unknown[] = [];
+	let passed = 0;
+	let failed = 0;
+	for (const { node, alias } of selected) {
+		const startedAt = Date.now();
+		let runId: string | undefined;
+		let metadata: ILogMetadata | undefined;
+		let executionError: string | undefined;
+		try {
+			metadata = await executeBoard(
+				args.appId,
+				args.boardId,
+				{ id: node.id, payload: {} },
+				false,
+				(id) => {
+					runId = id;
+				},
+				() => {},
+				false,
+			);
+		} catch (error) {
+			executionError = error instanceof Error ? error.message : String(error);
+		}
+
+		// Remote backends resolve without metadata — recover it by run id so
+		// the run can still be graded.
+		if (!metadata && runId) {
+			const recoveryId = runId;
+			metadata = await boardState
+				.listRuns(
+					args.appId,
+					args.boardId,
+					node.id,
+					(startedAt - 60_000) * 1000,
+					undefined,
+					undefined,
+					undefined,
+					0,
+					100,
+				)
+				.then((runs) => runs.find((run) => run.run_id === recoveryId))
+				.catch(() => undefined);
+		}
+
+		let assertLogs: ILog[] = [];
+		let errorLogs: ILog[] = [];
+		if (metadata) {
+			assertLogs = await boardState
+				.queryRun(metadata, "message LIKE 'ASSERT_%'", 0, 100)
+				.catch(() => []);
+			errorLogs = await boardState
+				.queryRun(metadata, "log_level >= 3", 0, 10)
+				.catch(() => []);
+		}
+		const assertOk = assertLogs.filter((log) =>
+			log.message?.startsWith("ASSERT_OK"),
+		).length;
+		const assertFail = assertLogs.filter((log) =>
+			log.message?.startsWith("ASSERT_FAIL"),
+		).length;
+		const hasFailures =
+			assertFail > 0 || errorLogs.length > 0 || executionError !== undefined;
+		// A run without metadata cannot be graded — never report it as a pass.
+		if (!metadata && executionError === undefined) {
+			executionError =
+				"The run returned no metadata, so its logs could not be graded.";
+		}
+		const verdict = !metadata ? "error" : hasFailures ? "fail" : "pass";
+		if (verdict === "pass") passed += 1;
+		else failed += 1;
+		tests.push({
+			node_id: node.id,
+			event_name: alias,
+			run_id: metadata?.run_id ?? runId,
+			verdict,
+			assert_ok: assertOk,
+			assert_fail: assertFail,
+			assertions: compactExecutionLogs(assertLogs, 25),
+			error_logs: compactExecutionLogs(errorLogs, 10),
+			execution_error: executionError,
+			duration_ms: Date.now() - startedAt,
+		});
+	}
+
+	return {
+		status: "ok",
+		app_id: args.appId,
+		board_id: args.boardId,
+		test_count: testNodes.length,
+		executed: selected.length,
+		skipped: testNodes.length - selected.length,
+		passed,
+		failed,
+		tests,
 	};
 }
 
@@ -976,7 +1123,11 @@ async function executeGraphTool(
 						rows: await graphState.sql(
 							appId,
 							overlayId,
-							{ query: getArgString(args, "query") ?? "", limit },
+							{
+								query: getArgString(args, "query") ?? "",
+								params: args.params as Record<string, unknown> | undefined,
+								limit,
+							},
 							userScoped,
 						),
 					};
@@ -1461,7 +1612,7 @@ export function useFrontendRuntimeToolExecutor(
 							await backend.dbState.optimize(
 								toolAppId,
 								tableName,
-								getArgBool(args, "keep_versions", "keepVersions", false),
+								getArgBool(args, "keep_versions", "keepVersions", true),
 								userScoped,
 							);
 							return { status: "ok", table_name: tableName };
@@ -1699,6 +1850,21 @@ export function useFrontendRuntimeToolExecutor(
 						payload: args.payload,
 						streamState: getArgBool(args, "stream_state", "streamState", true),
 						skipConsentCheck: false,
+					});
+				}
+
+				case "run_board_tests": {
+					const boardId =
+						getArgString(args, "board_id", "boardId") ?? defaultBoardId;
+					if (!boardId) throw new Error("run_board_tests requires board_id.");
+					const execute =
+						executionService?.executeBoard ??
+						backend.boardState.executeBoard.bind(backend.boardState);
+					return runBoardTestsRuntime(backend.boardState, execute, {
+						appId: toolAppId,
+						boardId,
+						filter: getArgString(args, "filter"),
+						maxTests: getArgNumber(args, "max_tests", "maxTests", 20),
 					});
 				}
 

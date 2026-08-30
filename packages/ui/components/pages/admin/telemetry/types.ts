@@ -120,6 +120,32 @@ export interface ITelemetryFlowpilotTotals {
 	validationRegressions: number;
 	boardsInspected: number;
 	emptyBoardsAfterRun: number;
+	failuresTotal: number;
+	subagentDispatchFailures: number;
+	flowscriptApplyFailures: number;
+	widgetApplyFailures: number;
+	dataApplyFailures: number;
+	pageApplyFailures: number;
+	toolFailures: number;
+	runFailures: number;
+}
+
+export type ITelemetryFlowpilotFailureKind =
+	| "subagent_dispatch"
+	| "flowscript_apply"
+	| "widget_apply"
+	| "data_apply"
+	| "page_apply"
+	| "tool_error"
+	| "run_error";
+
+export interface ITelemetryFlowpilotFailure {
+	kind: ITelemetryFlowpilotFailureKind;
+	tool: string;
+	code: string;
+	message: string;
+	count: number;
+	installs: number;
 }
 
 export interface ITelemetryFlowpilotTrendPoint {
@@ -134,6 +160,7 @@ export interface ITelemetryFlowpilotResponse {
 	installs: number;
 	totals: ITelemetryFlowpilotTotals;
 	trend: ITelemetryFlowpilotTrendPoint[];
+	failures: ITelemetryFlowpilotFailure[];
 }
 
 export type ITelemetryIssueStatus = "unresolved" | "resolved" | "ignored";
@@ -434,4 +461,79 @@ export interface IPromptFeedbackDetail {
 	transcript?: IPromptFeedbackTranscriptEntry[] | null;
 	transcriptTruncated: boolean;
 	canContact: boolean;
+}
+
+/**
+ * Captured FlowScript applies that failed, were blocked, or applied with warnings.
+ *
+ * Mirrors `packages/api/src/routes/admin/telemetry/flowscript_failures.rs`. Unlike everything
+ * above, these rows are user-attributed board content rather than anonymous counters — the source
+ * they carry is stored redacted (declared values dropped, long literals generalized).
+ */
+export type IFlowScriptFailureOutcome = "error" | "blocked" | "partial";
+
+export interface IFlowScriptFailureRecord {
+	id: string;
+	userId?: string | null;
+	userName?: string | null;
+	appId: string;
+	boardId: string;
+	layerId?: string | null;
+	source: string;
+	/** "editor" (a person in the FlowScript panel) or "agent" (FlowPilot). */
+	origin: string;
+	outcome: string;
+	/** The one line that explains the row: the error, or the first diagnostic. */
+	cause: string;
+	errorMessage?: string | null;
+	diagnostics: string[];
+	diagnosticCount: number;
+	commandCount: number;
+	allowDeletions: boolean;
+	flowscriptChars: number;
+	droppedValues: number;
+	redactedLiterals: number;
+	truncated: boolean;
+	appVersion?: string | null;
+	platform?: string | null;
+	traceId?: string | null;
+	createdAt: string;
+}
+
+export interface IFlowScriptFailureFacet {
+	key: string;
+	/** Set for user facets, where the id alone is unreadable. */
+	label?: string | null;
+	count: number;
+}
+
+export interface IFlowScriptFailureSummary {
+	total: number;
+	errors: number;
+	blocked: number;
+	partial: number;
+	users: number;
+	apps: number;
+	byOutcome: IFlowScriptFailureFacet[];
+	bySource: IFlowScriptFailureFacet[];
+	byOrigin: IFlowScriptFailureFacet[];
+	byCause: IFlowScriptFailureFacet[];
+	byUser: IFlowScriptFailureFacet[];
+	byApp: IFlowScriptFailureFacet[];
+}
+
+export interface IFlowScriptFailureResponse {
+	items: IFlowScriptFailureRecord[];
+	total: number;
+	page: number;
+	pageSize: number;
+	hours: number;
+	summary: IFlowScriptFailureSummary;
+}
+
+export interface IFlowScriptFailureDetail {
+	record: IFlowScriptFailureRecord;
+	/** Redacted source, with line numbers matching what the user submitted. */
+	flowscript: string;
+	corrections: string[];
 }

@@ -25,6 +25,7 @@ impl NodeLogic for LogActionNode {
             "Logs an automation action for debugging and auditing",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "logAction");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

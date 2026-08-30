@@ -1489,6 +1489,8 @@
 	"user": "用户",
 	"userCount": "用户数量",
 	"userScoped": "用户范围",
+	"userSearchFailed": "",
+	"userSearchFailedHint": "",
 	"userTables": "用户表格",
 	"userType": "用户类型",
 	"uses": "使用次数",

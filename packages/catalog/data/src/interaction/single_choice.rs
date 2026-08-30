@@ -32,6 +32,7 @@ impl NodeLogic for SingleChoiceInteraction {
             "Request the user to pick one option. Pauses execution until a response or timeout.",
             "Events/Chat/Interaction",
         );
+        node.set_flowscript_name("chat", "askSingleChoice");
         node.add_icon("/flow/icons/interaction.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);
@@ -165,7 +166,7 @@ impl NodeLogic for SingleChoiceInteraction {
             expires_at: now + ttl_seconds,
             run_id: None,
             app_id: None,
-            responder_jwt: None,
+            channel: None,
         };
 
         let result = wait_for_interaction_response(context, request, ttl_seconds).await?;

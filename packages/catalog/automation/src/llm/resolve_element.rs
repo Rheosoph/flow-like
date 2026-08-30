@@ -99,6 +99,7 @@ impl NodeLogic for LLMResolveElementNode {
             "Uses LLM to disambiguate between multiple element candidates",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "resolveElement");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

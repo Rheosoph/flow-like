@@ -16,15 +16,19 @@ import {
 	Calendar,
 	ChevronsUpDown,
 	Copy,
+	FileIcon,
 	Hash,
 	MoreHorizontal,
 	ToggleLeft,
 	Type,
+	UserRound,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
+import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
 import {
 	DropdownMenu,
@@ -35,10 +39,12 @@ import {
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
 import { RelativeTime } from "../../../ui/relative-time";
+import { StorageFileCell } from "../../../ui/storage-file-cell";
+import { UserInlineTag } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
 	cellToString,
-	classifyColumn,
+	classifyResultColumn,
 	formatNumber,
 	isNullish,
 } from "./column-types";
@@ -59,12 +65,15 @@ const KIND_ICON: Record<ColumnKind, typeof Hash> = {
 	temporal: Calendar,
 	boolean: ToggleLeft,
 	json: Braces,
+	user: UserRound,
+	file: FileIcon,
 	text: Type,
 };
 
 function sizeForKind(kind: ColumnKind): number {
 	if (kind === "number" || kind === "boolean") return 130;
-	if (kind === "temporal") return 190;
+	if (kind === "temporal" || kind === "user") return 190;
+	if (kind === "file") return 240;
 	return 200;
 }
 
@@ -76,7 +85,14 @@ function copyText(value: string, label: string): void {
 function CellContent({
 	value,
 	kind,
-}: Readonly<{ value: unknown; kind: ColumnKind }>) {
+	name,
+	appId,
+}: Readonly<{
+	value: unknown;
+	kind: ColumnKind;
+	name: string;
+	appId?: string;
+}>) {
 	const { t } = useTranslation("settings");
 	if (isNullish(value)) {
 		return (
@@ -102,6 +118,18 @@ function CellContent({
 	}
 	if (kind === "temporal") {
 		return <RelativeTime value={value} className="min-w-0 truncate" />;
+	}
+	// A user column still holds text for rows that name no account, so the tag is
+	// used only where the value is an id the directory could answer for.
+	if (kind === "user") {
+		const userId = accountIdFromValue(value);
+		if (userId) return <UserInlineTag userId={userId} />;
+	}
+	// Same story for files: the column holds paths, but a row may hold a path that
+	// points nowhere this app can open, and that row stays text.
+	if (kind === "file") {
+		const file = resolveStorageFile(name, value, appId);
+		if (file && appId) return <StorageFileCell appId={appId} file={file} />;
 	}
 	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
 }
@@ -159,7 +187,9 @@ function HeaderCell({
 						variant="ghost"
 						size="icon"
 						className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/head:opacity-100"
-						aria-label={t('nameColumnActions', '{{name}} column actions', { name })}
+						aria-label={t("nameColumnActions", "{{name}} column actions", {
+							name,
+						})}
 					>
 						<MoreHorizontal className="h-3.5 w-3.5" />
 					</Button>
@@ -170,7 +200,7 @@ function HeaderCell({
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem onClick={onCopyColumn}>
-						<Copy className="h-3.5 w-3.5" /> {t('copyColumn', 'Copy column')}
+						<Copy className="h-3.5 w-3.5" /> {t("copyColumn", "Copy column")}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -178,7 +208,7 @@ function HeaderCell({
 				<button
 					type="button"
 					tabIndex={-1}
-					aria-label={t('resizeNameColumn', 'Resize {{name}} column', { name })}
+					aria-label={t("resizeNameColumn", "Resize {{name}} column", { name })}
 					onMouseDown={onResizeStart}
 					onTouchStart={onResizeStart}
 					className={cn(
@@ -194,9 +224,11 @@ function HeaderCell({
 export function QueryResultTable({
 	columns,
 	rows,
+	appId,
 }: Readonly<{
 	columns: QueryColumn[];
 	rows: ResultRow[];
+	appId?: string;
 }>) {
 	const { t } = useTranslation("settings");
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -207,16 +239,16 @@ export function QueryResultTable({
 		const map = new Map<string, ColumnMeta>();
 		for (const column of columns)
 			map.set(column.name, {
-				kind: classifyColumn(column),
+				kind: classifyResultColumn(column, rows, appId),
 				typeName: column.type_name,
 			});
 		return map;
-	}, [columns]);
+	}, [columns, rows, appId]);
 
 	const columnDefs = useMemo<ColumnDef<ResultRow>[]>(
 		() =>
 			columns.map((column) => {
-				const kind = classifyColumn(column);
+				const kind = classifyResultColumn(column, rows, appId);
 				return {
 					id: column.name,
 					// Map SQL NULL (JS null) to undefined so `sortUndefined: "last"`
@@ -242,7 +274,7 @@ export function QueryResultTable({
 							: "alphanumeric",
 				};
 			}),
-		[columns],
+		[columns, rows, appId],
 	);
 
 	const table = useReactTable({
@@ -293,7 +325,9 @@ export function QueryResultTable({
 					className="table-fixed border-separate border-spacing-0 text-sm"
 					style={{ width: totalWidth, minWidth: "100%" }}
 				>
-					<caption className="sr-only">{t('queryResults', 'Query results')}</caption>
+					<caption className="sr-only">
+						{t("queryResults", "Query results")}
+					</caption>
 					<thead>
 						<tr aria-rowindex={1}>
 							<th
@@ -365,7 +399,9 @@ export function QueryResultTable({
 											type="button"
 											onClick={() => setInspect(row.original)}
 											className="flex h-full w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-											aria-label={t('inspectRowVal', 'Inspect row {{val}}', { val: virtualRow.index + 1 })}
+											aria-label={t("inspectRowVal", "Inspect row {{val}}", {
+												val: virtualRow.index + 1,
+											})}
 										>
 											{virtualRow.index + 1}
 										</button>
@@ -392,7 +428,12 @@ export function QueryResultTable({
 														meta.kind === "number" && "justify-end",
 													)}
 												>
-													<CellContent value={value} kind={meta.kind} />
+													<CellContent
+														value={value}
+														kind={meta.kind}
+														name={cell.column.id}
+														appId={appId}
+													/>
 												</div>
 												{!isNullish(value) && (
 													<button
@@ -401,7 +442,7 @@ export function QueryResultTable({
 															copyText(cellToString(value), "Copied cell")
 														}
 														className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cell:opacity-100"
-														aria-label={t('copyCellValue', 'Copy cell value')}
+														aria-label={t("copyCellValue", "Copy cell value")}
 													>
 														<Copy className="h-3 w-3" />
 													</button>
@@ -423,6 +464,7 @@ export function QueryResultTable({
 			<RowInspectorSheet
 				row={inspect}
 				columns={columns}
+				appId={appId}
 				onOpenChange={(open) => {
 					if (!open) setInspect(null);
 				}}

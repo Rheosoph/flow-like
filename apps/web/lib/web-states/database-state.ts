@@ -221,7 +221,7 @@ export class WebDatabaseState implements IDatabaseState {
 	): Promise<void> {
 		await apiPost(
 			`apps/${appId}/db/${tableName}/optimize${this.scopeQuery(userScoped)}`,
-			{ keep_versions: keepVersions },
+			{ keep_versions: keepVersions ?? true },
 			this.backend.auth,
 		);
 	}

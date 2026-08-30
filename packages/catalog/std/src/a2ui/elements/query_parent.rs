@@ -32,6 +32,7 @@ impl NodeLogic for QueryParent {
             "Gets the parent element of an element",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryParent");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -72,53 +73,41 @@ impl NodeLogic for QueryParent {
         let element_id = extract_element_id_from_pin(element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
 
-        let elements = context.get_frontend_elements().await?;
-
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("parent")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            context
-                .get_pin_by_name("parent_id")
-                .await?
-                .set_value(Value::String(String::new()))
-                .await;
-            context
-                .get_pin_by_name("has_parent")
-                .await?
-                .set_value(Value::Bool(false))
-                .await;
-            return Ok(());
-        };
+        context
+            .ensure_elements(&[format!("parent:{element_id}")])
+            .await?;
 
         // Search for parent - find element that has this element in its children.explicitList
-        let mut parent_id: Option<String> = None;
-        let mut parent_element: Option<Value> = None;
+        let (no_elements, found) = context
+            .with_elements(|elements| {
+                let found = elements.iter().find_map(|(id, element)| {
+                    let child_ids: Vec<&str> = element
+                        .get("component")
+                        .and_then(|c| c.get("children"))
+                        .and_then(|ch| ch.get("explicitList"))
+                        .and_then(|list| list.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                        .unwrap_or_default();
 
-        for (id, element) in elements_map {
-            let child_ids: Vec<&str> = element
-                .get("component")
-                .and_then(|c| c.get("children"))
-                .and_then(|ch| ch.get("explicitList"))
-                .and_then(|list| list.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-                .unwrap_or_default();
+                    if !child_ids.contains(&element_id.as_str()) {
+                        return None;
+                    }
 
-            if child_ids.contains(&element_id.as_str()) {
-                parent_id = Some(id.clone());
-                let mut parent_with_id = element.clone();
-                if let Some(obj) = parent_with_id.as_object_mut() {
-                    obj.insert("_id".to_string(), Value::String(id.clone()));
-                }
-                parent_element = Some(parent_with_id);
-                break;
-            }
+                    let mut parent_with_id = element.clone();
+                    if let Some(obj) = parent_with_id.as_object_mut() {
+                        obj.insert("_id".to_string(), Value::String(id.clone()));
+                    }
+                    Some((id.clone(), parent_with_id))
+                });
+                (elements.is_empty(), found)
+            })
+            .await?;
+
+        if no_elements {
+            context.log_message("No elements in payload", LogLevel::Warn);
         }
 
-        if let (Some(pid), Some(parent)) = (parent_id, parent_element) {
+        if let Some((pid, parent)) = found {
             context.log_message(
                 &format!("Found parent '{}' for element '{}'", pid, element_id),
                 LogLevel::Debug,

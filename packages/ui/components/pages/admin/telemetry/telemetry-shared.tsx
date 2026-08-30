@@ -99,7 +99,12 @@ export function BarList({
 	}
 	if (rows.length === 0) {
 		return (
-			<EmptyState message={emptyMessage ?? t('noDataInTheSelectedWindow', 'No data in the selected window.')} />
+			<EmptyState
+				message={
+					emptyMessage ??
+					t("noDataInTheSelectedWindow", "No data in the selected window.")
+				}
+			/>
 		);
 	}
 	return (

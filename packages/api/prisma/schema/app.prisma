@@ -73,7 +73,6 @@ model App {
   inviteLinks   InviteLink[]
   invitations   Invitation[]
   notifications Notification[]
-  interactions    Interaction[]
 
   feedback            Feedback[]
   publicationRequests PublicationRequest[]

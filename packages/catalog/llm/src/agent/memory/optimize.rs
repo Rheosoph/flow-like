@@ -5,6 +5,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
@@ -24,9 +25,11 @@ impl NodeLogic for OptimizeMemoryNode {
         let mut node = Node::new(
             "memory_optimize",
             "Optimize Memory",
-            "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, prune old versions, and rebuild indices. Run periodically or after bulk writes.",
+            "Runs LanceDB maintenance on the memory table: flush buffered writes, compact fragments, and update indices. Optional cleanup prunes versions older than seven days after maintenance.",
             "AI/Memory",
         );
+        node.set_flowscript_name("ai.memory", "optimize");
+        node.set_receiver("memory_config");
         node.set_version(1);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
@@ -56,10 +59,10 @@ impl NodeLogic for OptimizeMemoryNode {
         node.add_input_pin(
             "keep_versions",
             "Keep Versions",
-            "Whether to keep old row versions (false = prune for disk savings)",
+            "Retain all versions. Disable only to prune versions older than seven days after maintenance.",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(false)));
+        .set_default_value(Some(json!(true)));
 
         node.add_output_pin(
             "exec_out",
@@ -71,11 +74,12 @@ impl NodeLogic for OptimizeMemoryNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let config: MemoryConfig = context.evaluate_pin("memory_config").await?;
-        let keep_versions: bool = context.evaluate_pin("keep_versions").await.unwrap_or(false);
+        let keep_versions: bool = context.evaluate_pin("keep_versions").await.unwrap_or(true);
 
         let cached_db = config.database.load(context).await?;
         cached_db.ensure_flushed().await?;
@@ -85,5 +89,12 @@ impl NodeLogic for OptimizeMemoryNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Memory optimization requires the 'execute' feature"
+        ))
     }
 }

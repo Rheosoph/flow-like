@@ -27,6 +27,7 @@ impl NodeLogic for MakeRequestNode {
             "Creates a http request",
             "Web/API/Request",
         );
+        node.set_flowscript_name("http", "request");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

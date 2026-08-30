@@ -1,11 +1,11 @@
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic},
+    node::{Node, NodeLogic, dynamic_pin_source_literal, remove_unwired_pins},
     pin::{Pin, PinType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::{async_trait, json::json};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
@@ -51,6 +51,8 @@ impl NodeLogic for FormatStringNode {
             "Formats a string with placeholders",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "format");
+        node.set_receiver("format_string");
         node.add_icon("/flow/icons/string.svg");
 
         node.add_input_pin(
@@ -91,18 +93,19 @@ impl NodeLogic for FormatStringNode {
     }
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
+        // A wired, absent or non-string format string says nothing about which placeholders the
+        // node will actually see at runtime. Reading it as "no placeholders" would delete every
+        // placeholder pin along with the wires feeding them.
+        node.error = None;
+        let Some(format_string) = dynamic_pin_source_literal(node, "format_string") else {
+            return;
+        };
+
         let pins: Vec<_> = node
             .pins
             .values()
             .filter(|p| p.name != "format_string" && p.pin_type == PinType::Input)
             .collect();
-
-        let format_string: String = node
-            .get_pin_by_name("format_string")
-            .and_then(|pin| pin.default_value.clone())
-            .and_then(|bytes| flow_like_types::json::from_slice::<Value>(&bytes).ok())
-            .and_then(|json| json.as_str().map(ToOwned::to_owned))
-            .unwrap_or_default();
 
         // Group by name: earlier updates could have leaked several pins for one placeholder.
         let mut current_placeholders: HashMap<String, Vec<&Pin>> = HashMap::new();
@@ -113,7 +116,19 @@ impl NodeLogic for FormatStringNode {
                 .push(pin);
         }
 
-        let placeholders = self.placeholders(&format_string);
+        // A placeholder that names the config pin itself would mint a second pin called
+        // `format_string`, and every later lookup of that name would pick whichever the map
+        // yielded first — silently writing the placeholder's value over the template.
+        let (placeholders, reserved): (Vec<String>, Vec<String>) = self
+            .placeholders(&format_string)
+            .into_iter()
+            .partition(|placeholder| placeholder != "format_string");
+        if !reserved.is_empty() {
+            node.error = Some(
+                "`{format_string}` is the name of this node's own input and cannot be a placeholder. Rename it in the format string."
+                    .to_string(),
+            );
+        }
         let mut missing_placeholders = Vec::new();
         let mut stale_ids = Vec::new();
 
@@ -135,9 +150,7 @@ impl NodeLogic for FormatStringNode {
                 .flatten()
                 .map(|pin| pin.id.clone()),
         );
-        stale_ids.iter().for_each(|id| {
-            node.pins.remove(id);
-        });
+        remove_unwired_pins(node, &stale_ids);
 
         for placeholder in missing_placeholders {
             node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);

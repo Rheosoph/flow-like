@@ -25,6 +25,8 @@ impl NodeLogic for SetHistoryStreamNode {
             "Stores whether downstream LLM invocations should stream tokens",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setStream");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

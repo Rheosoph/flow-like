@@ -27,6 +27,8 @@ impl NodeLogic for UnionSetNode {
             "Combines 2 sets into one unified hash set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "union");
+        node.set_receiver("set_in_1");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

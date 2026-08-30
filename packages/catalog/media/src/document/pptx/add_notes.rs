@@ -77,6 +77,7 @@ impl NodeLogic for PptxAddNotesNode {
             "Set or replace speaker notes for a slide",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "addNotes");
         node.add_icon("/flow/icons/text.svg");
 
         node.set_scores(

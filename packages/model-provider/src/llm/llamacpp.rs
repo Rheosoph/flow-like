@@ -29,6 +29,27 @@ impl LlamaCppModel {
         })
     }
 
+    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+        let params = provider.params.clone().unwrap_or_default();
+        let endpoint = params
+            .get("endpoint")
+            .and_then(|value| value.as_str())
+            .unwrap_or("http://localhost:8080");
+        let default_model = provider.model_id.clone().or_else(|| {
+            params
+                .get("model_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        });
+
+        Ok(Self {
+            client: LlamaCppClient::new(endpoint),
+            _provider: provider.clone(),
+            default_model,
+            port: 0,
+        })
+    }
+
     pub fn port(&self) -> u16 {
         self.port
     }

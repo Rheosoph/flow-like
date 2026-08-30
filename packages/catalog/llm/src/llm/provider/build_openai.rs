@@ -35,6 +35,7 @@ impl NodeLogic for BuildOpenAiNode {
             "Prepares a Bit for OpenAI or Azure OpenAI endpoints with the provided credentials",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "openai");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(4);
 

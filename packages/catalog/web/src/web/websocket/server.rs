@@ -49,6 +49,7 @@ impl NodeLogic for WebSocketServerNode {
             "Binds a WebSocket server. Typed lifecycle events are exposed as pins; incoming messages are delivered to the referenced on-message handler.",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "server");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);
@@ -127,6 +128,7 @@ impl NodeLogic for WebSocketServerNode {
     }
 
     #[cfg(feature = "execute")]
+    #[allow(clippy::result_large_err)] // Err type is tungstenite's ErrorResponse, fixed by the accept_hdr_async callback contract
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("on_listening").await?;
         context.deactivate_exec_pin("on_connect").await?;
@@ -461,6 +463,7 @@ async fn await_or_abort(mut handle: tokio::task::JoinHandle<()>) {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn spawn_server_message_reader(
     context: &ExecutionContext,
     mut stream: super::ServerWsStream,

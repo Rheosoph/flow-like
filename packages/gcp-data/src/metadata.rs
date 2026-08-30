@@ -405,9 +405,9 @@ mod tests {
     fn refresh_margin_sits_below_the_metadata_server_rotation_floor() {
         // The metadata server rotates its cached token at ~300 s remaining; a
         // margin at or above that turns every call into a refetch.
-        assert!(REFRESH_MARGIN_SECONDS < 300);
-        assert!(MIN_USABLE_SECONDS < MIN_REUSE_SECONDS);
-        assert!(MIN_REUSE_SECONDS < REFRESH_MARGIN_SECONDS);
+        const { assert!(REFRESH_MARGIN_SECONDS < 300) };
+        const { assert!(MIN_USABLE_SECONDS < MIN_REUSE_SECONDS) };
+        const { assert!(MIN_REUSE_SECONDS < REFRESH_MARGIN_SECONDS) };
     }
 
     #[test]

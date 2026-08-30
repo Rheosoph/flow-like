@@ -8,6 +8,7 @@ import V5Apps from "../sections/v5-apps.astro";
 import V5Platform from "../sections/v5-platform.astro";
 import V5Flowpilot from "../sections/v5-flowpilot.astro";
 import V5Control from "../sections/v5-control.astro";
+import V5Book from "../sections/v5-book.astro";
 import NotesFooterV4 from "../sections/notes-footer-v4.astro";
 
 import type { Lang, TranslationKey } from "../i18n";
@@ -108,7 +109,6 @@ const websiteLd = {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-    <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#ef5b42" />
@@ -152,13 +152,14 @@ const websiteLd = {
   </head>
   <body class="bg-background text-foreground antialiased selection:bg-primary/25 selection:text-foreground">
     <a href="#content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:shadow-xl">Skip to content</a>
-    <Header client:only="react" />
+    <Header client:load pathname={Astro.url.pathname} darkHero />
     <main id="content" class="w-full max-w-full overflow-x-clip">
       <V5Hero lang={lang} />
       <V5Apps lang={lang} />
       <V5Platform lang={lang} />
       <V5Flowpilot lang={lang} />
       <V5Control lang={lang} />
+      <V5Book lang={lang} />
     </main>
     <NotesFooterV4 lang={lang} />
   </body>

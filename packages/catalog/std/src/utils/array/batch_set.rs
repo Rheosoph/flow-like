@@ -26,6 +26,8 @@ impl NodeLogic for BatchSetArrayNode {
             "Set multiple elements at specific indices in one operation. More efficient than multiple single sets.",
             "Utils/Array/Batch",
         );
+        node.set_flowscript_name("array", "batchSet");
+        node.set_receiver("array_in");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

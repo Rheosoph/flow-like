@@ -16,7 +16,9 @@ use flow_like_model_provider::ml::{
     ndarray::{Array2, Array3},
     ort::{inputs, session::Session, value::Value},
 };
-use flow_like_types::{Result, anyhow, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::anyhow;
+use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
@@ -261,6 +263,7 @@ fn ensure_gliner_inputs(session: &Session) -> Result<()> {
 }
 
 /// Keep the highest-scoring spans, dropping any that overlap an already accepted one.
+#[cfg(any(feature = "execute", test))]
 fn resolve_overlaps(mut candidates: Vec<GlinerEntity>, multi_label: bool) -> Vec<GlinerEntity> {
     candidates.sort_by(|a, b| {
         b.score
@@ -292,6 +295,7 @@ fn resolve_overlaps(mut candidates: Vec<GlinerEntity>, multi_label: bool) -> Vec
 /// whitespace. A token-level export scores `Satya` and `Nadella` — or `sarah`, `.`, `mueller` —
 /// independently; this rebuilds the phrase. An unlabelled word in between (`Berlin, Hamburg`)
 /// leaves a non-whitespace gap and keeps the two apart.
+#[cfg(any(feature = "execute", test))]
 fn merge_adjacent_entities(entities: Vec<GlinerEntity>, text: &str) -> Vec<GlinerEntity> {
     let mut merged: Vec<GlinerEntity> = Vec::with_capacity(entities.len());
 
@@ -475,6 +479,7 @@ impl NodeLogic for GlinerNode {
             "Extract entities for any labels you name at runtime, with no fixed label set and no retraining. Load a GLiNER ONNX export (e.g. https://huggingface.co/onnx-community/gliner_small-v2.1, gliner_multi-v2.1, gliner_medium_news-v2.1, gliner_multi_pii-v1, NuNER_Zero) plus the tokenizer.json from the same repository. For models with a fixed label set, use the Named Entity Recognition node instead.",
             "AI/ML/ONNX/NLP",
         );
+        node.set_flowscript_name("onnx", "gliner");
         node.set_version(1);
 
         node.add_icon("/flow/icons/type.svg");

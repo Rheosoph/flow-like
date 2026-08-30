@@ -34,6 +34,10 @@ import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
 import { Container } from "./container";
+import {
+	isSafeEmbeddedExternalHref,
+	resolveEmbeddedPageNavigation,
+} from "./embedded-page-navigation";
 import { Header } from "./header";
 import { InterfaceLoadError } from "./interface-load-error";
 import type {
@@ -52,7 +56,7 @@ import { PageInterface } from "./page-interface";
  */
 const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 
-export function pageLoadErrorMessage(error: unknown): string {
+function errorText(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string") return error;
 	if (
@@ -66,6 +70,25 @@ export function pageLoadErrorMessage(error: unknown): string {
 	return "Unknown error";
 }
 
+/**
+ * The message the interface card shows.
+ *
+ * A page read that fails because its board is missing reports the missing file, while the
+ * reason the board never arrived — a stale offline flag, a failed write, a server that no
+ * longer has it — travels as `cause`. Showing only the outer message turned every distinct
+ * cause into the same undiagnosable "file not found", so the cause is appended when it adds
+ * something the outer message does not already say.
+ */
+export function pageLoadErrorMessage(error: unknown): string {
+	const message = errorText(error);
+	const cause = error instanceof Error ? error.cause : undefined;
+	if (cause === undefined || cause === null) return message;
+
+	const causeMessage = errorText(cause);
+	if (!causeMessage || message.includes(causeMessage)) return message;
+	return `${message} (${causeMessage})`;
+}
+
 export interface UsePageContentProps {
 	/**
 	 * Only the runtime slice is read here. Taking the narrow type means `/use` can pass a
@@ -76,11 +99,23 @@ export interface UsePageContentProps {
 	appId?: string | null;
 	routePath?: string | null;
 	eventId?: string | null;
+	queryParams?: Record<string, string>;
+	/**
+	 * Whether this interface is on screen. An embedded runtime that parks its host keeps the
+	 * page mounted, so timed page work has to be told to idle rather than inferring it.
+	 */
+	active?: boolean;
 	embedded?: boolean;
+	/** Use an explicit event target before resolving the current route. Route navigation can
+	 * restore normal route resolution by sending a null event id. */
+	eventIdTakesPrecedence?: boolean;
 	onNavigate?: (next: {
 		routePath?: string | null;
 		eventId?: string | null;
+		queryParams?: Record<string, string>;
 	}) => void;
+	/** Report the Event and page that actually resolved after route navigation. */
+	onResolvedPage?: (target: { eventId: string; pageId: string }) => void;
 }
 
 /**
@@ -136,9 +171,18 @@ export async function loadPageWithBoardSync(
 				boardVersion,
 				options,
 			);
-		} catch {
+		} catch (retryError) {
 			// The first failure is the one that describes why the page is unreadable; a retry
-			// against a board that just arrived can only restate it less precisely.
+			// against a board that just arrived can only restate it less precisely. A retry
+			// that failed *differently* knows something the first one did not, so it is kept
+			// as the cause rather than discarded.
+			if (
+				error instanceof Error &&
+				error.cause === undefined &&
+				pageLoadErrorMessage(retryError) !== pageLoadErrorMessage(error)
+			) {
+				throw new Error(error.message, { cause: retryError });
+			}
 			throw error;
 		}
 	}
@@ -207,8 +251,12 @@ export function UsePageContent({
 	appId: appIdProp,
 	routePath: routePathProp,
 	eventId: eventIdProp,
+	queryParams: queryParamsProp,
+	active = true,
 	embedded = false,
+	eventIdTakesPrecedence = false,
 	onNavigate,
+	onResolvedPage,
 }: Readonly<UsePageContentProps>) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
@@ -222,6 +270,12 @@ export function UsePageContent({
 	const appId = appIdProp ?? searchParams.get("id");
 	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
 	const eventId = eventIdProp ?? searchParams.get("eventId");
+	// A URL that names only an Event is a direct Event target. The implicit "/" fallback must
+	// not replace it with an unrelated default route. When both are explicit, the route keeps
+	// precedence unless an embedded caller opts into Event-first resolution.
+	const preferEventId =
+		eventIdTakesPrecedence ||
+		Boolean(eventId && routePathProp == null && !searchParams.has("route"));
 	const authCheckPending = Boolean(appId && !embedded && auth.isLoading);
 
 	const headerRef = useRef<IToolBarActions>(
@@ -527,8 +581,9 @@ export function UsePageContent({
 	}, [redirectCheckPending, shouldRedirectToStore, goToStore]);
 
 	const effectiveRouteEvent = useMemo(() => {
+		if (preferEventId && eventId) return null;
 		return canUseEvent(routeEvent) ? routeEvent : null;
-	}, [canUseEvent, routeEvent]);
+	}, [canUseEvent, eventId, preferEventId, routeEvent]);
 
 	const effectiveRouteMapping = useMemo(() => {
 		return effectiveRouteEvent ? routeMapping : null;
@@ -630,6 +685,11 @@ export function UsePageContent({
 		appId && pageEventId && pageId
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
+
+	useEffect(() => {
+		if (!pageEventId || !pageId) return;
+		onResolvedPage?.({ eventId: pageEventId, pageId });
+	}, [onResolvedPage, pageEventId, pageId]);
 	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
 	// Auth/profile initialization can refresh the same route/event objects after
 	// an early native page read failed. Use the query generation to retry even
@@ -820,6 +880,20 @@ export function UsePageContent({
 		if (!events.data) retryCatalog();
 	}, [isOnline, pageKey, pageError, events.data, retryCatalog]);
 
+	// A restored event catalog can render a page before the session is: the query cache is
+	// persisted, so a cold start replays the events while sign-in is still in flight, and every
+	// read the page needs is refused for want of a token. The retry ladder is short and only a
+	// reconnect re-arms it, so a sign-in that lands late used to leave a signed-in, online
+	// device sitting on an error card. Signing in is a second chance, exactly like reconnecting.
+	const hadAccessTokenRef = useRef(hasAccessToken);
+	useEffect(() => {
+		const signedIn = hasAccessToken && !hadAccessTokenRef.current;
+		hadAccessTokenRef.current = hasAccessToken;
+		if (!signedIn) return;
+		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
+		if (!events.data) retryCatalog();
+	}, [hasAccessToken, pageKey, pageError, events.data, retryCatalog]);
+
 	// --- Route/event sync effects ---
 
 	useEffect(() => {
@@ -912,6 +986,32 @@ export function UsePageContent({
 		[appId, embedded, onNavigate, router],
 	);
 
+	const handleEmbeddedNavigation = useCallback(
+		(message: Parameters<typeof resolveEmbeddedPageNavigation>[0]) => {
+			if (!appId || !embedded) return;
+			const next = resolveEmbeddedPageNavigation(
+				message,
+				appId,
+				queryParamsProp ?? {},
+			);
+			if (next.externalHref) {
+				if (
+					typeof window !== "undefined" &&
+					isSafeEmbeddedExternalHref(next.externalHref, window.location.href)
+				) {
+					window.open(next.externalHref, "_blank", "noopener,noreferrer");
+				}
+				return;
+			}
+			onNavigate?.({
+				...(next.routePath !== undefined ? { routePath: next.routePath } : {}),
+				...(next.eventId !== undefined ? { eventId: next.eventId } : {}),
+				queryParams: next.queryParams,
+			});
+		},
+		[appId, embedded, onNavigate, queryParamsProp],
+	);
+
 	// --- Render logic ---
 
 	// A silent token renewal or a background access re-check must not tear down an
@@ -955,7 +1055,13 @@ export function UsePageContent({
 							appId={appId}
 							event={pageEvent}
 							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
+							route={effectiveRouteMapping?.path ?? routePath}
 							page={pageData}
+							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
+							active={active}
+							onNavigationMessage={
+								embedded ? handleEmbeddedNavigation : undefined
+							}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
 						/>
@@ -1017,7 +1123,12 @@ export function UsePageContent({
 				return (
 					<InterfaceLoadError
 						message={
-							isOnline ? t('thisAppsEventsCouldNotBeLoaded', 'This app\'s events could not be loaded.') : undefined
+							isOnline
+								? t(
+										"thisAppsEventsCouldNotBeLoaded",
+										"This app's events could not be loaded.",
+									)
+								: undefined
 						}
 						offline={!isOnline}
 						retrying={events.isFetching}
@@ -1063,6 +1174,12 @@ export function UsePageContent({
 		isOnline,
 		isPagePending,
 		pageEvent,
+		effectiveRouteMapping,
+		routePath,
+		embedded,
+		queryParamsProp,
+		active,
+		handleEmbeddedNavigation,
 		effectiveRouteEvent,
 		sortedEvents,
 		activeEvent,
@@ -1080,8 +1197,9 @@ export function UsePageContent({
 		return <>{notFound ?? <NoDefaultInterface appId="" />}</>;
 	}
 
+	const Root = embedded ? "div" : "main";
 	return (
-		<main className="flex flex-col h-full overflow-hidden flex-1 min-h-0">
+		<Root className="flex flex-col h-full overflow-hidden flex-1 min-h-0">
 			<Container ref={sidebarRef}>
 				<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
 					{shouldRenderHeader ? (
@@ -1101,6 +1219,6 @@ export function UsePageContent({
 					{inner}
 				</div>
 			</Container>
-		</main>
+		</Root>
 	);
 }

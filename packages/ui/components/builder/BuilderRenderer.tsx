@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ClipboardPaste,
 	Copy,
@@ -299,7 +299,7 @@ const EmptyDropZone = memo(function EmptyDropZone({
 					isOver ? "text-primary font-medium" : "text-muted-foreground/50",
 				)}
 			>
-				{isOver ? t('releaseToDrop', 'Release to drop') : "Drop here"}
+				{isOver ? t("releaseToDrop", "Release to drop") : "Drop here"}
 			</span>
 		</div>
 	);
@@ -355,7 +355,9 @@ const SelectionToolbar = memo(function SelectionToolbar({
 							<GripVertical className="h-3.5 w-3.5" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="top">{t('dragToMove', 'Drag to move')}</TooltipContent>
+					<TooltipContent side="top">
+						{t("dragToMove", "Drag to move")}
+					</TooltipContent>
 				</Tooltip>
 			)}
 
@@ -377,7 +379,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 						<Copy className="h-3.5 w-3.5" />
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">{t('copyC', 'Copy (⌘C)')}</TooltipContent>
+				<TooltipContent side="top">{t("copyC", "Copy (⌘C)")}</TooltipContent>
 			</Tooltip>
 
 			{/* Cut - only for non-root */}
@@ -392,7 +394,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 							<Scissors className="h-3.5 w-3.5" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="top">{t('cutX', 'Cut (⌘X)')}</TooltipContent>
+					<TooltipContent side="top">{t("cutX", "Cut (⌘X)")}</TooltipContent>
 				</Tooltip>
 			)}
 
@@ -407,7 +409,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 						<ClipboardPaste className="h-3.5 w-3.5" />
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">{t('pasteV', 'Paste (⌘V)')}</TooltipContent>
+				<TooltipContent side="top">{t("pasteV", "Paste (⌘V)")}</TooltipContent>
 			</Tooltip>
 
 			{/* Optimize with FlowPilot */}
@@ -424,7 +426,9 @@ const SelectionToolbar = memo(function SelectionToolbar({
 								<Sparkles className="h-3.5 w-3.5" />
 							</button>
 						</TooltipTrigger>
-						<TooltipContent side="top">{t('optimizeWithFlowpilot', 'Optimize with FlowPilot')}</TooltipContent>
+						<TooltipContent side="top">
+							{t("optimizeWithFlowpilot", "Optimize with FlowPilot")}
+						</TooltipContent>
 					</Tooltip>
 				</>
 			)}
@@ -786,7 +790,9 @@ function BuilderComponent({
 								<EmptyDropZone parentId={componentId} />
 							</div>
 						) : (
-							<span className="text-xs text-muted-foreground/50 select-none">{t('emptyType', 'Empty {{type}}', { type: component.type })}</span>
+							<span className="text-xs text-muted-foreground/50 select-none">
+								{t("emptyType", "Empty {{type}}", { type: component.type })}
+							</span>
 						)}
 					</div>
 				)}
@@ -855,7 +861,9 @@ function BuilderComponent({
 							<EmptyDropZone parentId={componentId} />
 						</div>
 					) : (
-						<span className="text-xs text-muted-foreground/50 select-none">{t('emptyType', 'Empty {{type}}', { type: component.type })}</span>
+						<span className="text-xs text-muted-foreground/50 select-none">
+							{t("emptyType", "Empty {{type}}", { type: component.type })}
+						</span>
 					)}
 				</div>
 			)}
@@ -919,7 +927,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					className,
 				)}
 			>
-				{t('noContentToDisplay', 'No content to display')}
+				{t("noContentToDisplay", "No content to display")}
 			</div>
 		);
 	}

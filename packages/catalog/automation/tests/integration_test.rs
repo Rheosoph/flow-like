@@ -101,9 +101,9 @@ fn test_nodes_have_valid_metadata() {
 #[test]
 fn test_fingerprint_serialization() {
     let selectors = SelectorSet::default()
-        .add(Selector::css("#my-button"))
-        .add(Selector::text("Click Me").with_confidence(0.9))
-        .add(Selector::role("button"));
+        .with_selector(Selector::css("#my-button"))
+        .with_selector(Selector::text("Click Me").with_confidence(0.9))
+        .with_selector(Selector::role("button"));
 
     let fingerprint = ElementFingerprint::new("fp_123")
         .with_selectors(selectors)
@@ -128,10 +128,10 @@ fn test_fingerprint_serialization() {
 fn test_selector_set_operations() {
     // Builder pattern - chain all additions
     let set = SelectorSet::default()
-        .add(Selector::test_id("submit-btn"))
-        .add(Selector::css("button.primary"))
-        .add(Selector::xpath("//button[@type='submit']"))
-        .add(Selector::text("Submit").with_confidence(0.85));
+        .with_selector(Selector::test_id("submit-btn"))
+        .with_selector(Selector::css("button.primary"))
+        .with_selector(Selector::xpath("//button[@type='submit']"))
+        .with_selector(Selector::text("Submit").with_confidence(0.85));
 
     assert_eq!(set.selectors.len(), 4);
 

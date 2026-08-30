@@ -52,6 +52,7 @@ impl NodeLogic for ListExcelWorksheetsNode {
             "List worksheets in an Excel workbook stored in OneDrive",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "listWorksheets");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -145,6 +146,7 @@ impl NodeLogic for ReadExcelRangeNode {
             "Read data from a range in an Excel worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "readRange");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -245,6 +247,7 @@ impl NodeLogic for WriteExcelRangeNode {
             "Write data to a range in an Excel worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "writeRange");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -355,6 +358,7 @@ impl NodeLogic for GetExcelUsedRangeNode {
             "Get the used range of a worksheet",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "usedRange");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -457,6 +461,7 @@ impl NodeLogic for GetExcelTableNode {
             "Get data from an Excel table by name",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "getTable");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 
@@ -586,6 +591,7 @@ impl NodeLogic for AddExcelTableRowNode {
             "Add a row to an Excel table",
             "Data/Microsoft/Excel",
         );
+        node.set_flowscript_name("microsoft.excel", "addTableRow");
         node.set_version(1);
         node.add_icon("/flow/icons/microsoft.svg");
 

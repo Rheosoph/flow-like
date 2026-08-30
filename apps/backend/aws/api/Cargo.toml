@@ -4,14 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["app-runtime"] }
 # `dynamodb` and `s3` must stay enabled here: without them EXECUTION_STATE_BACKEND and
 # CACHE_BACKEND silently fall back to Postgres on the serverless target.
-flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "sentry", "secrets-aws", "dynamodb", "s3"] }
+flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "sentry", "secrets-aws", "dynamodb", "s3", "channel-aws"] }
 flow-like-secrets = { workspace = true, features = ["aws"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+# The Lambda executors support the remote catalog plus local ONNX inference.
+# This API advertises the same packages without linking execution runtimes.
+flow-like-catalog = { workspace = true, features = ["server-local-metadata"] }
 mimalloc.workspace = true
 lambda_http.workspace = true
 axum.workspace = true
@@ -22,12 +24,3 @@ sentry.workspace = true
 sentry-tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false
-incremental = false

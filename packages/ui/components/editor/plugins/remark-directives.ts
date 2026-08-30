@@ -28,7 +28,7 @@ export function preprocessDirectiveBlocks(markdown: string): string {
 
 	while (i < lines.length) {
 		const line = lines[i];
-		const match = line.match(/^:::(\w+)(?:\s+(.+))?$/);
+		const match = line.match(/^:::(\w+)(?:[ \t](.*))?$/);
 
 		if (match) {
 			const type = match[1].toLowerCase();

@@ -84,6 +84,7 @@ impl NodeLogic for GetFieldsNode {
             "Get all available fields in Jira (system and custom fields)",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getFields");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -220,6 +221,7 @@ impl NodeLogic for SearchFieldsNode {
             "Search for Jira fields by name, type, or key",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "searchFields");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

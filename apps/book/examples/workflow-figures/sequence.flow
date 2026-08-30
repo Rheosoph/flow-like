@@ -1,0 +1,19 @@
+use log::{ info }
+
+function validate(record: string) {
+    info({ message: `Validated ${record}`, toast: false })
+}
+
+function writeRecord(record: string) {
+    info({ message: `Stored ${record}`, toast: false })
+}
+
+function sendConfirmation(record: string) {
+    info({ message: `Confirmed ${record}`, toast: false })
+}
+
+eventsGeneric processRecord(payload: Struct, record: string) {
+    validate(record)
+    writeRecord(record)
+    sendConfirmation(record)
+}

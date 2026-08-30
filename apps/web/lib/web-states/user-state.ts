@@ -24,7 +24,9 @@ import {
 	type IUserTemplateInfo,
 	type IUserUpdate,
 	type IUserWidgetInfo,
+	chunkLookupIds,
 	isLocalUserSub,
+	partitionLookupIds,
 	userLookupFromClaims,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
@@ -167,21 +169,52 @@ export class WebUserState implements IUserState {
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
 
+	/**
+	 * Runs unattended behind every table that shows a user column, so it refuses
+	 * to reach the hub without a token rather than spraying 401s at a session
+	 * that does not exist.
+	 */
+	async lookupUsers(userIds: string[]): Promise<IUserLookup[]> {
+		const { subs, local } = partitionLookupIds(userIds);
+		const resolved: IUserLookup[] = local
+			? [await this.lookupCurrentUser()]
+			: [];
+
+		if (subs.length === 0) return resolved;
+
+		if (!this.hasRemoteAccessToken()) {
+			throw new Error("The user directory is unavailable while signed out");
+		}
+
+		const batches = await Promise.all(
+			chunkLookupIds(subs).map((chunk) =>
+				apiPost<IUserLookup[]>(
+					"user/lookup",
+					{ user_ids: chunk },
+					this.backend.auth,
+				),
+			),
+		);
+
+		for (const batch of batches) resolved.push(...(batch ?? []));
+		return resolved;
+	}
+
+	/**
+	 * Throws on failure on purpose: swallowing the error here renders a broken
+	 * lookup as an empty directory, which is indistinguishable from "nobody
+	 * matched" and hides outages from whoever is trying to invite someone.
+	 */
 	async searchUsers(query: string): Promise<IUserLookup[]> {
 		const trimmed = query.trim();
 		if (!trimmed) return [];
 
-		try {
-			return (
-				(await apiGet<IUserLookup[]>(
-					`user/search/${encodeURIComponent(trimmed)}`,
-					this.backend.auth,
-				)) ?? []
-			);
-		} catch (error) {
-			console.warn("[UserState.searchUsers] search failed:", error);
-			return [];
-		}
+		return (
+			(await apiGet<IUserLookup[]>(
+				`user/search/${encodeURIComponent(trimmed)}`,
+				this.backend.auth,
+			)) ?? []
+		);
 	}
 
 	async getNotifications(): Promise<INotificationsOverview> {

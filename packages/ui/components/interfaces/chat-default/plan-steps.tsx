@@ -1,21 +1,19 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	AlertTriangle,
-	CheckCircle2,
-	ChevronDown,
-	ChevronRight,
-	Circle,
-	CircleMinus,
-	DatabaseIcon,
-	History,
-	LayoutIcon,
-	Loader2,
-	WorkflowIcon,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/dist/esm/icons/triangle-alert.js";
+import CheckCircle2 from "lucide-react/dist/esm/icons/circle-check.js";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
+import Circle from "lucide-react/dist/esm/icons/circle.js";
+import CircleMinus from "lucide-react/dist/esm/icons/circle-minus.js";
+import DatabaseIcon from "lucide-react/dist/esm/icons/database.js";
+import History from "lucide-react/dist/esm/icons/history.js";
+import LayoutIcon from "lucide-react/dist/esm/icons/panels-top-left.js";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
+import WorkflowIcon from "lucide-react/dist/esm/icons/workflow.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../../../lib";
+import { cn } from "../../../lib/utils";
 import { formatDuration } from "../../../lib/date";
 import {
 	Collapsible,
@@ -155,12 +153,14 @@ function ActivitySummaryLabel({
 			<span className="min-w-0 flex-1 truncate">
 				<span className="text-foreground">{activeTitle ?? "Working…"}</span>
 				<span className="text-muted-foreground">
-					{` · `}{`${summary.settledCount}/${summary.total}`}</span>
+					{` · `}
+					{`${summary.settledCount}/${summary.total}`}
+				</span>
 			</span>
 		);
 	}
 
-	const parts = [t('countSteps', '{{count}} step', { count: summary.total })];
+	const parts = [t("countSteps", "{{count}} step", { count: summary.total })];
 	if (summary.laneCount > 1) parts.push(`across ${summary.laneCount} lanes`);
 	if (summary.durationLabel) parts.push(summary.durationLabel);
 	if (summary.failedCount > 0) {
@@ -265,7 +265,11 @@ function BuildLaneRow({
 					<div className="flex items-center gap-1.5">
 						<AlertTriangle className="size-3 shrink-0 text-amber-500" />
 						<span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
-							{t('countFunctionsNeedYourLogic', { defaultValue_one: '1 function needs your logic', defaultValue_other: '{{count}} functions need your logic', count: detail.gaps.length })}
+							{t("countFunctionsNeedYourLogic", {
+								defaultValue_one: "1 function needs your logic",
+								defaultValue_other: "{{count}} functions need your logic",
+								count: detail.gaps.length,
+							})}
 						</span>
 					</div>
 					<ul className="mt-0.5 grid gap-0.5">
@@ -624,8 +628,12 @@ export function PlanSteps({
 						>
 							<History className="size-3.5 shrink-0" />
 							<span className="flex-1">
-								{showOlderSteps ? t('hide', 'Hide') : t('show', 'Show')}{" "}
-								{t('countEarlierSteps', { defaultValue_one: "{{count}} earlier step", defaultValue_other: "{{count}} earlier steps", count: olderSteps.length })}
+								{showOlderSteps ? t("hide", "Hide") : t("show", "Show")}{" "}
+								{t("countEarlierSteps", {
+									defaultValue_one: "{{count}} earlier step",
+									defaultValue_other: "{{count}} earlier steps",
+									count: olderSteps.length,
+								})}
 							</span>
 							<ChevronDown
 								className={cn(

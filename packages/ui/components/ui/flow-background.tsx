@@ -8,6 +8,14 @@ interface FlowBackgroundProps {
 	className?: string;
 	intensity?: "subtle" | "medium" | "full";
 	interactive?: boolean;
+	/**
+	 * Skips the animated canvas while keeping the wrapper DOM identical. Routes
+	 * that paint an opaque editor over the whole window would otherwise run a
+	 * permanent rAF loop and a window `mousemove` listener under it — and
+	 * swapping the wrapper element instead would remount `{children}`, i.e. the
+	 * entire router outlet.
+	 */
+	active?: boolean;
 	children?: React.ReactNode;
 }
 
@@ -308,6 +316,7 @@ export function FlowBackground({
 	className,
 	intensity = "subtle",
 	interactive = true,
+	active = true,
 	children,
 }: Readonly<FlowBackgroundProps>) {
 	return (
@@ -320,7 +329,7 @@ export function FlowBackground({
 			</div>
 
 			{/* Flow graph canvas */}
-			<FlowCanvas intensity={intensity} interactive={interactive} />
+			{active && <FlowCanvas intensity={intensity} interactive={interactive} />}
 
 			{/* Subtle grid */}
 			<div

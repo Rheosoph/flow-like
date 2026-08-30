@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-flow-like.workspace = true
+flow-like = { workspace = true, features = ["app-runtime"] }
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "sentry"] }
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like-catalog.workspace = true
+flow-like-catalog = { workspace = true, features = ["executor-local-metadata"] }
 mimalloc.workspace = true
 socket2 = "0.6.0"
 tracing.workspace = true
@@ -18,21 +18,3 @@ dotenv.workspace = true
 sentry-tracing.workspace = true
 sentry.workspace = true
 oasgen = {version="0.25.0", features = ["axum"]}
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false
-incremental = false
-
-[profile.dev]
-opt-level = 1
-debug = 1
-split-debuginfo = "unpacked"
-incremental = true
-
-[profile.dev.package."*"]
-opt-level = 0

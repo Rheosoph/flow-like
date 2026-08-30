@@ -24,6 +24,7 @@ impl NodeLogic for WhileLoopNode {
             "Loop downstream execution in while loop",
             "Control",
         );
+        node.set_flowscript_name("control", "whileLoop");
         node.add_icon("/flow/icons/for-each.svg");
 
         // inputs

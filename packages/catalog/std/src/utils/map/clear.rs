@@ -26,6 +26,8 @@ impl NodeLogic for ClearMapNode {
             "Removes all entries from a map",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "clear");
+        node.set_receiver("map_in");
 
         node.add_icon("/flow/icons/book-key.svg");
 

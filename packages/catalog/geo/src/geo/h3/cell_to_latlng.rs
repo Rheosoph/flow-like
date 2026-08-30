@@ -26,6 +26,7 @@ impl NodeLogic for CellToLatLngNode {
             "Converts an H3 cell index to the geographic coordinate of its center point.",
             "Web/Geo/H3",
         );
+        node.set_flowscript_name("h3", "cellToLatlng");
         node.add_icon("/flow/icons/hexagon.svg");
 
         node.add_input_pin(

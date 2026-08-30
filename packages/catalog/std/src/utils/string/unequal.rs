@@ -20,14 +20,25 @@ impl NodeLogic for UnEqualStringNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "not_equal_string",
-            "!=",
+            "!= (String)",
             "Compares two Strings",
             "Utils/String",
         );
+        node.set_flowscript_name("string", "unequal");
+        node.set_receiver("string");
         node.add_icon("/flow/icons/string.svg");
+        node.set_version(1);
 
         node.add_input_pin("string", "String", "Input", VariableType::String);
         node.add_input_pin("string", "String", "Input", VariableType::String);
+
+        node.add_input_pin(
+            "ignore_case",
+            "Ignore Case",
+            "Compare without regard to upper/lower case",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "unequal",
@@ -41,11 +52,13 @@ impl NodeLogic for UnEqualStringNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let string_pins = context.get_pins_by_name("string").await?;
+        let ignore_case: bool = context.evaluate_pin("ignore_case").await?;
         let mut equal = true;
         let mut value = None;
 
         for pin in string_pins {
             let pin: String = context.evaluate_pin_ref(pin).await?;
+            let pin = if ignore_case { pin.to_lowercase() } else { pin };
             if let Some(value) = &value {
                 if value != &pin {
                     equal = false;

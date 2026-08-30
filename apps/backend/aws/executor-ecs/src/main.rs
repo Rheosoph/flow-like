@@ -3,7 +3,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_catalog::initialize as initialize_catalog;
 use flow_like_executor::{resolve_payload_from_str, ExecutionRequest, ExecutorConfig};
-use flow_like_types::dispatch::DispatchPayload;
+use flow_like_types_contracts::dispatch::DispatchPayload;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
 

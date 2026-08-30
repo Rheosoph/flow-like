@@ -25,6 +25,8 @@ pub struct WasmModule {
     /// Whether module has on_drop export
     has_on_drop: bool,
     /// Whether module has get_abi_version export
+    #[allow(dead_code)]
+    // staged: core-ABI modules expose get_abi_version but the host does not verify it yet
     has_abi_version: bool,
     /// ABI version (if reported by module)
     abi_version: Option<u32>,
@@ -168,7 +170,7 @@ impl WasmModule {
         }
 
         // Create temporary instance to call get_node
-        let mut instance = WasmInstance::new(engine, self.clone(), security.clone()).await?;
+        let mut instance = WasmInstance::new(engine, self.clone(), security.for_metadata()).await?;
         let definition = instance.call_get_node().await?;
 
         // Cache it

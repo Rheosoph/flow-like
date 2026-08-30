@@ -373,7 +373,7 @@ mod tests {
             WORKLOAD_EXECUTION
         ));
         // Every inlined message still leaves room under the 64 KiB encoded cap.
-        assert!(CLAIM_CHECK_THRESHOLD_BYTES < MAX_MESSAGE_BODY_BYTES);
+        const { assert!(CLAIM_CHECK_THRESHOLD_BYTES < MAX_MESSAGE_BODY_BYTES) };
         assert_eq!(MAX_MESSAGE_BODY_BYTES, 65_536 * 3 / 4);
     }
 

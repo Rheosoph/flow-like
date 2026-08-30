@@ -21,7 +21,9 @@ jobs:
         run: bun run test:e2e:package-security
 
       - name: Run Rust tests
-        run: cargo test
+        # Preserve the pre-default-members CI coverage while keeping everyday
+        # bare Cargo commands focused on the shared editing surface.
+        run: cargo test --locked --workspace --profile ci
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}

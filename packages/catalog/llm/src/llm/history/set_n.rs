@@ -26,6 +26,8 @@ impl NodeLogic for SetHistoryNNode {
             "Stores how many completions to request in downstream LLM calls",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setN");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

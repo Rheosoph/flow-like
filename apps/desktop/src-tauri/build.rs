@@ -196,6 +196,15 @@ fn ensure_ios_associated_domain(domain: &str) -> Result<(), String> {
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+
+    // Flow-Like's worker-heavy desktop runtime needs an 8 MiB main-thread
+    // stack on Windows. Scope the option to the final MSVC desktop executable:
+    // a global RUSTFLAGS value would rebuild every dependency with a different
+    // fingerprint and `/STACK` is not valid for the Windows GNU linker.
+    if target_os == "windows" && target_env == "msvc" {
+        println!("cargo::rustc-link-arg-bin=flow-like-desktop=/STACK:8388608");
+    }
 
     // Link against system zlib on iOS (needed by flate2 with zlib feature)
     if target_os == "ios" {

@@ -27,6 +27,8 @@ impl NodeLogic for InsertSetNode {
             "Inserts an element to the set",
             "Utils/Set",
         );
+        node.set_flowscript_name("set", "insert");
+        node.set_receiver("set_in");
 
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 

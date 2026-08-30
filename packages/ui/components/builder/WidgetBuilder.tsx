@@ -1,5 +1,5 @@
-import { useTranslation } from "@flow-like/locales";
 import { useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import html2canvas from "html2canvas-pro";
 import {
 	ChevronRight,
@@ -10,6 +10,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import {
+	type RefObject,
 	useCallback,
 	useEffect,
 	useId,
@@ -17,15 +18,12 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAssetSource } from "../../hooks/use-asset-source";
 import { cn } from "../../lib";
 import {
 	DEFAULT_SHORTCUTS,
 	createShortcutManager,
 } from "../../lib/builder/KeyboardShortcuts";
-import {
-	presignCanvasSettings,
-	presignPageAssets,
-} from "../../lib/presign-assets";
 import {
 	type AssistantWidgetSurface,
 	useAssistantSurface,
@@ -37,6 +35,9 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
+import { collectRunElements } from "../a2ui/collect-run-elements";
+import type { ElementSource } from "../a2ui/element-materializer";
+import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -188,6 +189,34 @@ export interface WidgetBuilderProps {
 	 * requestOpenAssistant() and the embedded A2UICopilot panel/sheet are not mounted.
 	 */
 	externalAssistant?: boolean;
+	/**
+	 * Receives an imperative handle onto the live component state so the host can rewrite it without
+	 * remounting the builder (e.g. renaming a widget action id referenced by components).
+	 */
+	handleRef?: RefObject<WidgetBuilderHandle | null>;
+}
+
+export interface WidgetBuilderHandle {
+	getComponents: () => SurfaceComponent[];
+	replaceComponents: (components: SurfaceComponent[]) => void;
+}
+
+function BuilderHandleBridge({
+	handleRef,
+}: Readonly<{ handleRef: RefObject<WidgetBuilderHandle | null> }>) {
+	const { components, replaceComponents } = useBuilder();
+
+	useEffect(() => {
+		handleRef.current = {
+			getComponents: () => Array.from(components.values()),
+			replaceComponents,
+		};
+		return () => {
+			handleRef.current = null;
+		};
+	}, [components, replaceComponents, handleRef]);
+
+	return null;
 }
 
 export function WidgetBuilder({
@@ -205,6 +234,7 @@ export function WidgetBuilder({
 	currentPageId,
 	onPageChange,
 	externalAssistant = false,
+	handleRef,
 }: WidgetBuilderProps) {
 	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
 	// the assistant, so ask for it exactly when we drop our own.
@@ -232,6 +262,7 @@ export function WidgetBuilder({
 			onCanvasSettingsChange={onCanvasSettingsChange}
 			actionContext={actionContext}
 		>
+			{handleRef && <BuilderHandleBridge handleRef={handleRef} />}
 			<WidgetBuilderWithDnd
 				className={className}
 				surfaceId={surfaceId}
@@ -539,7 +570,7 @@ function WidgetBuilderContent({
 							onClick={() => setCopilotOpen(!copilotOpen)}
 						>
 							<SparklesIcon className="h-4 w-4" />
-							<span className="text-xs">{t('flowpilot', 'FlowPilot')}</span>
+							<span className="text-xs">{t("flowpilot", "FlowPilot")}</span>
 						</Button>
 					)}
 				</div>
@@ -577,11 +608,15 @@ function WidgetBuilderContent({
 									<TabsList className="w-full justify-start rounded-none border-b bg-transparent px-2 shrink-0">
 										<TabsTrigger value="palette" className="gap-1.5">
 											<Palette className="h-4 w-4" />
-											<span className="hidden sm:inline">{t('components', 'Components')}</span>
+											<span className="hidden sm:inline">
+												{t("components", "Components")}
+											</span>
 										</TabsTrigger>
 										<TabsTrigger value="hierarchy" className="gap-1.5">
 											<Layers className="h-4 w-4" />
-											<span className="hidden sm:inline">{t('hierarchy', 'Hierarchy')}</span>
+											<span className="hidden sm:inline">
+												{t("hierarchy", "Hierarchy")}
+											</span>
 										</TabsTrigger>
 									</TabsList>
 									<TabsContent
@@ -690,8 +725,13 @@ function PendingComponentsBar({
 		<div className="flex items-center justify-between px-4 py-2 bg-primary/5 border-b border-primary/20 shrink-0">
 			<div className="flex items-center gap-2">
 				<SparklesIcon className="h-4 w-4 text-primary" />
-				<span className="text-sm font-medium">{t('countComponents', { defaultValue_one: '{{count}} component', defaultValue_other: '{{count}} components', count: components.length })}{" "}
-					{t('readyToApply', 'ready to apply')}
+				<span className="text-sm font-medium">
+					{t("countComponents", {
+						defaultValue_one: "{{count}} component",
+						defaultValue_other: "{{count}} components",
+						count: components.length,
+					})}{" "}
+					{t("readyToApply", "ready to apply")}
 				</span>
 			</div>
 			<div className="flex items-center gap-2">
@@ -702,10 +742,10 @@ function PendingComponentsBar({
 					className="h-7 px-2 text-muted-foreground hover:text-destructive"
 				>
 					<XIcon className="h-4 w-4 mr-1" />
-					{t('dismiss', 'Dismiss')}
+					{t("dismiss", "Dismiss")}
 				</Button>
 				<Button size="sm" onClick={onApply} className="h-7 px-3">
-					{t('applyChanges', 'Apply Changes')}
+					{t("applyChanges", "Apply Changes")}
 				</Button>
 			</div>
 		</div>
@@ -731,93 +771,27 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 	const isDragging = activeId !== null;
 	const canvasRef = useRef<HTMLDivElement>(null);
 	const canvasId = useId();
-	const [presignedComponents, setPresignedComponents] = useState<Map<
-		string,
-		SurfaceComponent
-	> | null>(null);
-	const [presignedCanvasSettings, setPresignedCanvasSettings] =
-		useState(canvasSettings);
-	const backgroundClass = isBackgroundClass(
-		presignedCanvasSettings.backgroundColor,
-	)
-		? presignedCanvasSettings.backgroundColor
+	// Components carry storage paths and resolve their own artwork, so the canvas
+	// renders them as they are. Only the background has no component to do that.
+	const { src: canvasBackgroundImage } = useAssetSource(
+		actionContext?.appId,
+		canvasSettings.backgroundImage,
+	);
+	const backgroundClass = isBackgroundClass(canvasSettings.backgroundColor)
+		? canvasSettings.backgroundColor
 		: undefined;
 
-	// Presign assets in components for preview rendering
-	useEffect(() => {
-		const presignAssets = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedComponents(null);
-				return;
-			}
-
-			const componentsArray = Array.from(components.entries()).map(
-				([id, comp]) => ({ ...comp, id }),
-			);
-
-			try {
-				const presigned = await presignPageAssets(
-					appId,
-					componentsArray,
-					backend.storageState,
-				);
-				const presignedMap = new Map<string, SurfaceComponent>();
-				for (const comp of presigned) {
-					presignedMap.set(comp.id, comp);
-				}
-				setPresignedComponents(presignedMap);
-			} catch (err) {
-				console.warn("[VisualCanvas] Failed to presign assets:", err);
-				setPresignedComponents(null);
-			}
-		};
-
-		presignAssets();
-	}, [components, actionContext?.appId, backend.storageState]);
-
-	// Presign canvas background image
-	useEffect(() => {
-		const presignCanvas = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedCanvasSettings(canvasSettings);
-				return;
-			}
-
-			try {
-				const presigned = await presignCanvasSettings(
-					appId,
-					canvasSettings,
-					backend.storageState,
-				);
-				setPresignedCanvasSettings(presigned);
-			} catch (err) {
-				console.warn("[VisualCanvas] Failed to presign canvas settings:", err);
-				setPresignedCanvasSettings(canvasSettings);
-			}
-		};
-
-		presignCanvas();
-	}, [canvasSettings, actionContext?.appId, backend.storageState]);
-
-	// Build the surface for rendering - use presigned components if available
 	// Memoize to prevent unnecessary re-renders when drag state changes
 	const surface: Surface = useMemo(
 		() => ({
 			id: surfaceId,
 			rootComponentId: ROOT_ID,
-			components: Object.fromEntries(presignedComponents ?? components),
-			canvasSettings: presignedCanvasSettings.customCss
-				? { customCss: presignedCanvasSettings.customCss }
+			components: Object.fromEntries(components),
+			canvasSettings: canvasSettings.customCss
+				? { customCss: canvasSettings.customCss }
 				: undefined,
 		}),
-		[
-			surfaceId,
-			presignedComponents,
-			components,
-			presignedCanvasSettings.customCss,
-		],
+		[surfaceId, components, canvasSettings.customCss],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -972,13 +946,13 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			<ScopedCustomCss
-				css={presignedCanvasSettings.customCss}
+				css={canvasSettings.customCss}
 				scopeSelector={`[data-canvas-id="${canvasId}"]`}
 			/>
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
-				<span>{t('canvas', 'Canvas')}</span>
+				<span>{t("canvas", "Canvas")}</span>
 				{selection.componentIds.length > 0 &&
 					selection.componentIds[0] !== ROOT_ID && (
 						<>
@@ -1018,11 +992,11 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					style={{
 						backgroundColor: backgroundClass
 							? undefined
-							: presignedCanvasSettings.backgroundColor,
-						backgroundImage: presignedCanvasSettings.backgroundImage
-							? `url(${presignedCanvasSettings.backgroundImage})`
+							: canvasSettings.backgroundColor,
+						backgroundImage: canvasBackgroundImage
+							? `url(${canvasBackgroundImage})`
 							: undefined,
-						padding: presignedCanvasSettings.padding,
+						padding: canvasSettings.padding,
 					}}
 					data-canvas-background="true"
 				>
@@ -1042,7 +1016,10 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 							<div className="text-center text-muted-foreground">
 								<Plus className="h-8 w-8 mx-auto mb-2 opacity-50" />
 								<p className="text-sm">
-									{t('dropComponentsHereToStartBuilding', 'Drop components here to start building')}
+									{t(
+										"dropComponentsHereToStartBuilding",
+										"Drop components here to start building",
+									)}
 								</p>
 							</div>
 						</div>
@@ -1066,16 +1043,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const effectiveSurfaceId = actionContext?.pageId ?? surfaceId;
 	const previewCanvasId = useId();
 	const [previewSurface, setPreviewSurface] = useState<Surface | null>(null);
-	const [presignedComponents, setPresignedComponents] = useState<Map<
-		string,
-		SurfaceComponent
-	> | null>(null);
-	const [presignedCanvasSettings, setPresignedCanvasSettings] =
-		useState(canvasSettings);
-	const backgroundClass = isBackgroundClass(
-		presignedCanvasSettings.backgroundColor,
-	)
-		? presignedCanvasSettings.backgroundColor
+	// Canvas styling the preview is showing right now: the builder's own settings
+	// until a running workflow overrides them with a setCanvasSettings message.
+	const [liveCanvasSettings, setLiveCanvasSettings] = useState(canvasSettings);
+	useEffect(() => setLiveCanvasSettings(canvasSettings), [canvasSettings]);
+	const { src: previewBackgroundImage } = useAssetSource(
+		actionContext?.appId,
+		liveCanvasSettings.backgroundImage,
+	);
+	const backgroundClass = isBackgroundClass(liveCanvasSettings.backgroundColor)
+		? liveCanvasSettings.backgroundColor
 		: undefined;
 	const loadEventExecutedRef = useRef<string | null>(null);
 	// Keep a ref to components to avoid stale closure in handleA2UIMessage
@@ -1095,85 +1072,15 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		[effectiveSurfaceId, components],
 	);
 
-	// Presign assets in components when they change
-	useEffect(() => {
-		const presignAssets = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedComponents(null);
-				return;
-			}
-
-			const source = previewSurface
-				? Object.values(previewSurface.components)
-				: Array.from(components.values());
-			const componentsArray = source.map((comp) => ({ ...comp, id: comp.id }));
-
-			try {
-				const presigned = await presignPageAssets(
-					appId,
-					componentsArray,
-					backend.storageState,
-				);
-				const presignedMap = new Map<string, SurfaceComponent>();
-				for (const comp of presigned) {
-					presignedMap.set(comp.id, comp);
-				}
-				setPresignedComponents(presignedMap);
-			} catch (err) {
-				console.warn("[BuilderPreview] Failed to presign assets:", err);
-				setPresignedComponents(null);
-			}
-		};
-
-		presignAssets();
-	}, [components, previewSurface, actionContext?.appId, backend.storageState]);
-
-	// Presign canvas background image
-	useEffect(() => {
-		const presignCanvas = async () => {
-			const appId = actionContext?.appId;
-			if (!appId) {
-				setPresignedCanvasSettings(canvasSettings);
-				return;
-			}
-
-			try {
-				const presigned = await presignCanvasSettings(
-					appId,
-					canvasSettings,
-					backend.storageState,
-				);
-				setPresignedCanvasSettings(presigned);
-			} catch (err) {
-				console.warn(
-					"[BuilderPreview] Failed to presign canvas settings:",
-					err,
-				);
-				setPresignedCanvasSettings(canvasSettings);
-			}
-		};
-
-		presignCanvas();
-	}, [canvasSettings, actionContext?.appId, backend.storageState]);
-
-	// The logical surface is whatever runtime messages have produced, falling
-	// back to the live builder components before any message arrives.
+	// A running workflow's surface wins over the builder's own once it exists.
 	const logicalSurface = previewSurface ?? builderSurface;
 
 	// Don't pass canvasSettings to A2UIRenderer — BuilderPreview handles
 	// CSS injection and canvas styling at the outer level to avoid double
-	// scoping and inline-style conflicts. Presigned URLs are render-only and
-	// must never be written back into the logical surface.
+	// scoping and inline-style conflicts.
 	const surface: Surface = useMemo(
-		() => ({
-			...logicalSurface,
-			components: presignedComponents
-				? Object.fromEntries(presignedComponents)
-				: logicalSurface.components,
-			canvasSettings: undefined,
-		}),
-		[logicalSurface, presignedComponents],
+		() => ({ ...logicalSurface, canvasSettings: undefined }),
+		[logicalSurface],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1182,11 +1089,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
-			// Canvas styling is handled by the outer div via presignedCanvasSettings,
+			// Canvas styling is handled by the outer div via liveCanvasSettings,
 			// so keep it out of the surface reducer.
 			if (message.type === "setCanvasSettings") {
 				if (message.surfaceId !== effectiveSurfaceId) return;
-				setPresignedCanvasSettings((prev) => {
+				setLiveCanvasSettings((prev) => {
 					const filtered = Object.fromEntries(
 						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
@@ -1211,20 +1118,30 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		[effectiveSurfaceId],
 	);
 
-	// Convert components map to elements object for the workflow payload
-	// Uses componentsRef to avoid dependency on components changing (which would cause infinite loops)
-	const getElementsFromComponents = useCallback(() => {
-		const elements: Record<string, unknown> = {};
-		const currentComponents = componentsRef.current;
-		for (const [componentId, surfaceComponent] of currentComponents.entries()) {
-			const elementId = `${effectiveSurfaceId}/${componentId}`;
-			elements[elementId] = {
-				...surfaceComponent,
-				__element_id: elementId,
-			};
-		}
-		return elements;
-	}, [effectiveSurfaceId]); // Only depends on the stable preview surface id
+	// Reads componentsRef so live builder edits never re-trigger the lifecycle effects.
+	// The preview always refreshes the demand: the flow graph changes without a signal.
+	const collectPreviewElements = useCallback(
+		(appId: string, boardId: string) =>
+			collectRunElements({
+				backend,
+				appId,
+				boardId,
+				surfaceId: effectiveSurfaceId,
+				components: Object.fromEntries(componentsRef.current),
+				storedValues: {},
+				refresh: true,
+			}),
+		[backend, effectiveSurfaceId],
+	);
+
+	const elementSource = useCallback(
+		(): ElementSource => ({
+			surfaceId: effectiveSurfaceId,
+			components: Object.fromEntries(componentsRef.current),
+			storedValues: {},
+		}),
+		[effectiveSurfaceId],
+	);
 
 	// Execute onLoad event when entering preview mode
 	useEffect(() => {
@@ -1239,13 +1156,13 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			loadEventExecutedRef.current = executionKey;
 
 			try {
-				// Get elements from current components (for GetElement to work)
-				const builderElements = getElementsFromComponents();
+				const builderElements = await collectPreviewElements(appId, boardId);
 
 				const payload = {
 					id: onLoadEventId,
 					payload: {
 						_elements: builderElements,
+						_elements_mode: "demand",
 						_route: "/preview",
 						_query_params: {},
 						_page_id: pageId,
@@ -1263,6 +1180,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							if (handleWidgetQueryMessage(evt.payload)) {
 								continue;
 							}
+							if (handleElementsRequestMessage(evt.payload, elementSource)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}
@@ -1278,7 +1198,8 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		backend.boardState,
 		executionService,
 		handleA2UIMessage,
-		getElementsFromComponents,
+		collectPreviewElements,
+		elementSource,
 	]);
 
 	// Execute onInterval event at configured time intervals (preview mode)
@@ -1299,12 +1220,13 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 		const intervalId = setInterval(async () => {
 			try {
-				const builderElements = getElementsFromComponents();
+				const builderElements = await collectPreviewElements(appId, boardId);
 
 				const payload = {
 					id: onIntervalEventId,
 					payload: {
 						_elements: builderElements,
+						_elements_mode: "demand",
 						_route: "/preview",
 						_query_params: {},
 						_page_id: pageId,
@@ -1321,6 +1243,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
 							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
+							if (handleElementsRequestMessage(evt.payload, elementSource)) {
 								continue;
 							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
@@ -1341,7 +1266,8 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		backend.boardState,
 		executionService,
 		handleA2UIMessage,
-		getElementsFromComponents,
+		collectPreviewElements,
+		elementSource,
 	]);
 
 	return (
@@ -1351,16 +1277,16 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			style={{
 				backgroundColor: backgroundClass
 					? undefined
-					: presignedCanvasSettings.backgroundColor,
-				backgroundImage: presignedCanvasSettings.backgroundImage
-					? `url(${presignedCanvasSettings.backgroundImage})`
+					: liveCanvasSettings.backgroundColor,
+				backgroundImage: previewBackgroundImage
+					? `url(${previewBackgroundImage})`
 					: undefined,
-				padding: presignedCanvasSettings.padding,
+				padding: liveCanvasSettings.padding,
 			}}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
 			<ScopedCustomCss
-				css={presignedCanvasSettings.customCss}
+				css={liveCanvasSettings.customCss}
 				scopeSelector={`[data-canvas-id="${previewCanvasId}"]`}
 			/>
 			<A2UIRenderer

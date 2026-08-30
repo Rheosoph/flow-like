@@ -125,7 +125,9 @@ export function ChatHistory({
 			onSearchActiveChange={setSearching}
 			header={
 				entries
-					? t('countConversations', '{{count}} conversation', { count: entries.length })
+					? t("countConversations", "{{count}} conversation", {
+							count: entries.length,
+						})
 					: undefined
 			}
 			emptyDescription="Start a conversation and it will appear here."

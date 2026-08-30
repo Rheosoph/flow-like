@@ -71,6 +71,7 @@ impl NodeLogic for GetVersionsNode {
             "Get all versions (releases) for a project",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "getVersions");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -198,6 +199,7 @@ impl NodeLogic for CreateVersionNode {
             "Create a new version (release) in a project",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "createVersion");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -398,6 +400,7 @@ impl NodeLogic for BatchCreateVersionsNode {
             "Create multiple versions (releases) in a batch",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "batchCreateVersions");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(
@@ -598,6 +601,7 @@ impl NodeLogic for UpdateVersionNode {
             "Update an existing version",
             "Data/Atlassian/Jira",
         );
+        node.set_flowscript_name("jira", "updateVersion");
         node.add_icon("/flow/icons/jira.svg");
 
         node.add_input_pin(

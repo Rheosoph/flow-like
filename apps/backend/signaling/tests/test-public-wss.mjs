@@ -3,9 +3,6 @@ import WebSocket from "ws";
 
 const WSS_URL = "wss://signaling.flow-like.com";
 
-// Disable certificate validation for testing
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 console.log(`Testing public WebSocket server: ${WSS_URL}\n`);
 
 // Create two clients

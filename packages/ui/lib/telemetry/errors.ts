@@ -62,11 +62,10 @@ const MAX_CONTEXT_ENTRIES = 30;
 const MAX_CONTEXT_ARRAY_ITEMS = 20;
 const MAX_PENDING_TELEMETRY_ERRORS = 32;
 
-const V8_FRAME = /^at\s+(.*?)\s*(?:\((.*)\))?$/;
-const MOZ_FRAME = /^(.*?)@(.*)$/;
 const LOCATION_WITH_POSITION = /^(.*?):(\d+):(\d+)$/;
 const LOCATION_WITH_LINE = /^(.*?):(\d+)$/;
 const IDENTIFIER_LIKE = /^[A-Za-z_$][\w$.]*$/;
+const WHITESPACE = /\s/;
 
 const NATIVE_LOCATIONS = new Set([
 	"native",
@@ -215,23 +214,42 @@ function buildFrame(
 	return frame;
 }
 
+function skipWhitespace(value: string, from: number): number {
+	let index = from;
+	while (index < value.length && WHITESPACE.test(value[index])) index += 1;
+	return index;
+}
+
+function whitespaceRunStart(value: string, from: number): number {
+	let index = from;
+	while (index > 0 && WHITESPACE.test(value[index - 1])) index -= 1;
+	return index;
+}
+
+/** Scanned rather than matched: the equivalent regex backtracks polynomially. */
 function parseV8Frame(line: string): ITelemetryCapturedFrame | undefined {
-	const match = V8_FRAME.exec(line);
-	if (!match) return undefined;
-	const head = match[1] ?? "";
-	const parenthesized = match[2];
-	if (parenthesized !== undefined) return buildFrame(head, parenthesized);
-	return looksLikeLocation(head)
-		? buildFrame(undefined, head)
-		: buildFrame(head, undefined);
+	if (!line.startsWith("at")) return undefined;
+	const start = skipWhitespace(line, 2);
+	if (start === 2) return undefined;
+	const rest = line.slice(start);
+	const open = rest.indexOf("(");
+	if (open >= 0 && rest.endsWith(")")) {
+		return buildFrame(
+			rest.slice(0, whitespaceRunStart(rest, open)),
+			rest.slice(open + 1, rest.length - 1),
+		);
+	}
+	return looksLikeLocation(rest)
+		? buildFrame(undefined, rest)
+		: buildFrame(rest, undefined);
 }
 
 function parseMozFrame(line: string): ITelemetryCapturedFrame | undefined {
-	const match = MOZ_FRAME.exec(line);
-	if (!match) return undefined;
-	const location = match[2] ?? "";
+	const separator = line.indexOf("@");
+	if (separator < 0) return undefined;
+	const location = line.slice(separator + 1);
 	if (!looksLikeLocation(location)) return undefined;
-	return buildFrame(match[1], location);
+	return buildFrame(line.slice(0, separator), location);
 }
 
 /** Parses V8 ("at fn (file:1:2)") and Firefox/Safari ("fn@file:1:2") stacks. */

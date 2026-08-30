@@ -40,6 +40,7 @@ impl NodeLogic for GetConfluenceCommentsNode {
             "Get comments from a Confluence page",
             "Data/Atlassian/Confluence",
         );
+        node.set_flowscript_name("confluence", "getComments");
         node.add_icon("/flow/icons/confluence.svg");
         node.set_version(1);
 

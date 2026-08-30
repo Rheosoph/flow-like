@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	CrashReportDialog,
 	type ProjectQuickLink,
@@ -14,6 +13,7 @@ import {
 	useInvoke,
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	Bookmark,
@@ -137,7 +137,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			id: `open-board-${boardId}`,
 			type: "dynamic" as const,
 			label: boardName,
-			description: t('openFlowBoard', 'Open flow board'),
+			description: t("openFlowBoard", "Open flow board"),
 			group: "open-flows",
 			keywords: ["flow", "board", boardName.toLowerCase()],
 			priority: 180,
@@ -172,12 +172,15 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const handleFlowPilotMessage = useCallback(
 		async (message: string): Promise<string> => {
 			const responses: Record<string, string> = {
-				'how do i create a flow?':
-					t('toCreateAFlowGoToLibraryNewProjectGiveItANameAndChooseOnlineModeYoullBeTakenDirectlyToTheFlowEditorWhereYouCanStartAddingNodes', 'To create a flow, go to Library > New Project, give it a name, and choose Online mode. You\'ll be taken directly to the flow editor where you can start adding nodes!'),
-				'what are nodes?':
-					t('nodesAreTheBuildingBlocksOfYourWorkflowsEachNodePerformsASpecificActionLikeFetchingDataProcessingTextOrCallingAiModelsConnectThemTogetherToCreatePowerfulAutomations', 'Nodes are the building blocks of your workflows. Each node performs a specific action - like fetching data, processing text, or calling AI models. Connect them together to create powerful automations!'),
-				'help with storage':
-					`Storage in Flow-Like lets you persist data between flow runs. You can store files, JSON data, and more. Access it from your project's Storage tab.`,
+				"how do i create a flow?": t(
+					"toCreateAFlowGoToLibraryNewProjectGiveItANameAndChooseOnlineModeYoullBeTakenDirectlyToTheFlowEditorWhereYouCanStartAddingNodes",
+					"To create a flow, go to Library > New Project, give it a name, and choose Online mode. You'll be taken directly to the flow editor where you can start adding nodes!",
+				),
+				"what are nodes?": t(
+					"nodesAreTheBuildingBlocksOfYourWorkflowsEachNodePerformsASpecificActionLikeFetchingDataProcessingTextOrCallingAiModelsConnectThemTogetherToCreatePowerfulAutomations",
+					"Nodes are the building blocks of your workflows. Each node performs a specific action - like fetching data, processing text, or calling AI models. Connect them together to create powerful automations!",
+				),
+				"help with storage": `Storage in Flow-Like lets you persist data between flow runs. You can store files, JSON data, and more. Access it from your project's Storage tab.`,
 			};
 
 			const lowerMessage = message.toLowerCase();
@@ -187,7 +190,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				}
 			}
 
-			return t('thanksForYourQuestionAboutMessageFlowlikeIsAVisualWorkflowAutomationToolYouCanCreateFlowsWithDraganddropNodesConnectToAiModelsForIntelligentAutomationStoreAndProcessDataDeployOnlineForDetailedDocsVisitDocsflowlikecom', "Thanks for your question about \"{{message}}\"! Flow-Like is a visual workflow automation tool. You can: • Create flows with drag-and-drop nodes • Connect to AI models for intelligent automation • Store and process data • Deploy online For detailed docs, visit docs.flow-like.com", { message });
+			return t(
+				"thanksForYourQuestionAboutMessageFlowlikeIsAVisualWorkflowAutomationToolYouCanCreateFlowsWithDraganddropNodesConnectToAiModelsForIntelligentAutomationStoreAndProcessDataDeployOnlineForDetailedDocsVisitDocsflowlikecom",
+				'Thanks for your question about "{{message}}"! Flow-Like is a visual workflow automation tool. You can: • Create flows with drag-and-drop nodes • Connect to AI models for intelligent automation • Store and process data • Deploy online For detailed docs, visit docs.flow-like.com',
+				{ message },
+			);
 		},
 		[],
 	);
@@ -208,7 +215,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			: pathname;
 
 		const pageTitle =
-			document.title.replace(i18next.t('flowlike', "| Flow-Like"), "").trim() || "Current Page";
+			document.title.replace(i18next.t("flowlike", "| Flow-Like"), "").trim() ||
+			"Current Page";
 
 		const appId =
 			searchParams.get("app") ||
@@ -290,8 +298,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "action-add-shortcut",
 				type: "action",
-				label: i18next.t('addToShortcuts', 'Add to Shortcuts'),
-				description: i18next.t('addThisPageToYourQuickAccessShortcuts', 'Add this page to your quick access shortcuts'),
+				label: i18next.t("addToShortcuts", "Add to Shortcuts"),
+				description: i18next.t(
+					"addThisPageToYourQuickAccessShortcuts",
+					"Add this page to your quick access shortcuts",
+				),
 				icon: BookmarkPlus,
 				group: "shortcuts",
 				keywords: ["shortcut", "add", "bookmark", "pin", "save"],
@@ -330,10 +341,18 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "action-logout",
 				type: "action",
-				label: i18next.t('signOut', 'Sign Out'),
-				description: i18next.t('signOutOfYourAccount', 'Sign out of your account'),
+				label: i18next.t("signOut", "Sign Out"),
+				description: i18next.t(
+					"signOutOfYourAccount",
+					"Sign out of your account",
+				),
 				group: "account",
-				keywords: ["logout", i18next.t('signOut2', 'sign out'), "account", "exit"],
+				keywords: [
+					"logout",
+					i18next.t("signOut2", "sign out"),
+					"account",
+					"exit",
+				],
 				priority: 30,
 				action: () => auth.signoutRedirect(),
 			});
@@ -341,8 +360,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "nav-account",
 				type: "navigation",
-				label: i18next.t('accountSettings', 'Account Settings'),
-				description: i18next.t('manageYourAccountSettings', 'Manage your account settings'),
+				label: i18next.t("accountSettings", "Account Settings"),
+				description: i18next.t(
+					"manageYourAccountSettings",
+					"Manage your account settings",
+				),
 				group: "navigation",
 				keywords: ["account", "profile", "user", "settings"],
 				priority: 70,
@@ -352,8 +374,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "nav-notifications",
 				type: "navigation",
-				label: i18next.t('notifications', 'Notifications'),
-				description: i18next.t('viewYourNotifications', 'View your notifications'),
+				label: i18next.t("notifications", "Notifications"),
+				description: i18next.t(
+					"viewYourNotifications",
+					"View your notifications",
+				),
 				group: "navigation",
 				keywords: ["notifications", "alerts", "messages", "invites"],
 				priority: 65,
@@ -363,10 +388,18 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "action-login",
 				type: "action",
-				label: i18next.t('signIn', 'Sign In'),
-				description: i18next.t('signInToYourAccount', 'Sign in to your account'),
+				label: i18next.t("signIn", "Sign In"),
+				description: i18next.t(
+					"signInToYourAccount",
+					"Sign in to your account",
+				),
 				group: "account",
-				keywords: ["login", i18next.t('signIn2', 'sign in'), "account", "authenticate"],
+				keywords: [
+					"login",
+					i18next.t("signIn2", "sign in"),
+					"account",
+					"authenticate",
+				],
 				priority: 40,
 				action: () => auth.signinRedirect({ url_state: currentRelativeUrl() }),
 			});
@@ -375,8 +408,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		items.push({
 			id: "nav-profile-settings",
 			type: "navigation",
-			label: i18next.t('profileSettings', 'Profile Settings'),
-			description: i18next.t('editYourProfileConfiguration', 'Edit your profile configuration'),
+			label: i18next.t("profileSettings", "Profile Settings"),
+			description: i18next.t(
+				"editYourProfileConfiguration",
+				"Edit your profile configuration",
+			),
 			group: "navigation",
 			keywords: ["profile", "settings", "configuration", "preferences"],
 			priority: 60,
@@ -387,8 +423,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		items.push({
 			id: "flowpilot-docs",
 			type: "action" as const,
-			label: i18next.t('flowpilotDocumentation', 'FlowPilot Documentation'),
-			description: i18next.t('learnHowToUseFlowpilotAiAssistant', 'Learn how to use FlowPilot AI assistant'),
+			label: i18next.t("flowpilotDocumentation", "FlowPilot Documentation"),
+			description: i18next.t(
+				"learnHowToUseFlowpilotAiAssistant",
+				"Learn how to use FlowPilot AI assistant",
+			),
 			icon: ExternalLink,
 			group: "flowpilot",
 			keywords: [
@@ -409,8 +448,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		items.push({
 			id: "docs-quick-start",
 			type: "action" as const,
-			label: i18next.t('quickStartGuide', 'Quick Start Guide'),
-			description: i18next.t('getStartedWithFlowlike', 'Get started with Flow-Like'),
+			label: i18next.t("quickStartGuide", "Quick Start Guide"),
+			description: i18next.t(
+				"getStartedWithFlowlike",
+				"Get started with Flow-Like",
+			),
 			icon: ExternalLink,
 			group: "flowpilot",
 			keywords: ["docs", "quick start", "guide", "tutorial", "begin"],
@@ -423,8 +465,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		items.push({
 			id: "docs-concepts",
 			type: "action" as const,
-			label: i18next.t('coreConcepts', 'Core Concepts'),
-			description: i18next.t('learnAboutFlowsNodesAndMore', 'Learn about flows, nodes, and more'),
+			label: i18next.t("coreConcepts", "Core Concepts"),
+			description: i18next.t(
+				"learnAboutFlowsNodesAndMore",
+				"Learn about flows, nodes, and more",
+			),
 			icon: ExternalLink,
 			group: "flowpilot",
 			keywords: ["docs", "concepts", "flows", "nodes", "learn"],
@@ -454,7 +499,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			try {
 				const meta = {
 					name,
-					description: i18next.t('quickcreatedProjectName', 'Quick-created project: {{name}}', { name }),
+					description: i18next.t(
+						"quickcreatedProjectName",
+						"Quick-created project: {{name}}",
+						{ name },
+					),
 					tags: [],
 					use_case: "",
 					created_at: nowSystemTime(),
@@ -493,7 +542,9 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					useSpotlightStore.getState().close();
 				} else {
 					toast.error(
-						error instanceof Error ? error.message : i18next.t('failedToCreateProject', 'Failed to create project'),
+						error instanceof Error
+							? error.message
+							: i18next.t("failedToCreateProject", "Failed to create project"),
 					);
 				}
 				return null;

@@ -90,7 +90,7 @@ export function SetupChecklist({
 		>
 			<div className="flex items-center justify-between gap-2 border-b px-3 py-2">
 				<span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-					{t('setThisUp', 'Set this up')}
+					{t("setThisUp", "Set this up")}
 				</span>
 				<span
 					className={cn(
@@ -99,7 +99,12 @@ export function SetupChecklist({
 							? "bg-green-600/15 text-green-700 dark:text-green-400"
 							: "bg-primary/10 text-primary",
 					)}
-				>{t('donecountOfLength', '{{doneCount}} of {{length}}', { doneCount, length: steps.length })}</span>
+				>
+					{t("donecountOfLength", "{{doneCount}} of {{length}}", {
+						doneCount,
+						length: steps.length,
+					})}
+				</span>
 			</div>
 
 			<div className="h-[3px] bg-muted">
@@ -115,10 +120,13 @@ export function SetupChecklist({
 			{complete && !expanded && (
 				<div className="flex flex-wrap items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground">
 					<span className="rounded-full bg-green-600/15 px-2 py-0.5 text-[11px] font-semibold text-green-700 dark:text-green-400">
-						{t('allDone', 'All done')}
+						{t("allDone", "All done")}
 					</span>
 					<span className="flex-1">
-						{t('nothingLeftBeforeThisCarriesTraffic', 'Nothing left before this carries traffic.')}
+						{t(
+							"nothingLeftBeforeThisCarriesTraffic",
+							"Nothing left before this carries traffic.",
+						)}
 					</span>
 					<Button
 						variant="outline"
@@ -126,7 +134,7 @@ export function SetupChecklist({
 						className="h-6 px-2 text-[11px]"
 						onClick={() => setExpanded(true)}
 					>
-						{t('review', 'Review')}
+						{t("review", "Review")}
 					</Button>
 				</div>
 			)}
@@ -141,7 +149,7 @@ export function SetupChecklist({
 								className="h-6 px-2 text-[11px]"
 								onClick={() => setExpanded(false)}
 							>
-								{t('collapse', 'Collapse')}
+								{t("collapse", "Collapse")}
 							</Button>
 						</div>
 					)}
@@ -161,7 +169,11 @@ export function SetupChecklist({
 									disabled={derived}
 									onClick={() => toggle(step.id)}
 									aria-label={
-										done ? t('doneTitle', 'Done: {{title}}', { title: step.title }) : t('markDoneTitle', 'Mark done: {{title}}', { title: step.title })
+										done
+											? t("doneTitle", "Done: {{title}}", { title: step.title })
+											: t("markDoneTitle", "Mark done: {{title}}", {
+													title: step.title,
+												})
 									}
 									className={cn(
 										"mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border",
@@ -185,7 +197,7 @@ export function SetupChecklist({
 										</span>
 										{step.external && (
 											<span className="rounded-sm bg-amber-500/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-												{t('outsideFlowlike', 'outside Flow-Like')}
+												{t("outsideFlowlike", "outside Flow-Like")}
 											</span>
 										)}
 									</div>
@@ -205,7 +217,7 @@ export function SetupChecklist({
 											className="mt-1.5 h-6 px-2 text-[11px]"
 											onClick={() => onNavigate(step.section as EventSectionId)}
 										>
-											{t('takeMeThere', 'Take me there')}
+											{t("takeMeThere", "Take me there")}
 										</Button>
 									)}
 								</div>

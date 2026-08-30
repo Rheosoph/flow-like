@@ -23,6 +23,7 @@ impl NodeLogic for GetUserAttributesNode {
             "Get User Attributes",
             "Gets custom role attributes assigned to a project user.",
         );
+        node.set_flowscript_name("user", "getAttributes");
         add_app_pin(&mut node);
         add_user_id_pin(&mut node);
         node.add_output_pin(

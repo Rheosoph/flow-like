@@ -34,6 +34,7 @@ impl NodeLogic for BuildMozillaNode {
             "Builds a model via the Mozilla any-llm gateway (OpenAI-compatible). Supports both self-hosted gateways and the managed platform at any-llm.ai",
             "AI/Generative/Provider",
         );
+        node.set_flowscript_name("ai.provider", "mozilla");
         node.add_icon("/flow/icons/find_model.svg");
         node.set_version(3);
 

@@ -94,6 +94,7 @@ impl NodeLogic for LLMFindElementNode {
             "Uses a vision LLM to locate UI elements based on natural language description",
             "Automation/LLM/Vision",
         );
+        node.set_flowscript_name("automation.llm", "findElement");
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(3);
 

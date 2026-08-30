@@ -1,4 +1,6 @@
-use crate::generative::agent::{Agent, DataFusionContext};
+use crate::generative::agent::Agent;
+#[cfg(feature = "execute")]
+use crate::generative::agent::DataFusionContext;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -29,6 +31,8 @@ impl NodeLogic for AddDataFusionNode {
             "Add a DataFusion SQL session to an agent for data analysis capabilities",
             "AI/Agents/Builder",
         );
+        node.set_flowscript_name("agent", "addDatafusion");
+        node.set_receiver("agent");
         node.set_version(2);
         node.add_icon("/flow/icons/database.svg");
 
@@ -114,6 +118,7 @@ impl NodeLogic for AddDataFusionNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -176,5 +181,12 @@ impl NodeLogic for AddDataFusionNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "DataFusion agent integration requires the 'execute' feature"
+        ))
     }
 }

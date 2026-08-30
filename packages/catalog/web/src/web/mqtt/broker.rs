@@ -70,6 +70,7 @@ impl NodeLogic for MqttBrokerNode {
             "Binds a lightweight MQTT broker for daemon workflows. Typed lifecycle events are exposed as pins; published messages are delivered to the referenced on-message handler.",
             "Web/MQTT",
         );
+        node.set_flowscript_name("mqtt", "broker");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);
@@ -408,6 +409,7 @@ async fn trigger_connected_exec(context: &mut ExecutionContext, pin_name: &str, 
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_mqtt_client<R>(
     mut reader: R,
     tx: mpsc::UnboundedSender<Packet>,

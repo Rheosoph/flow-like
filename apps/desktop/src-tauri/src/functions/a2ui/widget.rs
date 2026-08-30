@@ -117,11 +117,9 @@ pub async fn create_widget_version(
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let mut app = App::load(app_id, flow_like_state.clone()).await?;
 
-    let mut widget = app.open_widget(widget_id.clone(), None).await?;
-    widget.bump_version(version_type);
-    app.save_widget(&widget).await?;
+    let version = app.create_widget_version(&widget_id, version_type).await?;
 
-    Ok(widget.version.unwrap_or((0, 0, 1)))
+    Ok(version)
 }
 
 #[tauri::command(async)]
@@ -197,16 +195,4 @@ pub async fn push_widget_meta(
     let app = App::load(app_id, flow_like_state).await?;
     app.push_widget_meta(&widget_id, language, metadata).await?;
     Ok(())
-}
-
-/// Deliver a micro-widget query result from a live surface back to the run
-/// awaiting it. Returns false when the request already timed out, was
-/// answered by another surface, or is unknown.
-#[tauri::command(async)]
-pub async fn respond_widget_query(
-    _handler: AppHandle,
-    request_id: String,
-    response: flow_like_types::Value,
-) -> Result<bool, TauriFunctionError> {
-    Ok(flow_like_types::frontend_request::resolve_frontend_request(&request_id, response).await)
 }

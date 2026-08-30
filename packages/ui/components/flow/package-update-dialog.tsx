@@ -58,9 +58,12 @@ export function PackageUpdateDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>{t('packageUpdates', 'Package Updates')}</DialogTitle>
+					<DialogTitle>{t("packageUpdates", "Package Updates")}</DialogTitle>
 					<DialogDescription>
-						{t('reviewAndApplyAvailableUpdatesForWasmPackages', 'Review and apply available updates for WASM packages.')}
+						{t(
+							"reviewAndApplyAvailableUpdatesForWasmPackages",
+							"Review and apply available updates for WASM packages.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				<ScrollArea className="max-h-80">

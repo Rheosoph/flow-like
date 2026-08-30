@@ -27,6 +27,7 @@ impl NodeLogic for ForEachWithBreakNode {
             "Loops over an Array; allows breaking early from inside the loop body.",
             "Control",
         );
+        node.set_flowscript_name("control", "forEachWithBreak");
         node.add_icon("/flow/icons/for-each.svg");
 
         // Execution inputs

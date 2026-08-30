@@ -10,7 +10,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::history::{Tool, ToolCall, ToolCallFunction};
-use flow_like_types::{Error, Value, anyhow, async_trait, json, jsonschema};
+use flow_like_types::{Error, Value, anyhow, async_trait, json};
 
 //#[derive(Debug, Deserialize, Serialize)]
 //pub struct OpenAIFunction {
@@ -122,7 +122,7 @@ pub fn validate_json_data(schema: &str, data: &str) -> Result<Value, Error> {
 }
 
 /// Validates a Tool Call Function str against a list of Tools and returns the Tool Call Object
-pub fn tool_call_from_str(tools: &Vec<Tool>, tool_call_function: &str) -> Result<ToolCall, Error> {
+pub fn tool_call_from_str(tools: &[Tool], tool_call_function: &str) -> Result<ToolCall, Error> {
     // Deserialize tool call
     let tool_call_function: ToolCallFunction = match json::from_str(tool_call_function) {
         Ok(tool_call_function) => tool_call_function,
@@ -186,6 +186,7 @@ impl NodeLogic for ParseWithSchema {
             "Parse JSON input Data With JSON/OpenAI Schema and Return Value",
             "Utils/JSON",
         );
+        node.set_flowscript_name("json", "parseWithSchema");
 
         node.add_icon("/flow/icons/repair.svg");
 
@@ -222,7 +223,8 @@ impl NodeLogic for ParseWithSchema {
             "Parsed",
             "Parsed and Validated JSON",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }

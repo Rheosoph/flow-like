@@ -71,6 +71,7 @@ impl NodeLogic for GetSprintsNode {
             "Get all sprints for a board",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "getSprints");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -202,6 +203,7 @@ impl NodeLogic for GetSprintIssuesNode {
             "Get all issues in a sprint",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "getSprintIssues");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -352,6 +354,7 @@ impl NodeLogic for CreateSprintNode {
             "Create a new sprint on a board",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "createSprint");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -508,6 +511,7 @@ impl NodeLogic for UpdateSprintNode {
             "Update an existing sprint",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "updateSprint");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 
@@ -676,6 +680,7 @@ impl NodeLogic for MoveToSprintNode {
             "Move issues to a sprint",
             "Data/Atlassian/Jira/Agile",
         );
+        node.set_flowscript_name("jira", "moveToSprint");
         node.add_icon("/flow/icons/jira.svg");
         node.set_version(1);
 

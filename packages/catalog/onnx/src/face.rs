@@ -115,6 +115,7 @@ impl NodeLogic for FaceDetectionNode {
             "Detect faces in images. Download models from: UltraFace (https://github.com/onnx/models/tree/main/validated/vision/body_analysis/ultraface), RetinaFace (https://huggingface.co/arnabdhar/retinaface-onnx), SCRFD (https://huggingface.co/onnx-community/scrfd_10g_bnkps)",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceDetection");
         node.set_version(1);
 
         node.add_icon("/flow/icons/face.svg");
@@ -410,6 +411,7 @@ impl NodeLogic for FaceEmbeddingNode {
             "Extract face embedding for recognition. Download models from: ArcFace (https://huggingface.co/onnx-community/arcface_torch/tree/main), FaceNet (https://huggingface.co/rocca/facenet-onnx)",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceEmbedding");
         node.set_version(1);
 
         node.add_icon("/flow/icons/fingerprint.svg");
@@ -535,6 +537,7 @@ impl NodeLogic for CompareFacesNode {
             "Compare two face embeddings for similarity",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "compareFaces");
 
         node.add_icon("/flow/icons/compare.svg");
 
@@ -638,6 +641,7 @@ impl NodeLogic for CropFacesNode {
             "Crop detected faces from image",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "cropFaces");
 
         node.add_icon("/flow/icons/crop.svg");
 

@@ -25,6 +25,7 @@ impl NodeLogic for PushLocalSessionNode {
             "Pushes a new local session to the chat. The session persists for one chat session.",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "pushLocalSession");
         node.add_icon("/flow/icons/paperclip.svg");
         node.set_event_callback(true);
 
@@ -41,7 +42,8 @@ impl NodeLogic for PushLocalSessionNode {
             "Generic Struct Type",
             VariableType::Struct,
         )
-        .set_default_value(Some(json!({})));
+        .set_default_value(Some(json!({})))
+        .set_open_schema();
 
         node.add_output_pin(
             "exec_out",

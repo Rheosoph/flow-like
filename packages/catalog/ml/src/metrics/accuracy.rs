@@ -37,6 +37,7 @@ impl NodeLogic for AccuracyNode {
             "Calculate classification accuracy by comparing predictions to actual values",
             "AI/ML/Metrics",
         );
+        node.set_flowscript_name("ml", "evalAccuracy");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(

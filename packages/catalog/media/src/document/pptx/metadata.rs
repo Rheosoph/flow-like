@@ -63,6 +63,7 @@ impl NodeLogic for PptxSetMetadataNode {
             "Set title, author, subject, keywords in presentation metadata",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "setMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()
@@ -159,6 +160,7 @@ impl NodeLogic for PptxGetMetadataNode {
             "Read presentation metadata (title, author, subject, keywords)",
             "Document/PPTX",
         );
+        node.set_flowscript_name("pptx", "getMetadata");
         node.add_icon("/flow/icons/text.svg");
         node.set_scores(
             NodeScores::new()

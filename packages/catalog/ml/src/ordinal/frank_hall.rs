@@ -11,9 +11,11 @@ use crate::ml::{
     PersistedBoolEnsemble, values_to_array1_ordinal, values_to_array2_f64,
 };
 use crate::ml::{NodeMLModel, OrdinalLevels};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -24,9 +26,10 @@ use flow_like_catalog_core::NodeDBConnection;
 use flow_like_ordinal::{FrankHall, FrankHallParams};
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -64,11 +67,8 @@ const BASE_LEARNERS: [&str; 3] = [
 /// Every base's pins have distinct names even where the knob is conceptually the same, because
 /// `on_update` only *adds* a missing pin: a shared name would keep the first base's description and
 /// range after the user switches base.
-#[cfg(feature = "execute")]
 const TREE_PINS: [&str; 3] = ["max_depth", "min_samples_split", "split_quality"];
-#[cfg(feature = "execute")]
 const BAYES_PINS: [&str; 1] = ["var_smoothing"];
-#[cfg(feature = "execute")]
 const FOREST_PINS: [&str; 6] = [
     "ensemble_size",
     "bootstrap_proportion",
@@ -208,7 +208,6 @@ fn fit_decomposition(
 }
 
 /// Reads a dropdown pin's selected value during `on_update`, where only default values exist.
-#[cfg(feature = "execute")]
 fn selected_value(node: &Node, name: &str) -> String {
     node.get_pin_by_name(name)
         .and_then(|pin| pin.default_value.clone())
@@ -218,7 +217,6 @@ fn selected_value(node: &Node, name: &str) -> String {
 }
 
 /// Drops the hyperparameter pins of the bases that are not selected.
-#[cfg(feature = "execute")]
 fn remove_pins(node: &mut Node, names: &[&str]) {
     for name in names {
         flow_like::flow::node::remove_pin_by_name(node, name);
@@ -244,6 +242,7 @@ impl NodeLogic for FitOrdinalFrankHallNode {
             "Fit/Train an ordinal model by decomposition: the ordered target is cut K-1 times (`is the level above this cut?`) and each cut is handed to an ordinary binary classifier, with the predicted level read back as the number of cuts answered yes. This is the one ordinal trainer here that is not linear in the features, so reach for it when the boundary between levels bends in a way the Proportional Odds and Ridge trainers cannot follow. The price is that the K-1 sub-models are fitted independently: there is no single latent scale, no coefficient vector to read a direction off, and no calibrated per-level probabilities - use Proportional Odds when you need those. Every declared level must occur in the training data at the bottom and at the top of the ordering, otherwise a cut has only one class and cannot be fitted. A Random Forest base is the sturdiest choice and by far the costliest: each cut grows its own full forest, so training costs K-1 forests and the saved model carries every tree of every one of them.",
             "AI/ML/Ordinal",
         );
+        node.set_flowscript_name("ml", "fitOrdinalFrankHall");
         node.set_version(2);
         node.add_icon("/flow/icons/chart-network.svg");
 
@@ -640,7 +639,6 @@ impl NodeLogic for FitOrdinalFrankHallNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

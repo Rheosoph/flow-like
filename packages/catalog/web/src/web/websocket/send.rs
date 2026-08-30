@@ -37,6 +37,8 @@ impl NodeLogic for WebSocketSendNode {
             "Sends a message through an open WebSocket connection",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "send");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

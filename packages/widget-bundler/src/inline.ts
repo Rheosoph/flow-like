@@ -1,5 +1,5 @@
 import { type WidgetContract, canonicalizeContract } from "./contract-types";
-import { insertAtHeadStart } from "./html";
+import { type TagSpan, findTag, insertAtHeadStart } from "./html";
 
 export type AssetResolver = (relPath: string) => Uint8Array | null;
 
@@ -55,6 +55,67 @@ function escapeStyleContent(css: string): string {
 
 const DECODER = new TextDecoder();
 
+const WHITESPACE = /\s/;
+
+interface ScriptElement extends TagSpan {
+	attrs: string;
+	body: string;
+}
+
+/** `String.replace` over hand-scanned spans; replacements are never rescanned. */
+function rewriteSpans<T extends TagSpan>(
+	html: string,
+	find: (from: number) => T | null,
+	replace: (span: T) => string,
+): string {
+	let out = "";
+	let cursor = 0;
+	for (;;) {
+		const span = find(cursor);
+		if (span === null) break;
+		out += html.slice(cursor, span.start) + replace(span);
+		cursor = span.end;
+	}
+	return out + html.slice(cursor);
+}
+
+function findScriptClose(
+	html: string,
+	from: number,
+): { start: number; end: number } | null {
+	let cursor = from;
+	for (;;) {
+		const start = html.indexOf("<", cursor);
+		if (start === -1) return null;
+		if (html.slice(start + 1, start + 8).toLowerCase() !== "/script") {
+			cursor = start + 1;
+			continue;
+		}
+		const tail = start + 8;
+		const next = html[tail];
+		if (next === ">") return { start, end: tail + 1 };
+		if (next !== undefined && WHITESPACE.test(next)) {
+			const gt = html.indexOf(">", tail + 1);
+			return gt === -1 ? null : { start, end: gt + 1 };
+		}
+		cursor = start + 1;
+	}
+}
+
+/** Linear-time scan for `<script …>…</script …>`; a regex here is quadratic. */
+function findScriptElement(html: string, from: number): ScriptElement | null {
+	const open = findTag(html, "script", from);
+	if (open === null) return null;
+	const close = findScriptClose(html, open.end);
+	if (close === null) return null;
+	return {
+		start: open.start,
+		end: close.end,
+		attrs: html.slice(open.start + 7, open.end - 1),
+		body: html.slice(open.end, close.start),
+	};
+}
+
 /**
  * Inline local `<script src>` and stylesheet `<link>` references into the
  * document; rewrite references into `shared/` to bundle-relative
@@ -68,36 +129,35 @@ export function inlineHtml(
 	const inlined: string[] = [];
 	const external = new Set<string>();
 
-	let out = html.replace(
-		/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi,
-		(full, attrs: string, body: string) => {
-			const src = attrValue(`<script${attrs}>`, "src");
-			if (src === null) return full;
-			const ref = classifyRef(src);
-			if (ref.kind === "url") return full;
-			if (ref.kind === "shared") {
-				external.add(`shared/${ref.file}`);
-				const openTag = replaceAttrValue(
-					`<script${attrs}>`,
-					"src",
-					`../../shared/${ref.file}`,
-				);
-				return `${openTag}${body}</script>`;
-			}
-			const asset = resolveAsset(ref.path);
-			if (asset === null) {
-				throw new Error(
-					`Cannot inline script '${src}': file not found next to the built document`,
-				);
-			}
-			inlined.push(ref.path);
-			const type = attrValue(`<script${attrs}>`, "type");
-			const typeAttr = type ? ` type="${type}"` : "";
-			return `<script${typeAttr}>${escapeScriptContent(DECODER.decode(asset))}</script>`;
-		},
-	);
+	const replaceScript = (element: ScriptElement): string => {
+		const { attrs, body } = element;
+		const full = html.slice(element.start, element.end);
+		const src = attrValue(`<script${attrs}>`, "src");
+		if (src === null) return full;
+		const ref = classifyRef(src);
+		if (ref.kind === "url") return full;
+		if (ref.kind === "shared") {
+			external.add(`shared/${ref.file}`);
+			const openTag = replaceAttrValue(
+				`<script${attrs}>`,
+				"src",
+				`../../shared/${ref.file}`,
+			);
+			return `${openTag}${body}</script>`;
+		}
+		const asset = resolveAsset(ref.path);
+		if (asset === null) {
+			throw new Error(
+				`Cannot inline script '${src}': file not found next to the built document`,
+			);
+		}
+		inlined.push(ref.path);
+		const type = attrValue(`<script${attrs}>`, "type");
+		const typeAttr = type ? ` type="${type}"` : "";
+		return `<script${typeAttr}>${escapeScriptContent(DECODER.decode(asset))}</script>`;
+	};
 
-	out = out.replace(/<link\b[^>]*\/?>/gi, (full) => {
+	const replaceLink = (full: string): string => {
 		const rel = attrValue(full, "rel")?.toLowerCase();
 		const href = attrValue(full, "href");
 		if (!href || (rel !== "stylesheet" && rel !== "modulepreload")) {
@@ -120,7 +180,18 @@ export function inlineHtml(
 		}
 		inlined.push(ref.path);
 		return `<style>${escapeStyleContent(DECODER.decode(asset))}</style>`;
-	});
+	};
+
+	const withScripts = rewriteSpans(
+		html,
+		(from) => findScriptElement(html, from),
+		replaceScript,
+	);
+	const out = rewriteSpans(
+		withScripts,
+		(from) => findTag(withScripts, "link", from),
+		(tag) => replaceLink(withScripts.slice(tag.start, tag.end)),
+	);
 
 	return { html: out, inlined, external: [...external].sort() };
 }
@@ -133,8 +204,31 @@ export function contractScriptContent(contract: WidgetContract): string {
 	return `globalThis.__FLW_CONTRACT__ = ${json};`;
 }
 
-const EXISTING_CONTRACT_SCRIPT =
-	/<script>\s*globalThis\.__FLW_CONTRACT__[\s\S]*?<\/script>/;
+const CONTRACT_OPEN = "<script>";
+const CONTRACT_CLOSE = "</script>";
+const CONTRACT_MARKER = "globalThis.__FLW_CONTRACT__";
+
+/** Linear-time removal of a previously injected contract script. */
+function stripContractScript(html: string): string {
+	const leadingWhitespace = /\s*/y;
+	let from = 0;
+	for (;;) {
+		const open = html.indexOf(CONTRACT_OPEN, from);
+		if (open === -1) return html;
+		leadingWhitespace.lastIndex = open + CONTRACT_OPEN.length;
+		leadingWhitespace.exec(html);
+		const marker = leadingWhitespace.lastIndex;
+		if (html.startsWith(CONTRACT_MARKER, marker)) {
+			const close = html.indexOf(
+				CONTRACT_CLOSE,
+				marker + CONTRACT_MARKER.length,
+			);
+			if (close === -1) return html;
+			return html.slice(0, open) + html.slice(close + CONTRACT_CLOSE.length);
+		}
+		from = open + 1;
+	}
+}
 
 /**
  * Add `globalThis.__FLW_CONTRACT__` as the first script in `<head>`,
@@ -145,7 +239,7 @@ export function injectContractScript(
 	html: string,
 	contract: WidgetContract,
 ): string {
-	const stripped = html.replace(EXISTING_CONTRACT_SCRIPT, "");
+	const stripped = stripContractScript(html);
 	return insertAtHeadStart(
 		stripped,
 		`<script>${contractScriptContent(contract)}</script>`,

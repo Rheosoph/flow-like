@@ -29,6 +29,7 @@ impl NodeLogic for GrabFrameNode {
             "Captures a frame from an IP camera",
             "Web/Camera",
         );
+        node.set_flowscript_name("camera", "grabFrame");
 
         node.add_icon("/flow/icons/cctv.svg");
 
@@ -119,7 +120,7 @@ impl NodeLogic for GrabFrameNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use flow_like_types::reqwest;
 
     use flow_like_types::{Bytes, tokio};

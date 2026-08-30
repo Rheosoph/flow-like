@@ -1,5 +1,9 @@
+import type { IChannelHandle } from "@flow-like/flow-like-ui/lib/schema/channel";
 import type { IAgentDebugEvent } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
-import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
+import {
+	getGlobalChatRunControl,
+	globalChatTransportRunId,
+} from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import {
 	dispatchSpecialistToolRequest,
 	parseSseFrame,
@@ -26,6 +30,42 @@ function frame(event: string, data: unknown, trailingBlank = true) {
 	return `event: ${event}\ndata: ${serialized}${trailingBlank ? "\n\n" : ""}`;
 }
 
+function pushUrl(runId: string) {
+	return `https://flow.example/api/v1/channels/${encodeURIComponent(runId)}/push`;
+}
+
+function httpHandle(runId: string, requestId?: string): IChannelHandle {
+	return {
+		channel_id: runId,
+		request_id: requestId ?? null,
+		expires_at: 4_102_444_800,
+		transport: { type: "http", push_url: pushUrl(runId), token: "push-token" },
+	};
+}
+
+function runFrame(runId: string) {
+	return frame("run", { runId, channel: httpHandle(runId) });
+}
+
+function toolRequestFrame(
+	runId: string,
+	request: { requestId: string; toolName: string; arguments: unknown },
+) {
+	return frame("tool_request", {
+		...request,
+		channel: httpHandle(runId, request.requestId),
+	});
+}
+
+function pushBody(init: RequestInit | undefined) {
+	return JSON.parse(String(init?.body)) as {
+		channel_id: string;
+		request_id?: string;
+		kind: string;
+		value: Record<string, unknown>;
+	};
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -44,7 +84,7 @@ describe("browser global-chat transport", () => {
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-1" }),
+					runFrame("run-1"),
 					frame("token", "hello"),
 					frame("final", { message: "done" }, false),
 				),
@@ -62,7 +102,7 @@ describe("browser global-chat transport", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	test("executes duplicate requestIds once and forces the original response id", async () => {
+	test("executes duplicate requestIds once and replies on the request's channel", async () => {
 		const request = {
 			requestId: "tool-1",
 			toolName: "database_tool",
@@ -72,9 +112,9 @@ describe("browser global-chat transport", () => {
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run/with spaces" }),
-					frame("tool_request", request),
-					frame("tool_request", request),
+					runFrame("run/with spaces"),
+					toolRequestFrame("run/with spaces", request),
+					toolRequestFrame("run/with spaces", request),
 					frame("final", { status: "ok" }),
 				),
 			)
@@ -100,10 +140,15 @@ describe("browser global-chat transport", () => {
 			string,
 			RequestInit,
 		];
-		expect(deliveryUrl).toContain("run%2Fwith%20spaces/tool-result");
-		expect(JSON.parse(String(deliveryInit.body))).toMatchObject({
-			requestId: "tool-1",
-			approved: true,
+		expect(deliveryUrl).toBe(pushUrl("run/with spaces"));
+		expect((deliveryInit.headers as Record<string, string>).authorization).toBe(
+			"Bearer push-token",
+		);
+		expect(pushBody(deliveryInit)).toMatchObject({
+			channel_id: "run/with spaces",
+			request_id: "tool-1",
+			kind: "reply",
+			value: { requestId: "tool-1", approved: true },
 		});
 		expect(
 			lifecycle.some(
@@ -120,13 +165,13 @@ describe("browser global-chat transport", () => {
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-2" }),
-					frame("tool_request", {
+					runFrame("run-2"),
+					toolRequestFrame("run-2", {
 						requestId: "failed-tool",
 						toolName: "flowpilot_board",
 						arguments: {},
 					}),
-					frame("tool_request", {
+					toolRequestFrame("run-2", {
 						requestId: "denied-tool",
 						toolName: "create_app",
 						arguments: {},
@@ -155,8 +200,10 @@ describe("browser global-chat transport", () => {
 
 		const posted = fetchMock.mock.calls
 			.slice(1)
-			.map((call) => JSON.parse(String((call[1] as RequestInit).body)))
-			.sort((left, right) => left.requestId.localeCompare(right.requestId));
+			.map((call) => pushBody(call[1] as RequestInit).value)
+			.sort((left, right) =>
+				String(left.requestId).localeCompare(String(right.requestId)),
+			);
 		expect(posted).toEqual([
 			{
 				requestId: "denied-tool",
@@ -185,13 +232,13 @@ describe("browser global-chat transport", () => {
 		expect(denial?.error).toBeUndefined();
 	});
 
-	test("fails the run when the server rejects a tool result", async () => {
+	test("fails the run when the channel rejects a tool result", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-3" }),
-					frame("tool_request", {
+					runFrame("run-3"),
+					toolRequestFrame("run-3", {
 						requestId: "tool-3",
 						toolName: "database_tool",
 						arguments: {},
@@ -222,13 +269,71 @@ describe("browser global-chat transport", () => {
 		).toBe(true);
 	});
 
+	test("falls back to the API push endpoint when the transport fails", async () => {
+		const fallbackUrl = "https://flow.example/api/v1/channels/run-fb/push";
+		const request = {
+			requestId: "tool-fb",
+			toolName: "database_tool",
+			arguments: {},
+		};
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				sseResponse(
+					runFrame("run-fb"),
+					frame("tool_request", {
+						...request,
+						channel: {
+							channel_id: "run-fb",
+							request_id: "tool-fb",
+							expires_at: 4_102_444_800,
+							transport: {
+								type: "http",
+								push_url: "https://edge.example/push",
+								token: "edge-token",
+							},
+							fallback: {
+								type: "http",
+								push_url: fallbackUrl,
+								token: "fallback-token",
+							},
+						} satisfies IChannelHandle,
+					}),
+					frame("final", { status: "ok" }),
+				),
+			)
+			.mockRejectedValueOnce(new TypeError("edge unreachable"))
+			.mockResolvedValueOnce(new Response(null, { status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		await webGlobalChatStart({
+			baseUrl: "https://flow.example",
+			body: {},
+			onToolRequest: async (req) => ({
+				requestId: req.requestId,
+				approved: true,
+				result: {},
+			}),
+		})(() => undefined);
+
+		expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+			"https://flow.example/api/v1/ai/global-chat",
+			"https://edge.example/push",
+			fallbackUrl,
+		]);
+		expect(
+			(fetchMock.mock.calls[2][1] as RequestInit).headers,
+		).toMatchObject({ authorization: "Bearer fallback-token" });
+	});
+
 	test("bounds a hanging tool-result delivery", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-4" }),
-					frame("tool_request", {
+					runFrame("run-4"),
+					toolRequestFrame("run-4", {
 						requestId: "tool-4",
 						toolName: "database_tool",
 						arguments: {},
@@ -265,8 +370,8 @@ describe("browser global-chat transport", () => {
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-handler-timeout" }),
-					frame("tool_request", {
+					runFrame("run-handler-timeout"),
+					toolRequestFrame("run-handler-timeout", {
 						requestId: "hung-tool",
 						toolName: "flowpilot_board",
 						arguments: {},
@@ -290,9 +395,8 @@ describe("browser global-chat transport", () => {
 
 		expect(result).toEqual({ status: "ok" });
 		expect(onToolCancel).toHaveBeenCalledTimes(1);
-		const delivered = JSON.parse(
-			String((fetchMock.mock.calls[1]?.[1] as RequestInit).body),
-		);
+		const delivered = pushBody(fetchMock.mock.calls[1]?.[1] as RequestInit)
+			.value;
 		expect(delivered).toMatchObject({
 			requestId: "hung-tool",
 			approved: true,
@@ -314,8 +418,12 @@ describe("browser global-chat transport", () => {
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "run-5" }),
-					frame("tool_request", { toolName: "database_tool", arguments: {} }),
+					runFrame("run-5"),
+					frame("tool_request", {
+						toolName: "database_tool",
+						arguments: {},
+						channel: httpHandle("run-5", "x"),
+					}),
 					frame("final", { status: "ok" }),
 				),
 			);
@@ -330,6 +438,52 @@ describe("browser global-chat transport", () => {
 		expect(
 			malformedLifecycle.some(
 				(event) => event.stage === "malformed_tool_request",
+			),
+		).toBe(true);
+
+		const channelLessToolFetch = vi
+			.fn()
+			.mockResolvedValueOnce(
+				sseResponse(
+					runFrame("run-5b"),
+					frame("tool_request", {
+						requestId: "tool-5b",
+						toolName: "database_tool",
+						arguments: {},
+					}),
+					frame("final", { status: "ok" }),
+				),
+			);
+		vi.stubGlobal("fetch", channelLessToolFetch);
+		await expect(
+			webGlobalChatStart({
+				baseUrl: "https://flow.example",
+				body: {},
+				onToolRequest: vi.fn(),
+			})(() => undefined),
+		).rejects.toThrow(/channel is missing/);
+		expect(channelLessToolFetch).toHaveBeenCalledTimes(1);
+
+		const channelLessRunLifecycle: IAgentDebugEvent[] = [];
+		const channelLessRunFetch = vi
+			.fn()
+			.mockResolvedValueOnce(
+				sseResponse(
+					frame("run", { runId: "run-5c" }),
+					frame("final", { status: "ok" }),
+				),
+			);
+		vi.stubGlobal("fetch", channelLessRunFetch);
+		await expect(
+			webGlobalChatStart({
+				baseUrl: "https://flow.example",
+				body: {},
+				onLifecycle: (event) => channelLessRunLifecycle.push(event),
+			})(() => undefined),
+		).rejects.toThrow(/run frame: channel is missing/);
+		expect(
+			channelLessRunLifecycle.some(
+				(event) => event.stage === "malformed_run_frame",
 			),
 		).toBe(true);
 
@@ -351,7 +505,7 @@ describe("browser global-chat transport", () => {
 
 		const missingFinalFetch = vi
 			.fn()
-			.mockResolvedValueOnce(sseResponse(frame("run", { runId: "run-6" })));
+			.mockResolvedValueOnce(sseResponse(runFrame("run-6")));
 		vi.stubGlobal("fetch", missingFinalFetch);
 		await expect(
 			webGlobalChatStart({
@@ -360,12 +514,13 @@ describe("browser global-chat transport", () => {
 			})(() => undefined),
 		).rejects.toThrow(/without a final frame/);
 	});
+
 	test("maps a client run id onto the server's while the run is live", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValueOnce(
 				sseResponse(
-					frame("run", { runId: "server-run-1" }),
+					runFrame("server-run-1"),
 					frame("token", "hi"),
 					frame("final", { status: "ok" }),
 				),
@@ -390,7 +545,47 @@ describe("browser global-chat transport", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	test("dispatches a nested specialist tool request back to the owning run", async () => {
+	test("steers and cancels a live run through the run channel", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				sseResponse(
+					runFrame("server-run-ctl"),
+					frame("token", "hi"),
+					frame("final", { status: "ok" }),
+				),
+			)
+			.mockResolvedValue(new Response(null, { status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		let control: Promise<void> | undefined;
+
+		await webGlobalChatStart({
+			baseUrl: "https://flow.example",
+			body: {},
+			clientRunId: "client-run-ctl",
+		})(() => {
+			const runControl = getGlobalChatRunControl("client-run-ctl");
+			control = runControl
+				?.steer("focus on tests")
+				.then(() => runControl.cancel());
+		});
+		await control;
+
+		expect(fetchMock.mock.calls.slice(1).map((call) => call[0])).toEqual([
+			pushUrl("server-run-ctl"),
+			pushUrl("server-run-ctl"),
+		]);
+		const bodies = fetchMock.mock.calls
+			.slice(1)
+			.map((call) => pushBody(call[1] as RequestInit));
+		expect(bodies).toEqual([
+			{ channel_id: "server-run-ctl", kind: "inbound", value: "focus on tests" },
+			{ channel_id: "server-run-ctl", kind: "cancel", value: null },
+		]);
+		expect(getGlobalChatRunControl("client-run-ctl")).toBeUndefined();
+	});
+
+	test("dispatches a nested specialist tool request on the frame's channel", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValueOnce(new Response(null, { status: 204 }));
@@ -402,29 +597,27 @@ describe("browser global-chat transport", () => {
 		});
 
 		await dispatchSpecialistToolRequest({
-			baseUrl: "https://flow.example",
-			token: "jwt-token",
-			runId: "server-run-2",
 			data: JSON.stringify({
 				requestId: "tool-9",
 				toolName: "database_tool",
 				arguments: { operation: "list_tables" },
+				channel: httpHandle("server-run-2", "tool-9"),
 			}),
 			onToolRequest,
 		});
 
 		expect(onToolRequest).toHaveBeenCalledTimes(1);
 		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-		expect(url).toBe(
-			"https://flow.example/api/v1/ai/global-chat/server-run-2/tool-result",
-		);
+		expect(url).toBe(pushUrl("server-run-2"));
 		expect((init.headers as Record<string, string>).authorization).toBe(
-			"Bearer jwt-token",
+			"Bearer push-token",
 		);
 		// The specialist is blocked on the id it sent, never on one a handler made up.
-		expect(JSON.parse(String(init.body))).toMatchObject({
-			requestId: "tool-9",
-			approved: true,
+		expect(pushBody(init)).toMatchObject({
+			channel_id: "server-run-2",
+			request_id: "tool-9",
+			kind: "reply",
+			value: { requestId: "tool-9", approved: true },
 		});
 	});
 
@@ -434,8 +627,6 @@ describe("browser global-chat transport", () => {
 
 		await expect(
 			dispatchSpecialistToolRequest({
-				baseUrl: "https://flow.example",
-				runId: "server-run-3",
 				data: JSON.stringify({ toolName: "database_tool" }),
 				onToolRequest: vi.fn(),
 			}),

@@ -1,19 +1,17 @@
 "use client";
 
 import { i18n as i18next } from "@flow-like/locales";
-import {
-	AudioLines,
-	AudioWaveform,
-	CornerDownRight,
-	FileIcon,
-	FolderIcon,
-	MicIcon,
-	Plus,
-	Send,
-	SquareIcon,
-	WrenchIcon,
-	X,
-} from "lucide-react";
+import AudioLines from "lucide-react/dist/esm/icons/audio-lines.js";
+import AudioWaveform from "lucide-react/dist/esm/icons/audio-waveform.js";
+import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right.js";
+import FileIcon from "lucide-react/dist/esm/icons/file.js";
+import FolderIcon from "lucide-react/dist/esm/icons/folder.js";
+import MicIcon from "lucide-react/dist/esm/icons/mic.js";
+import Plus from "lucide-react/dist/esm/icons/plus.js";
+import Send from "lucide-react/dist/esm/icons/send.js";
+import SquareIcon from "lucide-react/dist/esm/icons/square.js";
+import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import {
 	forwardRef,
 	useCallback,
@@ -22,21 +20,15 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { cn, humanFileSize, sanitizeImageUrl } from "../../../lib";
-import {
-	Button,
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-	Textarea,
-} from "../../ui";
-import {
-	type VoiceInvokeMode,
-	type VoiceMode,
-	useSpeechRecognition,
-	useVoiceRecorder,
-} from "../../voice";
+import { cn, humanFileSize } from "../../../lib/utils";
+import { Button } from "../../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
+import { Textarea } from "../../ui/textarea";
+import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
+import { useSpeechRecognition } from "../../voice/use-speech-recognition";
+import { useVoiceRecorder } from "../../voice/use-voice-recorder";
 import { FileManagerDialog } from "./chatbox/file-dialog";
+import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
 
 export type ISendMessageFunction = (
 	content: string,
@@ -116,6 +108,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
 		const [showFileManager, setShowFileManager] = useState(false);
+		const visibleFiles = attachedFiles.slice(0, 6);
+		const previewUrls = useImagePreviewUrls(visibleFiles);
 
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordedDuration, setRecordedDuration] = useState(0);
@@ -161,7 +155,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				console.error("Error transcribing speech:", error);
 				setSpeechFailed(true);
 				setVoiceError(
-					i18next.t('speechRecognitionIsUnavailableYouCanRecordAudioInstead', 'Speech recognition is unavailable. You can record audio instead.'),
+					i18next.t(
+						"speechRecognitionIsUnavailableYouCanRecordAudioInstead",
+						"Speech recognition is unavailable. You can record audio instead.",
+					),
 				);
 			},
 		});
@@ -445,10 +442,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			);
 		};
 
-		const isImageFile = (file: File) => {
-			return file.type.startsWith("image/");
-		};
-
 		return (
 			<div className="w-full max-w-screen-xl px-2">
 				{/* Attachments Preview */}
@@ -463,7 +456,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									<MicIcon className="w-4 h-4 text-primary" />
 								</div>
 								<div className="flex flex-col min-w-0 flex-1">
-									<span className="text-xs font-medium">{i18next.t('audioRecording', 'Audio Recording')}</span>
+									<span className="text-xs font-medium">
+										{i18next.t("audioRecording", "Audio Recording")}
+									</span>
 									<span className="text-xs text-muted-foreground">
 										{formatTime(recordedDuration)} •{" "}
 										{(recordedAudio.size / 1024).toFixed(1)} KB
@@ -484,7 +479,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Attached files — one quiet chip per file, wrapping inline. */}
 						{attachedFiles.length > 0 && (
 							<div className="flex flex-wrap items-center gap-1.5">
-								{attachedFiles.slice(0, 6).map((file, index) => (
+								{visibleFiles.map((file, index) => (
 									<div
 										key={`${file.name}-${index}`}
 										className="group flex h-8 min-w-0 max-w-56 items-center gap-2 rounded-full border py-0 pr-1 pl-1.5 transition-colors hover:border-ring"
@@ -494,7 +489,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									>
 										{isImageFile(file) ? (
 											<img
-												src={sanitizeImageUrl(URL.createObjectURL(file), "")}
+												src={previewUrls.get(file)}
 												alt={file.name}
 												className="size-6 shrink-0 rounded-full object-cover"
 											/>
@@ -513,7 +508,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											type="button"
 											size="sm"
 											variant="ghost"
-											aria-label={i18next.t('removeName', 'Remove {{name}}', { name: file.name })}
+											aria-label={i18next.t("removeName", "Remove {{name}}", {
+												name: file.name,
+											})}
 											className="size-6 shrink-0 rounded-full p-0 text-muted-foreground opacity-60 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
 											onClick={() => handleRemoveFile(index)}
 										>
@@ -542,7 +539,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:text-destructive"
 										onClick={() => setAttachedFiles([])}
 									>
-										{i18next.t('clearAll', 'Clear all')}
+										{i18next.t("clearAll", "Clear all")}
 									</Button>
 								)}
 							</div>
@@ -583,7 +580,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								onChange={(e) => setInput(e.target.value)}
 								onKeyDown={handleKeyDown}
 								onPaste={handlePaste}
-								placeholder={i18next.t('typeAMessage', 'Type a message...')}
+								placeholder={i18next.t("typeAMessage", "Type a message...")}
 								className="border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
 								rows={Math.min(5, Math.max(1, input.split("\n").length))}
 								style={{
@@ -608,7 +605,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									<Popover>
 										<PopoverTrigger asChild>
 											<Button
-												aria-label={i18next.t('addAttachment', 'Add attachment')}
+												aria-label={i18next.t(
+													"addAttachment",
+													"Add attachment",
+												)}
 												type="button"
 												size="sm"
 												variant="ghost"
@@ -645,14 +645,14 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
 												>
 													<FileIcon className="size-4 text-muted-foreground" />
-													{i18next.t('files', 'Files')}
+													{i18next.t("files", "Files")}
 												</label>
 												<label
 													htmlFor="folder-upload"
 													className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-accent"
 												>
 													<FolderIcon className="size-4 text-muted-foreground" />
-													{i18next.t('folder', 'Folder')}
+													{i18next.t("folder", "Folder")}
 												</label>
 											</div>
 										</PopoverContent>
@@ -665,7 +665,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										<Popover>
 											<PopoverTrigger asChild>
 												<Button
-													aria-label={i18next.t('chooseTools', 'Choose tools')}
+													aria-label={i18next.t("chooseTools", "Choose tools")}
 													type="button"
 													size="sm"
 													variant="ghost"
@@ -677,7 +677,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											<PopoverContent side="top" className="w-48 p-2 mb-2">
 												<div className="space-y-1">
 													<div className="text-xs font-medium text-muted-foreground px-2 pb-1">
-														{i18next.t('tools', 'Tools')}
+														{i18next.t("tools", "Tools")}
 													</div>
 													{availableTools.map((tool) => (
 														<div
@@ -728,7 +728,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											type="button"
 											onClick={() => setAttachedFiles([])}
 											className="flex items-center gap-1 px-2 py-1 bg-accent/50 hover:bg-destructive hover:text-destructive-foreground rounded-full transition-colors cursor-pointer"
-											title={i18next.t('clearAllAttachments', 'Clear all attachments')}
+											title={i18next.t(
+												"clearAllAttachments",
+												"Clear all attachments",
+											)}
 										>
 											<FileIcon className="w-3 h-3 text-muted-foreground group-hover:text-destructive-foreground" />
 											<span className="text-xs text-muted-foreground group-hover:text-destructive-foreground font-medium">
@@ -749,8 +752,14 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									<Button
 										aria-label={
 											isTranscribing
-												? i18next.t('stopVoiceTranscription', 'Stop voice transcription')
-												: i18next.t('startVoiceTranscription', 'Start voice transcription')
+												? i18next.t(
+														"stopVoiceTranscription",
+														"Stop voice transcription",
+													)
+												: i18next.t(
+														"startVoiceTranscription",
+														"Start voice transcription",
+													)
 										}
 										type="button"
 										size="sm"
@@ -774,7 +783,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										{voiceInvoke === "hold" ? (
 											<>
 												<Button
-													aria-label={i18next.t('holdToRecord', 'Hold to record')}
+													aria-label={i18next.t(
+														"holdToRecord",
+														"Hold to record",
+													)}
 													type="button"
 													size="sm"
 													variant={isRecording ? "destructive" : "ghost"}
@@ -805,7 +817,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										) : isRecording ? (
 											<>
 												<Button
-													aria-label={i18next.t('stopAudioRecording', 'Stop audio recording')}
+													aria-label={i18next.t(
+														"stopAudioRecording",
+														"Stop audio recording",
+													)}
 													type="button"
 													size="sm"
 													variant="destructive"
@@ -815,7 +830,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													<SquareIcon className="w-3 h-3" />
 												</Button>
 												<Button
-													aria-label={i18next.t('cancelAudioRecording', 'Cancel audio recording')}
+													aria-label={i18next.t(
+														"cancelAudioRecording",
+														"Cancel audio recording",
+													)}
 													type="button"
 													size="sm"
 													variant="ghost"
@@ -830,7 +848,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											</>
 										) : (
 											<Button
-												aria-label={i18next.t('startAudioRecording', 'Start audio recording')}
+												aria-label={i18next.t(
+													"startAudioRecording",
+													"Start audio recording",
+												)}
 												disabled={
 													!!recordedAudio ||
 													sendDisabled ||
@@ -857,7 +878,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
 										onClick={onVoiceModeToggle}
 										disabled={isRecording || isTranscribing || sendDisabled}
-										title={i18next.t('voiceMode', 'Voice mode')}
+										title={i18next.t("voiceMode", "Voice mode")}
 									>
 										<AudioWaveform className="w-4 h-4" />
 									</Button>
@@ -865,8 +886,14 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 								{onSteer && (
 									<Button
-										aria-label={i18next.t('addToTheRunningResponse', 'Add to the running response')}
-										title={i18next.t('addToTheRunningResponseFlowpilotPicksItUpWithoutRestarting', 'Add to the running response — FlowPilot picks it up without restarting')}
+										aria-label={i18next.t(
+											"addToTheRunningResponse",
+											"Add to the running response",
+										)}
+										title={i18next.t(
+											"addToTheRunningResponseFlowpilotPicksItUpWithoutRestarting",
+											"Add to the running response — FlowPilot picks it up without restarting",
+										)}
 										type="button"
 										size="sm"
 										disabled={
@@ -885,7 +912,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								)}
 
 								<Button
-									aria-label={sendHint ?? i18next.t('sendMessage', 'Send message')}
+									aria-label={
+										sendHint ?? i18next.t("sendMessage", "Send message")
+									}
 									title={sendHint}
 									type="submit"
 									size="sm"

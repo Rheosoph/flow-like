@@ -35,6 +35,7 @@ impl NodeLogic for NotifyUserNode {
             "Send a notification to the user who executed this workflow",
             "Notifications",
         );
+        node.set_flowscript_name("notify", "user");
         node.add_icon("/flow/icons/bell.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);

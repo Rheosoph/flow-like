@@ -160,7 +160,7 @@ export function PdfFrame({
 	if (state === "loading") {
 		return (
 			<div className="flex h-full w-full items-center justify-center p-4 text-sm text-muted-foreground">
-				{t('loadingPdfPreview', 'Loading PDF preview...')}
+				{t("loadingPdfPreview", "Loading PDF preview...")}
 			</div>
 		);
 	}
@@ -169,13 +169,18 @@ export function PdfFrame({
 		<iframe
 			src={`${src.split("#")[0]}${pdfViewerFragment(page)}`}
 			className={cn("w-full h-full border-0 max-h-full max-w-full", className)}
-			title={t('pdfPreviewVal', 'PDF Preview: {{val}}', { val: rawFileName(url, filename) })}
+			title={t("pdfPreviewVal", "PDF Preview: {{val}}", {
+				val: rawFileName(url, filename),
+			})}
 			loading={loading}
 		>
 			<p>
-				{t('yourBrowserCannotDisplayThePdf', 'Your browser cannot display the PDF.')}{" "}
+				{t(
+					"yourBrowserCannotDisplayThePdf",
+					"Your browser cannot display the PDF.",
+				)}{" "}
 				<a href={url} target="_blank" rel="noopener noreferrer">
-					{t('downloadThePdf', 'Download the PDF')}
+					{t("downloadThePdf", "Download the PDF")}
 				</a>{" "}
 				instead.
 			</p>
@@ -217,7 +222,12 @@ export function FilePreviewer({
 
 	if (!canPreview(url, filename)) {
 		return (
-			<div className="text-red-500">{t('fileTypeNotSupportedForPreview', 'File type not supported for preview')}</div>
+			<div className="text-red-500">
+				{t(
+					"fileTypeNotSupportedForPreview",
+					"File type not supported for preview",
+				)}
+			</div>
 		);
 	}
 
@@ -305,6 +315,11 @@ export function FilePreviewer({
 	}
 
 	return (
-		<div className="text-red-500">{t('fileTypeNotSupportedForPreview', 'File type not supported for preview')}</div>
+		<div className="text-red-500">
+			{t(
+				"fileTypeNotSupportedForPreview",
+				"File type not supported for preview",
+			)}
+		</div>
 	);
 }

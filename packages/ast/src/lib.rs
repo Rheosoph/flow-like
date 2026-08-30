@@ -7,6 +7,8 @@
 //! - [`model`] — the [`BoardAst`] IR types.
 //! - [`render`] — [`BoardAst`] → FlowScript text.
 //! - [`parse`] — FlowScript text → [`BoardAst`].
+//! - [`redact`] — strip declared values and long literals before a source is stored off-machine.
+//! - [`naming`] — `namespace::alias` derivation for nodes and the name-collision contract.
 //! - [`signatures`] — node signature stubs (the ~1200-function problem).
 //! - [`text`] — pure text helpers (casing, quoting).
 //!
@@ -14,21 +16,33 @@
 //! core, which depends on this crate.
 
 pub mod model;
+pub mod naming;
 pub mod parse;
+pub mod redact;
 pub mod render;
 pub mod schema;
 pub mod signatures;
 pub mod text;
 
 pub use model::*;
+pub use naming::{
+    CollisionKind, EffectiveNames, NAME_OVERRIDES, NAMESPACES, NameCollision, NameEntry,
+    NameFields, NameOverride, NamespaceSpec, NodeNames, VALUE_TYPE_NAMESPACES, check_names,
+    declared_identifier, default_receiver_pin, derive_alias, derive_namespace, effective_names,
+    effective_receiver_pin, effective_spelling, is_keyword, is_value_type_namespace,
+    legacy_display, namespace_accepts_receiver, qualified_name, receiver_class, receiver_class_of,
+    schema_title,
+};
 pub use parse::{ParseError, parse};
-pub use render::{RenderOptions, render, render_type_ref};
+pub use redact::{MAX_LITERAL_CHARS, MAX_SOURCE_CHARS, RedactedFlowScript, redact_flowscript};
+pub use render::{RenderOptions, render, render_template, render_type_ref};
 pub use schema::{
     apply_interface_schemas, interface_name_for_schema, interfaces_for_variables, normalize_schema,
     schema_from_interface, schema_from_interface_with_defs,
 };
 pub use signatures::{
     DeclarationFile, NodeSchemas, SIGNATURE_SET_VERSION, SigParam, Signature, SignatureSet,
-    declarations_by_category, declarations_by_package, render_signatures, schema_sidecar,
+    declarations_by_category, declarations_by_package, is_signature_line, render_signatures,
+    schema_sidecar,
 };
 pub use text::{is_valid_identifier, quote_string, to_camel_case};

@@ -8,7 +8,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait};
 
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 
 /// Gets the placeholder text of an input element.
 #[crate::register_node]
@@ -30,6 +30,7 @@ impl NodeLogic for GetInputPlaceholder {
             "Gets the placeholder text of an input element",
             "UI/Elements/Input",
         );
+        node.set_flowscript_name("ui", "getInputPlaceholder");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -56,10 +57,10 @@ impl NodeLogic for GetInputPlaceholder {
         let element_id = extract_element_id_from_pin(element_value)
             .ok_or_else(|| flow_like_types::anyhow!("Invalid element reference"))?;
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         let placeholder = element
+            .as_ref()
             .map(|(_, el)| el)
             .and_then(|el| el.get("component"))
             .and_then(|c| c.get("placeholder"))

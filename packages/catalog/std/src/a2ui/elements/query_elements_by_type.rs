@@ -33,6 +33,7 @@ impl NodeLogic for QueryElementsByType {
             "Gets all elements of a specific component type",
             "UI/Elements/Query",
         );
+        node.set_flowscript_name("ui", "queryElementsByType");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -64,30 +65,31 @@ impl NodeLogic for QueryElementsByType {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let component_type: String = context.evaluate_pin("component_type").await?;
         let component_type_lower = component_type.to_lowercase();
+        context
+            .ensure_elements(&[format!("type:{component_type}")])
+            .await?;
 
-        let elements = context.get_frontend_elements().await?;
-
-        let mut matching_elements: Vec<Value> = Vec::new();
-
-        if let Some(elements_map) = elements {
-            for (id, element) in elements_map {
-                // Check if element's component type matches
-                let element_type = element
-                    .get("component")
-                    .and_then(|c| c.get("type"))
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_lowercase());
-
-                if element_type == Some(component_type_lower.clone()) {
-                    // Include the element with its ID
-                    let mut element_with_id = element.clone();
-                    if let Some(obj) = element_with_id.as_object_mut() {
-                        obj.insert("_id".to_string(), Value::String(id.clone()));
-                    }
-                    matching_elements.push(element_with_id);
-                }
-            }
-        }
+        let matching_elements: Vec<Value> = context
+            .with_elements(|elements| {
+                elements
+                    .iter()
+                    .filter(|(_, element)| {
+                        element
+                            .get("component")
+                            .and_then(|c| c.get("type"))
+                            .and_then(|t| t.as_str())
+                            .is_some_and(|t| t.to_lowercase() == component_type_lower)
+                    })
+                    .map(|(id, element)| {
+                        let mut element_with_id = element.clone();
+                        if let Some(obj) = element_with_id.as_object_mut() {
+                            obj.insert("_id".to_string(), Value::String(id.clone()));
+                        }
+                        element_with_id
+                    })
+                    .collect()
+            })
+            .await?;
 
         let count = matching_elements.len() as i64;
 

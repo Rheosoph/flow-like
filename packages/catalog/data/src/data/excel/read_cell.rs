@@ -1,7 +1,6 @@
-use crate::data::{
-    excel::{parse_col_1_based, parse_row_1_based},
-    path::FlowPath,
-};
+#[cfg(feature = "execute")]
+use crate::data::excel::{parse_col_1_based, parse_row_1_based};
+use crate::data::path::FlowPath;
 #[cfg(feature = "execute")]
 use calamine::{Data, DataType};
 use flow_like::flow::{
@@ -80,6 +79,7 @@ impl NodeLogic for ReadCellNode {
             "Read a single cell value from an XLSX sheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "readCell");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);

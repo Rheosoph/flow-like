@@ -61,7 +61,7 @@ export function GraphEdgeInspector({
 					</div>
 					<div className="min-w-0">
 						<h3 className="font-semibold text-sm truncate">{edge.label}</h3>
-						<p className="text-xs text-muted-foreground">{t('edge', 'Edge')}</p>
+						<p className="text-xs text-muted-foreground">{t("edge", "Edge")}</p>
 					</div>
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
@@ -115,10 +115,14 @@ export function GraphEdgeInspector({
 						<div>
 							<div className="flex items-center justify-between mb-2">
 								<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-									{t('properties', 'Properties')}
+									{t("properties", "Properties")}
 								</p>
 								{hiddenFields.size > 0 && (
-									<span className="text-[10px] text-muted-foreground">{t('sizeHidden', '{{size}} hidden', { size: hiddenFields.size })}</span>
+									<span className="text-[10px] text-muted-foreground">
+										{t("sizeHidden", "{{size}} hidden", {
+											size: hiddenFields.size,
+										})}
+									</span>
 								)}
 							</div>
 							<div className="space-y-2">
@@ -140,12 +144,15 @@ export function GraphEdgeInspector({
 					)}
 					{propEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							{t('noPropertiesAvailable', 'No properties available')}
+							{t("noPropertiesAvailable", "No properties available")}
 						</p>
 					)}
 					{propEntries.length > 0 && visibleEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							{t('allFieldsHiddenUseTheFilterToShowThem', 'All fields hidden — use the filter to show them')}
+							{t(
+								"allFieldsHiddenUseTheFilterToShowThem",
+								"All fields hidden — use the filter to show them",
+							)}
 						</p>
 					)}
 				</div>

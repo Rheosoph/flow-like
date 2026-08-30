@@ -52,6 +52,7 @@ impl NodeLogic for GetCurrentUserInfoNode {
             "Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.",
             "Utils/User",
         );
+        node.set_flowscript_name("user", "getCurrentInfo");
         node.add_icon("/flow/icons/user.svg");
 
         node.add_output_pin(

@@ -19,6 +19,7 @@ impl NodeLogic for ProbeCodecBackendsNode {
             "Report compiled video-utils-rs features and recommended codec backend lanes",
             "Diagnostics",
         );
+        node.set_flowscript_name("video", "probeCodecBackends");
         node.add_icon("/flow/icons/info.svg");
         add_exec_pins(&mut node);
         node.add_output_pin(

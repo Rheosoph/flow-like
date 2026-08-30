@@ -74,7 +74,7 @@ function RetentionNotice() {
 		<div className="space-y-2">
 			<Label className="flex items-center gap-2">
 				<Timer className="h-4 w-4" />
-				{t('howLongDataIsKept', 'How long data is kept')}
+				{t("howLongDataIsKept", "How long data is kept")}
 			</Label>
 			<ul className="space-y-1 text-sm text-muted-foreground">
 				{RETENTION_ROWS.map((row) => (
@@ -107,20 +107,26 @@ export function PrivacySettingsPage({
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<ShieldCheck className="h-5 w-5" />
-					{t('privacyAmpTelemetry', "Privacy & Telemetry")}
+					{t("privacyAmpTelemetry", "Privacy & Telemetry")}
 				</CardTitle>
 				<CardDescription>
-					{t('controlWhatAnonymousDiagnosticsAndUsageDataFlowlikeMayCollectBothSwitchesAreIndependentMdashTurningOneOffNeverChangesTheOther', "Control what anonymous diagnostics and usage data Flow-Like may collect. Both switches are independent — turning one off never changes the other.")}
+					{t(
+						"controlWhatAnonymousDiagnosticsAndUsageDataFlowlikeMayCollectBothSwitchesAreIndependentMdashTurningOneOffNeverChangesTheOther",
+						"Control what anonymous diagnostics and usage data Flow-Like may collect. Both switches are independent — turning one off never changes the other.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<PrivacyToggle
 					id="crash-reports"
 					icon={<Bug className="h-4 w-4" />}
-					title={t('crashErrorReports', 'Crash & error reports')}
+					title={t("crashErrorReports", "Crash & error reports")}
 					description={
 						<>
-							{t('onByDefaultSendsAnonymousDiagnosticsWhenSomethingBreaksTheExceptionTypeAScrubbedStackTraceAndTheAppVersionNeverAUserIdNeverYourIpAddressNeverMessagePromptOrBoardContent', "On by default. Sends anonymous diagnostics when something breaks: the exception type, a scrubbed stack trace and the app version. Never a user id, never your IP address, never message, prompt or board content.")}
+							{t(
+								"onByDefaultSendsAnonymousDiagnosticsWhenSomethingBreaksTheExceptionTypeAScrubbedStackTraceAndTheAppVersionNeverAUserIdNeverYourIpAddressNeverMessagePromptOrBoardContent",
+								"On by default. Sends anonymous diagnostics when something breaks: the exception type, a scrubbed stack trace and the app version. Never a user id, never your IP address, never message, prompt or board content.",
+							)}
 						</>
 					}
 					checked={crashReportsEnabled}
@@ -131,10 +137,13 @@ export function PrivacySettingsPage({
 				<PrivacyToggle
 					id="anonymous-telemetry"
 					icon={<BarChart3 className="h-4 w-4" />}
-					title={t('anonymousUsageTelemetry', 'Anonymous usage telemetry')}
+					title={t("anonymousUsageTelemetry", "Anonymous usage telemetry")}
 					description={
 						<>
-							{t('optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded', "Opt-in only. Shares aggregate counters and sanitized page paths — never prompts, board content, names, or any personal data. Usage events may be sampled, so only a share of page views is recorded.")}
+							{t(
+								"optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded",
+								"Opt-in only. Shares aggregate counters and sanitized page paths — never prompts, board content, names, or any personal data. Usage events may be sampled, so only a share of page views is recorded.",
+							)}
 						</>
 					}
 					checked={enabled === true}
@@ -142,13 +151,19 @@ export function PrivacySettingsPage({
 					onChange={onChange}
 				/>
 				<p className="text-sm text-muted-foreground">
-					{t('bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn', "Both use the same random install id. It is deleted once both switches are off, and a fresh one is created if you turn either back on.")}
+					{t(
+						"bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn",
+						"Both use the same random install id. It is deleted once both switches are off, and a fresh one is created if you turn either back on.",
+					)}
 				</p>
 				<Separator />
 				<RetentionNotice />
 				{!available && (
 					<p className="text-sm text-muted-foreground">
-						{t('theConnectedPlatformHasTelemetryDisabledSoNothingIsCollectedRegardlessOfTheseSettings', "The connected platform has telemetry disabled, so nothing is collected regardless of these settings.")}
+						{t(
+							"theConnectedPlatformHasTelemetryDisabledSoNothingIsCollectedRegardlessOfTheseSettings",
+							"The connected platform has telemetry disabled, so nothing is collected regardless of these settings.",
+						)}
 					</p>
 				)}
 			</CardContent>

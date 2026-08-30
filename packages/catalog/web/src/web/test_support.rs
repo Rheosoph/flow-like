@@ -55,7 +55,7 @@ pub(crate) fn internal_node_with_logic(node: Node, logic: Arc<dyn NodeLogic>) ->
 
     let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
 
-    for pin in internal.pins.values() {
+    for pin in internal.pins.iter() {
         pin.init_node(Arc::downgrade(&internal));
         pin.init_connected_to(Vec::new());
         pin.init_depends_on(Vec::new());
@@ -108,6 +108,7 @@ pub(crate) async fn test_context(
         None,
         None,
         Arc::new(AHashMap::new()),
+        None,
     )
     .await
 }

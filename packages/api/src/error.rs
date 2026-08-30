@@ -64,6 +64,16 @@ impl ApiError {
     pub fn internal_error(err: flow_like_types::Error) -> Self {
         Self::internal(err.to_string())
     }
+
+    /// The client-safe message, for callers that need to record the same
+    /// reason they are about to return.
+    pub fn public_message(&self) -> Option<&str> {
+        self.public_message.as_deref()
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
 }
 
 impl ApiError {

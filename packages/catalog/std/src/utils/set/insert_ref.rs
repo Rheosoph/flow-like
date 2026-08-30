@@ -26,6 +26,7 @@ impl NodeLogic for InsertSetRefNode {
             "Insert an element directly into a variable set without copying. Much faster for large sets.",
             "Utils/Set/By Reference",
         );
+        node.set_flowscript_name("set", "insertRef");
         node.add_icon("/flow/icons/ellipsis-vertical.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

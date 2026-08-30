@@ -989,6 +989,7 @@ async fn decode_audio_file(
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 fn video_frame_pipeline(
     crop_x: i64,
     crop_y: i64,
@@ -1231,6 +1232,7 @@ fn process_video_transform(
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 fn process_subtitle_burn(
     demuxed: &video_utils_rs::DemuxedMedia,
     video_track_id: u32,

@@ -286,6 +286,23 @@ export default {
 	"v5.control.item3": "EU AI Act 대비",
 	"v5.control.item4": "엔드투엔드 관측 가능성",
 
+	"v5.book.eyebrow": "FLOWBOOK",
+	"v5.book.kicker": "개발자를 위한 공개 가이드",
+	"v5.book.title": "인시던트부터 구현까지 다루는 개발자 가이드입니다.",
+	"v5.book.body":
+		"FlowBook은 Flow-Like로 개발하는 개발자를 위한 책입니다. 하나의 실행 가능한 워크플로를 따라가며 타입이 지정된 FlowScript 소스, 비주얼 캔버스, 성공 또는 실패가 남긴 런타임 증거를 살펴보세요.",
+	"v5.book.meta": "공개판 · 2026 · 영어",
+	"v5.book.read": "FlowBook 온라인으로 읽기",
+	"v5.book.download": "PDF 다운로드",
+	"v5.book.note": "무료로 읽을 수 있습니다. 가입은 필요하지 않습니다.",
+	"v5.book.generalLabel": "일반 가이드",
+	"v5.book.generalBody":
+		"제품 소개와 단계별 튜토리얼은 문서 또는 Flow-Like YouTube 채널에서 시작하세요.",
+	"v5.book.docs": "문서 살펴보기",
+	"v5.book.youtube": "YouTube에서 보기",
+	"v5.book.coverCta": "공개판 다운로드",
+	"v5.book.aria": "FlowBook, Flow-Like 개발자 가이드를 PDF로 다운로드",
+
 	"v5.footer.notes.kicker": "엔진룸에서 보내는 노트",
 	"v5.footer.notes.title": "우리가 만들고 있는 것, 그리고 우리가 배운 것.",
 	"v5.footer.notes.all": "전체 노트 →",

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { useBackend } from "../state/backend-state";
+import { useBackend, useSignedIn } from "../state/backend-state";
 import { useInvalidateInvoke, useInvoke } from "./use-invoke";
 
 interface DeveloperModeMirror {
@@ -48,7 +48,15 @@ const useDeveloperModeMirror = create<DeveloperModeMirror>()(
 export function useDeveloperMode() {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
-	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const signedIn = useSignedIn();
+	// This hook mounts app-wide, so an ungated query re-runs `getInfo` (and its
+	// retry) on every route while signed out, where it can only fail.
+	const info = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		signedIn,
+	);
 	const localValue = useDeveloperModeMirror((state) => state.localValue);
 	const pendingSync = useDeveloperModeMirror((state) => state.pendingSync);
 	const setLocalValue = useDeveloperModeMirror((state) => state.setLocalValue);

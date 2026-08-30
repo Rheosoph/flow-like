@@ -11,7 +11,12 @@ import {
 	type BoardEditReceiptHistoryMode,
 	flowIrCommitDeliveryId,
 } from "../lib/flowpilot/board-edit-job-delivery";
+import type { FlowScriptApplyOrigin } from "../lib/flowscript-apply-failure";
 import { toastError, toastWarning } from "../lib/messages";
+import {
+	LAST_EDIT_FIELD,
+	sanitizeLastEdit,
+} from "../lib/realtime/presence-signals";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
@@ -27,6 +32,12 @@ interface ExecuteCommandsOptions {
 	refetch?: boolean;
 	allowDeletions?: boolean;
 	suppressBlockedToast?: boolean;
+	/** Who authored the FlowScript. Defaults to the editor; FlowPilot passes "agent". */
+	origin?: FlowScriptApplyOrigin;
+	/** Anchors from a scoped `getFlowScriptScoped` render — limits the reconcile diff. */
+	scopeAnchors?: string[];
+	/** Module layer id whose file this FlowScript is; undefined for the root file (`main`). */
+	module?: string;
 }
 
 interface UseCommandExecutionProps {
@@ -90,6 +101,19 @@ export function useCommandExecution({
 		},
 		[appId, boardId, queryClient, stampHistory],
 	);
+	// What the batch did, for peers' activity ticker — command kinds and a
+	// count only, never payloads.
+	const announceEdit = useCallback((edits: readonly IGenericCommand[]) => {
+		const awareness = awarenessRef.current;
+		if (!awareness || edits.length === 0) return;
+		const payload = sanitizeLastEdit({
+			kinds: [...new Set(edits.map((edit) => edit.command_type))],
+			count: edits.length,
+			ts: Date.now(),
+		});
+		if (payload) awareness.setLocalStateField(LAST_EDIT_FIELD, payload);
+	}, []);
+
 	// On desktop the local commit returns before the hub has the edit; peers are pinged again
 	// once delivery lands so their refetch finds it.
 	useEffect(() => {
@@ -215,6 +239,7 @@ export function useCommandExecution({
 				resultingBoard,
 			);
 			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+			announceEdit([command]);
 			return result;
 		},
 		[
@@ -224,6 +249,7 @@ export function useCommandExecution({
 			pushCommand,
 			settleCommittedMutation,
 			version,
+			announceEdit,
 		],
 	);
 
@@ -273,6 +299,7 @@ export function useCommandExecution({
 				resultingBoard,
 			);
 			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+			announceEdit(commands);
 			return result;
 		},
 		[
@@ -282,6 +309,7 @@ export function useCommandExecution({
 			pushCommands,
 			settleCommittedMutation,
 			version,
+			announceEdit,
 		],
 	);
 
@@ -314,6 +342,9 @@ export function useCommandExecution({
 					currentLayer,
 					catalogNodes,
 					options.allowDeletions === true,
+					options.origin ?? "editor",
+					options.scopeAnchors,
+					options.module,
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(

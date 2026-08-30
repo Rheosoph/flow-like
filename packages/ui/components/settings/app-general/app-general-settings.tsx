@@ -142,17 +142,17 @@ export function AppGeneralSettings({
 								<div className="flex items-center gap-2">
 									<InfoIcon className="w-5 h-5 text-orange-600" />
 									<span className="font-medium text-orange-800 dark:text-orange-200">
-										{t('youHaveUnsavedChanges', 'You have unsaved changes')}
+										{t("youHaveUnsavedChanges", "You have unsaved changes")}
 									</span>
 								</div>
 								<div className="flex gap-2">
 									<Button variant="outline" onClick={onReset} className="gap-2">
 										<RotateCcwIcon className="w-4 h-4" />
-										{t('reset', 'Reset')}
+										{t("reset", "Reset")}
 									</Button>
 									<Button onClick={onSave} className="gap-2">
 										<SaveIcon className="w-4 h-4" />
-										{t('saveChanges', 'Save Changes')}
+										{t("saveChanges", "Save Changes")}
 									</Button>
 								</div>
 							</div>
@@ -166,10 +166,13 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<InfoIcon className="w-5 h-5" />
-						{t('basicInformation', 'Basic Information')}
+						{t("basicInformation", "Basic Information")}
 					</CardTitle>
 					<CardDescription>
-						{t('configureTheBasicDetailsOfYourApplication', 'Configure the basic details of your application')}
+						{t(
+							"configureTheBasicDetailsOfYourApplication",
+							"Configure the basic details of your application",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -178,7 +181,7 @@ export function AppGeneralSettings({
 							<Label htmlFor="name">Name</Label>
 							<Input
 								id="name"
-								placeholder={t('applicationName', 'Application name')}
+								placeholder={t("applicationName", "Application name")}
 								value={metadata?.name ?? ""}
 								disabled={!canEdit}
 								onChange={(e) => {
@@ -192,7 +195,7 @@ export function AppGeneralSettings({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="version">{t('version', 'Version')}</Label>
+							<Label htmlFor="version">{t("version", "Version")}</Label>
 							<Input
 								id="version"
 								placeholder="1.0.0"
@@ -210,10 +213,15 @@ export function AppGeneralSettings({
 						</div>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="description">{t('shortDescription', 'Short Description')}</Label>
+						<Label htmlFor="description">
+							{t("shortDescription", "Short Description")}
+						</Label>
 						<Textarea
 							id="description"
-							placeholder={t('briefDescriptionIn12Sentences', 'Brief description in 1-2 sentences...')}
+							placeholder={t(
+								"briefDescriptionIn12Sentences",
+								"Brief description in 1-2 sentences...",
+							)}
 							rows={2}
 							value={metadata?.description ?? ""}
 							disabled={!canEdit}
@@ -230,14 +238,16 @@ export function AppGeneralSettings({
 					{/* Long Description with fullscreen markdown editor trigger */}
 					<div className="space-y-2">
 						<div className="flex items-center justify-between">
-							<Label htmlFor="long-description">{t('longDescription', 'Long Description')}</Label>
+							<Label htmlFor="long-description">
+								{t("longDescription", "Long Description")}
+							</Label>
 							{canEdit && (
 								<Button
 									variant="outline"
 									size="sm"
 									onClick={openLongDescEditor}
 								>
-									{t('openMarkdownEditor2', 'Open Markdown Editor')}
+									{t("openMarkdownEditor2", "Open Markdown Editor")}
 								</Button>
 							)}
 						</div>
@@ -248,7 +258,10 @@ export function AppGeneralSettings({
 								editable={false}
 								initialContent={
 									metadata?.long_description ||
-									t('noDetailedDescriptionAvailable', '*No detailed description available.*')
+									t(
+										"noDetailedDescriptionAvailable",
+										"*No detailed description available.*",
+									)
 								}
 							/>
 						</div>
@@ -264,10 +277,13 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<ImageIcon className="w-5 h-5" />
-						{t('visualAssets', 'Visual Assets')}
+						{t("visualAssets", "Visual Assets")}
 					</CardTitle>
 					<CardDescription>
-						{t('uploadThumbnailAndIconForYourApplication', 'Upload thumbnail and icon for your application')}
+						{t(
+							"uploadThumbnailAndIconForYourApplication",
+							"Upload thumbnail and icon for your application",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-6">
@@ -275,7 +291,9 @@ export function AppGeneralSettings({
 						{/* Thumbnail Upload */}
 						<div className="space-y-3">
 							<div className="flex items-center justify-between">
-								<Label className="text-sm font-medium">{t('thumbnail', 'Thumbnail')}</Label>
+								<Label className="text-sm font-medium">
+									{t("thumbnail", "Thumbnail")}
+								</Label>
 								<Badge variant="outline" className="text-xs">
 									{`1280 × 640px`}
 								</Badge>
@@ -293,7 +311,7 @@ export function AppGeneralSettings({
 								<div className="absolute inset-0">
 									<img
 										src={metadata?.thumbnail ?? "/placeholder-thumbnail.webp"}
-										alt={t('appThumbnail', 'App thumbnail')}
+										alt={t("appThumbnail", "App thumbnail")}
 										className="w-full h-full object-cover"
 									/>
 									{/* Overlay */}
@@ -304,7 +322,7 @@ export function AppGeneralSettings({
 												<span className="text-sm font-medium">
 													{metadata?.thumbnail
 														? "Change Thumbnail"
-														: t('uploadThumbnail', 'Upload Thumbnail')}
+														: t("uploadThumbnail", "Upload Thumbnail")}
 												</span>
 											</div>
 										</div>
@@ -317,8 +335,8 @@ export function AppGeneralSettings({
 											<ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
 											<p className="text-sm">
 												{canEdit && onThumbnailUpload
-													? t('clickToUpload', 'Click to upload')
-													: t('noThumbnail', 'No thumbnail')}
+													? t("clickToUpload", "Click to upload")
+													: t("noThumbnail", "No thumbnail")}
 											</p>
 										</div>
 									</div>
@@ -329,7 +347,9 @@ export function AppGeneralSettings({
 						{/* Icon Upload */}
 						<div className="space-y-3">
 							<div className="flex items-center justify-between">
-								<Label className="text-sm font-medium">{t('icon', 'Icon')}</Label>
+								<Label className="text-sm font-medium">
+									{t("icon", "Icon")}
+								</Label>
 								<Badge variant="outline" className="text-xs">
 									{`1024 × 1024px`}
 								</Badge>
@@ -347,7 +367,7 @@ export function AppGeneralSettings({
 									<div className="absolute inset-0">
 										<img
 											src={metadata?.icon ?? "/app-logo.webp"}
-											alt={t('appIcon', 'App icon')}
+											alt={t("appIcon", "App icon")}
 											className="w-full h-full object-cover rounded-lg"
 										/>
 										{/* Overlay */}
@@ -356,7 +376,9 @@ export function AppGeneralSettings({
 												<div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center gap-1 text-white">
 													<ImageIcon className="w-6 h-6" />
 													<span className="text-xs font-medium text-center">
-														{metadata?.icon ? "Change Icon" : t('uploadIcon2', 'Upload Icon')}
+														{metadata?.icon
+															? "Change Icon"
+															: t("uploadIcon2", "Upload Icon")}
 													</span>
 												</div>
 											</div>
@@ -369,8 +391,8 @@ export function AppGeneralSettings({
 												<ImageIcon className="w-8 h-8 mx-auto mb-1 opacity-50" />
 												<p className="text-xs">
 													{canEdit && onIconUpload
-														? t('clickToUpload', 'Click to upload')
-														: t('noIcon', 'No icon')}
+														? t("clickToUpload", "Click to upload")
+														: t("noIcon", "No icon")}
 												</p>
 											</div>
 										</div>
@@ -387,16 +409,21 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<TagIcon className="w-5 h-5" />
-						{t('categoriesTags', 'Categories & Tags')}
+						{t("categoriesTags", "Categories & Tags")}
 					</CardTitle>
 					<CardDescription>
-						{t('organizeYourApplicationWithCategoriesAndTags', 'Organize your application with categories and tags')}
+						{t(
+							"organizeYourApplicationWithCategoriesAndTags",
+							"Organize your application with categories and tags",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="primary-category">{t('primaryCategory2', 'Primary Category')}</Label>
+							<Label htmlFor="primary-category">
+								{t("primaryCategory2", "Primary Category")}
+							</Label>
 							<Select
 								value={app?.primary_category ?? IAppCategory.Other}
 								onValueChange={(value) => {
@@ -410,7 +437,12 @@ export function AppGeneralSettings({
 								disabled={!canEdit}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectPrimaryCategory', 'Select primary category')} />
+									<SelectValue
+										placeholder={t(
+											"selectPrimaryCategory",
+											"Select primary category",
+										)}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{Object.values(IAppCategory).map((category) => (
@@ -422,7 +454,9 @@ export function AppGeneralSettings({
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="secondary-category">{t('secondaryCategory2', 'Secondary Category')}</Label>
+							<Label htmlFor="secondary-category">
+								{t("secondaryCategory2", "Secondary Category")}
+							</Label>
 							<Select
 								value={app?.secondary_category ?? ""}
 								onValueChange={(value) => {
@@ -437,10 +471,15 @@ export function AppGeneralSettings({
 								disabled={!canEdit}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectSecondaryCategory', 'Select secondary category')} />
+									<SelectValue
+										placeholder={t(
+											"selectSecondaryCategory",
+											"Select secondary category",
+										)}
+									/>
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="none">{t('none', 'None')}</SelectItem>
+									<SelectItem value="none">{t("none", "None")}</SelectItem>
 									{Object.values(IAppCategory).map((category) => (
 										<SelectItem key={category} value={category}>
 											{categoryLabel(category)}
@@ -453,11 +492,14 @@ export function AppGeneralSettings({
 
 					{/* Tags Section */}
 					<div className="space-y-2">
-						<Label htmlFor="tags">{t('tags', 'Tags')}</Label>
+						<Label htmlFor="tags">{t("tags", "Tags")}</Label>
 						<div className="space-y-2">
 							<Input
 								id="tags"
-								placeholder={t('typeATagAndPressEnter', 'Type a tag and press Enter...')}
+								placeholder={t(
+									"typeATagAndPressEnter",
+									"Type a tag and press Enter...",
+								)}
 								value={newTag}
 								disabled={!canEdit}
 								onChange={(e) => setNewTag(e.target.value)}
@@ -494,16 +536,19 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<ExternalLinkIcon className="w-5 h-5" />
-						{t('supportLinks', 'Support & Links')}
+						{t("supportLinks", "Support & Links")}
 					</CardTitle>
 					<CardDescription>
-						{t('provideHelpfulLinksForUsersAndSupport', 'Provide helpful links for users and support')}
+						{t(
+							"provideHelpfulLinksForUsersAndSupport",
+							"Provide helpful links for users and support",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="website">{t('website', 'Website')}</Label>
+							<Label htmlFor="website">{t("website", "Website")}</Label>
 							<Input
 								id="website"
 								placeholder="https://yourapp.com"
@@ -520,7 +565,9 @@ export function AppGeneralSettings({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="docs-url">{t('documentationUrl', 'Documentation URL')}</Label>
+							<Label htmlFor="docs-url">
+								{t("documentationUrl", "Documentation URL")}
+							</Label>
 							<Input
 								id="docs-url"
 								placeholder="https://docs.yourapp.com"
@@ -537,7 +584,9 @@ export function AppGeneralSettings({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="support-url">{t('supportUrl', 'Support URL')}</Label>
+							<Label htmlFor="support-url">
+								{t("supportUrl", "Support URL")}
+							</Label>
 							<Input
 								id="support-url"
 								placeholder="https://support.yourapp.com"
@@ -562,14 +611,19 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<SettingsIcon className="w-5 h-5" />
-						{t('applicationSettings', 'Application Settings')}
+						{t("applicationSettings", "Application Settings")}
 					</CardTitle>
-					<CardDescription>{t('configureApplicationBehavior', 'Configure application behavior')}</CardDescription>
+					<CardDescription>
+						{t(
+							"configureApplicationBehavior",
+							"Configure application behavior",
+						)}
+					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="status">{t('status', 'Status')}</Label>
+							<Label htmlFor="status">{t("status", "Status")}</Label>
 							<Select
 								value={app?.status ?? IAppStatus.Active}
 								onValueChange={(value) => {
@@ -583,7 +637,9 @@ export function AppGeneralSettings({
 								disabled={!canEdit}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectStatus', 'Select status')} />
+									<SelectValue
+										placeholder={t("selectStatus", "Select status")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{Object.values(IAppStatus).map((status) => (
@@ -606,7 +662,7 @@ export function AppGeneralSettings({
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="price">{t('price', 'Price ($)')}</Label>
+							<Label htmlFor="price">{t("price", "Price ($)")}</Label>
 							<Input
 								id="price"
 								type="number"
@@ -632,7 +688,7 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<CalendarIcon className="w-5 h-5" />
-						{t('changelog', 'Changelog')}
+						{t("changelog", "Changelog")}
 					</CardTitle>
 					<CardDescription>
 						{`Document what's new in this version`}
@@ -640,7 +696,7 @@ export function AppGeneralSettings({
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="changelog">{t('whatapossNew', "What's New")}</Label>
+						<Label htmlFor="changelog">{t("whatapossNew", "What's New")}</Label>
 						<Textarea
 							id="changelog"
 							placeholder={`What's new in this version...`}
@@ -665,10 +721,13 @@ export function AppGeneralSettings({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<CalendarIcon className="w-5 h-5" />
-						{t('statistics', 'Statistics')}
+						{t("statistics", "Statistics")}
 					</CardTitle>
 					<CardDescription>
-						{t('applicationPerformanceAndEngagementMetrics', 'Application performance and engagement metrics')}
+						{t(
+							"applicationPerformanceAndEngagementMetrics",
+							"Application performance and engagement metrics",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -678,7 +737,7 @@ export function AppGeneralSettings({
 								{app.download_count}
 							</div>
 							<div className="text-sm text-gray-600 dark:text-gray-400">
-								{t('downloads', 'Downloads')}
+								{t("downloads", "Downloads")}
 							</div>
 						</div>
 						<div className="text-center p-4 border rounded-lg">
@@ -686,7 +745,7 @@ export function AppGeneralSettings({
 								{app.rating_count}
 							</div>
 							<div className="text-sm text-gray-600 dark:text-gray-400">
-								{t('ratings', 'Ratings')}
+								{t("ratings", "Ratings")}
 							</div>
 						</div>
 						<div className="text-center p-4 border rounded-lg">
@@ -694,7 +753,7 @@ export function AppGeneralSettings({
 								{app.interactions_count}
 							</div>
 							<div className="text-sm text-gray-600 dark:text-gray-400">
-								{t('interactions', 'Interactions')}
+								{t("interactions", "Interactions")}
 							</div>
 						</div>
 						<div className="text-center p-4 border rounded-lg">
@@ -702,7 +761,7 @@ export function AppGeneralSettings({
 								{app.avg_rating ? app.avg_rating.toFixed(1) : "N/A"}
 							</div>
 							<div className="text-sm text-gray-600 dark:text-gray-400">
-								{t('avgRating', 'Avg Rating')}
+								{t("avgRating", "Avg Rating")}
 							</div>
 						</div>
 					</div>
@@ -715,10 +774,13 @@ export function AppGeneralSettings({
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2 text-red-600 dark:text-red-400">
 							<ShieldIcon className="w-5 h-5" />
-							{t('dangerZone2', 'Danger Zone')}
+							{t("dangerZone2", "Danger Zone")}
 						</CardTitle>
 						<CardDescription>
-							{t('irreversibleActionsThatWillPermanentlyAffectYourApplication', 'Irreversible actions that will permanently affect your application')}
+							{t(
+								"irreversibleActionsThatWillPermanentlyAffectYourApplication",
+								"Irreversible actions that will permanently affect your application",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -728,7 +790,7 @@ export function AppGeneralSettings({
 						>
 							<Button variant="destructive" className="gap-2">
 								<BombIcon className="w-4 h-4" />
-								{t('deleteApp2', 'Delete App')}
+								{t("deleteApp2", "Delete App")}
 							</Button>
 						</VerificationDialog>
 					</CardContent>
@@ -741,9 +803,14 @@ export function AppGeneralSettings({
 					<CardContent className="pt-6">
 						<div className="flex items-center gap-2 text-blue-800 dark:text-blue-200">
 							<EyeIcon className="w-5 h-5" />
-							<span className="font-medium">{t('readonlyMode', 'Read-only mode')}</span>
+							<span className="font-medium">
+								{t("readonlyMode", "Read-only mode")}
+							</span>
 							<span className="text-sm">
-								{t('youDonapostHaveEditPermissionsForThisApplication', "You don't have edit permissions for this application")}
+								{t(
+									"youDonapostHaveEditPermissionsForThisApplication",
+									"You don't have edit permissions for this application",
+								)}
 							</span>
 						</div>
 					</CardContent>
@@ -763,9 +830,11 @@ export function AppGeneralSettings({
 				>
 					<div className="flex items-center justify-between px-6 py-2 h-20 border-b bg-background">
 						<div>
-							<div className="text-lg font-semibold">{t('editLongDescription', 'Edit Long Description')}</div>
+							<div className="text-lg font-semibold">
+								{t("editLongDescription", "Edit Long Description")}
+							</div>
 							<div className="text-sm text-muted-foreground">
-								{t('markdownSupported', 'Markdown supported')}
+								{t("markdownSupported", "Markdown supported")}
 							</div>
 						</div>
 						<div className="flex gap-2">
@@ -773,7 +842,7 @@ export function AppGeneralSettings({
 								variant="outline"
 								onClick={() => setLongDescEditorOpen(false)}
 							>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button
 								onClick={() => {
@@ -784,7 +853,7 @@ export function AppGeneralSettings({
 									setLongDescEditorOpen(false);
 								}}
 							>
-								{t('done', 'Done')}
+								{t("done", "Done")}
 							</Button>
 						</div>
 					</div>
@@ -803,7 +872,11 @@ export function AppGeneralSettings({
 									editable={canEdit}
 									isMarkdown
 									initialContent={
-										longDescInit || t('noDetailedDescriptionAvailable', '*No detailed description available.*')
+										longDescInit ||
+										t(
+											"noDetailedDescriptionAvailable",
+											"*No detailed description available.*",
+										)
 									}
 									onChange={(content) => {
 										setLongDescDraft(content);

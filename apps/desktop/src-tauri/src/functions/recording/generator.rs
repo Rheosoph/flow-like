@@ -66,6 +66,8 @@ pub struct GeneratorOptions {
     /// Confidence threshold for template matching (0.0-1.0)
     pub template_confidence: f64,
     /// App ID for constructing screenshot paths
+    #[allow(dead_code)]
+    // app scope is applied at capture time; the generator emits upload-dir-relative paths
     pub app_id: Option<String>,
     /// Board ID for constructing screenshot paths
     pub board_id: Option<String>,
@@ -105,9 +107,9 @@ pub async fn generate_add_node_commands(
     let mut nodes_in_row: usize = 0;
     let mut direction: f32 = 1.0; // 1.0 = right, -1.0 = left
 
-    let mut prev_exec_pin: Option<(String, String)> = None;
-    let mut session_node_id: Option<String> = None;
-    let mut session_out_pin_id: Option<String> = None;
+    let mut prev_exec_pin: Option<(String, String)>;
+    let mut session_node_id: Option<String>;
+    let mut session_out_pin_id: Option<String>;
 
     // First, add a simple_event node as the trigger
     let mut event_node = registry
@@ -569,7 +571,7 @@ pub async fn generate_add_node_commands(
                 // rdev on macOS reports line-level deltas (typically 1-5 per event).
                 // After consolidation the accumulated amount is already in scroll-line units.
                 // Pass through directly — enigo.scroll(1) sends one line tick.
-                let lines = (*amount).max(1).min(100);
+                let lines = (*amount).clamp(1, 100);
                 let (dx, dy) = match direction {
                     ScrollDirection::Down => (0, -lines),
                     ScrollDirection::Up => (0, lines),
@@ -877,86 +879,6 @@ pub async fn generate_add_node_commands(
     }
 
     Ok(commands)
-}
-
-pub fn action_to_description(action: &RecordedAction) -> String {
-    match &action.action_type {
-        ActionType::Click { button, modifiers } => {
-            let coords = action
-                .coordinates
-                .map(|(x, y)| format!(" at ({}, {})", x, y))
-                .unwrap_or_default();
-            let mods = if modifiers.is_empty() {
-                String::new()
-            } else {
-                format!(" with {:?}", modifiers)
-            };
-            format!("{:?} click{}{}", button, coords, mods)
-        }
-        ActionType::DoubleClick { button } => {
-            let coords = action
-                .coordinates
-                .map(|(x, y)| format!(" at ({}, {})", x, y))
-                .unwrap_or_default();
-            format!("{:?} double-click{}", button, coords)
-        }
-        ActionType::Drag { start, end } => {
-            format!(
-                "Drag from ({}, {}) to ({}, {})",
-                start.0, start.1, end.0, end.1
-            )
-        }
-        ActionType::Scroll { direction, amount } => {
-            format!("Scroll {:?} by {}", direction, amount)
-        }
-        ActionType::KeyType { text } => {
-            let preview = if text.len() > 20 {
-                format!("{}...", &text[..20])
-            } else {
-                text.clone()
-            };
-            format!("Type \"{}\"", preview)
-        }
-        ActionType::KeyPress { key, modifiers } => {
-            if modifiers.is_empty() {
-                format!("Press {}", key)
-            } else {
-                format!("Press {:?}+{}", modifiers, key)
-            }
-        }
-        ActionType::AppLaunch { app_name, .. } => {
-            format!("Launch {}", app_name)
-        }
-        ActionType::WindowFocus { window_title, .. } => {
-            format!("Focus window \"{}\"", window_title)
-        }
-        ActionType::Copy { clipboard_content } => {
-            let preview = clipboard_content
-                .as_ref()
-                .map(|s| {
-                    if s.len() > 20 {
-                        format!("\"{}...\"", &s[..20])
-                    } else {
-                        format!("\"{}\"", s)
-                    }
-                })
-                .unwrap_or_else(|| "(empty)".to_string());
-            format!("Copy {}", preview)
-        }
-        ActionType::Paste { clipboard_content } => {
-            let preview = clipboard_content
-                .as_ref()
-                .map(|s| {
-                    if s.len() > 20 {
-                        format!("\"{}...\"", &s[..20])
-                    } else {
-                        format!("\"{}\"", s)
-                    }
-                })
-                .unwrap_or_else(|| "(empty)".to_string());
-            format!("Paste {}", preview)
-        }
-    }
 }
 
 struct FingerprintNodeResult {

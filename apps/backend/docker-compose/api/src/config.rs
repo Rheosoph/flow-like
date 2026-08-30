@@ -38,6 +38,7 @@ impl Config {
 
 #[derive(Debug)]
 pub enum ConfigError {
+    #[allow(dead_code)] // retained for config loaders that fail on a missing env var
     MissingVar(&'static str),
     InvalidValue(String),
     Storage(String),

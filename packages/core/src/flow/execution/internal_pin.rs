@@ -21,18 +21,18 @@ use super::internal_node::InternalNode;
 /// - Only `value` uses RwLock as it changes during execution
 pub struct InternalPin {
     // === Immutable metadata (no synchronization needed) ===
-    /// Original pin ID
-    pub id: String,
-    /// Pin name for lookup
-    pub name: String,
+    /// Original pin ID (shared with the run template)
+    pub id: Arc<str>,
+    /// Pin name for lookup (shared with the run template)
+    pub name: Arc<str>,
     /// Input or Output
     pub pin_type: PinType,
     /// Data type (Execution, String, Number, etc.)
     pub data_type: VariableType,
     /// Whether this pin has a default value
     pub has_default: bool,
-    /// Cached default value (immutable)
-    pub default_value: Option<Value>,
+    /// Cached default value, parsed once and shared across runs
+    pub default_value: Option<Arc<Value>>,
     /// Whether this is a layer relay pin
     pub layer_pin: bool,
     /// Pin ordering index
@@ -56,16 +56,36 @@ impl InternalPin {
     /// Graph connections (connected_to, depends_on, node) must be set via init_* methods.
     pub fn new(pin: &Pin, layer_pin: bool) -> Self {
         Self {
-            id: pin.id.clone(),
-            name: pin.name.clone(),
+            id: Arc::from(pin.id.as_str()),
+            name: Arc::from(pin.name.as_str()),
             pin_type: pin.pin_type.clone(),
             data_type: pin.data_type.clone(),
             has_default: pin.default_value.is_some(),
             default_value: pin
                 .default_value
                 .as_ref()
-                .and_then(|v| flow_like_types::json::from_slice(v).ok()),
+                .and_then(|v| flow_like_types::json::from_slice(v).ok())
+                .map(Arc::new),
             layer_pin,
+            index: pin.index,
+            node: OnceLock::new(),
+            connected_to: OnceLock::new(),
+            depends_on: OnceLock::new(),
+            value: RwLock::new(None),
+        }
+    }
+
+    /// Create a per-run pin from a template pin: every field is a cheap Arc
+    /// clone — no string copies, no JSON parsing.
+    pub fn from_template(pin: &crate::flow::compiled::template::TemplatePin) -> Self {
+        Self {
+            id: pin.id.clone(),
+            name: pin.name.clone(),
+            pin_type: pin.pin_type.clone(),
+            data_type: pin.data_type.clone(),
+            has_default: pin.default_value.is_some(),
+            default_value: pin.default_value.clone(),
+            layer_pin: pin.layer_pin,
             index: pin.index,
             node: OnceLock::new(),
             connected_to: OnceLock::new(),

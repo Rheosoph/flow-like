@@ -26,6 +26,8 @@ impl NodeLogic for SetHistoryPresencePenaltyNode {
             "Stores the presence penalty parameter used for discouraging repetition",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setPresencePenalty");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

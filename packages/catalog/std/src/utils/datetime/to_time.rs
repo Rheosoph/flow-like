@@ -25,6 +25,8 @@ impl NodeLogic for DateTimeToTimeNode {
             "Extracts time components from a DateTime",
             "Utils/DateTime",
         );
+        node.set_flowscript_name("datetime", "toTime");
+        node.set_receiver("date");
 
         node.add_input_pin(
             "date",

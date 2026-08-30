@@ -28,6 +28,7 @@ impl NodeLogic for MakeBoxNode {
             "Make Bounding Box",
             "Image/Annotate",
         );
+        node.set_flowscript_name("image", "makeBox");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

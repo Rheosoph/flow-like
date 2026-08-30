@@ -35,6 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::channel::ChannelIssuer;
 use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
 use crate::entity::role;
@@ -235,7 +236,6 @@ impl BoardMutationGuard {
 }
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
-const JWKS: &str = include_str!(concat!(env!("OUT_DIR"), "/jwks.json"));
 const JWKS_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const JWKS_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -348,6 +348,8 @@ pub struct State {
     pub provider: Arc<ModelProviderConfiguration>,
     pub dispatcher: Arc<Dispatcher>,
     pub compilation_dispatcher: Arc<CompilationDispatcher>,
+    /// Mints run ⇄ client channel credentials (`CHANNEL_TRANSPORT`).
+    pub channels: Arc<ChannelIssuer>,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
@@ -388,6 +390,14 @@ pub struct State {
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
+    /// Positive cache for the pre-dispatch compiled-artifact check, keyed by
+    /// (app, board, version|etag, registry fingerprint). Entries are
+    /// content-addressed, so they never go stale — TTL only bounds memory.
+    pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
+    /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
+    /// like `compiled_artifact_cache`, so entries never go stale.
+    pub prerun_manifest_cache:
+        moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
     pub response_cache: moka::sync::Cache<String, Value>,
     /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
@@ -622,8 +632,10 @@ impl State {
                 .expect("OpenID validation configuration must be complete and exact");
         }
 
-        let jwks = flow_like_types::json::from_str::<JwkSet>(JWKS).expect("Failed to parse JWKS");
-        validate_jwks_set(&jwks).expect("Embedded OpenID JWKS must be safe and unambiguous");
+        // JWKS used to be downloaded by build.rs, making clean and cross builds depend on a
+        // live identity-provider endpoint. Start with a fail-closed empty cache instead; the
+        // existing bounded HTTPS refresh in `configured_jwk` fills it on first use.
+        let jwks = JwkSet { keys: Vec::new() };
 
         // Create content + meta buckets from master credentials (same mechanism
         // that board/storage already uses — works with IAM roles, STS, etc.)
@@ -722,9 +734,20 @@ impl State {
             None
         };
 
+        #[cfg(feature = "aws")]
+        let aws_client = Arc::new(aws_config::load_from_env().await);
+
+        #[cfg(feature = "aws")]
+        let channels = ChannelIssuer::from_env(&secrets, aws_client.clone()).await;
+        #[cfg(not(feature = "aws"))]
+        let channels = ChannelIssuer::from_env(&secrets).await;
+        let channels = Arc::new(channels);
+
         // Initialize dispatcher once with env config (caches AWS/Redis clients)
         let dispatch_config = DispatchConfig::from_env();
-        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone())).await;
+        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone()))
+            .await
+            .with_channel_issuer(channels.clone());
 
         // Initialize compilation dispatcher (mirrors execution dispatcher pattern)
         let compilation_config = CompilationDispatchConfig::from_env();
@@ -753,7 +776,7 @@ impl State {
         let sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>> = {
             let scheduler_provider = std::env::var("SINK_SCHEDULER_PROVIDER")
                 .ok()
-                .map(|s| flow_like_sinks::scheduler::SchedulerProvider::from_str(&s));
+                .map(|s| flow_like_sinks::scheduler::SchedulerProvider::from_env_value(&s));
 
             match scheduler_provider {
                 Some(flow_like_sinks::scheduler::SchedulerProvider::Aws) => {
@@ -837,12 +860,13 @@ impl State {
             stripe_client,
             mail_client,
             #[cfg(feature = "aws")]
-            aws_client: Arc::new(aws_config::load_from_env().await),
+            aws_client,
             catalog,
             provider: Arc::new(provider),
             registry: Arc::new(registry),
             dispatcher: Arc::new(dispatcher),
             compilation_dispatcher,
+            channels,
             permission_cache: moka::sync::Cache::builder()
                 .max_capacity(32 * 1024 * 1024)
                 .time_to_live(Duration::from_secs(120))
@@ -859,6 +883,15 @@ impl State {
             board_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
                 .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            compiled_artifact_cache: moka::sync::Cache::builder()
+                .max_capacity(16_384)
+                .time_to_idle(Duration::from_secs(12 * 60 * 60))
+                .build(),
+            prerun_manifest_cache: moka::sync::Cache::builder()
+                .max_capacity(4_096)
+                .time_to_idle(Duration::from_secs(24 * 60 * 60))
+                .support_invalidation_closures()
                 .build(),
             board_sync_cache: moka::sync::Cache::builder()
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
@@ -879,9 +912,12 @@ impl State {
                 .max_capacity(BOARD_SEGMENT_BASE_MAX_NODES)
                 .time_to_idle(Duration::from_secs(30 * 60))
                 .build(),
+            // Installs, updates and removals are caught immediately by the package-pin digest in
+            // the key. The TTL only backstops the one change that digest cannot see — a package
+            // republished under the same version — and reclaims retired epochs.
             app_wasm_nodes_cache: moka::sync::Cache::builder()
                 .max_capacity(1_000)
-                .time_to_live(Duration::from_secs(5 * 60))
+                .time_to_live(Duration::from_secs(10 * 60))
                 .build(),
             board_load_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
@@ -922,9 +958,12 @@ impl State {
 
     /// Invalidate the cached WASM package resolution for an app. Call this
     /// when the app's package list changes (add/update/delete).
+    ///
+    /// `app_wasm_nodes_cache` is deliberately absent: its key carries a digest of the app's package
+    /// pins, so a changed package list misses on its own — including on the replicas this call
+    /// never reaches.
     pub fn invalidate_wasm_resolve(&self, app_id: &str) {
         self.wasm_resolve_cache.invalidate(app_id);
-        self.app_wasm_nodes_cache.invalidate(app_id);
     }
 
     fn openid_validation_settings(&self) -> Result<OpenIdValidationSettings> {
@@ -934,7 +973,7 @@ impl State {
     async fn configured_jwk(&self, kid: &str) -> Result<Jwk> {
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }
@@ -945,7 +984,7 @@ impl State {
         let mut refresh = self.jwks_refresh.lock().await;
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }
@@ -959,10 +998,12 @@ impl State {
 
         let settings = self.openid_validation_settings()?;
         let refreshed = fetch_jwks(&settings.jwks_url).await?;
-        let jwk = find_unique_jwk(&refreshed, kid)?
-            .ok_or_else(|| flow_like_types::anyhow!("OpenID signing key is not published"))?;
+        // Cache every successfully validated set even when this particular `kid` is unknown.
+        // Otherwise a bogus first request after startup discards the valid key set and the
+        // refresh throttle blocks legitimate tokens until the next interval.
+        let jwk = find_unique_jwk(&refreshed, kid)?;
         *self.jwks.write().await = refreshed;
-        Ok(jwk)
+        jwk.ok_or_else(|| flow_like_types::anyhow!("OpenID signing key is not published"))
     }
 
     pub(crate) async fn validate_token(&self, token: &str) -> Result<ValidatedOpenIdToken> {
@@ -1198,8 +1239,8 @@ impl State {
 
     /// Pin an in-memory board to the object identity its writer just persisted.
     ///
-    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates`
-    /// + `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
+    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates` +
+    /// `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
     /// would produce. Seeding makes the read that follows every edit a `NotModified` memory hit
     /// instead of a decode + hydration. Skipping this is always safe (the next read reloads);
     /// seeding a board that does **not** match `put` is not, so only call it with the exact

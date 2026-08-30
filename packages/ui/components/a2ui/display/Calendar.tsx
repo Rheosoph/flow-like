@@ -211,14 +211,14 @@ function EventContextMenu({
 	const groups: PlanningMenuAction[][] = [
 		[
 			{
-				label: t('viewDetails', 'View details'),
+				label: t("viewDetails", "View details"),
 				icon: <EyeIcon className="h-3.5 w-3.5" />,
 				onSelect: () => handlers.openEvent(ev),
 			},
 			...(canEdit
 				? [
 						{
-							label: t('edit', 'Edit'),
+							label: t("edit", "Edit"),
 							icon: <PencilIcon className="h-3.5 w-3.5" />,
 							onSelect: () => handlers.editEvent(ev),
 						},
@@ -228,7 +228,7 @@ function EventContextMenu({
 		canEdit
 			? [
 					{
-						label: t('duplicate', 'Duplicate'),
+						label: t("duplicate", "Duplicate"),
 						icon: <CopyIcon className="h-3.5 w-3.5" />,
 						onSelect: () => handlers.duplicateEvent(ev),
 					},
@@ -237,7 +237,7 @@ function EventContextMenu({
 		canEdit
 			? [
 					{
-						label: t('delete', 'Delete'),
+						label: t("delete", "Delete"),
 						icon: <Trash2Icon className="h-3.5 w-3.5" />,
 						destructive: true,
 						onSelect: () => handlers.deleteEvent(ev),
@@ -555,7 +555,7 @@ export function A2UICalendar({
 						size="icon"
 						className="h-7 w-7 shrink-0"
 						onClick={() => navigate(1)}
-						aria-label={t('next', 'Next')}
+						aria-label={t("next", "Next")}
 					>
 						<ChevronRightIcon className="h-4 w-4" />
 					</Button>
@@ -566,7 +566,7 @@ export function A2UICalendar({
 							className="ml-1 h-7 shrink-0"
 							onClick={() => setFocusDate(new Date())}
 						>
-							{t('today', 'Today')}
+							{t("today", "Today")}
 						</Button>
 					)}
 					<div className="ml-2 flex min-w-0 items-baseline gap-2">
@@ -592,7 +592,7 @@ export function A2UICalendar({
 								className="h-7"
 								onClick={onHeaderCreate}
 							>
-								<PlusIcon className="mr-1 h-3.5 w-3.5" /> {t('event', 'Event')}
+								<PlusIcon className="mr-1 h-3.5 w-3.5" /> {t("event", "Event")}
 							</Button>
 						)}
 						{showViewSwitcher && (
@@ -1008,7 +1008,9 @@ function MonthDayCell({
 							onPointerDown={(e) => e.stopPropagation()}
 							onClick={(e) => e.stopPropagation()}
 							className="self-start rounded px-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-						>{t('lengthMore', '+{{length}} more', { length: hidden.length })}</button>
+						>
+							{t("lengthMore", "+{{length}} more", { length: hidden.length })}
+						</button>
 					</PopoverTrigger>
 					<PopoverContent
 						align="start"
@@ -1089,7 +1091,7 @@ function MonthChip({
 				{canEdit && (
 					<button
 						type="button"
-						aria-label={t('deleteEvent', 'Delete event')}
+						aria-label={t("deleteEvent", "Delete event")}
 						onPointerDown={(e) => e.stopPropagation()}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -1608,7 +1610,7 @@ function TimeGridChip({
 					{canEdit && (
 						<button
 							type="button"
-							aria-label={t('deleteEvent', 'Delete event')}
+							aria-label={t("deleteEvent", "Delete event")}
 							onPointerDown={(e) => e.stopPropagation()}
 							onClick={(e) => {
 								e.stopPropagation();
@@ -1955,7 +1957,7 @@ function AgendaView({
 		return (
 			<div className="flex h-full flex-col items-center justify-center gap-2 py-10">
 				<span className="text-sm text-muted-foreground/70">
-					{t('noUpcomingEvents', 'No upcoming events')}
+					{t("noUpcomingEvents", "No upcoming events")}
 				</span>
 				{editable && (
 					<Button
@@ -1970,7 +1972,8 @@ function AgendaView({
 							)
 						}
 					>
-						<PlusIcon className="mr-1 h-3.5 w-3.5" /> {t('addEvent', 'Add event')}
+						<PlusIcon className="mr-1 h-3.5 w-3.5" />{" "}
+						{t("addEvent", "Add event")}
 					</Button>
 				)}
 			</div>
@@ -2000,7 +2003,7 @@ function AgendaView({
 						<div className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
 							{dayEvents.length === 0 && (
 								<span className="px-2 py-1.5 text-xs text-muted-foreground/60">
-									{t('noEvents', 'No events')}
+									{t("noEvents", "No events")}
 								</span>
 							)}
 							{dayEvents.map((ev) => {
@@ -2043,7 +2046,7 @@ function AgendaView({
 														e.stopPropagation();
 														handlers.deleteEvent(ev);
 													}}
-													aria-label={t('deleteEvent', 'Delete event')}
+													aria-label={t("deleteEvent", "Delete event")}
 													className="ml-auto hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-background group-hover/ev:block"
 												>
 													<XIcon className="h-3.5 w-3.5" />
@@ -2060,7 +2063,7 @@ function AgendaView({
 									onClick={() => handlers.openCreate(day, day, true)}
 									className="h-6 self-start px-1.5 text-xs text-muted-foreground hover:text-foreground"
 								>
-									<PlusIcon className="mr-1 h-3 w-3" /> {t('add', 'Add')}
+									<PlusIcon className="mr-1 h-3 w-3" /> {t("add", "Add")}
 								</Button>
 							)}
 						</div>

@@ -30,6 +30,7 @@ impl NodeLogic for DocxReplaceTextNode {
             "Replace text placeholders in a DOCX template file with plain text or markdown",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "replaceText");
         node.add_icon("/flow/icons/text.svg");
 
         node.add_input_pin(

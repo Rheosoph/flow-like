@@ -26,6 +26,7 @@ impl NodeLogic for RemoveStepNode {
             "Removes a step from the plan by its ID",
             "Events/Chat",
         );
+        node.set_flowscript_name("chat", "removeStep");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
 

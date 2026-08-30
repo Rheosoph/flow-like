@@ -70,39 +70,6 @@ impl FixRefsCleanup {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::flow::{board::Board, node::Node, variable::VariableType};
-    use flow_like_storage::Path;
-
-    #[test]
-    fn cleanup_flattens_schema_ref_chains() {
-        let schema = r#"{"type":"object","properties":{"value":{"type":"string"}}}"#;
-        let mut board = Board::new_detached(Some("board".to_string()), Path::from("boards"));
-        board.refs = HashMap::from([
-            ("outer-ref".to_string(), "inner-ref".to_string()),
-            ("inner-ref".to_string(), schema.to_string()),
-        ]);
-        let mut node = Node::new("test", "Test", "", "Tests");
-        node.add_output_pin("value", "Value", "", VariableType::Struct)
-            .schema = Some("outer-ref".to_string());
-        board.nodes.insert(node.id.clone(), node);
-
-        board.cleanup();
-
-        let schema_ref = board
-            .nodes
-            .values()
-            .next()
-            .and_then(|node| node.get_pin_by_name("value"))
-            .and_then(|pin| pin.schema.as_deref())
-            .expect("schema ref should remain present");
-        assert_eq!(board.refs.get(schema_ref).map(String::as_str), Some(schema));
-        assert!(!board.refs.contains_key("inner-ref"));
-    }
-}
-
 impl BoardCleanupLogic for FixRefsCleanup {
     fn init(board: &mut Board) -> Self
     where
@@ -144,5 +111,38 @@ impl BoardCleanupLogic for FixRefsCleanup {
         board.refs = std::mem::take(&mut self.refs);
         board.refs.retain(|k, _| !self.abandoned.contains(k));
         board.refs.shrink_to_fit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{board::Board, node::Node, variable::VariableType};
+    use flow_like_storage::Path;
+
+    #[test]
+    fn cleanup_flattens_schema_ref_chains() {
+        let schema = r#"{"type":"object","properties":{"value":{"type":"string"}}}"#;
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from("boards"));
+        board.refs = HashMap::from([
+            ("outer-ref".to_string(), "inner-ref".to_string()),
+            ("inner-ref".to_string(), schema.to_string()),
+        ]);
+        let mut node = Node::new("test", "Test", "", "Tests");
+        node.add_output_pin("value", "Value", "", VariableType::Struct)
+            .schema = Some("outer-ref".to_string());
+        board.nodes.insert(node.id.clone(), node);
+
+        board.cleanup();
+
+        let schema_ref = board
+            .nodes
+            .values()
+            .next()
+            .and_then(|node| node.get_pin_by_name("value"))
+            .and_then(|pin| pin.schema.as_deref())
+            .expect("schema ref should remain present");
+        assert_eq!(board.refs.get(schema_ref).map(String::as_str), Some(schema));
+        assert!(!board.refs.contains_key("inner-ref"));
     }
 }

@@ -1,0 +1,150 @@
+use data::cache::{ has, open }
+use datetime::{ now, parse }
+use log::{ error, info, warn }
+
+interface CatalogPage {
+    records: any[];
+    generated_at: string;
+    next_cursor?: string | null;
+}
+
+@description("Bearer token for the upstream inventory service.")
+@secret
+const inventoryApiToken: string
+@description("Base URL of the upstream inventory service.")
+const inventoryBaseUrl = "https://inventory.internal.example.net"
+@description("RFC 3339 timestamp of the newest change the last successful run ingested.")
+@category("Sync/State")
+let lastSyncedAt = "1970-01-01T00:00:00Z"
+@description("Records ingested by the most recent run; seeds the next page size.")
+@category("Sync/State")
+let lastBatchSize = 0
+@description("Catalog revision the cached routing table was built from.")
+@category("Sync/State")
+let catalogRevision = "r0"
+
+@cache({ namespace: "inventory-routing-v3", ttlSeconds: 3600, scope: "app" })
+function resolveWarehouseRoute(categoryId: string, revision: string): (warehouse: string, slaHours: int) {
+    let warehouse = "wh-central-01"
+    let slaHours = 72
+    if (categoryId == "perishable") {
+        warehouse = "wh-cold-02"
+        slaHours = 12
+    } else if (categoryId == "hazmat") {
+        warehouse = "wh-secure-04"
+        slaHours = 24
+    }
+    return warehouse, slaHours
+}
+
+@cache({ namespace: "inventory-operator-prefs-v1", ttlSeconds: 900, scope: "user" })
+function resolveOperatorProfile(operatorId: string): (locale: string, digestChannel: string) {
+    let locale = "en-US"
+    let digestChannel = `mail:${operatorId}`
+    if (operatorId.startsWith("eu-")) {
+        locale = "de-DE"
+        digestChannel = `chat:${operatorId}`
+    }
+    return locale, digestChannel
+}
+
+@cache({ ttlSeconds: 0 })
+function taxonomyLabel(categoryId: string): (label: string) {
+    let label = "General Merchandise"
+    if (categoryId == "perishable") {
+        label = "Chilled & Fresh"
+    } else if (categoryId == "hazmat") {
+        label = "Regulated Goods"
+    }
+    return label
+}
+
+function pageSizeFor(previousBatch: int): (pageSize: int) {
+    let pageSize = 250
+    if (previousBatch == 0) {
+        pageSize = 100
+    } else if (previousBatch > 400) {
+        pageSize = 500
+    }
+    return pageSize
+}
+
+function buildChangeFeedRequest(since: string, pageSize: int): (request: Struct) {
+    const seeded = http::request({ method: "GET", url: `${inventoryBaseUrl}/v2/catalog/changes?since=${since}&limit=${pageSize}` })
+    const authorized = seeded.setBearerAuth(inventoryApiToken)
+    return authorized.setAccept("application/json")
+}
+
+function summarizePage(page: CatalogPage): (records: any, count: int, cursor: any) {
+    const records = struct::get({ struct: page, field: "records" })
+    const cursor = struct::get({ struct: page, field: "next_cursor" })
+    const count = array::length({ array: records })
+    return records, count, cursor
+}
+
+eventsSimple syncInventoryCatalog() {
+    const startedAt = now()
+    const stamp = startedAt.format("rfc3339")
+    const runLock = open({ scope: "App", namespace: "inventory-sync-locks-v1" })
+    const { value: lockHolder, written: acquired } = runLock.getOrWrite(`lock:${catalogRevision}`, stamp, 900)
+    if (!acquired) {
+        warn({ message: `a sync claimed at ${lockHolder} is still running; skipping this tick`, toast: false })
+    } else {
+        const previous = parse({ input: lastSyncedAt })
+        const { hours: hoursSinceSync } = previous.diff(startedAt)
+        if (hoursSinceSync > 24) {
+            warn({ message: `watermark is ${hoursSinceSync}h old; the change feed may have gaps`, toast: false })
+        }
+        const routingCache = open({ scope: "App", namespace: "inventory-routing-v3" })
+        const cursorKey = `cursor:${catalogRevision}`
+        const { found: hasCursor, value: storedCursor } = routingCache.read(cursorKey)
+        const since = hasCursor ? storedCursor : lastSyncedAt
+        const pageSize = pageSizeFor(lastBatchSize)
+        const request = buildChangeFeedRequest(since, pageSize)
+        const call = http::fetch({ request: request })
+        call {
+            execSuccess: {
+                const page = call.toJson()
+                const { records, count, cursor } = summarizePage(page)
+                const { locale, digestChannel } = resolveOperatorProfile("eu-ops-rota")
+                for (const [index, row] of records) {
+                    const categoryId = struct::get({ struct: row, field: "category_id" })
+                    const sku = struct::get({ struct: row, field: "sku" })
+                    const dedupeKey = `seen:${catalogRevision}:${sku}`
+                    if (has({ cache: routingCache, key: dedupeKey })) {
+                        info({ message: `#${index} ${sku} was already ingested by an earlier page`, toast: false })
+                    } else {
+                        const { warehouse, slaHours } = resolveWarehouseRoute(categoryId, catalogRevision)
+                        const label = taxonomyLabel(categoryId)
+                        routingCache.write(dedupeKey, stamp, 86400)
+                        info({ message: `#${index} ${label} ${sku} -> ${warehouse} (SLA ${slaHours}h)`, toast: false })
+                    }
+                }
+                if (count == 0) {
+                    warn({ message: "the change feed returned no records; leaving the watermark untouched", toast: false })
+                } else {
+                    routingCache.write(cursorKey, cursor, 3600)
+                    lastBatchSize = count
+                    lastSyncedAt = stamp
+                    info({ message: `ingested ${count} records; digest goes to ${digestChannel} in ${locale}`, toast: false })
+                }
+            }
+            execError: {
+                const status = call.status()
+                error({ message: `the change feed failed with status ${status}; watermark stays at ${lastSyncedAt}`, toast: false })
+            }
+        }
+        runLock.delete(`lock:${catalogRevision}`)
+    }
+}
+
+eventsGeneric invalidateRoutingCache(payload: Struct, revision: string) {
+    const routingCache = open({ scope: "App", namespace: "inventory-routing-v3" })
+    const purgedRoutes = routingCache.invalidateNamespace()
+    const operatorCache = open({ scope: "User", namespace: "inventory-operator-prefs-v1" })
+    const purgedProfiles = operatorCache.invalidateNamespace()
+    catalogRevision = revision
+    lastBatchSize = 0
+    info({ message: `revision ${revision}: purged ${purgedRoutes} routes and ${purgedProfiles} operator profiles`, toast: false })
+    return purgedRoutes + purgedProfiles
+}

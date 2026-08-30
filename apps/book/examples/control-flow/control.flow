@@ -1,0 +1,40 @@
+use log::{ info, warn }
+
+function classify(report: string): (status: string) {
+    let status = "investigate"
+    if (report.contains({ substring: "production is on hold", ignoreCase: true })) {
+        status = "critical"
+    } else {
+        if (report.contains({ substring: "degraded", ignoreCase: true })) {
+            status = "warning"
+        }
+    }
+    return status
+}
+
+eventsGeneric coordinateIncident(payload: Struct, reports: string[], healthUrl: string) {
+    const request = http::request({ method: "GET", url: healthUrl })
+    const apiCall = http::fetch({ request: request })
+    apiCall {
+        execSuccess: {
+            info({ message: "Dependency is reachable", toast: false })
+        }
+        execError: {
+            warn({ message: "Dependency returned an unsuccessful response", toast: false })
+        }
+    }
+    for (const [index, report] of reports) {
+        const status = classify(report)
+        info({ message: `#${index} ${status}: ${report}`, toast: false })
+    }
+    @parallel
+    for (const report of reports) {
+        info({ message: `independent check: ${report}`, toast: false })
+    }
+    let attempt = 0
+    while (attempt < 3) {
+        info({ message: `poll attempt ${attempt}`, toast: false })
+        attempt = attempt + 1
+    }
+    return "incident coordination completed"
+}

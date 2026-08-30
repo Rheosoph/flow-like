@@ -1,0 +1,11 @@
+// RECLASSIFIED 2026-08-26: not an engine defect. `ui::updateTable`'s `data` pin is `Struct`
+// (Normal), so an array of grouped rows cannot feed it directly; the payload has to be one
+// struct. Kept as a POSITIVE regression test for the correct spelling.
+use log::{ info }
+
+eventsSimple setTableData() {
+    const { groups } = array::groupBy({ arrayIn: [], key: "depot" })
+    const payload = { rows: groups }
+    ui::updateTable({ elementRef: ui::getElement({ elementRef: "s/table" }).element, operation: "Set Data", data: payload })
+    info({ message: "table refreshed", toast: false })
+}

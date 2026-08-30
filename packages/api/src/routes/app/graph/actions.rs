@@ -20,13 +20,14 @@ use crate::{
     credentials::CredentialsAccess,
     ensure_permission,
     error::ApiError,
+    execution::rejection,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::events::{
         db::{get_event_from_db, sync_event_to_db},
         invoke_event::{InvokeEventQuery, InvokeEventRequest, invoke_resolved_event},
     },
-    routes::app::prerun_shared::{OAuthRequirement, compute_payload},
+    routes::app::prerun_shared::{OAuthRequirement, PrerunPayload, load_prerun_manifest},
     state::AppState,
 };
 
@@ -247,7 +248,7 @@ async fn ensure_action_board_published(
                         })?;
                 if !unchanged {
                     let snapshot = guard
-                        .prepare_snapshot_at_fresh_patch_version(None)
+                        .prepare_snapshot_recovering_from_races(None)
                         .await
                         .map_err(|error| {
                             ApiError::internal(format!(
@@ -274,24 +275,31 @@ async fn ensure_action_board_published(
                         "Could not inspect the action's board version slot: {error}"
                     ))
                 })?;
-            if compatible {
+            // A slot another draft owns, and a slot this attempt writes but
+            // then loses to a racing editor save, resolve the same way: pin the
+            // reloaded draft at the next free patch instead.
+            let moved = if compatible {
                 guard
-                    .snapshot_at_version(pinned, None)
+                    .snapshot_at_version_recovering_from_races(pinned, None)
                     .await
                     .map_err(|error| {
                         ApiError::internal(format!(
                             "Could not publish the action's board version: {error}"
                         ))
-                    })?;
+                    })?
             } else {
-                let snapshot = guard
-                    .prepare_snapshot_at_fresh_patch_version(None)
-                    .await
-                    .map_err(|error| {
-                        ApiError::internal(format!(
-                            "Could not recover the action's interrupted board snapshot: {error}"
-                        ))
-                    })?;
+                Some(
+                    guard
+                        .prepare_snapshot_recovering_from_races(None)
+                        .await
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "Could not recover the action's interrupted board snapshot: {error}"
+                            ))
+                        })?,
+                )
+            };
+            if let Some(snapshot) = moved {
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
                 prepared = Some(snapshot);
@@ -333,7 +341,7 @@ async fn ensure_action_board_published(
             );
         } else {
             let snapshot = guard
-                .prepare_snapshot_at_fresh_patch_version(None)
+                .prepare_snapshot_recovering_from_races(None)
                 .await
                 .map_err(|error| {
                     ApiError::internal(format!(
@@ -495,6 +503,7 @@ where
 /// Creates or updates the internal, version-pinned events that make ontology
 /// actions executable through the existing event runtime. Callers must already
 /// have checked graph-write and event-write permissions.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn materialize_action_events(
     state: &AppState,
     sub: &str,
@@ -521,6 +530,7 @@ pub(crate) async fn materialize_action_events(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn materialize_action_events_with_mode(
     state: &AppState,
     sub: &str,
@@ -768,6 +778,7 @@ pub(crate) async fn remove_action_events(
 /// Best-effort compensation when ontology persistence fails after event files
 /// have already been updated. Newly created bindings are removed and reused
 /// bindings are restored to their previous definition.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn rollback_action_event_changes(
     state: &AppState,
     sub: &str,
@@ -829,6 +840,48 @@ pub(crate) async fn rollback_action_event_changes(
         (Some(error), _) => Err(error),
         (None, result) => result,
     }
+}
+
+/// An action refused for its parameters is the clearest case of a workflow that
+/// never starts: the caller sent something the contract does not accept, and
+/// without a record the attempt is invisible to the app owner who has to
+/// explain it.
+async fn record_action_rejection(
+    state: &AppState,
+    action: &OntologyActionDef,
+    request: &InvokeOntologyActionRequest,
+    permission: &crate::middleware::jwt::AppPermissionResponse,
+    error: &ApiError,
+) {
+    let Some(event_id) = action.event_id.as_deref() else {
+        return;
+    };
+    let Some(reason) = error.public_message() else {
+        return;
+    };
+    let Some(context) = rejection::context_for_event(
+        state,
+        event_id,
+        rejection::RejectionStage::Payload,
+        reason.to_string(),
+    )
+    .await
+    else {
+        return;
+    };
+
+    let sub = permission.effective_user_id().ok();
+    let mut context = context
+        .with_payload(Some(request.parameters.clone()))
+        .with_actor(
+            sub.clone(),
+            permission.technical_user_id().map(ToOwned::to_owned),
+        );
+    if let Some(sub) = sub {
+        context = context.with_credential_subject(sub);
+    }
+
+    rejection::record(state, context).await;
 }
 
 fn validate_request(
@@ -919,7 +972,9 @@ pub async fn prerun_ontology_action(
             "Ontology action execution requires access to the governed object data",
         ));
     }
-    let sub = permission.effective_user_id()?;
+    // Loading the board used to require an effective user; principals without
+    // one stay rejected until that is decided on purpose.
+    permission.effective_user_id()?;
     let credentials = state.master_credentials().await?;
     let connection = credentials.to_db(&app_id).await?.execute().await?;
     let ontology = lancegraph::load_overlay(&connection, &ontology_id)
@@ -966,10 +1021,8 @@ pub async fn prerun_ontology_action(
     let version = action
         .board_version
         .map(|version| (version[0], version[1], version[2]));
-    let board = state
-        .master_board(&sub, &app_id, &action.board_id, &state, version)
-        .await?;
-    let payload = compute_payload(&board);
+    let manifest = load_prerun_manifest(&state, &app_id, &action.board_id, version).await?;
+    let payload = PrerunPayload::from(&*manifest);
     Ok(Json(OntologyActionPrerunResponse {
         oauth_requirements: payload.oauth_requirements,
         signature: payload.signature,
@@ -1036,7 +1089,13 @@ pub async fn invoke_ontology_action(
             "This ontology action is not exposed to connected projects",
         ));
     }
-    let ids = validate_request(&action, &request)?;
+    let ids = match validate_request(&action, &request) {
+        Ok(ids) => ids,
+        Err(error) => {
+            record_action_rejection(&state, &action, &request, &permission, &error).await;
+            return Err(error);
+        }
+    };
 
     let event_id = action.event_id.as_deref().ok_or_else(|| {
         ApiError::conflict(

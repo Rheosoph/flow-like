@@ -25,6 +25,7 @@ impl NodeLogic for WaitForTemplateNode {
             "Waits for a template to appear on screen",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "waitForTemplate");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -174,6 +175,7 @@ impl NodeLogic for WaitForColorNode {
             "Waits for a specific color to appear at a position",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "waitForColor");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(
@@ -342,6 +344,7 @@ impl NodeLogic for DelayNode {
             "Pauses execution for a specified duration",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "wait");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

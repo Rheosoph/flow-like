@@ -111,6 +111,8 @@ struct EventHandler {
     channel_blacklist: Vec<String>,
     respond_to_mentions: bool,
     respond_to_dms: bool,
+    #[allow(dead_code)]
+    // configured + persisted prefix; the live should_process_message path does not consult it yet
     command_prefix: String,
 }
 
@@ -217,6 +219,7 @@ impl DiscordClientManager {
         Ok(())
     }
 
+    #[allow(dead_code)] // superset of DiscordSink::remove_handler: also prunes the orphaned discord_bots row
     fn remove_handler_from_db(db: &DbConnection, event_id: &str) -> Result<String> {
         let conn = db.lock().unwrap();
 
@@ -354,6 +357,7 @@ fn is_channel_allowed(channel_id: &str, handler: &EventHandler) -> bool {
     true
 }
 
+#[allow(dead_code)] // prefix/mention targeting, superseded by should_process_message which does not check the prefix
 fn is_message_targeted(msg: &serenity::model::channel::Message, handler: &EventHandler) -> bool {
     // Check if message starts with prefix
     if msg.content.starts_with(&handler.command_prefix) {
@@ -628,6 +632,7 @@ fn create_reasoning_embed(reasoning: &Reasoning) -> Option<CreateEmbed> {
     Some(embed)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_discord_message(
     ctx: &serenity::client::Context,
     message: &serenity::model::channel::Message,
@@ -1123,6 +1128,7 @@ impl DiscordSink {
         Ok(token)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn parse_discord_config(
         _event_id: String,
         token: String,

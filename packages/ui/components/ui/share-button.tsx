@@ -75,8 +75,10 @@ export function ShareButton({
 	const handleShare = useCallback(async () => {
 		const webUrl = generateWebUrl(webBaseUrl, appId);
 		const shareData = {
-			title: appName || t('flowLikeApp', 'Flow Like App'),
-			text: t('checkOutValOnFlowLike', 'Check out {{val}} on Flow Like!', { val: appName || "this app" }),
+			title: appName || t("flowLikeApp", "Flow Like App"),
+			text: t("checkOutValOnFlowLike", "Check out {{val}} on Flow Like!", {
+				val: appName || "this app",
+			}),
 			url: webUrl,
 		};
 
@@ -115,7 +117,7 @@ export function ShareButton({
 						)}
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent>{t('shareApp', 'Share App')}</TooltipContent>
+				<TooltipContent>{t("shareApp", "Share App")}</TooltipContent>
 			</Tooltip>
 		);
 	}
@@ -129,7 +131,7 @@ export function ShareButton({
 					className={cn("gap-2", className)}
 				>
 					<Share2 className="h-4 w-4" />
-					{t('share', 'Share')}
+					{t("share", "Share")}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-56">
@@ -137,14 +139,14 @@ export function ShareButton({
 					<>
 						<DropdownMenuItem onClick={openInDesktopApp}>
 							<Monitor className="h-4 w-4 mr-2" />
-							{t('openInDesktopApp', 'Open in Desktop App')}
+							{t("openInDesktopApp", "Open in Desktop App")}
 						</DropdownMenuItem>
 						<DropdownMenuSeparator />
 					</>
 				)}
 				<DropdownMenuItem onClick={handleShare}>
 					<Share2 className="h-4 w-4 mr-2" />
-					{t('shareViaSystem', 'Share via System')}
+					{t("shareViaSystem", "Share via System")}
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem
@@ -157,7 +159,7 @@ export function ShareButton({
 					) : (
 						<Link2 className="h-4 w-4 mr-2" />
 					)}
-					{t('copyWebLink', 'Copy Web Link')}
+					{t("copyWebLink", "Copy Web Link")}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					onClick={() => copyToClipboard(generateDeepLink(appId), "deep")}
@@ -167,7 +169,7 @@ export function ShareButton({
 					) : (
 						<Copy className="h-4 w-4 mr-2" />
 					)}
-					{t('copyDesktopLink', 'Copy Desktop Link')}
+					{t("copyDesktopLink", "Copy Desktop Link")}
 				</DropdownMenuItem>
 				{inviteToken && (
 					<>
@@ -185,7 +187,7 @@ export function ShareButton({
 							) : (
 								<Link2 className="h-4 w-4 mr-2" />
 							)}
-							{t('copyInviteLinkWeb', 'Copy Invite Link (Web)')}
+							{t("copyInviteLinkWeb", "Copy Invite Link (Web)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -200,7 +202,7 @@ export function ShareButton({
 							) : (
 								<Copy className="h-4 w-4 mr-2" />
 							)}
-							{t('copyInviteLinkDesktop', 'Copy Invite Link (Desktop)')}
+							{t("copyInviteLinkDesktop", "Copy Invite Link (Desktop)")}
 						</DropdownMenuItem>
 					</>
 				)}
@@ -249,7 +251,9 @@ export function QuickShareButton({
 					{title}
 				</Button>
 			</TooltipTrigger>
-			<TooltipContent>{copied ? "Copied!" : t('copyTitle', 'Copy {{title}}', { title })}</TooltipContent>
+			<TooltipContent>
+				{copied ? "Copied!" : t("copyTitle", "Copy {{title}}", { title })}
+			</TooltipContent>
 		</Tooltip>
 	);
 }

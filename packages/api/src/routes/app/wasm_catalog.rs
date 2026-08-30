@@ -9,7 +9,7 @@ use flow_like::flow::{
     board::{Board, commands::GenericCommand},
     node::{Node, NodeWasm},
 };
-use flow_like_wasm::manifest::PackageNodeEntry;
+use flow_like_wasm_schema::manifest::PackageNodeEntry;
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
@@ -20,20 +20,24 @@ pub struct AppWasmNodes {
     pub fingerprint: String,
 }
 
-/// [`app_wasm_nodes`] behind a short-lived per-app cache.
+/// [`app_wasm_nodes`] behind a per-app cache keyed by the app's package pins.
 ///
-/// The board sync endpoint needs this on every poll; without the cache each poll would pay two
-/// database round trips for a catalog that changes only when packages are installed. Package
-/// mutations call `invalidate_wasm_resolve`, which drops this entry too; the TTL bounds staleness
-/// against writes on other replicas.
+/// The board sync endpoint needs this on every poll and the mutation path on every write; without
+/// a cache each call pays a second database round trip that pulls every pinned package's node
+/// definitions as JSON. The key embeds a digest of the installed `(package, version)` set, so an
+/// install, update or removal is observed immediately and on every replica — a TTL would instead
+/// keep serving the previous catalog to someone who just added a package and went straight into a
+/// board, and no invalidation can reach the instances a Lambda deployment is holding.
 pub async fn app_wasm_nodes_cached(
     state: &AppState,
     app_id: &str,
 ) -> Result<Arc<AppWasmNodes>, ApiError> {
-    if let Some(cached) = state.app_wasm_nodes_cache.get(app_id) {
+    let packages = app_packages(state, app_id).await?;
+    let key = format!("{app_id}\u{1f}{}", packages_epoch(&packages));
+    if let Some(cached) = state.app_wasm_nodes_cache.get(&key) {
         return Ok(cached);
     }
-    let nodes = app_wasm_nodes(state, app_id).await?;
+    let nodes = wasm_nodes_for_packages(state, &packages).await?;
     let fingerprint = if nodes.is_empty() {
         String::new()
     } else {
@@ -60,25 +64,53 @@ pub async fn app_wasm_nodes_cached(
         hasher.finalize().to_hex().to_string()
     };
     let entry = Arc::new(AppWasmNodes { nodes, fingerprint });
-    state
-        .app_wasm_nodes_cache
-        .insert(app_id.to_string(), entry.clone());
+    state.app_wasm_nodes_cache.insert(key, entry.clone());
     Ok(entry)
 }
 
-pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
-    let packages = app_package::Entity::find()
+/// The app's pinned, non-stale packages. This is the cheap half of a catalog resolve; the
+/// expensive half is [`wasm_nodes_for_packages`], which the cache is there to skip.
+async fn app_packages(state: &AppState, app_id: &str) -> Result<Vec<app_package::Model>, ApiError> {
+    Ok(app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
         .filter(app_package::Column::Stale.eq(false))
         .all(&state.db)
-        .await?;
+        .await?)
+}
 
+/// Identity of an app's package pins: any install, removal or version change moves it.
+fn packages_epoch(packages: &[app_package::Model]) -> String {
+    if packages.is_empty() {
+        return String::new();
+    }
+    let mut pins: Vec<String> = packages
+        .iter()
+        .map(|pkg| format!("{}\u{1f}{}", pkg.package_id, pkg.version))
+        .collect();
+    pins.sort();
+    let mut hasher = blake3::Hasher::new();
+    for pin in pins {
+        hasher.update(pin.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
+    let packages = app_packages(state, app_id).await?;
+    wasm_nodes_for_packages(state, &packages).await
+}
+
+async fn wasm_nodes_for_packages(
+    state: &AppState,
+    packages: &[app_package::Model],
+) -> Result<Vec<Node>, ApiError> {
     if packages.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut pinned = Condition::any();
-    for pkg in &packages {
+    for pkg in packages {
         pinned = pinned.add(
             Condition::all()
                 .add(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
@@ -97,7 +129,7 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
 
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
 
-    for pkg in &packages {
+    for pkg in packages {
         let key = (pkg.package_id.clone(), pkg.version.clone());
         let Some(nodes_value) = nodes_by_pin.remove(&key) else {
             tracing::warn!(
@@ -120,7 +152,7 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
 }
 
 fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
-    Node {
+    let mut node = Node {
         id: entry.id.clone(),
         name: entry.name.clone(),
         friendly_name: entry
@@ -149,12 +181,23 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         },
         required_oauth_scopes: entry.required_oauth_scopes.clone(),
         only_offline: entry.only_offline,
-        version: entry.version,
+        // `build_node_from_definition` builds the same node for the executor
+        // and leaves this unset; the two must agree or the registry
+        // fingerprints they produce — and with them any compiled board
+        // artifact bound to one — diverge. Entries written before
+        // `definition_to_package_entry` stopped storing the module's ABI
+        // version here still carry one, so the stored value is not read.
+        version: None,
         wasm: Some(NodeWasm {
             package_id: package_id.to_string(),
             permissions: entry.permissions.clone(),
         }),
-    }
+        namespace: None,
+        alias: None,
+        receiver: None,
+    };
+    node.ensure_flowscript_names();
+    node
 }
 
 pub fn hydrate_board_wasm_metadata(
@@ -322,5 +365,93 @@ impl<'a> WasmCatalogLookup<'a> {
         }
 
         Ok(self.wasm_by_name.get(node.name.as_str()).copied())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_wasm::abi::{WasmNodeDefinition, WasmPinDefinition};
+    use flow_like_wasm::{build_node_from_definition, definition_to_package_entry};
+
+    fn definition() -> WasmNodeDefinition {
+        WasmNodeDefinition {
+            name: "youtube_transcript".to_string(),
+            friendly_name: "YouTube Transcript".to_string(),
+            description: "Fetch a transcript".to_string(),
+            category: "Web".to_string(),
+            icon: Some("video".to_string()),
+            pins: vec![
+                WasmPinDefinition {
+                    name: "video_url".to_string(),
+                    friendly_name: "Video URL".to_string(),
+                    description: "The video to transcribe".to_string(),
+                    pin_type: "Input".to_string(),
+                    data_type: "String".to_string(),
+                    default_value: None,
+                    value_type: Some("Normal".to_string()),
+                    schema: None,
+                    valid_values: None,
+                    range: None,
+                    step: None,
+                    sensitive: None,
+                    enforce_schema: None,
+                    enforce_generic_value_type: None,
+                },
+                WasmPinDefinition {
+                    name: "transcript".to_string(),
+                    friendly_name: "Transcript".to_string(),
+                    description: "The transcript text".to_string(),
+                    pin_type: "Output".to_string(),
+                    data_type: "String".to_string(),
+                    default_value: None,
+                    value_type: Some("Normal".to_string()),
+                    schema: None,
+                    valid_values: None,
+                    range: None,
+                    step: None,
+                    sensitive: None,
+                    enforce_schema: None,
+                    enforce_generic_value_type: None,
+                },
+            ],
+            scores: None,
+            long_running: None,
+            docs: None,
+            // A module built against a non-default host ABI: the case that used
+            // to push the two builders apart.
+            abi_version: Some(3),
+            permissions: vec![],
+        }
+    }
+
+    /// The executor overlays WASM nodes onto its registry via
+    /// `build_node_from_definition`; the API reconstructs the same nodes from
+    /// the stored `PackageNodeEntry`. `FlowNodeRegistryInner::fingerprint`
+    /// hashes name, version and `semantic_hash` per node, so any disagreement
+    /// on those three yields two different fingerprints for one package — and
+    /// a compiled artifact one side writes that the other always rejects.
+    #[test]
+    fn both_node_builders_agree_on_every_fingerprint_input() {
+        let definition = definition();
+
+        let executor_node = build_node_from_definition(&definition);
+        let api_node = package_node_to_node(
+            &definition_to_package_entry(&definition),
+            "com.flow-like.youtube",
+        );
+
+        assert_eq!(executor_node.name, api_node.name);
+        assert_eq!(executor_node.version, api_node.version);
+        assert_eq!(executor_node.semantic_hash(), api_node.semantic_hash());
+    }
+
+    #[test]
+    fn abi_version_never_becomes_a_node_schema_version() {
+        let definition = definition();
+        assert_eq!(definition.abi_version, Some(3));
+
+        assert_eq!(definition_to_package_entry(&definition).version, None);
+        assert_eq!(build_node_from_definition(&definition).version, None);
     }
 }

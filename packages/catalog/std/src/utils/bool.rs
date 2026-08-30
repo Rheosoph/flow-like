@@ -1,6 +1,11 @@
+pub mod aggregate;
 pub mod and;
+pub mod convert;
 pub mod equal;
+pub mod gates;
 pub mod not;
 pub mod or;
 pub mod random;
+pub mod toggle;
+pub mod unequal;
 pub mod xor;

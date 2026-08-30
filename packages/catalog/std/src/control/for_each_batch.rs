@@ -26,6 +26,7 @@ impl NodeLogic for BatchLoopNode {
             "Loops over an Array in batches, running the body once per slice of up to Batch Size elements",
             "Control",
         );
+        node.set_flowscript_name("control", "forEachBatch");
         node.add_icon("/flow/icons/for-each.svg");
         node.set_scores(
             NodeScores::new()

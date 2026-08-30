@@ -23,6 +23,7 @@ impl NodeLogic for GetEffectiveUserPermissionsNode {
             "Get Effective User Permissions",
             "Gets a project user's effective permission bitfield and expanded permission names. Owner and Admin imply all permissions.",
         );
+        node.set_flowscript_name("user", "getEffectivePermissions");
         add_app_pin(&mut node);
         add_user_id_pin(&mut node);
         node.add_output_pin(

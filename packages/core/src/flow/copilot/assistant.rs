@@ -39,7 +39,7 @@ pub struct GlobalOpenBoardContext {
 
 /// The Data Studio page the user currently has open, forwarded by the frontend so the global
 /// assistant knows which app's data "this data / this database / this ontology" refers to and can
-/// preserve the right app/overlay while applying the shared Event-first routing policy.
+/// preserve the right app/overlay when routing the request.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GlobalDataStudioContext {
     pub app_id: String,
@@ -110,7 +110,7 @@ Classify each work item as DIRECT (straightforward use of existing apps/evidence
 These ownership boundaries are strict:
 - `flowpilot_board`: all board/workflow logic, FlowScript, nodes, connections, entry points, debugging, and board explanations.
 - `flowpilot_widget`: pages, widgets, and components only; never workflow logic.
-- `data_studio_agent`: direct/raw app databases, ontologies, queries, analytics, actions, and data visualizations after routing selects the data path. Configured Events remain the primary DIRECT/COMPLEX app interface.
+- `data_studio_agent`: app databases, ontologies, queries, analytics, actions, and data visualizations — reading AND changing them, on existing apps as much as during BUILD.
 - `project_scout`: read-only prior-art and foundation planning for BUILD only.
 
 Never author specialist-owned artifacts yourself or ask one specialist to perform another's work. Resolve "this board/data/page" from supplied open-context IDs without asking again. Use exact context or tool-returned IDs; never invent state or silently switch to a similarly named app.
@@ -122,12 +122,12 @@ Default to DIRECT. Do not create a dependency plan for an ordinary one-call, one
 const TASK_ROUTING_PLAYBOOK: &str = r#"## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH: LOCAL FIRST
 
 Local apps are the first choice, including installed research/search apps.
-In DIRECT and COMPLEX SOLVE, an app's active configured Events are its primary supported interface. This includes chat and page Events plus headless simple/quick-action, REST/API, and MCP Events. Direct database, SQL, DataFusion, table, and ontology access is a fallback, not a shortcut around an Event.
+In DIRECT and COMPLEX SOLVE, an app's active configured Events are its primary supported interface for work an Event already performs. This includes chat and page Events plus headless simple/quick-action, REST/API, and MCP Events. Work about the data itself belongs to `data_studio_agent`.
 
 1. When a work item needs an app, private content, an action, or current external information, begin with `list_apps`. Match by capability and active interface metadata, not only exact name. A request to ask, tell, or check with a named person/agent normally names an app; if no unique app matches, ask which app and never reinterpret the name as a web query.
 2. For DIRECT/COMPLEX app use, choose the best matching active Event and invoke its exact `consumer_tool`. Inspect the interface first when its payload shape is unknown. For a page, pass its Event `id` as `event_id`; never substitute its `page_id`.
-3. Use `data_studio_agent` directly only for BUILD data work, an explicit raw schema/table/ontology/SQL/DataFusion request, when a complete inventory has no suitable Event, or when a successfully called Event explicitly cannot provide the required operation or fidelity. Outside BUILD, `list_apps` must finish in an earlier assistant round; never put it and `data_studio_agent` in the same wave. A failed, declined, timed-out, or approval-blocked suitable Event is a stop, not permission to bypass it through raw data. State the applicable `routing_reason` in the data call.
-4. Prefer a suitable local app over FlowPilot's public-web fallback. Use the sealed fallback only when a complete local inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors are not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool. The fallback is always rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers present in a mixed request. Any public query that must be derived from private output instead requires a new explicit sanitized user request.
+3. Call `data_studio_agent` directly for any work item about an app's data — schema, ad-hoc queries, analytics, corrections, migrations, seeding, indexes, ontologies/overlays — whether the app already exists or is being built. It needs no preflight, no inventory round, and no permission from another tool; pass the `app_id` you already have. Choose an Event instead when one already performs exactly what was asked; a failed, declined, timed-out, or approval-blocked Event is a stop to report, not work to redo through raw data.
+4. Prefer a suitable local app over FlowPilot's public-web fallback. Use the sealed fallback only when a returned local inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors make a listing partial, not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool. The fallback is always rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers present in a mixed request. Any public query that must be derived from private output instead requires a new explicit sanitized user request.
 5. DIRECT work may call one or two clearly needed apps without producing a plan. Calls that are obviously independent may run together; wait when one result supplies another call's input, and keep calls to the same stateful app ordered when they may conflict.
 6. Interpret and synthesize app results. Name contributing apps, preserve material caveats, and refer to returned UI/files instead of pretending to reproduce them. For page content, answer only from successfully returned screenshots; disclose incomplete capture.
    Preserve Data Studio's returned renderable chart/query/step-log blocks exactly so the client can display its evidence.
@@ -187,7 +187,7 @@ Run BUILD INTAKE and lead with the BUILD BRIEF before the steps below. Before cr
 
 After create/fork, pin the returned destination `app_id` for the entire build. A transient error never authorizes switching to an older similarly named app.
 
-For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and snake_case physical table/field names. For each additional board (one per page), choose its `board_id` up front and pass it to `flowpilot_widget` and `flowpilot_board` with `create_new_board=true`. Pass the same contract to every dispatched specialist and run independent specialists together. Sequence only identities that truly must be returned first — contract table/field names are not among them: tables are created on the workflow's first write, so never hold `flowpilot_board`/`flowpilot_widget` back for `data_studio_agent`. Dispatch `data_studio_agent` only for work only it can do (overlays for genuinely graph-shaped data, indexes, migrations, seeding, existing-schema discovery), never to pre-create simple tables. Propagate an EXISTING schema's authoritative identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
+For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and snake_case physical table/field names. For each additional board (one per page), choose its `board_id` up front and pass it to `flowpilot_widget` and `flowpilot_board` with `create_new_board=true`. Pass the same contract to every dispatched specialist and run independent specialists together. Sequence only identities that truly must be returned first — contract table/field names are not among them: tables are created on the workflow's first write, so never hold `flowpilot_board`/`flowpilot_widget` back for `data_studio_agent`. In a build wave, dispatch `data_studio_agent` for work only it can do (overlays for genuinely graph-shaped data, indexes, migrations, seeding, existing-schema discovery), never to pre-create simple tables. Propagate an EXISTING schema's authoritative identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
 
 UI scaffolding is not workflow logic. Requested behavior is incomplete until `flowpilot_board` edit succeeds. Preserve the full workflow acceptance contract across every retry; never substitute a smoke test, reduced slice, empty Event, or diagnostic workflow unless the user explicitly requests a partial prototype.
 
@@ -304,7 +304,7 @@ pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
 }
 
 /// Render the open-Data-Studio section injected into the assistant context. It resolves deictic
-/// references without overriding the shared Event-first routing policy.
+/// references to this app's data and points the request at the data specialist.
 pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
     let app_id = context.app_id.trim();
     if app_id.is_empty() {
@@ -319,7 +319,7 @@ pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
 
     let mut lines = vec![
         "## CURRENTLY OPEN DATA STUDIO".to_string(),
-        "The user has this app's Data Studio open and visible on screen right now. When they say \"this data\", \"this database\", \"this ontology\", or \"this overlay\", they mean THIS app; use these IDs and never ask which app. This context identifies the target but does not override Event-first routing for DIRECT/COMPLEX app use.".to_string(),
+        "The user has this app's Data Studio open and visible on screen right now. When they say \"this data\", \"this database\", \"this ontology\", or \"this overlay\", they mean THIS app; use these IDs and never ask which app. A request about the data itself — reading it, correcting it, restructuring it — is data_studio_agent work on this app; reach for a configured Event only when one already performs exactly what was asked.".to_string(),
         format!("- App: \"{app_label}\" (app_id: {app_id})"),
     ];
     let overlay_id = context
@@ -361,7 +361,7 @@ pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
         None => String::new(),
     };
     lines.push(format!(
-        "For an allowed raw-data fallback or BUILD data work, call data_studio_agent with app_id=\"{app_id}\"{overlay_arg}; otherwise use the best matching configured Event. Do not query or visualize the data yourself."
+        "For any question or change about this app's data, call data_studio_agent with app_id=\"{app_id}\"{overlay_arg}; use a configured Event instead when one already performs exactly what was asked. Do not query or visualize the data yourself."
     ));
     lines.join("\n")
 }
@@ -626,13 +626,12 @@ mod tests {
         assert!(prompt.contains("including installed research/search apps"));
         assert!(prompt.contains("active configured Events are its primary supported interface"));
         assert!(prompt.contains("REST/API, and MCP Events"));
-        assert!(prompt.contains("fallback, not a shortcut around an Event"));
         assert!(prompt.contains("best matching active Event"));
-        assert!(prompt.contains("`list_apps` must finish in an earlier assistant round"));
-        assert!(prompt.contains("never put it and `data_studio_agent` in the same wave"));
-        assert!(prompt.contains("successfully called Event explicitly cannot provide"));
-        assert!(prompt.contains("approval-blocked suitable Event is a stop"));
-        assert!(prompt.contains("State the applicable `routing_reason`"));
+        // Data work on an app that already exists must stay reachable in one call: no preflight
+        // round, no routing justification, no Event that has to be ruled out first.
+        assert!(prompt.contains("whether the app already exists or is being built"));
+        assert!(prompt.contains("no preflight, no inventory round"));
+        assert!(prompt.contains("approval-blocked Event is a stop to report"));
         assert!(prompt.contains("no suitable app/interface"));
         assert!(prompt.contains("local research candidates were tried in best-fit order"));
         assert!(prompt.contains("no useful, nonredundant candidate remained"));
@@ -670,9 +669,9 @@ mod tests {
 
         assert!(section.contains("app_id: sales-app"));
         assert!(section.contains("overlay_id: crm"));
-        assert!(section.contains("does not override Event-first routing"));
-        assert!(section.contains("allowed raw-data fallback or BUILD data work"));
-        assert!(section.contains("otherwise use the best matching configured Event"));
+        assert!(section.contains("is data_studio_agent work on this app"));
+        assert!(section.contains("any question or change about this app's data"));
+        assert!(section.contains("use a configured Event instead when one already performs"));
         assert!(!section.contains("route the request to data_studio_agent"));
     }
 

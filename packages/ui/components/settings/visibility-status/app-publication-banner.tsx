@@ -39,7 +39,7 @@ export function AppPublicationBanner({
 					<PauseCircle className="h-4 w-4 text-orange-500 shrink-0" />
 				)}
 				<span className="truncate">
-					{t('publicationRequest', 'Publication request')}{" "}
+					{t("publicationRequest", "Publication request")}{" "}
 					<Badge variant="secondary" className="text-xs mx-1">
 						{latest.status.replaceAll("_", " ")}
 					</Badge>{" "}
@@ -56,7 +56,7 @@ export function AppPublicationBanner({
 					className="shrink-0 gap-1 text-xs"
 					onClick={onNavigate}
 				>
-					{t('viewDetails', 'View details')}
+					{t("viewDetails", "View details")}
 					<ExternalLink className="h-3 w-3" />
 				</Button>
 			)}

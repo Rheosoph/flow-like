@@ -127,9 +127,14 @@ export function ForkPolicyEditor({
 	return (
 		<div className="space-y-3">
 			<div className="space-y-1">
-				<p className="text-sm font-medium">{t('whatAForkIncludes', 'What a fork includes')}</p>
+				<p className="text-sm font-medium">
+					{t("whatAForkIncludes", "What a fork includes")}
+				</p>
 				<p className="text-xs text-muted-foreground">
-					{t('anyoneWhoCanForkThisAppCanAlreadyReadItsContentsThroughTheNormalAppApisTheseSettingsKeepForksCleanAndSmallTheyAreNotAnAccessControl', "Anyone who can fork this app can already read its contents through the normal app APIs. These settings keep forks clean and small — they are not an access control.")}
+					{t(
+						"anyoneWhoCanForkThisAppCanAlreadyReadItsContentsThroughTheNormalAppApisTheseSettingsKeepForksCleanAndSmallTheyAreNotAnAccessControl",
+						"Anyone who can fork this app can already read its contents through the normal app APIs. These settings keep forks clean and small — they are not an access control.",
+					)}
 				</p>
 			</div>
 
@@ -168,7 +173,7 @@ export function ForkPolicyEditor({
 							className="text-sm font-medium flex items-center gap-2"
 						>
 							<DatabaseIcon className="w-3.5 h-3.5 text-muted-foreground" />
-							{t('databases', 'Databases')}
+							{t("databases", "Databases")}
 						</Label>
 						<p className="text-xs text-muted-foreground">
 							{activeMode.description}
@@ -195,12 +200,18 @@ export function ForkPolicyEditor({
 
 			{!policy.flows && (
 				<p className="text-xs text-amber-600 dark:text-amber-500">
-					{t('withoutFlowsAForkHasNoRunnableLogicOnlyTheAppShell', 'Without flows a fork has no runnable logic — only the app shell.')}
+					{t(
+						"withoutFlowsAForkHasNoRunnableLogicOnlyTheAppShell",
+						"Without flows a fork has no runnable logic — only the app shell.",
+					)}
 				</p>
 			)}
 			{!policy.roles && (
 				<p className="text-xs text-muted-foreground">
-					{t('forksGetFreshOwnerAdminAndUserRolesNodesThatReferenceARoleByIdWontResolveReferencesByNameStillWork', "Forks get fresh Owner, Admin and User roles. Nodes that reference a role by ID won't resolve; references by name still work.")}
+					{t(
+						"forksGetFreshOwnerAdminAndUserRolesNodesThatReferenceARoleByIdWontResolveReferencesByNameStillWork",
+						"Forks get fresh Owner, Admin and User roles. Nodes that reference a role by ID won't resolve; references by name still work.",
+					)}
 				</p>
 			)}
 		</div>

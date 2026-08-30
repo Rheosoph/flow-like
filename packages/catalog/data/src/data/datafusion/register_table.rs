@@ -1,21 +1,27 @@
-use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
+use crate::data::datafusion::session::DataFusionSession;
+#[cfg(feature = "execute")]
+use crate::data::datafusion::session::{CachedDataFusionSession, DeferredMount};
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::common::TableReference;
 use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 /// Building the Arrow MemTable is deferred to the first query, so a cached query never
 /// pays for the conversion.
+#[cfg(feature = "execute")]
 struct CsvTableMount {
     table: CSVTable,
     table_name: String,
 }
 
+#[cfg(feature = "execute")]
 #[async_trait]
 impl DeferredMount for CsvTableMount {
     fn describe(&self) -> String {
@@ -58,6 +64,8 @@ impl NodeLogic for RegisterCSVTableNode {
             "Register a CSVTable (from Excel/CSV extraction) into a DataFusion session for SQL queries. Converts the table to an in-memory Arrow table.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "registerCsvTable");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(
@@ -110,6 +118,7 @@ impl NodeLogic for RegisterCSVTableNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -124,5 +133,12 @@ impl NodeLogic for RegisterCSVTableNode {
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

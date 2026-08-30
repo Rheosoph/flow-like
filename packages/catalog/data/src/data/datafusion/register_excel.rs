@@ -150,6 +150,8 @@ impl NodeLogic for RegisterExcelNode {
             "Registers an Excel workbook's sheets as SQL tables in a DataFusion session. Tables are named after their normalized sheet names (e.g. 'Sales Data (2024)' becomes 'sales_data_2024'); additional tables on the same sheet get numeric suffixes. The download and parse are deferred until a query actually uses the session — unless the Table Names output is connected, which requires parsing here.",
             "Data/DataFusion",
         );
+        node.set_flowscript_name("df", "registerExcel");
+        node.set_receiver("session");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin(

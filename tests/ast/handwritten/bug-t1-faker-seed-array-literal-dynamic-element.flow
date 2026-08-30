@@ -1,0 +1,8 @@
+use log::{ info }
+
+eventsSimple arrayLiteralDynamicElement() {
+    const person = faker::name::fullName()
+    const names = [person, "static"]
+    const payload = json::stringify({ value: names, pretty: true })
+    info({ message: payload, toast: false })
+}

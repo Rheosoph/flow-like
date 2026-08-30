@@ -29,6 +29,10 @@ fn main() {
 
 #[cfg(feature = "bundled-python")]
 mod bundled_python {
+    use flow_like_catalog_build_helper::code_interpreter_build::{
+        blake3 as build_blake3, dirs_next as build_dirs_next, ureq as build_ureq,
+        wasmtime as build_wasmtime,
+    };
     use std::path::PathBuf;
 
     /// Pinned CPython WASI release from vmware-labs/webassembly-language-runtimes.
@@ -55,7 +59,7 @@ mod bundled_python {
         });
 
         if !EXPECTED_BLAKE3.is_empty() {
-            let actual = blake3::hash(&wasm_bytes).to_hex().to_string();
+            let actual = build_blake3::hash(&wasm_bytes).to_hex().to_string();
             if actual != EXPECTED_BLAKE3 {
                 panic!(
                     "bundled-python: blake3 mismatch for {}\n  expected: {}\n  actual:   {}",
@@ -140,7 +144,7 @@ mod bundled_python {
             });
         }
 
-        let agent = ureq::Agent::new_with_defaults();
+        let agent = build_ureq::Agent::new_with_defaults();
 
         let resp = agent.get(DOWNLOAD_URL).call().unwrap_or_else(|e| {
             panic!("bundled-python: failed to download {DOWNLOAD_URL}: {e}");
@@ -173,17 +177,17 @@ mod bundled_python {
 
     fn cache_directory() -> PathBuf {
         // ~/.cache/flow-like/python-wasm/{version}-{tag}/
-        let base = dirs_next::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
+        let base = build_dirs_next::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"));
         base.join("flow-like")
             .join("python-wasm")
             .join(format!("{}-{}", PYTHON_VERSION, RELEASE_TAG))
     }
 
     /// Build a wasmtime Engine whose config matches `PyodideRuntime::new()`.
-    fn build_engine() -> wasmtime::Engine {
-        let mut config = wasmtime::Config::new();
+    fn build_engine() -> build_wasmtime::Engine {
+        let mut config = build_wasmtime::Config::new();
         config.parallel_compilation(true);
-        config.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        config.cranelift_opt_level(build_wasmtime::OptLevel::Speed);
 
         config.consume_fuel(false);
         config.epoch_interruption(true);
@@ -196,6 +200,7 @@ mod bundled_python {
         config.wasm_wide_arithmetic(true);
         config.memory_init_cow(true);
 
-        wasmtime::Engine::new(&config).expect("bundled-python: failed to create wasmtime Engine")
+        build_wasmtime::Engine::new(&config)
+            .expect("bundled-python: failed to create wasmtime Engine")
     }
 }

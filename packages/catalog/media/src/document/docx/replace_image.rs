@@ -30,6 +30,7 @@ impl NodeLogic for DocxReplaceImageNode {
             "Replace an image in a DOCX file by matching alt text or shape name",
             "Document/DOCX",
         );
+        node.set_flowscript_name("docx", "replaceImage");
         node.add_icon("/flow/icons/image.svg");
 
         node.set_scores(

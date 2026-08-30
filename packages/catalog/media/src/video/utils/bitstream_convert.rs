@@ -19,6 +19,7 @@ impl NodeLogic for BitstreamConvertNode {
             "Convert H.264/H.265/AAC packet bitstream framing into an elementary output file",
             "Video/Packets",
         );
+        node.set_flowscript_name("video", "bitstreamConvert");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

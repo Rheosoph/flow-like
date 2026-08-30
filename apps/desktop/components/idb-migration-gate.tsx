@@ -40,7 +40,7 @@ export function IdbMigrationGate({
 			>
 				<Loader2 className="size-6 animate-spin text-muted-foreground" />
 				<p className="text-sm text-muted-foreground">
-					{t('upgradingLocalStorage', 'Upgrading local storage…')}
+					{t("upgradingLocalStorage", "Upgrading local storage…")}
 				</p>
 			</div>
 		);

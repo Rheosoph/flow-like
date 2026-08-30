@@ -15,7 +15,9 @@ use flow_like_model_provider::{
     response::{LLMUsageStats, Response},
     response_chunk::ResponseChunk,
 };
-use flow_like_types::{async_trait, json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json;
 #[cfg(feature = "execute")]
 use std::collections::HashMap;
 
@@ -41,6 +43,8 @@ impl NodeLogic for StreamInvokeAgentNode {
             "Executes an Agent with streaming, emitting chunks in real-time",
             "AI/Agents",
         );
+        node.set_flowscript_name("agent", "streamInvoke");
+        node.set_receiver("agent");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_version(4);
 

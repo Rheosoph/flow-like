@@ -5,9 +5,11 @@
 
 #[cfg(feature = "execute")]
 use crate::ml::{MAX_ML_PREDICTION_RECORDS, make_new_field, values_to_array2_f64};
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -20,9 +22,10 @@ use flow_like_storage::arrow_schema::Schema;
 use flow_like_storage::databases::vector::VectorStore;
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -51,6 +54,7 @@ impl NodeLogic for FitPcaNode {
             "Principal Component Analysis for dimensionality reduction",
             "AI/ML/Reduction",
         );
+        node.set_flowscript_name("ml", "fitPca");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -246,7 +250,6 @@ impl NodeLogic for FitPcaNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

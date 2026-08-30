@@ -63,7 +63,8 @@ use flow_like::flow::ast::{
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::{
-    PlatformToolImageUrl, run_internet_search, run_memory_tool, take_platform_tool_image_urls,
+    PLATFORM_TOOL_IMAGE_URLS_FIELD, PlatformToolImageUrl, run_internet_search, run_memory_tool,
+    take_platform_tool_image_urls,
 };
 use flow_like::flow::copilot::public_web::{
     WebResearchSession, run_archive_lookup_for_session, run_open_url_for_session,
@@ -1109,38 +1110,31 @@ fn frontend_tool_result_with_timeout(
 ) -> ToolResultObject {
     let mut result =
         run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
-    let image_urls = take_platform_tool_image_urls(&mut result);
-    let expected_image_count = image_urls.len();
-    let images = if image_urls.is_empty() {
-        Vec::new()
+    let FrontendToolImageInput {
+        field_present,
+        images,
+        mut errors,
+    } = take_frontend_tool_image_input(&mut result);
+    let expected_image_count = images.len();
+    let mut image_result = if images.is_empty() {
+        PlatformToolImageDownloads::default()
     } else {
-        block_on_tool(download_platform_tool_images(image_urls))
+        block_on_tool(download_platform_tool_images(images))
     };
-    if expected_image_count > 0
-        && let Some(object) = result.as_object_mut()
-    {
-        object.insert("screenshot_count".to_string(), json!(images.len()));
-        let was_complete = object
-            .get("screenshot_complete")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        object.insert(
-            "screenshot_complete".to_string(),
-            json!(was_complete && images.len() == expected_image_count),
-        );
-        if images.is_empty() {
-            object.insert(
-                    "message".to_string(),
-                    json!("The page rendered, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
-                );
-        }
-    }
+    errors.append(&mut image_result.errors);
+    image_result.errors = errors;
+    reconcile_frontend_tool_image_result(
+        &mut result,
+        field_present,
+        expected_image_count,
+        &mut image_result,
+    );
     let mut output = ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
     );
-    if !images.is_empty() {
-        output.binary_results_for_llm = Some(images);
+    if !image_result.images.is_empty() {
+        output.binary_results_for_llm = Some(image_result.images);
     }
     output
 }
@@ -1160,31 +1154,191 @@ fn platform_tool_image_client() -> &'static Result<reqwest::Client, reqwest::Err
     })
 }
 
-/// Copilot SDK/MCP image blocks require inline bytes. Resolve temporary URLs only at this final
-/// provider boundary so screenshots never travel as base64 through the frontend bridge or backend.
-async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec<ToolBinaryResult> {
+#[derive(Default)]
+struct PlatformToolImageDownloads {
+    images: Vec<ToolBinaryResult>,
+    errors: Vec<String>,
+}
+
+#[derive(Default)]
+struct FrontendToolImageInput {
+    field_present: bool,
+    images: Vec<PlatformToolImageUrl>,
+    errors: Vec<String>,
+}
+
+fn take_frontend_tool_image_input(result: &mut Value) -> FrontendToolImageInput {
+    let Some(raw_images) = result.get(PLATFORM_TOOL_IMAGE_URLS_FIELD) else {
+        return FrontendToolImageInput::default();
+    };
+    let supplied_image_count = raw_images.as_array().map(Vec::len);
+    let images = take_platform_tool_image_urls(result);
+    let mut errors = Vec::new();
+    if supplied_image_count.is_none() {
+        errors.push(
+            "The capture attachment payload was rejected because it was not an array.".to_string(),
+        );
+    } else if supplied_image_count.is_some_and(|count| count > images.len()) {
+        errors.push(format!(
+            "{} capture attachment reference(s) were rejected or skipped to preserve top-to-bottom ordering because their type, source, size, or encoding was invalid.",
+            supplied_image_count.unwrap_or_default() - images.len()
+        ));
+    }
+    FrontendToolImageInput {
+        field_present: true,
+        images,
+        errors,
+    }
+}
+
+fn mark_frontend_tool_attachment_partial(object: &mut serde_json::Map<String, Value>) {
+    let should_mark_partial = match object.get("status").and_then(Value::as_str) {
+        None | Some("ok" | "success" | "complete") => true,
+        Some(_) => false,
+    };
+    if should_mark_partial {
+        object.insert("status".to_string(), Value::String("partial".to_string()));
+    }
+}
+
+fn reconcile_frontend_tool_image_result(
+    result: &mut Value,
+    image_field_present: bool,
+    expected_image_count: usize,
+    image_result: &mut PlatformToolImageDownloads,
+) {
+    if !image_field_present && image_result.errors.is_empty() {
+        return;
+    }
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let declared_image_count = object
+        .get("screenshot_count")
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok());
+    let actual_image_count = image_result.images.len();
+    if image_result.errors.is_empty()
+        && declared_image_count.is_some_and(|count| count != actual_image_count)
+    {
+        image_result.errors.push(format!(
+            "The declared screenshot count did not match the {actual_image_count} attached capture(s)."
+        ));
+    }
+    if image_result.errors.is_empty() && expected_image_count != actual_image_count {
+        image_result.errors.push(format!(
+            "Expected {expected_image_count} accepted capture attachment(s), but attached {actual_image_count}.",
+        ));
+    }
+    let attachment_failed = !image_result.errors.is_empty();
+    object.insert("screenshot_count".to_string(), json!(actual_image_count));
+    let was_complete = object
+        .get("screenshot_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    object.insert(
+        "screenshot_complete".to_string(),
+        json!(was_complete && !attachment_failed),
+    );
+    if attachment_failed {
+        mark_frontend_tool_attachment_partial(object);
+        let mut errors = object
+            .remove("screenshot_attachment_errors")
+            .and_then(|errors| errors.as_array().cloned())
+            .unwrap_or_default();
+        errors.extend(image_result.errors.iter().cloned().map(Value::String));
+        errors.truncate(6);
+        object.insert(
+            "screenshot_attachment_errors".to_string(),
+            Value::Array(errors),
+        );
+        if image_result.images.is_empty() {
+            object.insert(
+                "message".to_string(),
+                json!("The page rendered, but its visual captures could not be attached to this agent. Do not claim to have read the page visually."),
+            );
+        }
+    }
+}
+
+/// Copilot SDK/MCP image blocks require inline bytes. Desktop captures can arrive as bounded
+/// base64 directly; web captures retain temporary URLs and are downloaded at this boundary.
+async fn download_platform_tool_images(
+    images: Vec<PlatformToolImageUrl>,
+) -> PlatformToolImageDownloads {
     use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 
-    // Nearly every frontend tool result has no visual captures. In particular, do not initialize
-    // an HTTP client while finalizing ordinary results such as `ask_user` or `database_tool`.
     if images.is_empty() {
-        return Vec::new();
+        return PlatformToolImageDownloads::default();
     }
 
-    let client = match platform_tool_image_client() {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "failed to initialize temporary capture download client");
-            return Vec::new();
-        }
+    let mut outcome = PlatformToolImageDownloads {
+        images: Vec::with_capacity(images.len()),
+        errors: Vec::new(),
     };
-    let mut results = Vec::with_capacity(images.len());
+    let total_images = images.len();
+    let mut failed_at = None;
     for (index, image) in images.into_iter().enumerate() {
-        let response = match client.get(&image.url).send().await {
+        if let Some(data) = image.data {
+            match STANDARD.decode(&data) {
+                Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => {
+                    outcome.images.push(ToolBinaryResult {
+                        data,
+                        mime_type: image.media_type,
+                        result_type: "image".to_string(),
+                        description: Some(format!(
+                            "Rendered app page capture {} (top to bottom)",
+                            index + 1
+                        )),
+                    });
+                }
+                Ok(_) => outcome.errors.push(format!(
+                    "Capture {} exceeded the {}-byte attachment limit.",
+                    index + 1,
+                    MAX_PLATFORM_TOOL_IMAGE_BYTES
+                )),
+                Err(_) => outcome.errors.push(format!(
+                    "Capture {} had invalid base64 image data.",
+                    index + 1
+                )),
+            }
+            if outcome.images.len() != index + 1 {
+                failed_at = Some(index);
+                break;
+            }
+            continue;
+        }
+
+        let Some(url) = image.url else {
+            outcome.errors.push(format!(
+                "Capture {} had no readable image source.",
+                index + 1
+            ));
+            failed_at = Some(index);
+            break;
+        };
+        let client = match platform_tool_image_client() {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(%error, "failed to initialize temporary capture download client");
+                outcome.errors.push(format!(
+                    "Capture {} could not initialize the download client.",
+                    index + 1
+                ));
+                failed_at = Some(index);
+                break;
+            }
+        };
+        let response = match client.get(&url).send().await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(%error, "failed to download temporary app page capture");
-                continue;
+                outcome.errors.push(format!(
+                    "Capture {} could not be downloaded from temporary storage.",
+                    index + 1
+                ));
+                failed_at = Some(index);
+                break;
             }
         };
         if !response.status().is_success()
@@ -1196,20 +1350,35 @@ async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec
                 status = %response.status(),
                 "temporary app page capture was unavailable or too large"
             );
-            continue;
+            outcome.errors.push(format!(
+                "Capture {} was unavailable or exceeded the attachment limit.",
+                index + 1
+            ));
+            failed_at = Some(index);
+            break;
         }
         let bytes = match response.bytes().await {
             Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => bytes,
             Ok(_) => {
                 tracing::warn!("temporary app page capture exceeded the size limit");
-                continue;
+                outcome.errors.push(format!(
+                    "Capture {} exceeded the attachment limit.",
+                    index + 1
+                ));
+                failed_at = Some(index);
+                break;
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to read temporary app page capture");
-                continue;
+                outcome.errors.push(format!(
+                    "Capture {} could not be read from temporary storage.",
+                    index + 1
+                ));
+                failed_at = Some(index);
+                break;
             }
         };
-        results.push(ToolBinaryResult {
+        outcome.images.push(ToolBinaryResult {
             data: STANDARD.encode(bytes),
             mime_type: image.media_type,
             result_type: "image".to_string(),
@@ -1219,7 +1388,16 @@ async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec
             )),
         });
     }
-    results
+    if let Some(failed_index) = failed_at {
+        let skipped_count = total_images.saturating_sub(failed_index + 1);
+        if skipped_count > 0 {
+            outcome.errors.push(format!(
+                "{skipped_count} later capture attachment(s) were skipped after capture {} failed, preserving a contiguous top-to-bottom prefix.",
+                failed_index + 1
+            ));
+        }
+    }
+    outcome
 }
 
 fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
@@ -1343,13 +1521,6 @@ fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> St
             && diagnostic.contains("no matching function return pin")
     }) {
         return "FlowScript validation failed: a helper returns a value without declaring a matching output pin. Add a named return signature, for example `function classify(body: string): (isSupport: bool) { ...; return result.value }`.".to_string();
-    }
-
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.contains("nodes (max"))
-    {
-        return "FlowScript validation failed: a layer would exceed the 100-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 100-node budget — and call the helpers from the parent flow.".to_string();
     }
 
     if diagnostics
@@ -1560,8 +1731,9 @@ fn create_catalog_search_tool(provider: Option<Arc<dyn CatalogProvider>>) -> (To
             r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Use get_declarations for exact camelCase signatures, author the complete source
-with write_flowscript, repair it with patch_flowscript, then check_flowscript and commit_flowscript.
+FOR WORKFLOW EDITS: Use get_declarations for exact `ns::alias({ pin: type })` signatures (and the
+`use ns::*` idiom), author the complete source with write_flowscript, repair it with
+patch_flowscript, then check_flowscript and commit_flowscript.
 FlowScript is the model-authored language; catalog_search is not part of that code-first lifecycle.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#,
         )
@@ -1914,6 +2086,7 @@ fn create_plan_board_scope_tool() -> (Tool, ToolHandler) {
     (tool, handler)
 }
 
+#[allow(clippy::result_large_err)] // the Err IS the caller's return value; boxing would allocate only to immediately unbox
 fn parse_flowscript_arguments<T: DeserializeOwned>(
     arguments: Value,
     tool_name: &str,
@@ -1991,7 +2164,7 @@ fn create_write_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
-        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        ToolResultObject::text(result.model_envelope())
     });
     (tool, handler)
 }
@@ -2036,6 +2209,11 @@ fn create_patch_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
+        // Patch is the one lifecycle result that must keep the full `source`: the merged document
+        // is host-computed, and both the workflow loop state (`workflow_tool_record_with_outcome`
+        // reads it into `last_flowscript`/continuation snapshots) and the workspace panel's
+        // `flowscript_workspace` frames have no other way to observe it. Write/check/commit return
+        // the model envelope because their retained source is exactly what the model submitted.
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -2081,7 +2259,7 @@ fn create_check_flowscript_tool(
             )
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
-        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        ToolResultObject::text(result.model_envelope())
     });
     (tool, handler)
 }
@@ -2158,7 +2336,6 @@ fn create_commit_flowscript_tool(
                         "draft_id": draft_id,
                         "revision": expected_revision,
                         "claim_released": released,
-                        "source": result.source,
                         "message": "FlowScript committed without a complete board/revision/claim identity. No commands were transferred; the malformed pre-delivery claim was rolled back."
                     })
                     .to_string(),
@@ -2185,7 +2362,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": result.source,
                             "message": "FlowScript checked successfully, but the host command queue is unavailable. The claim was released; retry this exact revision when the queue is available."
                         })
                         .to_string(),
@@ -2199,7 +2375,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_BATCH_INVALID",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": result.source,
                             "message": "The retained FlowScript command batch was incomplete. No commands were transferred and the claim was released."
                         })
                         .to_string(),
@@ -2216,7 +2391,6 @@ fn create_commit_flowscript_tool(
                                 "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
                                 "draft_id": draft_id,
                                 "revision": expected_revision,
-                                "source": result.source,
                                 "message": "The host command queue could not be locked. The FlowScript claim was released; retry this exact revision."
                             })
                             .to_string(),
@@ -2245,7 +2419,6 @@ fn create_commit_flowscript_tool(
                             "code": "FLOWSCRIPT_COMMIT_TOKEN_CONFLICT",
                             "draft_id": draft_id,
                             "revision": expected_revision,
-                            "source": source,
                             "message": "This FlowPilot response already carries unresolved commands or another commit token. The newer FlowScript claim was released rather than mixing batches under one review token."
                         })
                         .to_string(),
@@ -2258,9 +2431,10 @@ fn create_commit_flowscript_tool(
                 }
             }
 
-            // FlowScriptDraftResponse skips its host-only commands field, preventing a second,
-            // client-trusted copy of the batch from escaping through the model tool result.
-            ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+            // The envelope skips the host-only commands field, preventing a second, client-trusted
+            // copy of the batch from escaping, and replaces the full source with its size — the
+            // queued document already travels to the host through `queued_flowscript` above.
+            ToolResultObject::text(result.model_envelope())
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
         tool_result
@@ -2808,8 +2982,9 @@ RULES:
 - Helper `function` declarations are fully supported: calling `helperName(args)` creates a Call
   Function node wired to that function's layer, impure bodies chain from the layer's `exec_in`
   boundary pin, and `return` values surface as call-node outputs. USE THEM — a single layer
-  (root, event scope, or one function) is hard-capped at 100 nodes and edits exceeding it are
-  rejected, so split big flows into small helper functions with focused responsibilities.
+  (root, event scope, or one function) should stay under the 100-node guideline (oversized edits
+  apply with an advisory correction), so split big flows into small helper functions with focused
+  responsibilities.
 - The `function` keyword is mandatory for helpers: write
   `function fetchMail(host: string) { ... }`, never bare `fetchMail(...) { ... }`. A helper call is
   valid only when its declaration remains in this same full document; do not invent helper calls
@@ -3618,6 +3793,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "helperText",
             "accept",
             "multiple",
+            "directory",
             "maxSize",
             "maxFiles",
             "disabled",
@@ -4787,18 +4963,15 @@ fn get_component_schema_doc(component_type: &str) -> String {
 mod tests {
     use super::*;
     use flow_like::flow::{
-        board::{ExecutionMode, ExecutionStage},
         copilot::{
             FlowCapabilityRequirement, FlowIrArg, FlowIrDraftMode, FlowIrLiteral, FlowIrModule,
             FlowIrProgram, FlowIrStep, FlowIrValue, FlowModuleEstimate, FlowModuleKind,
             PinMetadata,
         },
-        execution::LogLevel,
         pin::ValueType,
         variable::{Variable, VariableType},
     };
     use flow_like::flow_like_storage::Path;
-    use std::time::SystemTime;
 
     #[test]
     fn specialist_direct_surfaces_exclude_global_public_web_research() {
@@ -4870,16 +5043,80 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn platform_tool_image_download_is_safe_on_the_sdk_runtime() {
         let no_images = block_on_tool(download_platform_tool_images(Vec::new()));
-        assert!(no_images.is_empty());
+        assert!(no_images.images.is_empty());
+        assert!(no_images.errors.is_empty());
+
+        let inline = block_on_tool(download_platform_tool_images(vec![PlatformToolImageUrl {
+            url: None,
+            data: Some("aW1hZ2U=".to_string()),
+            media_type: "image/png".to_string(),
+        }]));
+        assert_eq!(inline.images.len(), 1);
+        assert_eq!(inline.images[0].data, "aW1hZ2U=");
+        assert!(inline.errors.is_empty());
 
         // A malformed temporary URL exercises client initialization and request failure without
         // depending on an external server. Result enrichment is best-effort and must not unwind.
         let unavailable =
             block_on_tool(download_platform_tool_images(vec![PlatformToolImageUrl {
-                url: "not-a-valid-capture-url".to_string(),
+                url: Some("not-a-valid-capture-url".to_string()),
+                data: None,
                 media_type: "image/png".to_string(),
             }]));
-        assert!(unavailable.is_empty());
+        assert!(unavailable.images.is_empty());
+        assert_eq!(unavailable.errors.len(), 1);
+
+        let ordered_prefix = block_on_tool(download_platform_tool_images(vec![
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("Zmlyc3Q=".to_string()),
+                media_type: "image/png".to_string(),
+            },
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("invalid base64".to_string()),
+                media_type: "image/png".to_string(),
+            },
+            PlatformToolImageUrl {
+                url: None,
+                data: Some("dGhpcmQ=".to_string()),
+                media_type: "image/png".to_string(),
+            },
+        ]));
+        assert_eq!(ordered_prefix.images.len(), 1);
+        assert_eq!(ordered_prefix.images[0].data, "Zmlyc3Q=");
+        assert!(ordered_prefix.errors[0].contains("Capture 2"));
+        assert!(ordered_prefix.errors[1].contains("1 later capture attachment"));
+    }
+
+    #[test]
+    fn malformed_frontend_image_field_is_removed_and_reconciled_as_partial() {
+        let mut result = json!({
+            "status": "ok",
+            "screenshot_count": 1,
+            "screenshot_complete": true,
+            "_flowpilot_image_urls": { "data": "private-image-data" },
+        });
+
+        let image_input = take_frontend_tool_image_input(&mut result);
+        assert!(image_input.field_present);
+        assert!(image_input.images.is_empty());
+        assert_eq!(image_input.errors.len(), 1);
+        assert!(result.get(PLATFORM_TOOL_IMAGE_URLS_FIELD).is_none());
+        let mut image_result = PlatformToolImageDownloads {
+            images: Vec::new(),
+            errors: image_input.errors,
+        };
+        reconcile_frontend_tool_image_result(&mut result, true, 0, &mut image_result);
+
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result["screenshot_count"], 0);
+        assert_eq!(result["screenshot_complete"], false);
+        assert!(
+            result["screenshot_attachment_errors"][0]
+                .as_str()
+                .is_some_and(|error| error.contains("not an array"))
+        );
     }
 
     #[test]
@@ -5028,6 +5265,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
             NodeMetadata {
                 name: "string_format".to_string(),
@@ -5039,6 +5279,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
             NodeMetadata {
                 name: "log_info".to_string(),
@@ -5050,6 +5293,9 @@ mod tests {
                 required_inputs: vec!["message".to_string()],
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             },
         ]
     }
@@ -5252,7 +5498,12 @@ mod tests {
         let written: Value = serde_json::from_str(&written.text_result_for_llm)
             .expect("write returns structured source response");
         assert_eq!(written["revision"], 0);
-        assert_eq!(written["source"], source);
+        assert!(written.get("source").is_none(), "{written:#}");
+        assert_eq!(written["source_bytes"].as_u64(), Some(source.len() as u64));
+        assert_eq!(
+            written["source_lines"].as_u64(),
+            Some(source.lines().count() as u64)
+        );
 
         let checked = call(
             "check_flowscript",
@@ -5261,7 +5512,8 @@ mod tests {
         let checked: Value = serde_json::from_str(&checked.text_result_for_llm)
             .expect("check returns structured source response");
         assert_eq!(checked["status"], "valid", "{checked:#}");
-        assert_eq!(checked["source"], source);
+        assert!(checked.get("source").is_none(), "{checked:#}");
+        assert_eq!(checked["source_bytes"].as_u64(), Some(source.len() as u64));
 
         let committed = call(
             "commit_flowscript",
@@ -5270,7 +5522,8 @@ mod tests {
         let committed: Value = serde_json::from_str(&committed.text_result_for_llm)
             .expect("commit returns structured source response");
         assert_eq!(committed["status"], "queued", "{committed:#}");
-        assert_eq!(committed["source"], source);
+        assert!(committed.get("source").is_none(), "{committed:#}");
+        assert_eq!(committed["source_bytes"].as_u64(), Some(source.len() as u64));
         assert!(committed.get("commands").is_none());
 
         let mut queued = queue.lock().expect("command queue lock");

@@ -26,6 +26,7 @@ impl NodeLogic for ChunkText {
             "Splits long text into sized/overlapping chunks using the cached embedding model's splitter",
             "AI/Preprocessing",
         );
+        node.set_flowscript_name("ai.processing", "chunkText");
 
         node.set_scores(
             NodeScores::new()

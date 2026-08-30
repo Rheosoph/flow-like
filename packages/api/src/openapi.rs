@@ -50,6 +50,20 @@ impl Modify for SecurityAddon {
             )])),
         );
 
+        // Channel responder JWT (clients answering a run through /channels/{id}/push)
+        components.add_security_scheme(
+            "channel_responder_jwt",
+            SecurityScheme::Http(
+                Http::builder()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .description(Some(
+                        "Channel responder token minted with the run's channel grant",
+                    ))
+                    .build(),
+            ),
+        );
+
         // Executor JWT (for backend execution services)
         components.add_security_scheme(
             "executor_jwt",
@@ -87,6 +101,7 @@ impl Modify for SecurityAddon {
         (name = "pages", description = "Page management"),
         (name = "routes", description = "Route mapping management"),
         (name = "execution", description = "Workflow execution"),
+        (name = "channels", description = "Run ⇄ client reply channels"),
         (name = "events", description = "Event management"),
         (name = "widgets", description = "Widget management"),
         (name = "templates", description = "Template management"),
@@ -225,6 +240,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::query_logs::query_logs,
         crate::routes::app::board::get_runs::get_runs,
         crate::routes::app::board::get_execution_elements::get_execution_elements,
+        crate::routes::app::board::element_demand::get_element_demand,
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
         crate::routes::app::board::flow_ir_commit::apply_flow_ir_commit,
         // Page routes
@@ -245,6 +261,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::widget::get_widget::get_widget,
         crate::routes::app::widget::upsert_widget::upsert_widget,
         crate::routes::app::widget::delete_widget::delete_widget,
+        crate::routes::app::widget::get_widget_versions::get_widget_versions,
+        crate::routes::app::widget::create_widget_version::create_widget_version,
         // Template routes
         crate::routes::app::template::get_templates::get_templates,
         crate::routes::app::template::get_template::get_template,
@@ -384,6 +402,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::realtime::access,
         // Invoke presign
         crate::routes::app::invoke::presign::presign,
+        crate::routes::app::invoke::context::execution_context,
         // Database routes
         crate::routes::app::db::list_tables::list_tables,
         crate::routes::app::db::db_list::list_items,
@@ -446,6 +465,15 @@ impl Modify for SecurityAddon {
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
         crate::routes::execution::public_key::get_execution_jwks,
+        // Channel routes
+        crate::routes::channel::register_message,
+        crate::routes::channel::poll_message,
+        crate::routes::channel::remove_message,
+        crate::routes::channel::drain_inbound,
+        crate::routes::channel::channel_status,
+        crate::routes::channel::close_channel,
+        crate::routes::channel::push_channel,
+        crate::routes::channel::grant_channel,
         // Registry routes
         crate::routes::registry::publish::publish,
         crate::routes::registry::search::search,
@@ -478,6 +506,7 @@ impl Modify for SecurityAddon {
         crate::routes::solution::track_solution,
         // Tmp routes
         crate::routes::tmp::get_temporary_upload,
+        crate::routes::tmp::create_temporary_uploads,
         // Telemetry routes
         crate::routes::telemetry::ingest_events,
         crate::routes::telemetry::errors::ingest_errors,
@@ -490,6 +519,9 @@ impl Modify for SecurityAddon {
         crate::routes::admin::telemetry::list_telemetry_events,
         crate::routes::admin::telemetry::telemetry_engagement,
         crate::routes::admin::telemetry::telemetry_flowpilot,
+        crate::routes::flowscript::report_flowscript_apply_failure,
+        crate::routes::admin::telemetry::flowscript_failures::list_flowscript_failures,
+        crate::routes::admin::telemetry::flowscript_failures::get_flowscript_failure,
         crate::routes::admin::telemetry::prompt_feedback::list_prompt_feedback,
         crate::routes::admin::telemetry::prompt_feedback::get_prompt_feedback,
         crate::routes::ai::global_chat::feedback::upsert_global_chat_feedback,
@@ -588,6 +620,14 @@ impl Modify for SecurityAddon {
         // Health schemas
         crate::routes::health::HealthResponse,
         crate::routes::health::DbHealthResponse,
+        // Channel schemas
+        crate::routes::channel::RegisterMessageBody,
+        crate::routes::channel::RegisterMessageResponse,
+        crate::routes::channel::PollMessageBody,
+        crate::routes::channel::DrainInboundBody,
+        crate::routes::channel::ChannelStatusBody,
+        crate::routes::channel::PushResponse,
+        crate::routes::channel::GrantSide,
         // Cache schemas
         crate::routes::app::cache::ReadCacheResponse,
         crate::routes::app::cache::ExistsCacheResponse,
@@ -712,6 +752,7 @@ impl Modify for SecurityAddon {
         // Widgets
         crate::routes::app::widget::get_widget::VersionQuery,
         crate::routes::app::widget::upsert_widget::WidgetUpsert,
+        crate::routes::app::widget::create_widget_version::CreateWidgetVersion,
         // Templates
         crate::routes::app::template::get_template::VersionQuery,
         crate::routes::app::template::get_template_preview::TemplatePreview,
@@ -767,6 +808,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::prerun_event::PrerunEventResponse,
         crate::routes::app::board::prerun_board::PrerunBoardResponse,
         crate::routes::app::board::prerun_board::PrerunBoardQuery,
+        crate::routes::app::board::element_demand::ElementDemandQuery,
+        crate::routes::app::board::element_demand::ElementDemandResponse,
         crate::routes::app::events::invoke_event::InvokeEventQuery,
         crate::routes::app::events::invoke_event::InvokeEventRequest,
         crate::routes::app::events::invoke_event::InvokeEventResponse,
@@ -863,6 +906,13 @@ impl Modify for SecurityAddon {
         crate::routes::course::translate::TranslateResponse,
         // Telemetry
         crate::routes::telemetry::TelemetryIngestPayload,
+        crate::routes::flowscript::ReportFlowScriptApplyFailureBody,
+        crate::routes::flowscript::ReportFlowScriptApplyFailureResponse,
+        crate::routes::admin::telemetry::flowscript_failures::ListFlowScriptFailuresResponse,
+        crate::routes::admin::telemetry::flowscript_failures::FlowScriptFailureDetailResponse,
+        crate::routes::admin::telemetry::flowscript_failures::FlowScriptFailureRecord,
+        crate::routes::admin::telemetry::flowscript_failures::FlowScriptFailureSummary,
+        crate::routes::admin::telemetry::flowscript_failures::FlowScriptFailureFacet,
         crate::routes::telemetry::TelemetryEventPayload,
         crate::routes::telemetry::TelemetryIngestResponse,
         crate::routes::telemetry::errors::TelemetryErrorIngestPayload,
@@ -898,6 +948,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::telemetry::TelemetryFlowPilotResponse,
         crate::routes::admin::telemetry::FlowPilotTotals,
         crate::routes::admin::telemetry::FlowPilotTrendPoint,
+        crate::routes::admin::telemetry::FlowPilotFailureGroup,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackRecord,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackFacetCount,
         crate::routes::admin::telemetry::prompt_feedback::PromptFeedbackTrendPoint,

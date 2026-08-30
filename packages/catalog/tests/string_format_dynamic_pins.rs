@@ -7,11 +7,9 @@
 //! pin whose name had already been claimed. `add_input_pin` mints a fresh id rather than deduping
 //! by name, so each parse leaked another `page` pin and the board grew without bound.
 
-use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
-use flow_like::flow::execution::LogLevel;
+use flow_like::flow::board::Board;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::PinType;
 use flow_like_catalog::CatalogBuilder;
@@ -205,4 +203,100 @@ async fn placeholders_removed_from_the_format_string_drop_their_pins() {
         "stale placeholder pin must be removed"
     );
     assert_eq!(input_pins_named(&node, "page"), 1);
+}
+
+/// Removing a placeholder must not silently cut a wire. `on_update` deleting a connected pin takes
+/// its half of the edge with it, and `Board::cleanup`'s `fix_pin_connections` then prunes the
+/// producer's surviving half — the connection vanishes from both ends with no error, leaving the
+/// producer dead on the canvas next to an empty input.
+#[flow_like_types::tokio::test]
+async fn a_wired_placeholder_pin_survives_its_placeholder_being_removed() {
+    let logic = string_format_logic();
+    let board = empty_board();
+    let mut node = logic.get_node();
+
+    set_format_string(&mut node, "{parent}/{page}");
+    logic.on_update(&mut node, &board).await;
+    wire_input_pin(&mut node, "parent");
+
+    set_format_string(&mut node, "{page}");
+    logic.on_update(&mut node, &board).await;
+
+    assert_eq!(
+        input_pins_named(&node, "parent"),
+        1,
+        "a connected placeholder pin must be kept, not deleted with its wire"
+    );
+    assert!(
+        node.error
+            .as_deref()
+            .is_some_and(|error| error.contains("parent")),
+        "the node must report the stale-but-connected pin: {:?}",
+        node.error
+    );
+    assert_eq!(input_pins_named(&node, "page"), 1);
+}
+
+/// A wired `format_string` says nothing about which placeholders the node will see at runtime, so
+/// the stale literal must not be read as "declares nothing" — that wiped every placeholder pin.
+#[flow_like_types::tokio::test]
+async fn a_wired_format_string_keeps_the_placeholder_pins_it_already_has() {
+    let logic = string_format_logic();
+    let board = empty_board();
+    let mut node = logic.get_node();
+
+    set_format_string(&mut node, "{parent}/{page}");
+    logic.on_update(&mut node, &board).await;
+
+    node.pins
+        .values_mut()
+        .find(|pin| pin.name == "format_string")
+        .expect("format_string pin")
+        .depends_on
+        .insert("upstream-pin".to_string());
+
+    logic.on_update(&mut node, &board).await;
+
+    assert_eq!(input_pins_named(&node, "parent"), 1);
+    assert_eq!(input_pins_named(&node, "page"), 1);
+}
+
+/// A `{format_string}` token would mint a second pin with the config pin's own name, and every
+/// later lookup of that name would pick whichever the pin map yielded first.
+#[flow_like_types::tokio::test]
+async fn a_placeholder_named_like_the_config_pin_is_rejected() {
+    let logic = string_format_logic();
+    let board = empty_board();
+    let mut node = logic.get_node();
+
+    set_format_string(&mut node, "{format_string} and {page}");
+    logic.on_update(&mut node, &board).await;
+
+    assert_eq!(
+        input_pins_named(&node, "format_string"),
+        1,
+        "the node's own input must stay unique"
+    );
+    assert_eq!(input_pins_named(&node, "page"), 1);
+    assert!(
+        node.error.is_some(),
+        "the colliding placeholder must be reported"
+    );
+}
+
+fn set_format_string(node: &mut Node, value: &str) {
+    node.pins
+        .values_mut()
+        .find(|pin| pin.name == "format_string")
+        .expect("format_string pin")
+        .default_value = Some(json!(value).to_string().into_bytes());
+}
+
+fn wire_input_pin(node: &mut Node, name: &str) {
+    node.pins
+        .values_mut()
+        .find(|pin| pin.pin_type == PinType::Input && pin.name == name)
+        .unwrap_or_else(|| panic!("input pin `{name}`"))
+        .depends_on
+        .insert(format!("source-of-{name}"));
 }

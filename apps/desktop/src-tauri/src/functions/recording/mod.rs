@@ -296,6 +296,7 @@ pub async fn get_recorded_actions(
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_recording_to_board(
     handler: AppHandle,
     board_id: String,

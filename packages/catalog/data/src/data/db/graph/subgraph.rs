@@ -28,6 +28,8 @@ impl NodeLogic for GraphSubgraphNode {
             "Extracts a subgraph around seed nodes for visualization",
             "Data/Database/Graph/Query",
         );
+        node.set_flowscript_name("db.graph", "subgraph");
+        node.set_receiver("graph");
         node.add_icon("/flow/icons/database.svg");
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
@@ -91,7 +93,8 @@ impl NodeLogic for GraphSubgraphNode {
             "Subgraph Payload",
             "Subgraph data with nodes and edges",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
         node.add_output_pin(
             "truncated",
             "Truncated",

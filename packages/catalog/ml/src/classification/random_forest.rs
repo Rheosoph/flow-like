@@ -9,9 +9,11 @@ use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -20,9 +22,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -103,6 +106,7 @@ impl NodeLogic for FitRandomForestNode {
             "Fit/Train a Random Forest classifier: many Decision Trees, each grown on a bootstrapped sample of the rows and a random subset of the features, combined by majority vote. Far more robust to overfitting than a single tree, at the price of interpretability. Model size and fit time grow linearly with Ensemble Size, so a forest of 500 trees costs roughly 500x a single tree.",
             "AI/ML/Classification",
         );
+        node.set_flowscript_name("ml", "fitRandomForest");
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -442,7 +446,6 @@ impl NodeLogic for FitRandomForestNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         use flow_like_catalog_core::NodeDBConnection;
 

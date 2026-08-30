@@ -28,6 +28,8 @@ impl NodeLogic for RandomFloatInRangeNode {
             "Generates a random float within a specified range",
             "Math/Float/Random",
         );
+        node.set_flowscript_name("float", "randomInRange");
+        node.set_receiver("");
         node.add_icon("/flow/icons/random.svg");
 
         node.add_input_pin("min", "Min", "Minimum Value", VariableType::Float);

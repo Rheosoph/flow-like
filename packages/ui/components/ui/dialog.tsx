@@ -2,10 +2,11 @@
 
 import { useTranslation } from "@flow-like/locales";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { XIcon } from "lucide-react";
+import XIcon from "lucide-react/dist/esm/icons/x.js";
 import type * as React from "react";
 
 import { cn } from "../../lib/utils";
+import { usePortalContainer } from "./portal-container";
 
 function Dialog({
 	...props
@@ -20,9 +21,17 @@ function DialogTrigger({
 }
 
 function DialogPortal({
+	container,
 	...props
 }: Readonly<React.ComponentProps<typeof DialogPrimitive.Portal>>) {
-	return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
+	const portalContainer = usePortalContainer();
+	return (
+		<DialogPrimitive.Portal
+			data-slot="dialog-portal"
+			container={container ?? portalContainer}
+			{...props}
+		/>
+	);
 }
 
 function DialogClose({
@@ -76,7 +85,7 @@ function DialogContent({
 						className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 z-20"
 					>
 						<XIcon />
-						<span className="sr-only">{t('close', 'Close')}</span>
+						<span className="sr-only">{t("close", "Close")}</span>
 					</DialogPrimitive.Close>
 				)}
 			</DialogPrimitive.Content>

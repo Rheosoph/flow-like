@@ -18,6 +18,10 @@
 //! ever aggregate the rows and holding them forever would only grow the tables
 //! the sweeper exists to bound.
 //!
+//! `FlowScriptApplyFailure` is swept here too. It is not anonymous telemetry — it carries a user
+//! and their redacted board source — which is exactly why it must not accumulate forever, and it
+//! feeds no rollup, so its window is its own.
+//!
 //! `TelemetryIssue`, `TelemetryRelease`, `TelemetrySourceMap`,
 //! `TelemetrySavedQuery`, `TelemetryDashboard` and `TelemetryAlertRule` are
 //! never swept: they are bounded or user-owned. An issue therefore keeps its
@@ -32,14 +36,15 @@ use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 
 use crate::entity::prelude::{
-    TelemetryAlertEvent, TelemetryDimensionDaily, TelemetryErrorEvent, TelemetryEvent,
-    TelemetryEventDaily, TelemetryFlowpilotDaily, TelemetryInstallDaily, TelemetryLlmCall,
-    TelemetryLlmDaily, TelemetryPerfDaily, TelemetryPerfMetric, TelemetrySession,
-    TelemetrySessionDaily, TelemetrySpan,
+    FlowScriptApplyFailure, TelemetryAlertEvent, TelemetryDimensionDaily, TelemetryErrorEvent,
+    TelemetryEvent, TelemetryEventDaily, TelemetryFlowpilotDaily, TelemetryFlowpilotFailureDaily,
+    TelemetryInstallDaily, TelemetryLlmCall, TelemetryLlmDaily, TelemetryPerfDaily,
+    TelemetryPerfMetric, TelemetrySession, TelemetrySessionDaily, TelemetrySpan,
 };
 use crate::entity::{
-    telemetry_alert_event, telemetry_dimension_daily, telemetry_error_event, telemetry_event,
-    telemetry_event_daily, telemetry_flowpilot_daily, telemetry_install_daily, telemetry_llm_call,
+    flow_script_apply_failure, telemetry_alert_event, telemetry_dimension_daily,
+    telemetry_error_event, telemetry_event, telemetry_event_daily, telemetry_flowpilot_daily,
+    telemetry_flowpilot_failure_daily, telemetry_install_daily, telemetry_llm_call,
     telemetry_llm_daily, telemetry_perf_daily, telemetry_perf_metric, telemetry_session,
     telemetry_session_daily, telemetry_span,
 };
@@ -53,6 +58,7 @@ const DEFAULT_LLM_RETENTION_DAYS: i64 = 30;
 const DEFAULT_TRACE_RETENTION_DAYS: i64 = 7;
 const DEFAULT_PERF_RETENTION_DAYS: i64 = 30;
 const DEFAULT_ALERT_EVENT_RETENTION_DAYS: i64 = 180;
+const DEFAULT_FLOWSCRIPT_FAILURE_RETENTION_DAYS: i64 = 90;
 const DEFAULT_ROLLUP_RETENTION_DAYS: i64 = 400;
 const MIN_RETENTION_DAYS: i64 = 1;
 const MIN_INTERVAL_SECS: u64 = 1;
@@ -67,6 +73,7 @@ pub struct TelemetrySweepResult {
     pub spans_deleted: u64,
     pub perf_deleted: u64,
     pub alert_events_deleted: u64,
+    pub flowscript_failures_deleted: u64,
     pub rollups_deleted: u64,
 }
 
@@ -79,6 +86,7 @@ impl TelemetrySweepResult {
             + self.spans_deleted
             + self.perf_deleted
             + self.alert_events_deleted
+            + self.flowscript_failures_deleted
             + self.rollups_deleted
     }
 
@@ -98,6 +106,7 @@ pub struct TelemetrySweeperConfig {
     pub trace_retention_days: i64,
     pub perf_retention_days: i64,
     pub alert_event_retention_days: i64,
+    pub flowscript_failure_retention_days: i64,
     pub rollup_retention_days: i64,
 }
 
@@ -112,6 +121,7 @@ impl Default for TelemetrySweeperConfig {
             trace_retention_days: DEFAULT_TRACE_RETENTION_DAYS,
             perf_retention_days: DEFAULT_PERF_RETENTION_DAYS,
             alert_event_retention_days: DEFAULT_ALERT_EVENT_RETENTION_DAYS,
+            flowscript_failure_retention_days: DEFAULT_FLOWSCRIPT_FAILURE_RETENTION_DAYS,
             rollup_retention_days: DEFAULT_ROLLUP_RETENTION_DAYS,
         }
     }
@@ -128,6 +138,7 @@ impl TelemetrySweeperConfig {
     /// - `FLOW_LIKE_TRACE_RETENTION_DAYS`: spans (default 7)
     /// - `FLOW_LIKE_PERF_RETENTION_DAYS`: web-vitals samples (default 30)
     /// - `FLOW_LIKE_ALERT_EVENT_RETENTION_DAYS`: alert inbox rows (default 180)
+    /// - `FLOW_LIKE_FLOWSCRIPT_FAILURE_RETENTION_DAYS`: captured FlowScript apply failures (default 90)
     /// - `FLOW_LIKE_ROLLUP_RETENTION_DAYS`: every `*Daily` rollup (default 400)
     pub fn from_env() -> Self {
         Self {
@@ -163,6 +174,10 @@ impl TelemetrySweeperConfig {
             alert_event_retention_days: retention_days_from_env(
                 "FLOW_LIKE_ALERT_EVENT_RETENTION_DAYS",
                 DEFAULT_ALERT_EVENT_RETENTION_DAYS,
+            ),
+            flowscript_failure_retention_days: retention_days_from_env(
+                "FLOW_LIKE_FLOWSCRIPT_FAILURE_RETENTION_DAYS",
+                DEFAULT_FLOWSCRIPT_FAILURE_RETENTION_DAYS,
             ),
             rollup_retention_days: retention_days_from_env(
                 "FLOW_LIKE_ROLLUP_RETENTION_DAYS",
@@ -208,6 +223,7 @@ pub fn spawn_telemetry_sweeper(
         trace_retention_days = config.trace_retention_days,
         perf_retention_days = config.perf_retention_days,
         alert_event_retention_days = config.alert_event_retention_days,
+        flowscript_failure_retention_days = config.flowscript_failure_retention_days,
         rollup_retention_days = config.rollup_retention_days,
         "Spawning telemetry retention sweeper"
     );
@@ -230,6 +246,7 @@ pub fn spawn_telemetry_sweeper(
                     spans_deleted = result.spans_deleted,
                     perf_deleted = result.perf_deleted,
                     alert_events_deleted = result.alert_events_deleted,
+                    flowscript_failures_deleted = result.flowscript_failures_deleted,
                     rollups_deleted = result.rollups_deleted,
                     "Telemetry sweeper removed expired rows"
                 ),
@@ -311,6 +328,13 @@ pub async fn sweep_once(
         .await?
         .rows_affected;
 
+    let flowscript_cutoff = retention_cutoff(now, config.flowscript_failure_retention_days);
+    result.flowscript_failures_deleted = FlowScriptApplyFailure::delete_many()
+        .filter(flow_script_apply_failure::Column::CreatedAt.lt(flowscript_cutoff))
+        .exec(db)
+        .await?
+        .rows_affected;
+
     let rollup_cutoff = retention_cutoff(now, config.rollup_retention_days);
     result.rollups_deleted = sweep_rollups(db, rollup_cutoff).await?;
 
@@ -342,6 +366,7 @@ async fn sweep_rollups(db: &DatabaseConnection, cutoff: NaiveDateTime) -> Result
         TelemetryLlmDaily => telemetry_llm_daily::Column::Day,
         TelemetryPerfDaily => telemetry_perf_daily::Column::Day,
         TelemetryFlowpilotDaily => telemetry_flowpilot_daily::Column::Day,
+        TelemetryFlowpilotFailureDaily => telemetry_flowpilot_failure_daily::Column::Day,
     ))
 }
 
@@ -478,6 +503,7 @@ mod tests {
         assert_eq!(config.trace_retention_days, 7);
         assert_eq!(config.perf_retention_days, 30);
         assert_eq!(config.alert_event_retention_days, 180);
+        assert_eq!(config.flowscript_failure_retention_days, 90);
         assert_eq!(config.rollup_retention_days, 400);
         assert!(TelemetrySweepResult::default().is_empty());
     }
@@ -492,9 +518,10 @@ mod tests {
             spans_deleted: 5,
             perf_deleted: 6,
             alert_events_deleted: 7,
-            rollups_deleted: 8,
+            flowscript_failures_deleted: 8,
+            rollups_deleted: 9,
         };
-        assert_eq!(result.total(), 36);
+        assert_eq!(result.total(), 45);
         assert!(!result.is_empty());
     }
 

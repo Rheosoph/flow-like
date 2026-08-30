@@ -1,4 +1,4 @@
-use super::element_utils::{extract_element_id_from_pin, find_element};
+use super::element_utils::extract_element_id_from_pin;
 use super::schema_utils::{set_component_schema_by_type, set_generic_element_schema};
 use crate::a2ui::micro_widget_utils::{
     clear_widget_ref_metadata, set_widget_ref_metadata, widget_contract_from_component,
@@ -43,6 +43,7 @@ impl NodeLogic for GetElement {
             "Gets an element's data from the page",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "getElement");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -81,8 +82,7 @@ impl NodeLogic for GetElement {
             LogLevel::Debug,
         );
 
-        let elements = context.get_frontend_elements().await?;
-        let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+        let element = context.read_element(&element_id).await?;
 
         if let Some((found_id, element_value)) = element {
             // Create element with __element_id for use with setter nodes
@@ -173,10 +173,21 @@ impl NodeLogic for GetElement {
 
 async fn find_component_in_board(board: &Board, element_id: &str) -> Option<SurfaceComponent> {
     let loaded = board.load_all_pages(None).await.ok()?;
-    for page in loaded.pages {
+
+    // The exactly referenced page wins so schema and display come from the user's actual
+    // selection; any page's same-named component is only the fallback, matching the
+    // runtime's page-retargeting of element refs.
+    for page in &loaded.pages {
         for component in &page.components {
-            if component.id == element_id
-                || element_id.ends_with(&format!("/{}", component.id))
+            if component.id == element_id || element_id == format!("{}/{}", page.id, component.id) {
+                return Some(component.clone());
+            }
+        }
+    }
+
+    for page in &loaded.pages {
+        for component in &page.components {
+            if element_id.ends_with(&format!("/{}", component.id))
                 || element_id == component.id.split('/').next_back().unwrap_or("")
             {
                 return Some(component.clone());

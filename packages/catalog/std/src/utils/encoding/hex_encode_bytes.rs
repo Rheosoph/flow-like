@@ -25,6 +25,8 @@ impl NodeLogic for HexEncodeBytesNode {
             "Encodes raw bytes to a hexadecimal string",
             "Utils/Encoding",
         );
+        node.set_flowscript_name("bytes", "toHex");
+        node.set_receiver("input");
         node.add_icon("/flow/icons/hash.svg");
 
         node.add_input_pin("input", "Input", "Raw bytes to encode", VariableType::Byte)

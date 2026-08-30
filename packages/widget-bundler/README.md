@@ -2,7 +2,7 @@
 
 Builds `.flwb` (Flow-Like Widget Bundle) artifacts for package projects: extracts typed contracts from plain TypeScript widget configs, inlines framework build output into self-contained documents, and packs everything into a deterministic ZIP with `bundle.json`.
 
-The Rust source of truth for the emitted formats is `packages/wasm/src/widget.rs` (`contract.json`) and `packages/wasm/src/widget_bundle.rs` (`bundle.json` / archive layout).
+The Rust source of truth for the emitted formats is `packages/wasm/schema/src/widget.rs` (`contract.json`) and `packages/wasm/schema/src/widget_bundle.rs` (`bundle.json` / archive layout).
 
 ## CLI
 

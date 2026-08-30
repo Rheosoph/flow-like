@@ -25,6 +25,8 @@ impl NodeLogic for SetHistoryStopWordsNode {
             "Stores one or more stop sequences to truncate future completions",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setStopWords");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

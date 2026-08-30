@@ -76,7 +76,7 @@ const fullImage = image.startsWith("http") ? image : new URL(image, site).toStri
 		)}
 	</head>
 	<body class="bg-background text-foreground min-h-screen flex flex-col">
-		<Header client:only="react" />
+		<Header client:load pathname={Astro.url.pathname} />
 		<main class="flex-1">
 			<slot />
 		</main>

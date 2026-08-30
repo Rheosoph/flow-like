@@ -30,6 +30,7 @@ impl NodeLogic for FlipFlopNode {
             "Alternate execution between A and B on successive triggers.",
             "Control/Flow",
         );
+        node.set_flowscript_name("control", "flipFlop");
         node.add_icon("/flow/icons/workflow.svg");
 
         // Execution input

@@ -32,6 +32,8 @@ impl NodeLogic for WriteImageDataUrlNode {
             "Writes an image to a data URL",
             "Web/Camera",
         );
+        node.set_flowscript_name("image", "toDataUrl");
+        node.set_receiver("image");
         node.set_version(1);
 
         node.add_icon("/flow/icons/image.svg");

@@ -1,5 +1,5 @@
 ---
-import FlowPilotUseCase from "../components/showcase/flowpilot-usecase";
+import FlowPilotUseCaseLoader from "../components/showcase/flowpilot-usecase-loader";
 import type { Lang, TranslationKey } from "../i18n";
 import { defaultLang, translations } from "../i18n";
 
@@ -20,7 +20,29 @@ const t = (key: TranslationKey): string => {
     <p>{t("v5.flowpilot.body")}</p>
   </div>
   <div class="pilot-stage">
-    <FlowPilotUseCase client:only="react" className="h-[32rem]" />
+    <div class="pilot-fallback" aria-label="FlowPilot interactive preview loading">
+      <header class="fallback-bar">
+        <span class="fallback-orb" aria-hidden="true"></span>
+        <strong>FlowPilot</strong>
+        <span class="fallback-badge">Supplier Ops · governed</span>
+      </header>
+      <div class="fallback-thread">
+        <div class="fallback-message fallback-user">
+          <p>Resolve the supplier delay without impacting next week's production. Details attached.</p>
+          <span class="fallback-file"><b>PDF</b> supplier-delay-notice.pdf</span>
+        </div>
+        <div class="fallback-message fallback-agent">
+          <small>FlowPilot</small>
+          <p>Reading the delay notice and checking the affected purchase orders.</p>
+          <span class="fallback-progress"><i></i><i></i><i></i></span>
+        </div>
+      </div>
+      <div class="fallback-composer">
+        <span>Ask FlowPilot...</span>
+        <b aria-hidden="true">↑</b>
+      </div>
+    </div>
+    <FlowPilotUseCaseLoader client:only="react" className="h-[32rem]" />
   </div>
 </section>
 
@@ -34,7 +56,29 @@ const t = (key: TranslationKey): string => {
   .pilot-heading h2 em { color: var(--muted-foreground); font-style: normal; font-weight: 400; }
   .pilot-heading > p { max-width: 470px; color: var(--muted-foreground); font-size: 15px; line-height: 1.65; }
 
-  .pilot-stage { position: relative; z-index: 2; min-width: 0; }
+  .pilot-stage { position: relative; z-index: 2; min-width: 0; min-height: 32rem; }
+  .pilot-stage :global(astro-island) { position: absolute; inset: 0; display: block; opacity: 0; transition: opacity .2s ease; }
+  .pilot-stage.flowpilot-ready :global(astro-island) { opacity: 1; }
+
+  .pilot-fallback { height: 32rem; display: flex; flex-direction: column; overflow: hidden; border: 1px solid color-mix(in oklab, var(--primary) 20%, var(--border)); border-radius: 12px; background: color-mix(in oklab, var(--background) 95%, transparent); box-shadow: 0 24px 70px rgb(0 0 0 / 40%); transition: opacity .2s ease; }
+  .pilot-stage.flowpilot-ready .pilot-fallback { opacity: 0; visibility: hidden; }
+  .fallback-bar { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 7px 12px; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 40%, transparent); font-size: 12px; }
+  .fallback-orb { width: 31px; height: 31px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff8, transparent 22%), conic-gradient(from 30deg, #f05b3f, #f6a53a, #ef3e57, #8b5cf6, #f05b3f); box-shadow: 0 0 20px color-mix(in oklab, var(--primary) 35%, transparent); }
+  .fallback-badge { margin-left: auto; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-foreground); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .fallback-thread { flex: 1; display: flex; flex-direction: column; gap: 18px; padding: 22px 16px; }
+  .fallback-message { max-width: 82%; padding: 11px 13px; border-radius: 12px; color: var(--foreground); font-size: 12px; line-height: 1.55; }
+  .fallback-message p { margin: 0; }
+  .fallback-user { align-self: flex-end; border: 1px solid color-mix(in oklab, var(--primary) 26%, var(--border)); background: color-mix(in oklab, var(--primary) 10%, var(--muted)); }
+  .fallback-agent { align-self: flex-start; border: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 42%, transparent); }
+  .fallback-agent small { display: block; margin-bottom: 5px; color: var(--muted-foreground); font-size: 9px; text-transform: uppercase; letter-spacing: .12em; }
+  .fallback-file { display: flex; align-items: center; gap: 7px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; }
+  .fallback-file b { padding: 2px 4px; border-radius: 3px; background: color-mix(in oklab, var(--primary) 16%, transparent); color: var(--primary); font: 8px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .fallback-progress { display: flex; gap: 4px; margin-top: 10px; }
+  .fallback-progress i { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); opacity: .55; }
+  .fallback-progress i:nth-child(2) { opacity: .35; }
+  .fallback-progress i:nth-child(3) { opacity: .2; }
+  .fallback-composer { min-height: 62px; margin: 0 10px 10px; padding: 10px 11px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 85%, var(--muted)); color: var(--muted-foreground); font-size: 11px; }
+  .fallback-composer b { margin-left: auto; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--primary); color: var(--primary-foreground); font-size: 15px; }
 
   @media (max-width: 1050px) {
     .pilot-section { grid-template-columns: 1fr; gap: 60px; }

@@ -26,6 +26,7 @@ impl NodeLogic for TakeSnapshotNode {
             "Captures a screen snapshot and saves to file",
             "Automation/RPA",
         );
+        node.set_flowscript_name("rpa", "takeSnapshot");
         node.add_icon("/flow/icons/rpa.svg");
 
         node.set_scores(

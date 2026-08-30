@@ -31,6 +31,8 @@ impl NodeLogic for ImapMoveMailNode {
             "Moves a mail (by UID) to another IMAP mailbox",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "moveMessage");
+        node.set_receiver("email");
         node.add_icon("/flow/icons/mail.svg");
 
         // Impure node → requires execution pins

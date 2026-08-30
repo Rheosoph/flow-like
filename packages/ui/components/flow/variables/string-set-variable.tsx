@@ -58,7 +58,7 @@ export function StringSetVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "text"}
-					placeholder={t('addUniqueValue', 'Add unique value...')}
+					placeholder={t("addUniqueValue", "Add unique value...")}
 					disabled={disabled}
 					className="flex-1 min-w-0"
 				/>

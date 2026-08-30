@@ -26,6 +26,7 @@ impl NodeLogic for ClearArrayRefNode {
             "Clear all elements directly from a variable array without copying.",
             "Utils/Array/By Reference",
         );
+        node.set_flowscript_name("array", "clearRef");
         node.add_icon("/flow/icons/grip.svg");
 
         node.add_input_pin("exec_in", "In", "", VariableType::Execution);

@@ -262,6 +262,8 @@ export interface GlobalToolPrompt {
 	/** A gate that must never be answered without the user (e.g. the FlowScript deletion
 	 * re-apply). Auto mode skips these — waiving permission never extends to deletions. */
 	destructive?: boolean;
+	/** False when this one request cannot be safely represented by a reusable approval scope. */
+	rememberable?: boolean;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
 	respond: (value: GlobalToolPromptResolution) => void;
@@ -324,7 +326,7 @@ interface GlobalChatState {
 	inlineAppSurfaces: InlineAppSurface[];
 	/**
 	 * Interactions (single/multiple choice, form) raised by a nested app-chat run (call_app_chat).
-	 * Rendered by the chat body and answered via respond_to_interaction, unblocking the app workflow
+	 * Rendered by the chat body and answered on the interaction's channel, unblocking the app workflow
 	 * while the outer call_app_chat tool call is still in flight. Deliberately conversation-scoped
 	 * rather than run-scoped: these are independent cards keyed by their own ids, so interleaving
 	 * them across concurrent runs is correct.
@@ -429,6 +431,8 @@ interface GlobalChatState {
 	addInlineAppChat: (chat: Omit<InlineAppChat, "id">) => void;
 	removeInlineAppChat: (id: string) => void;
 	addInlineAppPage: (page: Omit<InlineAppPage, "id">) => void;
+	/** Keep a live card's identity while navigation resolves it to another page Event. */
+	retargetInlineAppPage: (id: string, eventId: string) => void;
 	removeInlineAppPage: (id: string) => void;
 	addInlineAppSurface: (surface: Omit<InlineAppSurface, "id">) => void;
 	removeInlineAppSurface: (id: string) => void;
@@ -823,6 +827,25 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 				inlineAppPages: [...state.inlineAppPages, { ...page, id: createId() }],
 			};
 		}),
+	retargetInlineAppPage: (id, eventId) =>
+		set((state) => {
+			const current = state.inlineAppPages.find((page) => page.id === id);
+			if (!current) return state;
+
+			let changed = current.eventId !== eventId;
+			const inlineAppPages = state.inlineAppPages.flatMap((page) => {
+				if (page.id === id) {
+					return page.eventId === eventId ? [page] : [{ ...page, eventId }];
+				}
+				if (page.appId === current.appId && page.eventId === eventId) {
+					changed = true;
+					return [];
+				}
+				return [page];
+			});
+
+			return changed ? { inlineAppPages } : state;
+		}),
 	removeInlineAppPage: (id) =>
 		set((state) => ({
 			inlineAppPages: state.inlineAppPages.filter((page) => page.id !== id),
@@ -1014,6 +1037,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	finalizeDebugReport: (messageId, options) => {
 		finalizeAgentGenerationMetrics(messageId, options.outcome, {
 			publish: !FLOWPILOT_DEBUG_ENABLED,
+			failure: { code: options.terminalCode, message: options.summary },
 		});
 		if (!FLOWPILOT_DEBUG_ENABLED) return null;
 		const report = get().runs[messageId]?.debugReport;

@@ -77,7 +77,7 @@ impl PinOptions {
         self.clone()
     }
 
-    pub fn hash(&self, hasher: &mut HighwayHasher) {
+    pub fn hash_into(&self, hasher: &mut HighwayHasher) {
         if let Some(sensitive) = &self.sensitive {
             hasher.append(sensitive.to_string().as_bytes());
         }
@@ -123,6 +123,41 @@ pub struct Pin {
     pub value: Option<Arc<Mutex<Value>>>,
 }
 
+/// Schema for a Struct pin whose fields are supplied by the user or a remote
+/// service. See [`Pin::set_open_schema`].
+pub const OPEN_OBJECT_SCHEMA: &str = r#"{"type":"object","additionalProperties":true}"#;
+
+/// Whether `schema` is the open-object marker rather than a real shape.
+///
+/// [`OPEN_OBJECT_SCHEMA`] declares that a pin's fields are open, so it can never contradict a
+/// concrete schema. Every site that compares two pin schemas must treat it as an absent schema,
+/// not as a contract the peer has to equal. Mirrored in TypeScript by `isOpenObjectSchema` in
+/// `packages/ui/lib/flow-board-utils.tsx`.
+pub fn is_open_object_schema(schema: &str) -> bool {
+    if !schema.contains("additionalProperties") {
+        return false;
+    }
+    let Ok(Value::Object(fields)) = flow_like_types::json::from_str::<Value>(schema) else {
+        return false;
+    };
+    fields.len() == 2
+        && fields.get("type").and_then(Value::as_str) == Some("object")
+        && fields.get("additionalProperties").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether two declared pin schemas can coexist on a connection.
+///
+/// Only two concrete schemas can contradict one another: an absent schema declares nothing, and an
+/// open-object schema declares that the shape is open. See [`is_open_object_schema`].
+pub fn schemas_are_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left == right || is_open_object_schema(left) || is_open_object_schema(right)
+        }
+        _ => true,
+    }
+}
+
 impl Pin {
     /// Whether the pin's literal is a secret (API keys, passwords) that must never leave the
     /// server in a board response and is write-only from clients.
@@ -162,6 +197,21 @@ impl Pin {
         self
     }
 
+    /// Declares a Struct pin whose fields are supplied by the user or the remote
+    /// service, so no fixed shape exists to describe — a config map, a database
+    /// row, a decoded payload. This is a statement that the shape is open, not a
+    /// placeholder: a pin that *does* have a known shape should use
+    /// [`Pin::set_schema`] instead.
+    pub fn set_open_schema(&mut self) -> &mut Self {
+        self.schema = Some(OPEN_OBJECT_SCHEMA.to_string());
+        self
+    }
+
+    /// See [`is_open_object_schema`]: the pin declares an open shape, so it constrains nothing.
+    pub fn has_open_schema(&self) -> bool {
+        self.schema.as_deref().is_some_and(is_open_object_schema)
+    }
+
     pub fn set_schema<T: Serialize + JsonSchema>(&mut self) -> &mut Self {
         let schema = schema_for!(T);
         let schema_str = to_value(&schema).ok().and_then(|v| to_string(&v).ok());
@@ -179,7 +229,7 @@ impl Pin {
         self
     }
 
-    pub fn hash(&self, hasher: &mut HighwayHasher) {
+    pub fn hash_into(&self, hasher: &mut HighwayHasher) {
         hasher.append(self.id.as_bytes());
         hasher.append(self.name.as_bytes());
         hasher.append(self.friendly_name.as_bytes());
@@ -193,7 +243,7 @@ impl Pin {
         }
 
         if let Some(options) = &self.options {
-            options.hash(hasher);
+            options.hash_into(hasher);
         }
 
         for connected in &self.connected_to {
@@ -224,6 +274,57 @@ mod tests {
     use flow_like_types::{Message, Value, tokio};
     use std::collections::BTreeSet;
     use std::sync::Arc;
+
+    #[test]
+    fn the_open_marker_is_recognized_however_it_is_formatted() {
+        for schema in [
+            super::OPEN_OBJECT_SCHEMA,
+            r#"{ "additionalProperties" : true , "type" : "object" }"#,
+            "{\n  \"type\": \"object\",\n  \"additionalProperties\": true\n}",
+        ] {
+            assert!(
+                super::is_open_object_schema(schema),
+                "should be the open marker: {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_schemas_are_never_mistaken_for_the_open_marker() {
+        for schema in [
+            r#"{"type":"object","properties":{"sub":{"type":"string"}}}"#,
+            // Declares fields *and* allows extras — a real contract, not a wildcard.
+            r#"{"type":"object","additionalProperties":true,"properties":{"x":{}}}"#,
+            r#"{"type":"object","additionalProperties":false}"#,
+            r#"{"type":"array","additionalProperties":true}"#,
+            "not json",
+            "",
+        ] {
+            assert!(
+                !super::is_open_object_schema(schema),
+                "should not be the open marker: {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_two_concrete_schemas_can_contradict_each_other() {
+        let real = r#"{"title":"UserExecutionContext"}"#;
+        let other = r#"{"title":"Bit"}"#;
+
+        assert!(super::schemas_are_compatible(Some(real), Some(real)));
+        assert!(super::schemas_are_compatible(Some(real), None));
+        assert!(super::schemas_are_compatible(None, None));
+        assert!(super::schemas_are_compatible(
+            Some(real),
+            Some(super::OPEN_OBJECT_SCHEMA)
+        ));
+        assert!(super::schemas_are_compatible(
+            Some(super::OPEN_OBJECT_SCHEMA),
+            Some(real)
+        ));
+        assert!(!super::schemas_are_compatible(Some(real), Some(other)));
+    }
 
     #[tokio::test]
     async fn serialize_pin() {

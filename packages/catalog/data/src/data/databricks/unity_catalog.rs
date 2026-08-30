@@ -110,6 +110,7 @@ impl NodeLogic for ListDatabricksCatalogsNode {
             "List all catalogs in Unity Catalog",
             "Data/Databricks/Unity Catalog",
         );
+        node.set_flowscript_name("databricks", "listCatalogs");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -262,6 +263,7 @@ impl NodeLogic for ListDatabricksSchemasNode {
             "List all schemas in a catalog",
             "Data/Databricks/Unity Catalog",
         );
+        node.set_flowscript_name("databricks", "listSchemas");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -428,6 +430,7 @@ impl NodeLogic for ListDatabricksTablesNode {
             "List all tables in a schema",
             "Data/Databricks/Unity Catalog",
         );
+        node.set_flowscript_name("databricks", "listTables");
         node.add_icon("/flow/icons/databricks.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);

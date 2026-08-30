@@ -30,7 +30,9 @@ export function BoolVariable({
 				}
 				id="default_value"
 			/>
-			<Label htmlFor="default_value">{t('defaultValue', 'Default Value')}</Label>
+			<Label htmlFor="default_value">
+				{t("defaultValue", "Default Value")}
+			</Label>
 		</div>
 	);
 }

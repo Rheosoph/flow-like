@@ -29,6 +29,7 @@ impl NodeLogic for PushToContainer {
             "Dynamically adds an element to a container's children list",
             "UI/Container",
         );
+        node.set_flowscript_name("ui", "pushToContainer");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);
@@ -38,14 +39,16 @@ impl NodeLogic for PushToContainer {
             "Container",
             "Reference to the container element (ID or element object)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "element_ref",
             "Element",
             "Reference to the element to add (e.g. from Instantiate Widget)",
             VariableType::Struct,
-        );
+        )
+        .set_schema::<flow_like::a2ui::ElementRef>();
 
         node.add_input_pin(
             "position",

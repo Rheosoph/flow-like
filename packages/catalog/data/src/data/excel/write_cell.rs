@@ -1,7 +1,6 @@
-use crate::data::{
-    excel::{parse_col_1_based, parse_row_1_based},
-    path::FlowPath,
-};
+#[cfg(feature = "execute")]
+use crate::data::excel::{parse_col_1_based, parse_row_1_based};
+use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -34,6 +33,7 @@ impl NodeLogic for WriteCellNode {
             "Write/update a single cell value in an XLSX sheet",
             "Data/Excel",
         );
+        node.set_flowscript_name("excel", "writeCell");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
 
         // Impure node → needs execution pins

@@ -27,6 +27,8 @@ impl NodeLogic for IsSuccessNode {
             "Checks if the status code of a http response is a success",
             "Web/API/Response",
         );
+        node.set_flowscript_name("http", "isSuccess");
+        node.set_receiver("response");
         node.add_icon("/flow/icons/web.svg");
 
         node.add_input_pin(

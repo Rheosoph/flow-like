@@ -15,15 +15,7 @@ use wasmtime::Module;
 #[cfg(feature = "component-model")]
 use wasmtime::component::Component;
 
-/// Wasmtime major version, extracted automatically from the workspace Cargo.toml at build time.
-///
-/// Precompiled artifacts are keyed by Wasmtime's serialization compatibility
-/// version, which is the major version for the default Wasmtime module version
-/// strategy.
-pub const WASMTIME_MAJOR_VERSION: &str = env!("WASMTIME_MAJOR_VERSION");
-
-/// Backwards-compatible alias for callers that imported the previous name.
-pub const WASMTIME_VERSION: &str = WASMTIME_MAJOR_VERSION;
+pub use flow_like_wasm_schema::runtime::{WASMTIME_MAJOR_VERSION, WASMTIME_VERSION};
 
 /// Build the executable platform key for the current host.
 ///

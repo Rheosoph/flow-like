@@ -27,6 +27,7 @@ impl NodeLogic for SetIframeSrc {
             "Sets the source URL of an iframe element",
             "UI/Elements/Media",
         );
+        node.set_flowscript_name("ui", "setIframeSrc");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

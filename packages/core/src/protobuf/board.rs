@@ -60,6 +60,7 @@ impl LayerType {
             LayerType::Function => 0,
             LayerType::Macro => 1,
             LayerType::Collapsed => 2,
+            LayerType::Module => 3,
         }
     }
 
@@ -68,13 +69,14 @@ impl LayerType {
             0 => LayerType::Function,
             1 => LayerType::Macro,
             2 => LayerType::Collapsed,
+            3 => LayerType::Module,
             _ => LayerType::Function,
         }
     }
 }
 
 impl LayerCacheScope {
-    fn to_proto(&self) -> i32 {
+    fn to_proto(self) -> i32 {
         match self {
             LayerCacheScope::App => 0,
             LayerCacheScope::User => 1,
@@ -112,7 +114,7 @@ impl FromProto<flow_like_types::proto::LayerCache> for LayerCache {
 }
 
 impl LogLevel {
-    fn to_proto(&self) -> i32 {
+    fn to_proto(self) -> i32 {
         match self {
             LogLevel::Debug => 0,
             LogLevel::Info => 1,
@@ -247,6 +249,7 @@ impl FromProto<flow_like_types::proto::Board> for Board {
             board_dir: Path::from("/default"),
             logic_nodes: HashMap::new(),
             app_state: None,
+            pin_index: None,
         }
     }
 }
@@ -404,6 +407,24 @@ mod tests {
             assert_eq!(restored.id, layer.id);
             assert_eq!(restored.name, layer.name);
         }
+    }
+
+    #[test]
+    fn a_module_layer_survives_a_board_proto_roundtrip() {
+        let mut board = Board::new_detached(Some("board-1".to_string()), Path::default());
+        let module = Layer::new(
+            "module-1".to_string(),
+            "Billing".to_string(),
+            LayerType::Module,
+        );
+        board.layers.insert(module.id.clone(), module);
+
+        let restored = Board::from_proto(board.to_proto());
+
+        assert!(matches!(
+            restored.layers["module-1"].r#type,
+            LayerType::Module
+        ));
     }
 
     #[test]

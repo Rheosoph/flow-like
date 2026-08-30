@@ -29,6 +29,7 @@ impl NodeLogic for SetElementLoading {
             "Sets the loading state of a button element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "setElementLoading");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

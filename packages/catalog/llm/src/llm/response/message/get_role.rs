@@ -26,6 +26,8 @@ impl NodeLogic for GetRoleNode {
             "Extracts the author role string from a response message",
             "AI/Generative/Response/Message",
         );
+        node.set_flowscript_name("ai.response", "getRole");
+        node.set_receiver("message");
         node.add_icon("/flow/icons/history.svg");
         node.set_scores(
             NodeScores::new()

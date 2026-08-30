@@ -25,6 +25,7 @@ impl NodeLogic for UrlDecode {
             "Decodes a URL-encoded (percent-encoded) string",
             "UI/Navigation",
         );
+        node.set_flowscript_name("ui", "urlDecode");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(

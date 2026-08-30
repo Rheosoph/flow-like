@@ -1,11 +1,12 @@
 # App-store screenshots (landing `#apps` section)
 
-Drop a real app screenshot in here and it crossfades into the matching card in the
-"Company App Store" carousel of [`v5-apps.astro`](../../../src/sections/v5-apps.astro).
-No code change needed — the card looks up `/images/apps/<slug>.webp` by slug.
+Drop a real app screenshot in here, then set that app's optional screenshot URL in
+the `carouselApps` entry in
+[`v5-apps.astro`](../../../src/sections/v5-apps.astro). It crossfades into the
+matching card in the "Company App Store" carousel.
 
-If a file is missing, the card silently falls back to its built-in CSS mockup, so the
-section never looks broken while screenshots are still being produced.
+Keep the URL set to `null` until the file exists. The card then uses its built-in CSS
+mockup without issuing a failed image request.
 
 ## Filenames (slug → app)
 

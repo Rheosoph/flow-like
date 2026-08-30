@@ -89,27 +89,27 @@ function ChainHealthBadge({
 	if (valid === false) {
 		return (
 			<Badge variant="destructive" className="gap-1">
-				<ShieldAlert className="h-3 w-3" /> {t('broken', 'Broken')}
+				<ShieldAlert className="h-3 w-3" /> {t("broken", "Broken")}
 			</Badge>
 		);
 	}
 	if (valid === true && signed) {
 		return (
 			<Badge className="gap-1 bg-emerald-500 text-white hover:bg-emerald-500/90">
-				<ShieldCheck className="h-3 w-3" /> {t('verified', 'Verified')}
+				<ShieldCheck className="h-3 w-3" /> {t("verified", "Verified")}
 			</Badge>
 		);
 	}
 	if (signed) {
 		return (
 			<Badge variant="secondary" className="gap-1">
-				<Shield className="h-3 w-3" /> {t('signed', 'Signed')}
+				<Shield className="h-3 w-3" /> {t("signed", "Signed")}
 			</Badge>
 		);
 	}
 	return (
 		<Badge variant="outline" className="gap-1">
-			<ShieldEllipsis className="h-3 w-3" /> {t('unsigned', 'Unsigned')}
+			<ShieldEllipsis className="h-3 w-3" /> {t("unsigned", "Unsigned")}
 		</Badge>
 	);
 }
@@ -183,7 +183,9 @@ export function AuditChainExplorer({
 			<div className="grid gap-4 md:grid-cols-4">
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">{t('totalEntries', 'Total entries')}</CardTitle>
+						<CardTitle className="text-sm">
+							{t("totalEntries", "Total entries")}
+						</CardTitle>
 						<Link2 className="h-4 w-4 text-muted-foreground" />
 					</CardHeader>
 					<CardContent>
@@ -195,13 +197,16 @@ export function AuditChainExplorer({
 							</div>
 						)}
 						<p className="mt-1 text-xs text-muted-foreground">
-							{status.data?.last_24h_entries.toLocaleString() ?? "0"} {t('inLast24h', "in last 24h")}
+							{status.data?.last_24h_entries.toLocaleString() ?? "0"}{" "}
+							{t("inLast24h", "in last 24h")}
 						</p>
 					</CardContent>
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">{t('signedCoverage', 'Signed coverage')}</CardTitle>
+						<CardTitle className="text-sm">
+							{t("signedCoverage", "Signed coverage")}
+						</CardTitle>
 						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
 					</CardHeader>
 					<CardContent>
@@ -220,7 +225,9 @@ export function AuditChainExplorer({
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">{t('branches', 'Branches')}</CardTitle>
+						<CardTitle className="text-sm">
+							{t("branches", "Branches")}
+						</CardTitle>
 						<GitBranch className="h-4 w-4 text-muted-foreground" />
 					</CardHeader>
 					<CardContent>
@@ -232,13 +239,15 @@ export function AuditChainExplorer({
 							</div>
 						)}
 						<p className="mt-1 text-xs text-muted-foreground">
-							{t('appPackageSubchains', 'App + package sub-chains')}
+							{t("appPackageSubchains", "App + package sub-chains")}
 						</p>
 					</CardContent>
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">{t('activeKey', 'Active key')}</CardTitle>
+						<CardTitle className="text-sm">
+							{t("activeKey", "Active key")}
+						</CardTitle>
 						<KeyRound className="h-4 w-4 text-muted-foreground" />
 					</CardHeader>
 					<CardContent>
@@ -254,8 +263,8 @@ export function AuditChainExplorer({
 						)}
 						<p className="mt-1 text-xs text-muted-foreground">
 							{status.data?.signing_configured
-								? t('signingEnabled', 'Signing enabled')
-								: t('signingNotConfigured', 'Signing not configured')}
+								? t("signingEnabled", "Signing enabled")
+								: t("signingNotConfigured", "Signing not configured")}
 						</p>
 					</CardContent>
 				</Card>
@@ -266,9 +275,14 @@ export function AuditChainExplorer({
 					<CardHeader className="pb-3">
 						<CardTitle className="flex items-center gap-2 text-base">
 							<Fingerprint className="h-4 w-4 text-emerald-500" />
-							{t('chains', 'Chains')}
+							{t("chains", "Chains")}
 						</CardTitle>
-						<CardDescription>{t('pickAChainToInspectEntries', 'Pick a chain to inspect entries')}</CardDescription>
+						<CardDescription>
+							{t(
+								"pickAChainToInspectEntries",
+								"Pick a chain to inspect entries",
+							)}
+						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-1.5">
 						{status.isLoading ? (
@@ -316,11 +330,17 @@ export function AuditChainExplorer({
 				<Card className="overflow-hidden">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
 						<div className="space-y-1">
-							<CardTitle className="text-base">{t('chainEntries', 'Chain entries')}</CardTitle>
+							<CardTitle className="text-base">
+								{t("chainEntries", "Chain entries")}
+							</CardTitle>
 							<CardDescription>
 								{activeChainId
-									? t('branchChainActivechainid', 'Branch chain {{activeChainId}}', { activeChainId })
-									: t('platformRootChain', 'Platform root chain')}
+									? t(
+											"branchChainActivechainid",
+											"Branch chain {{activeChainId}}",
+											{ activeChainId },
+										)
+									: t("platformRootChain", "Platform root chain")}
 							</CardDescription>
 						</div>
 						<Button
@@ -362,11 +382,12 @@ export function AuditChainExplorer({
 											</Badge>
 											{e.signature ? (
 												<Badge className="gap-1 bg-emerald-500 text-white hover:bg-emerald-500/90">
-													<Shield className="h-3 w-3" /> {t('signed', 'Signed')}
+													<Shield className="h-3 w-3" /> {t("signed", "Signed")}
 												</Badge>
 											) : (
 												<Badge variant="outline" className="gap-1">
-													<ShieldEllipsis className="h-3 w-3" /> {t('unsigned', 'Unsigned')}
+													<ShieldEllipsis className="h-3 w-3" />{" "}
+													{t("unsigned", "Unsigned")}
 												</Badge>
 											)}
 											<RelativeTime
@@ -388,7 +409,9 @@ export function AuditChainExplorer({
 												</code>
 											)}
 											<span className="inline-flex items-center gap-1">
-												<Box className="h-3 w-3" />{`${e.resource_type}:${e.resource_id}`}</span>
+												<Box className="h-3 w-3" />
+												{`${e.resource_type}:${e.resource_id}`}
+											</span>
 										</div>
 										<Separator className="my-2" />
 										<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -409,7 +432,7 @@ export function AuditChainExplorer({
 							</ol>
 						) : (
 							<div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
-								{t('noEntriesInThisChain', 'No entries in this chain.')}
+								{t("noEntriesInThisChain", "No entries in this chain.")}
 							</div>
 						)}
 					</CardContent>

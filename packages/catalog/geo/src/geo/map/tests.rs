@@ -1,5 +1,5 @@
 #[cfg(all(test, feature = "execute"))]
-mod tests {
+mod map_tests {
     use crate::geo::GeoCoordinate;
 
     const BERLIN_LAT: f64 = 52.52;
@@ -253,8 +253,8 @@ mod tests {
         let tiles_y = (end_tile_y - start_tile_y) as u32;
 
         // For a 512x512 image, we typically need 2-3 tiles in each direction
-        assert!(tiles_x >= 2 && tiles_x <= 4);
-        assert!(tiles_y >= 2 && tiles_y <= 4);
+        assert!((2..=4).contains(&tiles_x));
+        assert!((2..=4).contains(&tiles_y));
     }
 
     #[test]

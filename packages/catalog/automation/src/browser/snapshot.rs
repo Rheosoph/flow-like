@@ -48,6 +48,7 @@ impl NodeLogic for BrowserGetDomSnapshotNode {
             "Captures the current DOM state including HTML, title, URL, and viewport info",
             "Automation/Browser/Snapshot",
         );
+        node.set_flowscript_name("browser", "getDomSnapshot");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -181,6 +182,7 @@ impl NodeLogic for BrowserGetAccessibilitySnapshotNode {
             "Captures the accessibility tree of the current page for screen reader analysis",
             "Automation/Browser/Snapshot",
         );
+        node.set_flowscript_name("browser", "getAccessibilitySnapshot");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(
@@ -347,6 +349,7 @@ impl NodeLogic for BrowserGetElementSnapshotNode {
             "Gets detailed information about a specific element by selector",
             "Automation/Browser/Snapshot",
         );
+        node.set_flowscript_name("browser", "getElementSnapshot");
         node.add_icon("/flow/icons/browser.svg");
 
         node.set_scores(

@@ -50,6 +50,7 @@ impl NodeLogic for SearchGitHubCodeNode {
             "Search for code across GitHub repositories",
             "Data/GitHub",
         );
+        node.set_flowscript_name("github", "searchCode");
         node.add_icon("/flow/icons/github.svg");
         node.set_version(1);
 

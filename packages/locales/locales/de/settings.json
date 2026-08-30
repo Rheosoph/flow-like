@@ -1489,6 +1489,8 @@
 	"user": "Benutzer",
 	"userCount": "Benutzerzahl",
 	"userScoped": "Benutzerumfang",
+	"userSearchFailed": "",
+	"userSearchFailedHint": "",
 	"userTables": "Benutzertabellen",
 	"userType": "Benutzertyp",
 	"uses": "Verwendung",

@@ -30,6 +30,7 @@ impl NodeLogic for SetElementText {
             "Sets the text content of an element",
             "UI/Elements",
         );
+        node.set_flowscript_name("ui", "setElementText");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);

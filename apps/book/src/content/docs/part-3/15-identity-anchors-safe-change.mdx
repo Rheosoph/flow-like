@@ -1,0 +1,359 @@
+---
+title: "15. Identity, Anchors, and Safe Change"
+description: Learn how FlowScript anchors preserve Board identity, how reconciliation repairs deterministic drift, and how deletion guards, atomic Apply, and scoped editing protect existing work.
+seo:
+  title: "FlowScript Identity Anchors, Safe Reconciliation & Atomic Apply"
+  topics:
+    - FlowScript identity anchors
+    - safe graph editing
+    - destructive change review
+    - atomic workflow updates
+    - scoped FlowScript editing
+sidebar:
+  order: 15
+  badge:
+    text: Draft
+    variant: caution
+---
+
+Rename the Incident Desk Event from `triageQuickAction` to `incidentTriageAction`. Its spelling
+changes. Its wires, position, App Event references, run evidence, and undo history must still point
+to the same Board node. A text edit that silently replaces that node would damage more than a
+label.
+
+FlowScript carries durable graph identities in anchors such as `//@n:...`. The reconciler compares
+an anchor with the entity kind, containing scope, target, and boundary contract to decide whether
+an edit updates existing work or proposes a replacement. It repairs a change automatically when
+the evidence is decisive. Ambiguous plans stop. Recognized removals and moves to the Board root
+require approval.
+
+Identity here means **Board entity identity**. Caller identity, authentication, and permissions
+belong to the App boundary described in Chapter 13.
+
+> **Release check:** Web and Desktop render editable source with anchors, apply guarded command
+> batches, request separate approval for recognized deletions, and support selection-scoped
+> editing. Studio/Desktop can show the authoritative command plan before Apply; Web performs the
+> same reconciliation at Apply. Anchored Board-global variables, Events, and modules support
+> in-place renames. Anchored Functions can be renamed or moved between modules without changing
+> their layer IDs. Function signature changes remain rejected. Board command execution is
+> rollback-backed and a successful Apply is atomic at the authoring layer. A successful mutating
+> Apply is normally recorded as one local undo batch. Rollback, persistence, and
+> history-bookkeeping failures remain visible.
+
+## 15.1 Identity is not the same as spelling
+
+The Incident Desk contains a String Contains node. Its FlowScript binding might be named
+`productionStopped`, `urgentPhraseFound`, or `customerImpactDetected`. Those names help a reader
+follow the rule. The Board node still needs an opaque ID so every other system can refer to the
+same operation after a rename.
+
+For an author, the practical identity rule is:
+
+> Keep an entity's anchor when it occupies the same place in the program's meaning and continues
+> to do the same job.
+
+The reconciler cannot infer purpose from prose. It tests properties the Board can verify: entity
+kind, containing module or Function, resolved target, and boundary contract. Event recovery also
+checks the handler scope. An anchored String Contains call cannot silently become an IMAP
+connection, and a call to one Function cannot keep its node identity while targeting another
+Function. Both edits fail those checks. An explicit move can change the containing module while
+preserving identity because the retained anchor makes the move itself part of the proposal.
+
+Current behavior makes the boundary concrete:
+
+| Edit | Identity consequence |
+| --- | --- |
+| Rename an anchored Board variable | Updates the existing variable |
+| Rename an anchored Event entry | Renames the existing entry node |
+| Rename or reparent an anchored module | Updates the existing module layer |
+| Rename an anchored Function | Renames the existing Function layer under its current ID |
+| Move an anchored Function or Event to another module | Moves the existing entities under their current IDs |
+| Change the catalog operation while keeping its node anchor | Blocks because the anchor and operation disagree |
+| Copy Board content on the canvas | Mints new node, pin, and layer IDs and translates internal references |
+| Move Board content | Retains IDs and changes its containing layer |
+
+The Function layer is the durable callable entity, and its anchor supplies the identity for an
+in-place rename. FlowScript emits `RenameLayer` when an anchored declaration receives a new name
+that is available in its module. Existing Call Function nodes continue to target the stable layer
+ID. Anchored Function signatures remain fixed because changing parameters or returns requires
+migrating every caller and boundary wire.
+
+This distinction keeps familiar source syntax useful without asking names to carry more certainty
+than they can provide.
+
+## 15.2 Read `//@n`, `//@v`, and `//@l` as identity
+
+Editable FlowScript can include three anchor kinds. IDs are shortened here so the roles remain
+visible:
+
+```flow
+@description("Incident report supplied by the App")
+let report = "Production is on hold"   //@v:incident-report
+
+function decideIncident(report: string): (severity: string) {   //@l:decide-incident
+    const productionStopped = report.contains({
+        substring: "production is on hold",
+        ignoreCase: true
+    })   //@n:contains-report
+    return productionStopped ? "SEV-1" : "SEV-2"
+}
+
+eventsSimple triageQuickAction() {   //@n:triage-entry
+    const severity = decideIncident(report)   //@n:call-decision
+    log::info({ message: severity, toast: false })   //@n:record-severity
+}
+```
+
+The prefixes map directly to Board entities:
+
+| Anchor | Entity |
+| --- | --- |
+| `//@n:` | A node, including an Event entry or Function call node |
+| `//@v:` | A variable, either Board-global or Function-local |
+| `//@l:` | A Function or module layer |
+
+They are trailing comments because the current source contract needs identity to travel with the
+line that owns it. The parser recognizes only the known anchor forms. An anchor on its own line is
+normally left unattached rather than assigned to the preceding entity. The deliberate exception
+is an unambiguous `//@n:` before a branch arm. The renderer emits the anchor kind appropriate to
+each parsed entity in its canonical trailing position.
+
+Keeping identity inside the document lets external editors, copy operations, diffs, scoped
+renders, source-to-Board navigation, and statement-level merges carry the same reference.
+
+Leave anchors in place during ordinary edits. Studio can dim them without deleting them. When
+copying source to create another entity, leave the anchor on the original statement. Remove it
+from the pasted copy before Apply, then rename the copy as needed so declarations remain unique.
+Do not invent anchors. An ordinary anchor ID that is absent from the current Board is reported as
+unavailable and ignored, so it cannot force an association with live work. The entity then follows
+ordinary unanchored reconciliation. An absent Event anchor stays attached for the specialized
+recovery described in Section 15.4. One anchor assigned to two distinct entities produces a
+diagnostic before the reconciler looks it up or derives any Board commands.
+
+During a merge, combine competing edits to an anchored statement into one surviving statement.
+If both versions must remain, only the continuation keeps the anchor. The other version becomes a
+new entity and receives a new identity during Apply.
+
+## 15.3 Reconciliation preserves the existing Board
+
+An anchor gives the reconciler an exact starting point. It can compare the edited entity with the
+live node, variable, or layer and emit the smallest command that represents the semantic change.
+
+Rename the Incident Desk Event while preserving its anchor:
+
+```diff
+-eventsSimple triageQuickAction() {   //@n:triage-entry
++eventsSimple incidentTriageAction() {   //@n:triage-entry
+```
+
+The current plan contains one `RenameNode` for `triage-entry`. The Event body, entry pins, wires,
+coordinates, and App Event references retain their existing identity. Renaming an anchored
+Function or module similarly uses one `RenameLayer`. The Function keeps its layer ID, body,
+boundary pins, cache settings, and existing call targets. Moving an anchored Function to another
+module uses `MoveToLayer` without recreating it.
+
+Written callers in the same revision must use the Function's final name. Planning retires its old
+spelling. Qualified calls likewise use the module's final path after a rename or move.
+
+Changing a literal is smaller still:
+
+```diff
+-        substring: "production is on hold",
++        substring: "customer-facing outage",
+```
+
+With `//@n:contains-report` intact, the reconciler can emit one `UpdateNodePin` for the existing
+Contains node. Chapter 14 followed that exact path.
+
+Reconciliation leaves untouched Board facts where they already live. New source still creates new
+entities: the planner assigns temporary references, adds the required nodes and layers, connects
+their pins, and places them without re-laying out existing work. The same command vocabulary makes
+a one-character update and a new branch comparable during review.
+
+## 15.4 Corrections automate only proven repairs
+
+A **correction** is a deterministic repair that does not require the system to choose among
+plausible meanings. A correction can accompany a valid plan. A **diagnostic** says the proposal
+cannot be represented safely or unambiguously. When any diagnostic exists, Apply executes zero
+commands.
+
+Duplicate-anchor preflight runs against the submitted source before any Board lookup. One anchor
+assigned to two distinct entities is ambiguous even when the ID is absent from this Board. A
+multi-output Event header and its immediate first arm-routing Branch may repeat the same node
+anchor because both source forms represent one Event entry. Any distinct reuse stops before the
+reconciler derives commands.
+
+After preflight, an anchor ID absent from the current Board is unavailable for an ordinary node,
+variable, Function, or module. The reconciler reports a correction, ignores that ID, and handles
+the entity as unanchored. Ordinary resolution may create a new entity or reuse one unique
+compatible live target. It cannot use an absent ID to preserve identity.
+
+A live Function or module layer named by an anchored declaration is reserved for that declaration
+throughout the revision. If the same source revision renames `legacyHelper` to `currentHelper` and
+also declares a new unanchored `legacyHelper`, the new declaration receives another layer. Source
+order does not let it capture the layer being renamed. The same rule applies when a Function moves
+out of a module and its old location receives a new Function with the same name.
+
+Availability does not prove compatibility. An anchor that resolves on the current Board remains
+authoritative. If its live entity has the wrong operation, layer kind, Function target, or
+boundary contract, reconciliation fails closed. A variable anchor that exists in another Function
+or in the Board globals is also incompatible with the declaration's scope. It remains live and is
+not cleared as unavailable. Unanchored resolution stops when several live entities are equally
+plausible, including duplicate Function layers or same-named variables in one scope.
+
+Event recovery shows the boundary. For an absent Event anchor, the reconciler collects unclaimed,
+registered entries that fit the written type, name or alias, scope, and parameter contract. If
+several entries fit, exactly one entry that still drives the first still-live execution body node
+can settle the choice. One remaining candidate is re-anchored.
+
+With zero or several compatible candidates after that check, recovery does not guess. It uses the
+normal entry-creation path and assigns a new Board identity. An exact catalog type stays exact. An
+alias-only header uses the standard Simple or Generic fallback according to its declared
+parameters. Valid Event metadata is still required, but an absent anchor and an empty copied
+handler do not by themselves block recreation.
+
+Absent Event anchors keep this specialized recovery path instead of being cleared during the
+unavailable-anchor pass. That distinction lets Event recovery consider kind, scope, and parameter
+contract before it chooses a unique entry or creates a replacement.
+
+Unavailable anchors do not turn a whole-Board replacement draft into an import. In replacement
+mode, omitting existing target content can still propose deletions. Use additive or explicitly
+scoped authoring for a partial cross-Board paste, then review the resulting command plan.
+
+Other blocking cases include:
+
+- one anchor attached to several distinct entities;
+- a live anchor whose entity kind or operation disagrees with the written entity;
+- an ordinary unanchored declaration with several compatible live targets;
+- a Function call anchor that now names a different Function;
+- an anchored Function boundary with changed parameters or returns; and
+- an unresolved or incompatible catalog call.
+
+Apply results carry corrections separately from diagnostics. A correction causes the editor to
+reload canonical FlowScript even when no Board mutation was needed, so the repaired identity
+appears in the next source projection. The current editor does not explain the correction in a
+separate message.
+
+Re-anchor only when the evidence identifies one compatible live entity. When a new entity is a
+valid representation of the source, recreation avoids choosing among live candidates. Return a
+diagnostic when neither a safe update nor a valid creation represents the proposal.
+
+## 15.5 Deletions require explicit intent
+
+Anchors also make absence meaningful. If an anchored, text-visible node disappears from a
+whole-Board or in-scope draft, the reconciler can plan its removal. Recognized removals and moves
+from a module to the Board root require a separate approval.
+
+Use the Incident Desk for a safety drill. Start with the anchored Contains statement:
+
+```flow
+const productionStopped = report.contains({
+    substring: "production is on hold",
+    ignoreCase: true
+})   //@n:contains-report
+```
+
+Now remove only its anchor:
+
+```flow
+const productionStopped = report.contains({
+    substring: "production is on hold",
+    ignoreCase: true
+})
+```
+
+The text still looks equivalent to a reader. The identity claim has changed. The current
+reconciler treats the unanchored call as a new Contains node and sees the old
+`contains-report` node as absent. Its plan adds a replacement, rewires the expression, and removes
+the existing node. The removal makes the plan destructive, so the first Apply executes no
+commands.
+
+Studio/Desktop can expose that replacement plan before Apply. Web reaches the authoritative
+guard during Apply and shows its destructive summary. The confirmation names or identifies the
+recognized Board items and offers two paths:
+
+1. Keep everything, restore `//@n:contains-report`, and apply the intended in-place edit.
+2. Apply with deletions when replacing the node and its identity is deliberate.
+
+Ordinary editor approval triggers a fresh reconciliation and authorizes the recognized destructive
+commands in its result. It does not pause for a second review if that result differs from the
+preview. Refresh before approving when the Board may have changed.
+
+Deleting the entire anchored statement produces the same need for approval without the
+replacement. Removing a variable also enters the destructive gate. Moving content from a module
+to the Board root is guarded because a missing module wrapper could otherwise dissolve a
+namespace. Studio/Desktop's proactive classifier currently misses that relocation, so the
+authoritative guard catches it during Apply.
+
+The gate follows command families rather than claiming to recognize every risky semantic change.
+Disconnecting a wire is not automatically classified as deletion, for example, so review the
+complete plan when it is available. Function and module retirement also remain current gaps:
+omitting a declaration can remove visible body nodes without removing its layer. Retire those
+boundaries from the Board until FlowScript emits a complete layer-removal plan.
+
+AI-authored text follows the same rule as a human edit or an external tool. A truncated response,
+partial paste, or narrow model context receives no extra authority to remove unseen work.
+
+## 15.6 A successful command batch becomes one undo unit
+
+FlowScript Apply treats a document as one proposed program change. Apply follows this sequence:
+
+1. Parse the complete draft and reconcile it against the live Board and catalog.
+2. Return zero executed commands when a diagnostic exists.
+3. Return zero executed commands when a recognized destructive plan lacks approval.
+4. Execute the validated setup and remaining phases, rolling back earlier commands if a later
+   phase cannot be built, executed, or validated.
+5. On Web, persist only after the complete plan succeeds, then return the executed command batch.
+
+For a successful mutating Apply, Web and Desktop normally push the returned nonempty batch into
+local history as one entry. One press of Undo submits the whole batch; the Board applies its
+inverse commands in reverse order. Redo validates and executes the batch forward again. A
+structural source edit therefore remains one author action even when it required several node,
+pin, wire, and layer commands.
+
+Atomicity covers the Board authoring mutation. It does not execute the Flow or roll back external
+side effects from a later run. Rollback can fail, and local history bookkeeping can fail after a
+Board has been persisted. Both failures remain visible. When revision stamps are available, the
+clients clear stale history rather than replaying an inverse batch against a different revision.
+
+Desktop applies and saves locally, then delivers the same command receipt for shared Boards. Its
+shared-board path can restore a pre-Apply snapshot after an Apply or save failure. An offline save
+failure is a narrower edge: the error remains visible, but the in-memory Board can be ahead of
+storage and requires explicit recovery before further editing. The current path does not restore
+it automatically.
+
+The useful promise is observable and bounded: a successful command batch lands as one authoring
+change, and a failure remains visible with recovery information.
+
+## 15.7 Scoped editing protects the unseen remainder
+
+A large Flow does not need to become one large editing task. On a live Board version, select one
+or more nodes on the canvas, open the context menu, and choose **Edit selection as FlowScript**.
+This entry is available through the shared Web and Desktop Board interface.
+
+Flow-Like expands that selection into a coherent source scope:
+
+- the complete Event, Function, or detached chain that contains a selected node;
+- every Function those sections reference, followed transitively;
+- all Board variables and interfaces as shared context; and
+- `use` declarations recomputed for the resulting document.
+
+The render also returns the anchors of the included top-level sections. Apply sends those
+`scope_anchors` back with the edited source. The reconciler still reads the live Board and catalog,
+but its Event and Function node-removal diff covers only the declared scope. An Event or Function
+omitted because it was never rendered cannot be interpreted as deleted. An entity removed inside
+the visible scope still requires deletion approval. Board variables remain visible as shared
+context, so removing one is also an in-scope destructive edit.
+
+The editor banner reports how many sections are in scope and states that out-of-scope content is
+untouched. Leaving the scope returns to the current whole-Board source.
+
+Scoped editing gives people and tools a smaller reasoning surface with an explicit completeness
+boundary. It is valuable for a focused human change, a generated patch, and a review that should
+not carry the entire Flow into working memory.
+
+Preserve anchors during ordinary editing. Remove one only when replacement is deliberate and the
+destructive review is acceptable.
+
+The next chapter turns this identity model into editor behavior: navigation, completion,
+diagnostics, formatting, previews, and the language tools that connect a cursor back to the Board.

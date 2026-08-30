@@ -31,6 +31,8 @@ impl NodeLogic for ConvertImageNode {
             "Convert Image Color/Pixel Type (e.g. to Grayscale)",
             "Image/Transform",
         );
+        node.set_flowscript_name("image", "convertColor");
+        node.set_receiver("image_in");
         node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 

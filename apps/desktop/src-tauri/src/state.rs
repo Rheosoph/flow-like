@@ -137,6 +137,7 @@ impl TauriSettingsState {
 pub struct TauriEventBusState(pub Arc<EventBus>);
 impl TauriEventBusState {
     #[inline]
+    #[allow(dead_code)] // accessor parity with the other Tauri*State types; current consumers use try_state directly
     pub fn construct(app_handle: &AppHandle) -> anyhow::Result<Arc<EventBus>> {
         app_handle
             .try_state::<TauriEventBusState>()

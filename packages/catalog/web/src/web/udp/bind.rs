@@ -41,6 +41,7 @@ impl NodeLogic for UdpBindNode {
             "Binds a UDP socket to a local address and port",
             "Web/UDP",
         );
+        node.set_flowscript_name("udp", "bind");
         node.add_icon("/flow/icons/web.svg");
         node.scores = Some(
             flow_like::flow::node::NodeScores::new()

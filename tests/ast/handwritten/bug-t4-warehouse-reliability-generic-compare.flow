@@ -1,0 +1,43 @@
+// BUG: values whose FlowScript type lands as `Generic` cannot be compared to a string literal.
+// `==` refuses them with
+//     binary operator `==` has incompatible operand types `Generic` and `String`
+// and the whole comparison, plus everything downstream of it, is dropped:
+//     argument `condition` on `utilsTypesSelect` is not a literal or resolvable node output
+//
+// Two very ordinary spellings produce a `Generic`:
+//   1. the result of a ternary whose BOTH arms are string literals (`utils_types_select`
+//      declares its output pin Generic, and reconcile never narrows it to the arms' type);
+//   2. the `value` output of `struct::get`, which is `any`.
+//
+// Both are shapes the language documents and the renderer emits, and neither can be branched on
+// afterwards. The workaround is `string::equal(a, b)`, which takes String pins and types fine.
+use log::{ info, warn }
+
+eventsSimple ternaryResultCompare() {
+    const band = 1 > 0 ? "sev1" : "sev2"
+    if (band == "sev1") {
+        info({ message: "top band", toast: false })
+    } else {
+        warn({ message: "lower band", toast: false })
+    }
+}
+
+eventsSimple structFieldCompare() {
+    let request = {}
+    request.status = "prepared"
+    const status = struct::get({ struct: request, field: "status" })
+    if (status == "prepared") {
+        info({ message: "accepted", toast: false })
+    } else {
+        warn({ message: "refused", toast: false })
+    }
+}
+
+eventsSimple stringEqualWorkaround() {
+    const band = 1 > 0 ? "sev1" : "sev2"
+    if (string::equal(band, "sev1")) {
+        info({ message: "top band", toast: false })
+    } else {
+        warn({ message: "lower band", toast: false })
+    }
+}

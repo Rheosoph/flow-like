@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback } from "react";
+import { useAssetImage } from "../../../hooks/use-asset-image";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, ImageComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -13,6 +15,15 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
+const FIT_CLASSES: Record<string, string> = {
+	contain: "object-contain",
+	cover: "object-cover",
+	fill: "object-fill",
+	none: "object-none",
+	scaleDown: "object-scale-down",
+	"scale-down": "object-scale-down",
+};
+
 export function A2UIImage({
 	component,
 	style,
@@ -20,38 +31,51 @@ export function A2UIImage({
 	const src = useResolved<string>(component.src);
 	const alt = useResolved<string>(component.alt);
 	const fit = useResolved<string>(component.fit);
-	const fallback = useResolved<string>(component.fallback);
+	const rawFallback = useResolved<string>(component.fallback);
 	const loading = useResolved<"lazy" | "eager">(component.loading);
-	const [error, setError] = useState(false);
 
-	const fitMap: Record<string, string> = {
-		contain: "object-contain",
-		cover: "object-cover",
-		fill: "object-fill",
-		none: "object-none",
-		scaleDown: "object-scale-down",
-		"scale-down": "object-scale-down",
-	};
+	// The component holds a durable storage path; the signed URL that loads it
+	// is minted here and renewed before it lapses.
+	const { url: resolvedSrc, isLoading, refresh } = useAssetUrl(src);
+	const { url: fallback } = useAssetUrl(rawFallback);
 
-	if (error && fallback) {
+	// Sources here are usually signed storage URLs: they expire, and a dead one
+	// has a live replacement the registry already knows about. Failure state is
+	// keyed by URL, so pointing the component at another asset clears it.
+	const image = useAssetImage(resolvedSrc);
+
+	// A URL that failed may simply have outlived its signature: ask for a new
+	// one before falling back. The request is rate-limited, so a link that is
+	// dead for any other reason settles on the fallback after a single retry.
+	const onError = useCallback(() => {
+		image.onError();
+		refresh();
+	}, [image.onError, refresh]);
+
+	const className = cn(fit && FIT_CLASSES[fit], resolveStyle(style));
+	const inlineStyle = resolveInlineStyle(style);
+
+	if (!image.canRender && fallback && !isLoading) {
 		return (
 			<img
 				src={fallback}
 				alt={alt ?? ""}
-				className={cn(fit && fitMap[fit], resolveStyle(style))}
-				style={resolveInlineStyle(style)}
+				className={className}
+				style={inlineStyle}
 			/>
 		);
 	}
 
 	return (
 		<img
-			src={src}
+			ref={image.imgRef}
+			src={image.src}
 			alt={alt ?? ""}
 			loading={loading ?? "lazy"}
-			onError={() => setError(true)}
-			className={cn(fit && fitMap[fit], resolveStyle(style))}
-			style={resolveInlineStyle(style)}
+			onLoad={image.onLoad}
+			onError={onError}
+			className={className}
+			style={inlineStyle}
 		/>
 	);
 }

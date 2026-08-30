@@ -26,6 +26,8 @@ impl NodeLogic for ValuesMapNode {
             "Gets all values from the map as an array",
             "Utils/Map",
         );
+        node.set_flowscript_name("map", "values");
+        node.set_receiver("map_in");
 
         node.add_icon("/flow/icons/book-key.svg");
 

@@ -1,6 +1,6 @@
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use ahash::AHashSet;
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like::flow::{
     execution::{
         LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
@@ -8,18 +8,18 @@ use flow_like::flow::{
     pin::PinType,
     variable::VariableType,
 };
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like_types::sync::Mutex;
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like_types::{Value, anyhow, json};
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use std::collections::HashMap;
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use std::sync::Arc;
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[derive(Clone, Debug)]
 pub(crate) struct HttpRequest {
     pub method: String,
@@ -30,7 +30,7 @@ pub(crate) struct HttpRequest {
     pub remote_addr: String,
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 #[derive(Clone, Debug)]
 pub(crate) struct HttpResponse {
     pub status_code: u16,
@@ -38,7 +38,7 @@ pub(crate) struct HttpResponse {
     pub body: Vec<u8>,
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 impl HttpResponse {
     pub(crate) fn text(status_code: u16, body: impl Into<String>) -> Self {
         let mut headers = HashMap::new();
@@ -68,7 +68,7 @@ impl HttpResponse {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn read_http_request<S>(
     stream: &mut S,
     remote_addr: String,
@@ -157,7 +157,7 @@ where
     }))
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn write_http_response<S>(
     stream: &mut S,
     response: HttpResponse,
@@ -195,7 +195,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn write_sse_response_head<S>(
     stream: &mut S,
     status_code: u16,
@@ -222,7 +222,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn write_sse_event<S>(
     stream: &mut S,
     event: Option<&str>,
@@ -254,7 +254,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn write_sse_comment<S>(stream: &mut S, text: &str) -> flow_like_types::Result<()>
 where
     S: AsyncWrite + Unpin + ?Sized,
@@ -268,7 +268,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
     if request.body.is_empty() {
         return Value::Null;
@@ -291,10 +291,10 @@ pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) type SharedFunctionContext = Arc<Mutex<ExecutionContext>>;
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn create_shared_function_context(
     context: &ExecutionContext,
     referenced_node: &Arc<InternalNode>,
@@ -305,7 +305,7 @@ pub(crate) async fn create_shared_function_context(
     Arc::new(Mutex::new(sub))
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn trigger_shared_function_context(
     context: &SharedFunctionContext,
     arguments: &Value,
@@ -322,15 +322,13 @@ pub(crate) async fn trigger_shared_function_context(
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {
         let sanitized = sanitize_identifier(&pin.name);
-        if let Some(value) = args.get(&pin.name).or_else(|| args.get(&sanitized)) {
+        if let Some(value) = args.get(pin.name.as_ref()).or_else(|| args.get(&sanitized)) {
             context.set_pin_ref_value(&pin, value.clone()).await?;
         }
     }
@@ -356,16 +354,14 @@ pub(crate) async fn trigger_shared_function_context(
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 async fn reset_function_output_pins(context: &ExecutionContext) {
     let pins: Vec<_> = context
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {
@@ -384,7 +380,7 @@ pub(crate) fn normalize_path(path: &str) -> String {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) fn sanitize_identifier(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -402,12 +398,12 @@ pub(crate) fn sanitize_identifier(input: &str) -> String {
     }
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn split_target(target: &str) -> (String, HashMap<String, String>) {
     let (path, query_string) = target.split_once('?').unwrap_or((target, ""));
     let mut query = HashMap::new();
@@ -420,7 +416,7 @@ fn split_target(target: &str) -> (String, HashMap<String, String>) {
     (normalize_path(path), query)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn decode_query_component(component: &str) -> String {
     if component.contains('+') {
         let replaced = component.replace('+', " ");
@@ -434,7 +430,7 @@ fn decode_query_component(component: &str) -> String {
         .unwrap_or_else(|_| component.to_string())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn canonical_header_name(name: &str) -> String {
     name.split('-')
         .map(|part| {
@@ -452,7 +448,7 @@ fn canonical_header_name(name: &str) -> String {
         .join("-")
 }
 
-#[cfg(feature = "execute")]
+#[cfg(all(feature = "execute", not(feature = "remote")))]
 fn reason_phrase(status: u16) -> &'static str {
     match status {
         200 => "OK",
@@ -471,7 +467,7 @@ fn reason_phrase(status: u16) -> &'static str {
     }
 }
 
-#[cfg(all(test, feature = "execute"))]
+#[cfg(all(test, feature = "execute", not(feature = "remote")))]
 mod tests {
     use super::split_target;
 

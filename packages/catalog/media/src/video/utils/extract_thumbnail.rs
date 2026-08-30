@@ -19,6 +19,7 @@ impl NodeLogic for ExtractThumbnailNode {
             "Decode a video frame and write it as a still image",
             "Video/Preview",
         );
+        node.set_flowscript_name("video", "extractThumbnail");
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

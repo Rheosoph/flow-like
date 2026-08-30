@@ -1,16 +1,21 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import { Button, Card, CardContent, CardHeader } from "@flow-like/flow-like-ui";
+import { i18n as i18next } from "@flow-like/locales";
 import { PartyPopper } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Crossfire from "react-canvas-confetti/dist/presets/crossfire";
 
 const CongratsHeader = () => (
 	<CardHeader className="text-center space-y-2">
-		<h2 className="text-2xl sm:text-3xl font-semibold">{i18next.t('congratulations', '🎉 Congratulations!')}</h2>
+		<h2 className="text-2xl sm:text-3xl font-semibold">
+			{i18next.t("congratulations", "🎉 Congratulations!")}
+		</h2>
 		<p className="text-muted-foreground">
-			{i18next.t('youHaveSuccessfullyCompletedTheOnboardingProcess', 'You have successfully completed the onboarding process.')}
+			{i18next.t(
+				"youHaveSuccessfullyCompletedTheOnboardingProcess",
+				"You have successfully completed the onboarding process.",
+			)}
 		</p>
 	</CardHeader>
 );
@@ -20,7 +25,7 @@ const FinishSetupButton: React.FC<{ onFinish: () => void }> = ({
 }) => (
 	<Button className="gap-2 w-full mt-6" onClick={onFinish}>
 		<PartyPopper className="h-4 w-4" aria-hidden="true" />
-		{i18next.t('finishSetup', 'Finish Setup')}
+		{i18next.t("finishSetup", "Finish Setup")}
 	</Button>
 );
 

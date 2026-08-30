@@ -1,0 +1,52 @@
+// BUG: a `Generic` value — which is what `map::get` / `struct::get` hand back, i.e. the ONLY way
+// to read a Map<string, T> reconciliation index — can be wired into any typed input pin, but can
+// never be an operand of a binary operator. The three shapes below all fail:
+//
+//   liveBody == stored   (String vs Generic)  -> binary operator `==` has incompatible operand
+//                                                types `String` and `Generic`
+//   stored != 3          (Generic vs Integer) -> binary operator `!=` has incompatible operand
+//                                                types `Generic` and `Integer`
+//   stored == other      (Generic vs Generic) -> binary operator `==` for `Generic` has no
+//                                                suitable two-input catalog node
+//
+// `reconcile.rs::binary_operand_type` (packages/core/src/flow/ast/reconcile.rs:11039) compares
+// the two `expr_data_type_hint`s as opaque strings and errors on any mismatch; it has no arm that
+// treats `Generic` as a wildcard, and `BINARY_OPERATOR_NODES` has no `Generic` row for the
+// both-sides-Generic case. Meanwhile the CONNECTION layer already accepts Generic -> String
+// happily, which is why the last line of `probeSameComparisonViaNode` reconciles cleanly:
+// `string::equal("seen", stored, false)` is the exact node `"seen" == stored` would lower to, wired
+// from the exact same source pin. So the operator refuses a connection the reconciler is willing
+// to make one line later.
+//
+// Consequence: any Map-keyed index is write-only for comparison purposes. You can build it, pass
+// its values to nodes, and interpolate them into strings, but you cannot ask whether a stored
+// value still matches what is live without hand-lowering the comparison to a catalog node.
+use log::{ info }
+
+let noteIndex: Map<string, string> = {}
+let revisionIndex: Map<string, int> = {}
+
+eventsSimple compareStringToGeneric() {
+    const { value: stored } = map::get({ mapIn: noteIndex, key: "PLATFORM-1" })
+    const matches = "seen" == stored
+    info({ message: matches, toast: false })
+}
+
+eventsSimple compareGenericToIntLiteral() {
+    const { value: revision } = map::get({ mapIn: revisionIndex, key: "PLATFORM-1" })
+    const moved = revision != 3
+    info({ message: moved, toast: false })
+}
+
+eventsSimple compareGenericToGeneric() {
+    const { value: left } = map::get({ mapIn: noteIndex, key: "PLATFORM-1" })
+    const { value: right } = map::get({ mapIn: noteIndex, key: "PLATFORM-2" })
+    const same = left == right
+    info({ message: same, toast: false })
+}
+
+eventsSimple probeSameComparisonViaNode() {
+    const { value: stored } = map::get({ mapIn: noteIndex, key: "PLATFORM-1" })
+    const matches = string::equal("seen", stored, false)
+    info({ message: matches, toast: false })
+}

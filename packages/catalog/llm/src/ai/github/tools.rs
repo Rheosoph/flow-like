@@ -24,6 +24,7 @@ impl NodeLogic for CopilotToolConfigNode {
             "Configures an agent tool with parameters",
             "AI/GitHub/Copilot/Tools",
         );
+        node.set_flowscript_name("github.copilot", "toolConfig");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(
@@ -52,7 +53,8 @@ impl NodeLogic for CopilotToolConfigNode {
             "Tool parameters JSON schema",
             VariableType::Struct,
         )
-        .set_default_value(Some(json::json!({})));
+        .set_default_value(Some(json::json!({})))
+        .set_open_schema();
 
         node.add_output_pin("tool", "Tool", "Configured tool", VariableType::Struct)
             .set_schema::<CopilotToolConfig>()
@@ -93,6 +95,7 @@ impl NodeLogic for CopilotToolListNode {
             "Combines multiple tools into a list for session configuration",
             "AI/GitHub/Copilot/Tools",
         );
+        node.set_flowscript_name("github.copilot", "toolList");
         node.add_icon("/flow/icons/github.svg");
 
         node.set_scores(

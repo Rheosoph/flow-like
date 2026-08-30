@@ -100,6 +100,7 @@ impl NodeLogic for LLMSuggestNextStepNode {
             "Uses LLM to suggest the most appropriate next action given current screen and goal",
             "Automation/LLM/Planning",
         );
+        node.set_flowscript_name("automation.llm", "suggestNextStep");
         node.add_icon("/flow/icons/bot-plan.svg");
         node.set_version(3);
 

@@ -69,7 +69,7 @@ const TYPE_TEXT_MAP: Record<string, (node?: TElement) => string> = {
 		return "Paragraph";
 	},
 	[KEYS.table]: () => "Table",
-	[KEYS.toc]: () => i18next.t('tableOfContents', 'Table of Contents'),
+	[KEYS.toc]: () => i18next.t("tableOfContents", "Table of Contents"),
 	[KEYS.toggle]: () => "Toggle",
 	[KEYS.video]: () => "Video",
 };
@@ -159,7 +159,7 @@ export function BlockSuggestionCard({
 								{suggestionText2Array(suggestion.text!).map((text, index) => (
 									<div key={index} className="flex items-center gap-2">
 										<span className="text-sm text-muted-foreground">
-											{t('delete3', 'Delete:')}
+											{t("delete3", "Delete:")}
 										</span>
 
 										<span key={index} className="text-sm">
@@ -176,7 +176,7 @@ export function BlockSuggestionCard({
 									(text, index) => (
 										<div key={index} className="flex items-center gap-2">
 											<span className="text-sm text-muted-foreground">
-												{t('add2', 'Add:')}
+												{t("add2", "Add:")}
 											</span>
 
 											<span key={index} className="text-sm">
@@ -197,7 +197,7 @@ export function BlockSuggestionCard({
 												key={index}
 												className="flex items-start gap-2 text-brand/80"
 											>
-												<span className="text-sm">{t('with', 'with:')}</span>
+												<span className="text-sm">{t("with", "with:")}</span>
 												<span className="text-sm">{text || "line breaks"}</span>
 											</div>
 										</React.Fragment>
@@ -208,7 +208,11 @@ export function BlockSuggestionCard({
 									<React.Fragment key={index}>
 										<div key={index} className="flex items-start gap-2">
 											<span className="text-sm text-muted-foreground">
-												{t('delete3', { defaultValue_zero: 'Replace:', defaultValue_other: 'Delete:', count: index })}
+												{t("delete3", {
+													defaultValue_zero: "Replace:",
+													defaultValue_other: "Delete:",
+													count: index,
+												})}
 											</span>
 											<span className="text-sm">{text || "line breaks"}</span>
 										</div>

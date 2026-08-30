@@ -133,11 +133,11 @@ function PanelHeader({
 				<div className="flex shrink-0 gap-2">
 					<Button variant="outline" size="sm" onClick={onReset}>
 						<RotateCcwIcon className="mr-1 h-3 w-3" />
-						{t('revert', 'Revert')}
+						{t("revert", "Revert")}
 					</Button>
 					<Button size="sm" onClick={onSave} disabled={saving}>
 						<SaveIcon className="mr-1 h-3 w-3" />
-						{t('save', 'Save')}
+						{t("save", "Save")}
 					</Button>
 				</div>
 			)}
@@ -224,12 +224,16 @@ export function SettingsInspector({
 					await backend.appState.pushAppMedia(appId, type, file);
 					await onMediaChanged();
 					toast.success(
-						t('valUploaded', '{{val}} uploaded', { val: type === "thumbnail" ? "Banner" : "Icon" }),
+						t("valUploaded", "{{val}} uploaded", {
+							val: type === "thumbnail" ? "Banner" : "Icon",
+						}),
 						{ id: loading },
 					);
 				} catch (error) {
 					toast.error(
-						error instanceof Error ? error.message : t('uploadFailed', 'Upload failed'),
+						error instanceof Error
+							? error.message
+							: t("uploadFailed", "Upload failed"),
 						{ id: loading },
 					);
 				} finally {
@@ -273,7 +277,7 @@ export function SettingsInspector({
 				className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
 			>
 				<SheetHeader className="border-b px-5 py-4">
-					<SheetTitle>{t('settings', 'Settings')}</SheetTitle>
+					<SheetTitle>{t("settings", "Settings")}</SheetTitle>
 				</SheetHeader>
 
 				<div className="flex min-h-0 flex-1 flex-col sm:flex-row">
@@ -318,7 +322,7 @@ export function SettingsInspector({
 							{activePanel === "identity" && draftMetadata && draftApp && (
 								<div className="space-y-4">
 									<div className="space-y-2">
-										<Label>{t('appType', 'App type')}</Label>
+										<Label>{t("appType", "App type")}</Label>
 										<Select
 											value={draftApp.app_type ?? "unset"}
 											disabled={!canEdit}
@@ -331,12 +335,14 @@ export function SettingsInspector({
 											}
 										>
 											<SelectTrigger>
-												<SelectValue placeholder={t('chooseAType', 'Choose a type')} />
+												<SelectValue
+													placeholder={t("chooseAType", "Choose a type")}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												<SelectItem value="unset">
 													<span className="text-muted-foreground">
-														{t('unclassified', 'Unclassified')}
+														{t("unclassified", "Unclassified")}
 													</span>
 												</SelectItem>
 												{APP_TYPE_ORDER.map((type) => {
@@ -353,7 +359,16 @@ export function SettingsInspector({
 												})}
 											</SelectContent>
 										</Select>
-										<p className="text-xs text-muted-foreground">{t('descriptionShownAsTheShapeOfThisAppsIconInYourLibraryInProjectConfigAndInTheStore', "{{description}} Shown as the shape of this app's icon in your library, in project config and in the store.", { description: appTypeMeta(draftApp.app_type).description })}</p>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"descriptionShownAsTheShapeOfThisAppsIconInYourLibraryInProjectConfigAndInTheStore",
+												"{{description}} Shown as the shape of this app's icon in your library, in project config and in the store.",
+												{
+													description: appTypeMeta(draftApp.app_type)
+														.description,
+												},
+											)}
+										</p>
 										{!draftApp.app_type && suggestedType && (
 											<button
 												type="button"
@@ -365,11 +380,14 @@ export function SettingsInspector({
 											>
 												<SparklesIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
 												<span>
-													{t('looksLikeA', 'Looks like a')}{" "}
+													{t("looksLikeA", "Looks like a")}{" "}
 													<span className="font-medium text-foreground">
 														{appTypeMeta(suggestedType).label}
 													</span>{" "}
-													{t('basedOnThisAppsTriggersAndPagesUseThat', 'based on this app\'s triggers and pages — use that?')}
+													{t(
+														"basedOnThisAppsTriggersAndPagesUseThat",
+														"based on this app's triggers and pages — use that?",
+													)}
 												</span>
 											</button>
 										)}
@@ -389,10 +407,13 @@ export function SettingsInspector({
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label>{t('summary', 'Summary')}</Label>
+										<Label>{t("summary", "Summary")}</Label>
 										<Textarea
 											rows={2}
-											placeholder={t('oneOrTwoSentencesShownUnderTheName', 'One or two sentences shown under the name.')}
+											placeholder={t(
+												"oneOrTwoSentencesShownUnderTheName",
+												"One or two sentences shown under the name.",
+											)}
 											value={draftMetadata.description}
 											disabled={!canEdit}
 											onChange={(event) =>
@@ -405,7 +426,7 @@ export function SettingsInspector({
 									</div>
 									<div className="space-y-2">
 										<div className="flex items-center justify-between">
-											<Label>{t('fullDescription', 'Full description')}</Label>
+											<Label>{t("fullDescription", "Full description")}</Label>
 											<Button
 												variant="outline"
 												size="sm"
@@ -417,7 +438,7 @@ export function SettingsInspector({
 													setLongDescOpen(true);
 												}}
 											>
-												{t('openMarkdownEditor', 'Open Markdown editor')}
+												{t("openMarkdownEditor", "Open Markdown editor")}
 											</Button>
 										</div>
 										<div className="min-h-15 rounded-md border p-3 text-sm text-muted-foreground">
@@ -426,12 +447,14 @@ export function SettingsInspector({
 													{draftMetadata.long_description.substring(0, 240)}
 												</span>
 											) : (
-												<span className="italic">{t('noFullDescriptionYet', 'No full description yet')}</span>
+												<span className="italic">
+													{t("noFullDescriptionYet", "No full description yet")}
+												</span>
 											)}
 										</div>
 									</div>
 									<div className="space-y-2">
-										<Label>{t('artwork', 'Artwork')}</Label>
+										<Label>{t("artwork", "Artwork")}</Label>
 										<div className="grid grid-cols-2 gap-3">
 											<button
 												type="button"
@@ -441,7 +464,9 @@ export function SettingsInspector({
 											>
 												<ImageIcon className="mx-auto mb-1 h-5 w-5 text-muted-foreground" />
 												<p className="text-xs text-muted-foreground">
-													{metadata.icon ? "Change icon" : t('uploadIcon', 'Upload icon')}
+													{metadata.icon
+														? "Change icon"
+														: t("uploadIcon", "Upload icon")}
 												</p>
 											</button>
 											<button
@@ -454,7 +479,7 @@ export function SettingsInspector({
 												<p className="text-xs text-muted-foreground">
 													{metadata.thumbnail
 														? "Change banner"
-														: t('uploadBanner', 'Upload banner')}
+														: t("uploadBanner", "Upload banner")}
 												</p>
 											</button>
 										</div>
@@ -466,7 +491,10 @@ export function SettingsInspector({
 								<div className="space-y-4">
 									{slots?.access ?? (
 										<p className="text-sm text-muted-foreground">
-											{t('sharingControlsAreUnavailableForThisDeployment', 'Sharing controls are unavailable for this deployment.')}
+											{t(
+												"sharingControlsAreUnavailableForThisDeployment",
+												"Sharing controls are unavailable for this deployment.",
+											)}
 										</p>
 									)}
 								</div>
@@ -476,7 +504,7 @@ export function SettingsInspector({
 								<div className="space-y-4">
 									<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 										<div className="space-y-2">
-											<Label>{t('primaryCategory', 'Primary category')}</Label>
+											<Label>{t("primaryCategory", "Primary category")}</Label>
 											<Select
 												value={draftApp.primary_category ?? IAppCategory.Other}
 												disabled={!canEdit}
@@ -488,7 +516,9 @@ export function SettingsInspector({
 												}
 											>
 												<SelectTrigger>
-													<SelectValue placeholder={t('selectCategory', 'Select category')} />
+													<SelectValue
+														placeholder={t("selectCategory", "Select category")}
+													/>
 												</SelectTrigger>
 												<SelectContent>
 													{Object.values(IAppCategory).map((category) => (
@@ -500,7 +530,9 @@ export function SettingsInspector({
 											</Select>
 										</div>
 										<div className="space-y-2">
-											<Label>{t('secondaryCategory', 'Secondary category')}</Label>
+											<Label>
+												{t("secondaryCategory", "Secondary category")}
+											</Label>
 											<Select
 												value={draftApp.secondary_category ?? "none"}
 												disabled={!canEdit}
@@ -513,10 +545,12 @@ export function SettingsInspector({
 												}
 											>
 												<SelectTrigger>
-													<SelectValue placeholder={t('none', 'None')} />
+													<SelectValue placeholder={t("none", "None")} />
 												</SelectTrigger>
 												<SelectContent>
-													<SelectItem value="none">{t('none', 'None')}</SelectItem>
+													<SelectItem value="none">
+														{t("none", "None")}
+													</SelectItem>
 													{Object.values(IAppCategory).map((category) => (
 														<SelectItem key={category} value={category}>
 															{categoryLabel(category)}
@@ -528,9 +562,12 @@ export function SettingsInspector({
 									</div>
 
 									<div className="space-y-2">
-										<Label>{t('tags', 'Tags')}</Label>
+										<Label>{t("tags", "Tags")}</Label>
 										<Input
-											placeholder={t('typeATagAndPressEnter2', 'Type a tag and press Enter…')}
+											placeholder={t(
+												"typeATagAndPressEnter2",
+												"Type a tag and press Enter…",
+											)}
 											value={newTag}
 											disabled={!canEdit}
 											onChange={(event) => setNewTag(event.target.value)}
@@ -554,7 +591,9 @@ export function SettingsInspector({
 															<button
 																type="button"
 																onClick={() => removeTag(tag)}
-																aria-label={t('removeTag', 'Remove {{tag}}', { tag })}
+																aria-label={t("removeTag", "Remove {{tag}}", {
+																	tag,
+																})}
 																className="ml-0.5 hover:text-destructive"
 															>
 																<XIcon className="h-3 w-3" />
@@ -599,7 +638,10 @@ export function SettingsInspector({
 								<div className="space-y-4">
 									{slots?.compliance ?? (
 										<p className="text-sm text-muted-foreground">
-											{t('conformityChecksAreUnavailableForThisDeployment', 'Conformity checks are unavailable for this deployment.')}
+											{t(
+												"conformityChecksAreUnavailableForThisDeployment",
+												"Conformity checks are unavailable for this deployment.",
+											)}
 										</p>
 									)}
 								</div>
@@ -609,7 +651,7 @@ export function SettingsInspector({
 								<div className="space-y-4">
 									<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 										<div className="space-y-2">
-											<Label>{t('status', 'Status')}</Label>
+											<Label>{t("status", "Status")}</Label>
 											<Select
 												value={draftApp.status ?? IAppStatus.Active}
 												disabled={!canEdit}
@@ -633,7 +675,7 @@ export function SettingsInspector({
 											</Select>
 										</div>
 										<div className="space-y-2">
-											<Label>{t('version', 'Version')}</Label>
+											<Label>{t("version", "Version")}</Label>
 											<Input
 												placeholder="1.0.0"
 												value={draftApp.version ?? ""}
@@ -647,7 +689,7 @@ export function SettingsInspector({
 											/>
 										</div>
 										<div className="space-y-2">
-											<Label>{t('price', 'Price ($)')}</Label>
+											<Label>{t("price", "Price ($)")}</Label>
 											<Input
 												type="number"
 												placeholder="0.00"
@@ -664,7 +706,7 @@ export function SettingsInspector({
 										</div>
 									</div>
 									<div className="space-y-2">
-										<Label>{t('changelog', 'Changelog')}</Label>
+										<Label>{t("changelog", "Changelog")}</Label>
 										<Textarea
 											rows={4}
 											placeholder={`What is new in this version…`}
@@ -687,10 +729,13 @@ export function SettingsInspector({
 									{canEdit && (
 										<div className="space-y-2 rounded-lg border border-destructive/40 p-4">
 											<h4 className="text-sm font-semibold text-destructive">
-												{t('deleteThisApp', 'Delete this app')}
+												{t("deleteThisApp", "Delete this app")}
 											</h4>
 											<p className="text-xs text-muted-foreground">
-												{t('removesEveryFlowEventPageAndStoredFileThisCannotBeUndone', "Removes every flow, event, page and stored file. This cannot be undone.")}
+												{t(
+													"removesEveryFlowEventPageAndStoredFileThisCannotBeUndone",
+													"Removes every flow, event, page and stored file. This cannot be undone.",
+												)}
 											</p>
 											<VerificationDialog
 												dialog="You cannot undo this action. This will permanently delete the app!"
@@ -700,7 +745,7 @@ export function SettingsInspector({
 											>
 												<Button variant="destructive" size="sm">
 													<BombIcon className="mr-1.5 h-3 w-3" />
-													{t('deleteApp', 'Delete app')}
+													{t("deleteApp", "Delete app")}
 												</Button>
 											</VerificationDialog>
 										</div>
@@ -714,7 +759,9 @@ export function SettingsInspector({
 				<Dialog open={longDescOpen} onOpenChange={setLongDescOpen}>
 					<DialogContent className="flex max-h-svh min-h-svh w-dvw min-w-dvw max-w-dvw flex-col">
 						<DialogHeader>
-							<DialogTitle>{t('fullDescription', 'Full description')}</DialogTitle>
+							<DialogTitle>
+								{t("fullDescription", "Full description")}
+							</DialogTitle>
 						</DialogHeader>
 						<div className="min-h-0 flex-1 overflow-auto p-2">
 							<TextEditor
@@ -722,14 +769,18 @@ export function SettingsInspector({
 								editable={canEdit}
 								isMarkdown
 								initialContent={
-									longDescDraft || t('noDetailedDescriptionAvailable', '*No detailed description available.*')
+									longDescDraft ||
+									t(
+										"noDetailedDescriptionAvailable",
+										"*No detailed description available.*",
+									)
 								}
 								onChange={(content: string) => setLongDescDraft(content)}
 							/>
 						</div>
 						<div className="flex justify-end gap-2">
 							<Button variant="outline" onClick={() => setLongDescOpen(false)}>
-								{t('cancel', 'Cancel')}
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button
 								onClick={() => {
@@ -742,7 +793,7 @@ export function SettingsInspector({
 									setLongDescOpen(false);
 								}}
 							>
-								{t('done', 'Done')}
+								{t("done", "Done")}
 							</Button>
 						</div>
 					</DialogContent>

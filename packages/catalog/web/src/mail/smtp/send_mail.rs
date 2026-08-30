@@ -38,6 +38,8 @@ impl NodeLogic for SmtpSendMailNode {
             "Sends an email via SMTP using a cached connection",
             "Email/SMTP",
         );
+        node.set_flowscript_name("smtp", "send");
+        node.set_receiver("connection");
         node.add_icon("/flow/icons/mail.svg");
 
         node.add_input_pin("exec_in", "In", "Trigger", VariableType::Execution);
@@ -222,6 +224,7 @@ impl NodeLogic for SmtpSendMailNode {
 }
 
 #[cfg(feature = "execute")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_rfc5322_message_send(
     from: &str,
     to: &str,

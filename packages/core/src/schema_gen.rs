@@ -12,7 +12,10 @@ use crate::{
                 comments::{
                     remove_comment::RemoveCommentCommand, upsert_comment::UpsertCommentCommand,
                 },
-                layer::{remove_layer::RemoveLayerCommand, upsert_layer::UpsertLayerCommand},
+                layer::{
+                    move_to_layer::MoveToLayerCommand, remove_layer::RemoveLayerCommand,
+                    upsert_layer::UpsertLayerCommand,
+                },
                 nodes::{
                     add_node::AddNodeCommand, copy_paste::CopyPasteCommand,
                     move_node::MoveNodeCommand, remove_node::RemoveNodeCommand,
@@ -158,6 +161,10 @@ pub fn generate_schema(base_path: PathBuf) -> flow_like_types::Result<()> {
     generate_and_save_schema::<RemoveLayerCommand>(
         &base_path,
         "flow/board/commands/remove-layer.json",
+    )?;
+    generate_and_save_schema::<MoveToLayerCommand>(
+        &base_path,
+        "flow/board/commands/move-to-layer.json",
     )?;
     generate_and_save_schema::<Node>(&base_path, "flow/node.json")?;
     generate_and_save_schema::<Pin>(&base_path, "flow/pin.json")?;

@@ -23,7 +23,9 @@ import {
 	type IUserTemplateInfo,
 	type IUserUpdate,
 	type IUserWidgetInfo,
+	chunkLookupIds,
 	isLocalUserSub,
+	partitionLookupIds,
 	userLookupFromClaims,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
@@ -218,27 +220,64 @@ export class UserState implements IUserState {
 
 		return result;
 	}
+
+	/**
+	 * Runs unattended behind every table that shows a user column, so it refuses
+	 * to reach the hub without a token rather than spraying 401s and silent
+	 * renew attempts at a session that does not exist.
+	 */
+	async lookupUsers(userIds: string[]): Promise<IUserLookup[]> {
+		const { subs, local } = partitionLookupIds(userIds);
+		const resolved: IUserLookup[] = local
+			? [await this.lookupCurrentUser()]
+			: [];
+
+		if (subs.length === 0) return resolved;
+
+		if (!this.backend.profile || !this.hasRemoteAccessToken()) {
+			throw new Error("The user directory is unavailable while signed out");
+		}
+
+		const profile = this.backend.profile;
+		const auth = this.backend.auth;
+		const batches = await Promise.all(
+			chunkLookupIds(subs).map((chunk) =>
+				fetcher<IUserLookup[]>(
+					profile,
+					"user/lookup",
+					{
+						method: "POST",
+						body: JSON.stringify({ user_ids: chunk }),
+					},
+					auth,
+				),
+			),
+		);
+
+		for (const batch of batches) resolved.push(...(batch ?? []));
+		return resolved;
+	}
+	/**
+	 * Throws on failure on purpose: swallowing the error here renders a broken
+	 * lookup as an empty directory, which is indistinguishable from "nobody
+	 * matched" and hides outages from whoever is trying to invite someone.
+	 */
 	async searchUsers(query: string): Promise<IUserLookup[]> {
 		const trimmed = query.trim();
 		if (!trimmed || !this.backend.profile || !this.backend.auth) {
 			return [];
 		}
 
-		try {
-			const result = await fetcher<IUserLookup[]>(
-				this.backend.profile,
-				`user/search/${encodeURIComponent(trimmed)}`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
-			);
+		const result = await fetcher<IUserLookup[]>(
+			this.backend.profile,
+			`user/search/${encodeURIComponent(trimmed)}`,
+			{
+				method: "GET",
+			},
+			this.backend.auth,
+		);
 
-			return result ?? [];
-		} catch (error) {
-			console.warn("[UserState.searchUsers] search failed:", error);
-			return [];
-		}
+		return result ?? [];
 	}
 	async getNotifications(): Promise<INotificationsOverview> {
 		// Get local notifications first (works offline)

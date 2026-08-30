@@ -1,3 +1,19 @@
+use agent::*
+use chat::*
+use control::*
+use datetime::*
+use db::*
+use df::*
+use files::*
+use hash::*
+use history::*
+use http::*
+use json::*
+use notify::*
+use random::*
+use string::*
+use ui::*
+
 interface Metadata {
     name: string;
     description: string;
@@ -159,28 +175,28 @@ interface Elements {
 const model: Bit   //@v:yk46jml001u7skgutqnlrk9o
 const rSSHistory: History = {"model":"","messages":[]}   //@v:lmzmqyvqjti36zw77tu7mx65
 @category("Prompts")
-const rSSPrompt: string = "# News Research Agent\n\nYou process an RSS feed for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Max 5 tool calls total.** Budget aggressively, skip aggressively.\n- **Recency: today or yesterday only.** Drop everything else, including no-date entries. Apply before anything else — feeds carry weeks of backlog.\n- **Only `add_news` for articles you fetched.** Never summarize from RSS metadata alone.\n\n## Workflow\nFor each RSS entry:\n1. **Triage from metadata** (title, snippet, date). Stale or clearly off-Goal → skip, no fetch.\n2. **Fetch** via `fetch_page(url)` only if plausibly relevant.\n3. **Judge** post-fetch: substantive AND on-Goal? Yes → `add_news(...)`. No → move on.\n\nBe strict. Marginal relevance ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- RSS feed: titles, URLs, dates\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."   //@v:ziohc37zlq7z24twjzpky9cu
+const rSSPrompt = "# News Research Agent\n\nYou process an RSS feed for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Max 5 tool calls total.** Budget aggressively, skip aggressively.\n- **Recency: today or yesterday only.** Drop everything else, including no-date entries. Apply before anything else — feeds carry weeks of backlog.\n- **Only `add_news` for articles you fetched.** Never summarize from RSS metadata alone.\n\n## Workflow\nFor each RSS entry:\n1. **Triage from metadata** (title, snippet, date). Stale or clearly off-Goal → skip, no fetch.\n2. **Fetch** via `fetch_page(url)` only if plausibly relevant.\n3. **Judge** post-fetch: substantive AND on-Goal? Yes → `add_news(...)`. No → move on.\n\nBe strict. Marginal relevance ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- RSS feed: titles, URLs, dates\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."   //@v:ziohc37zlq7z24twjzpky9cu
 @category("Report")
-const reportCreated: bool = false   //@v:gyvwb7nu9ys1gb62mqqrztqq
+const reportCreated = false   //@v:gyvwb7nu9ys1gb62mqqrztqq
 @category("Report")
 const reportDB: NodeDBConnection = {}   //@v:ir4w463805qo6a4u2dmn61ey
 @category("Report")
 const reportEntry: ReportEntry[] = []   //@v:v7p61m5vg0dzfv6wtax1u0dn
 @category("Report")
-const reportID: string = ""   //@v:d7vgym9gjahtnqglhaartgqi
+const reportID = ""   //@v:d7vgym9gjahtnqglhaartgqi
 const searchHistory: History = {"model":"","messages":[]}   //@v:coo9ubd3w8y2k9rokrdnlf30
 @category("Prompts")
-const searchPrompt: string = "# News Research Agent\n\nYou research a topic for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Recency: today or yesterday only.** Encode into every query (`after:YYYY-MM-DD`, `\"Month YYYY\"`). Discard anything not demonstrably recent. No visible date → skip.\n- **Only `add_news` for pages you fetched.** Never summarize from search snippets alone.\n- **Depth over breadth.** Three well-sourced detailed entries beat ten shallow ones.\n\n## Workflow\n\n### Phase 1 — Search\n1. Formulate 1–3 SearXNG queries covering different angles (latest developments, key actors, data/stats). Use operators where useful: `\"exact phrase\"`, `site:`, `after:`.\n2. Call `search(query)` for each. Scan titles, snippets, dates.\n3. Pick promising URLs. Prioritise primary sources (official statements, wire services, major outlets) over aggregators and opinion.\n\n### Phase 2 — Fetch & Evaluate\n4. `fetch_page(url)` on each candidate.\n5. Decide:\n   - Relevant + recent + substantive → `add_news(title, uri, summary, date)`\n   - Irrelevant, duplicate, stale → discard\n6. If coverage is thin after round 1, run one refined query and repeat. Stop there.\n\nBe strict on relevance — marginal ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- Topic: subject to research\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."   //@v:pwdiwvzi73el0jdax8pujm8r
+const searchPrompt = "# News Research Agent\n\nYou research a topic for a daily briefing pipeline. Your output feeds a downstream summarizer LLM — write for machines, not humans.\n\n## Hard constraints\n- **Recency: today or yesterday only.** Encode into every query (`after:YYYY-MM-DD`, `\"Month YYYY\"`). Discard anything not demonstrably recent. No visible date → skip.\n- **Only `add_news` for pages you fetched.** Never summarize from search snippets alone.\n- **Depth over breadth.** Three well-sourced detailed entries beat ten shallow ones.\n\n## Workflow\n\n### Phase 1 — Search\n1. Formulate 1–3 SearXNG queries covering different angles (latest developments, key actors, data/stats). Use operators where useful: `\"exact phrase\"`, `site:`, `after:`.\n2. Call `search(query)` for each. Scan titles, snippets, dates.\n3. Pick promising URLs. Prioritise primary sources (official statements, wire services, major outlets) over aggregators and opinion.\n\n### Phase 2 — Fetch & Evaluate\n4. `fetch_page(url)` on each candidate.\n5. Decide:\n   - Relevant + recent + substantive → `add_news(title, uri, summary, date)`\n   - Irrelevant, duplicate, stale → discard\n6. If coverage is thin after round 1, run one refined query and repeat. Stop there.\n\nBe strict on relevance — marginal ≠ relevant.\n\n## Summary spec\nDense factual prose, 10–20 lines, never under 8. No bullets, no filler, no headline restatement, no editorializing.\n\nInclude where present:\n- Numbers, %, prices, rankings, statistics\n- Named entities (people, companies, countries, products, legislation)\n- Dates and forward timeline (what's next, when)\n- Causal context (why it matters, what triggered it)\n- Opposing views or official responses\n- Explicitly flag data series / comparisons suitable for charting\n\n## Inputs\n- Topic: subject to research\n- Goal: user's interests and relevance criteria\n\n## Output\n`add_news` calls only. No prose, no status, no recap."   //@v:pwdiwvzi73el0jdax8pujm8r
 const userConfiguration: UserConfiguration = {"general":{},"sources":[]}   //@v:n91xko12lf9i41ldu2pc6xul
 
 function filterSources(hash: string) {   //@l:hoi8axwhzf5rsnqd7f5fadcf
     let elements: Elements[] = []   //@v:a1oam4lr08evh4en1l0uiu6b
     elements = []   //@n:jogjrym9t2ckqc7lefcn1lrw
-    for (const forEach3 of controlForEach({ array: userConfiguration.sources })) {   //@n:oeymidn9082x3mm0lktcdg4y
-        const mD5Hash = utilsHashMd5({ input: forEach3.value.content })   //@n:f4ke1z1vfuzkjnwo29xvghxy
-        if (hash != mD5Hash.hash) {   //@n:sv415xl87fy0awvlpif045dh
-            const push3 = arrayPush({ arrayIn: elements, value: forEach3.value })   //@n:oq8idmw577alcusz7tt73f2d
-            elements = push3.arrayOut   //@n:mo4qljck5gzmy7dnhjjz8oaz
+    for (const item3 of userConfiguration.sources) {   //@n:oeymidn9082x3mm0lktcdg4y
+        const hash2 = md5({ input: item3.content })   //@n:f4ke1z1vfuzkjnwo29xvghxy
+        if (hash != hash2) {   //@n:sv415xl87fy0awvlpif045dh
+            const arrayOut3 = elements.push(item3)   //@n:oq8idmw577alcusz7tt73f2d
+            elements = arrayOut3   //@n:mo4qljck5gzmy7dnhjjz8oaz
         }
     }
     userConfiguration = { general: userConfiguration.general, sources: elements }   //@n:tlxjl6e7jyy2qmfeiz62rqo4
@@ -188,97 +204,94 @@ function filterSources(hash: string) {   //@l:hoi8axwhzf5rsnqd7f5fadcf
 
 function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
     let label: string = ""   //@v:sj4lpjo88va0ib4kt5bvsoxe
-    logInfo({ message: source, toast: false })   //@n:kmnq9axj91191hj4dhri2kn0
+    log::info({ message: source, toast: false })   //@n:kmnq9axj91191hj4dhri2kn0
     label = source.label   //@n:vmsn1tvdsgy5awzat1onblqk
     if (source.type == "Search") {   //@n:yp9yatv5kw64ialzmx14g0lz
-        const pushMessage3 = aiGenerativeAddHistoryMessage({ history: searchHistory, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}", goal: source.goal, label: source.label, query: source.content }) }) })   //@n:m61srpwfgpw0e3b3jgt2yahv
-        const invokeAgent2 = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [search, fetchPage] }), history: pushMessage3.historyOut })   //@n:ipq19pcofpgvjfneot279qfq
-        eventsChatPushStat({ stepName: source.label, stat: invokeAgent2.stats })   //@n:p9iba145p9uamrftvnhk0eel
+        const historyOut3 = searchHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nSearch for: {Query}\nGoal: {Goal}".format({ goal: source.goal, label: source.label, query: source.content }) }))   //@n:m61srpwfgpw0e3b3jgt2yahv
+        const { stats: stats2 } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [search, fetchPage] }).invoke(historyOut3)   //@n:ipq19pcofpgvjfneot279qfq
+        pushStat({ stepName: source.label, stat: stats2 })   //@n:p9iba145p9uamrftvnhk0eel
     } else {
-        const aPICall2 = httpFetch({ request: httpMakeRequest({ method: "GET", url: (source.type == "Reddit") ? stringFormat({ formatString: "https://www.reddit.com/{subreddit}/.rss?limit=30", subreddit: source.content }) : (stringContains({ string: source.content, substring: "?" }) ? stringFormat({ formatString: "{url}&limit=30", url: source.content }) : stringFormat({ formatString: "{url}?limit=30", url: source.content })) }) })   //@n:nzij3qvr1wfrjc9htrlxa2cn
-        const toText2 = httpResponseToText({ response: aPICall2.response })   //@n:qd4o2qqa0hu8ce5juxzq4zk6
-        const pushMessage = aiGenerativeAddHistoryMessage({ history: rSSHistory, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n", goal: source.goal, label: source.label, feed: toText2.text }) }) })   //@n:ceatqefijmyfzvfb59ninb6h
-        const invokeAgent = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [fetchPage, addNews] }), history: pushMessage.historyOut })   //@n:e8uj88d24q9xipxgczs1ktio
-        eventsChatPushStat({ stepName: source.label, stat: invokeAgent.stats })   //@n:i21zjcs446mtx5m26ae2mvpu
+        const response = request({ method: "GET", url: (source.type == "Reddit") ? "https://www.reddit.com/{subreddit}/.rss?limit=30".format({ subreddit: source.content }) : (contains({ string: source.content, substring: "?" }) ? "{url}&limit=30".format({ url: source.content }) : "{url}?limit=30".format({ url: source.content })) }).fetch()   //@n:nzij3qvr1wfrjc9htrlxa2cn
+        const text2 = response.toText()   //@n:qd4o2qqa0hu8ce5juxzq4zk6
+        const historyOut = rSSHistory.addMessage(makeMessage({ role: "User", type: "Text", text: "Topic {label}\nGoal: {Goal}\n\n## Feed\n{feed}\n".format({ goal: source.goal, label: source.label, feed: text2 }) }))   //@n:ceatqefijmyfzvfb59ninb6h
+        const { stats } = fromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [fetchPage, addNews] }).invoke(historyOut)   //@n:e8uj88d24q9xipxgczs1ktio
+        pushStat({ stepName: source.label, stat: stats })   //@n:i21zjcs446mtx5m26ae2mvpu
     }
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
-        const push2 = arrayPush({ arrayIn: reportEntry, value: { title: title, uri: uri, summary: summary, interest: label, date: date, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
-        reportEntry = push2.arrayOut   //@n:l2fh63vjftwrfgsrqmzlcl0y
-        return stringFormat({ formatString: "Successfully Added" })   //@n:ia430e904bgj81jzpeh2plyf
+        const arrayOut2 = reportEntry.push({ value: { title: title, uri: uri, summary: summary, interest: label, date: date, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
+        reportEntry = arrayOut2   //@n:l2fh63vjftwrfgsrqmzlcl0y
+        return `Successfully Added`   //@n:ia430e904bgj81jzpeh2plyf
     }
     eventsGeneric fetchPage(url: string, payload: Struct) {   //@n:owypi2kzuovvg7cnelos4uvi
-        eventsChatPushStep({ title: "Reading Website", description: url })   //@n:ow3fh5re5xfh3pb00zcxg6xt
-        const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })   //@n:det2l9brnyojanawng1zvj6x
+        pushStep({ title: "Reading Website", description: url })   //@n:ow3fh5re5xfh3pb00zcxg6xt
+        const aPICall = request({ method: "GET", url: url }).fetch()   //@n:det2l9brnyojanawng1zvj6x
         aPICall {
             execSuccess: {
-                const toText = httpResponseToText({ response: aPICall.response })   //@n:idbdkfu6b8jq6eovcn9fqgw0
-                const hTMLToMarkdown = utilsMdHtmlToMd({ html: toText.text, skippedTags: ["script","style","iframe"] })   //@n:b10najenij7p74aebpgfb107
-                return hTMLToMarkdown.markdown   //@n:rl6l97y8l3h2yjo7j8cnr0rq
+                const text = aPICall.response.toText()   //@n:idbdkfu6b8jq6eovcn9fqgw0
+                const markdown = md::fromHtml({ html: text, skippedTags: ["script","style","iframe"] })   //@n:b10najenij7p74aebpgfb107
+                return markdown   //@n:rl6l97y8l3h2yjo7j8cnr0rq
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO FETCH WEBSITE - SKIP" })   //@n:l1wdbhzhzgn9r5m077l6q08s
+                return `FAILED TO FETCH WEBSITE - SKIP`   //@n:l1wdbhzhzgn9r5m077l6q08s
             }
         }
     }
     eventsGeneric search(query: string, language: string, page: int, payload: Struct) {   //@n:fod9pjzyu28a3lj4s6y67yhf
-        eventsChatPushStep({ title: "Searching Internet", description: query })   //@n:ug86onmkffwjavx5kmmxwgtu
-        const aPICall3 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })   //@n:yvrx5rql2ap186ojffngs067
+        pushStep({ title: "Searching Internet", description: query })   //@n:ug86onmkffwjavx5kmmxwgtu
+        const aPICall3 = request({ method: "GET", url: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}".format({ page: page.fallback(1).result, lang: language.fallback("en-US").result, q: urlEncode({ input: query }) }) }).fetch()   //@n:yvrx5rql2ap186ojffngs067
         aPICall3 {
             execSuccess: {
-                const toStruct = httpResponseToJson({ response: aPICall3.response })   //@n:b6adf2qe4yg3ejon9sigwm0i
-                return toStruct.struct   //@n:xyos4tlvpfkx2wfhhytxorop
+                const struct2 = aPICall3.response.toJson()   //@n:b6adf2qe4yg3ejon9sigwm0i
+                return struct2   //@n:xyos4tlvpfkx2wfhhytxorop
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO SEARCH" })   //@n:rai8yzp15h79lazn2kji06gp
+                return `FAILED TO SEARCH`   //@n:rai8yzp15h79lazn2kji06gp
             }
         }
     }
 }
 
 function saveConfig(config: Struct) {   //@l:ssdi5toh4f9nza4w0a35p3rt
-    writeString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }), content: valToString({ value: config, pretty: true }) })   //@n:h140ef1az7ofufnf2flso6du
+    userDir({ nodeScope: false }).child("config.json").writeString(stringify({ value: config, pretty: true }))   //@n:h140ef1az7ofufnf2flso6du
 }
 
 eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
-    const openDatabase2 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
-    const createDataFusionSession2 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
-    dfRegisterLance({ session: createDataFusionSession2.session, database: openDatabase2.database, tableName: "reports" })   //@n:hiopuc2c1i4f3gvgzfpjmygn
-    const sQLQuery2 = dfSqlQuery({ session: createDataFusionSession2.session, query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })   //@n:u62nc1zm4i39z61uv1gpea8c
-    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: sQLQuery2.rows[0].report_id }) })   //@n:kngou6wcb3yk0b89zop3bbl0
-}
-
-variableSet setReportCreated(valueRef: bool) {   //@n:pwyjqi9tgqajltsx4hsjhmlk
+    const database2 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
+    const session2 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
+    session2.registerLance({ database: database2, tableName: "reports" })   //@n:hiopuc2c1i4f3gvgzfpjmygn
+    const { rows: rows2 } = session2.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 1;" })   //@n:u62nc1zm4i39z61uv1gpea8c
+    navigateTo({ route: "/briefing?report_id={id}".format({ id: rows2[0].report_id }) })   //@n:kngou6wcb3yk0b89zop3bbl0
 }
 
 eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
-    const openDatabase = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
-    const createDataFusionSession = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
-    dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase.database, tableName: "reports" })   //@n:n6dh9c7lm3xi6l2abxmf36ik
-    const sQLQuery3 = dfSqlQuery({ session: createDataFusionSession.session, query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })   //@n:xt3at38ofd71hzdw2spsjftu
-    a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: sQLQuery3.rows.length }) })   //@n:nfurt08eliw4h6jl9oz6vb8q
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: sQLQuery3.rows[0].title })   //@n:szjhznefdjy7k5pw7fpzftgb
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: sQLQuery3.rows[0].description })   //@n:q62hurliutk42ygbn3c6dh5l
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: utilsDatetimeFormat({ date: sQLQuery3.rows[0].created, format: "%A, %B %-d, %Y" }) })   //@n:lvfexsdysfpcipkhxgzwmkyk
-    const now4 = utilsDatetimeNow()   //@n:xv4ih0xfvry8j90a0lhbr0te
-    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: utilsDatetimeFormat({ date: now4.date, format: "%A, %B %-d, %Y" }) })   //@n:ccesyi9dsgwrngkz6xw00sib
-    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })   //@n:wwwbru83ooqgwier1j533qdl
-    for (const forEach2 of controlForEach({ array: sQLQuery3.rows })) {   //@n:mdaixcpu3wdlq45ra56uu0qo
-        if (forEach2.index > 0) {   //@n:ottdsy7nj4w6v0xw1d7lk79z
-            const instantiateReport = a2uiInstantiateWidget({ widgetSelector: "Report", instanceId: forEach2.value.report_id, dynPathDate: utilsDatetimeFormat({ date: forEach2.value.created, format: "%A, %B %-d, %Y" }), dynPathSummary: forEach2.value.description, dynPathTitle: forEach2.value.title, fnRefs: [widgetActionEvent2] })   //@n:dp0o5wfagxzaz0trwmemw3uu
-            a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: instantiateReport.elementRef, position: -1 })   //@n:dkkd7mm8ti115zvm66t1349w
+    const database = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
+    const session = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
+    session.registerLance({ database: database, tableName: "reports" })   //@n:n6dh9c7lm3xi6l2abxmf36ik
+    const { rows: rows3 } = session.sqlQuery({ query: "SELECT\n  report_id,\n  title,\n  description,\n  report,\n  created\nFROM reports\nORDER BY to_timestamp(created) DESC\nLIMIT 25;" })   //@n:xt3at38ofd71hzdw2spsjftu
+    setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/subline-right", text: "{num} Briefing(s)".format({ num: rows3.length }) })   //@n:nfurt08eliw4h6jl9oz6vb8q
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-title", text: rows3[0].title })   //@n:szjhznefdjy7k5pw7fpzftgb
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-markdown", text: rows3[0].description })   //@n:q62hurliutk42ygbn3c6dh5l
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/latest-date", text: format({ date: rows3[0].created, format: "%A, %B %-d, %Y" }) })   //@n:lvfexsdysfpcipkhxgzwmkyk
+    const date5 = now()   //@n:xv4ih0xfvry8j90a0lhbr0te
+    setElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/generated-date", text: date5.format("%A, %B %-d, %Y") })   //@n:ccesyi9dsgwrngkz6xw00sib
+    clearChildren({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })   //@n:wwwbru83ooqgwier1j533qdl
+    for (const [index, item2] of rows3) {   //@n:mdaixcpu3wdlq45ra56uu0qo
+        if (index > 0) {   //@n:ottdsy7nj4w6v0xw1d7lk79z
+            const elementRef2 = instantiateWidget({ widgetSelector: "Report", instanceId: item2.report_id, dynPathDate: format({ date: item2.created, format: "%A, %B %-d, %Y" }), dynPathSummary: item2.description, dynPathTitle: item2.title, fnRefs: [widgetActionEvent2] })   //@n:dp0o5wfagxzaz0trwmemw3uu
+            pushToContainer({ containerRef: getElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: elementRef2, position: -1 })   //@n:dkkd7mm8ti115zvm66t1349w
         }
     }
-    a2uiShowScreen()   //@n:tuaeuvu02xlcd81hbhx320n9
+    showScreen()   //@n:tuaeuvu02xlcd81hbhx320n9
 }
 
 eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:pdcl5guw4gvgulosa65xi0hf
-    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })   //@n:li2clmb381ynjcwv12igz58y
+    navigateTo({ route: "/briefing?report_id={id}".format({ id: widgetInstanceId }) })   //@n:li2clmb381ynjcwv12igz58y
 }
 
 eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
-    if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists   //@n:c3yjqmja8bew8bt8qov3o4m9
-        const readToString = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })   //@n:gs15p43h9q8ij93r0yiy75ae
-        userConfiguration = valFromString({ string: readToString.content })   //@n:g9y2k569dbrivxfc15r7d95v
+    if (exists({ path: userDir({ nodeScope: false }).child("config.json") })) { // exec_out_exists   //@n:c3yjqmja8bew8bt8qov3o4m9
+        const content = userDir({ nodeScope: false }).child("config.json").readToString()   //@n:gs15p43h9q8ij93r0yiy75ae
+        userConfiguration = parse({ string: content })   //@n:g9y2k569dbrivxfc15r7d95v
     } else { // exec_out_missing
         userConfiguration = { general: { arXiv: false, hn: false, news: false }, sources: [] }   //@n:lkfs3rjbb1l0r2wpsruh0i9z
         saveConfig({ config: userConfiguration })   //@n:ewuqxwurtrv2qsyo8sh4k1u8
@@ -286,103 +299,108 @@ eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
 }
 
 eventsSimple generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
-    const findModel = aiGenerativeFindModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
-    model = findModel.model   //@n:y563bdthcxcs4hkac7wp12bn
-    const cUIDV22 = cuid()   //@n:o1ortq2qc4bky6lvb90iekj0
-    reportID = cUIDV22.cuid   //@n:nn1g4pqsadqum4yr0ah8hp0i
-    const openDatabase3 = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:q9efkxbqdi6u04rqncnqaoyf
-    reportDB = openDatabase3.database   //@n:x29mzdl1orralbroofrfabih
+    const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
+    model = model2   //@n:y563bdthcxcs4hkac7wp12bn
+    const cuid3 = cuid()   //@n:o1ortq2qc4bky6lvb90iekj0
+    reportID = cuid3   //@n:nn1g4pqsadqum4yr0ah8hp0i
+    const database3 = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:q9efkxbqdi6u04rqncnqaoyf
+    reportDB = database3   //@n:x29mzdl1orralbroofrfabih
     loadConfig()   //@n:w12o6fz0k2xco3pe3jalmaty
-    const now = utilsDatetimeNow()   //@n:bmb70c0rnoa7fisa0ti9mv5g
-    const setSystemMessage2 = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: stringFormat({ formatString: "{prompt}\n\nTODAY: {today}", prompt: rSSPrompt, today: now.date }) })   //@n:uow7mjbghdvwiclhahtm27ys
-    rSSHistory = setSystemMessage2.historyOut   //@n:es62kvohohwa4569k9sj8nol
-    const setSystemMessage = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: stringFormat({ formatString: "{prompt}\n\nTODAY: {today}", prompt: searchPrompt, today: now.date }) })   //@n:osipofe4ux5vg2a9r3491yjv
-    searchHistory = setSystemMessage.historyOut   //@n:hd7t7qimvpmvog8wyk4ro0lz
-    const now3 = utilsDatetimeNow()   //@n:o6o3eahhw1y22r2xys4cekxj
-    for (const parallelForEach of controlParForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {   //@n:mg9afo8j3iouifkp4f204jbe
-        perpareNews({ source: parallelForEach.value })   //@n:s8kbh3fipnmzdvg77v3i56f4
+    const date2 = now()   //@n:bmb70c0rnoa7fisa0ti9mv5g
+    const historyOut5 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: rSSPrompt, today: date2 }))   //@n:uow7mjbghdvwiclhahtm27ys
+    rSSHistory = historyOut5   //@n:es62kvohohwa4569k9sj8nol
+    const historyOut4 = make({ modelName: "" }).setSystemPrompt("{prompt}\n\nTODAY: {today}".format({ prompt: searchPrompt, today: date2 }))   //@n:osipofe4ux5vg2a9r3491yjv
+    searchHistory = historyOut4   //@n:hd7t7qimvpmvog8wyk4ro0lz
+    const date4 = now()   //@n:o6o3eahhw1y22r2xys4cekxj
+    for (const parallelForEach2 of parallelForEach({ array: userConfiguration.sources, maxConcurrent: 15 })) {   //@n:mg9afo8j3iouifkp4f204jbe
+        perpareNews({ source: parallelForEach2.value })   //@n:s8kbh3fipnmzdvg77v3i56f4
     }
-    batchInsertLocalDb({ database: reportDB, value: reportEntry })   //@n:bmxguigo7uebsql0qmjbee3w
-    const setSystemMessage3 = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: "You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section" })   //@n:wja9hj3m4cj3akx299qv0l1j
-    const pushMessage2 = aiGenerativeAddHistoryMessage({ history: setSystemMessage3.historyOut, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: stringFormat({ formatString: "## News\n{news}\n\nToday: {today}", news: reportEntry, today: now3.date }) }) })   //@n:cnjm7p8qvitw1uujn0m77swz
-    const invokeAgent3 = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }), tools: [writeReport] }), history: pushMessage2.historyOut })   //@n:xmkaaite5b89sqjmm76rm9bs
-    eventsChatPushStat({ stepName: "Briefing", stat: invokeAgent3.stats })   //@n:wpz4z5uik2f28nf4ymlw8wcn
+    reportDB.batchInsert(reportEntry)   //@n:bmxguigo7uebsql0qmjbee3w
+    const historyOut6 = make({ modelName: "" }).setSystemPrompt("You are a professional news analyst delivering concise, high-signal morning briefings.\n\n## Your Task\nGiven a set of news articles, produce a structured morning briefing in markdown. Call `write_report` exactly once with the complete report and a short non MD summary — no other output.\n\n---\n\n## Report Structure\n\n### 1. 🗞️ Morning Briefing — {Today's Date}\n*One-sentence framing of the day's overall news landscape.*\n\n---\n\n### 2. Executive Summary\n3–5 bullet points covering the most critical developments. Each bullet is one crisp, specific sentence — names, numbers, stakes. A busy executive should need nothing else.\n\n---\n\n### 3. In-Depth Briefing\nOne section per major story or theme. Group thematically when articles overlap.\n\nFor each story:\n\n**### [Descriptive Headline]**\n\n2–4 sentences of context and significance. Be specific — named actors, concrete numbers, clear causality. Note conflicting viewpoints or official responses where reported.\n\nIf the article has a thumbnail or lead image, embed it: `![Alt text](image_url)`\n*(Source: [Publication Name](article_url))*\n\n> If quantitative data is present, embed a chart here — see Chart Rules below.\n\n---\n\n### 4. What to Watch\n2–3 forward-looking bullets on upcoming decisions, deadlines, or developments flagged in the articles. Include dates where known.\n\n---\n\n## Linking Rules — Mandatory\n\n- Every source reference must be a real, working markdown hyperlink: `[Publication Name](url)`\n- Inline hyperlinks are encouraged wherever you reference a named entity, report, or dataset that has a URL in the source material\n- Never write a bare URL — always use anchor text\n- Do not omit sources to save space\n\n---\n\n## Image Rules\n\n- If an article's source metadata includes a thumbnail, hero image, or og:image URL, embed it at the top of that story's section using `![descriptive alt text](url)`\n- Only embed images that are direct asset URLs (ending in `.jpg`, `.png`, `.webp`, `.gif`, or clearly an image CDN path) — skip tracking pixels, icons, or ambiguous URLs\n- One image per story maximum; skip if no clean URL is available\n\n---\n\n## Chart Rules\n\nCharts are a key part of this briefing. Be proactive — if numbers exist in the articles, find a way to visualize them.\n\n**Actively look for chart opportunities in:**\n- Any percentage changes, growth rates, or year-over-year comparisons\n- Price or index movements over time\n- Rankings, market share, or survey results\n- Multi-country or multi-company comparisons\n- Budget figures, trade volumes, or economic indicators\n\n**The bar for inclusion is low: if the data makes a point more clearly as a chart than as prose, use a chart.**\n\nNever fabricate or estimate data — only chart figures explicitly stated in the source articles.\n\n**When a chart is used:**\n- Place it inline within the relevant story section, directly after the prose it illustrates\n- Introduce it with one sentence explaining what the data shows and why it matters\n- Follow it with one sentence interpreting the most important pattern visible\n- Never drop a chart without this surrounding context sandwich\n\n### Nivo (preferred for most charts)\n```nivo\ntype: bar|line|pie|radar|heatmap|scatter|funnel|treemap|sunburst|waffle|radialBar|bump|areaBump\ntitle: Chart Title\ncolors: paired|nivo|category10|accent|dark2|set1|set2|set3|pastel1|pastel2|spectral\nheight: 300\nshowLegend: true\nstacked: false\nlayout: vertical|horizontal\n---\ncol1,col2,col3\nval1,val2,val3\n```\n\n### Plotly (for statistical or multi-trace charts)\n```plotly\ntype: bar|line|scatter|pie\ntitle: Chart Title\n---\ncol1,col2\nval1,val2\n```\n\n---\n\n## Style Rules\n- Tone: calm, authoritative, neutral — no sensationalism, but not sterile either\n- Be specific: names, numbers, dates always beat vague generalities\n- Sentence variety: mix short punchy statements with longer contextual ones\n- Length scales with article volume — substance over padding, but don't truncate important stories\n- A good briefing has rhythm: a reader should want to continue to the next section")   //@n:wja9hj3m4cj3akx299qv0l1j
+    const historyOut2 = historyOut6.addMessage(makeMessage({ role: "User", type: "Text", text: "## News\n{news}\n\nToday: {today}".format({ news: reportEntry, today: date4 }) }))   //@n:cnjm7p8qvitw1uujn0m77swz
+    const { stats: stats3 } = fromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [writeReport] }).invoke(historyOut2)   //@n:xmkaaite5b89sqjmm76rm9bs
+    pushStat({ stepName: "Briefing", stat: stats3 })   //@n:wpz4z5uik2f28nf4ymlw8wcn
 }
 
 eventsSimple simpleEvent() {   //@n:vnb84qc8e5e3sfz2oe0ltwo7
-    notifyUser({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })   //@n:m10ar7n0ln7ga6xvd4kid7ln
+    user({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })   //@n:m10ar7n0ln7ga6xvd4kid7ln
 }
 
 eventsSimple setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     loadConfig()   //@n:x2zjntfxkcmuozxqjg17s7mw
-    const push = arrayPush({ arrayIn: userConfiguration.sources, value: { label: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })   //@n:aabbfwmtsy6qwe4in41kp9b5
-    userConfiguration = { general: userConfiguration.general, sources: push.arrayOut }   //@n:zrz69ge5y0gc7yoxf4pggnza
+    const arrayOut = array::push({ arrayIn: userConfiguration.sources, value: { label: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (startsWith({ string: getElementValue({ elementRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })   //@n:aabbfwmtsy6qwe4in41kp9b5
+    userConfiguration = { general: userConfiguration.general, sources: arrayOut }   //@n:zrz69ge5y0gc7yoxf4pggnza
     saveConfig({ config: userConfiguration })   //@n:dolfpjyy08hukrzkfy56t4yi
     loadConfigDashboard()   //@n:flak8id73uvvv8rtoq9rqvi3
 }
 
 eventsSimple loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
-    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })   //@n:ub0bgb5wpynm6yr5jipyfr6q
+    clearChildren({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })   //@n:ub0bgb5wpynm6yr5jipyfr6q
     loadConfig()   //@n:yu47nfi83y7o1gw30y43kx40
-    for (const forEach4 of controlForEach({ array: userConfiguration.sources })) {   //@n:xy143hbqc8n42y6oj5fitzbz
-        const mD5Hash2 = utilsHashMd5({ input: forEach4.value.content })   //@n:v78kxflsekh1el3nmo4t2lpt
-        const instantiateConfigElement = a2uiInstantiateWidget({ widgetSelector: "Config Element", instanceId: mD5Hash2.hash, dynPathTitle: forEach4.value.label, dynPathDescription: forEach4.value.content, dynPathLabel: forEach4.value.type, fnRefs: [widgetActionEvent] })   //@n:ai58ul4gl4bgfvtyiq3fmxbw
-        a2uiPushChild({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: instantiateConfigElement.elementRef })   //@n:eurx9h0tte19xbi7vgutysak
+    for (const item4 of userConfiguration.sources) {   //@n:xy143hbqc8n42y6oj5fitzbz
+        const hash3 = md5({ input: item4.content })   //@n:v78kxflsekh1el3nmo4t2lpt
+        const elementRef = instantiateWidget({ widgetSelector: "Config Element", instanceId: hash3, dynPathTitle: item4.label, dynPathDescription: item4.content, dynPathLabel: item4.type, fnRefs: [widgetActionEvent] })   //@n:ai58ul4gl4bgfvtyiq3fmxbw
+        pushChild({ containerRef: getElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element, childRef: elementRef })   //@n:eurx9h0tte19xbi7vgutysak
     }
 }
 
 eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
-    const getQueryParams = a2uiGetQueryParams({ paramName: "report_id" })   //@n:b1nflz22aqijhrfjcflily63
-    if (getQueryParams.exists) {   //@n:mpv7ra68y2rhmvi7nbkb6oim
-        if (controlParExecution({ threadModel: "tasks" })) { // exec_out   //@n:eobh50rj59v0xo70mlc7o7mp
-            const openDatabase4 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:r4e5rd12y3q9739ekqnrczb4
-            const sQLFilterDatabase = filterLocalDb({ database: openDatabase4.database, filter: stringFormat({ formatString: "`report_id` = '{id}'", id: getQueryParams.value }), limit: 10, offset: 0 })   //@n:uw95hamks43awllq55e8xpgx
-            if (arrayGet({ arrayIn: sQLFilterDatabase.values, index: 0 }).success) {   //@n:zlg546ynwdwucsqgt23tv2b0
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: sQLFilterDatabase.values[0].report_id })   //@n:bul42ywazmy0ttpm60vjvw8f
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: utilsDatetimeFormat({ date: sQLFilterDatabase.values[0].created, format: "%A, %B %-d, %Y" }) })   //@n:ryzpm49zr5pwim8t3xi5lb22
-                a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/content", text: sQLFilterDatabase.values[0].report })   //@n:olae86kpbj27yr3sm8d8e4ct
-                a2uiShowScreen()   //@n:fywor45qu7yb6thfsszzf2zw
+    const { value, exists: exists2 } = getQueryParam({ paramName: "report_id" })   //@n:b1nflz22aqijhrfjcflily63
+    if (exists2) {   //@n:mpv7ra68y2rhmvi7nbkb6oim
+        if (parallel({ threadModel: "tasks" })) { // exec_out   //@n:eobh50rj59v0xo70mlc7o7mp
+            const database4 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:r4e5rd12y3q9739ekqnrczb4
+            const values = database4.filter({ filter: "`report_id` = '{id}'".format({ id: value }), limit: 10, offset: 0 })   //@n:uw95hamks43awllq55e8xpgx
+            if (values.get(0).success) {   //@n:zlg546ynwdwucsqgt23tv2b0
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/issue-text", text: values[0].report_id })   //@n:bul42ywazmy0ttpm60vjvw8f
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/briefing-date-top", text: format({ date: values[0].created, format: "%A, %B %-d, %Y" }) })   //@n:ryzpm49zr5pwim8t3xi5lb22
+                setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/content", text: values[0].report })   //@n:olae86kpbj27yr3sm8d8e4ct
+                showScreen()   //@n:fywor45qu7yb6thfsszzf2zw
             }
         } else { // exec_out[#2]
-            a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })   //@n:i3pijb894g70u3iiiqlr4d3h
-            const openDatabase5 = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:r4uu3hszndilivnipjor4xbt
-            const createDataFusionSession3 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:k0ii91rv27455pb7tpjzfqax
-            dfRegisterLance({ session: createDataFusionSession3.session, database: openDatabase5.database, tableName: "reports" })   //@n:ynbydo8tsnjpk5z0mo4lty48
-            const sQLQuery = dfSqlQuery({ session: createDataFusionSession3.session, query: stringFormat({ formatString: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;", id: getQueryParams.value }) })   //@n:dpukvyi7s2i8814rznrdjspo
-            a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: stringFormat({ formatString: "{cnt} Stories", cnt: sQLQuery.rowCount }) })   //@n:j65crp36fsk937g3d3gc11u1
-            for (const forEach of controlForEach({ array: sQLQuery.rows })) {   //@n:kww9p0cl3ajziwoef49qi5hp
-                const cUIDV2 = cuid()   //@n:h4ebqjzraxsrp40pahtazohg
-                const instantiateArticle = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: cUIDV2.cuid, dynPathDate: (stringLength({ string: forEach.value.date }) > 10) ? utilsDatetimeFormat({ date: utilsTypesTryTransform({ typeIn: forEach.value.date }).typeOut, format: "%B %-d, %Y" }) : forEach.value.date, dynPathSummary: forEach.value.summary, dynPathTitle: forEach.value.title, dynPathInterest: forEach.value.interest })   //@n:nprn90lsy7kb0eigzv068ogy
-                a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: instantiateArticle.elementRef, position: -1 })   //@n:fw3bozmoj4gcjksjuqe7ec79
+            clearChildren({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })   //@n:i3pijb894g70u3iiiqlr4d3h
+            const database5 = open({ name: "reports", userScoped: true, batchSize: 1000 })   //@n:r4uu3hszndilivnipjor4xbt
+            const session3 = createSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:k0ii91rv27455pb7tpjzfqax
+            session3.registerLance({ database: database5, tableName: "reports" })   //@n:ynbydo8tsnjpk5z0mo4lty48
+            const { rows, rowCount } = session3.sqlQuery({ query: "SELECT\n  date,\n  report_id,\n  summary,\n  title,\n  uri\nFROM reports\nWHERE report_id = '{id}'\nORDER BY date DESC;".format({ id: value }) })   //@n:dpukvyi7s2i8814rznrdjspo
+            setElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/articles-count-badge", text: "{cnt} Stories".format({ cnt: rowCount }) })   //@n:j65crp36fsk937g3d3gc11u1
+            for (const item of rows) {   //@n:kww9p0cl3ajziwoef49qi5hp
+                const cuid2 = cuid()   //@n:h4ebqjzraxsrp40pahtazohg
+                const elementRef3 = instantiateWidget({ widgetSelector: "Article", instanceId: cuid2, dynPathDate: (length({ string: item.date }) > 10) ? types::tryTransform({ typeIn: item.date }).typeOut.format("%B %-d, %Y") : item.date, dynPathSummary: item.summary, dynPathTitle: item.title, dynPathInterest: item.interest })   //@n:nprn90lsy7kb0eigzv068ogy
+                pushToContainer({ containerRef: getElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element, elementRef: elementRef3, position: -1 })   //@n:fw3bozmoj4gcjksjuqe7ec79
             }
         }
     }
 }
 
-notifyProjectUser(success: bool) {   //@n:iykhixlujrwjsexflb8ekm93
-}
-
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
-        return stringFormat({ formatString: "Already created a report" })   //@n:rkd57x855lzb6sr1lyatwt2h
+        return `Already created a report`   //@n:rkd57x855lzb6sr1lyatwt2h
     } else {
         reportCreated = true   //@n:c3z9pjjhjpy4njl7v5pl1exk
-        const now2 = utilsDatetimeNow()   //@n:ijrzyi85455n11q11zjlins6
-        let record = structSet({ structIn: {}, field: "created", value: now2.date }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
+        const date3 = now()   //@n:ijrzyi85455n11q11zjlins6
+        let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
         record.title = title   //@n:xw6ifsysoanbo9ka83d72cpt
         record.report = report   //@n:udwegq14u2johkogeuk3etlm
         record.description = shortSummary   //@n:g4msinux2ooq26k7tk6hdvss
         record.report_id = reportID   //@n:l3uwlikddjsnscukz2cfu8ll
-        const openDatabase6 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
-        insertLocalDb({ database: openDatabase6.database, value: record })   //@n:fqn428vwps1mlqa5qqa5ttbm
-        notifyUser({ title: title, description: "", link: stringFormat({ formatString: "/briefing?report_id={id}", id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q
-        return stringFormat({ formatString: "Successfully created Report. You are done now!" })   //@n:u44suc8lkffroaz9f30waxaf
+        const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
+        database6.insertOne(record)   //@n:fqn428vwps1mlqa5qqa5ttbm
+        user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q
+        return `Successfully created Report. You are done now!`   //@n:u44suc8lkffroaz9f30waxaf
     }
 }
 
-eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
+eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
     loadConfig()   //@n:pnrthxg45xmamey3u4ohy6mn
     filterSources({ hash: widgetInstanceId })   //@n:efukkvhntw0zqzovze5miev6
     saveConfig({ config: userConfiguration })   //@n:zjbodntlzzvdtaujg2nf9j0c
     loadConfigDashboard()   //@n:c14m2n2pc5cr0f7ly3t79zk5
+}
+
+detached {
+    reportCreated = null   //@n:pwyjqi9tgqajltsx4hsjhmlk
+}
+
+detached {
+    projectUser({ flowUserSub: "32a5a414-a001-70d1-7b23-570f65ba772b", title: "Notification", description: "", link: "/case" })   //@n:iykhixlujrwjsexflb8ekm93
 }

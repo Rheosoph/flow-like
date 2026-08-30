@@ -146,7 +146,8 @@ function TruncationNotice({ compact }: { readonly compact: boolean }) {
 			<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
 			<div className={compact ? "text-[11px]" : "text-xs"}>
 				<span className="font-semibold">
-					{t('cappedAt', 'Capped at')} {TELEMETRY_QUERY_MAX_ROWS.toLocaleString()} rows.
+					{t("cappedAt", "Capped at")}{" "}
+					{TELEMETRY_QUERY_MAX_ROWS.toLocaleString()} rows.
 				</span>{" "}
 				{`Part of the selected range is missing from this result and from the CSV export. Narrow the time range, pick a coarser interval, or drop the breakdown.`}
 			</div>
@@ -516,10 +517,19 @@ function ResultTable({
 			</div>
 			{hidden > 0 ? (
 				<p className="text-[11px] text-muted-foreground">
-					{t('showingTheFirst', 'Showing the first')} {rows.length.toLocaleString()} {t('ofThe', 'of the')}{" "}
-					{response.rows.length.toLocaleString()} {t('rowsTheServerReturnedTheCsvDownloadContainsAll', "rows the server returned. The CSV download contains all")} {response.rows.length.toLocaleString()} {t('ofThem', "of them")}
+					{t("showingTheFirst", "Showing the first")}{" "}
+					{rows.length.toLocaleString()} {t("ofThe", "of the")}{" "}
+					{response.rows.length.toLocaleString()}{" "}
+					{t(
+						"rowsTheServerReturnedTheCsvDownloadContainsAll",
+						"rows the server returned. The CSV download contains all",
+					)}{" "}
+					{response.rows.length.toLocaleString()} {t("ofThem", "of them")}
 					{capped
-						? t('butTheServerAlreadyCappedTheQuerySoNeitherThisTableNorTheCsvCoversTheFullRange', "— but the server already capped the query, so neither this table nor the CSV covers the full range.")
+						? t(
+								"butTheServerAlreadyCappedTheQuerySoNeitherThisTableNorTheCsvCoversTheFullRange",
+								"— but the server already capped the query, so neither this table nor the CSV covers the full range.",
+							)
 						: "."}
 				</p>
 			) : null}
@@ -592,8 +602,10 @@ export function TelemetryQueryResultView({
 			{showToolbar ? (
 				<div className="flex flex-wrap items-center justify-between gap-2">
 					<span className="text-[11px] tabular-nums text-muted-foreground">
-						{response.total.toLocaleString()} {t('rows', 'rows ·')}{" "}
-						{response.interval === "none" ? t('noBuckets', 'no buckets') : response.interval}
+						{response.total.toLocaleString()} {t("rows", "rows ·")}{" "}
+						{response.interval === "none"
+							? t("noBuckets", "no buckets")
+							: response.interval}
 					</span>
 					<div className="flex items-center gap-1">
 						{chartable && onViewChange ? (
@@ -604,7 +616,7 @@ export function TelemetryQueryResultView({
 									onClick={() => onViewChange("chart")}
 								>
 									<BarChart3 className="mr-1 h-3.5 w-3.5" />
-									{t('chart', 'Chart')}
+									{t("chart", "Chart")}
 								</Button>
 								<Button
 									variant={view === "table" ? "secondary" : "ghost"}
@@ -612,7 +624,7 @@ export function TelemetryQueryResultView({
 									onClick={() => onViewChange("table")}
 								>
 									<Table2 className="mr-1 h-3.5 w-3.5" />
-									{t('table', 'Table')}
+									{t("table", "Table")}
 								</Button>
 							</>
 						) : null}

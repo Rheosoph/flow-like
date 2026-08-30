@@ -24,6 +24,8 @@ impl NodeLogic for MinFloatNode {
             "Returns the smaller of two floats",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "min");
+        node.set_receiver("float1");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("float1", "Float 1", "First Float", VariableType::Float);

@@ -54,8 +54,9 @@ export async function createRealtimeSession(args: {
 		existing.refCount++;
 
 		const awareness = existing.provider.awareness;
+		// Shared with a still-mounted consumer: identity may be (re)asserted,
+		// but its live selection broadcast is not ours to reset.
 		awareness.setLocalStateField("sub", sub);
-		awareness.setLocalStateField("selection", { nodes: [] });
 
 		const dispose = () => {
 			existing.refCount--;
@@ -78,9 +79,18 @@ export async function createRealtimeSession(args: {
 
 		const reconnect = async () => {
 			if (onStatusChange) onStatusChange("reconnecting");
-			// Provider should auto-reconnect, just reset awareness state
-			awareness.setLocalStateField("sub", sub);
-			if (onStatusChange) onStatusChange("connected");
+			try {
+				// y-webrtc's Room.disconnect() removes OUR awareness entry and
+				// connect() never restores it — and setLocalStateField is a no-op
+				// on a null local state. Re-seed it, or nothing publishes again.
+				const snapshot = awareness.getLocalState() ?? {};
+				existing.provider.disconnect();
+				existing.provider.connect();
+				awareness.setLocalState({ ...snapshot, sub });
+			} catch (e) {
+				console.error("[WebRTC] Reconnection failed:", e);
+				if (onStatusChange) onStatusChange("disconnected");
+			}
 		};
 
 		return {
@@ -199,19 +209,28 @@ export async function createRealtimeSession(args: {
 
 	const reconnect = async () => {
 		if (onStatusChange) onStatusChange("reconnecting");
-
 		try {
-			// Reinitialize awareness state
-			awareness.setLocalStateField("sub", sub);
-			awareness.setLocalStateField("selection", { nodes: [] });
-			awareness.setLocalStateField("cursor", undefined);
-
-			// Trigger awareness update to broadcast to peers
-			awareness.setLocalStateField("reconnected", Date.now());
-
-			if (onStatusChange) onStatusChange("connected");
+			// Actually drive the transport: drop the signaling sockets and the
+			// room, then rejoin. y-webrtc's Room.disconnect() removes OUR
+			// awareness entry and connect() never restores it (and every
+			// setLocalStateField is a no-op on a null local state), so the
+			// fields are snapshotted and re-seeded — peers keep the clicker's
+			// selection and everything publishes again afterwards.
+			const snapshot = awareness.getLocalState() ?? {};
+			provider.disconnect();
+			provider.connect();
+			awareness.setLocalState({
+				...snapshot,
+				sub,
+				reconnected: Date.now(),
+			});
+			// The status is whatever the sockets say once they settle — never
+			// asserted here.
+			lastStatus = undefined;
+			setTimeout(checkConnectionStatus, 1000);
 		} catch (e) {
-			console.error(`[WebRTC] Reconnection failed:`, e);
+			console.error("[WebRTC] Reconnection failed:", e);
+			lastStatus = "disconnected";
 			if (onStatusChange) onStatusChange("disconnected");
 		}
 	};

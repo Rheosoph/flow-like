@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Avatar,
 	AvatarFallback,
@@ -21,6 +20,7 @@ import {
 	userAvatarUrl,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	CreditCard,
 	Crown,
@@ -216,9 +216,14 @@ export function ProfilePage({ actions = {} }: Readonly<ProfilePageProps>) {
 
 const ProfileHeader: React.FC = () => (
 	<div className="space-y-2">
-		<h1 className="text-3xl font-bold tracking-tight">{i18next.t('profileSettings', 'Profile Settings')}</h1>
+		<h1 className="text-3xl font-bold tracking-tight">
+			{i18next.t("profileSettings", "Profile Settings")}
+		</h1>
 		<p className="text-muted-foreground">
-			{i18next.t('manageYourAccountSettingsAndPreferences', 'Manage your account settings and preferences')}
+			{i18next.t(
+				"manageYourAccountSettingsAndPreferences",
+				"Manage your account settings and preferences",
+			)}
 		</p>
 	</div>
 );
@@ -240,7 +245,7 @@ const AvatarCard: React.FC<AvatarCardProps> = ({
 		<CardHeader>
 			<CardTitle className="flex items-center gap-2">
 				<User className="h-5 w-5" />
-				{i18next.t('profilePicture', 'Profile Picture')}
+				{i18next.t("profilePicture", "Profile Picture")}
 			</CardTitle>
 		</CardHeader>
 		<CardContent className="space-y-4">
@@ -296,42 +301,49 @@ const PersonalInfoCard: React.FC<PersonalInfoCardProps> = ({
 }) => (
 	<Card>
 		<CardHeader>
-			<CardTitle>{i18next.t('personalInformation', 'Personal Information')}</CardTitle>
+			<CardTitle>
+				{i18next.t("personalInformation", "Personal Information")}
+			</CardTitle>
 			<CardDescription>
-				{i18next.t('updateYourPersonalDetailsAndProfileInformation', 'Update your personal details and profile information')}
+				{i18next.t(
+					"updateYourPersonalDetailsAndProfileInformation",
+					"Update your personal details and profile information",
+				)}
 			</CardDescription>
 		</CardHeader>
 		<CardContent className="space-y-4">
 			<div className="grid gap-4 md:grid-cols-2">
 				<div className="space-y-2">
-					<Label htmlFor="username">{i18next.t('username2', 'Username')}</Label>
+					<Label htmlFor="username">{i18next.t("username2", "Username")}</Label>
 					<Input
 						id="username"
 						value={formData.username}
 						onChange={(e) => onInputChange("username", e.target.value)}
-						placeholder={i18next.t('enterUsername', 'Enter username')}
+						placeholder={i18next.t("enterUsername", "Enter username")}
 					/>
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="previewName">{i18next.t('displayName', 'Display Name')}</Label>
+					<Label htmlFor="previewName">
+						{i18next.t("displayName", "Display Name")}
+					</Label>
 					<Input
 						id="previewName"
 						value={formData.previewName}
 						onChange={(e) => onInputChange("previewName", e.target.value)}
-						placeholder={i18next.t('enterDisplayName', 'Enter display name')}
+						placeholder={i18next.t("enterDisplayName", "Enter display name")}
 					/>
 				</div>
 			</div>
 
 			<div className="space-y-2">
-				<Label htmlFor="email">{i18next.t('email', 'Email')}</Label>
+				<Label htmlFor="email">{i18next.t("email", "Email")}</Label>
 				<div className="flex gap-2">
 					<Input
 						id="email"
 						type="email"
 						value={formData.email}
-						placeholder={i18next.t('enterEmail', 'Enter email')}
+						placeholder={i18next.t("enterEmail", "Enter email")}
 						disabled
 						className="bg-muted"
 					/>
@@ -349,17 +361,24 @@ const PersonalInfoCard: React.FC<PersonalInfoCardProps> = ({
 			</div>
 
 			<div className="space-y-2">
-				<Label htmlFor="description">{i18next.t('profileDescription', 'Profile Description')}</Label>
+				<Label htmlFor="description">
+					{i18next.t("profileDescription", "Profile Description")}
+				</Label>
 				<Textarea
 					id="description"
 					value={formData.description}
 					onChange={(e) => onInputChange("description", e.target.value)}
-					placeholder={i18next.t('tellUsAboutYourself', 'Tell us about yourself...')}
+					placeholder={i18next.t(
+						"tellUsAboutYourself",
+						"Tell us about yourself...",
+					)}
 					className="min-h-[100px] resize-none"
 					maxLength={2000}
 				/>
 				<div className="flex justify-between items-center text-xs text-muted-foreground">
-					<span>{i18next.t('maximum2000Characters', 'Maximum 2000 characters')}</span>
+					<span>
+						{i18next.t("maximum2000Characters", "Maximum 2000 characters")}
+					</span>
 					<span>{`${formData.description.length}/2000`}</span>
 				</div>
 			</div>
@@ -396,12 +415,14 @@ const SubscriptionCard: React.FC<SubscriptionCardProps> = ({
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<Crown className="h-5 w-5" />
-					{t('subscription', 'Subscription')}
+					{t("subscription", "Subscription")}
 				</CardTitle>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="flex items-center justify-between">
-					<span className="text-sm text-muted-foreground">{t('currentPlan', 'Current Plan')}</span>
+					<span className="text-sm text-muted-foreground">
+						{t("currentPlan", "Current Plan")}
+					</span>
 					<Badge className={colorClass}>{tierKey}</Badge>
 				</div>
 				<div className="flex flex-col gap-2">
@@ -411,7 +432,7 @@ const SubscriptionCard: React.FC<SubscriptionCardProps> = ({
 							className="w-full"
 							onClick={onViewSubscription}
 						>
-							{t('viewPlans', 'View Plans')}
+							{t("viewPlans", "View Plans")}
 						</Button>
 					)}
 					{onViewBilling && tierKey !== "FREE" && (
@@ -422,7 +443,7 @@ const SubscriptionCard: React.FC<SubscriptionCardProps> = ({
 							onClick={onViewBilling}
 						>
 							<CreditCard className="h-4 w-4 mr-2" />
-							{t('manageBilling', 'Manage Billing')}
+							{t("manageBilling", "Manage Billing")}
 						</Button>
 					)}
 				</div>
@@ -443,10 +464,13 @@ const SecurityCard: React.FC<SecurityCardProps> = ({ onChangePassword }) => {
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2">
 						<Lock className="h-5 w-5" />
-						{t('security', 'Security')}
+						{t("security", "Security")}
 					</CardTitle>
 					<CardDescription>
-						{t('manageYourPasswordAndSecuritySettings', 'Manage your password and security settings')}
+						{t(
+							"manageYourPasswordAndSecuritySettings",
+							"Manage your password and security settings",
+						)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -456,7 +480,7 @@ const SecurityCard: React.FC<SecurityCardProps> = ({ onChangePassword }) => {
 							className="w-full"
 							onClick={onChangePassword}
 						>
-							{t('changePassword', 'Change Password')}
+							{t("changePassword", "Change Password")}
 						</Button>
 					)}
 				</CardContent>
@@ -488,7 +512,7 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 				disabled={isLoading || !hasChanges}
 				className="flex-1"
 			>
-				{isLoading ? "Saving..." : i18next.t('saveChanges', 'Save Changes')}
+				{isLoading ? "Saving..." : i18next.t("saveChanges", "Save Changes")}
 			</Button>
 		)}
 
@@ -503,7 +527,7 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 				onClick={onViewBilling}
 			>
 				<CreditCard className="h-4 w-4" />
-				{i18next.t('billingSettings', 'Billing Settings')}
+				{i18next.t("billingSettings", "Billing Settings")}
 			</Button>
 		)}
 
@@ -514,7 +538,7 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 				onClick={onPreviewProfile}
 			>
 				<Eye className="h-4 w-4" />
-				{i18next.t('previewProfile', 'Preview Profile')}
+				{i18next.t("previewProfile", "Preview Profile")}
 			</Button>
 		)}
 	</div>

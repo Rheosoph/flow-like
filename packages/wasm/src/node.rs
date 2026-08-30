@@ -114,7 +114,7 @@ impl WasmNodeLogic {
 
         let mut instance = self
             .loaded
-            .instantiate(&self.engine, self.security.clone())
+            .instantiate(&self.engine, self.security.for_metadata())
             .await?;
         let definitions = instance.call_get_nodes().await?;
 
@@ -228,52 +228,53 @@ async fn register_wasm_flowpath_stores(
     exec_cache: &ExecutionContextCache,
     credentials_store: Option<FlowLikeStore>,
 ) -> flow_like_types::Result<()> {
-    let mut dirs: Vec<(&str, Path, Option<FlowLikeStore>)> = Vec::with_capacity(9);
-    dirs.push((
-        "storage",
-        exec_cache.get_storage(false)?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "storage",
-        exec_cache.get_storage(true)?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "upload",
-        exec_cache.get_upload_dir()?,
-        exec_cache.stores.app_storage_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(false, false)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(true, false)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(false, true)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "cache",
-        exec_cache.get_cache(true, true)?,
-        exec_cache.stores.temporary_store.clone(),
-    ));
-    dirs.push((
-        "user",
-        exec_cache.get_user_dir(false)?,
-        exec_cache.stores.user_store.clone(),
-    ));
-    dirs.push((
-        "user",
-        exec_cache.get_user_dir(true)?,
-        exec_cache.stores.user_store.clone(),
-    ));
+    let dirs: Vec<(&str, Path, Option<FlowLikeStore>)> = vec![
+        (
+            "storage",
+            exec_cache.get_storage(false)?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "storage",
+            exec_cache.get_storage(true)?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "upload",
+            exec_cache.get_upload_dir()?,
+            exec_cache.stores.app_storage_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(false, false)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(true, false)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(false, true)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "cache",
+            exec_cache.get_cache(true, true)?,
+            exec_cache.stores.temporary_store.clone(),
+        ),
+        (
+            "user",
+            exec_cache.get_user_dir(false)?,
+            exec_cache.stores.user_store.clone(),
+        ),
+        (
+            "user",
+            exec_cache.get_user_dir(true)?,
+            exec_cache.stores.user_store.clone(),
+        ),
+    ];
 
     for (dir_type, dir, backing_store) in dirs {
         let Some(backing_store) = backing_store else {
@@ -393,7 +394,14 @@ pub fn definition_to_package_entry(
         oauth_providers: vec![],
         required_oauth_scopes: None,
         only_offline: false,
-        version: definition.abi_version,
+        // Deliberately not `definition.abi_version`. That is the host ABI the
+        // module was built against, while this field lands in `Node::version`,
+        // which `sync_node_schema` reads as the pin-schema generation. A guest
+        // definition carries no schema generation at all, and conflating the
+        // two would let an ABI bump present as a schema bump — which drops
+        // every pin the new catalog entry does not declare from boards already
+        // using the node.
+        version: None,
         permissions: definition.permissions.clone(),
         metadata: HashMap::new(),
     }
@@ -440,6 +448,7 @@ pub fn build_node_from_definition(definition: &WasmNodeDefinition) -> Node {
         wasm.permissions = definition.permissions.clone();
     }
 
+    node.ensure_flowscript_names();
     node
 }
 

@@ -4,6 +4,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
@@ -28,6 +29,8 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
             "Optimize and Update the Database",
             "Data/Database/Optimization",
         );
+        node.set_flowscript_name("db", "optimize");
+        node.set_receiver("database");
         node.set_long_running(true);
         node.add_icon("/flow/icons/database.svg");
 
@@ -43,10 +46,10 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
         node.add_input_pin(
             "keep_versions",
             "Keep Versions?",
-            "Otherwise deletes old versions",
+            "Retain all versions. Disable only to prune versions older than seven days after maintenance.",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(false)));
+        .set_default_value(Some(json!(true)));
 
         node.add_output_pin(
             "exec_out",
@@ -58,6 +61,7 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
@@ -70,5 +74,12 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

@@ -646,6 +646,23 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
             "Refresh FlowScript from the current board before editing it.",
             None,
         );
+    } else if message.contains("inside a template literal would be read as a placeholder") {
+        diagnostic.phase = FlowScriptDiagnosticPhase::Lowering;
+        diagnostic.actual = ticks.first().cloned();
+        diagnostic.expected = Some("template text without `{identifier}` sequences".into());
+        diagnostic.fix = fix(
+            "Write string::format({ formatString: … }) explicitly, or drop the braces from the template text.",
+            None,
+        );
+    } else if message.contains("`for…of` iterates") && message.contains("not an array") {
+        diagnostic.code = FlowScriptDiagnosticCode::FsTypeMismatch;
+        diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
+        diagnostic.actual = ticks.first().cloned();
+        diagnostic.expected = Some("an array value".into());
+        diagnostic.fix = fix(
+            "Iterate an array-typed value, or call the loop node explicitly with the intended input.",
+            None,
+        );
     } else if message.contains("new event") && message.contains("no executable body nodes") {
         diagnostic.code = FlowScriptDiagnosticCode::FsEventEmpty;
         diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
@@ -865,8 +882,8 @@ fn backtick_values(message: &str) -> Vec<String> {
     message
         .split('`')
         .enumerate()
-        .filter(|&(index, value)| (index % 2 == 1))
-        .map(|(index, value)| value.to_string())
+        .filter(|&(index, _value)| index % 2 == 1)
+        .map(|(_index, value)| value.to_string())
         .collect()
 }
 
@@ -973,7 +990,7 @@ mod tests {
     #[test]
     fn structures_unknown_pin_with_call_ast_path_and_catalog_search() {
         let structured = result(&[
-            "node `agentRegisterFunctionTools` has no input pin named `tools`; skipped that argument",
+            "node `agentRegisterFunctionTools` has no input pin named `tools`; no part of this revision was applied",
         ])
         .structured_diagnostics();
 

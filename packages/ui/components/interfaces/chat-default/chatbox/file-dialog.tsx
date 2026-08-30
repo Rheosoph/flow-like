@@ -1,37 +1,36 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	Archive,
-	ChevronRight,
-	FileText,
-	Files,
-	Folder,
-	FolderMinus,
-	FolderOpen,
-	FolderPlus,
-	Image,
-	Music,
-	Search,
-	Trash2,
-	Video,
-	X,
-} from "lucide-react";
+import Archive from "lucide-react/dist/esm/icons/archive.js";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
+import Files from "lucide-react/dist/esm/icons/files.js";
+import Folder from "lucide-react/dist/esm/icons/folder.js";
+import FolderMinus from "lucide-react/dist/esm/icons/folder-minus.js";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
+import FolderPlus from "lucide-react/dist/esm/icons/folder-plus.js";
+import Image from "lucide-react/dist/esm/icons/image.js";
+import Music from "lucide-react/dist/esm/icons/music.js";
+import Search from "lucide-react/dist/esm/icons/search.js";
+import Trash2 from "lucide-react/dist/esm/icons/trash-2.js";
+import Video from "lucide-react/dist/esm/icons/video.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import { useMemo, useState } from "react";
-import { humanFileSize } from "../../../../lib";
+import { humanFileSize } from "../../../../lib/utils";
+import { Badge } from "../../../ui/badge";
+import { Button } from "../../../ui/button";
+import { Card } from "../../../ui/card";
+import { Checkbox } from "../../../ui/checkbox";
 import {
-	Badge,
-	Button,
-	Card,
-	Checkbox,
 	Dialog,
 	DialogContent,
 	DialogHeader,
 	DialogTitle,
-	Input,
-	ScrollArea,
-	Separator,
-} from "../../../ui";
+} from "../../../ui/dialog";
+import { Input } from "../../../ui/input";
+import { ScrollArea } from "../../../ui/scroll-area";
+import { Separator } from "../../../ui/separator";
+import { isImageFile, useImagePreviewUrls } from "./image-previews";
 
 interface FileManagerDialogProps {
 	open: boolean;
@@ -66,6 +65,7 @@ export function FileManagerDialog({
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
 		new Set(["root"]),
 	);
+	const previewUrls = useImagePreviewUrls(files, open);
 
 	const getFileIcon = (file: File) => {
 		if (file.type.startsWith("image/")) return Image;
@@ -344,10 +344,16 @@ export function FileManagerDialog({
 									{fileCount}
 								</Badge>
 								{selectionState === "partial" && (
-									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</Badge>
+									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">
+										{t("selectedcountSelected", "{{selectedCount}} selected", {
+											selectedCount,
+										})}
+									</Badge>
 								)}
 								{selectionState === "all" && (
-									<Badge className="text-xs shrink-0">{t('allSelected', 'All selected')}</Badge>
+									<Badge className="text-xs shrink-0">
+										{t("allSelected", "All selected")}
+									</Badge>
 								)}
 							</button>
 							<div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -362,7 +368,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-destructive/10 hover:text-destructive"
 									>
 										<FolderMinus className="w-3 h-3 mr-1" />
-										{t('deselect', 'Deselect')}
+										{t("deselect", "Deselect")}
 									</Button>
 								)}
 								{selectionState !== "all" && (
@@ -376,7 +382,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-primary/10 hover:text-primary"
 									>
 										<FolderPlus className="w-3 h-3 mr-1" />
-										{t('select', 'Select')}
+										{t("select", "Select")}
 									</Button>
 								)}
 							</div>
@@ -410,15 +416,12 @@ export function FileManagerDialog({
 					/>
 
 					{/* File Preview/Icon */}
-					{node.file!.type.startsWith("image/") ? (
+					{isImageFile(node.file!) ? (
 						<div className="relative shrink-0">
 							<img
-								src={URL.createObjectURL(node.file!)}
+								src={previewUrls.get(node.file!)}
 								alt={node.name}
 								className="w-12 h-12 object-cover rounded-lg border border-border shadow-sm"
-								onLoad={(e) =>
-									URL.revokeObjectURL((e.target as HTMLImageElement).src)
-								}
 							/>
 							<div className="absolute -top-1 -right-1 w-5 h-5 bg-background rounded-full flex items-center justify-center border border-border shadow-sm">
 								<Image className="w-2.5 h-2.5 text-emerald-600" />
@@ -477,10 +480,12 @@ export function FileManagerDialog({
 					<DialogTitle className="flex items-center justify-between">
 						<div className="flex items-center gap-3">
 							<Files className="w-5 h-5" />
-							<span>{t('manageAttachedFiles', 'Manage Attached Files')}</span>
+							<span>{t("manageAttachedFiles", "Manage Attached Files")}</span>
 						</div>
 						<div className="flex items-center gap-3">
-							<Badge variant="outline" className="text-sm font-normal">{t('lengthFiles', '{{length}} files', { length: files.length })}</Badge>
+							<Badge variant="outline" className="text-sm font-normal">
+								{t("lengthFiles", "{{length}} files", { length: files.length })}
+							</Badge>
 							<Badge variant="outline" className="text-sm font-normal">
 								{humanFileSize(totalSize, true)}
 							</Badge>
@@ -492,7 +497,7 @@ export function FileManagerDialog({
 						<div className="relative flex-1">
 							<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 							<Input
-								placeholder={t('searchFiles', 'Search files...')}
+								placeholder={t("searchFiles", "Search files...")}
 								value={searchTerm}
 								onChange={(e) => setSearchTerm(e.target.value)}
 								className="pl-10 h-10"
@@ -506,14 +511,18 @@ export function FileManagerDialog({
 									className="h-10"
 								>
 									<X className="w-4 h-4 mr-2" />
-									{t('deselectAll', 'Deselect All')}
+									{t("deselectAll", "Deselect All")}
 								</Button>
 								<Button
 									variant="destructive"
 									onClick={removeSelectedFiles}
 									className="h-10"
 								>
-									<Trash2 className="w-4 h-4 mr-2" />{t('removeSize', 'Remove {{size}}', { size: selectedFiles.size })}</Button>
+									<Trash2 className="w-4 h-4 mr-2" />
+									{t("removeSize", "Remove {{size}}", {
+										size: selectedFiles.size,
+									})}
+								</Button>
 							</>
 						)}
 						<Button
@@ -522,7 +531,7 @@ export function FileManagerDialog({
 							className="h-10 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20"
 						>
 							<Trash2 className="w-4 h-4 mr-2" />
-							{t('clearAll2', 'Clear All')}
+							{t("clearAll2", "Clear All")}
 						</Button>
 					</div>
 				</DialogHeader>
@@ -539,11 +548,19 @@ export function FileManagerDialog({
 								<div className="w-20 h-20 mx-auto mb-6 rounded-full bg-muted/30 flex items-center justify-center">
 									<Files className="w-10 h-10 text-muted-foreground/50" />
 								</div>
-								<h3 className="text-lg font-semibold mb-2">{t('noFilesFound', 'No files found')}</h3>
+								<h3 className="text-lg font-semibold mb-2">
+									{t("noFilesFound", "No files found")}
+								</h3>
 								<p className="text-muted-foreground max-w-sm mx-auto">
 									{searchTerm
-										? t('tryAdjustingYourSearchTermsToFindFiles', 'Try adjusting your search terms to find files')
-										: t('noFilesHaveBeenAttachedToThisConversationYet', 'No files have been attached to this conversation yet')}
+										? t(
+												"tryAdjustingYourSearchTermsToFindFiles",
+												"Try adjusting your search terms to find files",
+											)
+										: t(
+												"noFilesHaveBeenAttachedToThisConversationYet",
+												"No files have been attached to this conversation yet",
+											)}
 								</p>
 							</div>
 						)}
@@ -555,11 +572,16 @@ export function FileManagerDialog({
 				{/* Footer Stats */}
 				<div className="flex items-center justify-between pt-4 text-sm text-muted-foreground">
 					<span className="flex items-center gap-2">
-						<Badge variant="secondary" className="text-xs">{t('filteredcountOfLength', '{{filteredCount}} of {{length}}', { filteredCount, length: files.length })}</Badge>
-						{t('filesShown', 'files shown')}
+						<Badge variant="secondary" className="text-xs">
+							{t("filteredcountOfLength", "{{filteredCount}} of {{length}}", {
+								filteredCount,
+								length: files.length,
+							})}
+						</Badge>
+						{t("filesShown", "files shown")}
 					</span>
 					<span className="font-medium">
-						{t('total', 'Total:')} {humanFileSize(totalSize, true)}
+						{t("total", "Total:")} {humanFileSize(totalSize, true)}
 					</span>
 				</div>
 			</DialogContent>

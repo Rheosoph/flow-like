@@ -26,6 +26,8 @@ impl NodeLogic for SetHistoryUserNode {
             "Updates the user identifier stored alongside the chat history",
             "AI/Generative/History",
         );
+        node.set_flowscript_name("history", "setUser");
+        node.set_receiver("history");
         node.add_icon("/flow/icons/history.svg");
         node.set_version(1);
         node.set_scores(

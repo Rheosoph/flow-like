@@ -385,6 +385,7 @@ impl ChatEventNode {
 impl NodeLogic for ChatEventNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("events_chat", "Chat Event", "A simple Chat event", "Events");
+        node.set_flowscript_name("events", "chat");
         node.add_icon("/flow/icons/event.svg");
         node.set_version(1);
         node.set_start(true);
@@ -406,14 +407,16 @@ impl NodeLogic for ChatEventNode {
             "Local Session",
             "Local to the Chat",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "global_session",
             "Global Session",
             "Global to the User",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node.add_output_pin(
             "tools",
@@ -1253,9 +1256,8 @@ mod tests {
 
         // All remaining should be valid HTTPS URLs
         for attachment in processed {
-            match attachment {
-                Attachment::Url(url) => assert!(url.starts_with("https://")),
-                _ => {}
+            if let Attachment::Url(url) = attachment {
+                assert!(url.starts_with("https://"))
             }
         }
     }

@@ -297,7 +297,11 @@
 											"label": "Send replies directly from day one — drafts just pile up unread"
 										}
 									],
-									"correct": ["draft-first", "exit-after-success", "file-robots"]
+									"correct": [
+										"draft-first",
+										"exit-after-success",
+										"file-robots"
+									]
 								}
 							}
 						],
@@ -507,7 +511,11 @@
 											"label": "Skip message filters — channel members are trusted, so every message is safe to process"
 										}
 									],
-									"correct": ["narrow-allowlist", "token-credential", "delete-webhook-before-polling"]
+									"correct": [
+										"narrow-allowlist",
+										"token-credential",
+										"delete-webhook-before-polling"
+									]
 								}
 							}
 						],
@@ -713,7 +721,11 @@
 											"label": "Rely on HTTP semantics — repeating the same POST is safe by design"
 										}
 									],
-									"correct": ["bounded-attempts", "branch-success", "dedupe-key"]
+									"correct": [
+										"bounded-attempts",
+										"branch-success",
+										"dedupe-key"
+									]
 								}
 							}
 						],
@@ -797,7 +809,11 @@
 											"label": "Diff Directory mis-diffed the folder; switching it to Checksum mode fixes the double batch"
 										}
 									],
-									"correct": ["hybrid-two-paths", "pick-one-target", "idempotent-processing"]
+									"correct": [
+										"hybrid-two-paths",
+										"pick-one-target",
+										"idempotent-processing"
+									]
 								}
 							},
 							{
@@ -950,7 +966,11 @@
 											"label": "No further checks — Diff Directory is idempotent, so the schedule can't do damage"
 										}
 									],
-									"correct": ["real-folder-run", "durable-outputs", "failure-rehearsal"]
+									"correct": [
+										"real-folder-run",
+										"durable-outputs",
+										"failure-rehearsal"
+									]
 								}
 							}
 						],

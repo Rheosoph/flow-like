@@ -65,7 +65,7 @@ export function IntegerSetVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "number"}
-					placeholder={t('addUniqueInteger', 'Add unique integer...')}
+					placeholder={t("addUniqueInteger", "Add unique integer...")}
 					step={1}
 					className="flex-1 min-w-0"
 				/>

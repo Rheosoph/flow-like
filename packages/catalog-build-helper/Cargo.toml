@@ -2,3 +2,13 @@
 name = "flow-like-catalog-build-helper"
 version = "0.1.0"
 edition = "2024"
+
+[features]
+default = []
+code-interpreter-build = ["dep:wasmtime", "dep:dirs-next", "dep:ureq", "dep:blake3"]
+
+[dependencies]
+wasmtime = { version = "47.0.3", default-features = false, features = ["anyhow", "async", "cranelift", "gc-drc", "parallel-compilation", "pulley", "runtime", "std"], optional = true }
+dirs-next = { version = "2", optional = true }
+ureq = { version = "3", optional = true }
+blake3 = { version = "1.8.2", optional = true }

@@ -184,6 +184,7 @@ impl NodeLogic for GetNotionDataSourceNode {
             "Retrieves a Notion data source schema with its properties",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "getDataSource");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -299,6 +300,7 @@ impl NodeLogic for QueryNotionDataSourceNode {
             "Queries a Notion data source and returns matching pages or child data sources",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "queryDataSource");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -525,6 +527,7 @@ impl NodeLogic for CreateNotionDataSourceNode {
             "Creates a Notion data source inside an existing database",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "createDataSource");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
@@ -682,6 +685,7 @@ impl NodeLogic for UpdateNotionDataSourceNode {
             "Updates a Notion data source title, description, icon, or property schema",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "updateDataSource");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

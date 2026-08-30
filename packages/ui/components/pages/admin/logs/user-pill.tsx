@@ -65,7 +65,7 @@ export function UserPill({
 				className={`gap-1 border-dashed text-muted-foreground ${className ?? ""}`}
 			>
 				<UserIcon className="h-3 w-3" />
-				{t('anonymous', 'Anonymous')}
+				{t("anonymous", "Anonymous")}
 			</Badge>
 		);
 	}
@@ -128,7 +128,7 @@ export function UserPill({
 								{lookup.data?.email && (
 									<div className="flex items-center justify-between gap-2">
 										<span className="text-muted-foreground inline-flex items-center gap-1.5">
-											<Mail className="h-3.5 w-3.5" /> {t('email', 'Email')}
+											<Mail className="h-3.5 w-3.5" /> {t("email", "Email")}
 										</span>
 										<span className="truncate text-right">
 											{lookup.data.email}
@@ -137,7 +137,9 @@ export function UserPill({
 								)}
 								{lookup.data?.username && (
 									<div className="flex items-center justify-between gap-2">
-										<span className="text-muted-foreground">{t('username2', 'Username')}</span>
+										<span className="text-muted-foreground">
+											{t("username2", "Username")}
+										</span>
 										<span className="truncate text-right">
 											{lookup.data.username}
 										</span>
@@ -145,7 +147,9 @@ export function UserPill({
 								)}
 								{lookup.data?.preferred_username && (
 									<div className="flex items-center justify-between gap-2">
-										<span className="text-muted-foreground">{t('preferred', 'Preferred')}</span>
+										<span className="text-muted-foreground">
+											{t("preferred", "Preferred")}
+										</span>
 										<span className="truncate text-right">
 											{lookup.data.preferred_username}
 										</span>
@@ -153,7 +157,9 @@ export function UserPill({
 								)}
 								{lookup.data?.created_at && (
 									<div className="flex items-center justify-between gap-2">
-										<span className="text-muted-foreground">{t('joined', 'Joined')}</span>
+										<span className="text-muted-foreground">
+											{t("joined", "Joined")}
+										</span>
 										<RelativeTime
 											value={lookup.data.created_at}
 											className="text-right"
@@ -165,7 +171,7 @@ export function UserPill({
 										<Separator />
 										<div className="space-y-1">
 											<div className="text-xs uppercase tracking-wide text-muted-foreground">
-												{t('description', 'Description')}
+												{t("description", "Description")}
 											</div>
 											<p className="text-sm leading-relaxed">
 												{lookup.data.description}
@@ -180,7 +186,7 @@ export function UserPill({
 
 						<div className="space-y-2">
 							<div className="text-xs uppercase tracking-wide text-muted-foreground">
-								{t('reference', 'Reference')}
+								{t("reference", "Reference")}
 							</div>
 							<div className="flex items-center gap-2">
 								<code className="flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs">

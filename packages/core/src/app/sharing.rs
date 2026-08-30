@@ -82,7 +82,7 @@ impl TrailerV1 {
         }
     }
 
-    fn to_bytes(&self) -> [u8; 24] {
+    fn to_bytes(self) -> [u8; 24] {
         let mut buf = [0u8; 24];
         buf[0..8].copy_from_slice(&self.manifest_size.to_le_bytes());
         buf[8..16].copy_from_slice(&self.prio_size.to_le_bytes());
@@ -301,6 +301,10 @@ fn now_unix() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+/// Decrypted `(prio, secondary)` archive segments; either side is `None` when
+/// the restore plan does not need it.
+type DecryptedSegments = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 impl App {
     pub async fn export_archive(
@@ -856,7 +860,7 @@ impl App {
                 let secondary_seg = secondary_seg.clone();
                 let need_prio = !plan.prio.is_empty();
                 let need_secondary = !plan.secondary.is_empty();
-                move || -> flow_like_types::Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+                move || -> flow_like_types::Result<DecryptedSegments> {
                     let p = if need_prio {
                         Some(decrypt_bytes(pw.as_ref().unwrap(), &prio_seg)?)
                     } else {

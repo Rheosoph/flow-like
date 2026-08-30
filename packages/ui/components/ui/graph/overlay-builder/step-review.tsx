@@ -32,9 +32,14 @@ export function StepReview({
 	return (
 		<div className="space-y-4">
 			<div>
-				<h3 className="text-sm font-medium mb-1">{t('reviewOverlay', 'Review Overlay')}</h3>
+				<h3 className="text-sm font-medium mb-1">
+					{t("reviewOverlay", "Review Overlay")}
+				</h3>
 				<p className="text-xs text-muted-foreground">
-					{t('reviewYourGraphOverlayConfigurationBeforeCreatingIt', 'Review your graph overlay configuration before creating it.')}
+					{t(
+						"reviewYourGraphOverlayConfigurationBeforeCreatingIt",
+						"Review your graph overlay configuration before creating it.",
+					)}
 				</p>
 			</div>
 
@@ -43,7 +48,11 @@ export function StepReview({
 					<h4 className="text-sm font-semibold">
 						{name || "Untitled Overlay"}
 					</h4>
-					<Badge variant="secondary" className="text-[10px]">{t('limitDefaultlimit', 'Limit: {{defaultLimit}}', { defaultLimit })}</Badge>
+					<Badge variant="secondary" className="text-[10px]">
+						{t("limitDefaultlimit", "Limit: {{defaultLimit}}", {
+							defaultLimit,
+						})}
+					</Badge>
 				</div>
 				{description && (
 					<p className="text-xs text-muted-foreground">{description}</p>
@@ -52,7 +61,11 @@ export function StepReview({
 
 			{nodes.length > 0 && (
 				<div className="space-y-2">
-					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('nodeLabelsLength', 'Node Labels ({{length}})', { length: nodes.length })}</p>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						{t("nodeLabelsLength", "Node Labels ({{length}})", {
+							length: nodes.length,
+						})}
+					</p>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{nodes.map((n) => {
 							const Icon = getGraphIcon(n.style.icon);
@@ -80,7 +93,11 @@ export function StepReview({
 
 			{edges.length > 0 && (
 				<div className="space-y-2">
-					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('edgeLabelsLength', 'Edge Labels ({{length}})', { length: edges.length })}</p>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						{t("edgeLabelsLength", "Edge Labels ({{length}})", {
+							length: edges.length,
+						})}
+					</p>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{edges.map((e) => (
 							<div
@@ -112,7 +129,9 @@ export function StepReview({
 							<AlertCircle className="h-4 w-4 text-destructive" />
 						)}
 						<span className="text-xs font-medium">
-							{validation.ok ? "Validation passed" : t('validationIssuesFound', 'Validation issues found')}
+							{validation.ok
+								? "Validation passed"
+								: t("validationIssuesFound", "Validation issues found")}
 						</span>
 					</div>
 					{validation.issues.length > 0 && (

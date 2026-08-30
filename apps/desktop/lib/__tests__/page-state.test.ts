@@ -1,9 +1,22 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-	invoke: vi.fn(),
-	fetcher: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+	const fetcher = vi.fn();
+	return {
+		invoke: vi.fn(),
+		fetcher,
+		/**
+		 * Page reads go through the conditional wrapper, which was never stubbed here — every
+		 * test that reached it died on the mock rather than on its own assertion. It delegates
+		 * to the plain fetcher so a test still only has to stub one thing.
+		 */
+		fetcherConditional: vi.fn(async (...args: unknown[]) => ({
+			data: await fetcher(...args),
+			notModified: false,
+			etag: undefined,
+		})),
+	};
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mocks.invoke,
@@ -11,6 +24,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("../api", () => ({
 	fetcher: mocks.fetcher,
+	fetcherConditional: mocks.fetcherConditional,
 }));
 
 import {
@@ -24,6 +38,7 @@ import {
 function offlineBackend() {
 	return {
 		isOffline: vi.fn().mockResolvedValue(true),
+		isLocalOnly: vi.fn().mockResolvedValue(true),
 		profile: undefined,
 		auth: undefined,
 		backgroundTaskHandler: vi.fn(),
@@ -33,6 +48,22 @@ function offlineBackend() {
 function onlineBackend() {
 	return {
 		isOffline: vi.fn().mockResolvedValue(false),
+		isLocalOnly: vi.fn().mockResolvedValue(false),
+		profile: { hub: "hub.example" },
+		auth: { user: { access_token: "token" } },
+		backgroundTaskHandler: vi.fn(),
+	};
+}
+
+/**
+ * A hosted app this device has not learned the visibility of yet. `isOffline` reports it as
+ * offline because unknown fails closed there; only an explicit local-only app may be denied
+ * the network.
+ */
+function unknownVisibilityBackend() {
+	return {
+		isOffline: vi.fn().mockResolvedValue(true),
+		isLocalOnly: vi.fn().mockResolvedValue(false),
 		profile: { hub: "hub.example" },
 		auth: { user: { access_token: "token" } },
 		backgroundTaskHandler: vi.fn(),
@@ -116,26 +147,75 @@ describe("desktop page lookup errors", () => {
 		);
 	});
 
-	test("preserves the native board error when board repair fails", async () => {
+	test("serves the page from the server when the board cannot be repaired", async () => {
 		const nativeFailure = {
 			error:
-				"Failed to open board 'board-1' while looking up page 'page-1': Project store not found",
+				"Failed to open board 'board-1' while looking up page 'page-1': Object at location apps/app-1/board-1.board not found",
 		};
-		mocks.invoke.mockRejectedValueOnce(nativeFailure);
-		const getBoard = vi
-			.fn()
-			.mockRejectedValue(new Error("network unavailable"));
+		const remotePage = { id: "page-1", boardId: "board-1" };
+		mocks.invoke
+			.mockRejectedValueOnce(nativeFailure)
+			.mockResolvedValueOnce(undefined);
+		mocks.fetcher.mockResolvedValueOnce(remotePage);
 		const backend = {
-			...offlineBackend(),
-			boardState: { getBoard },
+			...onlineBackend(),
+			boardState: {
+				getBoard: vi.fn().mockRejectedValue(new Error("network unavailable")),
+			},
 		};
 		const state = new PageState(backend as never);
 
-		await expect(state.getPage("app-1", "page-1", "board-1")).rejects.toBe(
-			nativeFailure,
+		// Rendering reads the page payload, which the server holds and serves; a board file
+		// this device never downloaded must not keep the interface dark.
+		await expect(state.getPage("app-1", "page-1", "board-1")).resolves.toEqual(
+			remotePage,
 		);
-		expect(mocks.invoke).toHaveBeenCalledTimes(1);
-		expect(mocks.fetcher).not.toHaveBeenCalled();
+		expect(mocks.fetcher).toHaveBeenCalled();
+	});
+
+	test("keeps the native board error, with its cause, when the server cannot answer either", async () => {
+		const nativeFailure = {
+			error:
+				"Failed to open board 'board-1' while looking up page 'page-1': Object at location apps/app-1/board-1.board not found",
+		};
+		const repairFailure = new Error("network unavailable");
+		mocks.invoke.mockRejectedValueOnce(nativeFailure);
+		mocks.fetcher.mockRejectedValueOnce(new Error("hub unreachable"));
+		const backend = {
+			...onlineBackend(),
+			boardState: { getBoard: vi.fn().mockRejectedValue(repairFailure) },
+		};
+		const state = new PageState(backend as never);
+
+		const rejection = await state
+			.getPage("app-1", "page-1", "board-1")
+			.catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(Error);
+		expect((rejection as Error).message).toContain(
+			"Failed to open board 'board-1'",
+		);
+		// Why the board never arrived is the diagnosis; without it every cause reads as
+		// "the file is missing".
+		expect((rejection as Error).cause).toBe(repairFailure);
+	});
+
+	test("asks the server for an app whose visibility this device has not learned", async () => {
+		const nativeFailure = {
+			error:
+				"Failed to load page 'page-1' from board 'board-1': page page-1 not found at canonical path",
+		};
+		const remotePage = { id: "page-1", boardId: "board-1" };
+		mocks.invoke
+			.mockRejectedValueOnce(nativeFailure)
+			.mockResolvedValueOnce(undefined);
+		mocks.fetcher.mockResolvedValueOnce(remotePage);
+		const state = new PageState(unknownVisibilityBackend() as never);
+
+		await expect(state.getPage("app-1", "page-1", "board-1")).resolves.toEqual(
+			remotePage,
+		);
+		expect(mocks.fetcher).toHaveBeenCalled();
 	});
 
 	test("recognizes an unreadable local page payload", () => {
@@ -229,7 +309,7 @@ describe("desktop page lookup errors", () => {
 		await expect(state.getPage("app-1", "page-1")).rejects.toThrow(
 			"Page not found: page-1",
 		);
-		expect(backend.isOffline).toHaveBeenCalledWith("app-1");
+		expect(backend.isLocalOnly).toHaveBeenCalledWith("app-1");
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 	});
 });

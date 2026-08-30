@@ -7,9 +7,11 @@ use flow_like::flow::execution::{
     LogLevel, context::ExecutionContext, egress, internal_node::InternalNode, log::LogMessage,
 };
 
+#[cfg(feature = "execute")]
+use flow_like::flow::pin::PinType;
 use flow_like::flow::{
     node::{Node, NodeLogic},
-    pin::{PinOptions, PinType},
+    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::async_trait;
@@ -58,6 +60,7 @@ impl NodeLogic for WebSocketConnectNode {
              connection closes, then triggers on_close.",
             "Web/WebSocket",
         );
+        node.set_flowscript_name("websocket", "connect");
         node.add_icon("/flow/icons/web.svg");
         node.set_long_running(true);
         node.set_can_reference_fns(true);
@@ -400,10 +403,8 @@ async fn reset_handler_output_pins(context: &ExecutionContext) {
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
-        })
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .map(|pin| (*pin).clone())
         .collect();
 
     for pin in pins {
@@ -421,8 +422,8 @@ async fn set_named_output_pin(
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| pin.pin_type == PinType::Output && pin.name == name)
-        .map(|(_, pin)| pin.clone())
+        .filter(|pin| pin.pin_type == PinType::Output && pin.name.as_ref() == name)
+        .map(|pin| (*pin).clone())
         .collect();
 
     let matched = !pins.is_empty();
@@ -443,10 +444,12 @@ async fn set_first_typed_output_pin(
         .node
         .pins
         .iter()
-        .find(|(_, pin)| {
-            pin.pin_type == PinType::Output && pin.data_type == data_type && pin.name != "payload"
+        .find(|pin| {
+            pin.pin_type == PinType::Output
+                && pin.data_type == data_type
+                && pin.name.as_ref() != "payload"
         })
-        .map(|(_, pin)| pin.clone());
+        .map(|pin| (*pin).clone());
 
     if let Some(pin) = pin {
         pin.set_value(value).await;
@@ -465,12 +468,12 @@ async fn map_object_to_output_pins(
         .node
         .pins
         .iter()
-        .filter(|(_, pin)| {
+        .filter(|pin| {
             pin.pin_type == PinType::Output
                 && pin.data_type != VariableType::Execution
-                && pin.name != "payload"
+                && pin.name.as_ref() != "payload"
         })
-        .map(|(_, pin)| (pin.name.clone(), pin.clone()))
+        .map(|pin| (pin.name.to_string(), (*pin).clone()))
         .collect();
 
     let mut matched = false;
@@ -586,11 +589,11 @@ async fn create_message_handler_context(
     let mut has_payload_pin = false;
     let mut typed_pin_count: usize = 0;
 
-    for pin in ref_node_pins.values() {
+    for pin in ref_node_pins.iter() {
         if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
             continue;
         }
-        if pin.name == "payload" {
+        if pin.name.as_ref() == "payload" {
             has_payload_pin = true;
             continue;
         }
@@ -788,7 +791,7 @@ mod tests {
             name_cache,
         ));
 
-        for pin in internal.pins.values() {
+        for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
             pin.init_connected_to(Vec::new());
             pin.init_depends_on(Vec::new());
@@ -841,6 +844,7 @@ mod tests {
             None,
             None,
             Arc::new(AHashMap::new()),
+            None,
         )
         .await
     }

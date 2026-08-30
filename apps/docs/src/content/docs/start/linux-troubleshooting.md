@@ -1,20 +1,20 @@
 ---
 title: Linux Troubleshooting
-description: Fixes for blank windows, EGL errors and AppImage mount failures on Linux
+description: Fixes for glibc errors, blank windows, EGL errors and AppImage mount failures on Linux
 sidebar:
   order: 25
 ---
 
-Most Linux problems with Flow-Like Desktop come from the AppImage interacting
-with the host graphics stack. This page covers the known symptoms and their
-workarounds.
+Linux startup failures usually come from a system-library baseline mismatch or
+from the AppImage interacting with the host graphics stack. This page covers
+the known symptoms and their workarounds.
 
 If none of these match, collect the diagnostics at the bottom of this page and
 [open a GitHub issue](https://github.com/Rheosoph/flow-like/issues).
 
 ## The window is blank and the terminal says `EGL_BAD_PARAMETER`
 
-**Symptom.** The application window opens but stays completely empty — no menu,
+**Symptom.** The application window opens but stays completely empty: no menu,
 no controls, no reaction to keyboard shortcuts. Started from a terminal, it
 prints:
 
@@ -23,8 +23,8 @@ Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
 ```
 
 **Affects.** AppImage builds up to and including 0.1.7, on distributions that
-ship a recent Mesa — Arch, Manjaro, EndeavourOS, CachyOS and derivatives. It
-happens on both X11 and Wayland sessions.
+ship a recent Mesa, including Arch, Manjaro, EndeavourOS, CachyOS and their
+derivatives. It happens on both X11 and Wayland sessions.
 
 **Cause.** Those AppImages bundle their own `libwayland-client.so.0`, and
 `AppRun` puts the bundled library directory ahead of the system one. Your Mesa
@@ -33,9 +33,9 @@ load against the older bundled copy, and the EGL setup collapses. The browser
 engine treats that as fatal and terminates its rendering process, which leaves
 the empty window behind.
 
-:::caution[This is a packaging bug, not a problem with your system]
-Nothing is wrong with your drivers. The workaround below makes the app use your
-distribution's own Wayland libraries instead of the ones we shipped.
+:::caution[The package caused this failure]
+Your drivers are working. The workaround below makes the app use your
+distribution's own Wayland libraries instead of the copies we shipped.
 :::
 
 **Fix.** Extract the AppImage and remove the bundled Wayland libraries:
@@ -63,9 +63,32 @@ LD_PRELOAD=$(ldconfig -p | awk '/libwayland-client\.so\.0/{print $NF; exit}') \
 ```
 
 Setting `GDK_BACKEND`, `WEBKIT_FORCE_COMPOSITING_MODE` or
-`LIBGL_ALWAYS_SOFTWARE` does **not** help with this particular failure — the
+`LIBGL_ALWAYS_SOFTWARE` does **not** help with this particular failure. The
 AppImage already forces an X11 backend internally, and the software renderer
 lives inside the same library that fails to load.
+
+## The terminal reports `GLIBC_2.38` or `GLIBC_2.39` not found
+
+**Symptom.** The AppImage exits before opening a window and prints one or more
+`version 'GLIBC_2.38' not found` or `version 'GLIBC_2.39' not found` messages.
+The `.deb` package installs, but its application does not start either.
+
+**Affects.** Prebuilt Linux artifacts up to and including version 0.1.8 on
+distributions with glibc older than 2.39. This includes Ubuntu and Pop!_OS
+22.04 with glibc 2.35, and Debian 12 with glibc 2.36.
+
+**Cause.** The affected Linux artifacts were built using Ubuntu 24.04 userland.
+The desktop executable and libraries copied into its AppImage require newer
+glibc symbols than older distributions provide. AppImage uses the host's glibc,
+so extracting the AppImage or installing the `.deb` cannot resolve this
+mismatch.
+
+**Fix.** Install Flow-Like 0.1.9 or later. These releases use a glibc 2.35
+baseline. If that release is not available yet, use the web application or
+build [from source](/dev/build/) on the target distribution.
+
+Do not replace the system glibc manually. Ubuntu treats it as a core system
+component, and replacing it can leave the operating system unusable.
 
 ## The AppImage will not start at all
 
@@ -90,8 +113,11 @@ also works.
 
 Every release publishes `.deb` and `.rpm` packages next to the AppImage. These
 link against your distribution's own web engine and graphics libraries and
-bundle no graphics libraries at all, so they avoid the whole class of problem
-above. On Debian and Ubuntu derivatives, install the `.deb` normally.
+bundle no graphics libraries, so they avoid AppImage-specific graphics library
+conflicts. They contain the same desktop executable and keep the release's
+glibc requirement. In particular, the 0.1.8 `.deb` does not resolve the
+`GLIBC_2.38` or `GLIBC_2.39` error. On Debian and Ubuntu derivatives, install a
+compatible release's `.deb` normally.
 
 On distributions without a matching package manager you can still run the
 payload directly. On Arch and Manjaro:
@@ -104,16 +130,16 @@ bsdtar -xf data.tar.* -C /tmp/flow-like
 ./usr/bin/flow-like-desktop
 ```
 
-This is not a managed installation — there is no package database entry and no
-automatic updates — and the binary must be started from inside the extracted
+This is an unmanaged installation. There is no package database entry or
+automatic update support. Start the binary from inside the extracted
 tree, because it locates its bundled AI runtime libraries relative to itself.
 
 ## System requirements
 
-The Linux builds are compiled on Ubuntu 24.04. They require glibc 2.39 or newer,
-which means Ubuntu 24.04+, Debian 13+, Fedora 40+, or any current rolling
-release. Older distributions are not supported by the prebuilt artifacts; build
-[from source](/dev/build/) instead.
+Linux artifacts from version 0.1.9 onward are built on Ubuntu 22.04 and require
+glibc 2.35 or newer. This includes Ubuntu and Pop!_OS 22.04+, Debian 12+, and
+newer releases of those distributions. Prebuilt Linux artifacts up to and
+including version 0.1.8 require glibc 2.39.
 
 ## Collecting diagnostics for a bug report
 
@@ -133,6 +159,6 @@ actionable:
 `/tmp/flow-like-sysinfo.txt` together with the complete terminal output of the
 failed launch.
 
-If `eglinfo -B` fails on its own — without Flow-Like involved — the problem is in
-the host graphics stack rather than in our packaging. A partial system upgrade or
-a driver update without a reboot are the usual causes.
+If `eglinfo -B` fails on its own, without Flow-Like involved, the problem is in
+the host graphics stack. A partial system upgrade or a driver update without a
+reboot are the usual causes.

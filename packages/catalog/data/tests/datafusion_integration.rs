@@ -3,12 +3,12 @@
 //! These tests verify that our FlowLike node implementations work correctly
 //! with DataFusion sessions using the FlowLikeStore abstraction layer.
 //!
-//! Run all tests: cargo test --package flow-like-catalog-data --test datafusion_integration
+//! Run all tests: cargo test --package flow-like-catalog-data --features execute --test datafusion_integration
 //!
 //! For Docker-dependent tests:
 //! ```sh
 //! cd tests && docker-compose -f docker-compose.test.yml up -d
-//! cargo test --package flow-like-catalog-data --test datafusion_integration -- --ignored
+//! cargo test --package flow-like-catalog-data --features execute --test datafusion_integration -- --ignored
 //! ```
 
 use std::path::PathBuf;
@@ -865,7 +865,7 @@ mod schema_tests {
 
 // ============================================================================
 // Real Database Integration Tests
-// Run with: cargo test --package flow-like-catalog-data --test datafusion_integration
+// Run with: cargo test --package flow-like-catalog-data --features execute --test datafusion_integration
 // Requires: docker-compose -f tests/docker-compose.test.yml up -d
 // ============================================================================
 

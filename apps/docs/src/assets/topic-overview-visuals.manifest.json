@@ -1,7 +1,7 @@
 {
 	"schemaVersion": 1,
 	"createdOn": "2026-07-29",
-	"updatedOn": "2026-08-11",
+	"updatedOn": "2026-08-27",
 	"visualSystem": {
 		"canvas": "dark charcoal",
 		"primary": "#ff7656",
@@ -45,6 +45,12 @@
 			"dimensions": "1440x720",
 			"source": "deterministic SVG composition",
 			"page": "topics/datascience/overview.md"
+		},
+		{
+			"file": "LanceIndexDecisionGuide.svg",
+			"dimensions": "720x1070",
+			"source": "deterministic SVG composition",
+			"page": "topics/datascience/lance-indexes.md"
 		},
 		{
 			"file": "SummarizationStrategiesOverview.svg",

@@ -38,49 +38,78 @@ use std::sync::{Arc, LazyLock};
 pub use flow_like_catalog_core::NodeLogic;
 
 // Re-export core types and utilities
+#[cfg(any(feature = "portable-execute", feature = "compat"))]
+pub use flow_like_catalog_core::CachedDB;
 pub use flow_like_catalog_core::{
-    Attachment, BoundingBox, CachedDB, DEFAULT_GRAPH_NEIGHBORS_DIRECTION,
-    DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE, FlowPath,
-    FlowPathRuntime, FlowPathStore, GraphOverlay, NodeDBConnection, NodeImage, NodeImageWrapper,
-    ObjectViewDefinition, OntologyActionDefinition, RemoteOntologyImport, is_reserved_table,
+    Attachment, BoundingBox, DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT,
+    DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE, FlowPath, FlowPathRuntime, FlowPathStore,
+    GraphOverlay, NodeDBConnection, NodeImage, NodeImageWrapper, ObjectViewDefinition,
+    OntologyActionDefinition, RemoteOntologyImport, is_reserved_table,
     ontology_action_parameter_validator, ontology_binding_nodes, register_node,
     remote_ontology_binding_nodes, validate_ontology_action_parameters,
 };
 
 // Re-export standard library
+#[cfg(feature = "package-std")]
 pub use flow_like_catalog_std::{control, logging, math, structs, utils, variables};
 
 // Re-export data integrations
+#[cfg(feature = "package-data")]
 pub use flow_like_catalog_data::{data, events};
 
 // Re-export web modules
+#[cfg(feature = "package-web")]
 pub use flow_like_catalog_web::{http, mail, web};
 
 // Re-export Telegram and Discord modules
+#[cfg(feature = "package-web")]
 pub use flow_like_catalog_web::discord;
+#[cfg(feature = "package-web")]
 pub use flow_like_catalog_web::telegram;
 
 // Re-export media modules
+#[cfg(feature = "package-media")]
 pub use flow_like_catalog_media::{bit, image};
 
 // Re-export ML module
+#[cfg(feature = "package-ml")]
 pub use flow_like_catalog_ml::ml;
 
 // Re-export ONNX module
+#[cfg(feature = "package-onnx")]
 pub use flow_like_catalog_onnx::{onnx, teachable_machine};
 
 // Re-export LLM/GenAI modules
+#[cfg(feature = "package-llm")]
 pub use flow_like_catalog_llm::generative;
 
 // Re-export processing modules
+#[cfg(feature = "package-geo")]
 pub use flow_like_catalog_geo::geo;
+#[cfg(feature = "package-processing")]
 pub use flow_like_catalog_processing::processing;
 
 // Re-export automation modules (desktop only — not available on iOS/Android)
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(all(
+    feature = "package-automation",
+    not(any(target_os = "ios", target_os = "android"))
+))]
 pub use flow_like_catalog_automation::{
     browser, computer, fingerprint, llm as automation_llm, rpa, selector, vision,
 };
+
+macro_rules! package_nodes {
+    ($feature:literal, $get_catalog:path) => {{
+        #[cfg(feature = $feature)]
+        {
+            $get_catalog()
+        }
+        #[cfg(not(feature = $feature))]
+        {
+            Vec::new()
+        }
+    }};
+}
 
 /// Available catalog packages that can be included/excluded
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,16 +147,38 @@ impl CatalogPackage {
     fn get_nodes(&self) -> Vec<Arc<dyn NodeLogic>> {
         match self {
             CatalogPackage::Core => Vec::new(),
-            CatalogPackage::Std => flow_like_catalog_std::get_catalog(),
-            CatalogPackage::Data => flow_like_catalog_data::get_catalog(),
-            CatalogPackage::Web => flow_like_catalog_web::get_catalog(),
-            CatalogPackage::Media => flow_like_catalog_media::get_catalog(),
-            CatalogPackage::Ml => flow_like_catalog_ml::get_catalog(),
-            CatalogPackage::Onnx => flow_like_catalog_onnx::get_catalog(),
-            CatalogPackage::Llm => flow_like_catalog_llm::get_catalog(),
-            CatalogPackage::Processing => flow_like_catalog_processing::get_catalog(),
-            CatalogPackage::Geo => flow_like_catalog_geo::get_catalog(),
-            CatalogPackage::Automation => flow_like_catalog_automation::get_catalog(),
+            CatalogPackage::Std => {
+                package_nodes!("package-std", flow_like_catalog_std::get_catalog)
+            }
+            CatalogPackage::Data => {
+                package_nodes!("package-data", flow_like_catalog_data::get_catalog)
+            }
+            CatalogPackage::Web => {
+                package_nodes!("package-web", flow_like_catalog_web::get_catalog)
+            }
+            CatalogPackage::Media => {
+                package_nodes!("package-media", flow_like_catalog_media::get_catalog)
+            }
+            CatalogPackage::Ml => {
+                package_nodes!("package-ml", flow_like_catalog_ml::get_catalog)
+            }
+            CatalogPackage::Onnx => {
+                package_nodes!("package-onnx", flow_like_catalog_onnx::get_catalog)
+            }
+            CatalogPackage::Llm => {
+                package_nodes!("package-llm", flow_like_catalog_llm::get_catalog)
+            }
+            CatalogPackage::Processing => package_nodes!(
+                "package-processing",
+                flow_like_catalog_processing::get_catalog
+            ),
+            CatalogPackage::Geo => {
+                package_nodes!("package-geo", flow_like_catalog_geo::get_catalog)
+            }
+            CatalogPackage::Automation => package_nodes!(
+                "package-automation",
+                flow_like_catalog_automation::get_catalog
+            ),
         }
     }
 
@@ -199,6 +250,9 @@ impl std::str::FromStr for CatalogPackage {
     }
 }
 
+/// Predicate deciding whether an individual node stays in the built catalog.
+pub type NodeFilter = Box<dyn Fn(&dyn NodeLogic) -> bool + Send + Sync>;
+
 /// Builder for constructing a customized catalog
 #[derive(Default)]
 pub struct CatalogBuilder {
@@ -207,7 +261,7 @@ pub struct CatalogBuilder {
     excluded_nodes: HashSet<String>,
     included_nodes: Option<HashSet<String>>,
     custom_nodes: Vec<Arc<dyn NodeLogic>>,
-    node_filter: Option<Box<dyn Fn(&dyn NodeLogic) -> bool + Send + Sync>>,
+    node_filter: Option<NodeFilter>,
 }
 
 impl CatalogBuilder {
@@ -335,8 +389,29 @@ impl CatalogBuilder {
     }
 }
 
-/// Static cached catalog - initialized once on first access
-static CATALOG: LazyLock<Vec<Arc<dyn NodeLogic>>> = LazyLock::new(|| CatalogBuilder::new().build());
+#[cfg(feature = "runtime-catalog")]
+fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
+    match node.get_node().name.as_str() {
+        "ai_audio_local_text_to_speech" => cfg!(feature = "local-tts"),
+        "ai_audio_local_speech_to_text" => cfg!(feature = "local-stt"),
+        "df_register_oracle" | "df_register_athena" => cfg!(feature = "odbc"),
+        _ => true,
+    }
+}
+
+fn product_catalog_builder() -> CatalogBuilder {
+    let builder = CatalogBuilder::new();
+    #[cfg(feature = "runtime-catalog")]
+    {
+        return builder.with_filter(runtime_implementation_available);
+    }
+    #[cfg(not(feature = "runtime-catalog"))]
+    builder
+}
+
+/// Static cached product catalog, initialized once on first access.
+static CATALOG: LazyLock<Vec<Arc<dyn NodeLogic>>> =
+    LazyLock::new(|| product_catalog_builder().build());
 
 /// Get the full catalog from all sub-crates (cached, initialized once)
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
@@ -345,19 +420,61 @@ pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
 
 /// Get catalog from specific packages only (not cached - use sparingly)
 pub fn get_catalog_from(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic>> {
-    CatalogBuilder::new().only_packages(packages).build()
+    product_catalog_builder().only_packages(packages).build()
 }
 
 /// Get catalog excluding specific packages (not cached - use sparingly)
 pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic>> {
-    CatalogBuilder::new().exclude_packages(packages).build()
+    product_catalog_builder().exclude_packages(packages).build()
+}
+
+#[cfg(all(test, feature = "package-data", feature = "package-media"))]
+mod catalog_surface_tests {
+    use super::*;
+
+    fn has_node(catalog: &[Arc<dyn NodeLogic>], name: &str) -> bool {
+        catalog.iter().any(|logic| logic.get_node().name == name)
+    }
+
+    #[test]
+    fn raw_builder_keeps_optional_nodes_for_metadata_tooling() {
+        let catalog = CatalogBuilder::new().build();
+
+        for name in [
+            "ai_audio_local_text_to_speech",
+            "ai_audio_local_speech_to_text",
+            "df_register_oracle",
+            "df_register_athena",
+        ] {
+            assert!(has_node(&catalog, name), "raw catalog omitted {name}");
+        }
+    }
+
+    #[cfg(feature = "runtime-catalog")]
+    #[test]
+    fn product_catalog_omits_optional_nodes_without_their_runtime() {
+        let catalog = get_catalog();
+
+        assert_eq!(
+            has_node(&catalog, "ai_audio_local_text_to_speech"),
+            cfg!(feature = "local-tts")
+        );
+        assert_eq!(
+            has_node(&catalog, "ai_audio_local_speech_to_text"),
+            cfg!(feature = "local-stt")
+        );
+        for name in ["df_register_oracle", "df_register_athena"] {
+            assert_eq!(has_node(&catalog, name), cfg!(feature = "odbc"));
+        }
+    }
 }
 
 /// Initialize the catalog runtime systems.
 ///
 /// This should be called once at application startup, before any flow execution.
-/// It initializes:
-/// - ONNX Runtime with the best available execution providers (GPU/NPU acceleration)
+/// With `local-ml` enabled, it initializes ONNX Runtime with the best available
+/// execution providers. Remote-only and metadata-only builds return an empty
+/// status without loading an inference runtime.
 ///
 /// # Returns
 ///
@@ -370,38 +487,53 @@ pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic
 ///
 /// fn main() {
 ///     let info = initialize();
+///     println!("ONNX configured: {}", info.onnx_configured);
 ///     println!("Configured providers: {:?}", info.onnx_providers);
 ///     println!("Acceleration configured: {}", info.onnx_accelerated);
 /// }
 /// ```
-#[cfg(feature = "execute")]
 pub fn initialize() -> InitInfo {
-    let onnx_info = flow_like_catalog_onnx::onnx::initialize_ort();
-    tracing::info!(
-        providers = ?onnx_info.active_providers,
-        accelerated = onnx_info.accelerated,
-        "ONNX Runtime initialized"
-    );
-    InitInfo {
-        onnx_providers: onnx_info.active_providers,
-        onnx_accelerated: onnx_info.accelerated,
-        onnx_warnings: onnx_info.warnings,
+    #[cfg(feature = "local-ml")]
+    {
+        let onnx_info = flow_like_catalog_onnx::onnx::initialize_ort();
+        if onnx_info.configured {
+            tracing::info!(
+                providers = ?onnx_info.active_providers,
+                accelerated = onnx_info.accelerated,
+                "ONNX Runtime initialized"
+            );
+        } else {
+            tracing::warn!(
+                providers = ?onnx_info.active_providers,
+                warnings = ?onnx_info.warnings,
+                "ONNX Runtime configuration is unavailable"
+            );
+        }
+        return InitInfo {
+            onnx_providers: onnx_info.active_providers,
+            onnx_accelerated: onnx_info.accelerated,
+            onnx_configured: onnx_info.configured,
+            onnx_warnings: onnx_info.warnings,
+        };
+    }
+
+    #[cfg(not(feature = "local-ml"))]
+    {
+        tracing::debug!("ONNX Runtime initialization skipped because local ML is disabled");
+        InitInfo::default()
     }
 }
 
 /// Information about initialized runtime systems
-#[cfg(feature = "execute")]
 #[derive(Debug, Clone, Default)]
 pub struct InitInfo {
-    /// Configured ONNX execution providers, including CPU fallback
+    /// Configured ONNX execution providers, including CPU fallback.
+    /// Empty when local ML execution is disabled.
     pub onnx_providers: Vec<String>,
     /// Whether ONNX has a GPU/NPU provider configured
     pub onnx_accelerated: bool,
+    /// Whether FlowLike configured the process-wide ONNX Runtime environment
+    pub onnx_configured: bool,
     /// Any warnings during ONNX initialization
     pub onnx_warnings: Vec<String>,
-}
-
-#[cfg(not(feature = "execute"))]
-pub fn initialize() -> () {
-    // No-op when execute feature is not enabled
 }

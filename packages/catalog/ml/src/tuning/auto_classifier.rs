@@ -3,15 +3,19 @@
 //! Automatically tries multiple classification algorithms and returns the best one.
 //! Simple AutoML that compares models with cross-validation.
 
-use crate::ml::{AutoMLEntry, AutoMLResult, NodeMLModel};
+#[cfg(feature = "execute")]
+use crate::ml::AutoMLEntry;
+use crate::ml::{AutoMLResult, NodeMLModel};
 #[cfg(feature = "execute")]
 use crate::ml::{
     MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
+use flow_like::flow::board::Board;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::{
-    board::Board,
-    execution::{LogLevel, context::ExecutionContext},
+    execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -19,9 +23,10 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
+use flow_like_types::Value;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, seq::SliceRandom};
-use flow_like_types::{Result, Value, async_trait, json::json};
+use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
@@ -211,6 +216,7 @@ impl NodeLogic for AutoClassifierNode {
             "Automatically finds the best classification model. Cross-validates Naive Bayes, Decision Tree, Logistic Regression, Random Forest and SVM, then retrains the winner on the full dataset. The reported Best Model Type can be fed straight into Grid Search to tune it further.",
             "AI/ML/Tuning",
         );
+        node.set_flowscript_name("ml", "autoClassifier");
         node.add_icon("/flow/icons/chart-network.svg");
         node.set_version(2);
 
@@ -722,7 +728,6 @@ impl NodeLogic for AutoClassifierNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let source_pin: String = node
             .get_pin_by_name("source")
@@ -765,6 +770,14 @@ impl NodeLogic for AutoClassifierNode {
     }
 }
 
+/// Training dataset, validation features and the validation row indices of one CV fold.
+#[cfg(feature = "execute")]
+type FoldSplit = (
+    DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
+    ndarray::Array2<f64>,
+    Vec<usize>,
+);
+
 #[cfg(feature = "execute")]
 fn create_fold_split(
     records: &DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
@@ -772,11 +785,7 @@ fn create_fold_split(
     fold: usize,
     fold_size: usize,
     cv_folds: usize,
-) -> (
-    DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
-    ndarray::Array2<f64>,
-    Vec<usize>,
-) {
+) -> FoldSplit {
     let n_samples = records.nsamples();
     let val_start = fold * fold_size;
     let val_end = if fold == cv_folds - 1 {

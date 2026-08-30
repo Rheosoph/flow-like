@@ -174,7 +174,7 @@ mod tests {
                     values.retain(|value| {
                         value
                             .as_str()
-                            .map_or(true, |variant| !variants.contains(&variant))
+                            .is_none_or(|variant| !variants.contains(&variant))
                     });
                 }
 
@@ -203,10 +203,7 @@ mod tests {
         cleanup.main_variable_iteration(&mut variable, &HashMap::new());
 
         let migrated = variable.schema.expect("schema should remain set");
-        assert_eq!(
-            Some(migrated.as_str()),
-            cleanup.bit_schema.as_ref().map(String::as_str)
-        );
+        assert_eq!(Some(migrated.as_str()), cleanup.bit_schema.as_deref());
         assert!(migrated.contains("\"Tts\""));
         assert!(migrated.contains("\"Stt\""));
     }
@@ -223,10 +220,7 @@ mod tests {
         cleanup.main_variable_iteration(&mut variable, &HashMap::new());
 
         let migrated = variable.schema.expect("schema should remain set");
-        assert_eq!(
-            Some(migrated.as_str()),
-            cleanup.bit_schema.as_ref().map(String::as_str)
-        );
+        assert_eq!(Some(migrated.as_str()), cleanup.bit_schema.as_deref());
         assert!(migrated.contains("\"Stt\""));
     }
 
@@ -242,10 +236,7 @@ mod tests {
 
         cleanup.main_variable_iteration(&mut variable, &HashMap::new());
 
-        assert_eq!(
-            variable.schema.as_deref(),
-            cleanup.bit_schema.as_ref().map(String::as_str)
-        );
+        assert_eq!(variable.schema.as_deref(), cleanup.bit_schema.as_deref());
     }
 
     #[test]

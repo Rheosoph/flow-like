@@ -1,0 +1,201 @@
+---
+import { getCollection } from "astro:content";
+import { Icon } from "@astrojs/starlight/components";
+
+const RELATED_ENTRY_IDS: Readonly<Record<string, readonly string[]>> = {
+	introduction: [
+		"part-1/01-the-3-am-call",
+		"part-1/04-first-flow-incident-triage",
+		"contents",
+	],
+	"part-1/01-the-3-am-call": [
+		"part-1/02-manifesto-constrained-freedom",
+		"part-1/04-first-flow-incident-triage",
+		"introduction",
+	],
+	"part-1/02-manifesto-constrained-freedom": [
+		"part-1/03-one-platform-one-flow-model",
+		"part-2/11-state-configuration-runtime-values-secrets",
+		"part-1/01-the-3-am-call",
+	],
+	"part-1/03-one-platform-one-flow-model": [
+		"part-1/04-first-flow-incident-triage",
+		"part-2/05-nodes-pins-wires-execution",
+		"part-2/13-events-interfaces-complete-apps",
+	],
+	"part-1/04-first-flow-incident-triage": [
+		"part-2/05-nodes-pins-wires-execution",
+		"part-2/10-branches-loops-parallelism-return",
+		"part-3/14-board-ast-text",
+	],
+	"part-2/05-nodes-pins-wires-execution": [
+		"part-2/06-anatomy-of-a-flowscript-document",
+		"part-2/10-branches-loops-parallelism-return",
+		"part-2/12-functions-layers-handlers-caching",
+	],
+	"part-2/06-anatomy-of-a-flowscript-document": [
+		"part-2/07-values-types-collections-interfaces",
+		"part-3/14-board-ast-text",
+		"part-1/04-first-flow-incident-triage",
+	],
+	"part-2/07-values-types-collections-interfaces": [
+		"part-2/08-calling-the-node-library",
+		"part-2/09-expressions-operators-readable-sugar",
+		"part-2/06-anatomy-of-a-flowscript-document",
+	],
+	"part-2/08-calling-the-node-library": [
+		"part-2/07-values-types-collections-interfaces",
+		"part-2/09-expressions-operators-readable-sugar",
+		"part-2/12-functions-layers-handlers-caching",
+	],
+	"part-2/09-expressions-operators-readable-sugar": [
+		"part-2/07-values-types-collections-interfaces",
+		"part-2/10-branches-loops-parallelism-return",
+		"part-3/14-board-ast-text",
+	],
+	"part-2/10-branches-loops-parallelism-return": [
+		"part-2/05-nodes-pins-wires-execution",
+		"part-2/09-expressions-operators-readable-sugar",
+		"part-2/12-functions-layers-handlers-caching",
+	],
+	"part-2/11-state-configuration-runtime-values-secrets": [
+		"part-1/03-one-platform-one-flow-model",
+		"part-2/12-functions-layers-handlers-caching",
+		"part-2/13-events-interfaces-complete-apps",
+	],
+	"part-2/12-functions-layers-handlers-caching": [
+		"part-2/05-nodes-pins-wires-execution",
+		"part-2/11-state-configuration-runtime-values-secrets",
+		"part-2/13-events-interfaces-complete-apps",
+	],
+	"part-2/13-events-interfaces-complete-apps": [
+		"part-1/03-one-platform-one-flow-model",
+		"part-2/11-state-configuration-runtime-values-secrets",
+		"part-2/12-functions-layers-handlers-caching",
+	],
+	"part-3/14-board-ast-text": [
+		"part-2/06-anatomy-of-a-flowscript-document",
+		"part-2/09-expressions-operators-readable-sugar",
+		"part-3",
+	],
+};
+
+const { entry } = Astro.locals.starlightRoute;
+const relatedIds = RELATED_ENTRY_IDS[entry.id] ?? [];
+const docs = relatedIds.length > 0 ? await getCollection("docs") : [];
+const docsById = new Map(docs.map((doc) => [doc.id, doc]));
+const related = relatedIds.flatMap((entryId) => {
+	const relatedEntry = docsById.get(entryId);
+	return relatedEntry ? [{ entryId, entry: relatedEntry }] : [];
+});
+---
+
+{
+	related.length > 0 && (
+		<nav class="book-related" aria-labelledby="book-related-title">
+			<div class="book-related__heading">
+				<p>Continue exploring</p>
+				<h2 id="book-related-title">Related reading</h2>
+			</div>
+			<ul>
+				{related.map(({ entryId, entry: relatedEntry }) => (
+					<li>
+						<a href={`/${entryId}/`}>
+							<div>
+								<h3>{relatedEntry.data.title}</h3>
+								{relatedEntry.data.description && (
+									<p>{relatedEntry.data.description}</p>
+								)}
+							</div>
+							<Icon name="right-arrow" />
+						</a>
+					</li>
+				))}
+			</ul>
+		</nav>
+	)
+}
+
+<style>
+	.book-related {
+		margin-top: 3rem;
+		padding-top: 2rem;
+		border-top: 1px solid var(--sl-color-hairline);
+	}
+
+	.book-related__heading p {
+		margin: 0 0 0.35rem;
+		font: 700 0.66rem/1.3 var(--flowbook-mono, ui-monospace, monospace);
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--sl-color-accent-high);
+	}
+
+	.book-related__heading h2 {
+		margin: 0;
+		font-size: 1.35rem;
+	}
+
+	.book-related ul {
+		margin: 1rem 0 0;
+		padding: 0;
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.75rem;
+		list-style: none;
+	}
+
+	.book-related li {
+		margin: 0;
+	}
+
+	.book-related a {
+		height: 100%;
+		padding: 1rem;
+		display: flex;
+		gap: 0.8rem;
+		justify-content: space-between;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.65rem;
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.book-related a:hover {
+		border-color: var(--sl-color-accent-high);
+	}
+
+	.book-related h3,
+	.book-related p {
+		margin: 0;
+	}
+
+	.book-related h3 {
+		font-size: 0.94rem;
+		line-height: 1.35;
+		color: var(--sl-color-white);
+	}
+
+	.book-related h3 + p {
+		margin-top: 0.45rem;
+		display: -webkit-box;
+		overflow: hidden;
+		font-size: 0.78rem;
+		line-height: 1.5;
+		color: var(--sl-color-gray-2);
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+	}
+
+	.book-related :global(svg) {
+		width: 1rem;
+		flex: 0 0 auto;
+		color: var(--sl-color-accent-high);
+	}
+
+	@media (max-width: 54rem) {
+		.book-related ul {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

@@ -37,6 +37,7 @@ fn canonical_json(value: &Value) -> String {
 /// The hash covers: sequence, timestamp, actor_id, action, resource_type,
 /// resource_id, details (canonical JSON or empty), prev_hash, and prev_signature.
 /// This forms a tamper-evident chain — altering any field breaks the chain.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_entry_hash(
     sequence: i64,
     timestamp: &NaiveDateTime,
@@ -79,26 +80,26 @@ pub fn compute_entry_hash(
     hasher.finalize().to_hex().to_string()
 }
 
+/// One audit entry as fed to [`verify_chain`]:
+/// (seq, ts, actor, action, resource_type, resource_id, details, prev_hash, entry_hash, prev_signature)
+pub type ChainEntryRow = (
+    i64,
+    NaiveDateTime,
+    String,
+    String,
+    String,
+    String,
+    Option<Value>,
+    String,
+    String,
+    Option<String>,
+);
+
 /// Verify a segment of a hash chain. Returns the index of the first broken entry,
 /// or None if the chain is valid.
 ///
 /// `entries` must be sorted by sequence ascending within the same chain.
-/// Tuple fields: (seq, ts, actor, action, rtype, rid, details, prev_hash, entry_hash, prev_signature)
-pub fn verify_chain(
-    entries: &[(
-        i64,
-        NaiveDateTime,
-        String,
-        String,
-        String,
-        String,
-        Option<Value>,
-        String,
-        String,
-        Option<String>,
-    )],
-    initial_prev_hash: &str,
-) -> Option<usize> {
+pub fn verify_chain(entries: &[ChainEntryRow], initial_prev_hash: &str) -> Option<usize> {
     let mut expected_prev = initial_prev_hash.to_string();
     for (i, (seq, ts, actor, action, rtype, rid, details, prev_hash, entry_hash, prev_sig)) in
         entries.iter().enumerate()

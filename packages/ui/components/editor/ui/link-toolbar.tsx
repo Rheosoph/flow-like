@@ -108,7 +108,7 @@ export function LinkFloatingToolbar({
 
 				<FloatingLinkUrlInput
 					className={inputVariants()}
-					placeholder={t('pasteLink', 'Paste link')}
+					placeholder={t("pasteLink", "Paste link")}
 					data-plate-focus
 				/>
 			</div>
@@ -119,7 +119,7 @@ export function LinkFloatingToolbar({
 				</div>
 				<input
 					className={inputVariants()}
-					placeholder={t('textToDisplay', 'Text to display')}
+					placeholder={t("textToDisplay", "Text to display")}
 					data-plate-focus
 					{...textInputProps}
 				/>
@@ -136,7 +136,7 @@ export function LinkFloatingToolbar({
 				type="button"
 				{...editButtonProps}
 			>
-				{t('editLink', 'Edit link')}
+				{t("editLink", "Edit link")}
 			</button>
 
 			<Separator orientation="vertical" />

@@ -4,9 +4,12 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use rake::{KeywordSort, Rake, StopWords};
+#[cfg(feature = "execute")]
 use std::collections::HashSet;
 #[cfg(feature = "execute")]
 use whatlang::detect;
@@ -2252,6 +2255,7 @@ impl NodeLogic for RakeExtractionNode {
             "Extracts keywords from text using the RAKE (Rapid Automatic Keyword Extraction) algorithm. RAKE is a domain-independent algorithm that extracts significant phrases by analyzing word frequency and co-occurrence.",
             "AI/Processing",
         );
+        node.set_flowscript_name("ai.processing", "extractKeywordsRake");
         node.add_icon("/flow/icons/key.svg");
 
         node.set_scores(

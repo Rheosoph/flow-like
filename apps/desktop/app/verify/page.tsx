@@ -1,5 +1,4 @@
 "use client";
-import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	type CertificateView,
@@ -7,6 +6,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -63,10 +63,13 @@ export default function VerifyPage() {
 		const reason =
 			certQuery.error instanceof Error
 				? certQuery.error.message
-				: t('thisCertificateDoesntExistOrHasBeenRevoked', 'This certificate doesn\'t exist or has been revoked.');
+				: t(
+						"thisCertificateDoesntExistOrHasBeenRevoked",
+						"This certificate doesn't exist or has been revoked.",
+					);
 		return (
 			<MissingCertScreen
-				title={t('certificateNotFound', 'Certificate not found')}
+				title={t("certificateNotFound", "Certificate not found")}
 				description={reason}
 				certId={certId}
 			/>
@@ -88,8 +91,11 @@ function VerifiedScreen({
 	const issued = new Date(cert.issued_at).toLocaleDateString(undefined, {
 		dateStyle: "long",
 	});
-	const recipient = cert.recipient_name?.trim() || t('anonymousLearner', 'Anonymous learner');
-	const courseTitle = cert.course_name?.trim() || t('courseCourse_id', 'Course {{course_id}}', { course_id: cert.course_id });
+	const recipient =
+		cert.recipient_name?.trim() || t("anonymousLearner", "Anonymous learner");
+	const courseTitle =
+		cert.course_name?.trim() ||
+		t("courseCourse_id", "Course {{course_id}}", { course_id: cert.course_id });
 	const verifyLink = `${origin}/verify?id=${cert.id}`;
 	const qrPayload = useMemo(
 		() =>
@@ -109,7 +115,7 @@ function VerifiedScreen({
 					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="h-3 w-3" />
-					{t('flowlikeUniversity', 'Flow-Like University')}
+					{t("flowlikeUniversity", "Flow-Like University")}
 				</Link>
 
 				{/* Verified badge */}
@@ -120,7 +126,7 @@ function VerifiedScreen({
 					className="flex items-center gap-2 self-start rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/30 text-emerald-700 dark:text-emerald-400 px-4 py-1.5 text-sm font-medium w-fit"
 				>
 					<CheckCircle2 className="size-4" />
-					{t('verifiedCertificate', 'Verified certificate')}
+					{t("verifiedCertificate", "Verified certificate")}
 				</motion.div>
 
 				{/* The certificate */}
@@ -139,12 +145,12 @@ function VerifiedScreen({
 						<div className="space-y-6">
 							<div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] font-semibold text-amber-700 dark:text-amber-300">
 								<ScrollText className="size-3.5" />
-								{t('certificateOfCompletion', 'Certificate of completion')}
+								{t("certificateOfCompletion", "Certificate of completion")}
 							</div>
 
 							<div className="space-y-1.5">
 								<div className="text-xs uppercase tracking-wide text-muted-foreground">
-									{t('thisCertifiesThat', 'This certifies that')}
+									{t("thisCertifiesThat", "This certifies that")}
 								</div>
 								<div className="text-3xl md:text-4xl font-serif font-semibold leading-tight text-foreground">
 									{recipient}
@@ -153,7 +159,7 @@ function VerifiedScreen({
 
 							<div className="space-y-1.5">
 								<div className="text-xs uppercase tracking-wide text-muted-foreground">
-									{t('hasSuccessfullyCompleted', 'has successfully completed')}
+									{t("hasSuccessfullyCompleted", "has successfully completed")}
 								</div>
 								<div className="text-xl md:text-2xl font-medium leading-snug">
 									{courseTitle}
@@ -163,14 +169,14 @@ function VerifiedScreen({
 							<div className="flex items-center gap-4 pt-2">
 								<div>
 									<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-										{t('issued', 'Issued')}
+										{t("issued", "Issued")}
 									</div>
 									<div className="text-sm font-medium">{issued}</div>
 								</div>
 								<div className="size-px h-8 bg-border self-end" />
 								<div>
 									<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-										{t('certificateId', 'Certificate ID')}
+										{t("certificateId", "Certificate ID")}
 									</div>
 									<div className="text-sm font-mono">{cert.id}</div>
 								</div>
@@ -189,7 +195,7 @@ function VerifiedScreen({
 								/>
 							</div>
 							<div className="mt-2 text-center text-[10px] uppercase tracking-wider text-muted-foreground">
-								{t('scanToReverify', 'Scan to re-verify')}
+								{t("scanToReverify", "Scan to re-verify")}
 							</div>
 						</div>
 					</div>
@@ -201,17 +207,17 @@ function VerifiedScreen({
 							</div>
 							<div>
 								<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-									{t('issuedBy', 'Issued by')}
+									{t("issuedBy", "Issued by")}
 								</div>
 								<div className="text-sm font-semibold">
-									{t('flowlikeUniversity', 'Flow-Like University')}
+									{t("flowlikeUniversity", "Flow-Like University")}
 								</div>
 							</div>
 						</div>
 
 						<div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
 							<Sparkles className="size-3 text-amber-500" />
-							<span>{t('sha256Verified', 'SHA-256 verified')}</span>
+							<span>{t("sha256Verified", "SHA-256 verified")}</span>
 						</div>
 					</div>
 				</motion.article>
@@ -225,7 +231,7 @@ function VerifiedScreen({
 				>
 					<div className="flex items-center gap-2 text-sm font-medium">
 						<ShieldCheck className="size-4 text-emerald-500" />
-						{t('verificationHash', 'Verification hash')}
+						{t("verificationHash", "Verification hash")}
 					</div>
 					<div className="rounded-lg bg-muted/50 px-3 py-2 font-mono text-xs break-all">
 						<span className="text-amber-600 dark:text-amber-400 font-semibold">
@@ -242,7 +248,7 @@ function VerifiedScreen({
 							}}
 						>
 							<Copy className="size-3.5 mr-1.5" />
-							{t('copyHash', 'Copy hash')}
+							{t("copyHash", "Copy hash")}
 						</Button>
 						<Button
 							size="sm"
@@ -252,7 +258,7 @@ function VerifiedScreen({
 							}}
 						>
 							<Copy className="size-3.5 mr-1.5" />
-							{t('copyVerifyLink', 'Copy verify link')}
+							{t("copyVerifyLink", "Copy verify link")}
 						</Button>
 					</div>
 				</motion.div>
@@ -284,8 +290,12 @@ function CornerOrnament({ className }: { readonly className?: string }) {
 function LoadingScreen() {
 	return (
 		<div className="flex-1 grid place-items-center p-12">
-			<div className="flex items-center gap-2 text-muted-foreground"><Trans i18nKey="divClassnamesize4RoundedfullBorder2Bordermutedforeground30BordertforegroundAnimatespinVerifyingCertificate"><div className="size-4 rounded-full border-2 border-muted-foreground/30 border-t-foreground animate-spin" />
-				Verifying certificate…</Trans></div>
+			<div className="flex items-center gap-2 text-muted-foreground">
+				<Trans i18nKey="divClassnamesize4RoundedfullBorder2Bordermutedforeground30BordertforegroundAnimatespinVerifyingCertificate">
+					<div className="size-4 rounded-full border-2 border-muted-foreground/30 border-t-foreground animate-spin" />
+					Verifying certificate…
+				</Trans>
+			</div>
 		</div>
 	);
 }
@@ -311,7 +321,7 @@ function MissingCertScreen({
 				{certId && (
 					<div className="rounded-lg border border-border/40 bg-card/40 px-3 py-2 text-left space-y-1">
 						<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-							{t('lookedUp', 'Looked up')}
+							{t("lookedUp", "Looked up")}
 						</div>
 						<code className="text-xs font-mono break-all">{certId}</code>
 					</div>
@@ -321,7 +331,7 @@ function MissingCertScreen({
 						href="/verify"
 						className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
 					>
-						{t('tryAnotherId', 'Try another ID')}
+						{t("tryAnotherId", "Try another ID")}
 					</Link>
 					<span className="text-xs text-muted-foreground">·</span>
 					<Link
@@ -329,7 +339,7 @@ function MissingCertScreen({
 						className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 					>
 						<ArrowLeft className="size-3" />
-						{t('flowlikeUniversity', 'Flow-Like University')}
+						{t("flowlikeUniversity", "Flow-Like University")}
 					</Link>
 				</div>
 			</div>
@@ -359,7 +369,7 @@ function VerifyLookupScreen() {
 					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<ArrowLeft className="h-3 w-3" />
-					{t('flowlikeUniversity', 'Flow-Like University')}
+					{t("flowlikeUniversity", "Flow-Like University")}
 				</Link>
 
 				<motion.div
@@ -372,10 +382,13 @@ function VerifyLookupScreen() {
 						<ShieldCheck className="size-7 text-emerald-500" />
 					</div>
 					<h1 className="text-3xl font-semibold tracking-tight">
-						{t('verifyACertificate', 'Verify a certificate')}
+						{t("verifyACertificate", "Verify a certificate")}
 					</h1>
 					<p className="text-muted-foreground">
-						{t('pasteACertificateIdSha256HashOrVerifyLinkToConfirmAuthenticity', "Paste a certificate ID, SHA-256 hash, or verify link to confirm authenticity.")}
+						{t(
+							"pasteACertificateIdSha256HashOrVerifyLinkToConfirmAuthenticity",
+							"Paste a certificate ID, SHA-256 hash, or verify link to confirm authenticity.",
+						)}
 					</p>
 				</motion.div>
 
@@ -391,7 +404,10 @@ function VerifyLookupScreen() {
 							htmlFor="cert-lookup-input"
 							className="text-xs uppercase tracking-wide text-muted-foreground font-medium"
 						>
-							{t('certificateIdHashOrVerifyUrl', 'Certificate ID, hash, or verify URL')}
+							{t(
+								"certificateIdHashOrVerifyUrl",
+								"Certificate ID, hash, or verify URL",
+							)}
 						</label>
 						<Input
 							id="cert-lookup-input"
@@ -403,17 +419,23 @@ function VerifyLookupScreen() {
 						/>
 						{trimmed && !extractedId && (
 							<p className="text-xs text-rose-500">
-								{t('doesntLookLikeACertificateIdOrVerifyLink', 'Doesn\'t look like a certificate ID or verify link.')}
+								{t(
+									"doesntLookLikeACertificateIdOrVerifyLink",
+									"Doesn't look like a certificate ID or verify link.",
+								)}
 							</p>
 						)}
 					</div>
 					<div className="flex items-center justify-between gap-2">
 						<p className="text-xs text-muted-foreground">
-							{t('tipScanTheQrCodeOnACertificateToJumpStraightIn', 'Tip: scan the QR code on a certificate to jump straight in.')}
+							{t(
+								"tipScanTheQrCodeOnACertificateToJumpStraightIn",
+								"Tip: scan the QR code on a certificate to jump straight in.",
+							)}
 						</p>
 						<Button type="submit" disabled={!extractedId} className="gap-1.5">
 							<ShieldCheck className="size-4" />
-							{t('verify', 'Verify')}
+							{t("verify", "Verify")}
 						</Button>
 					</div>
 				</motion.form>

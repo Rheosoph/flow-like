@@ -1,11 +1,11 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import type {
 	IOAuthCallbackData,
 	IOAuthPendingAuth,
 	IOAuthProvider,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next } from "@flow-like/locales";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
@@ -147,7 +147,9 @@ async function processCallback(payload: IOAuthCallbackData) {
 	} catch (e) {
 		console.error("Failed to handle callback:", e);
 		toast.error(
-			i18next.t('authorizationFailedVal', 'Authorization failed: {{val}}', { val: e instanceof Error ? e.message : "Unknown error" }),
+			i18next.t("authorizationFailedVal", "Authorization failed: {{val}}", {
+				val: e instanceof Error ? e.message : "Unknown error",
+			}),
 		);
 	}
 }

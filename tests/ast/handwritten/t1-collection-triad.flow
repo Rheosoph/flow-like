@@ -1,0 +1,141 @@
+// BUG: `use map::{ set as recordRollup }` (aliased member import) does not parse, so the map
+// writes below stay qualified — see bug-t1-collection-triad-use-member-alias.flow.
+// BUG: `covered: Set<string>` is rejected inside an interface body even though `Set<T>` is a
+// valid type everywhere else (see `lastCovered` below and
+// bug-t1-collection-triad-interface-set-field.flow), so FleetAudit.covered is spelled string[].
+use log::{ info, warn }
+use set::{ difference, isSubset, toArray }
+
+interface DeploymentRow {
+    service: string;
+    region: string;
+    replicas: int;
+}
+
+interface RegionRollup {
+    region: string;
+    services: string[];
+    replicas: int;
+    thin: bool;
+}
+
+interface FleetAudit {
+    fleet: string;
+    rollups: Map<string, RegionRollup>;
+    covered: string[];
+    missing: string[];
+}
+
+@description("Fleet whose deployments this audit reports on")
+@category("Fleet/Audit")
+let fleetName = "checkout-platform"
+
+@description("Regions the last audit found a live deployment in")
+@category("Fleet/Audit")
+@readonly
+let lastCovered: Set<string>
+
+@description("Minimum replica count per region, keyed by region")
+@category("Fleet/Policy")
+let replicaFloors: Map<string, int>
+
+@description("The audit document produced by the last run")
+@category("Fleet/Audit")
+@readonly
+let lastAudit: FleetAudit
+
+function deployment(service: string, region: string, replicas: int): (row: DeploymentRow) {
+    const named = struct::make().set("service", service)
+    const placed = named.set("region", region)
+    const row = placed.set("replicas", replicas)
+    return row
+}
+
+function rollup(region: string, members: Struct[]): (summary: RegionRollup, replicas: int) {
+    const services = members.pluck("service")
+    const { sum: replicaSum, counted } = members.sumField("replicas")
+    const total = members.length()
+    const replicas = replicaSum.toInt("round")
+
+    const base = struct::make().set("region", region)
+    const withServices = base.set("services", services)
+    const withReplicas = withServices.set("replicas", replicas)
+    const summary = withReplicas.set("thin", counted != total)
+    return summary, replicas
+}
+
+eventsGeneric auditFleet(payload: Struct, contractedRegions: string[]) {
+    // Reads off the event payload are qualified on purpose: `payload.has(...)` is ambiguous
+    // between struct::has and data::cache::has, which both take a Struct receiver.
+    if (struct::has({ struct: payload, field: "fleet" })) {
+        fleetName = struct::get({ struct: payload, field: "fleet" }).value
+    }
+
+    const checkout = deployment("checkout-api", "eu-central-1", 6)
+    const search = deployment("search-api", "eu-central-1", 4)
+    const billing = deployment("billing-api", "us-east-1", 3)
+    const mailer = deployment("mailer", "us-east-1", 2)
+    const cart = deployment("cart-legacy", "ap-south-1", 1)
+
+    const staged = array::make().push(checkout).push(search).push(billing).push(mailer).push(cart)
+    const replacement = deployment("cart", "ap-south-1", 2)
+    const deployments = staged.setIndex(4, replacement)
+
+    const seedPolicy = map::make().set("eu-central-1", 8).mapOut
+    const minPerRegion = seedPolicy.set("us-east-1", 4).mapOut
+    const { groups, groupCount } = deployments.groupBy("region")
+
+    let rollups = map::make()
+    let breaches = array::make()
+    for (const group of groups) {
+        const region = struct::get({ struct: group, field: "key" }).value
+        const members = struct::get({ struct: group, field: "items" }).value
+        const { summary, replicas } = rollup(region, members)
+        rollups = map::set({ mapIn: rollups, key: region, value: summary }).mapOut
+
+        if (minPerRegion.has(region)) {
+            const floor = minPerRegion.get(region).value
+            // BUG: `replicas < floor` is rejected because a map/struct read is typed Generic and
+            // the operator lowering treats that as a concrete type — see
+            // bug-t1-collection-triad-generic-operand-compare.flow.
+            if (int::lessThan({ integer1: replicas, integer2: floor })) {
+                breaches = breaches.push(region)
+            }
+        }
+    }
+
+    const regions = rollups.keys()
+    const summaries = rollups.values()
+    const covered = regions.toSet()
+    const contracted = contractedRegions.toSet()
+
+    const complete = isSubset(contracted, covered)
+    const servesHome = covered.has("eu-central-1")
+    const gap = difference(contracted, covered)
+    const missing = toArray(gap)
+    const coveredList = toArray(covered)
+    const gapCount = gap.size()
+    const planned = covered.insert("sa-east-1").setOut
+    const reach = set::union({ setIn1: planned, setIn2: contracted })
+    const reachCount = reach.size()
+    const breachCount = array::length({ array: breaches })
+
+    const { sum: fleetReplicas } = summaries.sumField("replicas")
+
+    const named = struct::make().set("fleet", fleetName)
+    const withRollups = named.set("rollups", rollups)
+    const withCovered = withRollups.set("covered", coveredList)
+    const audit = withCovered.set("missing", missing)
+
+    lastAudit = audit
+    lastCovered = covered
+    replicaFloors = minPerRegion
+
+    if (complete && servesHome) {
+        info({ message: `${fleetName}: ${groupCount} regions, ${fleetReplicas} replicas, ${breachCount} under floor`, toast: false })
+    } else {
+        warn({ message: `${fleetName} covers ${reachCount} planned regions but is short ${gapCount} contracted ones`, toast: true })
+    }
+
+    return audit
+}

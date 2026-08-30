@@ -41,7 +41,7 @@ export function PathbufVariable({
 					}}
 					id="is_folder"
 				/>
-				<Label htmlFor="is_folder">{t('folder', 'Folder')}</Label>
+				<Label htmlFor="is_folder">{t("folder", "Folder")}</Label>
 			</div>
 			<Button
 				variant={"outline"}
@@ -85,13 +85,13 @@ export function PathbufVariable({
 							{fileOrFolder.split("/").pop()}
 						</span>
 					) : (
-						<span>{t('pickAFolder', 'Pick a folder')}</span>
+						<span>{t("pickAFolder", "Pick a folder")}</span>
 					))}
 				{!isFolder &&
 					(fileOrFolder && fileOrFolder.length > 0 ? (
 						<span className="text-nowrap truncate">{fileOrFolder}</span>
 					) : (
-						<span>{t('pickAFile', 'Pick a file')}</span>
+						<span>{t("pickAFile", "Pick a file")}</span>
 					))}
 			</Button>
 		</div>

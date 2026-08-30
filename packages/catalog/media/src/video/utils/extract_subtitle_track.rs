@@ -19,6 +19,7 @@ impl NodeLogic for ExtractSubtitleTrackNode {
             "Extract a subtitle track to an SRT or WebVTT sidecar",
             "Subtitles",
         );
+        node.set_flowscript_name("video", "extractSubtitleTrack");
         node.add_icon("/flow/icons/text.svg");
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Source media FlowPath");

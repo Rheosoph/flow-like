@@ -164,7 +164,7 @@ function CopyButton({
 			}}
 			{...props}
 		>
-			<span className="sr-only">{t('copy', 'Copy')}</span>
+			<span className="sr-only">{t("copy", "Copy")}</span>
 			{hasCopied ? (
 				<CheckIcon className="size-3!" />
 			) : (

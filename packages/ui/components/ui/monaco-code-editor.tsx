@@ -5,7 +5,7 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { cn } from "../../lib";
+import { FLOW_KEY_OPT_OUT_CLASS, cn } from "../../lib";
 import { Button } from "./button";
 
 function injectMonacoCodeStyles() {
@@ -122,6 +122,7 @@ export function MonacoCodeEditor({
 				</Button>
 			)}
 			<Editor
+				className={FLOW_KEY_OPT_OUT_CLASS}
 				height={isFullscreen ? "100vh" : height}
 				language={language}
 				value={value}

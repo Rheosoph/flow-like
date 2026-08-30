@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -31,13 +30,14 @@ import {
 	LoadingScreen,
 	type QueryClient,
 	isAzureBlobStorageUrl,
+	useAuthStatusStore,
 	useBackendStore,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
-import { setWidgetQueryResponder } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import { i18n as i18next } from "@flow-like/locales";
 import { useEffect } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -149,6 +149,9 @@ export class WebBackend implements IBackendState {
 	pushAuthContext(auth: AuthContextProps) {
 		this.auth = auth;
 		this.backendRef.auth = auth;
+		useAuthStatusStore
+			.getState()
+			.setSignedIn(Boolean(auth.isAuthenticated && auth.user?.access_token));
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
@@ -210,7 +213,11 @@ export class WebBackend implements IBackendState {
 				} else {
 					reject(
 						new Error(
-							i18next.t('uploadFailedWithStatusStatusStatustext', 'Upload failed with status {{status}}: {{statusText}}', { status: xhr.status, statusText: xhr.statusText }),
+							i18next.t(
+								"uploadFailedWithStatusStatusStatustext",
+								"Upload failed with status {{status}}: {{statusText}}",
+								{ status: xhr.status, statusText: xhr.statusText },
+							),
 						),
 					);
 				}
@@ -261,13 +268,7 @@ export function WebProvider({
 				});
 		}, queryClient);
 
-		setWidgetQueryResponder((requestId, response) =>
-			backend.boardState.respondWidgetQuery
-				? backend.boardState.respondWidgetQuery(requestId, response)
-				: Promise.resolve(false),
-		);
 		setBackend(backend);
-		return () => setWidgetQueryResponder(null);
 	}, [queryClient, setBackend]);
 
 	if (!backend) {

@@ -286,6 +286,15 @@ pub struct FaceIdResult {
 type FaceAnalyzerCell =
     Arc<flow_like_types::tokio::sync::OnceCell<Arc<face_id::analyzer::FaceAnalyzer>>>;
 
+/// Cache entry that keeps an analyzer alive only while a node still holds it.
+#[cfg(feature = "execute")]
+type WeakFaceAnalyzerCell =
+    Weak<flow_like_types::tokio::sync::OnceCell<Arc<face_id::analyzer::FaceAnalyzer>>>;
+
+/// Analyzer reference keyed by the model reference it was loaded from.
+#[cfg(feature = "execute")]
+type FaceAnalyzerRegistry = Mutex<HashMap<String, WeakFaceAnalyzerCell>>;
+
 #[cfg(feature = "execute")]
 pub struct NodeFaceAnalyzerWrapper {
     analyzer: FaceAnalyzerCell,
@@ -420,14 +429,7 @@ fn global_analysis_limit() -> Arc<flow_like_types::tokio::sync::Semaphore> {
 
 #[cfg(feature = "execute")]
 fn shared_analyzer_cell(analyzer_ref: &str) -> Result<FaceAnalyzerCell> {
-    static ANALYZERS: OnceLock<
-        Mutex<
-            HashMap<
-                String,
-                Weak<flow_like_types::tokio::sync::OnceCell<Arc<face_id::analyzer::FaceAnalyzer>>>,
-            >,
-        >,
-    > = OnceLock::new();
+    static ANALYZERS: OnceLock<FaceAnalyzerRegistry> = OnceLock::new();
 
     let mut analyzers = ANALYZERS
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -1385,6 +1387,7 @@ impl NodeLogic for LoadFaceAnalyzerNode {
             "Load a face_id analyzer (SCRFD detector + ArcFace embedder + gender/age). Weights are verified and cached when a session identity is first built; equivalent analyzers reuse process-wide sessions.",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdLoadAnalyzer");
         node.set_version(2);
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -1621,6 +1624,7 @@ impl NodeLogic for UnloadFaceAnalyzerNode {
             "Release a cached face analyzer and its three ONNX sessions. Equivalent analyzer handles share the same cache entry and are invalidated together.",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdUnloadAnalyzer");
         node.set_version(1);
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -2045,6 +2049,7 @@ impl NodeLogic for AnalyzeFacesNode {
             "Detect faces and extract embeddings, gender and age using a face_id analyzer",
             "AI/ML/ONNX/Face",
         );
+        node.set_flowscript_name("onnx", "faceIdAnalyze");
         node.set_version(2);
         node.add_icon("/flow/icons/face.svg");
 

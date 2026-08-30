@@ -36,6 +36,7 @@ import {
 	type IPrerunBoardResponse,
 	type IRunContext,
 	type IRunPayload,
+	type IScopedFlowScriptResponse,
 	type ISettingsProfile,
 	type IVersionType,
 	type ProgressToastData,
@@ -53,11 +54,11 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import type { IProfile } from "@flow-like/flow-like-ui";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BoardSyncClient,
@@ -67,8 +68,17 @@ import {
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
+import {
+	FLOWSCRIPT_APPLY_FAILURE_PATH,
+	type FlowScriptApplyOrigin,
+	type FlowScriptApplyOutcome,
+	type IFlowScriptApplyFailureReport,
+	flowScriptApplyOutcome,
+} from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import { createId } from "@paralleldrive/cuid2";
+import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
@@ -81,6 +91,7 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import { desktopPlatform } from "../../lib/platform";
 import {
 	ensureRpaSystemPermissions,
 	requestRpaAutomationConsent,
@@ -146,6 +157,35 @@ export class BoardSyncDiscardRequiredError extends Error {
 			} that the server has not accepted.`,
 		);
 		this.name = "BoardSyncDiscardRequiredError";
+	}
+}
+
+/** Where materializing a board this device does not have gave up. */
+export type BoardMaterializationPhase =
+	| "gated"
+	| "fetch"
+	| "persist"
+	| "verify";
+
+/**
+ * A board the device does not hold could not be brought onto disk.
+ *
+ * Every caller of `getBoard` treats a resolved promise as "the board is readable locally" — the
+ * page lookup and the pre-run gate both re-read from disk immediately afterwards. Reporting the
+ * download as a success while the write failed makes every retry re-run an identical, invisible
+ * failure, so the local-miss path fails loudly instead, naming the step that broke.
+ */
+export class BoardMaterializationError extends Error {
+	constructor(
+		readonly boardId: string,
+		readonly phase: BoardMaterializationPhase,
+		options?: { cause?: unknown },
+	) {
+		super(
+			`Board ${boardId} could not be made available on this device (${phase})`,
+			options,
+		);
+		this.name = "BoardMaterializationError";
 	}
 }
 
@@ -810,8 +850,10 @@ export class BoardState implements IBoardState {
 		});
 		const byId = new Map(local.map((summary) => [summary.id, summary]));
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) {
+		// This listing is the app-level safety net that materializes boards the device never
+		// downloaded, so an app whose visibility is merely unknown must not gate it shut.
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
 			return Array.from(byId.values());
 		}
 
@@ -910,6 +952,79 @@ export class BoardState implements IBoardState {
 		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;
 	}
+	/**
+	 * Bring a board this device does not have onto disk, and prove that it landed.
+	 *
+	 * Nothing else on the interface route can create a board file: a hosted app's manifest
+	 * arrives listing board ids whose payloads were never downloaded, so this is the single
+	 * door. Its post-condition is therefore the strong one — **resolving means the board file
+	 * exists locally** — which is what the page lookup and the pre-run gate already assume.
+	 *
+	 * The gate is `isLocalOnly`, not `isOffline`: an app whose visibility this device has not
+	 * learned yet is unknown, not local-only, and must be allowed to ask the server. A refusal
+	 * from the hub is the positive evidence that it is local-only.
+	 *
+	 * A pinned version is deliberately not persisted — no native command writes the
+	 * `versions/` layout — so that path returns the remote board and says so.
+	 */
+	private async materializeBoardFromRemote(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
+			throw new BoardMaterializationError(boardId, "gated", {
+				cause: new Error(
+					localOnly
+						? `App ${appId} is local-only, so the board cannot be fetched`
+						: "No profile or authentication for a remote board fetch",
+				),
+			});
+		}
+
+		let remoteData: IBoard;
+		try {
+			remoteData = await this.fetchRemoteBoard(appId, boardId, version);
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "fetch", { cause: error });
+		}
+
+		if (typeof version !== "undefined") {
+			return remoteData;
+		}
+
+		try {
+			await invoke("upsert_board", {
+				appId: appId,
+				boardId: boardId,
+				name: remoteData.name,
+				description: remoteData.description,
+				logLevel: remoteData.log_level,
+				stage: remoteData.stage,
+				executionMode: remoteData.execution_mode,
+				boardData: remoteData,
+			});
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "persist", { cause: error });
+		}
+
+		// Read it back rather than trusting the write. This is what separates "downloaded" from
+		// "on disk", and it warms the local sync client's base for the next read, so the extra
+		// round trip is not wasted.
+		let materialized: IBoard;
+		try {
+			materialized = await this.fetchLocalBoard(appId, boardId, version);
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "verify", { cause: error });
+		}
+
+		await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
+		dispatchRemoteBoardApplied(appId, boardId);
+
+		return materialized;
+	}
+
 	async getBoard(
 		appId: string,
 		boardId: string,
@@ -920,33 +1035,7 @@ export class BoardState implements IBoardState {
 		try {
 			board = await this.fetchLocalBoard(appId, boardId, version);
 		} catch {
-			const isOffline = await this.backend.isOffline(appId);
-			if (isOffline || !this.backend.profile || !this.backend.auth) {
-				throw new Error(`Board not found: ${boardId}`);
-			}
-			const remoteData = await this.fetchRemoteBoard(appId, boardId, version);
-			if (typeof version === "undefined") {
-				await invoke("upsert_board", {
-					appId: appId,
-					boardId: boardId,
-					name: remoteData.name,
-					description: remoteData.description,
-					logLevel: remoteData.log_level,
-					stage: remoteData.stage,
-					executionMode: remoteData.execution_mode,
-					boardData: remoteData,
-				}).catch((e: unknown) => {
-					console.warn(
-						"[BoardState] Failed to persist remote board locally:",
-						e,
-					);
-				});
-			}
-			if (typeof version === "undefined") {
-				await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
-				dispatchRemoteBoardApplied(appId, boardId);
-			}
-			return remoteData;
+			return this.materializeBoardFromRemote(appId, boardId, version);
 		}
 
 		const isOffline = await this.backend.isOffline(appId);
@@ -1297,14 +1386,15 @@ export class BoardState implements IBoardState {
 
 		const promise = injectDataFunction(
 			async () => {
+				// The route reads version_type from the query string only, so a
+				// body here silently degrades every Major and Minor to a Patch.
 				const remoteData = await fetcher<[number, number, number]>(
 					this.backend.profile!,
-					`apps/${appId}/board/${boardId}`,
+					`apps/${appId}/board/${boardId}?version_type=${encodeURIComponent(
+						versionType,
+					)}`,
 					{
 						method: "PATCH",
-						body: JSON.stringify({
-							version_type: versionType,
-						}),
 					},
 					this.backend.auth,
 				);
@@ -1426,12 +1516,35 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		const board = await this.getBoard(
-			appId,
-			boardId,
-			normalizeBoardVersion(payload.version),
-			true,
-		);
+		let board: IBoard;
+		try {
+			board = await this.getBoard(
+				appId,
+				boardId,
+				normalizeBoardVersion(payload.version),
+				true,
+			);
+		} catch (error) {
+			// Everything below reads the flow to prepare a local run. A user who
+			// may run a board but not read it — the normal shape of a published
+			// app — gets nothing back from any of it, and the server can run it
+			// instead: it holds the board, and resolves permissions, secrets and
+			// OAuth on its own.
+			if (!(await this.canReachServer(appId))) throw error;
+			console.warn(
+				"[BoardState] Board unavailable for local execution, running on the server:",
+				error,
+			);
+			return this.executeBoardRemote(
+				appId,
+				boardId,
+				payload,
+				streamState,
+				eventId,
+				cb,
+			);
+		}
+
 		await this.ensureAppPackagesInstalledForExecution(appId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
@@ -2988,23 +3101,67 @@ export class BoardState implements IBoardState {
 		currentLayer?: string,
 		catalogNodes?: INode[],
 		allowDeletions = false,
+		origin: FlowScriptApplyOrigin = "editor",
+		scopeAnchors?: string[],
+		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
 				appId,
 				boardId,
 			);
-			const result = await invoke<IApplyFlowScriptResponse>(
-				"apply_flowscript",
-				{
+			let result: IApplyFlowScriptResponse;
+			try {
+				result = await invoke<IApplyFlowScriptResponse>("apply_flowscript", {
 					appId,
 					boardId,
 					flowscript,
 					currentLayer,
 					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
 					allowDeletions,
-				},
+					scopeAnchors,
+					module,
+				});
+			} catch (error) {
+				void this.reportFlowScriptApplyFailure({
+					appId,
+					boardId,
+					currentLayer,
+					allowDeletions,
+					flowscript,
+					origin,
+					outcome: "error",
+					errorMessage: getErrorMessage(
+						error,
+						"Unknown FlowScript apply error",
+					),
+					diagnostics: [],
+					corrections: [],
+					commandCount: 0,
+				});
+				throw error;
+			}
+
+			// Classified on the native result: a blocked remote delivery below appends its own
+			// diagnostic, and that is a sync failure, not the user's edit going wrong.
+			const outcome = flowScriptApplyOutcome(
+				result.commands.length,
+				result.diagnostics.length,
 			);
+			if (outcome) {
+				void this.reportFlowScriptApplyFailure({
+					appId,
+					boardId,
+					currentLayer,
+					allowDeletions,
+					flowscript,
+					origin,
+					outcome,
+					diagnostics: result.diagnostics,
+					corrections: result.corrections ?? [],
+					commandCount: result.commands.length,
+				});
+			}
 
 			if (result.commands.length > 0) {
 				const sync = await this.syncExecutedCommandsToServer(
@@ -3026,6 +3183,111 @@ export class BoardState implements IBoardState {
 				}
 			}
 			return result;
+		});
+	}
+
+	/**
+	 * Report an apply that did not do what the user asked, so the source that produced it can be
+	 * reviewed. Best-effort in every direction: the source is redacted natively first so nothing
+	 * raw leaves the machine, a signed-out user reports nothing, and a failed report is swallowed —
+	 * losing a capture must never cost someone their edit. The typed-IR commit path holds only a
+	 * compiler token, never the draft source, so `flowscript` may be absent there; a supplied but
+	 * empty source still reports nothing.
+	 */
+	private async reportFlowScriptApplyFailure(failure: {
+		appId: string;
+		boardId: string;
+		currentLayer?: string;
+		allowDeletions: boolean;
+		flowscript?: string;
+		outcome: FlowScriptApplyOutcome;
+		origin: FlowScriptApplyOrigin;
+		errorMessage?: string;
+		diagnostics: string[];
+		corrections: string[];
+		commandCount: number;
+	}): Promise<void> {
+		const { profile, auth } = this.backend;
+		if (!profile || !auth) return;
+
+		try {
+			let flowscript = "";
+			if (failure.flowscript !== undefined) {
+				if (!failure.flowscript.trim()) return;
+				const redacted = await invoke<{ flowscript: string }>(
+					"redact_flowscript",
+					{ flowscript: failure.flowscript },
+				);
+				if (!redacted.flowscript.trim()) return;
+				flowscript = redacted.flowscript;
+			}
+
+			const report: IFlowScriptApplyFailureReport = {
+				app_id: failure.appId,
+				board_id: failure.boardId,
+				layer_id: failure.currentLayer,
+				outcome: failure.outcome,
+				origin: failure.origin,
+				flowscript,
+				error_message: failure.errorMessage,
+				diagnostics: failure.diagnostics,
+				corrections: failure.corrections,
+				command_count: failure.commandCount,
+				allow_deletions: failure.allowDeletions,
+				app_version: await getVersion().catch(() => undefined),
+				platform: desktopPlatform(),
+			};
+
+			await fetcher(
+				profile,
+				FLOWSCRIPT_APPLY_FAILURE_PATH,
+				{ method: "POST", body: JSON.stringify(report) },
+				auth,
+			);
+		} catch (error) {
+			console.debug("[applyFlowScript] failure report skipped", error);
+		}
+	}
+
+	/**
+	 * Capture a terminal typed-IR commit outcome, classified on the native result before remote
+	 * delivery so a blocked sync is never miscounted as the agent's edit going wrong. Replays and
+	 * already-delivered claims are earlier successes, not failures.
+	 */
+	private captureFlowIrCommitFailure(
+		appId: string,
+		token: FlowIrCommitToken,
+		result: IApplyFlowIrCommitResponse,
+	): void {
+		if (result.replayed || result.code === "IR_COMMIT_DELIVERY_FINALIZED")
+			return;
+		// A user declining the native destructive dialog is a choice, not an agent failure.
+		if (result.code === "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED") return;
+		const outcome =
+			result.status === "applied"
+				? flowScriptApplyOutcome(
+						result.commands.length,
+						result.diagnostics.length,
+					)
+				: result.status === "error"
+					? "error"
+					: "blocked";
+		if (!outcome) return;
+		void this.reportFlowScriptApplyFailure({
+			appId,
+			boardId: token.board_id,
+			allowDeletions: token.requires_destructive_approval ?? false,
+			origin: "agent",
+			outcome,
+			errorMessage:
+				result.status === "applied"
+					? undefined
+					: result.code
+						? `${result.code}: ${result.message}`
+						: result.message,
+			diagnostics: result.diagnostics,
+			corrections: result.corrections ?? [],
+			commandCount: result.commands.length,
 		});
 	}
 
@@ -3060,6 +3322,92 @@ export class BoardState implements IBoardState {
 		}
 	}
 
+	async getFlowScriptScoped(
+		appId: string,
+		boardId: string,
+		nodeIds: string[],
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_scoped", {
+				appId,
+				boardId,
+				nodeIds,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("node_ids", nodeIds.join(","));
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
+	async getFlowScriptFile(
+		appId: string,
+		boardId: string,
+		file: string,
+		anchors = true,
+	): Promise<IScopedFlowScriptResponse> {
+		try {
+			return await invoke<IScopedFlowScriptResponse>("get_flowscript_file", {
+				appId,
+				boardId,
+				file,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			params.set("anchors", String(anchors));
+			params.set("file", file);
+			const response = await fetcher<{
+				flowscript: string;
+				scope_anchors?: string[];
+			}>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return {
+				flowscript: response.flowscript,
+				scope_anchors: response.scope_anchors ?? [],
+			};
+		}
+	}
+
+	async formatFlowScript(
+		_appId: string,
+		_boardId: string,
+		flowscript: string,
+		anchors = true,
+	): Promise<string> {
+		return await invoke<string>("format_flowscript", {
+			flowscript,
+			anchors,
+		});
+	}
+
 	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
 		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
 			flowscript,
@@ -3070,21 +3418,13 @@ export class BoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		flowscript: string,
+		scopeAnchors?: string[],
+		module?: string,
 	): Promise<ICheckFlowScriptReconcileResponse> {
 		return await invoke<ICheckFlowScriptReconcileResponse>(
 			"check_flowscript_reconcile",
-			{ appId, boardId, flowscript },
+			{ appId, boardId, flowscript, scopeAnchors, module },
 		);
-	}
-
-	async respondWidgetQuery(
-		requestId: string,
-		response: { ok: boolean; value?: unknown; error?: string },
-	): Promise<boolean> {
-		return await invoke<boolean>("respond_widget_query", {
-			requestId,
-			response,
-		});
 	}
 
 	async getExecutionElements(
@@ -3149,6 +3489,33 @@ export class BoardState implements IBoardState {
 		}
 
 		return localElements;
+	}
+
+	async getElementDemand(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IElementDemand> {
+		if (
+			(await this.backend.isOffline(appId)) ||
+			!this.backend.profile ||
+			!this.backend.auth
+		) {
+			return await invoke<IElementDemand>("element_demand", {
+				appId,
+				boardId,
+				version,
+			});
+		}
+		// Online apps may execute on the server: the API's answer (or its 404 on an
+		// older deployment, which makes the caller send the full map) is authoritative.
+		const query = version ? `?version=${version.join("_")}` : "";
+		return await fetcher<IElementDemand>(
+			this.backend.profile,
+			`apps/${appId}/board/${boardId}/element-demand${query}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
 	}
 
 	async copilot_chat(
@@ -3297,13 +3664,33 @@ export class BoardState implements IBoardState {
 				}
 				deliveryIdentity = boundIdentity;
 			}
-			const result = await invoke<IApplyFlowIrCommitResponse>(
-				"flowpilot_apply_flow_ir_commit",
-				{
+			let result: IApplyFlowIrCommitResponse;
+			try {
+				result = await invoke<IApplyFlowIrCommitResponse>(
+					"flowpilot_apply_flow_ir_commit",
+					{
+						appId,
+						token,
+					},
+				);
+			} catch (error) {
+				void this.reportFlowScriptApplyFailure({
 					appId,
-					token,
-				},
-			);
+					boardId: token.board_id,
+					allowDeletions: token.requires_destructive_approval ?? false,
+					origin: "agent",
+					outcome: "error",
+					errorMessage: getErrorMessage(
+						error,
+						"Unknown typed workflow apply error",
+					),
+					diagnostics: [],
+					corrections: [],
+					commandCount: 0,
+				});
+				throw error;
+			}
+			this.captureFlowIrCommitFailure(appId, token, result);
 			if (result.status !== "applied" || result.commands.length === 0) {
 				return result;
 			}
@@ -3433,13 +3820,22 @@ export class BoardState implements IBoardState {
 		});
 	}
 
+	/**
+	 * Whether a run can be handed to the server for this app. `isOffline` also
+	 * reports true when the app's visibility has never been cached, which is not
+	 * a reason to give up on the server — only an app this device positively
+	 * knows is local-only is.
+	 */
+	private async canReachServer(appId: string): Promise<boolean> {
+		if (!this.backend.profile || !this.backend.auth) return false;
+		return !(await this.backend.isLocalOnly(appId).catch(() => false));
+	}
+
 	async prerunBoard(
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IPrerunBoardResponse> {
-		const isOffline = await this.backend.isOffline(appId);
-
 		// Helper to build prerun response from local board
 		const buildLocalPrerun = async (): Promise<IPrerunBoardResponse> => {
 			const board = await this.fetchLocalBoard(appId, boardId, version);
@@ -3495,8 +3891,10 @@ export class BoardState implements IBoardState {
 			};
 		};
 
-		// Offline apps: always use local board data
-		if (isOffline) {
+		// Local-only apps have no server answer to ask for. An app whose
+		// visibility is merely uncached is not one of them — treating it as one
+		// leaves this preflight with only a board the device may not have.
+		if (await this.backend.isLocalOnly(appId).catch(() => false)) {
 			return buildLocalPrerun();
 		}
 

@@ -1,7 +1,7 @@
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic},
+    node::{Node, NodeLogic, remove_unwired_pins},
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
@@ -9,6 +9,7 @@ use flow_like_types::{
     Value, async_trait,
     json::{Map, json},
 };
+use std::collections::HashSet;
 
 /// Unique identifier prefix for break struct pins to enable special connection rules
 pub const BREAK_STRUCT_PIN_PREFIX: &str = "__break_struct_field__";
@@ -228,6 +229,60 @@ fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
     resolved.clone()
 }
 
+/// A producer pin for a `Struct[]` carries the schema one level up from what Break Struct works on.
+/// `Get Element`/`For Each` hand over a single item, so unwrap `items` before looking for fields —
+/// the same unwrapping [`build_standalone_schema`] already does for nested array properties.
+fn unwrap_item_schema<'a>(schema: &'a Value, root_schema: &'a Value) -> &'a Value {
+    if schema.get("type").and_then(|t| t.as_str()) != Some("array") {
+        return schema;
+    }
+
+    match schema.get("items") {
+        Some(items) => resolve_schema(items, root_schema),
+        None => schema,
+    }
+}
+
+/// The fields a schema exposes, whether declared directly or spread across a `oneOf` union.
+fn object_properties(schema: &Value, root_schema: &Value) -> Option<Map<String, Value>> {
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        return Some(properties.clone());
+    }
+
+    union_object_properties(schema, root_schema)
+}
+
+/// Drop the field pins the current schema no longer declares — but never one the user has wired.
+///
+/// A field pin that disappears takes its half of the edge with it, and `fix_pin_connections` then
+/// prunes the surviving half on the producer, so the connection vanishes from both ends with no
+/// error anywhere. Every schema change would silently cut the wires of every field that moved.
+/// `remove_unwired_pins` keeps anything still attached and names it on `node.error` instead, so a
+/// mismatch is something the user reads and resolves rather than something they lose.
+fn retain_declared_field_pins(node: &mut Node, declared: &HashSet<String>) {
+    let stale: Vec<String> = node
+        .pins
+        .values()
+        .filter(|pin| !declared.contains(&pin.name))
+        .map(|pin| pin.id.clone())
+        .collect();
+
+    remove_unwired_pins(node, &stale);
+}
+
+/// Give up on deriving fields: hand `struct_in` its open marker back and drop the unwired pins.
+///
+/// The marker is what lets any struct producer be wired in. Leaving the last resolved schema on the
+/// pin instead would make it a contract: `schemas_are_compatible` rejects two differing concrete
+/// schemas, so after unplugging one producer the user could never plug in a different one.
+fn reset_to_open(node: &mut Node, error: Option<String>) {
+    node.error = error;
+    retain_declared_field_pins(node, &HashSet::from(["struct_in".to_string()]));
+    if let Some(input_pin) = node.get_pin_mut_by_name("struct_in") {
+        input_pin.set_open_schema();
+    }
+}
+
 fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -245,6 +300,8 @@ impl NodeLogic for BreakStructNode {
             "Breaks a struct into its individual fields based on the schema",
             "Structs",
         );
+        node.set_flowscript_name("struct", "break");
+        node.set_receiver("struct_in");
         node.add_icon("/flow/icons/struct.svg");
 
         // Input struct pin - accepts any struct with a schema
@@ -253,7 +310,8 @@ impl NodeLogic for BreakStructNode {
             "Struct",
             "The struct to break apart",
             VariableType::Struct,
-        );
+        )
+        .set_open_schema();
 
         node
     }
@@ -265,7 +323,7 @@ impl NodeLogic for BreakStructNode {
         let output_pins: Vec<_> = context
             .node
             .pins
-            .values()
+            .iter()
             .filter(|pin| pin.pin_type == PinType::Output)
             .cloned()
             .collect();
@@ -300,26 +358,25 @@ impl NodeLogic for BreakStructNode {
         let connected_pin_id = match struct_pin.depends_on.iter().next() {
             Some(id) => id.clone(),
             None => {
-                // No connection - remove generated pins but keep struct_in
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Input);
+                reset_to_open(node, None);
                 return;
             }
         };
 
+        // A producer that is not on the board handed to us is not evidence that the wire is gone:
+        // `node_updates` lifts the node being updated out of the board, and on load this runs
+        // before `cleanup` has repaired anything. Dropping the field pins on that incomplete view
+        // would delete every wire the user drew from them, so keep them and wait for a full pass.
         let connected_pin = match board.get_pin_by_id(&connected_pin_id) {
             Some(pin) => pin,
-            None => {
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Input);
-                return;
-            }
+            None => return,
         };
 
         // Get the schema from the connected pin
         let schema_ref = match &connected_pin.schema {
             Some(s) => s.clone(),
             None => {
-                node.error = Some("Connected struct has no schema".to_string());
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Input);
+                reset_to_open(node, Some("Connected struct has no schema".to_string()));
                 return;
             }
         };
@@ -331,44 +388,53 @@ impl NodeLogic for BreakStructNode {
             .cloned()
             .unwrap_or(schema_ref.clone());
 
+        if flow_like::flow::pin::is_open_object_schema(&schema_str) {
+            reset_to_open(
+                node,
+                Some(
+                    "Connected struct declares no fields. Break Struct needs a producer with a concrete schema."
+                        .to_string(),
+                ),
+            );
+            return;
+        }
+
         // Parse the JSON schema as a generic Value
         let schema: Value = match flow_like_types::json::from_str(&schema_str) {
             Ok(s) => s,
             Err(e) => {
-                node.error = Some(format!("Failed to parse schema: {}", e));
+                reset_to_open(node, Some(format!("Failed to parse schema: {}", e)));
                 return;
             }
         };
 
-        // Resolve the schema in case it has $ref at the top level
-        let resolved_schema = resolve_schema(&schema, &schema);
+        // Resolve the schema in case it has $ref at the top level, then step into the element type
+        // when the producer describes an array of structs.
+        let resolved_schema = unwrap_item_schema(resolve_schema(&schema, &schema), &schema);
 
         // Extract properties from the schema
         // JSON Schema stores properties under "properties" key
-        let properties = match resolved_schema
-            .get("properties")
-            .and_then(|p| p.as_object())
-        {
+        let properties = match object_properties(resolved_schema, &schema) {
             Some(props) => props,
             None => {
                 // Check if this is a dynamic object type (additionalProperties without properties)
-                if resolved_schema.get("additionalProperties").is_some() {
-                    node.error = Some("Cannot break dynamic object types (e.g., HashMap). Use a different approach to access the values.".to_string());
+                let error = if resolved_schema.get("additionalProperties").is_some() {
+                    "Cannot break dynamic object types (e.g., HashMap). Use a different approach to access the values."
                 } else {
-                    node.error = Some("Schema has no object properties".to_string());
-                }
-                node.pins.retain(|_, pin| pin.pin_type == PinType::Input);
+                    "Schema has no object properties"
+                };
+                reset_to_open(node, Some(error.to_string()));
                 return;
             }
         };
 
         // Collect the pin names we need for this schema
-        let mut relevant_pins = std::collections::HashSet::new();
+        let mut relevant_pins = HashSet::new();
         relevant_pins.insert("struct_in".to_string());
 
         // Create output pins for each property (or skip if already exists)
         let mut index = 1u16;
-        for (prop_name, prop_schema) in properties {
+        for (prop_name, prop_schema) in &properties {
             let (var_type, value_type) = get_schema_type(prop_schema, &schema);
 
             // Use a unique prefixed name for the pin to enable special connection rules
@@ -422,8 +488,8 @@ impl NodeLogic for BreakStructNode {
             index += 1;
         }
 
-        // Remove pins that are no longer in the schema
-        node.pins.retain(|_, pin| relevant_pins.contains(&pin.name));
+        // Retire the pins this schema no longer declares, keeping any the user still has wired
+        retain_declared_field_pins(node, &relevant_pins);
 
         // Update the input pin to have the schema reference
         if let Some(input_pin) = node.get_pin_mut_by_name("struct_in") {

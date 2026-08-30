@@ -193,6 +193,8 @@ impl NodeLogic for ListMailsNode {
             "Lists email UIDs for a mailbox page with selectable filters",
             "Email/IMAP",
         );
+        node.set_flowscript_name("imap", "listMails");
+        node.set_receiver("inbox");
         node.add_icon("/flow/icons/mail.svg");
         node.set_version(3);
 

@@ -4,11 +4,13 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{ExecutorClaims, verify_jwt_async};
+use crate::jwt::{verify_jwt_async, ExecutorClaims};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::board::Board;
+use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache};
 use flow_like::flow::event::Event;
+use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
@@ -28,42 +30,37 @@ use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
 /// Contains the static catalog nodes only; WASM nodes are overlaid per-request.
-pub(crate) static PREPARED_REGISTRY: LazyLock<FlowNodeRegistryInner> = LazyLock::new(|| {
+pub(crate) static PREPARED_REGISTRY: LazyLock<Arc<FlowNodeRegistryInner>> = LazyLock::new(|| {
     let catalog = get_catalog();
     let catalog_arc = Arc::new(catalog);
-    FlowNodeRegistryInner::prepare(&catalog_arc)
+    Arc::new(FlowNodeRegistryInner::prepare(&catalog_arc))
 });
 
-/// One entry in [`BOARD_CACHE`]. Carries a cleaned, node-updated `Board` with
-/// request-specific state stripped, plus the storage-level identity captured
-/// during the original load so a cheap HEAD can verify freshness.
-struct CachedBoard {
-    board: flow_like::flow::board::Board,
-    e_tag: Option<String>,
-    last_modified: chrono::DateTime<chrono::Utc>,
+/// The registry for one request: the shared prepared catalog when the request
+/// brings no WASM overlay, a copy-on-write extension otherwise. The full deep
+/// clone (every catalog Node) is only paid on the WASM path.
+pub(crate) fn request_registry(
+    wasm_nodes: Vec<Arc<dyn flow_like::flow::node::NodeLogic>>,
+) -> Arc<FlowNodeRegistryInner> {
+    if wasm_nodes.is_empty() {
+        return PREPARED_REGISTRY.clone();
+    }
+    let mut registry = PREPARED_REGISTRY.as_ref().clone();
+    for logic in wasm_nodes {
+        let node = logic.get_node();
+        registry.insert(node, logic);
+    }
+    Arc::new(registry)
 }
 
-/// Cache of prepared boards, keyed by `(app_id, board_id, version, wasm bundle)`.
+/// Cache of compiled run templates, keyed by
+/// `(app_id, board_id, version, registry fingerprint, wasm bundle)`.
 ///
-/// The cached board has already gone through object-store fetch, lz4
-/// decompression, protobuf decode, `Board::from_proto`, `node_updates`, and
-/// cleanup. Before insertion, `app_state` and `logic_nodes` are removed so a
-/// warm Lambda hit cannot reuse caller credentials or request-scoped logic.
-///
-/// The per-request `Board` is a clone with the current `FlowLikeState` attached.
-/// `InternalRun` still builds its own mutable execution graph per run, so pin
-/// values and node state remain isolated.
-///
-/// Freshness: pinned versions are immutable in storage and skip revalidation.
-/// `latest` does a HEAD before reuse so rapid edit-test cycles never execute
-/// stale boards. TTL bounds memory growth on long-lived instances.
-static BOARD_CACHE: LazyLock<moka::sync::Cache<String, Arc<CachedBoard>>> = LazyLock::new(|| {
-    moka::sync::Cache::builder()
-        .max_capacity(256)
-        .time_to_live(Duration::from_secs(30 * 60))
-        .time_to_idle(Duration::from_secs(5 * 60))
-        .build()
-});
+/// A cached template has already gone through artifact decode (or full
+/// compile: fetch, decompress, decode, `node_updates`, `compile_board`) plus
+/// registry resolution and default parsing. Runs built from it only allocate
+/// per-run state — no per-request Board clone, no graph rebuild.
+static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
 
 fn wasm_registry_signature(request: &ExecutionRequest) -> String {
     let Some(packages) = request.wasm_packages.as_ref() else {
@@ -87,140 +84,68 @@ fn wasm_registry_signature(request: &ExecutionRequest) -> String {
     parts.join("|")
 }
 
-fn board_cache_key(request: &ExecutionRequest, board_id: &str) -> String {
-    let version = request.board_version;
-    let board_key = match version {
-        Some((m, n, p)) => format!("{}:{}:{}_{}_{}", request.app_id, board_id, m, n, p),
-        None => format!("{}:{}:latest", request.app_id, board_id),
-    };
-    format!("{}:{}", board_key, wasm_registry_signature(request))
-}
-
-fn attach_cached_board(
-    cached: &CachedBoard,
-    board_dir: Path,
-    state: Arc<FlowLikeState>,
-) -> flow_like::flow::board::Board {
-    let mut board = cached.board.clone();
-    board.board_dir = board_dir;
-    board.app_state = Some(state);
-    board.logic_nodes = HashMap::new();
-    board
-}
-
-fn strip_request_state(mut board: flow_like::flow::board::Board) -> flow_like::flow::board::Board {
-    board.app_state = None;
-    board.logic_nodes = HashMap::new();
-    board
-}
-
-fn board_version_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)>) -> String {
-    match version {
-        Some((m, n, p)) => format!("{}:{}:{}_{}_{}", app_id, board_id, m, n, p),
-        None => format!("{}:{}:latest", app_id, board_id),
-    }
-}
-
-/// True when the storage-level identity we recorded at load time still
-/// matches what HEAD returns now. We prefer e_tag (cheap, exact) and fall
-/// back to last_modified when the backend doesn't expose one.
-fn meta_unchanged(
-    cached: &CachedBoard,
-    head: &flow_like_storage::object_store::ObjectMeta,
-) -> bool {
-    match (&cached.e_tag, &head.e_tag) {
-        (Some(a), Some(b)) => a == b,
-        _ => cached.last_modified == head.last_modified,
-    }
-}
-
-/// Resolve the request's board with the prepared-board cache + HEAD revalidation.
-///
-/// On a cache hit for the floating "latest", we kick off the HEAD probe and
-/// the per-request board clone in parallel. If HEAD reports the cached board
-/// stale (or fails), we discard the speculative clone and reload from storage.
-/// Pinned versions are immutable and skip HEAD.
-pub(crate) async fn resolve_board(
+/// Resolve the request's board into a shared run template via the core
+/// resolver: in-process cache → persisted artifact → compile + write-back.
+/// The per-request WASM bundle signature salts the cache key so bundles with
+/// changed package content never share a template.
+pub(crate) async fn resolve_run_template(
     state: &Arc<FlowLikeState>,
     request: &ExecutionRequest,
-    storage_root: &Path,
-) -> Result<flow_like::flow::board::Board, ExecutorError> {
-    let board_id = &request.board_id;
-    let cache_key = board_cache_key(request, board_id);
-    let version_key = board_version_key(&request.app_id, board_id, request.board_version);
-    let proto_path = Board::proto_path(storage_root, board_id, request.board_version);
-    let is_pinned_version = request.board_version.is_some();
-
-    let meta_store = state
-        .config
-        .read()
+) -> Result<Arc<CompiledRunTemplate>, ExecutorError> {
+    TEMPLATE_CACHE
+        .resolve(
+            state,
+            &request.app_id,
+            &request.board_id,
+            request.board_version,
+            &wasm_registry_signature(request),
+        )
         .await
-        .stores
-        .app_meta_store
-        .clone()
-        .ok_or_else(|| {
+        .map_err(|e| {
             ExecutorError::BoardLoad(format!(
-                "Project store not found while loading board {}",
-                board_id
+                "Failed to resolve board {}: {}",
+                request.board_id, e
             ))
-        })?
-        .as_generic();
+        })
+}
 
-    if let Some(cached) = BOARD_CACHE.get(&cache_key) {
-        if is_pinned_version {
-            tracing::debug!(cache_key = %cache_key, "Board cache hit (pinned)");
-            return Ok(attach_cached_board(
-                cached.as_ref(),
-                storage_root.clone(),
-                state.clone(),
-            ));
-        }
+/// A run the API already created but the executor never started leaves the run
+/// row carrying a reason and no logs at all, so opening it in the UI explains
+/// nothing. Write the same per-run log table a real run would have produced.
+pub(crate) async fn record_executor_rejection(
+    state: &Arc<FlowLikeState>,
+    request: &ExecutionRequest,
+    run_id: &str,
+    stage: RejectionStage,
+    reason: String,
+) {
+    let mut rejection = RejectedRun::new(
+        request.app_id.clone(),
+        request.board_id.clone(),
+        stage,
+        reason,
+    )
+    .with_run_id(run_id)
+    .with_node(request.node_id.clone())
+    .with_board_version(request.board_version)
+    .with_payload(request.payload.as_ref());
 
-        let head_fut = meta_store.head(&proto_path);
-        let build_fut =
-            async { attach_cached_board(cached.as_ref(), storage_root.clone(), state.clone()) };
-        let (head_result, speculative_board) = tokio::join!(head_fut, build_fut);
-
-        match head_result {
-            Ok(head_meta) if meta_unchanged(cached.as_ref(), &head_meta) => {
-                tracing::debug!(cache_key = %cache_key, "Board cache hit (HEAD validated)");
-                return Ok(speculative_board);
-            }
-            Ok(_) => {
-                tracing::debug!(cache_key = %cache_key, "Board cache stale, reloading");
-                BOARD_CACHE.invalidate(&cache_key);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    cache_key = %cache_key,
-                    error = %e,
-                    "HEAD failed during board cache revalidation, falling back to full reload"
-                );
-                BOARD_CACHE.invalidate(&cache_key);
-            }
-        }
-        // The speculative board built from stale storage is unsafe to return;
-        // drop it and load fresh below.
-        drop(speculative_board);
+    if let Some(event) = request
+        .event_json
+        .as_ref()
+        .and_then(|json| serde_json::from_str::<Event>(json).ok())
+    {
+        rejection = rejection.with_event_definition(&event);
     }
 
-    let (loaded, meta) =
-        Board::load_proto_with_meta(meta_store, storage_root, board_id, request.board_version)
-            .await
-            .map_err(|e| {
-                ExecutorError::BoardLoad(format!("Failed to load board {}: {}", board_id, e))
-            })?;
-    let board = Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await;
-    BOARD_CACHE.insert(
-        cache_key.clone(),
-        Arc::new(CachedBoard {
-            board: strip_request_state(board.clone()),
-            e_tag: meta.e_tag.clone(),
-            last_modified: meta.last_modified,
-        }),
-    );
-    tracing::debug!(cache_key = %cache_key, version_key = %version_key, "Board cache populated");
-    Ok(board)
+    if let Err(error) = state.record_rejected_run(&rejection).await {
+        tracing::warn!(
+            error = %error,
+            run_id = %run_id,
+            app_id = %request.app_id,
+            "Failed to record a run that never started"
+        );
+    }
 }
 
 /// API-compatible event input format
@@ -458,7 +383,7 @@ pub async fn execute(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = execution_environment;
 
-    let mut registry = PREPARED_REGISTRY.clone();
+    let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
 
     // Load WASM packages from presigned URLs if any are specified
@@ -478,10 +403,7 @@ pub async fn execute(
                         "Loaded WASM nodes for execution"
                     );
                     failed_wasm_package_ids = report.failed_package_ids;
-                    for logic in report.nodes {
-                        let node = logic.get_node();
-                        registry.insert(node, logic);
-                    }
+                    wasm_nodes = report.nodes;
                 }
                 Err(e) => {
                     return Err(e);
@@ -490,24 +412,62 @@ pub async fn execute(
         }
     }
 
-    state.node_registry.write().await.node_registry = Arc::new(registry);
+    state.node_registry.write().await.node_registry = request_registry(wasm_nodes);
 
     let state = Arc::new(state);
 
     let board_id = &request.board_id;
     let storage_root = Path::from("apps").child(request.app_id.to_string());
-    let board = Arc::new(resolve_board(&state, &request, &storage_root).await?);
+    // Template build resolves every node against the registry, so a board
+    // whose WASM packages failed to download errors here first — keep the
+    // actionable package list in that error.
+    let template = match resolve_run_template(&state, &request)
+        .await
+        .map_err(|e| match e {
+            ExecutorError::BoardLoad(msg) if !failed_wasm_package_ids.is_empty() => {
+                let failed: Vec<&str> =
+                    failed_wasm_package_ids.iter().map(String::as_str).collect();
+                ExecutorError::BoardLoad(format!(
+                    "{} (WASM packages failed to load: {})",
+                    msg,
+                    failed.join(", ")
+                ))
+            }
+            other => other,
+        }) {
+        Ok(template) => template,
+        Err(error) => {
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Resolution,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
-        &board,
+        template.board.as_ref(),
         request.wasm_packages.as_ref(),
         &failed_wasm_package_ids,
     );
     if !unavailable_wasm_packages.is_empty() {
-        return Err(ExecutorError::Execution(format!(
+        let error = ExecutorError::Execution(format!(
             "Missing WASM package artifacts for board {}: {}",
             board_id,
             unavailable_wasm_packages.join(", ")
-        )));
+        ));
+        record_executor_rejection(
+            &state,
+            &request,
+            &claims.run_id,
+            RejectionStage::Setup,
+            error.to_string(),
+        )
+        .await;
+        return Err(error);
     }
 
     // Send start event to API
@@ -608,9 +568,32 @@ pub async fn execute(
         .clone()
         .or_else(|| Some(request.executor_jwt.clone()));
 
-    let mut run = InternalRun::new_with_run_id(
+    let channel = match crate::channel::build_run_channel(
+        request.channel.as_ref(),
+        &claims.run_id,
+        &claims.callback_url,
+        context_token.as_deref(),
+    )
+    .await
+    {
+        Ok(channel) => channel,
+        Err(error) => {
+            let error = ExecutorError::RunInit(error.to_string());
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Setup,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
+
+    let run = InternalRun::from_template(
         &request.app_id,
-        board.clone(),
+        template.clone(),
         event,
         &state,
         &profile,
@@ -621,9 +604,25 @@ pub async fn execute(
         context_token,
         oauth_tokens,
         Some(claims.run_id.clone()),
+        Some(channel.clone()),
     )
     .await
-    .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+    .map_err(|e| ExecutorError::RunInit(e.to_string()));
+
+    let mut run = match run {
+        Ok(run) => run,
+        Err(error) => {
+            record_executor_rejection(
+                &state,
+                &request,
+                &claims.run_id,
+                RejectionStage::Setup,
+                error.to_string(),
+            )
+            .await;
+            return Err(error);
+        }
+    };
 
     run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {
@@ -672,6 +671,8 @@ pub async fn execute(
     } else {
         Some(execution_future.as_mut().await)
     };
+
+    channel.close().await;
 
     if let Some(error) = lease_failure {
         drop(execution_future);
@@ -1358,33 +1359,25 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Completed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_ok()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Running"),
-                &ExecutionStatus::Completed,
-            )
-            .is_err()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(true, "Failed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_err()
-        );
-        assert!(
-            ensure_terminal_acknowledgement(
-                &acknowledgement(false, "Failed"),
-                &ExecutionStatus::Completed,
-            )
-            .is_ok()
-        );
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Completed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Running"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(false, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
     }
 }

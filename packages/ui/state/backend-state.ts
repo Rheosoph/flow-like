@@ -24,6 +24,7 @@ import type {
 	IBoardSyncStatus,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
+	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
@@ -65,6 +66,8 @@ import type {
 	ISinkState,
 } from "./backend-state/sink-state";
 import type { IStorageState } from "./backend-state/storage-state";
+
+export type { IStorageUploadOptions } from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
 import type { IUsageState } from "./backend-state/usage-state";
@@ -99,6 +102,7 @@ export type {
 	IApplyFlowScriptResponse,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
+	IScopedFlowScriptResponse,
 	IEventState,
 	IHelperState,
 	IPageState,
@@ -143,6 +147,8 @@ export type {
 	Version,
 	VersionType,
 } from "./backend-state/widget-state";
+
+export { applyWidgetRename } from "./backend-state/widget-state";
 
 export type { IMediaItem } from "./backend-state/app-state";
 
@@ -247,6 +253,12 @@ export interface IBackendState {
 
 	capabilities(): ICapabilities;
 	isOffline(appId: string): Promise<boolean>;
+	/**
+	 * True only when this device positively knows the app is local-only.
+	 * `isOffline` also answers true for an app whose visibility has never been
+	 * cached, so it cannot be used to rule out the server.
+	 */
+	isLocalOnly?(appId: string): Promise<boolean>;
 }
 
 interface BackendStoreState {
@@ -258,6 +270,29 @@ export const useBackendStore = create<BackendStoreState>((set) => ({
 	backend: null,
 	setBackend: (backend: IBackendState) => set({ backend }),
 }));
+
+interface AuthStatusState {
+	/** `undefined` until a host provider pushes its OIDC state. */
+	signedIn?: boolean;
+	setSignedIn: (signedIn: boolean) => void;
+}
+
+/**
+ * Sign-in signal for components in this package, pushed by the host provider
+ * (`pushAuthContext`) on every OIDC change. `packages/ui` has no auth context
+ * of its own, so without it queries that only a signed-in session can serve
+ * fire on every mount while signed out and fail (with retries).
+ */
+export const useAuthStatusStore = create<AuthStatusState>((set) => ({
+	signedIn: undefined,
+	setSignedIn: (signedIn: boolean) =>
+		set((state) => (state.signedIn === signedIn ? state : { signedIn })),
+}));
+
+/** False only while a host positively reports a signed-out session. */
+export function useSignedIn(): boolean {
+	return useAuthStatusStore((state) => state.signedIn !== false);
+}
 
 const serverBackend: IBackendState = {
 	appState: new EmptyAppState(),
@@ -318,4 +353,13 @@ export function useBackend(): IBackendState {
 		return serverBackend;
 	}
 	return backend;
+}
+
+/**
+ * False while `useBackend()` still hands out the prerender placeholder, whose
+ * states throw on every call. Queries that mount before the host provider has
+ * published its backend gate on this.
+ */
+export function useBackendReady(): boolean {
+	return useBackendStore((state) => state.backend !== null);
 }

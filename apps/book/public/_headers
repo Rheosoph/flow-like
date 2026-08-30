@@ -1,0 +1,41 @@
+/flowbook.pdf
+  X-Robots-Tag: noindex, follow
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Disposition: attachment; filename="FlowBook-Open-Edition-2026.pdf"
+
+/print/*
+  X-Robots-Tag: noindex, follow
+
+/llms.txt
+  Content-Type: text/markdown; charset=utf-8
+  Content-Language: en
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Link: <https://book.flow-like.com/llms.txt>; rel="self"; type="text/markdown"
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex, follow
+
+/llms-full.txt
+  Content-Type: text/markdown; charset=utf-8
+  Content-Language: en
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Link: <https://book.flow-like.com/llms.txt>; rel="describedby", <https://book.flow-like.com/llms-full.txt>; rel="self"; type="text/markdown"
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex, follow
+
+/*.md
+  Content-Type: text/markdown; charset=utf-8
+  Content-Language: en
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  X-Content-Type-Options: nosniff
+
+/index.md
+  Link: <https://book.flow-like.com/>; rel="canonical", <https://book.flow-like.com/llms.txt>; rel="describedby"
+
+/*/index.md
+  Link: <https://book.flow-like.com/:splat/>; rel="canonical", <https://book.flow-like.com/llms.txt>; rel="describedby"
+
+/social/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable

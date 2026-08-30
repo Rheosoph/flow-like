@@ -1,0 +1,636 @@
+use log::{ info, warn, error }
+use string::{ trim, contains, slugify }
+use auth::{ hmacSha256 }
+use rest::{ registerAuth, registerFunction, registerOpenApi, server, serverConfig }
+use jira::{ createIssue }
+use control::{ delay }
+
+interface AlertEnvelope {
+    alert_id: string;
+    source: "webhook" | "mail" | "sweep" | "queue";
+    detector: string;
+    received_at: string;
+    severity: "info" | "low" | "medium" | "high" | "critical";
+    indicators: string[];
+    "asset.hostname"?: string | null;
+    "enrichment.by_source": Map<string, string>;
+    raw?: any;
+}
+interface TriageVerdict {
+    alert_id: string;
+    disposition: "auto_close" | "escalate" | "contain" | "needs_analyst";
+    confidence: float;
+    rationale: string;
+    matched_indicators: string[];
+}
+interface ContainmentPlan {
+    case_key: string;
+    host: string;
+    console_window: string;
+    steps: string[];
+    approved: bool;
+    "operator.note"?: string | null;
+}
+interface CaseRecord {
+    case_key: string;
+    alert_id: string;
+    state: "open" | "waiting_approval" | "contained" | "closed";
+    opened_at: string;
+    owner?: string | null;
+    summary: string;
+    jira_key?: string | null;
+}
+
+@description("Shared HMAC secret configured on the SOC alert webhook sink")
+@secret
+const socWebhookSecret: string
+@description("Atlassian API token used to open and update SOC cases")
+@secret
+const jiraApiToken: string
+@description("Password of the soc-intake@ mailbox")
+@secret
+const mailboxPassword: string
+@description("Microsoft Graph token used to notify the on-call channel")
+@secret
+const graphToken: string
+@description("Deployment region; injected by the runtime, never stored on the board")
+@runtime
+const socRegion: string
+@description("Worker identity; injected by the runtime for audit trails")
+@runtime
+const socWorkerId: string
+@description("Maximum reasoning turns the triage agent may spend on one alert")
+@category("SOC/Agent")
+let agentStepBudget = 6
+@description("Indicators the SOC has permanently suppressed")
+@category("SOC/State")
+const suppressedIndicators: Set<string>
+@description("Case key to containment state, written by the analyst approval path")
+@category("SOC/State")
+const containmentState: Map<string, string>
+@description("Intel feeds queried in parallel during enrichment")
+@category("SOC/Enrichment")
+let intelFeeds: any[] = ["virustotal","abuseipdb","internal-edr","threatfox"]
+@description("Table holding analyst-visible cases")
+@category("SOC/Storage")
+let caseTable = "soc_cases"
+@description("Table holding raw alert envelopes")
+@category("SOC/Storage")
+let alertTable = "soc_alerts"
+@description("Window title of the legacy containment console driven by UI automation")
+@category("SOC/Containment")
+let consoleWindow = "NetGuard Console"
+
+function sqlParam(key: string, value: string): (params: Struct) {
+    const empty = struct::make()
+    const params = struct::set({ structIn: empty, field: key, value: value })
+    return params
+}
+
+function caseKeyFor(alertId: string, detector: string): (caseKey: string) {
+    const stem = detector.trim().slugify({ separator: "-", maxLength: 24 })
+    const digest = hash::sha256({ input: `${socRegion}:${alertId}:${stem}` })
+    const shortDigest = digest.substring({ start: 0, length: 10 })
+    return `SOC-${stem}-${shortDigest}`
+}
+
+@cache({ namespace: "soc-triage-model-v1", ttlSeconds: 900 })
+function triageModel(): (model: Struct) {
+    const preferences = ai::preferences::make({ multimodal: true })
+    const hinted = preferences.setModelHint({ modelHint: "reasoning" })
+    const weighted = hinted.setWeight({ preferencesKey: "cost", weight: 0.3 })
+    const model = ai::findModel({ preferences: weighted })
+    return model
+}
+
+function analystBriefing(verdict: TriageVerdict, enrichment: Struct): (briefing: string) {
+    const enrichmentJson = json::stringify({ value: enrichment, pretty: true })
+    return `Triage: ${verdict.rationale} — Enrichment: ${enrichmentJson}`
+}
+
+function enrichAlert(alertId: string): (enrichment: Struct) {
+    let enrichment = {}
+    @parallel
+    for (const feed of intelFeeds) {
+        const { summary, hits } = enrich::triage(alertId, feed)
+        enrichment.last_feed = feed
+        enrichment.last_summary = summary
+        enrichment.total_hits = hits
+    }
+    return enrichment
+}
+
+function awaitApproval(caseKey: string): (approved: bool, polls: int) {
+    const cases = db::open({ name: caseTable, userScoped: false })
+    const params = sqlParam("case", caseKey)
+    let approved = false
+    let waited = 0
+    while (!approved && waited < 40) {
+        delay({ time: 15.0 })
+        const pending = cases.count({ filter: "case_key = $case AND state = 'approved'", params: params })
+        approved = pending > 0
+        waited = waited + 1
+    }
+    return approved, waited
+}
+
+function escalateCase(caseKey: string, detector: string, briefing: string, severity: string): (issueKey: string) {
+    const provider = atlassian::providerApiToken({ baseUrl: "https://rheosoph.atlassian.net", email: "soc-bot@rheosoph.com", apiToken: jiraApiToken, isCloud: true })
+    const { issueKey } = createIssue({ provider: provider, projectKey: "SOC", issueType: "Incident", summary: `${caseKey}: ${detector}`, description: briefing, priority: "High", labels: ["soc","auto-triage"] })
+    jira::addComment({ provider: provider, issueKey: issueKey, body: `Severity ${severity} — awaiting containment approval in ${socRegion}.` })
+    return issueKey
+}
+
+function abandonCase(issueKey: string, caseKey: string, polls: int) {
+    const provider = atlassian::providerApiToken({ baseUrl: "https://rheosoph.atlassian.net", email: "soc-bot@rheosoph.com", apiToken: jiraApiToken, isCloud: true })
+    jira::addComment({ provider: provider, issueKey: issueKey, body: `Automated containment aborted for ${caseKey}: approval window elapsed after ${polls} polls.` })
+    jira::transitionIssue({ provider: provider, issueKey: issueKey, transitionName: "Needs Analyst", comment: "Returned to the analyst queue by the nightly sweep." })
+}
+
+function containCase(caseKey: string, hostname: string): (contained: bool) {
+    const plan = contain::triage(caseKey, hostname)
+    const contained = contain::quarantine(hostname, caseKey)
+    map::setRef({ varRef: "containmentState", key: caseKey, value: "contained" })
+    const graph = microsoft::providerToken({ token: graphToken, baseUrl: "https://graph.microsoft.com/v1.0" })
+    microsoft::teams::sendMessage({ provider: graph, teamId: "soc-team", channelId: "containment", message: `${caseKey} contained on ${hostname} via ${plan.console_window}`, contentType: "text" })
+    return contained
+}
+
+function ingestMailbox(): (ingested: int) {
+    const connection = imap::connect({ host: "imap.internal", port: 993, username: "soc-intake", password: mailboxPassword, encryption: "tls" })
+    const mailbox = connection.inbox({ inbox: "INBOX" })
+    const messages = mailbox.listMails({ filter: "UNSEEN" })
+    const alerts = db::open({ name: alertTable, userScoped: false })
+    let ingested = 0
+    for (const [index, reference] of messages) {
+        const mail = reference.fetchMail()
+        const { subject, plain, date } = mail.getContent()
+        // BUG(bug-t4-soc-triage-nullable-mailaddress): `.from` is Nullable_MailAddress and is
+        // refused by addressToFields, so read the sender list and index it instead.
+        const { sender } = mail.getHeaders()
+        const { email: senderAddress } = email::addressToFields({ address: sender[0] })
+        const alertId = hash::blake3({ input: `${senderAddress}:${subject}:${date}` })
+        let envelope = {}
+        envelope.alert_id = alertId
+        envelope.source = "mail"
+        envelope.detector = senderAddress
+        envelope.severity = subject.contains({ substring: "CRITICAL", ignoreCase: true }) ? "critical" : "medium"
+        envelope.indicators = plain.lines({ skipEmpty: true })
+        envelope.received_at = date
+        alerts.upsert({ idRow: "alert_id", value: envelope })
+        reference.markSeen({ markAsSeen: true })
+        reference.moveMessage({ destination: "Triaged", createIfMissing: true, expungeMode: "deferred" })
+        ingested = ingested + 1
+        info({ message: `mail #${index} ingested as ${alertId}`, toast: false })
+    }
+    return ingested
+}
+
+function sweepBacklog(): (opened: int) {
+    const alerts = db::open({ name: alertTable, userScoped: false })
+    const cases = db::open({ name: caseTable, userScoped: false })
+    const backlog = alerts.filter({ filter: "state IS NULL OR state = 'open'", limit: 200 })
+    let opened = 0
+    for (const envelope of backlog) {
+        const alertId = struct::get({ struct: envelope, field: "alert_id" })
+        const detector = struct::get({ struct: envelope, field: "detector" })
+        const severity = struct::get({ struct: envelope, field: "severity" })
+        const hostname = struct::get({ struct: envelope, field: "asset.hostname" })
+        const indicators = struct::get({ struct: envelope, field: "indicators" })
+        const caseKey = caseKeyFor(alertId, detector)
+        const enrichment = enrichAlert(alertId)
+        const { verdict, disposition } = intake::triage(alertId, detector, severity, indicators)
+        const briefing = analystBriefing(verdict, enrichment)
+        // BUG(bug-t4-soc-triage-union-field-compare): `verdict.disposition == "auto_close"` is
+        // refused (`Struct` vs `String`), so `intake::triage` hands the union back as a second,
+        // explicitly `string`-typed return and the branch reads that instead.
+        let record = {}
+        record.case_key = caseKey
+        record.alert_id = alertId
+        record.summary = briefing
+        record.opened_at = datetime::now().format({ format: "%Y-%m-%dT%H:%M:%S" })
+        if (disposition == "auto_close") {
+            record.state = "closed"
+            cases.upsert({ idRow: "case_key", value: record })
+            info({ message: `${caseKey} auto-closed by ${socWorkerId}`, toast: false })
+        } else {
+            const issueKey = escalateCase(caseKey, detector, briefing, severity)
+            record.state = "waiting_approval"
+            record.jira_key = issueKey
+            cases.upsert({ idRow: "case_key", value: record })
+            map::setRef({ varRef: "containmentState", key: caseKey, value: "waiting_approval" })
+            const { approved, polls } = awaitApproval(caseKey)
+            if (approved) {
+                const contained = containCase(caseKey, hostname)
+                record.state = "contained"
+                cases.upsert({ idRow: "case_key", value: record })
+            } else {
+                abandonCase(issueKey, caseKey, polls)
+                warn({ message: `${caseKey} approval timed out`, toast: false })
+            }
+            opened = opened + 1
+        }
+    }
+    return opened
+}
+
+function mailDigest(opened: int): (messageId: string) {
+    const cases = db::open({ name: caseTable, userScoped: false })
+    const waiting = cases.count({ filter: "state = 'waiting_approval'" })
+    const contained = cases.count({ filter: "state = 'contained'" })
+    const connection = smtp::connect({ host: "smtp.internal", port: 587, username: "soc-bot", password: mailboxPassword, encryption: "starttls" })
+    const messageId = connection.send({ from: "soc-bot@rheosoph.com", to: "soc-oncall@rheosoph.com", cc: "soc-leads@rheosoph.com", subject: `SOC sweep ${socRegion}: ${opened} new cases`, bodyText: `Opened ${opened}, awaiting approval ${waiting}, contained ${contained}. Worker ${socWorkerId}.`, includeBccHeader: false })
+    return messageId
+}
+
+function renderCaseQueue(): (shown: int) {
+    const { value: stateFilter, exists: hasFilter } = ui::getQueryParam({ paramName: "state" })
+    const cases = db::open({ name: caseTable, userScoped: false })
+    const params = sqlParam("state", "waiting_approval")
+    const rows = cases.filter({ filter: "state = $state OR state = 'open'", params: params, limit: 100 })
+    const shown = array::length({ array: rows })
+    const openCount = cases.count({ filter: "state != 'closed'" })
+
+    const { element: header } = ui::getElement({ elementRef: "queue_header" })
+    ui::setElementText({ elementRef: header, text: `${openCount} open SOC cases in ${socRegion}` })
+    const { element: table } = ui::getElement({ elementRef: "case_table" })
+    let tableData = {}
+    tableData.rows = rows
+    ui::updateTable({ elementRef: table, operation: "replace", data: tableData })
+
+    const { element: container } = ui::getElement({ elementRef: "case_cards" })
+    ui::clearChildren({ containerRef: container })
+    for (const row of rows) {
+        const rowKey = struct::get({ struct: row, field: "case_key" })
+        const card = ui::instantiateWidget({ widgetSelector: "SOC Case Card", instanceId: rowKey, fnRefs: [caseAction] })
+        ui::pushChild({ containerRef: container, childRef: card })
+    }
+    ui::setPageState({ key: "soc_state_filter", value: stateFilter })
+    ui::setPageState({ key: "soc_queue_filtered", value: hasFilter })
+    return shown
+}
+
+function mayContain(): (allowed: bool) {
+    const { userContext, hasUser } = user::getExecuting()
+    const permitted = user::hasPermission({ permission: "soc.contain" })
+    const named = struct::get({ struct: userContext, field: "sub" })
+    const allowed = hasUser && permitted
+    info({ message: `containment gate for ${named}: ${allowed}`, toast: false })
+    return allowed
+}
+
+function recordDecision(caseKey: string, decision: string): (accepted: bool) {
+    const cases = db::open({ name: caseTable, userScoped: false })
+    const params = sqlParam("case", caseKey)
+    const rows = cases.filter({ filter: "case_key = $case", params: params, limit: 1 })
+    const current = rows[0]
+    const moved = struct::set({ structIn: current, field: "state", value: decision })
+    cases.upsert({ idRow: "case_key", value: moved })
+    map::setRef({ varRef: "containmentState", key: caseKey, value: decision })
+    let accepted = false
+    if (decision == "approved") {
+        accepted = true
+    } else {
+        set::insertRef({ varRef: "suppressedIndicators", value: caseKey })
+    }
+    return accepted
+}
+
+function seedDisposition(): (disposition: string) {
+    const alerts = db::open({ name: alertTable, userScoped: false })
+    const newest = alerts.filter({ filter: "source = 'webhook'", limit: 1 })
+    const envelope = newest[0]
+    const { disposition } = intake::triage(struct::get({ struct: envelope, field: "alert_id" }), struct::get({ struct: envelope, field: "detector" }), struct::get({ struct: envelope, field: "severity" }), struct::get({ struct: envelope, field: "indicators" }))
+    return disposition
+}
+
+function announceOutcome(phase: string, spent: int) {
+    if (phase == "escalate") {
+        const escalationKey = escalateCase("SOC-CHAT", "analyst-chat", `Escalated in ${socRegion} by ${socWorkerId} after ${spent} turns`, "critical")
+        chat::pushResponse({ response: ai::response::fromString({ content: `Escalated as ${escalationKey}.` }) })
+    } else {
+        chat::pushResponse({ response: ai::response::fromString({ content: `Alert settled on ${phase} after ${spent} of ${agentStepBudget} turns.` }) })
+    }
+}
+
+function analystTurn(agent: Struct, model: Struct, transcript: Struct): (phase: string, historyOut: Struct) {
+    const { response, historyOut, stats } = agent.invoke({ history: transcript })
+    const { content: answer } = response.lastContent()
+    chat::pushTextToStep({ text: answer })
+    chat::pushStat({ stepName: "Triage", stat: stats })
+    const { response: parsed } = ai::extract({ model: model, schema: "{\"disposition\":\"contain\",\"confidence\":0.5}", text: answer, hint: "Read only the final disposition line" })
+    const phase = struct::get({ struct: parsed, field: "disposition" })
+    return phase, historyOut
+}
+
+eventsSimple configureAlertSink() {
+    const base = serverConfig({ host: "0.0.0.0", port: 8443, timeoutSeconds: 30, maxConnections: 256, maxBodyBytes: 1048576, tls: { secure: false } })
+    const routed = base.registerFunction({ path: "/soc/alerts", method: "POST", fnRefs: [socWebhook] })
+    const secured = routed.registerAuth({ auth: hmacSha256({ secret: socWebhookSecret, signatureHeader: "x-soc-signature", timestampHeader: "x-soc-timestamp", maxSkewSeconds: 300 }) })
+    const documented = secured.registerOpenApi({ path: "/soc/openapi.json", uiPath: "/soc/docs" })
+    const address = server({ config: documented })
+    address {
+        onListening: {
+            info({ message: `SOC alert sink listening on ${address} in ${socRegion}`, toast: false })
+        }
+        onClose: {
+            warn({ message: "SOC alert sink closed", toast: false })
+        }
+        execError: {
+            error({ message: "SOC alert sink failed to bind", toast: false })
+        }
+    }
+}
+
+eventsSimple mailIntake() {
+    const ingested = ingestMailbox()
+    info({ message: `mail intake ingested ${ingested} alerts`, toast: false })
+}
+
+eventsSimple nightlySweep() {
+    const opened = sweepBacklog()
+    mailDigest(opened)
+    info({ message: `nightly sweep opened ${opened} cases in ${socRegion}`, toast: false })
+}
+
+eventsWidgetAction caseAction(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    const caseKey = events::extractActionContext({ actionContext: actionContext, fieldName: "case_key" })
+    const decision = events::extractInputValue({ inputValues: inputValues, componentId: "containment_decision" })
+    const allowed = mayContain()
+    if (allowed) {
+        const accepted = recordDecision(caseKey, decision)
+        info({ message: `${eventName}: decision recorded (${accepted})`, toast: true })
+    } else {
+        warn({ message: `rejected containment decision from ${widgetInstanceId}`, toast: true })
+    }
+}
+
+eventsSimple caseQueueLoad() {
+    const shown = renderCaseQueue()
+    info({ message: `case queue rendered ${shown} rows`, toast: false })
+    ui::showScreen()
+}
+
+eventsChat socAnalystChat(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {
+    const model = triageModel()
+    const armed = agent::fromModel({ model: model, maxIter: 4, infiniteContext: false, contextMode: "sliding", maxContextTokens: 32000 }).setSystemPrompt({ systemPrompt: "You are the SOC triage analyst. Use the lookup tools before proposing a disposition." }).registerThinking().registerFunctionTools({ tools: [indicatorLookup, hostReputation, quarantineHost, caseTimeline] })
+    const stepId = chat::pushStep({ title: "Triage", description: "Bounded reasoning over the newest webhook alert" })
+    const disposition = seedDisposition()
+
+    // BUG(bug-t4-soc-triage-union-field-compare): `phase` carries the TriageVerdict
+    // `disposition` union, but a union field read straight off the verdict types as `Struct`
+    // and cannot be compared to a literal, so it is seeded from the `string` return instead.
+    let phase = "needs_analyst"
+    let spent = 0
+    let transcript = history
+    phase = disposition
+    while (spent < agentStepBudget && phase != "auto_close" && phase != "escalate") {
+        const { phase: turnPhase, historyOut } = analystTurn(armed, model, transcript)
+        transcript = historyOut
+        phase = turnPhase
+        spent = spent + 1
+    }
+
+    chat::removeStep({ stepId: stepId })
+    announceOutcome(phase, spent)
+
+    eventsGeneric caseTimeline(caseKey: string) {
+        const cases = db::open({ name: caseTable, userScoped: false })
+        const params = sqlParam("case", caseKey)
+        const timeline = cases.filter({ filter: "case_key = $case", params: params, limit: 50 })
+        return json::stringify({ value: timeline, pretty: true })
+    }
+}
+
+detached {
+    const probeSession = automation::startSession({ defaultDelayMs: 250, clickDelayMs: 90, debugMode: true })
+    const { count: displayCount } = computer::listDisplays({ session: probeSession })
+    const { width, height } = automation::vision::getScreenSize({ session: probeSession, monitor: 0 })
+    warn({ message: `orphaned console probe saw ${displayCount} displays at ${width}x${height}`, toast: false })
+    automation::stopSession({ session: probeSession })
+}
+
+module intake {
+    function triage(alertId: string, detector: string, severity: string, indicators: string[]): (verdict: TriageVerdict, disposition: string) {
+        const normalized = detector.trim().toLower()
+        const critical = severity == "critical" || severity == "high"
+        const noisy = normalized.contains({ substring: "heartbeat", ignoreCase: true })
+        const suppressed = set::has({ setIn: suppressedIndicators, value: indicators[0] })
+        let disposition = "needs_analyst"
+        let confidence = 0.4
+        if (noisy || suppressed) {
+            disposition = "auto_close"
+            confidence = 0.92
+        } else if (critical) {
+            disposition = "contain"
+            confidence = 0.78
+        }
+        const verdict = struct::make()
+        verdict.alert_id = alertId
+        verdict.disposition = disposition
+        verdict.confidence = confidence
+        verdict.rationale = `${normalized} classified as ${disposition} in ${socRegion}`
+        verdict.matched_indicators = indicators
+        return verdict, disposition
+    }
+
+    eventsGeneric socWebhook(alertId: string, detector: string, severity: string, indicators: string[], payload: Struct) {
+        const { verdict, disposition } = intake::triage(alertId, detector, severity, indicators)
+        const alerts = db::open({ name: alertTable, userScoped: false })
+        const vaultKey = crypto::generateKey()
+        const associated = sqlParam("alert", alertId)
+        const sealed = crypto::aesEncryptValue({ key: vaultKey, value: payload, associatedData: associated })
+        // BUG(bug-t4-soc-triage-typed-local-unreadable): the annotated form `let envelope: Struct = {}`
+        // reconciles to a variable nothing can read, so the untyped alias is used here and everywhere else.
+        let envelope = {}
+        envelope.alert_id = alertId
+        envelope.source = "webhook"
+        envelope.detector = detector
+        envelope.severity = severity
+        envelope.indicators = indicators
+        envelope.received_at = datetime::now().format({ format: "%Y-%m-%dT%H:%M:%S" })
+        envelope.raw = sealed
+        envelope.raw_digest = hash::blake3({ input: payload })
+        alerts.upsert({ idRow: "alert_id", value: envelope })
+        info({ message: `webhook alert ${alertId} dispositioned ${disposition}`, toast: false })
+        return verdict
+    }
+}
+
+module enrich {
+    function triage(alertId: string, feed: string): (summary: string, hits: int) {
+        const intel = db::open({ name: "soc_intel", userScoped: false })
+        const params = sqlParam("feed", feed)
+        const rows = intel.filter({ filter: "feed = $feed", params: params, limit: 25 })
+        const hits = array::length({ array: rows })
+        const indicators = array::pluck({ arrayIn: rows, key: "indicator", skipMissing: true })
+        const rendered = json::stringify({ value: indicators, pretty: false })
+        return `${feed}: ${rendered}`, hits
+    }
+
+    eventsGeneric indicatorLookup(indicator: string, payload: Struct) {
+        const intel = db::open({ name: "soc_intel", userScoped: false })
+        const rows = intel.ftsSearch({ search: indicator, fields: ["indicator","context"], limit: 10 })
+        return json::stringify({ value: rows, pretty: false })
+    }
+
+    eventsGeneric hostReputation(hostname: string, payload: Struct) {
+        const request = http::request({ method: "GET", url: `https://edr.internal/api/v2/hosts/${hostname}` })
+        const authed = request.setBearerAuth({ token: graphToken }).setAccept({ accept: "application/json" })
+        const result = http::fetch({ request: authed })
+        let reputation = "unknown"
+        result {
+            execSuccess: {
+                const body = result.toJson()
+                reputation = struct::get({ struct: body, field: "risk_band" })
+            }
+            execError: {
+                warn({ message: `EDR reputation lookup failed for ${hostname}`, toast: false })
+            }
+        }
+        return reputation
+    }
+}
+
+module contain {
+    function triage(caseKey: string, host: string): (plan: ContainmentPlan) {
+        const plan = struct::make()
+        plan.case_key = caseKey
+        plan.host = host
+        plan.console_window = consoleWindow
+        plan.steps = ["focus-console","search-host","quarantine","verify"]
+        plan.approved = false
+        return plan
+    }
+
+    function selectorPlan(): (rendered: string) {
+        const roleSelector = automation::selector::build({ kind: "role", value: "textbox:host-search", confidence: 0.8, scope: "window" })
+        const cssSelector = automation::selector::build({ kind: "css", value: "#host-search", confidence: 0.6, scope: "document" })
+        const emptySet = automation::selector::createSet()
+        const withRole = emptySet.addToSet({ selector: roleSelector })
+        const withCss = withRole.addToSet({ selector: cssSelector })
+        const ranked = withCss.rank()
+        const restored = ranked.rankedToSet()
+        const { kind, value, confidence } = automation::selector::toString({ selector: roleSelector })
+        return `${kind}=${value}@${confidence}`
+    }
+
+    function driveConsole(session: Struct, fingerprint: Struct, hostname: string, caseKey: string, x: int, y: int): (contained: bool) {
+        computer::mouseClick({ session: session, x: x, y: y, button: "left", useTemplateMatching: false, template: fingerprint, confidence: 0.9, naturalMove: true, moveDurationMs: 260, useFingerprint: true, fingerprint: fingerprint })
+        computer::typeText({ session: session, text: hostname })
+        computer::keyPress({ session: session, key: "Enter", modifiers: "" })
+        computer::wait({ session: session, ms: 600 })
+        const shotDir = files::cacheDir({ nodeScope: true, userScope: false })
+        const shotPath = shotDir.child(`${caseKey}-console.png`)
+        rpa::takeSnapshot({ session: session, filePath: shotPath, monitor: 0 })
+        let contained = false
+        const appeared = automation::vision::waitTemplate({ session: session, template: shotPath, confidence: 0.86, timeoutMs: 12000, pollIntervalMs: 400 })
+        appeared {
+            execOut: {
+                const clicked = automation::vision::clickTemplate({ session: session, template: shotPath, confidence: 0.86, clickType: "left", offsetX: 0, offsetY: 0, fallbackX: 640, fallbackY: 420 })
+                clicked {
+                    execOut: {
+                        const settled = automation::vision::waitTemplateDisappear({ session: session, template: shotPath, confidence: 0.8, timeoutMs: 15000 })
+                        settled {
+                            execOut: {
+                                const verified = rpa::assertColor({ session: session, x: 24, y: 96, red: 34, green: 160, blue: 84, tolerance: 18 })
+                                verified {
+                                    execPass: {
+                                        rpa::saveCheckpoint({ checkpointName: `contain-${caseKey}`, data: hostname })
+                                        contained = true
+                                    }
+                                    execFail: {
+                                        warn({ message: `${caseKey}: console never showed the quarantined banner`, toast: false })
+                                    }
+                                }
+                            }
+                            execTimeout: {
+                                warn({ message: `${caseKey}: quarantine control never cleared the screen`, toast: false })
+                            }
+                        }
+                    }
+                    execNotFound: {
+                        warn({ message: `${caseKey}: quarantine control vanished before the click landed`, toast: false })
+                    }
+                }
+            }
+            execTimeout: {
+                warn({ message: `${caseKey}: quarantine control never appeared`, toast: false })
+            }
+        }
+        return contained
+    }
+
+    function healAndRetry(session: Struct, model: Struct, captured: string, fingerprint: Struct, hostname: string, caseKey: string): (contained: bool) {
+        const fingerprintJson = fingerprint.toJson({ pretty: false })
+        const plan = contain::selectorPlan()
+        const healed = automation::llm::healSelector({ model: model, screenshot: captured, pageHtml: fingerprintJson, brokenSelector: plan, elementDescription: "host search input", selectorType: "role" })
+        let contained = false
+        healed {
+            execOut: {
+                const matched = automation::fingerprint::match({ session: session, fingerprint: fingerprint, strategy: "role-then-text", timeoutMs: 4000 })
+                matched {
+                    execFound: {
+                        const { updatedFingerprint, matchCount } = fingerprint.recordMatch()
+                        info({ message: `${caseKey}: fingerprint matched on attempt ${matchCount}`, toast: false })
+                        contained = contain::driveConsole(session, updatedFingerprint, hostname, caseKey, 640, 420)
+                    }
+                    execNotFound: {
+                        rpa::wait({ durationMs: 1500 })
+                        warn({ message: `${caseKey}: healed selector ${healed.new_selector} still does not match`, toast: false })
+                    }
+                }
+            }
+            execFailed: {
+                const diagnosis = rpa::diagnoseFailure({ session: session, errorMessage: `no host search field for ${hostname}`, screenshotPath: captured })
+                error({ message: `${caseKey}: ${diagnosis}`, toast: false })
+            }
+        }
+        return contained
+    }
+
+    function quarantine(hostname: string, caseKey: string): (contained: bool) {
+        const timer = rpa::startTimer()
+        const session = automation::startSession({ defaultDelayMs: 120, clickDelayMs: 60, debugMode: false })
+        rpa::logAction({ action: "containment.start", details: `${caseKey} on ${hostname}`, level: "info" })
+        const model = triageModel()
+        let contained = false
+        const window = computer::focusWindow({ session: session, windowTitle: consoleWindow, exactMatch: false, launchIfNotFound: true })
+        window {
+            execOut: {
+                computer::wait({ session: session, ms: 800 })
+                const captured = computer::captureWindow({ session: session, windowId: window.id })
+                const { description: observed } = automation::llm::observeScreen({ model: model, screenshot: captured, focusArea: "host search bar" })
+                const fingerprint = automation::fingerprint::create({ id: "netguard-host-search", role: "textbox", name: "Host", text: "Search hosts" })
+                const located = automation::llm::findElement({ model: model, screenshot: captured, description: "host search input", context: observed })
+                located {
+                    execOut: {
+                        contained = contain::driveConsole(session, fingerprint, hostname, caseKey, located.x, located.y)
+                    }
+                    execNotFound: {
+                        contained = contain::healAndRetry(session, model, captured, fingerprint, hostname, caseKey)
+                    }
+                }
+            }
+            execNotFound: {
+                warn({ message: `${consoleWindow} is not running on this worker`, toast: false })
+            }
+        }
+        const { elapsedMs } = rpa::calculateElapsed({ startTime: timer })
+        automation::stopSession({ session: session })
+        rpa::logAction({ action: "containment.done", details: `${caseKey} finished in ${elapsedMs}ms`, level: "info" })
+        return contained
+    }
+
+    eventsGeneric quarantineHost(hostname: string, caseKey: string, payload: Struct) {
+        const alreadyRunning = map::has({ mapIn: containmentState, key: caseKey })
+        let contained = false
+        if (alreadyRunning) {
+            warn({ message: `containment for ${caseKey} is already in flight`, toast: false })
+        } else {
+            contained = contain::quarantine(hostname, caseKey)
+        }
+        map::setRef({ varRef: "containmentState", key: caseKey, value: contained ? "contained" : "failed" })
+        return contained
+    }
+}

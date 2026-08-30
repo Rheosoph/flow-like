@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	AppRefEditor,
 	type AppRefFormValue,
@@ -28,6 +27,7 @@ import type {
 	LessonAppRef,
 	LessonAssetView,
 } from "@flow-like/flow-like-ui/lib/learn/types";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -186,7 +186,7 @@ function LessonAdminContent() {
 				<div className="mx-auto max-w-3xl p-6 md:p-10">
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('lessonMissing', 'Lesson missing')}</CardTitle>
+							<CardTitle>{t("lessonMissing", "Lesson missing")}</CardTitle>
 							<CardDescription>
 								{`Open a lesson from the course editor.`}
 							</CardDescription>
@@ -195,7 +195,7 @@ function LessonAdminContent() {
 							<Button asChild variant="outline">
 								<Link href="/learn/admin">
 									<ArrowLeft className="mr-2 h-4 w-4" />
-									{t('courseAdmin', 'Course admin')}
+									{t("courseAdmin", "Course admin")}
 								</Link>
 							</Button>
 						</CardContent>
@@ -214,7 +214,7 @@ function LessonAdminContent() {
 						className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 					>
 						<ArrowLeft className="h-3 w-3" />
-						{t('courseEditor', 'Course editor')}
+						{t("courseEditor", "Course editor")}
 					</Link>
 					<h1 className="ml-auto text-2xl font-semibold truncate max-w-[60%]">
 						{title || "Untitled lesson"}
@@ -227,23 +227,36 @@ function LessonAdminContent() {
 						}}
 					>
 						<Trash2 className="h-3.5 w-3.5 mr-1.5" />
-						{t('delete', 'Delete')}
+						{t("delete", "Delete")}
 					</Button>
 				</div>
 
 				<Tabs defaultValue="content">
 					<TabsList>
-						<TabsTrigger value="content">{t('content', 'Content')}</TabsTrigger>
-						<TabsTrigger value="challenges">{t('challengesLength', 'Challenges ({{length}})', { length: challenges.length })}</TabsTrigger>
-						<TabsTrigger value="refs">{t('appRefsLength', 'App refs ({{length}})', { length: appRefs.length })}</TabsTrigger>
+						<TabsTrigger value="content">{t("content", "Content")}</TabsTrigger>
+						<TabsTrigger value="challenges">
+							{t("challengesLength", "Challenges ({{length}})", {
+								length: challenges.length,
+							})}
+						</TabsTrigger>
+						<TabsTrigger value="refs">
+							{t("appRefsLength", "App refs ({{length}})", {
+								length: appRefs.length,
+							})}
+						</TabsTrigger>
 					</TabsList>
 
 					<TabsContent value="content" className="mt-4">
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">{t('lessonBody', 'Lesson body')}</CardTitle>
+								<CardTitle className="text-base">
+									{t("lessonBody", "Lesson body")}
+								</CardTitle>
 								<CardDescription>
-									{t('markdownIsRenderedWithGfmTablesTaskListsCode', 'Markdown is rendered with GFM (tables, task lists, code).')}
+									{t(
+										"markdownIsRenderedWithGfmTablesTaskListsCode",
+										"Markdown is rendered with GFM (tables, task lists, code).",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -256,7 +269,9 @@ function LessonAdminContent() {
 								>
 									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="space-y-1.5">
-											<Label htmlFor="lesson-title">{t('title', 'Title')}</Label>
+											<Label htmlFor="lesson-title">
+												{t("title", "Title")}
+											</Label>
 											<Input
 												id="lesson-title"
 												value={title}
@@ -265,15 +280,21 @@ function LessonAdminContent() {
 											/>
 										</div>
 										<div className="space-y-1.5">
-											<Label htmlFor="lesson-lang">{t('language', 'Language')}</Label>
+											<Label htmlFor="lesson-lang">
+												{t("language", "Language")}
+											</Label>
 											<Input
 												id="lesson-lang"
 												value={language}
-												onChange={(e) => { setLanguage(e.target.value); }}
+												onChange={(e) => {
+													setLanguage(e.target.value);
+												}}
 											/>
 										</div>
 										<div className="space-y-1.5">
-											<Label htmlFor="lesson-position">{t('position', 'Position')}</Label>
+											<Label htmlFor="lesson-position">
+												{t("position", "Position")}
+											</Label>
 											<Input
 												id="lesson-position"
 												type="number"
@@ -284,7 +305,9 @@ function LessonAdminContent() {
 											/>
 										</div>
 										<div className="space-y-1.5">
-											<Label htmlFor="lesson-minutes">{t('estimatedMinutes', 'Estimated minutes')}</Label>
+											<Label htmlFor="lesson-minutes">
+												{t("estimatedMinutes", "Estimated minutes")}
+											</Label>
 											<Input
 												id="lesson-minutes"
 												type="number"
@@ -308,9 +331,14 @@ function LessonAdminContent() {
 									</div>
 									<div className="flex items-center justify-between rounded-md border p-3">
 										<div>
-											<p className="text-sm font-medium">{t('optionalLesson', 'Optional lesson')}</p>
+											<p className="text-sm font-medium">
+												{t("optionalLesson", "Optional lesson")}
+											</p>
 											<p className="text-xs text-muted-foreground">
-												{t('optionalLessonsDontNeedToBeCompletedForCertificates', "Optional lessons don't need to be completed for certificates.")}
+												{t(
+													"optionalLessonsDontNeedToBeCompletedForCertificates",
+													"Optional lessons don't need to be completed for certificates.",
+												)}
 											</p>
 										</div>
 										<Switch
@@ -319,9 +347,12 @@ function LessonAdminContent() {
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label>{t('content', 'Content')}</Label>
+										<Label>{t("content", "Content")}</Label>
 										<p className="text-xs text-muted-foreground">
-											{t('richTextEditorFormattingCodeMathMentionsAndFocusnodeLinksAreSupported', "Rich text editor — formatting, code, math, mentions and focus-node links are supported.")}
+											{t(
+												"richTextEditorFormattingCodeMathMentionsAndFocusnodeLinksAreSupported",
+												"Rich text editor — formatting, code, math, mentions and focus-node links are supported.",
+											)}
 										</p>
 										<div className="rounded-md border bg-background">
 											<TextEditor
@@ -335,7 +366,7 @@ function LessonAdminContent() {
 									</div>
 									<Button type="submit" disabled={saveLesson.isPending}>
 										<Save className="h-4 w-4 mr-2" />
-										{t('saveLesson', 'Save lesson')}
+										{t("saveLesson", "Save lesson")}
 									</Button>
 								</form>
 							</CardContent>
@@ -483,7 +514,7 @@ function ChallengesPanel({
 			) : (
 				<Button variant="outline" onClick={() => setShowNew(true)}>
 					<Plus className="h-4 w-4 mr-2" />
-					{t('addChallenge', 'Add challenge')}
+					{t("addChallenge", "Add challenge")}
 				</Button>
 			)}
 		</div>
@@ -575,7 +606,7 @@ function AppRefsPanel({
 			) : (
 				<Button variant="outline" onClick={() => setShowNew(true)}>
 					<Plus className="h-4 w-4 mr-2" />
-					{t('addAppReference', 'Add app reference')}
+					{t("addAppReference", "Add app reference")}
 				</Button>
 			)}
 		</div>

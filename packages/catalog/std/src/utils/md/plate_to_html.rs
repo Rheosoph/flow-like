@@ -27,6 +27,7 @@ impl NodeLogic for PlateJsonToHtmlNode {
             "Converts a rich text document (plate_json) into HTML, keeping alignment, colours, columns and table spans that Markdown cannot express",
             "Utils/Markdown",
         );
+        node.set_flowscript_name("md", "plateToHtml");
 
         node.add_icon("/flow/icons/web.svg");
 

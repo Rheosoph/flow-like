@@ -2429,6 +2429,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Gate",
             "slug": "nodes/control/flow/control-gate"
+          },
+          {
+            "label": "Switch",
+            "slug": "nodes/control/flow/control-switch"
           }
         ]
       },
@@ -2895,7 +2899,7 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/data/datafusion/databases/df-mount-athena-query"
               },
               {
-                "label": "Register Athena Table",
+                "label": "Register AWS Athena",
                 "slug": "nodes/data/datafusion/databases/df-register-athena"
               },
               {
@@ -5865,6 +5869,48 @@ export const generatedNodeSidebar = [
             "slug": "nodes/math/float"
           },
           {
+            "label": "Aggregate",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/math/float/aggregate"
+              },
+              {
+                "label": "Average (Float)",
+                "slug": "nodes/math/float/aggregate/float-average"
+              },
+              {
+                "label": "Max Of (Float)",
+                "slug": "nodes/math/float/aggregate/float-max-of"
+              },
+              {
+                "label": "Median",
+                "slug": "nodes/math/float/aggregate/float-median"
+              },
+              {
+                "label": "Min Of (Float)",
+                "slug": "nodes/math/float/aggregate/float-min-of"
+              },
+              {
+                "label": "Percentile",
+                "slug": "nodes/math/float/aggregate/float-percentile"
+              },
+              {
+                "label": "Standard Deviation",
+                "slug": "nodes/math/float/aggregate/float-std-dev"
+              },
+              {
+                "label": "Sum (Float)",
+                "slug": "nodes/math/float/aggregate/float-sum"
+              },
+              {
+                "label": "Variance",
+                "slug": "nodes/math/float/aggregate/float-variance"
+              }
+            ]
+          },
+          {
             "label": "Comparison",
             "collapsed": true,
             "items": [
@@ -5873,28 +5919,40 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/math/float/comparison"
               },
               {
-                "label": "!=",
+                "label": "!= (Float)",
                 "slug": "nodes/math/float/comparison/float-unequal"
               },
               {
-                "label": "<",
+                "label": "< (Float)",
                 "slug": "nodes/math/float/comparison/float-less-than"
               },
               {
-                "label": "<=",
+                "label": "<= (Float)",
                 "slug": "nodes/math/float/comparison/float-less-than-or-equal"
               },
               {
-                "label": "==",
+                "label": "== (Float)",
                 "slug": "nodes/math/float/comparison/float-equal"
               },
               {
-                "label": ">",
+                "label": "> (Float)",
                 "slug": "nodes/math/float/comparison/float-greater-than"
               },
               {
-                "label": ">=",
+                "label": ">= (Float)",
                 "slug": "nodes/math/float/comparison/float-greater-than-or-equal"
+              },
+              {
+                "label": "Is Finite",
+                "slug": "nodes/math/float/comparison/float-is-finite"
+              },
+              {
+                "label": "Is Infinite",
+                "slug": "nodes/math/float/comparison/float-is-infinite"
+              },
+              {
+                "label": "Is Not A Number",
+                "slug": "nodes/math/float/comparison/float-is-nan"
               }
             ]
           },
@@ -5913,19 +5971,81 @@ export const generatedNodeSidebar = [
             ]
           },
           {
-            "label": "*",
+            "label": "Trigonometry",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/math/float/trigonometry"
+              },
+              {
+                "label": "Acos",
+                "slug": "nodes/math/float/trigonometry/float-acos"
+              },
+              {
+                "label": "Asin",
+                "slug": "nodes/math/float/trigonometry/float-asin"
+              },
+              {
+                "label": "Atan",
+                "slug": "nodes/math/float/trigonometry/float-atan"
+              },
+              {
+                "label": "Atan2",
+                "slug": "nodes/math/float/trigonometry/float-atan2"
+              },
+              {
+                "label": "Cos",
+                "slug": "nodes/math/float/trigonometry/float-cos"
+              },
+              {
+                "label": "Cosh",
+                "slug": "nodes/math/float/trigonometry/float-cosh"
+              },
+              {
+                "label": "Sin",
+                "slug": "nodes/math/float/trigonometry/float-sin"
+              },
+              {
+                "label": "Sinh",
+                "slug": "nodes/math/float/trigonometry/float-sinh"
+              },
+              {
+                "label": "Tan",
+                "slug": "nodes/math/float/trigonometry/float-tan"
+              },
+              {
+                "label": "Tanh",
+                "slug": "nodes/math/float/trigonometry/float-tanh"
+              },
+              {
+                "label": "To Degrees",
+                "slug": "nodes/math/float/trigonometry/float-to-degrees"
+              },
+              {
+                "label": "To Radians",
+                "slug": "nodes/math/float/trigonometry/float-to-radians"
+              }
+            ]
+          },
+          {
+            "label": "% (Float)",
+            "slug": "nodes/math/float/float-modulo"
+          },
+          {
+            "label": "* (Float)",
             "slug": "nodes/math/float/float-multiply"
           },
           {
-            "label": "+",
+            "label": "+ (Float)",
             "slug": "nodes/math/float/float-add"
           },
           {
-            "label": "-",
+            "label": "- (Float)",
             "slug": "nodes/math/float/float-subtract"
           },
           {
-            "label": "/",
+            "label": "/ (Float)",
             "slug": "nodes/math/float/float-divide"
           },
           {
@@ -5941,8 +6061,52 @@ export const generatedNodeSidebar = [
             "slug": "nodes/math/float/float-clamp"
           },
           {
+            "label": "Copy Sign",
+            "slug": "nodes/math/float/float-copysign"
+          },
+          {
+            "label": "Exp",
+            "slug": "nodes/math/float/float-exp"
+          },
+          {
+            "label": "Exp 2",
+            "slug": "nodes/math/float/float-exp2"
+          },
+          {
             "label": "Floor",
             "slug": "nodes/math/float/float-floor"
+          },
+          {
+            "label": "Fraction",
+            "slug": "nodes/math/float/float-fract"
+          },
+          {
+            "label": "Hypotenuse",
+            "slug": "nodes/math/float/float-hypot"
+          },
+          {
+            "label": "Lerp",
+            "slug": "nodes/math/float/float-lerp"
+          },
+          {
+            "label": "Log",
+            "slug": "nodes/math/float/float-log"
+          },
+          {
+            "label": "Log 10",
+            "slug": "nodes/math/float/float-log10"
+          },
+          {
+            "label": "Log 2",
+            "slug": "nodes/math/float/float-log2"
+          },
+          {
+            "label": "Map Range",
+            "slug": "nodes/math/float/float-map-range"
+          },
+          {
+            "label": "Math Constant",
+            "slug": "nodes/math/float/float-constant"
           },
           {
             "label": "Max",
@@ -5953,8 +6117,24 @@ export const generatedNodeSidebar = [
             "slug": "nodes/math/float/float-min"
           },
           {
+            "label": "Multiply Add",
+            "slug": "nodes/math/float/float-mul-add"
+          },
+          {
+            "label": "Natural Log",
+            "slug": "nodes/math/float/float-ln"
+          },
+          {
+            "label": "Percent Change",
+            "slug": "nodes/math/float/float-percent-change"
+          },
+          {
             "label": "Power",
             "slug": "nodes/math/float/float-power"
+          },
+          {
+            "label": "Reciprocal",
+            "slug": "nodes/math/float/float-recip"
           },
           {
             "label": "Root",
@@ -5963,6 +6143,26 @@ export const generatedNodeSidebar = [
           {
             "label": "Round",
             "slug": "nodes/math/float/float-round"
+          },
+          {
+            "label": "Round To Multiple",
+            "slug": "nodes/math/float/float-round-to-multiple"
+          },
+          {
+            "label": "Sign (Float)",
+            "slug": "nodes/math/float/float-signum"
+          },
+          {
+            "label": "Square Root",
+            "slug": "nodes/math/float/float-sqrt"
+          },
+          {
+            "label": "To Integer",
+            "slug": "nodes/math/float/float-to-int"
+          },
+          {
+            "label": "Truncate",
+            "slug": "nodes/math/float/float-trunc"
           }
         ]
       },
@@ -5973,6 +6173,104 @@ export const generatedNodeSidebar = [
           {
             "label": "Overview",
             "slug": "nodes/math/int"
+          },
+          {
+            "label": "Aggregate",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/math/int/aggregate"
+              },
+              {
+                "label": "Average (Int)",
+                "slug": "nodes/math/int/aggregate/int-average"
+              },
+              {
+                "label": "Max Of (Int)",
+                "slug": "nodes/math/int/aggregate/int-max-of"
+              },
+              {
+                "label": "Min Of (Int)",
+                "slug": "nodes/math/int/aggregate/int-min-of"
+              },
+              {
+                "label": "Product (Int)",
+                "slug": "nodes/math/int/aggregate/int-product"
+              },
+              {
+                "label": "Sum (Int)",
+                "slug": "nodes/math/int/aggregate/int-sum"
+              }
+            ]
+          },
+          {
+            "label": "Bitwise",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/math/int/bitwise"
+              },
+              {
+                "label": "& (Int)",
+                "slug": "nodes/math/int/bitwise/int-bitand"
+              },
+              {
+                "label": "<< (Int)",
+                "slug": "nodes/math/int/bitwise/int-shl"
+              },
+              {
+                "label": ">> (Int)",
+                "slug": "nodes/math/int/bitwise/int-shr"
+              },
+              {
+                "label": "Count Ones",
+                "slug": "nodes/math/int/bitwise/int-count-ones"
+              },
+              {
+                "label": "Leading Zeros",
+                "slug": "nodes/math/int/bitwise/int-leading-zeros"
+              },
+              {
+                "label": "Trailing Zeros",
+                "slug": "nodes/math/int/bitwise/int-trailing-zeros"
+              },
+              {
+                "label": "^ (Int)",
+                "slug": "nodes/math/int/bitwise/int-bitxor"
+              },
+              {
+                "label": "| (Int)",
+                "slug": "nodes/math/int/bitwise/int-bitor"
+              },
+              {
+                "label": "~ (Int)",
+                "slug": "nodes/math/int/bitwise/int-bitnot"
+              }
+            ]
+          },
+          {
+            "label": "Overflow",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/math/int/overflow"
+              },
+              {
+                "label": "Checked Arithmetic",
+                "slug": "nodes/math/int/overflow/int-checked-op"
+              },
+              {
+                "label": "Saturating Arithmetic",
+                "slug": "nodes/math/int/overflow/int-saturating-op"
+              },
+              {
+                "label": "Wrapping Arithmetic",
+                "slug": "nodes/math/int/overflow/int-wrapping-op"
+              }
+            ]
           },
           {
             "label": "Random",
@@ -5989,47 +6287,51 @@ export const generatedNodeSidebar = [
             ]
           },
           {
-            "label": "!=",
+            "label": "!= (Int)",
             "slug": "nodes/math/int/int-unequal"
           },
           {
-            "label": "%",
+            "label": "% (Int)",
             "slug": "nodes/math/int/int-modulo"
           },
           {
-            "label": "*",
+            "label": "* (Int)",
             "slug": "nodes/math/int/int-multiply"
           },
           {
-            "label": "+",
+            "label": "+ (Int)",
             "slug": "nodes/math/int/int-add"
           },
           {
-            "label": "-",
+            "label": "- (Int)",
             "slug": "nodes/math/int/int-subtract"
           },
           {
-            "label": "/",
+            "label": "/ (Int)",
             "slug": "nodes/math/int/int-divide"
           },
           {
-            "label": "<",
+            "label": "// (Int)",
+            "slug": "nodes/math/int/int-div"
+          },
+          {
+            "label": "< (Int)",
             "slug": "nodes/math/int/int-less-than"
           },
           {
-            "label": "<=",
+            "label": "<= (Int)",
             "slug": "nodes/math/int/int-less-than-or-equal"
           },
           {
-            "label": "==",
+            "label": "== (Int)",
             "slug": "nodes/math/int/int-equal"
           },
           {
-            "label": ">",
+            "label": "> (Int)",
             "slug": "nodes/math/int/int-greater-than"
           },
           {
-            "label": ">=",
+            "label": ">= (Int)",
             "slug": "nodes/math/int/int-greater-than-or-equal"
           },
           {
@@ -6041,6 +6343,50 @@ export const generatedNodeSidebar = [
             "slug": "nodes/math/int/int-clamp"
           },
           {
+            "label": "Decrement",
+            "slug": "nodes/math/int/int-decrement"
+          },
+          {
+            "label": "Floor Divide (Int)",
+            "slug": "nodes/math/int/int-div-euclid"
+          },
+          {
+            "label": "From Base",
+            "slug": "nodes/math/int/int-from-radix"
+          },
+          {
+            "label": "Greatest Common Divisor",
+            "slug": "nodes/math/int/int-gcd"
+          },
+          {
+            "label": "Increment",
+            "slug": "nodes/math/int/int-increment"
+          },
+          {
+            "label": "Integer Limits",
+            "slug": "nodes/math/int/int-limits"
+          },
+          {
+            "label": "Is Even",
+            "slug": "nodes/math/int/int-is-even"
+          },
+          {
+            "label": "Is Negative",
+            "slug": "nodes/math/int/int-is-negative"
+          },
+          {
+            "label": "Is Odd",
+            "slug": "nodes/math/int/int-is-odd"
+          },
+          {
+            "label": "Is Positive",
+            "slug": "nodes/math/int/int-is-positive"
+          },
+          {
+            "label": "Least Common Multiple",
+            "slug": "nodes/math/int/int-lcm"
+          },
+          {
             "label": "Max",
             "slug": "nodes/math/int/int-max"
           },
@@ -6049,12 +6395,32 @@ export const generatedNodeSidebar = [
             "slug": "nodes/math/int/int-min"
           },
           {
+            "label": "Modulo (Int)",
+            "slug": "nodes/math/int/int-rem-euclid"
+          },
+          {
+            "label": "Negate (Int)",
+            "slug": "nodes/math/int/int-negate"
+          },
+          {
             "label": "Power",
             "slug": "nodes/math/int/int-power"
           },
           {
             "label": "Root",
             "slug": "nodes/math/int/int-root"
+          },
+          {
+            "label": "Sign (Int)",
+            "slug": "nodes/math/int/int-signum"
+          },
+          {
+            "label": "To Base",
+            "slug": "nodes/math/int/int-to-radix"
+          },
+          {
+            "label": "To Float",
+            "slug": "nodes/math/int/int-to-float"
           }
         ]
       },
@@ -6153,6 +6519,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/structs/fields/struct-has"
           },
           {
+            "label": "Pick Fields",
+            "slug": "nodes/structs/fields/struct-pick"
+          },
+          {
             "label": "Remove Field",
             "slug": "nodes/structs/fields/struct-remove"
           },
@@ -6173,6 +6543,10 @@ export const generatedNodeSidebar = [
       {
         "label": "Make Struct (Schema)",
         "slug": "nodes/structs/struct-make-from-schema"
+      },
+      {
+        "label": "Merge Structs",
+        "slug": "nodes/structs/struct-merge"
       }
     ]
   },
@@ -6973,6 +7347,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/array/array-length"
           },
           {
+            "label": "Chunk",
+            "slug": "nodes/utils/array/array-chunk"
+          },
+          {
             "label": "Clear Array",
             "slug": "nodes/utils/array/array-clear"
           },
@@ -6983,6 +7361,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Extend",
             "slug": "nodes/utils/array/array-extend"
+          },
+          {
+            "label": "Filter",
+            "slug": "nodes/utils/array/array-filter-by"
           },
           {
             "label": "Filter Array Field",
@@ -6997,16 +7379,40 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/array/array-find-item"
           },
           {
+            "label": "Flatten",
+            "slug": "nodes/utils/array/array-flatten"
+          },
+          {
             "label": "Get Element",
             "slug": "nodes/utils/array/array-get"
+          },
+          {
+            "label": "Group By",
+            "slug": "nodes/utils/array/array-group-by"
           },
           {
             "label": "Includes",
             "slug": "nodes/utils/array/array-includes"
           },
           {
+            "label": "Join By Key",
+            "slug": "nodes/utils/array/array-join-by"
+          },
+          {
             "label": "Make Array",
             "slug": "nodes/utils/array/make-array"
+          },
+          {
+            "label": "Max By",
+            "slug": "nodes/utils/array/array-max-by"
+          },
+          {
+            "label": "Min By",
+            "slug": "nodes/utils/array/array-min-by"
+          },
+          {
+            "label": "Pluck",
+            "slug": "nodes/utils/array/array-pluck"
           },
           {
             "label": "Pop",
@@ -7021,12 +7427,36 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/array/array-remove-index"
           },
           {
+            "label": "Reverse",
+            "slug": "nodes/utils/array/array-reverse"
+          },
+          {
             "label": "Set Index",
             "slug": "nodes/utils/array/array-set-index"
           },
           {
             "label": "Shuffle",
             "slug": "nodes/utils/array/array-shuffle"
+          },
+          {
+            "label": "Slice",
+            "slug": "nodes/utils/array/array-slice"
+          },
+          {
+            "label": "Sort",
+            "slug": "nodes/utils/array/array-sort"
+          },
+          {
+            "label": "Sum Field",
+            "slug": "nodes/utils/array/array-sum-field"
+          },
+          {
+            "label": "Unique",
+            "slug": "nodes/utils/array/array-unique"
+          },
+          {
+            "label": "Zip",
+            "slug": "nodes/utils/array/array-zip"
           }
         ]
       },
@@ -7039,16 +7469,44 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/bool"
           },
           {
-            "label": "!",
+            "label": "! (Bool)",
             "slug": "nodes/utils/bool/bool-not"
           },
           {
-            "label": "==",
+            "label": "!= (Bool)",
+            "slug": "nodes/utils/bool/bool-unequal"
+          },
+          {
+            "label": "== (Bool)",
             "slug": "nodes/utils/bool/bool-equal"
+          },
+          {
+            "label": "All",
+            "slug": "nodes/utils/bool/bool-all"
           },
           {
             "label": "And",
             "slug": "nodes/utils/bool/bool-and"
+          },
+          {
+            "label": "Any",
+            "slug": "nodes/utils/bool/bool-any"
+          },
+          {
+            "label": "From Integer",
+            "slug": "nodes/utils/bool/int-to-bool"
+          },
+          {
+            "label": "Implies",
+            "slug": "nodes/utils/bool/bool-implies"
+          },
+          {
+            "label": "Nand",
+            "slug": "nodes/utils/bool/bool-nand"
+          },
+          {
+            "label": "Nor",
+            "slug": "nodes/utils/bool/bool-nor"
           },
           {
             "label": "Or",
@@ -7059,8 +7517,70 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/bool/random-bool"
           },
           {
-            "label": "^",
+            "label": "To Integer",
+            "slug": "nodes/utils/bool/bool-to-int"
+          },
+          {
+            "label": "To String",
+            "slug": "nodes/utils/bool/bool-to-string"
+          },
+          {
+            "label": "Toggle (By Ref)",
+            "slug": "nodes/utils/bool/bool-toggle"
+          },
+          {
+            "label": "^ (Bool)",
             "slug": "nodes/utils/bool/bool-xor"
+          }
+        ]
+      },
+      {
+        "label": "Bytes",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/utils/bytes"
+          },
+          {
+            "label": "== (Bytes)",
+            "slug": "nodes/utils/bytes/bytes-equal"
+          },
+          {
+            "label": "Byte Length",
+            "slug": "nodes/utils/bytes/bytes-length"
+          },
+          {
+            "label": "Bytes to Text",
+            "slug": "nodes/utils/bytes/bytes-to-text"
+          },
+          {
+            "label": "Concat Bytes",
+            "slug": "nodes/utils/bytes/bytes-concat"
+          },
+          {
+            "label": "Detect Type",
+            "slug": "nodes/utils/bytes/bytes-detect-type"
+          },
+          {
+            "label": "Gzip Compress",
+            "slug": "nodes/utils/bytes/bytes-gzip-compress"
+          },
+          {
+            "label": "Gzip Decompress",
+            "slug": "nodes/utils/bytes/bytes-gzip-decompress"
+          },
+          {
+            "label": "Slice Bytes",
+            "slug": "nodes/utils/bytes/bytes-slice"
+          },
+          {
+            "label": "Starts With (Bytes)",
+            "slug": "nodes/utils/bytes/bytes-starts-with"
+          },
+          {
+            "label": "Text to Bytes",
+            "slug": "nodes/utils/bytes/text-to-bytes"
           }
         ]
       },
@@ -7159,16 +7679,94 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/datetime"
           },
           {
+            "label": "Comparison",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/utils/datetime/comparison"
+              },
+              {
+                "label": "Is After",
+                "slug": "nodes/utils/datetime/comparison/utils-datetime-after"
+              },
+              {
+                "label": "Is Before",
+                "slug": "nodes/utils/datetime/comparison/utils-datetime-before"
+              },
+              {
+                "label": "Is Between",
+                "slug": "nodes/utils/datetime/comparison/utils-datetime-between"
+              },
+              {
+                "label": "Is Same",
+                "slug": "nodes/utils/datetime/comparison/utils-datetime-same"
+              }
+            ]
+          },
+          {
+            "label": "Add Business Days",
+            "slug": "nodes/utils/datetime/utils-datetime-add-business-days"
+          },
+          {
             "label": "Add Duration",
             "slug": "nodes/utils/datetime/utils-datetime-duration"
+          },
+          {
+            "label": "Add Months / Years",
+            "slug": "nodes/utils/datetime/utils-datetime-shift-calendar"
+          },
+          {
+            "label": "Business Days Between",
+            "slug": "nodes/utils/datetime/utils-datetime-business-days-between"
+          },
+          {
+            "label": "Calendar Info",
+            "slug": "nodes/utils/datetime/utils-datetime-calendar-info"
+          },
+          {
+            "label": "Clamp Date",
+            "slug": "nodes/utils/datetime/utils-datetime-clamp"
           },
           {
             "label": "DateTime Difference",
             "slug": "nodes/utils/datetime/utils-datetime-diff"
           },
           {
+            "label": "Earlier",
+            "slug": "nodes/utils/datetime/utils-datetime-min"
+          },
+          {
+            "label": "Earliest Of",
+            "slug": "nodes/utils/datetime/utils-datetime-min-of"
+          },
+          {
+            "label": "End Of",
+            "slug": "nodes/utils/datetime/utils-datetime-end-of"
+          },
+          {
             "label": "Format DateTime",
             "slug": "nodes/utils/datetime/utils-datetime-format"
+          },
+          {
+            "label": "From Parts",
+            "slug": "nodes/utils/datetime/utils-datetime-from-parts"
+          },
+          {
+            "label": "From Unix Timestamp",
+            "slug": "nodes/utils/datetime/utils-datetime-from-unix"
+          },
+          {
+            "label": "Humanize",
+            "slug": "nodes/utils/datetime/utils-datetime-humanize"
+          },
+          {
+            "label": "Later",
+            "slug": "nodes/utils/datetime/utils-datetime-max"
+          },
+          {
+            "label": "Latest Of",
+            "slug": "nodes/utils/datetime/utils-datetime-max-of"
           },
           {
             "label": "Now",
@@ -7179,12 +7777,24 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/datetime/utils-datetime-parse"
           },
           {
+            "label": "Start Of",
+            "slug": "nodes/utils/datetime/utils-datetime-start-of"
+          },
+          {
             "label": "To Date",
             "slug": "nodes/utils/datetime/utils-datetime-to-date"
           },
           {
             "label": "To Time",
             "slug": "nodes/utils/datetime/utils-datetime-to-time"
+          },
+          {
+            "label": "To Timezone",
+            "slug": "nodes/utils/datetime/utils-datetime-to-timezone"
+          },
+          {
+            "label": "To Unix Timestamp",
+            "slug": "nodes/utils/datetime/utils-datetime-to-unix"
           }
         ]
       },
@@ -7517,6 +8127,32 @@ export const generatedNodeSidebar = [
         ]
       },
       {
+        "label": "Format",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/utils/format"
+          },
+          {
+            "label": "Format Duration",
+            "slug": "nodes/utils/format/format-duration"
+          },
+          {
+            "label": "Format File Size",
+            "slug": "nodes/utils/format/format-bytes"
+          },
+          {
+            "label": "Format Number",
+            "slug": "nodes/utils/format/format-number"
+          },
+          {
+            "label": "Ordinal",
+            "slug": "nodes/utils/format/format-ordinal"
+          }
+        ]
+      },
+      {
         "label": "Hash",
         "collapsed": true,
         "items": [
@@ -7711,6 +8347,24 @@ export const generatedNodeSidebar = [
         ]
       },
       {
+        "label": "Random",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/utils/random"
+          },
+          {
+            "label": "Random Choice",
+            "slug": "nodes/utils/random/random-choice"
+          },
+          {
+            "label": "Random String",
+            "slug": "nodes/utils/random/random-string"
+          }
+        ]
+      },
+      {
         "label": "Set",
         "collapsed": true,
         "items": [
@@ -7811,6 +8465,66 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/string"
           },
           {
+            "label": "Case",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/utils/string/case"
+              },
+              {
+                "label": "Capitalize",
+                "slug": "nodes/utils/string/case/string-capitalize"
+              },
+              {
+                "label": "Convert Case",
+                "slug": "nodes/utils/string/case/string-convert-case"
+              },
+              {
+                "label": "Detect Case",
+                "slug": "nodes/utils/string/case/string-detect-case"
+              },
+              {
+                "label": "Title Case",
+                "slug": "nodes/utils/string/case/string-title-case"
+              },
+              {
+                "label": "camelCase",
+                "slug": "nodes/utils/string/case/string-camel-case"
+              },
+              {
+                "label": "kebab-case",
+                "slug": "nodes/utils/string/case/string-kebab-case"
+              },
+              {
+                "label": "snake_case",
+                "slug": "nodes/utils/string/case/string-snake-case"
+              }
+            ]
+          },
+          {
+            "label": "Regex",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/utils/string/regex"
+              },
+              {
+                "label": "Regex Captures",
+                "slug": "nodes/utils/string/regex/string-regex-captures"
+              },
+              {
+                "label": "Regex Find All",
+                "slug": "nodes/utils/string/regex/string-regex-find-all"
+              },
+              {
+                "label": "Regex Match",
+                "slug": "nodes/utils/string/regex/string-regex-match"
+              }
+            ]
+          },
+          {
             "label": "Similarity",
             "collapsed": true,
             "items": [
@@ -7849,16 +8563,36 @@ export const generatedNodeSidebar = [
             ]
           },
           {
-            "label": "!=",
+            "label": "!= (String)",
             "slug": "nodes/utils/string/not-equal-string"
           },
           {
-            "label": "==",
+            "label": "== (String)",
             "slug": "nodes/utils/string/equal-string"
+          },
+          {
+            "label": "Character At",
+            "slug": "nodes/utils/string/string-char-at"
+          },
+          {
+            "label": "Concat Strings",
+            "slug": "nodes/utils/string/string-concat"
           },
           {
             "label": "Contains",
             "slug": "nodes/utils/string/string-contains"
+          },
+          {
+            "label": "Contains Any",
+            "slug": "nodes/utils/string/string-contains-any"
+          },
+          {
+            "label": "Count Matches",
+            "slug": "nodes/utils/string/string-count-matches"
+          },
+          {
+            "label": "Ellipsis",
+            "slug": "nodes/utils/string/string-ellipsis"
           },
           {
             "label": "Ends With",
@@ -7869,6 +8603,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/string/string-escape"
           },
           {
+            "label": "Extract",
+            "slug": "nodes/utils/string/string-extract"
+          },
+          {
             "label": "Format String",
             "slug": "nodes/utils/string/string-format"
           },
@@ -7877,28 +8615,148 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/string/utf8-lossy"
           },
           {
+            "label": "Index Of",
+            "slug": "nodes/utils/string/string-index-of"
+          },
+          {
+            "label": "Is ASCII",
+            "slug": "nodes/utils/string/string-is-ascii"
+          },
+          {
+            "label": "Is Alphanumeric",
+            "slug": "nodes/utils/string/string-is-alphanumeric"
+          },
+          {
+            "label": "Is Email",
+            "slug": "nodes/utils/string/string-is-email"
+          },
+          {
+            "label": "Is Empty",
+            "slug": "nodes/utils/string/string-is-empty"
+          },
+          {
+            "label": "Is IP Address",
+            "slug": "nodes/utils/string/string-is-ip"
+          },
+          {
+            "label": "Is JSON",
+            "slug": "nodes/utils/string/string-is-json"
+          },
+          {
+            "label": "Is Numeric",
+            "slug": "nodes/utils/string/string-is-numeric"
+          },
+          {
+            "label": "Is URL",
+            "slug": "nodes/utils/string/string-is-url"
+          },
+          {
+            "label": "Is UUID",
+            "slug": "nodes/utils/string/string-is-uuid"
+          },
+          {
             "label": "Join Strings",
             "slug": "nodes/utils/string/string-join"
+          },
+          {
+            "label": "Last Index Of",
+            "slug": "nodes/utils/string/string-last-index-of"
+          },
+          {
+            "label": "Lines",
+            "slug": "nodes/utils/string/string-lines"
+          },
+          {
+            "label": "Mask",
+            "slug": "nodes/utils/string/string-mask"
+          },
+          {
+            "label": "Normalize Whitespace",
+            "slug": "nodes/utils/string/string-normalize-whitespace"
+          },
+          {
+            "label": "Pad End",
+            "slug": "nodes/utils/string/string-pad-end"
+          },
+          {
+            "label": "Pad Start",
+            "slug": "nodes/utils/string/string-pad-start"
           },
           {
             "label": "Render Template",
             "slug": "nodes/utils/string/string-render-template"
           },
           {
+            "label": "Repeat String",
+            "slug": "nodes/utils/string/string-repeat"
+          },
+          {
             "label": "Replace String",
             "slug": "nodes/utils/string/string-replace"
+          },
+          {
+            "label": "Reverse String",
+            "slug": "nodes/utils/string/string-reverse"
+          },
+          {
+            "label": "Slugify",
+            "slug": "nodes/utils/string/string-slugify"
+          },
+          {
+            "label": "Split At",
+            "slug": "nodes/utils/string/string-split-at"
+          },
+          {
+            "label": "Split Once",
+            "slug": "nodes/utils/string/string-split-once"
           },
           {
             "label": "Split String",
             "slug": "nodes/utils/string/string-split"
           },
           {
+            "label": "Split Whitespace",
+            "slug": "nodes/utils/string/string-split-whitespace"
+          },
+          {
             "label": "Starts With",
             "slug": "nodes/utils/string/string-starts-with"
           },
           {
+            "label": "Starts With Any",
+            "slug": "nodes/utils/string/string-starts-with-any"
+          },
+          {
             "label": "String Length",
             "slug": "nodes/utils/string/string-length"
+          },
+          {
+            "label": "Strip Prefix",
+            "slug": "nodes/utils/string/string-strip-prefix"
+          },
+          {
+            "label": "Strip Suffix",
+            "slug": "nodes/utils/string/string-strip-suffix"
+          },
+          {
+            "label": "Substring",
+            "slug": "nodes/utils/string/string-substring"
+          },
+          {
+            "label": "To Boolean",
+            "slug": "nodes/utils/string/string-to-bool"
+          },
+          {
+            "label": "To Characters",
+            "slug": "nodes/utils/string/string-to-chars"
+          },
+          {
+            "label": "To Float",
+            "slug": "nodes/utils/string/string-to-float"
+          },
+          {
+            "label": "To Integer",
+            "slug": "nodes/utils/string/string-to-int"
           },
           {
             "label": "To Lower Case",
@@ -7909,12 +8767,46 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/string/string-to-upper"
           },
           {
+            "label": "Trim Characters",
+            "slug": "nodes/utils/string/string-trim-matches"
+          },
+          {
+            "label": "Trim End",
+            "slug": "nodes/utils/string/string-trim-end"
+          },
+          {
+            "label": "Trim Start",
+            "slug": "nodes/utils/string/string-trim-start"
+          },
+          {
             "label": "Trim String",
             "slug": "nodes/utils/string/string-trim"
           },
           {
+            "label": "Truncate String",
+            "slug": "nodes/utils/string/string-truncate"
+          },
+          {
             "label": "Unescape String",
             "slug": "nodes/utils/string/string-unescape"
+          },
+          {
+            "label": "Word Count",
+            "slug": "nodes/utils/string/string-word-count"
+          }
+        ]
+      },
+      {
+        "label": "Testing",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/utils/testing"
+          },
+          {
+            "label": "Assert",
+            "slug": "nodes/utils/testing/flow-assert"
           }
         ]
       },
@@ -7931,12 +8823,20 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/types/utils-types-fallback"
           },
           {
+            "label": "Is Empty",
+            "slug": "nodes/utils/types/utils-types-is-empty"
+          },
+          {
             "label": "Select",
             "slug": "nodes/utils/types/utils-types-select"
           },
           {
             "label": "Try Transform",
             "slug": "nodes/utils/types/utils-types-try-transform"
+          },
+          {
+            "label": "Type Of",
+            "slug": "nodes/utils/types/utils-types-type-of"
           }
         ]
       },
@@ -8025,6 +8925,14 @@ export const generatedNodeSidebar = [
       {
         "label": "CUID v2",
         "slug": "nodes/utils/cuid"
+      },
+      {
+        "label": "UUID v4",
+        "slug": "nodes/utils/uuid-v4"
+      },
+      {
+        "label": "UUID v7",
+        "slug": "nodes/utils/uuid-v7"
       }
     ]
   },

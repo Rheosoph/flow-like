@@ -138,7 +138,10 @@ export function GroupConsole({
 								{current.use_case || current.name || "Untitled suite"}
 							</SheetTitle>
 							<SheetDescription>
-								{t('aSuiteIsAVisualCollectionOnlyItNeverGrantsRuntimePermissionsAndEveryMemberAppCanLeaveAtAnyTime', "A suite is a visual collection only — it never grants runtime permissions, and every member app can leave at any time.")}
+								{t(
+									"aSuiteIsAVisualCollectionOnlyItNeverGrantsRuntimePermissionsAndEveryMemberAppCanLeaveAtAnyTime",
+									"A suite is a visual collection only — it never grants runtime permissions, and every member app can leave at any time.",
+								)}
 							</SheetDescription>
 						</div>
 						<Badge variant="secondary" className="gap-1 text-[11px] shrink-0">
@@ -155,10 +158,16 @@ export function GroupConsole({
 					className="flex-1 min-h-0 flex flex-col gap-0"
 				>
 					<TabsList className="mx-4 mt-4 w-fit">
-						<TabsTrigger value="branding">{t('branding', 'Branding')}</TabsTrigger>
-						<TabsTrigger value="apps">{t('apps', 'Apps')}</TabsTrigger>
-						<TabsTrigger value="visibility">{t('visibility', 'Visibility')}</TabsTrigger>
-						<TabsTrigger value="danger">{t('dangerZone', 'Danger zone')}</TabsTrigger>
+						<TabsTrigger value="branding">
+							{t("branding", "Branding")}
+						</TabsTrigger>
+						<TabsTrigger value="apps">{t("apps", "Apps")}</TabsTrigger>
+						<TabsTrigger value="visibility">
+							{t("visibility", "Visibility")}
+						</TabsTrigger>
+						<TabsTrigger value="danger">
+							{t("dangerZone", "Danger zone")}
+						</TabsTrigger>
 					</TabsList>
 					<ScrollArea className="flex-1 min-h-0">
 						<div className="p-4 pb-10">
@@ -334,7 +343,9 @@ function ArtworkDrop({
 						<ImageIcon className="w-4 h-4" />
 					)}
 					<span className="text-[11px] font-medium">
-						{busy ? "Uploading…" : t('dropOrClickToReplace', 'Drop or click to replace')}
+						{busy
+							? "Uploading…"
+							: t("dropOrClickToReplace", "Drop or click to replace")}
 					</span>
 				</div>
 			</button>
@@ -390,7 +401,9 @@ function BrandingTab({
 				await onSaved();
 			} catch (error) {
 				toast.error(
-					error instanceof Error ? error.message : t('couldNotUploadTheImage', 'Could not upload the image'),
+					error instanceof Error
+						? error.message
+						: t("couldNotUploadTheImage", "Could not upload the image"),
 				);
 			}
 		},
@@ -411,7 +424,9 @@ function BrandingTab({
 			await onSaved();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotUpdateTheSuite', 'Could not update the suite'),
+				error instanceof Error
+					? error.message
+					: t("couldNotUpdateTheSuite", "Could not update the suite"),
 			);
 		} finally {
 			setBusy(false);
@@ -453,15 +468,18 @@ function BrandingTab({
 					value={name}
 					disabled={!canEdit}
 					onChange={(event) => setName(event.target.value)}
-					placeholder={t('coreSuite', 'Core Suite')}
+					placeholder={t("coreSuite", "Core Suite")}
 				/>
 			</div>
 
 			<div className="space-y-1.5">
 				<Label htmlFor="console-suite-usecase">
-					{t('suiteLabel', 'Suite label')}{" "}
+					{t("suiteLabel", "Suite label")}{" "}
 					<span className="text-muted-foreground font-normal">
-						{t('optionalShownAboveTheAppName', '(optional, shown above the app name)')}
+						{t(
+							"optionalShownAboveTheAppName",
+							"(optional, shown above the app name)",
+						)}
 					</span>
 				</Label>
 				<Input
@@ -469,27 +487,35 @@ function BrandingTab({
 					value={useCase}
 					disabled={!canEdit}
 					onChange={(event) => setUseCase(event.target.value)}
-					placeholder={t('backofficePlatform', 'Back-office platform')}
+					placeholder={t("backofficePlatform", "Back-office platform")}
 				/>
 			</div>
 
 			<div className="space-y-1.5">
-				<Label htmlFor="console-suite-desc">{t('description', 'Description')}</Label>
+				<Label htmlFor="console-suite-desc">
+					{t("description", "Description")}
+				</Label>
 				<Textarea
 					id="console-suite-desc"
 					value={description}
 					disabled={!canEdit}
 					onChange={(event) => setDescription(event.target.value)}
-					placeholder={t('whatThisSuiteOfAppsDoesTogether', 'What this suite of apps does together.')}
+					placeholder={t(
+						"whatThisSuiteOfAppsDoesTogether",
+						"What this suite of apps does together.",
+					)}
 					rows={4}
 				/>
 			</div>
 
 			<div className="space-y-2">
-				<Label htmlFor="console-suite-tags">{t('tags', 'Tags')}</Label>
+				<Label htmlFor="console-suite-tags">{t("tags", "Tags")}</Label>
 				<Input
 					id="console-suite-tags"
-					placeholder={t('typeATagAndPressEnter', 'Type a tag and press Enter...')}
+					placeholder={t(
+						"typeATagAndPressEnter",
+						"Type a tag and press Enter...",
+					)}
 					value={newTag}
 					disabled={!canEdit}
 					onChange={(event) => setNewTag(event.target.value)}
@@ -530,11 +556,14 @@ function BrandingTab({
 
 			{canEdit ? (
 				<Button onClick={save} disabled={busy || !name.trim()}>
-					{t('saveChanges2', 'Save changes')}
+					{t("saveChanges2", "Save changes")}
 				</Button>
 			) : (
 				<InfoNote>
-					{t('onlyTheAnchorAppCanEditThisSuiteapossBranding', "Only the anchor app can edit this suite's branding.")}
+					{t(
+						"onlyTheAnchorAppCanEditThisSuiteapossBranding",
+						"Only the anchor app can edit this suite's branding.",
+					)}
 				</InfoNote>
 			)}
 		</div>
@@ -631,7 +660,9 @@ function AppsTab({
 			await onChange();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotAddTheApp', 'Could not add the app'),
+				error instanceof Error
+					? error.message
+					: t("couldNotAddTheApp", "Could not add the app"),
 			);
 		} finally {
 			setBusy(false);
@@ -646,7 +677,9 @@ function AppsTab({
 			await onChange();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotRemoveTheApp', 'Could not remove the app'),
+				error instanceof Error
+					? error.message
+					: t("couldNotRemoveTheApp", "Could not remove the app"),
 			);
 		} finally {
 			setBusy(false);
@@ -661,7 +694,9 @@ function AppsTab({
 			onLeft();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotLeaveTheSuite', 'Could not leave the suite'),
+				error instanceof Error
+					? error.message
+					: t("couldNotLeaveTheSuite", "Could not leave the suite"),
 			);
 		} finally {
 			setBusy(false);
@@ -675,7 +710,14 @@ function AppsTab({
 	return (
 		<div className="space-y-6">
 			<SectionHeading
-				title={t('member_countAppvalInThisSuite', '{{member_count}} app{{val}} in this suite', { member_count: group.member_count, val: group.member_count === 1 ? "" : "s" })}
+				title={t(
+					"member_countAppvalInThisSuite",
+					"{{member_count}} app{{val}} in this suite",
+					{
+						member_count: group.member_count,
+						val: group.member_count === 1 ? "" : "s",
+					},
+				)}
 				hint="Membership is presentation only. Each app keeps its own team, permissions and visibility."
 			/>
 
@@ -712,12 +754,12 @@ function AppsTab({
 								</div>
 								{member.kind === "PRIMARY" && (
 									<Badge variant="outline" className="text-[10px]">
-										{t('anchor', 'Anchor')}
+										{t("anchor", "Anchor")}
 									</Badge>
 								)}
 								{member.status === "PENDING" && (
 									<Badge variant="secondary" className="text-[10px]">
-										{t('pending', 'Pending')}
+										{t("pending", "Pending")}
 									</Badge>
 								)}
 								{isAnchor && member.kind !== "PRIMARY" && (
@@ -734,7 +776,13 @@ function AppsTab({
 							</div>
 							{hiddenMeta && (
 								<p className="mt-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-									<Info className="w-3 h-3 mt-0.5 shrink-0" />{t('thisAppIsTitleItStaysInTheSuiteButWillNotBeShownInTheStoreUntilItIsPublishedItself', "This app is {{title}} — it stays in the suite but will not be shown in the store until it is published itself.", { title: hiddenMeta.title })}</p>
+									<Info className="w-3 h-3 mt-0.5 shrink-0" />
+									{t(
+										"thisAppIsTitleItStaysInTheSuiteButWillNotBeShownInTheStoreUntilItIsPublishedItself",
+										"This app is {{title}} — it stays in the suite but will not be shown in the store until it is published itself.",
+										{ title: hiddenMeta.title },
+									)}
+								</p>
 							)}
 						</div>
 					);
@@ -744,7 +792,10 @@ function AppsTab({
 			{ownMembership && (
 				<div className="rounded-lg border p-3 space-y-2">
 					<p className="text-xs text-muted-foreground">
-						{t('thisAppDecidesForItselfWhetherItStaysListedInsideTheSuite', "This app decides for itself whether it stays listed inside the suite.")}
+						{t(
+							"thisAppDecidesForItselfWhetherItStaysListedInsideTheSuite",
+							"This app decides for itself whether it stays listed inside the suite.",
+						)}
 					</p>
 					<Button
 						variant="outline"
@@ -754,7 +805,7 @@ function AppsTab({
 						className="text-destructive hover:text-destructive"
 					>
 						<LogOut className="w-3.5 h-3.5 mr-1.5" />
-						{t('leaveSuite', 'Leave suite')}
+						{t("leaveSuite", "Leave suite")}
 					</Button>
 				</div>
 			)}
@@ -762,14 +813,17 @@ function AppsTab({
 			{isAnchor && (
 				<div className="space-y-3 border-t pt-4">
 					<SectionHeading
-						title={t('addAnApp', 'Add an app')}
+						title={t("addAnApp", "Add an app")}
 						hint="Connected apps join instantly; everyone else receives an invite to accept."
 					/>
 
 					{quickAdd.length > 0 && (
 						<div className="flex flex-wrap gap-1.5">
 							<span className="text-[11px] text-muted-foreground w-full">
-								{t('connectedAppsJoinInstantly', 'Connected apps — join instantly:')}
+								{t(
+									"connectedAppsJoinInstantly",
+									"Connected apps — join instantly:",
+								)}
 							</span>
 							{quickAdd.map((app) => (
 								<button
@@ -792,14 +846,14 @@ function AppsTab({
 							<Input
 								value={search}
 								onChange={(event) => setSearch(event.target.value)}
-								placeholder={t('searchYourApps', 'Search your apps…')}
+								placeholder={t("searchYourApps", "Search your apps…")}
 								className="pl-8 h-9"
 							/>
 						</div>
 						<div className="rounded-lg border divide-y">
 							{filtered.length === 0 ? (
 								<p className="p-3 text-xs text-muted-foreground">
-									{t('noAppsMatchThatSearch', 'No apps match that search.')}
+									{t("noAppsMatchThatSearch", "No apps match that search.")}
 								</p>
 							) : (
 								filtered.map((app) => (
@@ -825,7 +879,7 @@ function AppsTab({
 											onClick={() => addMember(app.id)}
 										>
 											<Plus className="w-3.5 h-3.5 mr-1" />
-											{t('add', 'Add')}
+											{t("add", "Add")}
 										</Button>
 									</div>
 								))
@@ -835,13 +889,13 @@ function AppsTab({
 
 					<details className="text-xs text-muted-foreground">
 						<summary className="cursor-pointer select-none">
-							{t('addByAppId', 'Add by app ID')}
+							{t("addByAppId", "Add by app ID")}
 						</summary>
 						<div className="flex items-center gap-2 pt-2">
 							<Input
 								value={manualId}
 								onChange={(event) => setManualId(event.target.value)}
-								placeholder={t('appId', 'App ID')}
+								placeholder={t("appId", "App ID")}
 								className="h-8 text-xs font-mono"
 							/>
 							<Button
@@ -868,13 +922,20 @@ function PublicationRequestPanel({
 		<div className="rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-2">
 			<div className="flex items-center gap-2">
 				<Clock className="w-4 h-4 text-primary" />
-				<p className="text-sm font-medium">{t('submittedForReview', 'Submitted for review')}</p>
+				<p className="text-sm font-medium">
+					{t("submittedForReview", "Submitted for review")}
+				</p>
 				<Badge variant="secondary" className="text-[10px] ml-auto">
 					{request.status}
 				</Badge>
 			</div>
 			<p className="text-xs text-muted-foreground">
-				{t('targetVisibility', 'Target visibility')}{" "}{t('titleSubmitted', "{{title}} · submitted ", { title: VISIBILITY_META[fromWireVisibility(request.targetVisibility)].title })}{formatRelativeTime(request.createdAt)}
+				{t("targetVisibility", "Target visibility")}{" "}
+				{t("titleSubmitted", "{{title}} · submitted ", {
+					title:
+						VISIBILITY_META[fromWireVisibility(request.targetVisibility)].title,
+				})}
+				{formatRelativeTime(request.createdAt)}
 			</p>
 			{request.logs.length > 0 && (
 				<ul className="space-y-1.5 border-t pt-2">
@@ -900,7 +961,7 @@ function MemberReadinessList({
 	return (
 		<div className="space-y-2">
 			<SectionHeading
-				title={t('euAiActReadiness', 'EU AI Act readiness')}
+				title={t("euAiActReadiness", "EU AI Act readiness")}
 				hint="Every active member app needs a submitted, non-blocked assessment before the suite can be published."
 			/>
 			<div className="rounded-lg border divide-y">
@@ -918,7 +979,7 @@ function MemberReadinessList({
 							variant={entry.ready ? "secondary" : "outline"}
 							className="text-[10px]"
 						>
-							{entry.aiActStatus ?? t('notStarted', 'Not started')}
+							{entry.aiActStatus ?? t("notStarted", "Not started")}
 						</Badge>
 					</div>
 				))}
@@ -1003,17 +1064,30 @@ function VisibilityTab({
 
 			{!isAnchor && (
 				<InfoNote>
-					{t('onlyTheAnchorAppCanPublishThisSuiteYourAppapossOwnVisibilityIsNeverChangedByTheSuite', "Only the anchor app can publish this suite. Your app's own visibility is never changed by the suite.")}
+					{t(
+						"onlyTheAnchorAppCanPublishThisSuiteYourAppapossOwnVisibilityIsNeverChangedByTheSuite",
+						"Only the anchor app can publish this suite. Your app's own visibility is never changed by the suite.",
+					)}
 				</InfoNote>
 			)}
 
 			{isAnchor && !canPublish && !isStoreVisible(visibility) && (
 				<InfoNote tone="warning">
 					{group.member_count === 0
-						? t('aSuiteNeedsAtLeastOneMemberAppBeforeItCanBePublished', 'A suite needs at least one member app before it can be published.')
+						? t(
+								"aSuiteNeedsAtLeastOneMemberAppBeforeItCanBePublished",
+								"A suite needs at least one member app before it can be published.",
+							)
 						: pending
-							? t('aReviewIsAlreadyPendingForThisSuite', 'A review is already pending for this suite.')
-							: t('publishingIsBlockedUntilEveryActiveMemberAppClearsTheEuAiActGateLengthOutstanding', 'Publishing is blocked until every active member app clears the EU AI Act gate ({{length}} outstanding).', { length: blockers.length })}
+							? t(
+									"aReviewIsAlreadyPendingForThisSuite",
+									"A review is already pending for this suite.",
+								)
+							: t(
+									"publishingIsBlockedUntilEveryActiveMemberAppClearsTheEuAiActGateLengthOutstanding",
+									"Publishing is blocked until every active member app clears the EU AI Act gate ({{length}} outstanding).",
+									{ length: blockers.length },
+								)}
 				</InfoNote>
 			)}
 
@@ -1069,7 +1143,9 @@ function DangerTab({
 			await onChange();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotUpdateTheStatus', 'Could not update the status'),
+				error instanceof Error
+					? error.message
+					: t("couldNotUpdateTheStatus", "Could not update the status"),
 			);
 		} finally {
 			setBusy(false);
@@ -1084,7 +1160,9 @@ function DangerTab({
 			onDeleted();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : t('couldNotDeleteTheSuite', 'Could not delete the suite'),
+				error instanceof Error
+					? error.message
+					: t("couldNotDeleteTheSuite", "Could not delete the suite"),
 			);
 		} finally {
 			setBusy(false);
@@ -1122,27 +1200,32 @@ function DangerTab({
 
 			<div className="space-y-2 border-t pt-4">
 				<SectionHeading
-					title={t('deleteSuite', 'Delete suite')}
+					title={t("deleteSuite", "Delete suite")}
 					hint="This cannot be undone. The member apps are not affected."
 				/>
 				<AlertDialog>
 					<AlertDialogTrigger asChild>
 						<Button variant="destructive" size="sm" disabled={busy}>
 							<Trash2 className="w-3.5 h-3.5 mr-1.5" />
-							{t('deleteSuite', 'Delete suite')}
+							{t("deleteSuite", "Delete suite")}
 						</Button>
 					</AlertDialogTrigger>
 					<AlertDialogContent>
 						<AlertDialogHeader>
-							<AlertDialogTitle>{t('deleteThisSuite', 'Delete this suite?')}</AlertDialogTitle>
+							<AlertDialogTitle>
+								{t("deleteThisSuite", "Delete this suite?")}
+							</AlertDialogTitle>
 							<AlertDialogDescription>
-								{t('theSuiteAndItsCurationAreRemovedTheMemberAppsThemselvesAreNotAffected', "The suite and its curation are removed. The member apps themselves are not affected.")}
+								{t(
+									"theSuiteAndItsCurationAreRemovedTheMemberAppsThemselvesAreNotAffected",
+									"The suite and its curation are removed. The member apps themselves are not affected.",
+								)}
 							</AlertDialogDescription>
 						</AlertDialogHeader>
 						<AlertDialogFooter>
-							<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+							<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 							<AlertDialogAction onClick={deleteGroup}>
-								{t('delete', 'Delete')}
+								{t("delete", "Delete")}
 							</AlertDialogAction>
 						</AlertDialogFooter>
 					</AlertDialogContent>

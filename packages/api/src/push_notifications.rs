@@ -67,12 +67,31 @@ pub struct ProviderTargetRegistration {
     pub installation_id: Option<String>,
 }
 
+/// The fields of a Google service-account key file this crate signs with.
 #[derive(Debug, Deserialize)]
-struct GoogleServiceAccount {
-    client_email: String,
-    private_key: String,
-    token_uri: Option<String>,
+pub(crate) struct GoogleServiceAccount {
+    pub(crate) client_email: String,
+    pub(crate) private_key: String,
+    #[serde(default)]
+    pub(crate) private_key_id: Option<String>,
+    #[serde(default)]
+    pub(crate) token_uri: Option<String>,
 }
+
+impl GoogleServiceAccount {
+    pub(crate) fn parse(service_account_json: &str) -> flow_like_types::Result<Self> {
+        let account: Self = serde_json::from_str(service_account_json)
+            .map_err(|e| flow_like_types::anyhow!("service account JSON is malformed: {e}"))?;
+        if account.client_email.trim().is_empty() || account.private_key.trim().is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "service account JSON is missing client_email or private_key"
+            ));
+        }
+        Ok(account)
+    }
+}
+
+const FIREBASE_MESSAGING_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
 
 #[derive(Debug, Serialize)]
 struct GoogleClaims<'a> {
@@ -202,6 +221,7 @@ pub async fn dispatch_notification(
     Ok(notification_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_provider_target_registration(
     state: &AppState,
     user_id: &str,
@@ -1189,7 +1209,28 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
     }
 
     // Cache miss or expired – fetch a new token
-    let service_account: GoogleServiceAccount = serde_json::from_str(service_account_json)?;
+    let token =
+        exchange_google_service_account(service_account_json, FIREBASE_MESSAGING_SCOPE).await?;
+
+    // Cache the new token with a 55-minute TTL (5-min safety buffer on 60-min lifetime)
+    {
+        let mut guard = cache.write().await;
+        *guard = Some(CachedAccessToken {
+            token: token.clone(),
+            expires_at: Instant::now() + std::time::Duration::from_secs(55 * 60),
+        });
+    }
+
+    Ok(token)
+}
+
+/// Exchange a service-account key for an OAuth access token carrying `scope` (space separated
+/// scopes allowed). Uncached: callers own their cache policy.
+pub(crate) async fn exchange_google_service_account(
+    service_account_json: &str,
+    scope: &str,
+) -> flow_like_types::Result<String> {
+    let service_account = GoogleServiceAccount::parse(service_account_json)?;
     let now = chrono::Utc::now().timestamp() as usize;
     let aud = service_account
         .token_uri
@@ -1198,7 +1239,7 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
 
     let claims = GoogleClaims {
         iss: &service_account.client_email,
-        scope: "https://www.googleapis.com/auth/firebase.messaging",
+        scope,
         aud: &aud,
         iat: now,
         exp: now + 3600,
@@ -1228,16 +1269,6 @@ async fn fetch_google_access_token(service_account_json: &str) -> flow_like_type
     }
 
     let token: GoogleTokenResponse = response.json().await?;
-
-    // Cache the new token with a 55-minute TTL (5-min safety buffer on 60-min lifetime)
-    {
-        let mut guard = cache.write().await;
-        *guard = Some(CachedAccessToken {
-            token: token.access_token.clone(),
-            expires_at: Instant::now() + std::time::Duration::from_secs(55 * 60),
-        });
-    }
-
     Ok(token.access_token)
 }
 

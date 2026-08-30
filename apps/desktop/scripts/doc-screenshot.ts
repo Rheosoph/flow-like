@@ -294,8 +294,9 @@ async function run(options: DocScreenshotCliOptions): Promise<number> {
 		printResult(result, options.json);
 		return result.passed ? 0 : 1;
 	} finally {
-		process.off("SIGINT", onSigint);
-		process.off("SIGTERM", onSigterm);
+		// Bun's Process.off overload currently exposes only its memory-pressure event.
+		Reflect.apply(process.off, process, ["SIGINT", onSigint]);
+		Reflect.apply(process.off, process, ["SIGTERM", onSigterm]);
 		if (spawned && !options.keepServer) await stopFrontend(spawned.child);
 	}
 }

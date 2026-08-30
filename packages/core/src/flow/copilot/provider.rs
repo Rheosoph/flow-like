@@ -2,13 +2,15 @@ use async_trait::async_trait;
 use flow_like_ast::model::{Container, TypeRef};
 use flow_like_ast::{SigParam, Signature, to_camel_case};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::declarations::{
-    declaration_semantic_evidence, render_declaration_matches, search_declarations,
+    DeclarationMatch, declaration_semantic_evidence, render_declaration_matches,
+    search_declarations,
 };
 use super::search::score_catalog_metadata;
 use super::types::{NodeMetadata, PinMetadata};
+use crate::flow::ast::catalog_names;
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
 use crate::flow::variable::VariableType;
@@ -73,7 +75,7 @@ pub(crate) fn parse_declaration_resolution_metadata(
     })
 }
 
-const IMAP_CHAIN_NOTE: &str = "// IMAP: `mailImapInbox({ connection: connection, inbox: \"INBOX\" })` -> `mailImapList({ inbox: inbox, filter: \"UNSEEN\" })`; loop `controlForEach({ array: refs })`, then `emailImapInboxFetchMail({ emailRef: item.value })`; read with `emailGetContent`, `emailGetHeaders`, and `mailAddressFields`; after success use `emailImapMarkSeen({ email: item.value, markAsSeen: true })`.";
+const IMAP_CHAIN_NOTE: &str = "// IMAP: `imap::inbox({ connection: connection, inbox: \"INBOX\" })` -> `imap::listMails({ inbox: inbox, filter: \"UNSEEN\" })`; loop `for (const ref of refs)`, then `imap::fetchMail({ emailRef: ref })` (or `ref.fetchMail()`); read with `email::getContent`, `email::getHeaders`, and `email::addressToFields`; after success use `imap::markSeen({ email: ref, markAsSeen: true })`.";
 
 /// Trait for providing catalog search functionality
 #[async_trait]
@@ -85,8 +87,8 @@ pub trait CatalogProvider: Send + Sync {
     async fn get_all_nodes(&self) -> Vec<String>;
 
     /// Return metadata for the full catalog. FlowScript reconciliation uses this to resolve
-    /// parsed camelCase calls back to catalog node types without asking the model to manually
-    /// emit command JSON.
+    /// parsed calls (`ns::alias`, `x.alias()` or the legacy camelCase name) back to catalog node
+    /// types without asking the model to manually emit command JSON.
     async fn get_all_metadata(&self) -> Vec<NodeMetadata> {
         let node_types = self.get_all_nodes().await;
         let mut metadata = Vec::with_capacity(node_types.len());
@@ -101,8 +103,9 @@ pub trait CatalogProvider: Send + Sync {
     /// Render `.flow.d`-style FlowScript declarations for nodes matching `query`.
     ///
     /// This is FlowPilot's type-reference lookup: instead of inspecting nodes pin-by-pin, the
-    /// agent retrieves the exact `declare function …` signatures (camelCase node type, typed
-    /// params, `@impure` marker) for the nodes it wants to write in FlowScript. The default
+    /// agent retrieves the exact `function ns::alias(this: T, { … }): R;` signatures (qualified
+    /// name, receiver, typed params, `// impure` marker) for the nodes it wants to write in
+    /// FlowScript, plus the `use ns::*` idiom that makes the bare alias resolve. The default
     /// implementation derives signatures from the same metadata `search` returns, so every
     /// provider — including ones that inject third-party packages into the catalog — supports it
     /// without extra wiring.
@@ -149,11 +152,19 @@ impl DeclarationCatalogSnapshot {
         let mut function_names = Vec::with_capacity(all_metadata.len());
         let mut metadata_by_function: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, metadata) in all_metadata.iter().enumerate() {
-            let function_name = metadata_to_signature(metadata).display;
-            metadata_by_function
-                .entry(function_name.clone())
-                .or_default()
-                .push(index);
+            let signature = metadata_to_signature(metadata);
+            let function_name = signature.qualified();
+            // Every accepted spelling resolves to the node: qualified, legacy flat, node type.
+            for spelling in [
+                function_name.clone(),
+                signature.display.clone(),
+                metadata.name.clone(),
+            ] {
+                let indices = metadata_by_function.entry(spelling).or_default();
+                if !indices.contains(&index) {
+                    indices.push(index);
+                }
+            }
             function_names.push(function_name);
         }
         // Companion hints must obey the same ambiguity rule as declarations. Otherwise a direct
@@ -178,6 +189,33 @@ impl DeclarationCatalogSnapshot {
             imap_chain_compatible,
         }
     }
+
+    /// Live catalog rows for an embedded match, by node type first (the stable identity), then
+    /// by the qualified and legacy spellings.
+    fn indices_for(&self, matched: &DeclarationMatch) -> Option<&Vec<usize>> {
+        [
+            matched.node_type.as_str(),
+            matched.function_name.as_str(),
+            matched.flat.as_str(),
+        ]
+        .into_iter()
+        .filter(|spelling| !spelling.is_empty())
+        .find_map(|spelling| self.metadata_by_function.get(spelling))
+    }
+}
+
+/// The live catalog's names and signature are authoritative for an embedded match.
+fn refresh_match_from_signature(matched: &mut DeclarationMatch, signature: &Signature) {
+    matched.function_name = signature.qualified();
+    matched.node_type = signature.node_type.clone();
+    matched.namespace = signature.namespace_path().join("::");
+    matched.alias = signature.alias_name().to_string();
+    matched.flat = signature.display.clone();
+    matched.receiver = signature
+        .receiver_param()
+        .map(|param| to_camel_case(&param.name));
+    matched.signature_line = signature.signature_line();
+    matched.impure = signature.impure;
 }
 
 #[derive(Debug, Clone)]
@@ -352,50 +390,38 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         return render_declaration_matches(query, &embedded_matches);
     }
 
-    let embedded_function_names: HashSet<String> = embedded_matches
-        .iter()
-        .map(|matched| matched.function_name.clone())
-        .collect();
     let mut unavailable_function_names = Vec::new();
     let mut ambiguous_function_names = Vec::new();
     let mut assessments = Vec::new();
     let mut live_signature_override_count = 0usize;
+    let mut embedded_node_types: HashSet<String> = HashSet::new();
     let mut declaration_matches = embedded_matches
         .into_iter()
-        .filter_map(
-            |mut matched| match snapshot.metadata_by_function.get(&matched.function_name) {
-                None => {
-                    unavailable_function_names.push(matched.function_name);
-                    None
+        .filter_map(|mut matched| match snapshot.indices_for(&matched) {
+            None => {
+                unavailable_function_names.push(matched.function_name);
+                None
+            }
+            Some(indices) if indices.len() == 1 => {
+                let metadata_index = indices[0];
+                let metadata = &snapshot.all_metadata[metadata_index];
+                embedded_node_types.insert(metadata.name.clone());
+                let assessment = assess_declaration_candidate(query, metadata_index, snapshot);
+                let accepted = assessment.accepted;
+                matched.score = assessment.score;
+                assessments.push(assessment);
+                if !accepted {
+                    return None;
                 }
-                Some(indices) if indices.len() == 1 => {
-                    let metadata_index = indices[0];
-                    let metadata = &snapshot.all_metadata[metadata_index];
-                    let assessment = assess_declaration_candidate(query, metadata_index, snapshot);
-                    let accepted = assessment.accepted;
-                    matched.score = assessment.score;
-                    assessments.push(assessment);
-                    if !accepted {
-                        return None;
-                    }
-                    let signature = metadata_to_signature(metadata);
-                    matched.signature_line = signature
-                        .render_declaration()
-                        .lines()
-                        .find(|line| line.trim_start().starts_with("declare function "))
-                        .map(str::trim)
-                        .unwrap_or("")
-                        .to_string();
-                    matched.impure = signature.impure;
-                    live_signature_override_count += 1;
-                    Some(matched)
-                }
-                Some(_) => {
-                    ambiguous_function_names.push(matched.function_name);
-                    None
-                }
-            },
-        )
+                refresh_match_from_signature(&mut matched, &metadata_to_signature(metadata));
+                live_signature_override_count += 1;
+                Some(matched)
+            }
+            Some(_) => {
+                ambiguous_function_names.push(matched.function_name);
+                None
+            }
+        })
         .collect::<Vec<_>>();
     declaration_matches.sort_by(|left, right| {
         right
@@ -412,9 +438,9 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         .all_metadata
         .iter()
         .enumerate()
-        .filter_map(|(index, _meta)| {
+        .filter_map(|(index, meta)| {
             let function_name = &snapshot.function_names[index];
-            if embedded_function_names.contains(function_name)
+            if embedded_node_types.contains(&meta.name)
                 || snapshot
                     .metadata_by_function
                     .get(function_name)
@@ -488,8 +514,19 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
 
     if !live_matches.is_empty() && !declaration_matches.is_empty() {
         out.push_str(
-            "\n// Additional live app catalog declarations, including installed package nodes:\n\n",
+            "\n// Additional live app catalog declarations, including installed package nodes:\n",
         );
+    }
+    if !live_matches.is_empty() {
+        let live_namespaces = live_matches
+            .iter()
+            .map(|meta| metadata_to_signature(meta).namespace_path().join("::"))
+            .filter(|namespace| !namespace.is_empty())
+            .collect::<BTreeSet<_>>();
+        for namespace in live_namespaces {
+            out.push_str(&format!("// use {namespace}::*\n"));
+        }
+        out.push('\n');
     }
 
     let start_idx = if declaration_matches.is_empty() {
@@ -499,10 +536,11 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
     };
     for (idx, meta) in live_matches.iter().enumerate() {
         let signature = metadata_to_signature(meta);
+        let qualified = signature.qualified();
         out.push_str(&format!(
             "{}. {} — {} [{}]\n",
             start_idx + idx + 1,
-            signature.display,
+            qualified,
             signature
                 .doc
                 .as_deref()
@@ -510,35 +548,38 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
                 .unwrap_or_else(|| signature
                     .friendly
                     .clone()
-                    .unwrap_or_else(|| signature.display.clone())),
+                    .unwrap_or_else(|| qualified.clone())),
             meta.category
                 .clone()
                 .unwrap_or_else(|| "catalog".to_string())
         ));
         out.push_str("   ");
         out.push_str(&metadata_signature_line(&signature));
-        out.push_str("\n\n");
+        out.push('\n');
+        if let Some(receiver) = signature.receiver_param() {
+            out.push_str(&format!(
+                "   // {qualified}({{ … }})  or  {}.{}(…)\n",
+                to_camel_case(&receiver.name),
+                signature.alias_name()
+            ));
+        }
+        out.push('\n');
     }
 
     let mut usage_metadata = Vec::new();
     let mut seen_usage = HashSet::new();
     for matched in &declaration_matches {
-        let Some(metadata) = snapshot
-            .metadata_by_function
-            .get(&matched.function_name)
-            .and_then(|indices| {
-                (indices.len() == 1).then(|| snapshot.all_metadata[indices[0]].clone())
-            })
-        else {
+        let Some(metadata) = snapshot.indices_for(matched).and_then(|indices| {
+            (indices.len() == 1).then(|| snapshot.all_metadata[indices[0]].clone())
+        }) else {
             continue;
         };
-        if seen_usage.insert(matched.function_name.clone()) {
+        if seen_usage.insert(metadata.name.clone()) {
             usage_metadata.push(metadata);
         }
     }
     for metadata in &live_matches {
-        let function_name = metadata_to_signature(metadata).display;
-        if seen_usage.insert(function_name) {
+        if seen_usage.insert(metadata.name.clone()) {
             usage_metadata.push(metadata.clone());
         }
     }
@@ -564,9 +605,9 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         .or_else(|| {
             resolved_top_function
                 .and_then(|function_name| {
-                    live_matches
-                        .iter()
-                        .find(|metadata| metadata_to_signature(metadata).display == function_name)
+                    live_matches.iter().find(|metadata| {
+                        metadata_to_signature(metadata).qualified() == function_name
+                    })
                 })
                 .map(metadata_to_signature)
                 .map(|signature| metadata_signature_line(&signature))
@@ -574,7 +615,7 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
     let priority_metadata_index = resolved_top_function.and_then(|top_function_name| {
         usage_metadata
             .iter()
-            .position(|metadata| metadata_to_signature(metadata).display == top_function_name)
+            .position(|metadata| metadata_to_signature(metadata).qualified() == top_function_name)
     });
     let priority_metadata = priority_metadata_index.and_then(|index| usage_metadata.get(index));
     let priority_block = top_signature
@@ -734,7 +775,7 @@ fn catalog_usage_note_lines(
     }
 
     for metadata in metadata {
-        let function_name = metadata_to_signature(metadata).display;
+        let function_name = metadata_to_signature(metadata).qualified();
         let required_inputs = required_input_names(metadata);
         if !required_inputs.is_empty() {
             lines.push(format!(
@@ -1179,14 +1220,8 @@ fn compact_doc_line(doc: &str) -> String {
 }
 
 fn metadata_signature_line(signature: &crate::flow::ast::Signature) -> String {
-    let line = signature
-        .render_declaration()
-        .lines()
-        .find(|line| line.trim_start().starts_with("declare function "))
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string();
-    if signature.impure && !line.is_empty() {
+    let line = signature.signature_line();
+    if signature.impure {
         format!("{line}  // impure")
     } else {
         line
@@ -1307,6 +1342,9 @@ pub fn node_to_metadata(node: &Node) -> NodeMetadata {
         required_inputs: Vec::new(),
         companion_nodes: Vec::new(),
         capability_tags: Vec::new(),
+        namespace: Some(node.flowscript_namespace()),
+        alias: Some(node.flowscript_alias()),
+        receiver: node.receiver.clone().or_else(|| node.flowscript_receiver()),
     })
 }
 
@@ -1351,6 +1389,7 @@ pub fn metadata_to_signature(meta: &NodeMetadata) -> Signature {
         (!d.is_empty()).then(|| d.to_string())
     };
 
+    let names = catalog_names(meta);
     Signature {
         node_type: meta.name.clone(),
         display: to_camel_case(&meta.name),
@@ -1361,6 +1400,9 @@ pub fn metadata_to_signature(meta: &NodeMetadata) -> Signature {
         outputs,
         impure,
         doc,
+        namespace: Some(names.namespace).filter(|namespace| !namespace.is_empty()),
+        alias: Some(names.alias),
+        receiver: names.receiver,
     }
 }
 
@@ -1394,7 +1436,27 @@ mod tests {
         }
     }
 
+    /// Explicit names for the catalog nodes these tests imitate, mirroring the bake-in:
+    /// production metadata always carries effective names, so the synthetic metadata must too.
+    fn baked_names(name: &str) -> (Option<&str>, Option<&str>, Option<&str>) {
+        match name {
+            "email_imap_connect" => (Some("imap"), Some("connect"), None),
+            "mail_imap_inbox" => (Some("imap"), Some("inbox"), Some("connection")),
+            "mail_imap_list" => (Some("imap"), Some("listMails"), Some("inbox")),
+            "email_imap_inbox_fetch_mail" => (Some("imap"), Some("fetchMail"), Some("email_ref")),
+            "email_imap_mark_seen" => (Some("imap"), Some("markSeen"), Some("email")),
+            "email_get_content" => (Some("email"), Some("getContent"), Some("email")),
+            "email_get_headers" => (Some("email"), Some("getHeaders"), Some("email")),
+            "mail_address_fields" => (Some("email"), Some("addressToFields"), None),
+            "hybrid_search_local_db" => (None, Some("hybridSearch"), None),
+            "open_local_db" => (None, Some("open"), None),
+            "upsert_local_db" => (None, Some("upsert"), None),
+            _ => (None, None, None),
+        }
+    }
+
     fn metadata(name: &str, inputs: Vec<PinMetadata>, outputs: Vec<PinMetadata>) -> NodeMetadata {
+        let (namespace, alias, receiver) = baked_names(name);
         NodeMetadata {
             name: name.to_string(),
             friendly_name: name.to_string(),
@@ -1405,6 +1467,9 @@ mod tests {
             required_inputs: Vec::new(),
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
+            namespace: namespace.map(str::to_string),
+            alias: alias.map(str::to_string),
+            receiver: receiver.map(str::to_string),
         }
     }
 
@@ -1544,11 +1609,11 @@ mod tests {
         assert_eq!(metadata_reads.load(Ordering::SeqCst), 1);
         assert_eq!(declarations.len(), queries.len());
         assert!(
-            declarations[0].contains("declare function boolOr({ left: bool, right: bool }): bool;")
+            declarations[0].contains("function test::boolOr({ left: bool, right: bool }): bool;")
         );
         assert!(declarations[0].contains("live pin contract is authoritative"));
-        assert!(declarations[1].contains("declare function customPackageDatabaseExport("));
-        assert!(!declarations[2].contains("declare function stringReplace("));
+        assert!(declarations[1].contains("function test::customPackageDatabaseExport("));
+        assert!(!declarations[2].contains("function test::stringReplace("));
         assert!(declarations[2].contains("Ambiguous live catalog declarations omitted"));
     }
 
@@ -1566,14 +1631,14 @@ mod tests {
                 "register Lance",
                 "open_local_db",
                 "Opens a Lance database that can later be registered in another engine.",
-                "openLocalDb",
+                "open",
                 "register",
             ),
             (
                 "hybrid search",
                 "open_local_db",
                 "Opens a Lance database that can later participate in hybrid search.",
-                "openLocalDb",
+                "open",
                 "hybrid",
             ),
             (
@@ -1637,7 +1702,7 @@ mod tests {
                 "{query:?} did not explain its abstention: {resolution:?}"
             );
             assert!(
-                !declarations.contains(&format!("declare function {wrong_function}(")),
+                !declarations.contains(&format!("function test::{wrong_function}(")),
                 "{query:?} leaked the incident decoy: {declarations}"
             );
         }
@@ -1662,7 +1727,7 @@ mod tests {
                 "open_local_db",
                 "Opens a Lance database that may later be registered.",
                 "dfRegisterLance",
-                "openLocalDb",
+                "open",
             ),
             (
                 "hybrid search",
@@ -1670,8 +1735,8 @@ mod tests {
                 "Runs hybrid search against a local database.",
                 "open_local_db",
                 "Opens a database used by later hybrid search calls.",
-                "hybridSearchLocalDb",
-                "openLocalDb",
+                "hybridSearch",
+                "open",
             ),
             (
                 "upsert",
@@ -1679,7 +1744,7 @@ mod tests {
                 "Upserts one row in a local database.",
                 "set_insert_ref",
                 "Upsert-style insertion into a mutable set.",
-                "upsertLocalDb",
+                "upsert",
                 "setInsertRef",
             ),
             (
@@ -1752,15 +1817,15 @@ mod tests {
                     .iter()
                     .find(|candidate| candidate.accepted)
                     .map(|candidate| candidate.function_name.as_str()),
-                Some(correct_function),
+                Some(format!("test::{correct_function}").as_str()),
                 "{query:?}: {resolution:?}"
             );
             assert!(
-                declarations.contains(&format!("declare function {correct_function}(")),
+                declarations.contains(&format!("function test::{correct_function}(")),
                 "{query:?}: {declarations}"
             );
             assert!(
-                !declarations.contains(&format!("declare function {decoy_function}(")),
+                !declarations.contains(&format!("function test::{decoy_function}(")),
                 "{query:?}: {declarations}"
             );
         }
@@ -1788,7 +1853,7 @@ mod tests {
                 .reason_codes
                 .contains(&"unique_live_exact_symbol".to_string())
         );
-        assert!(declarations.contains("declare function dfSqlQuery("));
+        assert!(declarations.contains("function test::dfSqlQuery("));
     }
 
     #[tokio::test]
@@ -1809,6 +1874,9 @@ mod tests {
                 required_inputs: Vec::new(),
                 companion_nodes: Vec::new(),
                 capability_tags: Vec::new(),
+                namespace: None,
+                alias: None,
+                receiver: None,
             }],
         };
 
@@ -1818,8 +1886,8 @@ mod tests {
         assert!(declarations.contains("customPackageDatabaseExport"));
         assert!(declarations.contains("unavailable in the live catalog were omitted"));
         assert!(declarations.contains(&stale_embedded_function));
-        assert!(!declarations.contains(&format!("declare function {stale_embedded_function}(")));
-        assert!(declarations.contains("declare function customPackageDatabaseExport("));
+        assert!(!declarations.contains(&format!("function {stale_embedded_function}(")));
+        assert!(declarations.contains("function packages::database::customPackageDatabaseExport("));
     }
 
     #[tokio::test]
@@ -1839,7 +1907,7 @@ mod tests {
 
         let declarations = provider.get_declarations("boolean or").await;
 
-        assert!(declarations.contains("declare function boolOr("));
+        assert!(declarations.contains("function test::boolOr("));
         assert!(declarations.contains("boolOr({ boolean: value1, boolean: value2 })"));
         assert!(declarations.contains("Repeat the exact key in declaration order"));
         assert!(declarations.contains("do not rename it or add [#N]"));
@@ -1861,7 +1929,7 @@ mod tests {
         let declarations = provider.get_declarations("boolean or").await;
 
         assert!(
-            declarations.contains("declare function boolOr({ left: bool, right: bool }): bool;"),
+            declarations.contains("function test::boolOr({ left: bool, right: bool }): bool;"),
             "{declarations}"
         );
         assert!(!declarations.contains("boolOr({ boolean?: bool, boolean?: bool })"));
@@ -1893,10 +1961,11 @@ mod tests {
 
         let declarations = provider.get_declarations("boolean or").await;
 
-        assert!(!declarations.contains("declare function boolOr("));
+        assert!(!declarations.contains("function test::boolOr("));
         assert!(declarations.contains("Ambiguous live catalog declarations omitted"));
-        assert!(declarations.contains("boolOr"));
+        assert!(declarations.contains("bool::or"));
         assert!(!declarations.contains("boolOr required inputs"));
+        assert!(!declarations.contains("bool::or required inputs"));
     }
 
     #[tokio::test]
@@ -1925,7 +1994,7 @@ mod tests {
 
         let declarations = provider.get_declarations("logic gate").await;
 
-        assert!(declarations.contains("declare function logicGate("));
+        assert!(declarations.contains("function test::logicGate("));
         assert!(!declarations.contains("logicGate companion calls: boolOr"));
     }
 
@@ -2018,35 +2087,34 @@ mod tests {
 
         let declarations = provider.get_declarations("imap fetch mail").await;
 
-        assert!(declarations.contains("emailImapInboxFetchMail required inputs: emailRef"));
+        assert!(declarations.contains("fetchMail required inputs: emailRef"));
         assert!(declarations.contains("schema: Email {"));
         assert!(declarations.contains("from?: MailAddress"));
         assert!(declarations.contains("plain?: string"));
         assert!(declarations.contains("subject: string"));
         assert!(declarations.contains("uid: int"));
-        assert!(
-            declarations.contains("mailImapInbox({ connection: connection, inbox: \"INBOX\" })")
-        );
-        assert!(declarations.contains("mailImapList({ inbox: inbox, filter: \"UNSEEN\" })"));
+        assert!(declarations.contains("imap::inbox({ connection: connection, inbox: \"INBOX\" })"));
+        assert!(declarations.contains("imap::listMails({ inbox: inbox, filter: \"UNSEEN\" })"));
         assert!(declarations.contains("filter: \"UNSEEN\""));
-        assert!(declarations.contains("controlForEach({ array: refs })"));
-        assert!(declarations.contains("emailImapInboxFetchMail({ emailRef: item.value })"));
-        assert!(declarations.contains("emailGetContent"));
-        assert!(declarations.contains("emailGetHeaders"));
-        assert!(declarations.contains("mailAddressFields"));
-        assert!(
-            declarations.contains("emailImapMarkSeen({ email: item.value, markAsSeen: true })")
-        );
+        assert!(declarations.contains("for (const ref of refs)"));
+        assert!(declarations.contains("imap::fetchMail({ emailRef: ref })"));
+        assert!(declarations.contains("email::getContent"));
+        assert!(declarations.contains("email::getHeaders"));
+        assert!(declarations.contains("email::addressToFields"));
+        assert!(declarations.contains("imap::markSeen({ email: ref, markAsSeen: true })"));
         assert!(declarations.contains(DECLARATION_PRIORITY_BEGIN));
         assert!(declarations.contains(DECLARATION_PRIORITY_END));
         let priority_start = declarations.find(DECLARATION_PRIORITY_BEGIN).unwrap()
             + DECLARATION_PRIORITY_BEGIN.len();
-        assert!(declarations[priority_start..].starts_with("declare function "));
+        assert!(
+            declarations[priority_start..].starts_with("function imap::fetchMail("),
+            "{declarations}"
+        );
         for companion in [
-            "emailImapConnect",
-            "mailImapInbox",
-            "mailImapList",
-            "emailImapMarkSeen",
+            "imap::connect",
+            "imap::inbox",
+            "listMails",
+            "imap::markSeen",
         ] {
             assert!(
                 declarations.contains(companion),
@@ -2119,7 +2187,7 @@ mod tests {
 
         let declarations = provider.get_declarations("imap fetch mail").await;
 
-        assert!(declarations.contains("declare function emailImapInboxFetchMail"));
+        assert!(declarations.contains("function imap::fetchMail"));
         assert!(!declarations.contains("// IMAP:"));
         assert!(!declarations.contains("filter: \"UNSEEN\""));
     }

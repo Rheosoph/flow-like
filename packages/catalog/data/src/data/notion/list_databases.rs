@@ -47,6 +47,7 @@ impl NodeLogic for ListNotionDatabasesNode {
             "Lists all databases the integration has access to",
             "Data/Notion",
         );
+        node.set_flowscript_name("notion", "listDatabases");
         node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 

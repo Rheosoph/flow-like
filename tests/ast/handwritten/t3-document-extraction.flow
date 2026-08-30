@@ -1,0 +1,262 @@
+use log::{ error, info, warn }
+
+interface SheetDigest {
+    sheet: string;
+    table_count?: int = 0;
+    rendered_chars?: int = 0;
+    empty?: bool = false;
+}
+interface ExtractedDocument {
+    source_path: string;
+    kind: "pdf" | "docx" | "pptx" | "xlsx";
+    markup?: "plain" | "markdown" | "html" = "plain";
+    title?: string = "";
+    text: string;
+    char_count?: int = 0;
+    unit_count?: int = 0;
+    truncated?: bool = false;
+    sheets?: Map<string, SheetDigest> = {};
+    extractor?: string | null = null;
+}
+
+@description("Folder under the upload directory that new documents are dropped into")
+@category("Extraction/Inbox")
+const inboxFolder = "inbox"
+@description("Longest text an extractor may hand to the chunker before it is cut")
+@category("Extraction/Limits")
+const maxDocumentChars = 400000
+@description("Characters per chunk handed to the embedding splitter")
+@category("Extraction/Limits")
+const chunkCapacity = 1200
+@description("Characters shared between two consecutive chunks")
+@category("Extraction/Limits")
+const chunkOverlap = 120
+@description("How many chunks are written into one batch file")
+@category("Extraction/Limits")
+const chunkBatchSize = 8
+@description("Shape the metadata pass is asked to fill in from the head of a document")
+@category("Extraction/Model")
+const metadataShape: Struct = {"title":"","author":"","topics":[""]}
+@description("Normalized form of the document that is currently being processed")
+@category("Extraction/State")
+const currentDocument: ExtractedDocument = {"source_path":"","kind":"pdf","text":""}
+@category("Extraction/State")
+let stagedKind = "pdf"
+@category("Extraction/State")
+let stagedText = ""
+@category("Extraction/State")
+let stagedTitle = ""
+@category("Extraction/State")
+let stagedUnits = 0
+@category("Extraction/State")
+let sheetIndex: Struct = {}
+@category("Extraction/State")
+let workbookSections: string[] = []
+@category("Extraction/State")
+let batchCursor = 0
+@category("Extraction/Metrics")
+let skippedPaths: string[] = []
+@category("Extraction/Metrics")
+let documentsExtracted = 0
+@category("Extraction/Metrics")
+let batchesWritten = 0
+
+function selectModels(): (writer: Struct, embedder: Struct) {
+    const base = ai::preferences::make({ multimodal: false })
+    const hinted = base.setModelHint("cheap long-context summarizer")
+    const writer = ai::findModel({ preferences: hinted })
+    const embedder = ai::embedding::loadModel({ bit: writer })
+    return writer, embedder
+}
+
+function classifyDocument(file: Struct): (source: string, stem: string, ext: string, supported: bool) {
+    const source = file.rawPath()
+    const stem = file.filename(true)
+    const ext = file.extension().toLower()
+    const { contains: supported } = ext.containsAny({ substrings: ["pdf", "docx", "pptx", "xlsx"], ignoreCase: true })
+    return source, stem, ext, supported
+}
+
+function pdfDigest(file: Struct): (text: string, title: string, units: int) {
+    const text = pdf::extractText({ template: file })
+    const { title: metaTitle } = pdf::getMetadata({ template: file })
+    const units = pdf::pageCount({ pdf: file })
+    return text, metaTitle, units
+}
+
+function docxDigest(file: Struct): (text: string, title: string) {
+    const text = docx::extractText({ template: file })
+    const { title: metaTitle, description } = docx::getMetadata({ template: file })
+    const untitled = metaTitle.isEmpty({ ignoreWhitespace: true })
+    let title = untitled ? description : metaTitle
+    return text, title
+}
+
+function pptxDigest(file: Struct): (text: string, title: string, units: int) {
+    const text = pptx::extractText({ template: file })
+    const { title: metaTitle } = pptx::getMetadata({ template: file })
+    const units = pptx::slideCount({ template: file })
+    return text, metaTitle, units
+}
+
+function worksheetDigest(file: Struct, sheet: string): (entry: Struct, section: string) {
+    const tables = excel::extractTables({ file: file, sheet: sheet })
+    const tableCount = array::length({ array: tables })
+    const rendered = json::stringify({ value: tables, pretty: true })
+    const renderedChars = rendered.length({ mode: "Characters" })
+    let empty = tableCount == 0
+    const blank = struct::make()
+    const named = struct::set({ structIn: blank, field: "sheet", value: sheet })
+    const counted = struct::set({ structIn: named, field: "table_count", value: tableCount })
+    const measured = struct::set({ structIn: counted, field: "rendered_chars", value: renderedChars })
+    const entry = struct::set({ structIn: measured, field: "empty", value: empty })
+    let heading = `## ${sheet}`
+    const parts = array::construct({ element: heading, element: rendered })
+    const section = string::join({ strings: parts, separator: "\n\n" })
+    return entry, section
+}
+
+function workbookDigest(file: Struct): (text: string, units: int) {
+    const { sheetNames, count } = excel::getSheetNames({ file: file })
+    for (const sheet of sheetNames) {
+        const { entry, section } = worksheetDigest(file, sheet)
+        sheetIndex = struct::set({ structIn: sheetIndex, field: sheet, value: entry })
+        workbookSections = workbookSections.push(section)
+    }
+    const text = string::join({ strings: workbookSections, separator: "\n\n" })
+    return text, count
+}
+
+function stageExtraction(file: Struct, ext: string, stem: string): (kind: string) {
+    sheetIndex = struct::make()
+    workbookSections = array::make()
+    if (ext == "pdf") {
+        const { text, title, units } = pdfDigest(file)
+        stagedKind = "pdf"
+        stagedText = text
+        stagedTitle = title
+        stagedUnits = units
+    } else if (ext == "docx") {
+        const { text, title } = docxDigest(file)
+        stagedKind = "docx"
+        stagedText = text
+        stagedTitle = title
+        stagedUnits = 1
+    } else if (ext == "pptx") {
+        const { text, title, units } = pptxDigest(file)
+        stagedKind = "pptx"
+        stagedText = text
+        stagedTitle = title
+        stagedUnits = units
+    } else {
+        const { text, units } = workbookDigest(file)
+        stagedKind = "xlsx"
+        stagedText = text
+        stagedTitle = stem
+        stagedUnits = units
+    }
+    return stagedKind
+}
+
+function normalizeMarkup(raw: string): (normalized: string, markup: string) {
+    const trimmed = raw.trim()
+    const looksHtml = trimmed.startsWith({ prefix: "<", ignoreCase: false })
+    const converted = md::fromHtml({ html: trimmed, skippedTags: ["script", "style", "nav"] })
+    let normalized = looksHtml ? converted : trimmed
+    let markup = looksHtml ? "markdown" : "plain"
+    return normalized, markup
+}
+
+function recordDocument(source: string, markup: string, body: string, charCount: int, truncated: bool): (documentJson: string) {
+    currentDocument.source_path = source
+    currentDocument.kind = stagedKind
+    currentDocument.markup = markup
+    currentDocument.title = stagedTitle
+    currentDocument.text = body
+    currentDocument.char_count = charCount
+    currentDocument.unit_count = stagedUnits
+    currentDocument.truncated = truncated
+    currentDocument.sheets = sheetIndex
+    currentDocument.extractor = stagedKind
+    const documentJson = json::stringify({ value: currentDocument, pretty: false })
+    return documentJson
+}
+
+function writePreview(chunkRoot: Struct, stem: string, body: string): (previewPath: Struct) {
+    const previewPath = chunkRoot.child(stem).setExtension("html")
+    const seen = files::exists({ path: previewPath })
+    seen {
+        execOutExists: {
+            info({ message: `${stem} was extracted before, refreshing its preview`, toast: false })
+        }
+        execOutMissing: {
+            info({ message: `${stem} is new to the chunk index`, toast: false })
+        }
+    }
+    const preview = body.toHtml({ allowHtml: false, smartPunctuation: true })
+    previewPath.writeString(preview)
+    return previewPath
+}
+
+function writeChunkBatches(chunkRoot: Struct, stem: string, chunks: string[], count: int): (batches: int) {
+    batchCursor = 0
+    while (batchCursor < count) {
+        const batch = chunks.slice(batchCursor, chunkBatchSize)
+        const joined = string::join({ strings: batch, separator: "\n\n---\n\n" })
+        const batchPath = chunkRoot.child(`${stem}-${batchCursor}`).setExtension("txt")
+        batchPath.writeString(joined)
+        batchesWritten = batchesWritten + 1
+        batchCursor = batchCursor + chunkBatchSize
+    }
+    return batchesWritten
+}
+
+function ingestDocument(file: Struct, index: int, chunkRoot: Struct, writer: Struct, embedder: Struct, schema: string): (chunkCount: int) {
+    const { source, stem, ext, supported } = classifyDocument(file)
+    if (!supported) {
+        skippedPaths = skippedPaths.push(source)
+        warn({ message: `skipping ${source}, no extractor handles .${ext}`, toast: false })
+        return 0
+    }
+    const kind = stageExtraction(file, ext, stem)
+    const { normalized, markup } = normalizeMarkup(stagedText)
+    const charCount = normalized.length({ mode: "Characters" })
+    let truncated = charCount > maxDocumentChars
+    const body = normalized.ellipsis({ maxLength: maxDocumentChars, ellipsis: "\n\n[truncated]" })
+    const documentJson = recordDocument(source, markup, body, charCount, truncated)
+
+    const head = body.ellipsis({ maxLength: 4000, ellipsis: " ..." })
+    const { response: metadata } = ai::extract({ model: writer, schema: schema, text: head, hint: "Only use what the excerpt actually states" })
+    const topics = json::stringify({ value: metadata, pretty: false })
+
+    writePreview(chunkRoot, stem, body)
+    let markdownAware = markup == "markdown"
+    const chunks = ai::processing::chunkText({ text: body, model: embedder, capacity: chunkCapacity, overlap: chunkOverlap, markdown: markdownAware })
+    const chunkCount = array::length({ array: chunks })
+    writeChunkBatches(chunkRoot, stem, chunks, chunkCount)
+    documentsExtracted = documentsExtracted + 1
+    info({ message: `#${index} ${kind} ${stagedTitle}: ${chunkCount} chunks over ${stagedUnits} units, ${charCount} chars, metadata ${topics}, record ${documentJson}`, toast: false })
+    return chunkCount
+}
+
+eventsGeneric extractInbox(payload: Struct, folder: string) {
+    const noFolder = folder.isEmpty({ ignoreWhitespace: true })
+    let target = noFolder ? inboxFolder : folder
+    const root = files::uploadDir().child(target)
+    const chunkRoot = files::storageDir(false).child("chunks")
+    const { writer, embedder } = selectModels()
+    const schema = json::stringify({ value: metadataShape, pretty: false })
+    const paths = root.listPaths(true)
+    info({ message: `scanning ${target} for extractable documents`, toast: false })
+
+    for (const [index, file] of paths) {
+        ingestDocument(file, index, chunkRoot, writer, embedder, schema)
+    }
+
+    const skippedCount = array::length({ array: skippedPaths })
+    if (skippedCount > 0) {
+        const list = string::join({ strings: skippedPaths, separator: ", " })
+        error({ message: `${skippedCount} files had no extractor: ${list}`, toast: true })
+    }
+    return `extracted ${documentsExtracted} documents into ${batchesWritten} chunk batches`
+}

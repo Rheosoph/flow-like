@@ -26,6 +26,7 @@ impl NodeLogic for GetChildAtIndex {
             "Gets a child element at a specific index from a container",
             "UI/Elements/Containers",
         );
+        node.set_flowscript_name("ui", "getChildAtIndex");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin(
@@ -71,30 +72,11 @@ impl NodeLogic for GetChildAtIndex {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let container_id: String = context.evaluate_pin("container_ref").await?;
         let index: i64 = context.evaluate_pin("index").await?;
+        context
+            .ensure_elements(&[format!("children:{container_id}")])
+            .await?;
 
-        let elements = context.get_frontend_elements().await?;
-
-        let Some(elements_map) = elements else {
-            context.log_message("No elements in payload", LogLevel::Warn);
-            context
-                .get_pin_by_name("child")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            context
-                .get_pin_by_name("child_id")
-                .await?
-                .set_value(Value::Null)
-                .await;
-            context
-                .get_pin_by_name("found")
-                .await?
-                .set_value(Value::Bool(false))
-                .await;
-            return Ok(());
-        };
-
-        let Some(container) = elements_map.get(&container_id) else {
+        let Some((_, container)) = context.read_element(&container_id).await? else {
             context.log_message(
                 &format!("Container not found: {}", container_id),
                 LogLevel::Warn,
@@ -158,11 +140,11 @@ impl NodeLogic for GetChildAtIndex {
         }
 
         let child_id = &child_ids[idx];
-        let child_element = elements_map.get(child_id).cloned();
+        let child_element = context.read_element(child_id).await?;
 
-        if let Some(mut child) = child_element {
+        if let Some((resolved_id, mut child)) = child_element {
             if let Some(obj) = child.as_object_mut() {
-                obj.insert("_id".to_string(), Value::String(child_id.clone()));
+                obj.insert("_id".to_string(), Value::String(resolved_id));
             }
             context
                 .get_pin_by_name("child")

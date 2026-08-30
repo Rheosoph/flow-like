@@ -10,8 +10,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{Value, async_trait, json::json};
 
-use super::element_utils::find_element;
-
 /// Unified ImageHotspot update node.
 ///
 /// Manage hotspots on an ImageHotspot element with a single node.
@@ -43,6 +41,7 @@ impl NodeLogic for UpdateHotspot {
             "Add, remove, or manage hotspots on an ImageHotspot element",
             "UI/Elements/Hotspot",
         );
+        node.set_flowscript_name("ui", "updateHotspot");
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.add_input_pin("exec_in", "▶", "", VariableType::Execution);
@@ -132,9 +131,9 @@ impl NodeLogic for UpdateHotspot {
                 context.upsert_element(&element_id, update).await?;
             }
             "Get All" => {
-                let elements = context.get_frontend_elements().await?;
-                let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
+                let element = context.read_element(&element_id).await?;
                 let hotspots = element
+                    .as_ref()
                     .map(|(_, el)| el)
                     .and_then(|el| el.get("component"))
                     .and_then(|c| c.get("hotspots"))

@@ -1,3 +1,4 @@
+use crate::utils::pure_scores;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -21,12 +22,23 @@ impl NodeLogic for RoundFloatNode {
         let mut node = Node::new(
             "float_round",
             "Round",
-            "Rounds a float to the nearest integer",
+            "Rounds a float to the given number of decimal places",
             "Math/Float",
         );
+        node.set_flowscript_name("float", "round");
+        node.set_receiver("float");
         node.add_icon("/flow/icons/sigma.svg");
+        node.set_version(1);
+        node.set_scores(pure_scores());
 
         node.add_input_pin("float", "Float", "Input Float", VariableType::Float);
+        node.add_input_pin(
+            "decimals",
+            "Decimals",
+            "Number of decimal places to keep",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(0)));
 
         node.add_output_pin(
             "rounded",
@@ -40,8 +52,10 @@ impl NodeLogic for RoundFloatNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let float: f64 = context.evaluate_pin("float").await?;
+        let decimals: i64 = context.evaluate_pin("decimals").await?;
 
-        let rounded = float.round();
+        let factor = 10f64.powi(decimals.clamp(0, 15) as i32);
+        let rounded = (float * factor).round() / factor;
 
         context.set_pin_value("rounded", json!(rounded)).await?;
         Ok(())

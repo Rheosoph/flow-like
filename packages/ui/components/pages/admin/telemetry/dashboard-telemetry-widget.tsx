@@ -85,7 +85,7 @@ function Sparkline({
 	if (!points.length) {
 		return (
 			<div className="flex h-9 items-center text-xs text-muted-foreground">
-				{t('noData', 'No data')}
+				{t("noData", "No data")}
 			</div>
 		);
 	}
@@ -143,7 +143,9 @@ function TopList({
 					<Skeleton className="h-4 w-full" />
 				</div>
 			) : buckets.length === 0 ? (
-				<div className="text-xs text-muted-foreground">{t('noData', 'No data')}</div>
+				<div className="text-xs text-muted-foreground">
+					{t("noData", "No data")}
+				</div>
 			) : (
 				<ul className="space-y-1">
 					{buckets.map((b) => (
@@ -231,18 +233,21 @@ export function DashboardTelemetryWidget({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<Activity className="h-4 w-4 text-primary" />
-						{t('telemetry', 'Telemetry')}
+						{t("telemetry", "Telemetry")}
 						<Badge variant="outline" className="text-[10px]">
 							24h
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						{t('anonymousOptinProductMetricsAcrossInstalls', 'Anonymous opt-in product metrics across installs')}
+						{t(
+							"anonymousOptinProductMetricsAcrossInstalls",
+							"Anonymous opt-in product metrics across installs",
+						)}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/telemetry">
-						{t('openTelemetry', 'Open Telemetry')}
+						{t("openTelemetry", "Open Telemetry")}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -250,7 +255,7 @@ export function DashboardTelemetryWidget({
 			<CardContent className="space-y-4">
 				<div className="grid gap-2 sm:grid-cols-4">
 					<StatTile
-						label={t('events24h', 'Events 24h')}
+						label={t("events24h", "Events 24h")}
 						value={
 							overview.isLoading
 								? "…"
@@ -259,7 +264,7 @@ export function DashboardTelemetryWidget({
 						icon={<Zap className="h-4 w-4" />}
 					/>
 					<StatTile
-						label={t('activeInstalls', 'Active installs')}
+						label={t("activeInstalls", "Active installs")}
 						value={
 							overview.isLoading
 								? "…"
@@ -268,7 +273,7 @@ export function DashboardTelemetryWidget({
 						icon={<MonitorSmartphone className="h-4 w-4" />}
 					/>
 					<StatTile
-						label={t('topEvent', 'Top event')}
+						label={t("topEvent", "Top event")}
 						value={overview.isLoading ? "…" : (topEvent?.name ?? "—")}
 						icon={<Star className="h-4 w-4" />}
 					/>
@@ -290,14 +295,18 @@ export function DashboardTelemetryWidget({
 					</div>
 				) : isEmpty ? (
 					<div className="flex items-center justify-center rounded-lg border border-dashed py-8 text-sm text-muted-foreground">
-						{t('noTelemetryYetDataAppearsOnceUsersOptIn', 'No telemetry yet — data appears once users opt in.')}
+						{t(
+							"noTelemetryYetDataAppearsOnceUsersOptIn",
+							"No telemetry yet — data appears once users opt in.",
+						)}
 					</div>
 				) : (
 					<>
 						<div className="rounded-lg border bg-card/50 p-3">
 							<div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
 								<span className="inline-flex items-center gap-1.5">
-									<TrendingUp className="h-3 w-3" /> {t('eventsLast24hHourly', 'Events (last 24h, hourly)')}
+									<TrendingUp className="h-3 w-3" />{" "}
+									{t("eventsLast24hHourly", "Events (last 24h, hourly)")}
 								</span>
 								{change != null && (
 									<span
@@ -309,7 +318,8 @@ export function DashboardTelemetryWidget({
 									>
 										<ChangeIcon className="h-3 w-3" />
 										{change >= 0 ? "+" : ""}
-										{change.toFixed(1)}{t('vsPrior', '% vs prior')}
+										{change.toFixed(1)}
+										{t("vsPrior", "% vs prior")}
 									</span>
 								)}
 							</div>
@@ -317,7 +327,7 @@ export function DashboardTelemetryWidget({
 						</div>
 
 						<TopList
-							title={t('topEvents', 'Top events')}
+							title={t("topEvents", "Top events")}
 							buckets={
 								overview.data?.topEvents.map((e) => ({
 									key: e.name,

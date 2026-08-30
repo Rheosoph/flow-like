@@ -1,9 +1,12 @@
+use crate::data::query_params as params;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
@@ -28,7 +31,10 @@ impl NodeLogic for VectorSearchLocalDatabaseNode {
             "Searches the Database based on a Vector",
             "Data/Database/Search",
         );
+        node.set_flowscript_name("db", "vectorSearch");
+        node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -44,10 +50,12 @@ impl NodeLogic for VectorSearchLocalDatabaseNode {
         node.add_input_pin(
             "filter",
             "SQL Filter",
-            "Optional SQL Filter",
+            "Optional SQL filter on the table's columns. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        params::add_params_pin(&mut node, params::SqlFlavor::LanceFilter);
 
         node.add_input_pin("limit", "Limit", "Limit", VariableType::Integer)
             .set_default_value(Some(json!(10)));
@@ -63,17 +71,25 @@ impl NodeLogic for VectorSearchLocalDatabaseNode {
         );
 
         node.add_output_pin("values", "Values", "Found Items", VariableType::Struct)
-            .set_value_type(ValueType::Array);
+            .set_value_type(ValueType::Array)
+            .set_open_schema();
 
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "filter", board, params::SqlFlavor::LanceFilter);
+    }
+
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let vector: Vec<f64> = context.evaluate_pin("vector").await?;
         let filter: String = context.evaluate_pin("filter").await?;
+        let filter = params::bind_lance_filter(context, &filter).await?;
         let filter: Option<&str> = if filter.is_empty() {
             None
         } else {
@@ -90,5 +106,12 @@ impl NodeLogic for VectorSearchLocalDatabaseNode {
         context.set_pin_value("values", json!(results)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }

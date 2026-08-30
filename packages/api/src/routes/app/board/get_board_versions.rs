@@ -7,6 +7,9 @@ use axum::{
     extract::{Path, State},
 };
 
+/// Available board versions, each as (major, minor, patch).
+pub type BoardVersionList = Vec<(u32, u32, u32)>;
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/board/{board_id}/version",
@@ -28,7 +31,7 @@ pub async fn get_board_versions(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
-) -> Result<Json<Vec<(u32, u32, u32)>>, ApiError> {
+) -> Result<Json<BoardVersionList>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
 

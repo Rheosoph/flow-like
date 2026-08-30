@@ -96,7 +96,8 @@ export function EventCard({
 						{event.name}
 					</CardTitle>
 					<CardDescription className="leading-relaxed text-muted-foreground/90">
-						{event.description || t('noDescriptionProvided', 'No description provided')}
+						{event.description ||
+							t("noDescriptionProvided", "No description provided")}
 					</CardDescription>
 				</CardHeader>
 
@@ -129,7 +130,7 @@ export function EventCard({
 									className="gap-2 hover:bg-primary/10 hover:border-primary/30 hover:text-primary transition-all duration-200"
 								>
 									<Edit2 className="h-3 w-3" />
-									{t('edit', 'Edit')}
+									{t("edit", "Edit")}
 								</Button>
 								<Button
 									variant="destructive"
@@ -138,7 +139,7 @@ export function EventCard({
 									className="gap-2"
 								>
 									<Trash2 className="h-3 w-3" />
-									{t('delete', 'Delete')}
+									{t("delete", "Delete")}
 								</Button>
 							</div>
 							<Button

@@ -444,14 +444,25 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	useEffect(() => {
 		if (!(backend instanceof TauriBackend)) return;
 
-		(async () => {
-			// Ensure user record exists in DB before profile operations
-			await invalidate(backend.userState.getInfo, []);
+		// Hub-backed queries can only be served with an access token; refetching
+		// them signed out just replays failures. Local state stays in sync either
+		// way. An in-flight refetch that a newer invalidation supersedes rejects
+		// with CancelledError, so every invalidation must be settled, not awaited
+		// bare.
+		const signedIn = Boolean(auth?.isAuthenticated && auth.user?.access_token);
 
-			void Promise.allSettled([
+		(async () => {
+			if (signedIn) {
+				// Ensure user record exists in DB before profile operations
+				await Promise.allSettled([invalidate(backend.userState.getInfo, [])]);
+			}
+
+			await Promise.allSettled([
+				...(signedIn
+					? [invalidateInfinite(backend.teamState.getInvites, [])]
+					: []),
 				invalidate(backend.userState.getNotifications, []),
 				invalidateInfinite(backend.userState.listNotifications, [false]),
-				invalidateInfinite(backend.teamState.getInvites, []),
 				invalidate(backend.userState.getProfile, []),
 				invalidate(backend.userState.getSettingsProfile, []),
 				invalidate(backend.userState.getProfiles, []),
@@ -461,6 +472,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	}, [
 		backend,
 		auth?.isAuthenticated,
+		auth?.user?.access_token,
 		auth?.user?.profile?.sub,
 		invalidate,
 		invalidateInfinite,

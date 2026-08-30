@@ -135,7 +135,7 @@ export function Sparkline({
 			preserveAspectRatio="none"
 			aria-hidden
 		>
-			<title>{t('runVolumeLast24Hours', 'Run volume, last 24 hours')}</title>
+			<title>{t("runVolumeLast24Hours", "Run volume, last 24 hours")}</title>
 			<path d={area} fill={stroke} fillOpacity={0.14} />
 			<path
 				d={line}
