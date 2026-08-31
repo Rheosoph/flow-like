@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like::a2ui::widget::Page;
+use flow_like::{app::App, flow::event::Event};
 use flow_like_types::anyhow;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
@@ -23,11 +24,11 @@ const VERSIONED_PAGE_CACHE: &str = "private, max-age=600";
 /// Derived from the encoded page rather than from the `Page` row's timestamp: any rewrite of
 /// the stored payload changes the tag, so a writer that does not touch the row (template
 /// instantiation, fork, a board-level restore) can never leave clients pinned to stale content.
-fn page_etag(body: &[u8]) -> String {
+pub(crate) fn page_etag(body: &[u8]) -> String {
     format!("\"{}\"", blake3::hash(body).to_hex())
 }
 
-fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+pub(crate) fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
@@ -41,6 +42,31 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
                         .is_some_and(|inner| inner == etag)
             })
         })
+}
+
+/// Load only the page bound to an event. In particular, do not fall back to a page with the
+/// same ID on another board: an event pins both its board and, when present, its board version.
+pub(crate) async fn load_event_bound_page(app: &App, event: &Event) -> Result<Page, ApiError> {
+    let page_id = event
+        .default_page_id
+        .as_deref()
+        .ok_or(ApiError::NOT_FOUND)?;
+    let board = app
+        .open_board(event.board_id.clone(), None, event.board_version)
+        .await
+        .map_err(|_| ApiError::NOT_FOUND)?;
+    let board = board.lock().await;
+
+    match event.board_version {
+        Some(version) => board
+            .load_versioned_page(page_id, version, None)
+            .await
+            .map_err(|_| ApiError::NOT_FOUND),
+        None => board
+            .load_page(page_id, None)
+            .await
+            .map_err(|_| ApiError::NOT_FOUND),
+    }
 }
 
 fn page_response(page: &Page, headers: &HeaderMap, versioned: bool) -> Result<Response, ApiError> {

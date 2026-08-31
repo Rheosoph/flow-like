@@ -1,7 +1,14 @@
-import type { IBackendRole, IRoleState } from "@flow-like/flow-like-ui";
+import type {
+	IBackendRole,
+	IOwnRole,
+	IRoleState,
+} from "@flow-like/flow-like-ui";
 
 export class EmptyRoleState implements IRoleState {
 	getRoles(appId: string): Promise<[string | undefined, IBackendRole[]]> {
+		throw new Error("Method not implemented.");
+	}
+	getOwnRole(appId: string): Promise<IOwnRole> {
 		throw new Error("Method not implemented.");
 	}
 	deleteRole(appId: string, roleId: string): Promise<void> {

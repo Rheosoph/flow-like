@@ -14,10 +14,11 @@ use super::{CanvasSettings, DataModel, Style};
 #[serde(rename_all = "camelCase")]
 pub struct SurfaceComponent {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<Style>,
     pub component: Value,
     /// When true, this component's current value is included in widget action event payloads
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub event_relevant: bool,
 }
 
@@ -68,6 +69,7 @@ pub struct Surface {
     pub id: String,
     pub root_component_id: String,
     pub components: HashMap<String, SurfaceComponent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_id: Option<String>,
 }
 
@@ -185,11 +187,13 @@ pub enum A2UIServerMessage {
         root_component_id: String,
         components: Vec<SurfaceComponent>,
         data_model: Vec<super::DataEntry>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         catalog_id: Option<String>,
     },
     SurfaceUpdate {
         surface_id: String,
         components: Vec<SurfaceComponent>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         parent_id: Option<String>,
     },
     SetCanvasSettings {
@@ -198,6 +202,7 @@ pub enum A2UIServerMessage {
     },
     DataModelUpdate {
         surface_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         path: Option<String>,
         contents: Vec<super::DataEntry>,
     },
@@ -241,6 +246,7 @@ pub enum A2UIServerMessage {
         surface_id: String,
         parent_id: String,
         component: SurfaceComponent,
+        #[serde(skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
     RemoveElement {
@@ -479,6 +485,7 @@ pub enum A2UIClientMessage {
     },
     ClientError {
         surface_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         component_id: Option<String>,
         message: String,
         code: String,
@@ -617,6 +624,29 @@ mod tests {
     fn test_surface_component_with_style() {
         let component = SurfaceComponent::new("comp-1", Value::Null).with_style(Style::default());
         assert!(component.style.is_some());
+    }
+
+    #[test]
+    fn a2ui_json_omits_optional_defaults_but_round_trips_required_values() {
+        let component = SurfaceComponent::new(
+            "comp-1",
+            serde_json::json!({ "type": "text", "content": "hello" }),
+        )
+        .with_style(Style::default());
+
+        let encoded = flow_like_types::json::to_value(&component).expect("serialize component");
+        let object = encoded.as_object().expect("component object");
+        assert_eq!(object.get("id"), Some(&serde_json::json!("comp-1")));
+        assert!(object.get("style").is_some());
+        assert!(object.get("eventRelevant").is_none());
+        assert_eq!(object["style"], serde_json::json!({}));
+
+        let decoded: SurfaceComponent =
+            flow_like_types::json::from_value(encoded).expect("deserialize component");
+        assert_eq!(decoded.id, component.id);
+        assert_eq!(decoded.component, component.component);
+        assert!(decoded.style.is_some());
+        assert!(!decoded.event_relevant);
     }
 
     #[test]

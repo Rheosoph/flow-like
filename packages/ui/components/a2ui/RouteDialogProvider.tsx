@@ -14,6 +14,7 @@ import {
 import { useAuth } from "react-oidc-context";
 import {
 	type PageSurfaceIdentity,
+	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -28,6 +29,7 @@ import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
+import { shouldRevealProgressively } from "../interfaces/progressive-page-reveal";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
@@ -171,14 +173,17 @@ function RouteDialogRenderer({
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
-	const [isCacheLoading, setIsCacheLoading] = useState(false);
+	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [surface, setSurface] = useState<Surface | null>(null);
 	const [page, setPage] = useState<IPage | null>(null);
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
-	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
+	const [cachedSurfaceResult, setCachedSurfaceResult] = useState<{
+		readonly identityKey: string;
+		readonly surface: Surface | null;
+	} | null>(null);
 	const pageExecutionBoardId = routeEvent?.board_id || page?.boardId;
 	const pageExecutionVersion = useMemo(
 		() =>
@@ -209,31 +214,44 @@ function RouteDialogRenderer({
 			userKey: currentUserKey,
 		};
 	}, [appId, page?.id, page?.updatedAt, dialogQueryKey, currentUserKey]);
+	const surfaceIdentityKey = surfaceIdentity
+		? pageSurfaceCacheKey(surfaceIdentity)
+		: null;
+	const cacheEnabled = page?.cache === true;
+	const shouldReadCachedSurface = Boolean(
+		cacheEnabled && surfaceIdentityKey && page?.onLoadEventId,
+	);
+	const isCacheLoading = Boolean(
+		shouldReadCachedSurface &&
+			cachedSurfaceResult?.identityKey !== surfaceIdentityKey,
+	);
+	const cachedSurface =
+		cacheEnabled && cachedSurfaceResult?.identityKey === surfaceIdentityKey
+			? cachedSurfaceResult.surface
+			: null;
 
 	useEffect(() => {
 		let cancelled = false;
 
-		if (!surfaceIdentity || !page?.onLoadEventId) {
-			setCachedSurface(null);
-			setIsCacheLoading(false);
+		if (
+			!cacheEnabled ||
+			!surfaceIdentity ||
+			!surfaceIdentityKey ||
+			!page?.onLoadEventId
+		) {
 			return;
 		}
 
-		setIsCacheLoading(true);
 		void readPageSurfaceCache(surfaceIdentity)
 			.then((surface) => {
 				if (cancelled) return;
-				setCachedSurface(surface);
-			})
-			.finally(() => {
-				if (cancelled) return;
-				setIsCacheLoading(false);
+				setCachedSurfaceResult({ identityKey: surfaceIdentityKey, surface });
 			});
 
 		return () => {
 			cancelled = true;
 		};
-	}, [surfaceIdentity, page?.onLoadEventId]);
+	}, [cacheEnabled, surfaceIdentity, surfaceIdentityKey, page?.onLoadEventId]);
 
 	// Load the route content when dialog opens
 	useEffect(() => {
@@ -273,11 +291,16 @@ function RouteDialogRenderer({
 
 				// Check if event has a page target
 				if (event.default_page_id) {
-					const pageResult = await backend.pageState.getPage(
-						appId,
-						event.default_page_id,
-						event.board_id || undefined,
-					);
+						const pageResult = await backend.pageState.getPage(
+							appId,
+							event.default_page_id,
+							event.board_id || undefined,
+							resolveEventBoardVersion(
+								event.board_id,
+								event.board_version,
+								event.board_id,
+							) ?? undefined,
+						);
 
 					if (pageResult) {
 						setPage(pageResult);
@@ -312,6 +335,9 @@ function RouteDialogRenderer({
 
 	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
 		console.log("[RouteDialog] Server message:", message);
+		if (message.type === "showScreen" || shouldRevealProgressively(message)) {
+			setIsScreenRevealed(true);
+		}
 		setSurface((prevSurface) =>
 			prevSurface ? applyA2UIMessage(prevSurface, message) : prevSurface,
 		);
@@ -333,12 +359,12 @@ function RouteDialogRenderer({
 		};
 	}, []);
 
-	// Save surface to cache after onLoad completes
+	// Save opted-in page surfaces after onLoad completes
 	useEffect(() => {
 		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!page?.onLoadEventId) return;
+		if (!cacheEnabled || !page?.onLoadEventId) return;
 		void writePageSurfaceCache(surfaceIdentity, surface);
-	}, [surfaceIdentity, page?.onLoadEventId, surface, isLoadEventRunning]);
+	}, [surfaceIdentity, cacheEnabled, page?.onLoadEventId, surface, isLoadEventRunning]);
 
 	// Execute onLoad event for dialog page
 	useEffect(() => {
@@ -355,6 +381,7 @@ function RouteDialogRenderer({
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
+			setIsScreenRevealed(false);
 			setIsLoadEventRunning(true);
 
 			try {
@@ -426,14 +453,14 @@ function RouteDialogRenderer({
 	]);
 
 	const activeSurface =
-		cachedSurface && isLoadEventRunning
+		cachedSurface && isLoadEventRunning && !isScreenRevealed
 			? cachedSurface
 			: (surface ?? cachedSurface);
 	const canRenderFromCache = Boolean(cachedSurface);
 	const showLoading =
 		(isLoading && !canRenderFromCache) ||
 		isCacheLoading ||
-		(isLoadEventRunning && !canRenderFromCache);
+		(isLoadEventRunning && !canRenderFromCache && !isScreenRevealed);
 
 	return (
 		<Dialog open={dialog.isOpen} onOpenChange={onOpenChange}>

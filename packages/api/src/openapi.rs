@@ -244,6 +244,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
         crate::routes::app::board::flow_ir_commit::apply_flow_ir_commit,
         // Page routes
+		crate::routes::app::page::bootstrap::bootstrap,
         crate::routes::app::page::get_page::get_page,
         crate::routes::app::page::get_pages::get_pages,
         crate::routes::app::page::get_page_by_route::get_page_by_route,
@@ -722,6 +723,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::summaries::BoardSummary,
         crate::routes::app::board::get_board_variables::BoardVariables,
         crate::routes::app::page::get_pages::PageInfo,
+		crate::routes::app::page::bootstrap::BootstrapResponse,
         crate::routes::app::publication::get_publication::AppPublicationActor,
         crate::routes::app::publication::get_publication::AppPublicationLogItem,
         crate::routes::app::publication::get_publication::AppPublicationRequestItem,

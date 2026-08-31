@@ -1,5 +1,8 @@
-import type { IRoleState } from "@flow-like/flow-like-ui";
-import type { IBackendRole } from "@flow-like/flow-like-ui/state/backend-state/types";
+import { type IRoleState, RolePermissions } from "@flow-like/flow-like-ui";
+import type {
+	IBackendRole,
+	IOwnRole,
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -18,6 +21,33 @@ export class RoleState implements IRoleState {
 		);
 		console.dir(roles);
 		return roles;
+	}
+	async getOwnRole(appId: string): Promise<IOwnRole> {
+		// A local-only app has no hub to ask and no team to belong to. Whoever
+		// holds it is its only owner, so answer that here rather than letting
+		// every caller special-case the offline device. `isLocalOnly`, not
+		// `isOffline`: the latter also answers true for a hosted app whose
+		// visibility this device has simply never cached.
+		if (await this.backend.isLocalOnly(appId)) {
+			return {
+				role_id: "local",
+				role_name: "Owner",
+				permissions: Number(RolePermissions.Owner.toBigInt()),
+				is_owner: true,
+				can_leave: false,
+			};
+		}
+
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		return await fetcher<IOwnRole>(
+			this.backend.profile,
+			`apps/${appId}/roles/me`,
+			undefined,
+			this.backend.auth,
+		);
 	}
 	async deleteRole(appId: string, roleId: string): Promise<void> {
 		if (!this.backend.profile || !this.backend.auth) {

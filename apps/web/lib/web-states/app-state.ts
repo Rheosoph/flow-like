@@ -118,6 +118,14 @@ export class WebAppState implements IAppState {
 		await apiDelete(`apps/${appId}`, this.backend.auth);
 	}
 
+	async leaveApp(appId: string): Promise<void> {
+		const sub = this.backend.auth?.user?.profile.sub;
+		if (!sub) {
+			throw new Error("No signed-in user. Cannot leave app.");
+		}
+		await apiDelete(`apps/${appId}/team/${sub}`, this.backend.auth);
+	}
+
 	async searchApps(
 		id?: string,
 		query?: string,

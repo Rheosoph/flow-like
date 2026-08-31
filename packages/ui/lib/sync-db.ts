@@ -74,4 +74,43 @@ offlineSyncDB.version(4).stores({
 	discarded: "archiveId, appId, [appId+boardId], archivedAt",
 });
 
+/**
+ * Retire every queued mutation for an app that has left this device.
+ *
+ * Age-based cleanup deliberately never reclaims a row that still carries
+ * commands, so rows for an app that was deleted or quit would otherwise sit in
+ * the outbox forever: their board no longer exists locally, nothing reopens it,
+ * and the hub would answer 403 if anything tried. They are archived rather than
+ * dropped, so an edit that never reached the server is still recoverable.
+ */
+export async function discardOfflineSyncForApp(
+	appId: string,
+	archiveReason: string,
+): Promise<number> {
+	const archivedAt = new Date();
+	let archived = 0;
+	await offlineSyncDB.transaction(
+		"rw",
+		offlineSyncDB.commands,
+		offlineSyncDB.discarded,
+		async () => {
+			const queued = await offlineSyncDB.commands
+				.where("appId")
+				.equals(appId)
+				.toArray();
+			for (const entry of queued) {
+				await offlineSyncDB.discarded.put({
+					...entry,
+					archiveId: `${entry.commandId}${archivedAt.getTime()}`,
+					archivedAt,
+					archiveReason,
+				});
+				await offlineSyncDB.commands.delete(entry.commandId);
+				archived += 1;
+			}
+		},
+	);
+	return archived;
+}
+
 export { offlineSyncDB };

@@ -1,4 +1,5 @@
 import {
+	type IPageBootstrap,
 	type IPageState,
 	normalizePageForPersistence,
 } from "@flow-like/flow-like-ui";
@@ -67,6 +68,21 @@ export class WebPageState implements IPageState {
 				this.backend.auth,
 			);
 		}
+	}
+
+	async getPageBootstrap(
+		appId: string,
+		route?: string,
+		eventId?: string,
+	): Promise<IPageBootstrap> {
+		const params = new URLSearchParams();
+		if (route !== undefined) params.set("route", route);
+		if (eventId !== undefined) params.set("eventId", eventId);
+		const query = params.size > 0 ? `?${params.toString()}` : "";
+		return apiGet<IPageBootstrap>(
+			`apps/${appId}/pages/bootstrap${query}`,
+			this.backend.auth,
+		);
 	}
 
 	async createPage(

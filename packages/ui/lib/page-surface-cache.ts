@@ -75,7 +75,8 @@ export function pageSurfaceQueryKey(search: string | undefined): string {
  */
 const SEP = " ";
 
-function cacheKey(identity: PageSurfaceIdentity): string {
+/** Stable identity used both by IndexedDB and by render-time cache result matching. */
+export function pageSurfaceCacheKey(identity: PageSurfaceIdentity): string {
 	return [
 		identity.appId,
 		identity.pageId,
@@ -139,7 +140,7 @@ export async function readPageSurfaceCache(
 	}
 
 	try {
-		const key = cacheKey(identity);
+		const key = pageSurfaceCacheKey(identity);
 		const record = await get<PageSurfaceCacheRecord>(key, surfaceStore());
 		if (!record?.surface) return null;
 
@@ -171,7 +172,7 @@ export async function writePageSurfaceCache(
 		const record: PageSurfaceCacheRecord = { surface, cachedAt: Date.now() };
 		if (JSON.stringify(record.surface).length > MAX_ENTRY_BYTES) return;
 
-		const key = cacheKey(identity);
+		const key = pageSurfaceCacheKey(identity);
 		await set(key, record, surfaceStore());
 
 		const manifest = await readManifest();

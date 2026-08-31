@@ -40,91 +40,91 @@ import type { TauriBackend } from "../../tauri-provider";
 import { AppState } from "../app-state";
 
 const APP = "app-1";
+const SUB = "user-7";
 
 const apiError = (status: number) =>
 	new ApiResponseError({ status, message: `HTTP ${status}` });
 
-function onlineBackend() {
+function memberBackend() {
 	return {
 		isOffline: vi.fn().mockResolvedValue(false),
+		isLocalOnly: vi.fn().mockResolvedValue(false),
 		profile: { hub: "hub.example" },
-		auth: { isAuthenticated: true, user: { access_token: "token" } },
+		auth: {
+			isAuthenticated: true,
+			user: { access_token: "token", profile: { sub: SUB } },
+		},
 		queryClient: {},
 	} as unknown as TauriBackend;
 }
 
-describe("AppState.deleteApp", () => {
+describe("AppState.leaveApp", () => {
 	beforeEach(() => {
 		mocks.invoke.mockReset().mockResolvedValue(undefined);
 		mocks.fetcher.mockReset();
 		mocks.discardOfflineSyncForApp.mockReset().mockResolvedValue(0);
 	});
 
-	test("removes the local copy after the server accepted the delete", async () => {
+	test("removes only the caller's own membership, then the local copy", async () => {
 		mocks.fetcher.mockResolvedValue(undefined);
 
-		await new AppState(onlineBackend()).deleteApp(APP);
+		await new AppState(memberBackend()).leaveApp(APP);
 
-		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
-	});
-
-	test("removes the local copy when the app is already gone on the server", async () => {
-		mocks.fetcher.mockRejectedValue(apiError(404));
-
-		await new AppState(onlineBackend()).deleteApp(APP);
-
-		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
-	});
-
-	test("removes the local copy when the membership cascaded away with the app", async () => {
-		mocks.fetcher
-			.mockRejectedValueOnce(apiError(403))
-			.mockRejectedValueOnce(apiError(404));
-
-		await new AppState(onlineBackend()).deleteApp(APP);
-
-		expect(mocks.fetcher).toHaveBeenCalledTimes(2);
-		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
-	});
-
-	test("keeps the local copy when the app is still readable but not ours to delete", async () => {
-		mocks.fetcher
-			.mockRejectedValueOnce(apiError(403))
-			.mockResolvedValueOnce({ id: APP });
-
-		await expect(new AppState(onlineBackend()).deleteApp(APP)).rejects.toThrow(
-			ApiResponseError,
+		expect(mocks.fetcher).toHaveBeenCalledWith(
+			{ hub: "hub.example" },
+			`apps/${APP}/team/${SUB}`,
+			{ method: "DELETE" },
+			expect.anything(),
 		);
-		expect(mocks.invoke).not.toHaveBeenCalled();
-	});
-
-	test("keeps the local copy when the server failed for another reason", async () => {
-		mocks.fetcher.mockRejectedValue(apiError(500));
-
-		await expect(new AppState(onlineBackend()).deleteApp(APP)).rejects.toThrow(
-			ApiResponseError,
-		);
-		expect(mocks.invoke).not.toHaveBeenCalled();
-	});
-
-	test("deletes offline apps without contacting the server", async () => {
-		const backend = onlineBackend();
-		(backend.isOffline as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
-		await new AppState(backend).deleteApp(APP);
-
-		expect(mocks.fetcher).not.toHaveBeenCalled();
 		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
 	});
 
-	test("clears queued offline edits alongside the local copy", async () => {
+	test("clears queued offline edits so the outbox cannot retry forever", async () => {
 		mocks.fetcher.mockResolvedValue(undefined);
 
-		await new AppState(onlineBackend()).deleteApp(APP);
+		await new AppState(memberBackend()).leaveApp(APP);
 
 		expect(mocks.discardOfflineSyncForApp).toHaveBeenCalledWith(
 			APP,
-			"app-deleted",
+			"app-left",
 		);
+	});
+
+	test("still clears the local copy when the membership is already gone", async () => {
+		mocks.fetcher.mockRejectedValue(apiError(404));
+
+		await new AppState(memberBackend()).leaveApp(APP);
+
+		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
+	});
+
+	test("keeps the local copy when the server refuses — an owner cannot leave", async () => {
+		mocks.fetcher.mockRejectedValue(apiError(403));
+
+		await expect(new AppState(memberBackend()).leaveApp(APP)).rejects.toThrow(
+			ApiResponseError,
+		);
+		expect(mocks.invoke).not.toHaveBeenCalled();
+	});
+
+	test("refuses a local-only app, which has no team to leave", async () => {
+		const backend = memberBackend();
+		(backend.isLocalOnly as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+		await expect(new AppState(backend).leaveApp(APP)).rejects.toThrow(
+			/local-only/,
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+		expect(mocks.invoke).not.toHaveBeenCalled();
+	});
+
+	test("refuses when no user is signed in", async () => {
+		const backend = memberBackend();
+		(backend as unknown as { auth: { user?: unknown } }).auth.user = undefined;
+
+		await expect(new AppState(backend).leaveApp(APP)).rejects.toThrow(
+			/No signed-in user/,
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
 	});
 });

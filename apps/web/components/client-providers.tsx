@@ -6,9 +6,6 @@ import {
 	QueryClientProvider,
 	ReactFlowProvider,
 } from "@flow-like/flow-like-ui";
-import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
-import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
-import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -21,6 +18,7 @@ import {
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
 import { I18nProvider } from "@flow-like/locales";
+import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { WebAuthProvider } from "../components/auth-provider";
@@ -31,6 +29,31 @@ import { SpotlightWrapper } from "../components/spotlight-wrapper";
 import { TelemetryProvider } from "../components/telemetry-provider";
 import { ThemeLoader } from "../components/theme-loader";
 import { WebProvider } from "../components/web-provider";
+
+// Keep the always-mounted chat surfaces out of the synchronous root-layout chunk. The bridge is
+// still rendered unconditionally once its client chunk loads, so it keeps listening independently
+// of whether the overlay is open.
+const GlobalChatOverlay = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/global-chat-overlay").then(
+			(module) => module.GlobalChatOverlay,
+		),
+	{ ssr: false },
+);
+const GlobalToolBridge = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/global-tool-bridge").then(
+			(module) => module.GlobalToolBridge,
+		),
+	{ ssr: false },
+);
+const FlowPilotBubbleButton = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button").then(
+			(module) => module.FlowPilotBubbleButton,
+		),
+	{ ssr: false },
+);
 
 // Per-query persistence: each query is written individually as it
 // resolves and restored lazily on first mount — no whole-client blob.

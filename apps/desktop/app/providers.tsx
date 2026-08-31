@@ -9,9 +9,6 @@ import {
 	QueryClientProvider,
 	ReactFlowProvider,
 } from "@flow-like/flow-like-ui";
-import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
-import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
-import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -25,6 +22,7 @@ import {
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
 import { I18nProvider } from "@flow-like/locales";
+import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
@@ -47,6 +45,31 @@ import ToastProvider from "../components/toast-provider";
 import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
 import { initBlobOffload } from "../lib/init-blob-offload";
+
+// Keep the always-mounted chat surfaces out of the synchronous root-layout chunk. The bridge is
+// still rendered unconditionally once its client chunk loads, so it keeps listening independently
+// of whether the overlay is open.
+const GlobalChatOverlay = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/global-chat-overlay").then(
+			(module) => module.GlobalChatOverlay,
+		),
+	{ ssr: false },
+);
+const GlobalToolBridge = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/global-tool-bridge").then(
+			(module) => module.GlobalToolBridge,
+		),
+	{ ssr: false },
+);
+const FlowPilotBubbleButton = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button").then(
+			(module) => module.FlowPilotBubbleButton,
+		),
+	{ ssr: false },
+);
 
 initBlobOffload();
 

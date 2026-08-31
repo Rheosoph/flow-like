@@ -17,6 +17,7 @@ import { useAssetSource } from "../../hooks/use-asset-source";
 import { boardReadinessKey, whenBoardReady } from "../../lib/board-readiness";
 import {
 	type PageSurfaceIdentity,
+	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -57,6 +58,7 @@ import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
+import { shouldRevealProgressively } from "./progressive-page-reveal";
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
@@ -78,6 +80,8 @@ export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
 	route?: string;
 	page?: IPage;
+	/** Exact page payload revision returned by a freshness-validating bootstrap read. */
+	pageRevision?: string;
 	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
 	queryParams?: Record<string, string>;
 	/** Consume page-owned route and query changes inside an embedded runtime. */
@@ -136,6 +140,7 @@ function PageInterfaceInner({
 	config,
 	route,
 	page: providedPage,
+	pageRevision,
 	queryParams: providedQueryParams,
 	onNavigationMessage,
 	active = true,
@@ -168,36 +173,63 @@ function PageInterfaceInner({
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
-	const [page, setPage] = useState<IPage | null>(null);
+	// The parent already resolved the page for the normal `/use` path. Seed local state from
+	// that value so the first render can build its surface without an effect handoff.
+	const [page, setPage] = useState<IPage | null>(() => providedPage ?? null);
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
-	const [isLoading, setIsLoading] = useState(true);
+	const [isLoading, setIsLoading] = useState(() => !providedPage);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
-	const [isCacheLoading, setIsCacheLoading] = useState(false);
 	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [loadEventPhase, setLoadEventPhase] = useState<
 		"idle" | "preparing" | "running"
 	>("idle");
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
-	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
+	const [cachedSurfaceResult, setCachedSurfaceResult] = useState<{
+		readonly identityKey: string;
+		readonly surface: Surface | null;
+	} | null>(null);
 
 	const pageRoute = route || (config?.route as string);
 	const cacheSource = providedPage ?? page;
 	const activePageEvent = event ?? routeEvent;
+	const cacheEnabled = cacheSource?.cache === true;
 
 	// A cached surface may only be replayed for the same parameters and the same account that
 	// produced it: the onLoad workflow receives both, and its output is built from them.
 	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
-		if (!appId || !cacheSource?.id || !cacheSource.updatedAt) return null;
+		const revision = pageRevision ?? cacheSource?.updatedAt;
+		if (!appId || !cacheSource?.id || !revision) return null;
 		return {
 			appId,
 			pageId: cacheSource.id,
-			pageUpdatedAt: cacheSource.updatedAt,
+			pageUpdatedAt: revision,
 			queryKey: pageSurfaceQueryKey(search),
 			userKey: currentUserKey,
 		};
-	}, [appId, cacheSource?.id, cacheSource?.updatedAt, currentUserKey, search]);
+	}, [
+		appId,
+		cacheSource?.id,
+		cacheSource?.updatedAt,
+		pageRevision,
+		currentUserKey,
+		search,
+	]);
+	const surfaceIdentityKey = surfaceIdentity
+		? pageSurfaceCacheKey(surfaceIdentity)
+		: null;
+	const shouldReadCachedSurface = Boolean(
+		cacheEnabled && surfaceIdentityKey && cacheSource?.onLoadEventId,
+	);
+	const isCacheLoading = Boolean(
+		shouldReadCachedSurface &&
+			cachedSurfaceResult?.identityKey !== surfaceIdentityKey,
+	);
+	const cachedSurface =
+		cacheEnabled && cachedSurfaceResult?.identityKey === surfaceIdentityKey
+			? cachedSurfaceResult.surface
+			: null;
 	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
 	const pageExecutionVersion = useMemo(
 		() =>
@@ -284,34 +316,35 @@ function PageInterfaceInner({
 		backend.eventState,
 	]);
 
-	// Every page keeps its last rendered surface, not only those that opt in: the alternative
-	// to showing it is a skeleton for the whole length of the onLoad run, and the run replaces
-	// it either way. Pages without an onLoad event build their surface from the payload and
-	// never consult this.
+	// Only pages that explicitly opt in keep a last rendered surface. Pages without the opt-in
+	// always render their fresh page payload while the onLoad workflow updates it.
 	useEffect(() => {
 		let cancelled = false;
 
-		if (!surfaceIdentity || !cacheSource?.onLoadEventId) {
-			setCachedSurface(null);
-			setIsCacheLoading(false);
+		if (
+			!cacheEnabled ||
+			!surfaceIdentity ||
+			!surfaceIdentityKey ||
+			!cacheSource?.onLoadEventId
+		) {
 			return;
 		}
 
-		setIsCacheLoading(true);
 		void readPageSurfaceCache(surfaceIdentity)
 			.then((surface) => {
 				if (cancelled) return;
-				setCachedSurface(surface);
-			})
-			.finally(() => {
-				if (cancelled) return;
-				setIsCacheLoading(false);
+				setCachedSurfaceResult({ identityKey: surfaceIdentityKey, surface });
 			});
 
 		return () => {
 			cancelled = true;
 		};
-	}, [surfaceIdentity, cacheSource?.onLoadEventId]);
+	}, [
+		cacheEnabled,
+		surfaceIdentity,
+		surfaceIdentityKey,
+		cacheSource?.onLoadEventId,
+	]);
 
 	const initialSurface = useMemo(() => {
 		if (cachedSurface) return cachedSurface;
@@ -338,13 +371,19 @@ function PageInterfaceInner({
 		};
 	}, []);
 
-	// Written only once the run that produced it has finished, so a half-built surface is never
-	// what the next visit replays.
+	// For opted-in pages, write only once the run that produced the surface has finished, so a
+	// half-built surface is never what the next visit replays.
 	useEffect(() => {
 		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!page?.onLoadEventId) return;
+		if (!cacheEnabled || !cacheSource?.onLoadEventId) return;
 		void writePageSurfaceCache(surfaceIdentity, surface);
-	}, [surfaceIdentity, page?.onLoadEventId, surface, isLoadEventRunning]);
+	}, [
+		surfaceIdentity,
+		cacheEnabled,
+		cacheSource?.onLoadEventId,
+		surface,
+		isLoadEventRunning,
+	]);
 
 	// Comprehensive A2UI message handler for page events
 	const handleA2UIMessage = useCallback(
@@ -367,6 +406,10 @@ function PageInterfaceInner({
 			if (message.type === "showScreen") {
 				setIsScreenRevealed(true);
 				return;
+			}
+
+			if (shouldRevealProgressively(message)) {
+				setIsScreenRevealed(true);
 			}
 
 			// Handle navigation

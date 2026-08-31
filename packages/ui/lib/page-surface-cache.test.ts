@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { pageSurfaceQueryKey, selectEvictions } from "./page-surface-cache";
+import {
+	pageSurfaceCacheKey,
+	pageSurfaceQueryKey,
+	selectEvictions,
+} from "./page-surface-cache";
 
 describe("page surface query signature", () => {
 	test("is independent of parameter order", () => {
@@ -18,6 +22,29 @@ describe("page surface query signature", () => {
 	test("treats no parameters and no search string alike", () => {
 		expect(pageSurfaceQueryKey(undefined)).toBe("");
 		expect(pageSurfaceQueryKey("?")).toBe("");
+	});
+});
+
+describe("page surface identity key", () => {
+	const identity = {
+		appId: "app",
+		pageId: "page",
+		pageUpdatedAt: "2026-08-31T10:00:00Z",
+		queryKey: "item=1",
+		userKey: "user-a",
+	};
+
+	test("changes for every freshness and isolation boundary", () => {
+		const base = pageSurfaceCacheKey(identity);
+		for (const changed of [
+			{ ...identity, appId: "other-app" },
+			{ ...identity, pageId: "other-page" },
+			{ ...identity, pageUpdatedAt: "2026-08-31T10:00:01Z" },
+			{ ...identity, queryKey: "item=2" },
+			{ ...identity, userKey: "user-b" },
+		]) {
+			expect(pageSurfaceCacheKey(changed)).not.toBe(base);
+		}
 	});
 });
 

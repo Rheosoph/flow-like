@@ -45,6 +45,7 @@ import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
 } from "../../../lib/oauth/types";
+import { normalizeRoutePath } from "../../../lib/route-path";
 import type { IEvent } from "../../../lib/schema/flow/event";
 import type { IHub } from "../../../lib/schema/hub/hub";
 import { parseUint8ArrayToJson } from "../../../lib/uint8";
@@ -156,14 +157,6 @@ function eventRequiresSink(
 	return eventMapping[nodeName]?.withSink.includes(event.event_type) ?? false;
 }
 
-function normalizePath(path: unknown): string {
-	const raw = String(path ?? "").trim();
-	if (!raw) return "/";
-	const withoutQuery = raw.split("?")[0] ?? raw;
-	if (!withoutQuery || withoutQuery === "/") return "/";
-	return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-}
-
 export function EventsOverview({
 	events,
 	boardsMap,
@@ -218,7 +211,7 @@ export function EventsOverview({
 	const routeByEventId = useMemo(() => {
 		const map = new Map<string, string>();
 		for (const route of routes.data ?? []) {
-			map.set(route.eventId, normalizePath(route.path));
+			map.set(route.eventId, normalizeRoutePath(route.path));
 		}
 		return map;
 	}, [routes.data]);
@@ -425,7 +418,7 @@ export function EventsOverview({
 
 	const handleRouteChange = useCallback(
 		async (eventId: string, previous: string | undefined, next: string) => {
-			const normalized = next.trim() ? normalizePath(next) : "";
+			const normalized = next.trim() ? normalizeRoutePath(next) : "";
 			if (normalized === (previous ?? "")) return;
 			try {
 				if (previous && previous !== normalized) {
