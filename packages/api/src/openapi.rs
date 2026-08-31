@@ -277,6 +277,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::meta::remove_media::remove_media,
         // Role routes
         crate::routes::app::roles::get_roles::get_roles,
+        crate::routes::app::roles::get_own_role::get_own_role,
         crate::routes::app::roles::upsert_role::upsert_role,
         crate::routes::app::roles::delete_role::delete_role,
         crate::routes::app::roles::make_role_default::make_role_default,
