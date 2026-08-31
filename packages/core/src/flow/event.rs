@@ -7,12 +7,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    app::App,
+    app::{App, AppVisibility},
     state::FlowLikeState,
     utils::compression::{compress_to_file, from_compressed},
 };
 
-use super::{board::VersionType, pin::PinType, variable::Variable};
+use super::{
+    board::VersionType, compiled::prerun::PrerunPageExecution, pin::PinType,
+    variable::Variable,
+};
 
 /// Simplified input pin metadata for events (used when board can't be fetched)
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -453,8 +456,71 @@ impl Event {
     }
 
     pub async fn validate_event_references(&self, app: &App) -> flow_like_types::Result<()> {
-        // Page-target events don't require a board/node reference.
-        if self.default_page_id.is_some() {
+        if let Some(page_id) = self.default_page_id.as_deref() {
+            if self.board_id.trim().is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "Page Event '{}' must identify its owning board",
+                    self.id
+                ));
+            }
+            let version = match self.board_version {
+                Some(version) => Some(version),
+                None if matches!(app.visibility, AppVisibility::Offline) => None,
+                None => {
+                    return Err(flow_like_types::anyhow!(
+                        "Page Event '{}' must pin an immutable board version",
+                        self.id
+                    ));
+                }
+            };
+            let board = app
+                .open_board(self.board_id.clone(), Some(false), version)
+                .await?;
+            let board = board.lock().await;
+            if board.id != self.board_id
+                || version.is_some_and(|expected| board.version != expected)
+            {
+                let expected = version.unwrap_or(board.version);
+                return Err(flow_like_types::anyhow!(
+                    "Page Event '{}' resolved board '{}' at {}.{}.{}, expected '{}' at {}.{}.{}",
+                    self.id,
+                    board.id,
+                    board.version.0,
+                    board.version.1,
+                    board.version.2,
+                    self.board_id,
+                    expected.0,
+                    expected.1,
+                    expected.2
+                ));
+            }
+            if !board.page_ids.iter().any(|candidate| candidate == page_id) {
+                let suffix = version
+                    .map(|version| format!(" at {}.{}.{}", version.0, version.1, version.2))
+                    .unwrap_or_default();
+                return Err(flow_like_types::anyhow!(
+                    "Page '{}' is not listed by board '{}'{}",
+                    page_id,
+                    board.id,
+                    suffix
+                ));
+            }
+            let page = match version {
+                Some(version) => board.load_versioned_page(page_id, version, None).await?,
+                None => board.load_page(page_id, None).await?,
+            };
+            if page.id != page_id
+                || page
+                    .board_id
+                    .as_deref()
+                    .is_some_and(|page_board_id| page_board_id != board.id)
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Page Event '{}' has an invalid Page/board binding",
+                    self.id
+                ));
+            }
+            PrerunPageExecution::from_page(&board, &page)?;
             return Ok(());
         }
 

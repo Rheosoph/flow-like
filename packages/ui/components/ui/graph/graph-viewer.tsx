@@ -1,7 +1,17 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import { AlertTriangle, Crosshair, Route, Search, X } from "lucide-react";
+import {
+	AlertTriangle,
+	BarChart3,
+	Crosshair,
+	Filter,
+	FilterX,
+	LayoutGrid,
+	Route,
+	Search,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	GraphAnalyticsResult,
@@ -13,14 +23,29 @@ import type {
 	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
-import { GraphCanvas } from "./graph-canvas";
+import { subgraphFromCypherRows } from "./cypher-subgraph";
+import {
+	GraphCanvas,
+	type GraphCanvasApi,
+	type GraphLayoutCommand,
+} from "./graph-canvas";
 import { buildClusterModel } from "./graph-clusters";
 import {
 	collapseClusters,
 	collapsedGroupClusterId,
 	isCollapsedGroupId,
 } from "./graph-collapse";
+import {
+	GraphContextMenu,
+	type GraphContextMenuState,
+} from "./graph-context-menu";
 import { GraphDensityControl } from "./graph-density-control";
 import { GraphEdgeInspector } from "./graph-edge-inspector";
 import {
@@ -28,6 +53,8 @@ import {
 	GraphExpansionDialog,
 	buildExpansionChoices,
 } from "./graph-expansion-dialog";
+import { GraphHistogramPanel } from "./graph-histogram-panel";
+import type { GraphLayoutMode } from "./graph-layout";
 import { GraphLegend, type LegendEntry } from "./graph-legend";
 import {
 	type ConnectionInfo,
@@ -38,6 +65,20 @@ import { GraphQueryPanel } from "./graph-query-panel";
 const GRAPH_VIEW_LIMIT_OPTIONS = [
 	50, 100, 200, 500, 1000, 2500, 5000, 10000,
 ] as const;
+
+/** Members past which a group lands pre-collapsed instead of as loose nodes. */
+const AUTO_COLLAPSE_MIN_MEMBERS = 75;
+/** Budget for one-gesture expansions (double-click, context-menu rows). */
+const QUICK_EXPANSION_LIMIT = 100;
+
+const LAYOUT_MODE_OPTIONS: { mode: GraphLayoutMode; label: string }[] = [
+	{ mode: "auto", label: "Auto" },
+	{ mode: "force", label: "Force" },
+	{ mode: "hierarchy", label: "Hierarchy" },
+	{ mode: "radial", label: "Radial" },
+	{ mode: "circular", label: "Circular" },
+	{ mode: "grid", label: "Grid" },
+];
 
 function formatGraphLimitOption(limit: number): string {
 	if (limit >= 1000000)
@@ -102,6 +143,10 @@ export interface GraphViewerProps {
 	cypherResults?: unknown[] | null;
 	cypherLoading?: boolean;
 	cypherError?: string | null;
+	/**
+	 * May resolve to the node ids the expansion actually added — that list is
+	 * what makes a double-click expansion reversible.
+	 */
 	onExpandNode?: (
 		nodeId: string,
 		label: string,
@@ -109,9 +154,16 @@ export interface GraphViewerProps {
 		seedNode?: SubgraphNode,
 		depth?: number,
 		options?: ExpansionOptions,
-	) => void;
+		// biome-ignore lint/suspicious/noConfusingVoidType: fire-and-forget handlers stay assignable; only the promise form reports added ids
+	) => void | Promise<string[] | undefined>;
 	onExpandChildren?: (nodeId: string, label: string, rawId?: unknown) => void;
 	onCollapseChildren?: (nodeId: string) => void;
+	/** Removes previously-loaded nodes again (undo for reversible expansion). */
+	onRemoveNodes?: (nodeIds: string[]) => void;
+	/** Merges an externally built result (Cypher, say) into the loaded scene. */
+	onMergeSubgraph?: (result: SubgraphResult) => void;
+	/** Storage key under which node positions and pins survive a reload. */
+	persistKey?: string;
 	expandedChildParents?: Set<string>;
 	onSearchNodes?: (query: string) => Promise<SubgraphNode[]>;
 	onStyleChange?: (
@@ -164,6 +216,9 @@ export function GraphViewer({
 	onExpandNode,
 	onExpandChildren,
 	onCollapseChildren,
+	onRemoveNodes,
+	onMergeSubgraph,
+	persistKey,
 	expandedChildParents,
 	onSearchNodes,
 	onStyleChange,
@@ -203,9 +258,15 @@ export function GraphViewer({
 	const latestRemoteSearchRequestRef = useRef(0);
 	const autoExpandedSearchQueryRef = useRef<string | null>(null);
 
-	const [focus, setFocus] = useState<{ nodeId: string; depth: number } | null>(
-		null,
-	);
+	/**
+	 * Focus is two-stage, Bloom-style: `dim` keeps the rest of the graph as
+	 * grayed-out context, `hide` removes it and gives the survivors the stage.
+	 */
+	const [focus, setFocus] = useState<{
+		nodeId: string;
+		depth: number;
+		mode: "dim" | "hide";
+	} | null>(null);
 	const [expansionTarget, setExpansionTarget] = useState<SubgraphNode | null>(
 		null,
 	);
@@ -214,6 +275,27 @@ export function GraphViewer({
 	const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
 		new Set(),
 	);
+	const [contextMenu, setContextMenu] = useState<GraphContextMenuState | null>(
+		null,
+	);
+	/** Objects hidden one at a time from the context menu. */
+	const [manualHidden, setManualHidden] = useState<Set<string>>(new Set());
+	/** Facet-panel filters; `to` restricts, `out` subtracts. */
+	const [facetFilters, setFacetFilters] = useState<
+		{ id: string; title: string; mode: "to" | "out"; ids: Set<string> }[]
+	>([]);
+	const [facetsOpen, setFacetsOpen] = useState(false);
+	const [facetHover, setFacetHover] = useState<Set<string> | null>(null);
+	const [layoutCommand, setLayoutCommand] = useState<GraphLayoutCommand | null>(
+		null,
+	);
+	const [layoutMode, setLayoutMode] = useState<GraphLayoutMode>("auto");
+	const [canvasApi, setCanvasApi] = useState<GraphCanvasApi | null>(null);
+	/** nodeId → the nodes its double-click expansion added, for the undo click. */
+	const doubleExpandedRef = useRef<Map<string, string[]>>(new Map());
+	/** Groups the reader opened by hand; auto-collapse never re-folds these. */
+	const userOpenedGroupsRef = useRef<Set<string>>(new Set());
+	const autoCollapsedRef = useRef<Set<string>>(new Set());
 
 	const [pathSource, setPathSource] = useState<SubgraphNode | null>(null);
 	const [pathHighlight, setPathHighlight] = useState<Set<string> | null>(null);
@@ -267,7 +349,12 @@ export function GraphViewer({
 		);
 	}, [clusterModel]);
 
-	const expandAllGroups = useCallback(() => setCollapsedGroups(new Set()), []);
+	const expandAllGroups = useCallback(() => {
+		setCollapsedGroups((prev) => {
+			for (const id of prev) userOpenedGroupsRef.current.add(id);
+			return new Set();
+		});
+	}, []);
 
 	// A group id that no longer exists would keep a phantom collapsed forever.
 	useEffect(() => {
@@ -275,6 +362,24 @@ export function GraphViewer({
 		const live = new Set((clusterModel?.clusters ?? []).map((c) => c.id));
 		const next = new Set([...collapsedGroups].filter((id) => live.has(id)));
 		if (next.size !== collapsedGroups.size) setCollapsedGroups(next);
+	}, [clusterModel, collapsedGroups]);
+
+	// Overflow degrades to aggregation, never to a hairball: a group past this
+	// size arrives folded into one badge-carrying node, and opening it is one
+	// click. Groups the reader opened by hand are never re-folded.
+	useEffect(() => {
+		if (!clusterModel) return;
+		const toCollapse: string[] = [];
+		for (const cluster of clusterModel.clusters) {
+			if (cluster.memberIds.length < AUTO_COLLAPSE_MIN_MEMBERS) continue;
+			if (autoCollapsedRef.current.has(cluster.id)) continue;
+			if (userOpenedGroupsRef.current.has(cluster.id)) continue;
+			autoCollapsedRef.current.add(cluster.id);
+			if (!collapsedGroups.has(cluster.id)) toCollapse.push(cluster.id);
+		}
+		if (toCollapse.length > 0) {
+			setCollapsedGroups((prev) => new Set([...prev, ...toCollapse]));
+		}
 	}, [clusterModel, collapsedGroups]);
 
 	// Only node_count and label_counts describe the whole population; every other
@@ -697,18 +802,58 @@ export function GraphViewer({
 		[nonLeafNodeIds, viewData],
 	);
 
-	/** Both filters restrict, so the canvas sees their intersection. */
+	/**
+	 * Everything that restricts the stage, composed: hide-mode focus, the leaf
+	 * cutoff, facet filter-to sets, then the subtractive channels (facet
+	 * excludes and per-object hides). `undefined` means "no restriction".
+	 */
 	const visibleNodeIds = useMemo(() => {
-		if (!focusedNodeIds) return nonLeafNodeIds;
-		if (!nonLeafNodeIds) return focusedNodeIds;
-		const both = new Set<string>();
-		for (const id of focusedNodeIds) {
-			// The focused node itself always survives, or the view it anchors would
-			// vanish the moment the cutoff passed its own degree.
-			if (id === focus?.nodeId || nonLeafNodeIds.has(id)) both.add(id);
+		const intersect = (
+			current: Set<string> | undefined,
+			next: ReadonlySet<string>,
+		): Set<string> => {
+			if (!current) return new Set(next);
+			const out = new Set<string>();
+			for (const id of current) {
+				if (next.has(id)) out.add(id);
+			}
+			return out;
+		};
+
+		let base: Set<string> | undefined;
+		if (focus?.mode === "hide" && focusedNodeIds) {
+			base = intersect(base, focusedNodeIds);
 		}
-		return both;
-	}, [focusedNodeIds, nonLeafNodeIds, focus]);
+		if (nonLeafNodeIds) base = intersect(base, nonLeafNodeIds);
+		for (const filter of facetFilters) {
+			if (filter.mode === "to") base = intersect(base, filter.ids);
+		}
+		// The focused node itself always survives, or the view it anchors would
+		// vanish the moment a cutoff passed its own degree.
+		if (base && focus) base.add(focus.nodeId);
+
+		const hasSubtractive =
+			manualHidden.size > 0 ||
+			facetFilters.some((filter) => filter.mode === "out");
+		if (hasSubtractive) {
+			if (!base) {
+				base = new Set((viewData?.nodes ?? []).map((node) => node.id));
+			}
+			for (const filter of facetFilters) {
+				if (filter.mode !== "out") continue;
+				for (const id of filter.ids) base.delete(id);
+			}
+			for (const id of manualHidden) base.delete(id);
+		}
+		return base;
+	}, [
+		focus,
+		focusedNodeIds,
+		nonLeafNodeIds,
+		facetFilters,
+		manualHidden,
+		viewData,
+	]);
 
 	const expansionChoices = useMemo(() => {
 		if (!expansionTarget) return [];
@@ -730,10 +875,22 @@ export function GraphViewer({
 				setFocus(null);
 				return;
 			}
-			setFocus({ nodeId: selectedNode.id, depth });
+			// Dim first: the rest of the graph stays as grayed context, and hiding
+			// it is a second, explicit step in the banner.
+			setFocus((prev) => ({
+				nodeId: selectedNode.id,
+				depth,
+				mode: prev?.nodeId === selectedNode.id ? prev.mode : "dim",
+			}));
 		},
 		[selectedNode],
 	);
+
+	const focusNodeById = useCallback((nodeId: string) => {
+		setFocus((prev) =>
+			prev?.nodeId === nodeId ? null : { nodeId, depth: 1, mode: "dim" },
+		);
+	}, []);
 
 	// A focus is anchored to one node, so it cannot outlive that node being drawn.
 	// Checked against the collapsed view, not the sample: folding the focused node
@@ -745,17 +902,22 @@ export function GraphViewer({
 			setFocus(null);
 	}, [focus, viewData]);
 
+	const openCollapsedGroup = useCallback((nodeId: string) => {
+		const clusterId = collapsedGroupClusterId(nodeId);
+		userOpenedGroupsRef.current.add(clusterId);
+		setCollapsedGroups((prev) => {
+			const next = new Set(prev);
+			next.delete(clusterId);
+			return next;
+		});
+	}, []);
+
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
 			// A group is an affordance, not an object: clicking it opens it rather
 			// than offering properties that belong to nobody.
 			if (isCollapsedGroupId(nodeId)) {
-				const clusterId = collapsedGroupClusterId(nodeId);
-				setCollapsedGroups((prev) => {
-					const next = new Set(prev);
-					next.delete(clusterId);
-					return next;
-				});
+				openCollapsedGroup(nodeId);
 				return;
 			}
 
@@ -769,7 +931,7 @@ export function GraphViewer({
 			setSelectedEdge(null);
 			setSelectedEdgeKey(null);
 		},
-		[data, pathSource, runPath],
+		[data, pathSource, runPath, openCollapsedGroup],
 	);
 
 	const handleEdgeClick = useCallback(
@@ -800,12 +962,7 @@ export function GraphViewer({
 			// A group stands for members the backend has never heard of, so it can
 			// only be opened locally — expanding it would send a synthetic id.
 			if (isCollapsedGroupId(nodeId)) {
-				const clusterId = collapsedGroupClusterId(nodeId);
-				setCollapsedGroups((prev) => {
-					const next = new Set(prev);
-					next.delete(clusterId);
-					return next;
-				});
+				openCollapsedGroup(nodeId);
 				return;
 			}
 
@@ -813,10 +970,148 @@ export function GraphViewer({
 			// Shift+Click opens the guard rather than expanding: this is the gesture
 			// most likely to be aimed at a node with a four-figure fan-out.
 			if (node) setExpansionTarget(node);
-			else onExpandNode?.(nodeId, label, undefined);
+			else void onExpandNode?.(nodeId, label, undefined);
 		},
-		[data, onExpandNode],
+		[data, onExpandNode, openCollapsedGroup],
 	);
+
+	/**
+	 * Double-click grows the graph one budgeted hop, and a second double-click
+	 * takes exactly that expansion back — the Browser-style reversible gesture.
+	 */
+	const handleNodeDoubleClick = useCallback(
+		(nodeId: string) => {
+			if (isCollapsedGroupId(nodeId)) {
+				openCollapsedGroup(nodeId);
+				return;
+			}
+			const node = data?.nodes.find((candidate) => candidate.id === nodeId);
+			if (!node) return;
+
+			const undo = doubleExpandedRef.current.get(nodeId);
+			if (undo && undo.length > 0 && onRemoveNodes) {
+				doubleExpandedRef.current.delete(nodeId);
+				onRemoveNodes(undo);
+				return;
+			}
+			if (!onExpandNode) return;
+			void Promise.resolve(
+				onExpandNode(
+					node.id,
+					node.label,
+					getNodeRawId(node, overlay),
+					undefined,
+					1,
+					{
+						limit: QUICK_EXPANSION_LIMIT,
+					},
+				),
+			).then((added) => {
+				if (Array.isArray(added) && added.length > 0) {
+					doubleExpandedRef.current.set(nodeId, added);
+				}
+			});
+		},
+		[data, onExpandNode, onRemoveNodes, overlay, openCollapsedGroup],
+	);
+
+	const handleNodeContextMenu = useCallback(
+		(nodeId: string, position: { x: number; y: number }) => {
+			setContextMenu({ nodeId, x: position.x, y: position.y });
+		},
+		[],
+	);
+
+	const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+	const contextNode = useMemo(() => {
+		if (!contextMenu) return null;
+		return (
+			viewData?.nodes.find((node) => node.id === contextMenu.nodeId) ??
+			data?.nodes.find((node) => node.id === contextMenu.nodeId) ??
+			null
+		);
+	}, [contextMenu, viewData, data]);
+
+	const contextChoices = useMemo(() => {
+		if (!contextNode || isCollapsedGroupId(contextNode.id)) return [];
+		const loadedByLabel = new Map<string, number>();
+		for (const edge of data?.edges ?? []) {
+			if (edge.source !== contextNode.id && edge.target !== contextNode.id)
+				continue;
+			loadedByLabel.set(edge.label, (loadedByLabel.get(edge.label) ?? 0) + 1);
+		}
+		return buildExpansionChoices(contextNode, overlay, loadedByLabel);
+	}, [contextNode, overlay, data]);
+
+	const contextClusterId = useMemo(() => {
+		if (!contextMenu || !clusterModel) return null;
+		const assignment = clusterModel.byNode.get(contextMenu.nodeId);
+		if (!assignment) return null;
+		const cluster = clusterModel.clusters.find(
+			(candidate) => candidate.id === assignment.clusterId,
+		);
+		return cluster && cluster.memberIds.length > 1 ? cluster.id : null;
+	}, [contextMenu, clusterModel]);
+
+	const hideNode = useCallback((nodeId: string) => {
+		setManualHidden((prev) => new Set(prev).add(nodeId));
+		setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
+	}, []);
+
+	const showHiddenNodes = useCallback(() => setManualHidden(new Set()), []);
+
+	const removeFacetFilter = useCallback((filterId: string) => {
+		setFacetFilters((prev) => prev.filter((filter) => filter.id !== filterId));
+	}, []);
+
+	const addFacetFilter = useCallback(
+		(mode: "to" | "out", title: string, ids: Set<string>) => {
+			setFacetFilters((prev) => [
+				...prev,
+				{ id: `${mode}-${Date.now()}-${prev.length}`, title, mode, ids },
+			]);
+		},
+		[],
+	);
+
+	const applyLayoutMode = useCallback(
+		(mode: GraphLayoutMode) => {
+			setLayoutMode(mode);
+			setLayoutCommand((prev) => ({
+				mode,
+				seq: (prev?.seq ?? 0) + 1,
+				centerNodeId: selectedNode?.id ?? null,
+			}));
+		},
+		[selectedNode],
+	);
+
+	// Cypher rows resolved back into drawable structure, when they can be.
+	const cypherSubgraph = useMemo(
+		() =>
+			cypherResults && onMergeSubgraph
+				? subgraphFromCypherRows(cypherResults, overlay)
+				: null,
+		[cypherResults, onMergeSubgraph, overlay],
+	);
+
+	const addCypherToCanvas = useCallback(() => {
+		if (cypherSubgraph && onMergeSubgraph) onMergeSubgraph(cypherSubgraph);
+	}, [cypherSubgraph, onMergeSubgraph]);
+
+	/**
+	 * One highlight channel reaches the canvas; priority order: an explicit path
+	 * beats a search, a search beats a hovered facet bar, and dim-mode focus is
+	 * the ambient baseline under all of them.
+	 */
+	const effectiveHighlight = useMemo(() => {
+		if (pathHighlight) return pathHighlight;
+		if (searchHighlight.size > 0) return searchHighlight;
+		if (facetHover && facetHover.size > 0) return facetHover;
+		if (focus?.mode === "dim" && focusedNodeIds) return focusedNodeIds;
+		return undefined;
+	}, [pathHighlight, searchHighlight, facetHover, focus, focusedNodeIds]);
 
 	const handleConnectionClick = useCallback(
 		(targetNodeId: string) => {
@@ -1030,6 +1325,68 @@ export function GraphViewer({
 							hiddenLeaves={hiddenLeafCount}
 						/>
 
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<button
+									type="button"
+									className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2 py-1 text-xs transition-colors ${
+										layoutMode !== "auto"
+											? "border-primary/40 bg-primary/10 text-foreground"
+											: "text-muted-foreground hover:text-foreground"
+									}`}
+									title={t(
+										"chooseHowTheGraphIsArranged",
+										"Choose how the graph is arranged",
+									)}
+								>
+									<LayoutGrid className="h-3.5 w-3.5" />
+									{LAYOUT_MODE_OPTIONS.find(
+										(option) => option.mode === layoutMode,
+									)?.label ?? "Auto"}
+								</button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="start">
+								{LAYOUT_MODE_OPTIONS.map((option) => (
+									<DropdownMenuItem
+										key={option.mode}
+										className="text-xs"
+										onSelect={() => applyLayoutMode(option.mode)}
+									>
+										<span className="min-w-0 flex-1">{option.label}</span>
+										{option.mode === layoutMode && (
+											<span className="text-primary">•</span>
+										)}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+
+						<button
+							type="button"
+							className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2 py-1 text-xs transition-colors ${
+								facetsOpen || facetFilters.length > 0
+									? "border-primary/40 bg-primary/10 text-foreground"
+									: "text-muted-foreground hover:text-foreground"
+							}`}
+							onClick={() => {
+								setFacetsOpen((open) => {
+									if (!open) {
+										setSelectedNode(null);
+										setSelectedEdge(null);
+										setSelectedEdgeKey(null);
+									}
+									return !open;
+								});
+							}}
+							title={t(
+								"summarizeAndFilterTheLoadedObjects",
+								"Summarize and filter the loaded objects",
+							)}
+						>
+							<BarChart3 className="h-3.5 w-3.5" />
+							{t("facets", "Facets")}
+						</button>
+
 						<div className="ml-auto flex min-w-0 items-center gap-2">
 							{warnings.length > 0 && !warningsDismissed && (
 								<Popover>
@@ -1095,6 +1452,50 @@ export function GraphViewer({
 					</div>
 				)}
 
+				{/* Active filter chips — the removable record of what the view omits */}
+				{(facetFilters.length > 0 || manualHidden.size > 0) && (
+					<div className="flex flex-wrap items-center gap-1.5 border-b bg-background px-2 py-1.5">
+						{facetFilters.map((filter) => (
+							<span
+								key={filter.id}
+								className="flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-[11px]"
+							>
+								{filter.mode === "to" ? (
+									<Filter className="h-3 w-3 text-primary" />
+								) : (
+									<FilterX className="h-3 w-3 text-destructive" />
+								)}
+								<span className="max-w-48 truncate">{filter.title}</span>
+								<span className="tabular-nums text-muted-foreground">
+									{filter.ids.size.toLocaleString()}
+								</span>
+								<button
+									type="button"
+									className="text-muted-foreground hover:text-foreground"
+									onClick={() => removeFacetFilter(filter.id)}
+									title={t("removeFilter", "Remove filter")}
+								>
+									<X className="h-3 w-3" />
+								</button>
+							</span>
+						))}
+						{manualHidden.size > 0 && (
+							<span className="flex items-center gap-1.5 rounded-full border bg-muted/50 px-2 py-0.5 text-[11px]">
+								{t("countObjectsHidden", "{{count}} objects hidden", {
+									count: manualHidden.size,
+								})}
+								<button
+									type="button"
+									className="font-medium text-primary hover:underline"
+									onClick={showHiddenNodes}
+								>
+									{t("show", "Show")}
+								</button>
+							</span>
+						)}
+					</div>
+				)}
+
 				{/* Query panel (collapsible) */}
 				{showQuery && onRunCypher && (
 					<div className="border-b p-2">
@@ -1103,6 +1504,8 @@ export function GraphViewer({
 							results={cypherResults ?? null}
 							loading={cypherLoading}
 							error={cypherError}
+							onAddToCanvas={onMergeSubgraph ? addCypherToCanvas : undefined}
+							addToCanvasCount={cypherSubgraph?.nodes.length ?? 0}
 						/>
 					</div>
 				)}
@@ -1114,10 +1517,7 @@ export function GraphViewer({
 						loading={loading}
 						selectedNodeId={selectedNode?.id}
 						selectedEdgeKey={selectedEdgeKey}
-						highlightedNodeIds={
-							pathHighlight ??
-							(searchHighlight.size > 0 ? searchHighlight : undefined)
-						}
+						highlightedNodeIds={effectiveHighlight}
 						highlightedEdgeIds={
 							pathHighlight ? (pathEdgeHighlight ?? undefined) : undefined
 						}
@@ -1126,9 +1526,103 @@ export function GraphViewer({
 						clusters={layoutClusterModel}
 						onNodeClick={handleNodeClick}
 						onNodeShiftClick={handleNodeShiftClick}
+						onNodeDoubleClick={handleNodeDoubleClick}
+						onNodeContextMenu={handleNodeContextMenu}
 						onEdgeClick={handleEdgeClick}
 						onStageClick={handleStageClick}
+						persistKey={persistKey}
+						layoutCommand={layoutCommand}
+						onCanvasApi={setCanvasApi}
 						className="absolute inset-0"
+					/>
+
+					<GraphContextMenu
+						state={contextMenu}
+						node={contextNode}
+						isGroup={
+							contextMenu ? isCollapsedGroupId(contextMenu.nodeId) : false
+						}
+						collapsibleClusterId={contextClusterId}
+						pinned={
+							contextMenu
+								? (canvasApi?.isPinned(contextMenu.nodeId) ?? false)
+								: false
+						}
+						focused={
+							contextMenu !== null && focus?.nodeId === contextMenu.nodeId
+						}
+						choices={contextChoices}
+						onClose={closeContextMenu}
+						onExpandChoice={
+							onExpandNode && contextNode
+								? (choice) => {
+										void onExpandNode(
+											contextNode.id,
+											contextNode.label,
+											getNodeRawId(contextNode, overlay),
+											undefined,
+											1,
+											{
+												edgeLabels: [choice.label],
+												direction: choice.direction,
+												limit: QUICK_EXPANSION_LIMIT,
+											},
+										);
+									}
+								: undefined
+						}
+						onExpandAll={
+							onExpandNode && contextNode
+								? () => {
+										void onExpandNode(
+											contextNode.id,
+											contextNode.label,
+											getNodeRawId(contextNode, overlay),
+											undefined,
+											1,
+											{ limit: QUICK_EXPANSION_LIMIT },
+										);
+									}
+								: undefined
+						}
+						onGuidedExpand={
+							onExpandNode && contextNode
+								? () => setExpansionTarget(contextNode)
+								: undefined
+						}
+						onOpenGroup={
+							contextMenu && isCollapsedGroupId(contextMenu.nodeId)
+								? () => openCollapsedGroup(contextMenu.nodeId)
+								: undefined
+						}
+						onCollapseGroup={
+							contextClusterId
+								? () =>
+										setCollapsedGroups((prev) =>
+											new Set(prev).add(contextClusterId),
+										)
+								: undefined
+						}
+						onToggleFocus={
+							contextMenu ? () => focusNodeById(contextMenu.nodeId) : undefined
+						}
+						onHide={
+							contextMenu ? () => hideNode(contextMenu.nodeId) : undefined
+						}
+						onTogglePin={
+							canvasApi && contextMenu
+								? () =>
+										canvasApi.pinNode(
+											contextMenu.nodeId,
+											!canvasApi.isPinned(contextMenu.nodeId),
+										)
+								: undefined
+						}
+						onFindPath={
+							onFindPaths && contextNode
+								? () => handleArmPath(contextNode)
+								: undefined
+						}
 					/>
 
 					{/* Focus banner — the only way back out, so it is always on top */}
@@ -1137,16 +1631,69 @@ export function GraphViewer({
 							<div className="flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
 								<Crosshair className="h-3.5 w-3.5 text-primary" />
 								<span className="whitespace-nowrap">
-									{t("showingCountOfTotalObjectsAroundName", {
-										defaultValue_one:
-											"Showing {{count}} of {{total}} objects around {{name}}",
-										defaultValue_other:
-											"Showing {{count}} of {{total}} objects around {{name}}",
-										count: focusedNodeIds.size,
-										total: nodeCount,
-										name: nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
-									})}
+									{focus.mode === "dim"
+										? t("highlightingCountOfTotalObjectsAroundName", {
+												defaultValue_one:
+													"Highlighting {{count}} of {{total}} objects around {{name}}",
+												defaultValue_other:
+													"Highlighting {{count}} of {{total}} objects around {{name}}",
+												count: focusedNodeIds.size,
+												total: nodeCount,
+												name:
+													nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
+											})
+										: t("showingCountOfTotalObjectsAroundName", {
+												defaultValue_one:
+													"Showing {{count}} of {{total}} objects around {{name}}",
+												defaultValue_other:
+													"Showing {{count}} of {{total}} objects around {{name}}",
+												count: focusedNodeIds.size,
+												total: nodeCount,
+												name:
+													nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
+											})}
 								</span>
+								<button
+									type="button"
+									className="whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-medium hover:bg-accent"
+									onClick={() =>
+										setFocus((prev) =>
+											prev
+												? { ...prev, depth: prev.depth === 1 ? 2 : 1 }
+												: prev,
+										)
+									}
+									title={t(
+										"toggleBetweenOneAndTwoHops",
+										"Toggle between one and two hops",
+									)}
+								>
+									{focus.depth === 1
+										? t("2Hops", "2 hops")
+										: t("1Hop", "1 hop")}
+								</button>
+								<button
+									type="button"
+									className="whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-medium hover:bg-accent"
+									onClick={() =>
+										setFocus((prev) =>
+											prev
+												? {
+														...prev,
+														mode: prev.mode === "dim" ? "hide" : "dim",
+													}
+												: prev,
+										)
+									}
+									title={t(
+										"dimKeepsContextHideRemovesIt",
+										"Dim keeps the rest as context; hide removes it",
+									)}
+								>
+									{focus.mode === "dim"
+										? t("hideOthers", "Hide others")
+										: t("dimOthers", "Dim others")}
+								</button>
 								<button
 									type="button"
 									className="text-muted-foreground hover:text-foreground"
@@ -1248,6 +1795,20 @@ export function GraphViewer({
 					)}
 				</div>
 			</div>
+
+			{/* Facet histogram (right drawer; the inspectors take precedence) */}
+			{facetsOpen && !selectedNode && !selectedEdge && (
+				<GraphHistogramPanel
+					nodes={viewData?.nodes ?? []}
+					onClose={() => {
+						setFacetsOpen(false);
+						setFacetHover(null);
+					}}
+					onHoverValue={setFacetHover}
+					onFilterTo={(title, ids) => addFacetFilter("to", title, ids)}
+					onFilterOut={(title, ids) => addFacetFilter("out", title, ids)}
+				/>
+			)}
 
 			{/* Node inspector (right drawer) */}
 			{showInspector && selectedNode && (

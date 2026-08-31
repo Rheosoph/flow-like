@@ -16,7 +16,7 @@ use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
 /// A pinned board version addresses an immutable snapshot, so a client may hold it without
-/// asking again. The current page can change at any moment and has to be revalidated —
+/// asking again. The current page can change at any moment and has to be revalidated.
 /// `no-cache` requires exactly that while still letting a 304 answer the revalidation.
 const CURRENT_PAGE_CACHE: &str = "private, no-cache";
 const VERSIONED_PAGE_CACHE: &str = "private, max-age=600";
@@ -141,7 +141,7 @@ pub async fn get_page(
     Query(params): Query<VersionQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
 
     let requested_board_id = params.board_id.filter(|id| !id.trim().is_empty());
     let version_opt = if let Some(ver_str) = params.version {

@@ -200,7 +200,13 @@ function findMatchingPin(
 	const droppedSchema =
 		typeof schema === "string" && !isOpenObjectSchema(schema) ? schema : undefined;
 
-	return Object.values(pins).find((pin) => {
+	// `pins` is keyed by cuid, so its iteration order is arbitrary. Pin index is the order the
+	// node declares — and the order the user sees — so a node with two pins a drop could land on
+	// (Cast to Struct's `struct_in` and `struct_shape`) connects to the first one every time
+	// instead of whichever the map happened to yield.
+	const ordered = Object.values(pins).sort((a, b) => a.index - b.index);
+
+	return ordered.find((pin) => {
 		const rawPinSchema = refs?.[pin.schema ?? ""] ?? pin.schema;
 		const pinSchema =
 			typeof rawPinSchema === "string" && !isOpenObjectSchema(rawPinSchema)

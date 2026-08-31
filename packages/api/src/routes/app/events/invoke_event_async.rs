@@ -20,9 +20,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType,
+        DispatchRequest, DispatchTrigger, ExecutionJwtParams, PageExecutionJwtContext, TokenType,
         fetch_profile_for_dispatch, is_jwt_configured, payload_storage, rejection,
-        resolve_wasm_packages, sign_execution_jwt,
+        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -60,6 +60,11 @@ pub struct InvokeEventAsyncRequest {
     /// belongs to (e.g. `{"order_id": "1234"}`).
     #[serde(default)]
     pub correlation: Option<std::collections::HashMap<String, String>>,
+    /// Governed Page action or lifecycle trigger. This capability is request
+    /// data only; normal user authentication remains in the Authorization
+    /// header.
+    #[serde(default)]
+    pub page_trigger: Option<super::page_trigger::PageTrigger>,
 }
 
 /// Response from async event invocation
@@ -140,6 +145,45 @@ pub async fn invoke_event_async(
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
 
+    let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())
+    {
+        (Some(_), Some(trigger)) => Some(
+            super::page_trigger::resolve_page_trigger(
+                &state,
+                &permission,
+                &app_id,
+                &event,
+                trigger,
+            )
+            .await?,
+        ),
+        (Some(_), None) => {
+            return Err(ApiError::bad_request(
+                "Invoking a Page Event requires page_trigger",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(ApiError::bad_request(
+                "page_trigger is valid only for an Event that owns a Page",
+            ));
+        }
+        (None, None) => None,
+    };
+    let board_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_id.clone())
+        .unwrap_or_else(|| event.board_id.clone());
+    let board_version = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_version)
+        .unwrap_or(event.board_version);
+    let node_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.node_id.clone())
+        .unwrap_or_else(|| event.node_id.clone());
+    let resolved_version =
+        board_version.map(|(major, minor, patch)| format!("{major}_{minor}_{patch}"));
+
     // Async dispatch always runs the event's configured board version. A request
     // asking for a different version cannot be honored here (there is no
     // validation against the app's available board versions), so reject it
@@ -147,7 +191,7 @@ pub async fn invoke_event_async(
     // for. A malformed version string is likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
         let reason = match super::parse_version_tuple(requested) {
-            Some(parsed) if event.board_version == Some(parsed) => None,
+            Some(parsed) if board_version == Some(parsed) => None,
             Some(_) => Some(
                 "Executing a board version other than the event's configured version is not supported"
                     .to_string(),
@@ -173,7 +217,6 @@ pub async fn invoke_event_async(
         }
     }
 
-    let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
@@ -245,9 +288,9 @@ pub async fn invoke_event_async(
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id.clone()),
-        version: Set(params.version.clone()),
+        version: Set(resolved_version.clone()),
         event_id: Set(Some(event_id.clone())),
-        node_id: Set(Some(event.id.clone())),
+        node_id: Set(Some(node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Queue),
         input_payload_len: Set(input_payload_len),
@@ -275,8 +318,8 @@ pub async fn invoke_event_async(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
-        node_id: Some(event.id.clone()),
-        version: params.version.clone(),
+        node_id: Some(node_id.clone()),
+        version: resolved_version,
         mode: RunMode::Queue,
         status: RunStatus::Pending,
         input_payload_len,
@@ -319,7 +362,7 @@ pub async fn invoke_event_async(
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
+    let executor_jwt_params = ExecutionJwtParams {
         user_id: sub.clone(),
         technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
@@ -331,7 +374,19 @@ pub async fn invoke_event_async(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
-    })
+    };
+    let executor_jwt = if let Some(resolved) = &resolved_page_trigger {
+        sign_execution_jwt_with_page_context(
+            executor_jwt_params,
+            PageExecutionJwtContext {
+                page_id: resolved.page_id.clone(),
+                manifest_revision: resolved.manifest_revision.clone(),
+                board_version: resolved.board_version,
+            },
+        )
+    } else {
+        sign_execution_jwt(executor_jwt_params)
+    }
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
@@ -346,8 +401,8 @@ pub async fn invoke_event_async(
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id,
-        board_version: event.board_version,
-        node_id: event.node_id.clone(),
+        board_version,
+        node_id,
         event_json: Some(event_json),
         payload: params.payload,
         user_id: sub,

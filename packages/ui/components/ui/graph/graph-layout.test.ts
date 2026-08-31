@@ -4,17 +4,22 @@ import type { GraphCluster } from "./graph-clusters";
 import {
 	CLUSTER_GAP,
 	type ClusterDisc,
+	LABEL_EXTENT_NODE_CAP,
 	NODE_GAP,
 	applyClusterLayout,
+	computeLabelExtents,
 	computeSeedSpread,
 	createDeterministicPosition,
 	getLayoutBounds,
 	packClusterDiscs,
 	packNodesOnGrid,
 	partitionByConnectivity,
+	placeCircularLayout,
 	placeDetachedNodes,
+	placeHierarchyLayout,
 	placeHubStar,
 	placePhyllotaxis,
+	placeRadialLayout,
 	relaxOverlaps,
 } from "./graph-layout";
 
@@ -483,5 +488,150 @@ describe("seed positions", () => {
 		expect(createDeterministicPosition("Person:42", 400)).toEqual(
 			createDeterministicPosition("Person:42", 400),
 		);
+	});
+});
+
+describe("relaxOverlaps label extents", () => {
+	test("clears the horizontal strip a caption occupies", () => {
+		const graph = new Graph();
+		graph.addNode("left", { x: 0, y: 0, size: 10, label: "A long caption" });
+		graph.addNode("right", { x: 30, y: 2, size: 10 });
+
+		const extents = new Map([["left", 80]]);
+		relaxOverlaps(graph, ["left", "right"], {
+			iterations: 200,
+			labelExtents: extents,
+		});
+
+		const leftX = graph.getNodeAttribute("left", "x") as number;
+		const rightX = graph.getNodeAttribute("right", "x") as number;
+		// radius + extent + radius + gap = 10 + 80 + 10 + 8, minus convergence slack.
+		expect(rightX - leftX).toBeGreaterThan(90);
+	});
+
+	test("leaves vertically-separated nodes alone", () => {
+		const graph = new Graph();
+		graph.addNode("left", { x: 0, y: 0, size: 10, label: "A long caption" });
+		graph.addNode("below", { x: 30, y: 60, size: 10 });
+
+		relaxOverlaps(graph, ["left", "below"], {
+			iterations: 50,
+			labelExtents: new Map([["left", 80]]),
+		});
+
+		expect(graph.getNodeAttribute("below", "x")).toBe(30);
+		expect(graph.getNodeAttribute("below", "y")).toBe(60);
+	});
+});
+
+describe("relaxOverlaps pinned nodes", () => {
+	test("a pinned node holds its position while the other yields", () => {
+		const graph = new Graph();
+		graph.addNode("pinnedNode", { x: 0, y: 0, size: 10, pinned: true });
+		graph.addNode("free", { x: 4, y: 0, size: 10 });
+
+		relaxOverlaps(graph, ["pinnedNode", "free"], { iterations: 200 });
+
+		expect(graph.getNodeAttribute("pinnedNode", "x")).toBe(0);
+		expect(graph.getNodeAttribute("pinnedNode", "y")).toBe(0);
+		const freeX = graph.getNodeAttribute("free", "x") as number;
+		expect(freeX).toBeGreaterThan(20);
+	});
+
+	test("two pinned nodes stay exactly where they were put", () => {
+		const graph = new Graph();
+		graph.addNode("a", { x: 0, y: 0, size: 10, pinned: true });
+		graph.addNode("b", { x: 2, y: 0, size: 10, pinned: true });
+
+		relaxOverlaps(graph, ["a", "b"], { iterations: 50 });
+
+		expect(graph.getNodeAttribute("b", "x")).toBe(2);
+	});
+});
+
+describe("computeLabelExtents", () => {
+	test("estimates widths only for captioned nodes under the cap", () => {
+		const graph = new Graph();
+		graph.addNode("titled", { x: 0, y: 0, size: 10, label: "Feedback item" });
+		graph.addNode("bare", { x: 0, y: 0, size: 10, label: "" });
+
+		const extents = computeLabelExtents(graph, ["titled", "bare"]);
+		expect(extents?.has("titled")).toBeTrue();
+		expect(extents?.has("bare")).toBeFalsy();
+		expect(extents?.get("titled") ?? 0).toBeGreaterThan(20);
+	});
+
+	test("returns nothing above the node cap", () => {
+		const graph = buildGraph(LABEL_EXTENT_NODE_CAP + 1, () => ({ x: 0, y: 0 }));
+		for (const nodeId of graph.nodes()) {
+			graph.setNodeAttribute(nodeId, "label", "caption");
+		}
+		expect(computeLabelExtents(graph, graph.nodes())).toBeUndefined();
+	});
+});
+
+describe("deterministic layouts", () => {
+	function buildChain(length: number): Graph {
+		const graph = new Graph({ multi: true, type: "directed" });
+		for (let index = 0; index < length; index += 1) {
+			graph.addNode(`n${index}`, { x: 0, y: 0, size: 10 });
+		}
+		for (let index = 0; index < length - 1; index += 1) {
+			graph.addEdge(`n${index}`, `n${index + 1}`);
+		}
+		return graph;
+	}
+
+	test("circular places every node on one non-degenerate ring", () => {
+		const graph = buildChain(12);
+		const bounds = placeCircularLayout(graph, graph.nodes());
+		expect(bounds).not.toBeNull();
+
+		const radii = graph
+			.nodes()
+			.map((nodeId) =>
+				Math.hypot(
+					graph.getNodeAttribute(nodeId, "x") as number,
+					graph.getNodeAttribute(nodeId, "y") as number,
+				),
+			);
+		const min = Math.min(...radii);
+		const max = Math.max(...radii);
+		expect(min).toBeGreaterThan(0);
+		expect(max - min).toBeLessThan(1);
+	});
+
+	test("radial rings grow with hop distance from the centre", () => {
+		const graph = buildChain(6);
+		placeRadialLayout(graph, graph.nodes(), { centerId: "n0" });
+
+		const radiusOf = (nodeId: string) =>
+			Math.hypot(
+				graph.getNodeAttribute(nodeId, "x") as number,
+				graph.getNodeAttribute(nodeId, "y") as number,
+			);
+		expect(radiusOf("n0")).toBe(0);
+		expect(radiusOf("n1")).toBeGreaterThan(0);
+		expect(radiusOf("n2")).toBeGreaterThan(radiusOf("n1"));
+		expect(radiusOf("n3")).toBeGreaterThan(radiusOf("n2"));
+	});
+
+	test("hierarchy layers follow edge direction left to right", () => {
+		const graph = new Graph({ multi: true, type: "directed" });
+		graph.addNode("root", { x: 0, y: 0, size: 10 });
+		graph.addNode("childA", { x: 0, y: 0, size: 10 });
+		graph.addNode("childB", { x: 0, y: 0, size: 10 });
+		graph.addNode("grandchild", { x: 0, y: 0, size: 10 });
+		graph.addEdge("root", "childA");
+		graph.addEdge("root", "childB");
+		graph.addEdge("childA", "grandchild");
+
+		placeHierarchyLayout(graph, graph.nodes());
+
+		const xOf = (nodeId: string) =>
+			graph.getNodeAttribute(nodeId, "x") as number;
+		expect(xOf("root")).toBeLessThan(xOf("childA"));
+		expect(xOf("childA")).toBe(xOf("childB"));
+		expect(xOf("childA")).toBeLessThan(xOf("grandchild"));
 	});
 });

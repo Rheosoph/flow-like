@@ -3,10 +3,12 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
+	ArrowLeftRight,
 	ArrowRight,
 	Check,
 	Database,
 	Loader2,
+	Plus,
 	Sparkles,
 	Trash2,
 } from "lucide-react";
@@ -43,6 +45,20 @@ import {
 	SelectValue,
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
+import {
+	AddRelationshipForm,
+	type RelationshipEndpoint,
+	type WizardEdge,
+	apiName,
+	buildEdge,
+	displayName,
+	endpointMatchesStem,
+	foreignKeyStem,
+	isValidGraphIdentifier,
+	reversedEdge,
+	toEdgeMapping,
+	uniqueLabel,
+} from "./relationship-form";
 
 export interface DataStudioTableInfo {
 	name: string;
@@ -99,42 +115,35 @@ function schemaColumns(schema: ArrowSchemaJSON): PropertyColumn[] {
 	});
 }
 
-function singularize(value: string): string {
-	if (value.endsWith("ies") && value.length > 3)
-		return `${value.slice(0, -3)}y`;
-	if (value.endsWith("sses")) return value.slice(0, -2);
-	if (value.endsWith("s") && !value.endsWith("ss")) return value.slice(0, -1);
-	return value;
+function objectToEndpoint(object: InferredObject): RelationshipEndpoint {
+	return {
+		id: object.id ?? "",
+		label: object.label,
+		api_name: object.api_name,
+		table: object.table,
+		id_column: object.id_column,
+		columns: object.columns,
+		color: object.style.color,
+	};
 }
 
-function apiName(value: string): string {
-	return singularize(
-		value
-			.trim()
-			.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-			.replace(/[^a-zA-Z0-9]+/g, "_")
-			.replace(/^_+|_+$/g, "")
-			.toLowerCase(),
-	);
-}
-
-function displayName(value: string): string {
-	return apiName(value)
-		.split("_")
-		.filter(Boolean)
-		.map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-		.join(" ");
-}
-
-function inferIdColumn(columns: PropertyColumn[], typeApiName: string): string {
+function inferIdColumn(
+	columns: PropertyColumn[],
+	typeApiName: string,
+	pointsAtAnotherObject: (stem: string) => boolean,
+): string {
 	const names = columns.map((column) => column.name);
-	return (
-		names.find((name) => name.toLowerCase() === "id") ??
-		names.find((name) => name.toLowerCase() === `${typeApiName}_id`) ??
-		names.find((name) => name.toLowerCase().endsWith("_id")) ??
-		names[0] ??
-		""
-	);
+	const exact = names.find((name) => apiName(name) === "id");
+	if (exact) return exact;
+	const own = names.find((name) => apiName(name) === `${typeApiName}_id`);
+	if (own) return own;
+	// A bare `*_id` that resolves to a *different* object is a foreign key, not
+	// this object's identity — taking it here would also drop the relationship.
+	const ownIdShaped = names.find((name) => {
+		const stem = foreignKeyStem(name);
+		return stem !== undefined && !pointsAtAnotherObject(stem);
+	});
+	return ownIdShaped ?? names[0] ?? "";
 }
 
 function inferDisplayColumn(
@@ -151,43 +160,45 @@ function inferDisplayColumn(
 	return columns.find((column) => column.name !== idColumn)?.name;
 }
 
-function inferEdges(objects: InferredObject[]): EdgeLabelMapping[] {
-	const edges: EdgeLabelMapping[] = [];
-	for (const source of objects) {
+/**
+ * Foreign-key inference. Deliberately conservative: a column only becomes an
+ * edge when its stem resolves to another selected object, so widening the
+ * accepted column shapes cannot invent relationships. Self-references and
+ * role-named keys (`owner_id`) are left to the manual form.
+ */
+function inferEdges(objects: InferredObject[]): WizardEdge[] {
+	const endpoints = objects.map(objectToEndpoint);
+	const edges: WizardEdge[] = [];
+	const taken = new Set(
+		endpoints.map((endpoint) => endpoint.label.trim().toLowerCase()),
+	);
+	for (const source of endpoints) {
 		for (const column of source.columns) {
-			const columnName = column.name.toLowerCase();
-			if (!columnName.endsWith("_id") || column.name === source.id_column) {
-				continue;
-			}
-			const targetApiName = columnName.slice(0, -3);
-			const target = objects.find(
-				(object) => object.api_name === targetApiName,
+			if (column.name === source.id_column) continue;
+			const stem = foreignKeyStem(column.name);
+			if (!stem) continue;
+			const target = endpoints.find((endpoint) =>
+				endpointMatchesStem(endpoint, stem),
 			);
 			if (!target || target.id === source.id) continue;
-			edges.push({
-				id: createId(),
-				api_name: `${source.api_name}_to_${target.api_name}`,
-				label: `has_${target.api_name}`,
-				table: source.table,
-				src_column: source.id_column,
-				dst_column: column.name,
-				src_label: source.label,
-				dst_label: target.label,
-				containment: false,
-				property_columns: [],
-				style: {
-					color: source.style.color,
-					icon: "arrow-right",
-					size: { mode: "fixed", value: 2 },
-				},
-			});
+			const sourceApi = apiName(source.api_name ?? source.label);
+			const targetApi = apiName(target.api_name ?? target.label);
+			const role = stem === targetApi ? targetApi : stem;
+			edges.push(
+				buildEdge({
+					originKey: `inferred:${source.id}::${target.id}::${column.name}`,
+					manual: false,
+					source,
+					target,
+					table: source.table,
+					srcColumn: source.id_column,
+					dstColumn: column.name,
+					label: uniqueLabel(`${sourceApi}_has_${role}`, taken),
+				}),
+			);
 		}
 	}
 	return edges;
-}
-
-function edgeKey(edge: EdgeLabelMapping): string {
-	return `${edge.src_label}::${edge.dst_label}::${edge.dst_column}`;
 }
 
 export function OntologySetupDialog({
@@ -211,10 +222,15 @@ export function OntologySetupDialog({
 	const [description, setDescription] = useState("");
 	const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
 	const [objects, setObjects] = useState<InferredObject[]>([]);
-	const [edges, setEdges] = useState<EdgeLabelMapping[]>([]);
+	const [edges, setEdges] = useState<WizardEdge[]>([]);
 	const [removedEdgeKeys, setRemovedEdgeKeys] = useState<Set<string>>(
 		new Set(),
 	);
+	const [addingEdge, setAddingEdge] = useState(false);
+	const [edgePrefill, setEdgePrefill] = useState<{
+		sourceId: string;
+		dstColumn: string;
+	} | null>(null);
 	const [loadingSchemas, setLoadingSchemas] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -232,6 +248,8 @@ export function OntologySetupDialog({
 		setObjects([]);
 		setEdges([]);
 		setRemovedEdgeKeys(new Set());
+		setAddingEdge(false);
+		setEdgePrefill(null);
 		setLoadingSchemas(false);
 		setSubmitting(false);
 		setError(null);
@@ -239,15 +257,22 @@ export function OntologySetupDialog({
 		setValidationWarning(null);
 	}, [open]);
 
+	const endpoints = useMemo(() => objects.map(objectToEndpoint), [objects]);
 	const inferredEdges = useMemo(() => inferEdges(objects), [objects]);
 
+	// Inferred edges are rebuilt from the current objects; manual ones are kept
+	// verbatim and only have their endpoint labels re-resolved, so renaming an
+	// object cannot orphan a hand-authored relationship.
 	useEffect(() => {
 		setEdges((current) => {
-			const byKey = new Map(current.map((edge) => [edgeKey(edge), edge]));
-			return inferredEdges
-				.filter((candidate) => !removedEdgeKeys.has(edgeKey(candidate)))
+			const objectsById = new Map(
+				objects.map((object) => [object.id ?? "", object]),
+			);
+			const previous = new Map(current.map((edge) => [edge.origin_key, edge]));
+			const reconciled = inferredEdges
+				.filter((candidate) => !removedEdgeKeys.has(candidate.origin_key))
 				.map((candidate) => {
-					const existing = byKey.get(edgeKey(candidate));
+					const existing = previous.get(candidate.origin_key);
 					return existing
 						? {
 								...candidate,
@@ -259,8 +284,16 @@ export function OntologySetupDialog({
 							}
 						: candidate;
 				});
+			const manual = current.flatMap((edge) => {
+				if (!edge.manual) return [];
+				const source = objectsById.get(edge.src_object_id ?? "");
+				const target = objectsById.get(edge.dst_object_id ?? "");
+				if (!source || !target) return [];
+				return [{ ...edge, src_label: source.label, dst_label: target.label }];
+			});
+			return [...reconciled, ...manual];
 		});
-	}, [inferredEdges, removedEdgeKeys]);
+	}, [inferredEdges, objects, removedEdgeKeys]);
 
 	const toggleTable = useCallback((tableName: string) => {
 		setSelectedTables((current) => {
@@ -281,13 +314,32 @@ export function OntologySetupDialog({
 			const existingByTable = new Map(
 				objects.map((object) => [object.table, object]),
 			);
-			const inferred = await Promise.all(
-				selected.map(async (table, index): Promise<InferredObject> => {
+			// Schemas load first so identity inference can tell a foreign key apart
+			// from an object's own id — that needs every selected table's API name.
+			const loaded = await Promise.all(
+				selected.map(async (table) => {
 					const existing = existingByTable.get(table.name);
+					return {
+						table,
+						existing,
+						columns: existing ? [] : schemaColumns(await loadSchema(table)),
+					};
+				}),
+			);
+			const selectedApiNames = new Set(
+				loaded.map(({ table, existing }) =>
+					apiName(existing?.api_name ?? table.name),
+				),
+			);
+			const inferred = loaded.map(
+				({ table, existing, columns }, index): InferredObject => {
 					if (existing) return existing;
-					const columns = schemaColumns(await loadSchema(table));
 					const typeApiName = apiName(table.name);
-					const idColumn = inferIdColumn(columns, typeApiName);
+					const idColumn = inferIdColumn(
+						columns,
+						typeApiName,
+						(stem) => stem !== typeApiName && selectedApiNames.has(stem),
+					);
 					return {
 						id: createId(),
 						api_name: typeApiName,
@@ -303,7 +355,7 @@ export function OntologySetupDialog({
 							size: { mode: "fixed", value: 10 },
 						},
 					};
-				}),
+				},
 			);
 			setObjects(inferred);
 			if (!name.trim()) {
@@ -328,7 +380,7 @@ export function OntologySetupDialog({
 		} finally {
 			setLoadingSchemas(false);
 		}
-	}, [loadSchema, name, objects, projectTables, selectedTables]);
+	}, [loadSchema, name, objects, projectTables, selectedTables, t]);
 
 	const updateObject = useCallback(
 		(index: number, patch: Partial<InferredObject>) => {
@@ -342,17 +394,49 @@ export function OntologySetupDialog({
 	);
 
 	const updateEdge = useCallback(
-		(target: EdgeLabelMapping, patch: Partial<EdgeLabelMapping>) => {
+		(originKey: string, patch: Partial<EdgeLabelMapping>) => {
 			setEdges((current) =>
-				current.map((edge) => (edge === target ? { ...edge, ...patch } : edge)),
+				current.map((edge) =>
+					edge.origin_key === originKey ? { ...edge, ...patch } : edge,
+				),
 			);
 		},
 		[],
 	);
 
-	const removeEdge = useCallback((target: EdgeLabelMapping) => {
-		setRemovedEdgeKeys((keys) => new Set(keys).add(edgeKey(target)));
-		setEdges((current) => current.filter((edge) => edge !== target));
+	const removeEdge = useCallback((originKey: string) => {
+		setEdges((current) =>
+			current.filter((edge) => edge.origin_key !== originKey),
+		);
+		if (originKey.startsWith("inferred:")) {
+			setRemovedEdgeKeys((keys) => new Set(keys).add(originKey));
+		}
+	}, []);
+
+	// A reversed edge becomes manual so re-inference cannot flip it back, and
+	// its inferred key is tombstoned so the original does not reappear beside it.
+	const reverseEdge = useCallback((originKey: string) => {
+		setEdges((current) =>
+			current.map((edge) =>
+				edge.origin_key === originKey
+					? {
+							...reversedEdge(edge),
+							manual: true,
+							src_object_id: edge.dst_object_id,
+							dst_object_id: edge.src_object_id,
+						}
+					: edge,
+			),
+		);
+		if (originKey.startsWith("inferred:")) {
+			setRemovedEdgeKeys((keys) => new Set(keys).add(originKey));
+		}
+	}, []);
+
+	const addEdge = useCallback((edge: WizardEdge) => {
+		setEdges((current) => [...current, edge]);
+		setAddingEdge(false);
+		setEdgePrefill(null);
 	}, []);
 
 	const duplicateLabels = useMemo(() => {
@@ -377,6 +461,32 @@ export function OntologySetupDialog({
 		);
 	}, [objects]);
 
+	// The server puts object and relationship labels in one case-insensitive
+	// namespace, so collisions have to be counted across both.
+	const labelCounts = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const label of [
+			...objects.map((object) => object.label),
+			...edges.map((edge) => edge.label),
+		]) {
+			const key = label.trim().toLowerCase();
+			if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		return counts;
+	}, [edges, objects]);
+
+	const takenLabels = useMemo(() => new Set(labelCounts.keys()), [labelCounts]);
+
+	const edgeLabelIssue = useCallback(
+		(edge: WizardEdge): "invalid" | "duplicate" | undefined => {
+			const label = edge.label.trim();
+			if (!isValidGraphIdentifier(label)) return "invalid";
+			if ((labelCounts.get(label.toLowerCase()) ?? 0) > 1) return "duplicate";
+			return undefined;
+		},
+		[labelCounts],
+	);
+
 	const hasDuplicateLabel = useCallback(
 		(object: InferredObject) =>
 			duplicateLabels.has(object.label.trim().toLowerCase()),
@@ -389,16 +499,39 @@ export function OntologySetupDialog({
 		[duplicateApiNames],
 	);
 
+	// Foreign-key-shaped columns inference could not resolve — offered as manual
+	// starting points instead of guessed at.
+	const unlinkedColumns = useMemo(() => {
+		const linked = new Set(
+			edges.map((edge) => `${edge.table}::${edge.dst_column}`),
+		);
+		return objects.flatMap((object) =>
+			object.columns
+				.filter(
+					(column) =>
+						column.name !== object.id_column &&
+						foreignKeyStem(column.name) !== undefined &&
+						!linked.has(`${object.table}::${column.name}`),
+				)
+				.map((column) => ({ object, column: column.name })),
+		);
+	}, [edges, objects]);
+
 	const validObjects =
 		objects.length > 0 &&
 		objects.every(
 			(object) =>
-				object.label.trim() &&
+				isValidGraphIdentifier(object.label.trim()) &&
 				apiName(object.api_name ?? "") &&
 				object.id_column,
 		) &&
 		duplicateLabels.size === 0 &&
 		duplicateApiNames.size === 0;
+
+	const validEdges = useMemo(
+		() => edges.every((edge) => !edgeLabelIssue(edge)),
+		[edgeLabelIssue, edges],
+	);
 
 	const handleBack = useCallback(() => {
 		if (step === "objects") setStep("sources");
@@ -424,6 +557,7 @@ export function OntologySetupDialog({
 				({ columns: _columns, api_name_touched: _touched, ...object }) =>
 					object,
 			);
+			const finalEdges = edges.map(toEdgeMapping);
 			const objectViews = finalObjects.map((object) => ({
 				object_type: object.id ?? object.api_name ?? object.label,
 				title_property: object.display_column,
@@ -440,7 +574,7 @@ export function OntologySetupDialog({
 					name: name.trim(),
 					description: description.trim() || undefined,
 					nodes,
-					edges,
+					edges: finalEdges,
 					object_views: objectViews,
 					actions: [],
 					exposed: false,
@@ -475,7 +609,7 @@ export function OntologySetupDialog({
 				name: name.trim(),
 				description: description.trim() || undefined,
 				nodes,
-				edges,
+				edges: finalEdges,
 				object_views: objectViews,
 				actions: [],
 				exposed: false,
@@ -501,6 +635,7 @@ export function OntologySetupDialog({
 		objects,
 		onCreate,
 		onOpenChange,
+		t,
 		userScoped,
 	]);
 
@@ -630,12 +765,18 @@ export function OntologySetupDialog({
 										{t("reviewInferredObjects", "Review inferred objects")}
 									</p>
 									<p className="text-xs text-muted-foreground">
-										{`IDs and display fields are suggested from each selected schema.`}
+										{t(
+											"idsAndDisplayFieldsAreSuggestedFromEachSelectedSchema",
+											"IDs and display fields are suggested from each selected schema.",
+										)}
 									</p>
 								</div>
 								{objects.map((object, index) => {
 									const dupLabel = hasDuplicateLabel(object);
 									const dupApiName = hasDuplicateApiName(object);
+									const invalidLabel = !isValidGraphIdentifier(
+										object.label.trim(),
+									);
 									return (
 										<div
 											key={object.id}
@@ -671,9 +812,11 @@ export function OntologySetupDialog({
 																	: { label, api_name: apiName(label) },
 															);
 														}}
-														aria-invalid={dupLabel}
+														aria-invalid={dupLabel || invalidLabel}
 														className={
-															dupLabel ? "border-destructive" : undefined
+															dupLabel || invalidLabel
+																? "border-destructive"
+																: undefined
 														}
 													/>
 													{dupLabel && (
@@ -681,6 +824,14 @@ export function OntologySetupDialog({
 															{t(
 																"anotherObjectAlreadyUsesThisName",
 																"Another object already uses this name.",
+															)}
+														</p>
+													)}
+													{!dupLabel && invalidLabel && (
+														<p className="text-xs text-destructive">
+															{t(
+																"useLettersDigitsAndUnderscoresStartingWithALetter",
+																"Use letters, digits and underscores, starting with a letter.",
 															)}
 														</p>
 													)}
@@ -779,15 +930,48 @@ export function OntologySetupDialog({
 					{step === "relationships" && (
 						<ScrollArea className="h-full min-h-80 pr-3">
 							<div className="space-y-3">
-								<div>
-									<p className="text-sm font-medium">
-										{t("reviewRelationships", "Review relationships")}
-									</p>
-									<p className="text-xs text-muted-foreground">
-										{`Inferred from foreign-key style columns. Edit labels or remove any that do not belong.`}
-									</p>
+								<div className="flex items-start justify-between gap-3">
+									<div>
+										<p className="text-sm font-medium">
+											{t("reviewRelationships", "Review relationships")}
+										</p>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"inferredFromForeignkeyStyleColumnsAddYourOwnForAnythingInferenceCouldNotSee",
+												"Inferred from foreign-key style columns. Add your own for anything inference could not see.",
+											)}
+										</p>
+									</div>
+									{!addingEdge && (
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() => {
+												setEdgePrefill(null);
+												setAddingEdge(true);
+											}}
+											disabled={objects.length === 0}
+										>
+											<Plus className="h-4 w-4" />
+											{t("addRelationship", "Add relationship")}
+										</Button>
+									)}
 								</div>
-								{edges.length === 0 ? (
+
+								{addingEdge && (
+									<AddRelationshipForm
+										endpoints={endpoints}
+										takenLabels={takenLabels}
+										prefill={edgePrefill}
+										onAdd={addEdge}
+										onCancel={() => {
+											setAddingEdge(false);
+											setEdgePrefill(null);
+										}}
+									/>
+								)}
+
+								{edges.length === 0 && !addingEdge && (
 									<div className="rounded-xl border border-dashed p-8 text-center">
 										<p className="text-sm font-medium">
 											{t(
@@ -796,18 +980,57 @@ export function OntologySetupDialog({
 											)}
 										</p>
 										<p className="mt-1 text-xs text-muted-foreground">
-											{`We could not find foreign-key columns linking your objects. You can add relationships later from the ontology editor.`}
+											{t(
+												"weCouldNotFindForeignkeyColumnsLinkingYourObjectsAddOneByHandToConnectThem",
+												"We could not find foreign-key columns linking your objects. Add one by hand to connect them.",
+											)}
 										</p>
 									</div>
-								) : (
-									edges.map((edge) => (
-										<EdgeReviewCard
-											key={edge.id ?? edgeKey(edge)}
-											edge={edge}
-											onEdgeChange={updateEdge}
-											onRemove={removeEdge}
-										/>
-									))
+								)}
+
+								{edges.map((edge) => (
+									<EdgeReviewCard
+										key={edge.origin_key}
+										edge={edge}
+										issue={edgeLabelIssue(edge)}
+										onEdgeChange={updateEdge}
+										onReverse={reverseEdge}
+										onRemove={removeEdge}
+									/>
+								))}
+
+								{unlinkedColumns.length > 0 && (
+									<div className="space-y-2 rounded-xl border border-dashed p-4">
+										<p className="text-xs font-medium">
+											{t("unlinkedIdColumns", "Unlinked ID columns")}
+										</p>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"theseLookLikeForeignKeysButDoNotResolveToASelectedObjectPickOneToLinkItYourself",
+												"These look like foreign keys but do not resolve to a selected object. Pick one to link it yourself.",
+											)}
+										</p>
+										<div className="flex flex-wrap gap-2 pt-1">
+											{unlinkedColumns.map(({ object, column }) => (
+												<Button
+													key={`${object.id}-${column}`}
+													size="sm"
+													variant="outline"
+													className="h-7 font-mono text-[11px]"
+													onClick={() => {
+														setEdgePrefill({
+															sourceId: object.id ?? "",
+															dstColumn: column,
+														});
+														setAddingEdge(true);
+													}}
+												>
+													<Plus className="h-3 w-3" />
+													{`${object.table}.${column}`}
+												</Button>
+											))}
+										</div>
+									</div>
 								)}
 							</div>
 						</ScrollArea>
@@ -875,8 +1098,10 @@ export function OntologySetupDialog({
 											className="text-xs"
 										>
 											<p className="font-medium">
-												{mapping.kind === "edge" ? "Relationship" : "Object"}:{" "}
-												{mapping.label}
+												{mapping.kind === "edge"
+													? t("relationship", "Relationship")
+													: t("object", "Object")}
+												{`: ${mapping.label}`}
 											</p>
 											<ul className="list-disc space-y-1 pl-4">
 												{mapping.issues.map((issue) => (
@@ -893,7 +1118,10 @@ export function OntologySetupDialog({
 								</div>
 							)}
 							<p className="text-xs text-muted-foreground">
-								{`The ontology stays private until you expose it from Sharing. Standard object views and board bindings are generated automatically.`}
+								{t(
+									"theOntologyStaysPrivateUntilYouExposeItFromSharingObjectViewsAndBoardBindingsAreGeneratedAutomatically",
+									"The ontology stays private until you expose it from Sharing. Object views and board bindings are generated automatically.",
+								)}
 							</p>
 						</div>
 					)}
@@ -901,7 +1129,7 @@ export function OntologySetupDialog({
 
 				<DialogFooter className="flex-row items-center justify-between border-t pt-4 sm:justify-between">
 					<Button variant="ghost" onClick={handleBack}>
-						{step === "sources" ? "Cancel" : "Back"}
+						{step === "sources" ? t("cancel", "Cancel") : t("back", "Back")}
 					</Button>
 					{step === "sources" && (
 						<Button
@@ -925,7 +1153,7 @@ export function OntologySetupDialog({
 						</Button>
 					)}
 					{step === "relationships" && (
-						<Button onClick={() => setStep("publish")}>
+						<Button onClick={() => setStep("publish")} disabled={!validEdges}>
 							{t("continue", "Continue")} <ArrowRight className="h-4 w-4" />
 						</Button>
 					)}
@@ -949,21 +1177,22 @@ export function OntologySetupDialog({
 }
 
 interface EdgeReviewCardProps {
-	edge: EdgeLabelMapping;
-	onEdgeChange: (
-		edge: EdgeLabelMapping,
-		patch: Partial<EdgeLabelMapping>,
-	) => void;
-	onRemove: (edge: EdgeLabelMapping) => void;
+	edge: WizardEdge;
+	issue?: "invalid" | "duplicate";
+	onEdgeChange: (originKey: string, patch: Partial<EdgeLabelMapping>) => void;
+	onReverse: (originKey: string) => void;
+	onRemove: (originKey: string) => void;
 }
 
 function EdgeReviewCard({
 	edge,
+	issue,
 	onEdgeChange,
+	onReverse,
 	onRemove,
 }: Readonly<EdgeReviewCardProps>) {
 	const { t } = useTranslation("settings");
-	const containmentId = `edge-containment-${edge.id ?? edgeKey(edge)}`;
+	const containmentId = `edge-containment-${edge.origin_key}`;
 	return (
 		<div className="space-y-3 rounded-xl border p-4">
 			<div className="flex items-center justify-between gap-3">
@@ -971,15 +1200,30 @@ function EdgeReviewCard({
 					<Badge variant="secondary">{edge.src_label}</Badge>
 					<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
 					<Badge variant="secondary">{edge.dst_label}</Badge>
+					{edge.manual && (
+						<Badge variant="outline" className="text-[10px]">
+							{t("manual", "Manual")}
+						</Badge>
+					)}
 				</div>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={() => onRemove(edge)}
-					title={t("removeRelationship", "Remove relationship")}
-				>
-					<Trash2 className="h-4 w-4" />
-				</Button>
+				<div className="flex items-center">
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => onReverse(edge.origin_key)}
+						title={t("reverseDirection", "Reverse direction")}
+					>
+						<ArrowLeftRight className="h-4 w-4" />
+					</Button>
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => onRemove(edge.origin_key)}
+						title={t("removeRelationship", "Remove relationship")}
+					>
+						<Trash2 className="h-4 w-4" />
+					</Button>
+				</div>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
@@ -987,14 +1231,31 @@ function EdgeReviewCard({
 					<Input
 						value={edge.label}
 						onChange={(event) =>
-							onEdgeChange(edge, { label: event.target.value })
+							onEdgeChange(edge.origin_key, { label: event.target.value })
 						}
-						className="font-mono text-xs"
+						aria-invalid={Boolean(issue)}
+						className={`font-mono text-xs${issue ? " border-destructive" : ""}`}
 					/>
+					{issue === "duplicate" && (
+						<p className="text-xs text-destructive">
+							{t(
+								"thisLabelIsAlreadyUsedByAnotherObjectOrRelationship",
+								"This label is already used by another object or relationship.",
+							)}
+						</p>
+					)}
+					{issue === "invalid" && (
+						<p className="text-xs text-destructive">
+							{t(
+								"useLettersDigitsAndUnderscoresStartingWithALetter",
+								"Use letters, digits and underscores, starting with a letter.",
+							)}
+						</p>
+					)}
 				</div>
 				<div className="space-y-1.5">
 					<Label>{t("join", "Join")}</Label>
-					<p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">{`${edge.src_column} → ${edge.dst_column}`}</p>
+					<p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">{`${edge.table}.${edge.src_column} → ${edge.table}.${edge.dst_column}`}</p>
 				</div>
 			</div>
 			<div className="flex items-center gap-2">
@@ -1002,7 +1263,7 @@ function EdgeReviewCard({
 					id={containmentId}
 					checked={Boolean(edge.containment)}
 					onCheckedChange={(checked) =>
-						onEdgeChange(edge, { containment: checked })
+						onEdgeChange(edge.origin_key, { containment: checked })
 					}
 				/>
 				<Label htmlFor={containmentId} className="text-xs font-medium">

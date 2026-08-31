@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import type { IBackendState } from "../state/backend-state";
-import type { ILogMetadata } from "./schema";
+import type { ILogMetadata, PageTrigger } from "./schema";
 import type { IRunPayload } from "./schema";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
 
@@ -42,6 +42,7 @@ interface IExecuteEventOptions {
 	title?: string;
 	interfaceType?: string;
 	skipConsentCheck?: boolean;
+	pageTrigger?: PageTrigger;
 	/**
 	 * Optional callback for incremental saves during streaming.
 	 * Called every `saveIntervalEvents` events and on completion.
@@ -63,6 +64,7 @@ export type ExecuteEventFn = (
 	onEventId?: (id: string) => void,
 	cb?: (event: IIntercomEvent[]) => void,
 	skipConsentCheck?: boolean,
+	pageTrigger?: PageTrigger,
 ) => Promise<ILogMetadata | undefined>;
 
 export class ExecutionEngineProvider {
@@ -257,6 +259,7 @@ export class ExecutionEngineProvider {
 				}
 			},
 			options.skipConsentCheck,
+			options.pageTrigger,
 		);
 
 		stream.executionPromise = executionPromise;

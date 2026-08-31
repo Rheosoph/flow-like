@@ -4,6 +4,7 @@ import type {
 	IIntercomEvent,
 	ILogMetadata,
 	IOAuthToken,
+	PageTrigger,
 	IRunPayload,
 	IVersionType,
 } from "@flow-like/flow-like-ui";
@@ -66,6 +67,7 @@ export class EmptyEventState implements IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined> {
 		throw new Error("Method not implemented.");
 	}

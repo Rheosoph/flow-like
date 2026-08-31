@@ -7,6 +7,7 @@ import type {
 	IIndexConfig,
 	IIndexType,
 	IQueryTablePayload,
+	ITableSummary,
 } from "../db-state";
 
 export class EmptyDatabaseState implements IDatabaseState {
@@ -67,6 +68,12 @@ export class EmptyDatabaseState implements IDatabaseState {
 		throw new Error("Method not implemented.");
 	}
 	listTablesUser(appId: string): Promise<string[]> {
+		throw new Error("Method not implemented.");
+	}
+	listTableSummaries(
+		appId: string,
+		userScoped?: boolean,
+	): Promise<ITableSummary[]> {
 		throw new Error("Method not implemented.");
 	}
 	countItems(appId: string, tableName: string): Promise<number> {

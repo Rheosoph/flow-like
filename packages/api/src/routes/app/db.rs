@@ -2,6 +2,7 @@ use axum::{
     Router,
     routing::{delete, get, post, put},
 };
+use flow_like_storage::databases::table_summary::{TableSummary, summarize_tables};
 use flow_like_storage::lancedb::Connection;
 
 use crate::{
@@ -39,6 +40,57 @@ impl ScopeParams {
     pub fn is_user_scoped(&self) -> bool {
         self.scope.as_deref() == Some("user")
     }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct TableListParams {
+    /// `summary` swaps the bare name list for a full per-table summary.
+    pub detail: Option<String>,
+}
+
+impl TableListParams {
+    pub fn wants_summary(&self) -> bool {
+        self.detail
+            .as_deref()
+            .is_some_and(|detail| detail.eq_ignore_ascii_case("summary"))
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum TableListResponse {
+    Names(Vec<String>),
+    Summaries(Vec<TableSummary>),
+}
+
+/// Shared body of both list endpoints.
+///
+/// Deliberately uncached. The summary is a live read every time: table contents
+/// move from flow runs, WASM nodes and other API instances, so no invalidation
+/// set could ever be complete, and the in-process response cache cannot be
+/// invalidated across Lambda instances anyway. Sources is a navigate-to page and
+/// React Query already dedupes it per session; if this ever gets slow on a large
+/// project, defer `stats()` — the only expensive call — rather than serving
+/// stale counts.
+pub async fn table_listing(
+    connection: Connection,
+    params: &TableListParams,
+) -> Result<TableListResponse, ApiError> {
+    let names: Vec<String> = connection
+        .table_names()
+        .execute()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
+        .collect();
+
+    if !params.wants_summary() {
+        return Ok(TableListResponse::Names(names));
+    }
+
+    Ok(TableListResponse::Summaries(
+        summarize_tables(&connection, names).await,
+    ))
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]

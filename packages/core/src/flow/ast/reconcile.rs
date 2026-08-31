@@ -4881,11 +4881,16 @@ fn schema_constraints_are_compatible(
     let input_schema = normalized_pin_schema(input_schema, refs);
     let output_schema = normalized_pin_schema(output_schema, refs);
 
-    // struct_make/struct_break/struct_set boundary pins adopt the connected schema dynamically.
-    // Preserve that behavior before applying the ordinary two-sided schema equality rule.
-    if (matches!(input_name, "struct" | "struct_in" | "struct_out")
-        || matches!(output_name, "struct" | "struct_in" | "struct_out"))
-        && input_data_type == "Struct"
+    // struct_make/struct_break/struct_set/struct_cast boundary pins adopt the connected schema
+    // dynamically. Preserve that behavior before applying the ordinary two-sided schema equality
+    // rule. Mirrors `isStructIOPin` in `packages/ui/lib/flow-board-utils.tsx`.
+    if (matches!(
+        input_name,
+        "struct" | "struct_in" | "struct_out" | "struct_shape"
+    ) || matches!(
+        output_name,
+        "struct" | "struct_in" | "struct_out" | "struct_shape"
+    )) && input_data_type == "Struct"
         && output_data_type == "Struct"
     {
         return input_value_type == output_value_type;

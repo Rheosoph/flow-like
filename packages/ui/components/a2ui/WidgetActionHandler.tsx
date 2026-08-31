@@ -8,11 +8,17 @@ import {
 	useContext,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import {
 	resolveEventBoardVersion,
 	withBoardVersion,
 } from "../../lib/schema/flow/board-version";
+import {
+	mayDispatchRawPageBoardAction,
+	pageTriggerFromAction,
+} from "../../lib/schema/flow/page-trigger";
 import { useBackend } from "../../state/backend-state";
+import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import {
 	buildFrontendContextPayload,
 	compactWorkflowPayload,
@@ -101,6 +107,7 @@ export function WidgetActionProvider({
 	onA2UIEvents,
 }: WidgetActionProviderProps) {
 	const backend = useBackend();
+	const executionService = useExecutionServiceOptional();
 	const pathname = usePathname();
 	const runtimeActionContext = useActionContext();
 	const collectInputValues = useEventRelevantValues({
@@ -143,6 +150,20 @@ export function WidgetActionProvider({
 			try {
 				if ("workflow" in binding) {
 					const { flowId, inputMappings } = binding.workflow;
+					const pageAction = binding.pageAction;
+					if (
+						!pageAction &&
+						!mayDispatchRawPageBoardAction(runtimeActionContext.isGovernedPage)
+					) {
+						console.warn(
+							"[WidgetAction] Refusing a raw workflow binding on a governed Page.",
+							{ actionId, surfaceId, triggeringComponentId },
+						);
+						toast.error(
+							"This widget action is missing its execution authorization. Reload the Page.",
+						);
+						return;
+					}
 
 					const inputValues = collectInputValues();
 					const elements = await collectElements();
@@ -185,26 +206,46 @@ export function WidgetActionProvider({
 							unknown
 						>;
 
-						const runPayload = withBoardVersion(
-							{
-								id: "widget_action",
-								payload: compactPayload,
-							},
-							resolveEventBoardVersion(
-								runtimeActionContext.boardId,
-								runtimeActionContext.boardVersion,
-								flowId,
-							),
-						);
+						const baseRunPayload = {
+							id: pageAction?.actionId ?? "widget_action",
+							payload: compactPayload,
+						};
 
-						await backend.boardState.executeBoard(
-							appId,
-							flowId,
-							runPayload,
-							false,
-							undefined,
-							onA2UIEvents,
-						);
+						if (pageAction) {
+							const eventId = runtimeActionContext.eventId;
+							if (!eventId) {
+								throw new Error(
+									"Governed widget action is missing its Event id.",
+								);
+							}
+							await (
+								executionService?.executeEvent ??
+								backend.eventState.executeEvent.bind(backend.eventState)
+							)(
+								appId,
+								eventId,
+								baseRunPayload,
+								false,
+								undefined,
+								onA2UIEvents,
+								undefined,
+								pageTriggerFromAction(pageAction),
+							);
+						} else {
+							const runPayload = withBoardVersion(
+								baseRunPayload,
+								resolveEventBoardVersion(
+									runtimeActionContext.boardId,
+									runtimeActionContext.boardVersion,
+									flowId,
+								),
+							);
+
+							await (
+								executionService?.executeBoard ??
+								backend.boardState.executeBoard
+							)(appId, flowId, runPayload, false, undefined, onA2UIEvents);
+						}
 					} catch (error) {
 						console.error("[WidgetAction] Failed to execute workflow:", error);
 					}
@@ -235,7 +276,8 @@ export function WidgetActionProvider({
 			}
 		},
 		[
-			backend.boardState,
+			backend,
+			executionService,
 			appId,
 			surfaceId,
 			instance,
@@ -248,6 +290,8 @@ export function WidgetActionProvider({
 			pathname,
 			runtimeActionContext.boardId,
 			runtimeActionContext.boardVersion,
+			runtimeActionContext.eventId,
+			runtimeActionContext.isGovernedPage,
 			runtimeActionContext.globalState,
 			runtimeActionContext.pageState,
 		],

@@ -484,4 +484,8 @@ export interface IPrerunEventResponse {
 	wasm_package_permissions?: Record<string, string[]>;
 	/** See {@link IPrerunBoardResponse.signature}. */
 	signature?: string;
+	/** Present for a governed Page trigger prerun. */
+	page_id?: string;
+	/** Authority revision that must accompany the Page invocation. */
+	manifest_revision?: string;
 }

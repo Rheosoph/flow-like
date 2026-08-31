@@ -382,9 +382,14 @@ impl LanceGraphStore {
             .await
     }
 
-    /// Upsert edge rows into the underlying table of an edge label, merging on the label's
-    /// (source, target) columns so re-adding an existing pair updates it instead of duplicating.
-    /// Returns the number of rows written.
+    /// Upsert edge rows into the underlying table of an edge label so re-adding an existing
+    /// link updates it instead of duplicating. Returns the number of rows written.
+    ///
+    /// The merge key depends on how the edge is stored. A join table's natural key is the
+    /// (source, target) pair. An edge whose table is an object's own table stores the link
+    /// as a foreign-key column on that object's row, and there the row's identity is the
+    /// object's id alone — merging on the pair would miss the stored row whenever the
+    /// foreign key changes and insert a duplicate, half-populated object instead.
     pub async fn upsert_edges(&self, label: &str, rows: Vec<Value>) -> Result<usize> {
         let edge_def = self
             .overlay
@@ -395,6 +400,19 @@ impl LanceGraphStore {
         let table_name = edge_def.table.clone();
         let src_column = edge_def.src_column.clone();
         let dst_column = edge_def.dst_column.clone();
+
+        if let Some(id_column) = foreign_key_row_identity(
+            &self.overlay.nodes,
+            &self.overlay.edges,
+            &table_name,
+            &src_column,
+            &dst_column,
+        )? {
+            return self
+                .merge_upsert(&table_name, &[id_column.as_str()], rows)
+                .await;
+        }
+
         self.merge_upsert(
             &table_name,
             &[src_column.as_str(), dst_column.as_str()],
@@ -1623,6 +1641,32 @@ pub fn effective_node_id_column_checked(
     effective_node_id_column_for_mappings(&overlay.nodes, &overlay.edges, label)
 }
 
+/// The identity column of the object an edge is stored on, when the edge lives on that
+/// object's own table as a foreign key rather than in a join table. `None` for join tables,
+/// whose rows are edges in their own right and whose natural key is the (source, target) pair.
+///
+/// The object is recognized by its identity column being one of the edge's join columns —
+/// exactly the foreign-key shape. A junction table that is itself mapped as an object keeps
+/// its own id out of the join, so it still merges on the pair.
+pub fn foreign_key_row_identity(
+    nodes: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    table: &str,
+    src_column: &str,
+    dst_column: &str,
+) -> Result<Option<String>> {
+    for node in nodes.iter().filter(|node| node.table == table) {
+        let Some(id_column) = effective_node_id_column_for_mappings(nodes, edges, &node.label)?
+        else {
+            continue;
+        };
+        if id_column == src_column || id_column == dst_column {
+            return Ok(Some(id_column));
+        }
+    }
+    Ok(None)
+}
+
 pub fn effective_node_id_column_for_mappings(
     nodes: &[NodeMappingDef],
     edges: &[EdgeMappingDef],
@@ -2704,6 +2748,151 @@ mod tests {
         assert!(preflight_cypher(bounded.ast(), &safety()).is_ok());
         let plain = parse("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b LIMIT 10");
         assert!(preflight_cypher(plain.ast(), &safety()).is_ok());
+    }
+
+    fn node(label: &str, table: &str, id_column: &str) -> NodeMappingDef {
+        NodeMappingDef {
+            id: Some(label.to_lowercase()),
+            api_name: Some(label.to_lowercase()),
+            label: label.to_string(),
+            table: table.to_string(),
+            id_column: id_column.to_string(),
+            display_column: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        }
+    }
+
+    fn edge(
+        label: &str,
+        table: &str,
+        src_column: &str,
+        dst_column: &str,
+        src_label: &str,
+        dst_label: &str,
+    ) -> EdgeMappingDef {
+        EdgeMappingDef {
+            id: Some(label.to_string()),
+            api_name: Some(label.to_string()),
+            label: label.to_string(),
+            table: table.to_string(),
+            src_column: src_column.to_string(),
+            dst_column: dst_column.to_string(),
+            src_label: src_label.to_string(),
+            dst_label: dst_label.to_string(),
+            src_node_column: None,
+            dst_node_column: None,
+            containment: false,
+            dst_ontology: None,
+            dst_binding_id: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        }
+    }
+
+    #[test]
+    fn foreign_key_edges_merge_on_the_object_identity() {
+        let nodes = vec![
+            node("Order", "orders", "id"),
+            node("Customer", "customers", "id"),
+        ];
+        let edges = vec![edge(
+            "order_has_customer",
+            "orders",
+            "id",
+            "customer_id",
+            "Order",
+            "Customer",
+        )];
+        // Merging on (id, customer_id) would miss the stored row whenever the
+        // foreign key changes and insert a duplicate, half-populated order.
+        assert_eq!(
+            foreign_key_row_identity(&nodes, &edges, "orders", "id", "customer_id").unwrap(),
+            Some("id".to_string())
+        );
+    }
+
+    #[test]
+    fn reversed_foreign_key_edges_still_merge_on_the_object_identity() {
+        let nodes = vec![
+            node("Order", "orders", "id"),
+            node("Customer", "customers", "id"),
+        ];
+        let edges = vec![edge(
+            "customer_has_order",
+            "orders",
+            "customer_id",
+            "id",
+            "Customer",
+            "Order",
+        )];
+        assert_eq!(
+            foreign_key_row_identity(&nodes, &edges, "orders", "customer_id", "id").unwrap(),
+            Some("id".to_string())
+        );
+    }
+
+    #[test]
+    fn join_tables_keep_the_source_target_pair_as_their_key() {
+        let nodes = vec![node("User", "users", "id"), node("Group", "groups", "id")];
+        let edges = vec![edge(
+            "user_has_group",
+            "memberships",
+            "user_id",
+            "group_id",
+            "User",
+            "Group",
+        )];
+        assert_eq!(
+            foreign_key_row_identity(&nodes, &edges, "memberships", "user_id", "group_id").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_junction_table_mapped_as_an_object_still_merges_on_the_pair() {
+        let nodes = vec![
+            node("Order", "orders", "id"),
+            node("Product", "products", "id"),
+            node("OrderItem", "order_items", "id"),
+        ];
+        let edges = vec![edge(
+            "order_has_product",
+            "order_items",
+            "order_id",
+            "product_id",
+            "Order",
+            "Product",
+        )];
+        // `order_items.id` is not one of the join columns, so the row is an edge
+        // in its own right rather than a foreign key on an object.
+        assert_eq!(
+            foreign_key_row_identity(&nodes, &edges, "order_items", "order_id", "product_id")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn identity_overrides_win_over_the_nodes_own_id_column() {
+        let nodes = vec![
+            node("Order", "orders", "id"),
+            node("Customer", "customers", "id"),
+        ];
+        let mut linking = edge(
+            "order_has_customer",
+            "orders",
+            "order_ref",
+            "customer_id",
+            "Order",
+            "Customer",
+        );
+        linking.src_node_column = Some("order_ref".to_string());
+        let edges = vec![linking];
+        assert_eq!(
+            foreign_key_row_identity(&nodes, &edges, "orders", "order_ref", "customer_id").unwrap(),
+            Some("order_ref".to_string())
+        );
     }
 
     #[test]

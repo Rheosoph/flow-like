@@ -7,6 +7,7 @@ import {
 	type ILogMetadata,
 	type IOAuthProvider,
 	type IOAuthToken,
+	type PageTrigger,
 	type IRunPayload,
 	type IVersionType,
 	type ProgressToastData,
@@ -14,6 +15,7 @@ import {
 	checkOAuthTokensFromPrerun,
 	finishAllProgressToasts,
 	getCurrentPageContext,
+	serializePageTrigger,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
@@ -332,25 +334,34 @@ export class WebEventState implements IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined> {
-		// Get the event and its board for OAuth checking
-		const event = await this.getEvent(appId, eventId);
-		const boardParams = event.board_version
-			? `?version=${event.board_version.join("_")}`
-			: "";
-		const board = await apiGet<IBoard>(
-			`apps/${appId}/board/${event.board_id}${boardParams}`,
-			this.backend.auth,
-		);
-
-		// Check OAuth tokens
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthService = getOAuthService(
 			getOAuthApiBaseUrl(this.backend.profile?.hub),
 		);
-		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
+		const oauthOptions = {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
-		});
+		};
+		const oauthResult = pageTrigger
+			? await checkOAuthTokensFromPrerun(
+					(await this.prerunEvent(appId, eventId, undefined, pageTrigger))
+						.oauth_requirements,
+					oauthTokenStore,
+					hub,
+					oauthOptions,
+				)
+			: await (async () => {
+					const event = await this.getEvent(appId, eventId);
+					const boardParams = event.board_version
+						? `?version=${event.board_version.join("_")}`
+						: "";
+					const board = await apiGet<IBoard>(
+						`apps/${appId}/board/${event.board_id}${boardParams}`,
+						this.backend.auth,
+					);
+					return checkOAuthTokens(board, oauthTokenStore, hub, oauthOptions);
+				})();
 
 		console.log("[OAuth] Event check result:", {
 			requiredProviders: oauthResult.requiredProviders.map((p) => p.id),
@@ -433,6 +444,9 @@ export class WebEventState implements IEventState {
 					oauth_tokens: oauthTokens,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
+					page_trigger: pageTrigger
+						? serializePageTrigger(pageTrigger)
+						: undefined,
 				}),
 			});
 
@@ -620,8 +634,16 @@ export class WebEventState implements IEventState {
 		appId: string,
 		eventId: string,
 		version?: [number, number, number],
+		pageTrigger?: PageTrigger,
 	): Promise<IPrerunEventResponse> {
 		const params = version ? `?version=${version.join("_")}` : "";
+		if (pageTrigger) {
+			return apiPost<IPrerunEventResponse>(
+				`apps/${appId}/events/${eventId}/prerun${params}`,
+				{ page_trigger: serializePageTrigger(pageTrigger) },
+				this.backend.auth,
+			);
+		}
 		return apiGet<IPrerunEventResponse>(
 			`apps/${appId}/events/${eventId}/prerun${params}`,
 			this.backend.auth,

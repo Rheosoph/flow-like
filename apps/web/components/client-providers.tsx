@@ -35,28 +35,28 @@ import { WebProvider } from "../components/web-provider";
 // of whether the overlay is open.
 const GlobalChatOverlay = dynamic(
 	() =>
-		import("@flow-like/flow-like-ui/components/global-chat/global-chat-overlay").then(
-			(module) => module.GlobalChatOverlay,
-		),
+		import(
+			"@flow-like/flow-like-ui/components/global-chat/global-chat-overlay"
+		).then((module) => module.GlobalChatOverlay),
 	{ ssr: false },
 );
 const GlobalToolBridge = dynamic(
 	() =>
-		import("@flow-like/flow-like-ui/components/global-chat/global-tool-bridge").then(
-			(module) => module.GlobalToolBridge,
-		),
+		import(
+			"@flow-like/flow-like-ui/components/global-chat/global-tool-bridge"
+		).then((module) => module.GlobalToolBridge),
 	{ ssr: false },
 );
 const FlowPilotBubbleButton = dynamic(
 	() =>
-		import("@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button").then(
-			(module) => module.FlowPilotBubbleButton,
-		),
+		import(
+			"@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button"
+		).then((module) => module.FlowPilotBubbleButton),
 	{ ssr: false },
 );
 
 // Per-query persistence: each query is written individually as it
-// resolves and restored lazily on first mount — no whole-client blob.
+// resolves and restored lazily on first mount. There is no whole-client blob.
 // Retention policy (denylist + size cap) lives in query-persister.ts.
 const queryPersister = createSmartQueryPersister();
 const queryClient = new QueryClient({

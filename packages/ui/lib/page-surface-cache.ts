@@ -7,11 +7,13 @@ import { hasExpiredAssetUrl } from "./stable-asset-url";
  *
  * A page whose onLoad workflow builds its content used to show a skeleton for the entire run.
  * Keeping the surface the workflow produced last time turns that into an instant render of
- * real content that the run then replaces — so the wait is spent looking at the page instead
+ * real content that the run then replaces, so the wait is spent looking at the page instead
  * of at a placeholder.
  *
  * What makes a cached surface replayable is narrow, and every part of it is in the key:
- *  - the page revision, because an edited page renders differently;
+ *  - the page and execution-authority revisions, because either can change
+ *    the rendered output or invalidate its opaque action selectors;
+ *  - the route, because the workflow receives it as input;
  *  - the query parameters, because the workflow receives them and its output depends on them;
  *  - the signed-in identity, because a surface is built from that account's data.
  * Anything that does not match is a miss, never a stale render.
@@ -46,8 +48,10 @@ type CacheManifest = Record<string, number>;
 export interface PageSurfaceIdentity {
 	readonly appId: string;
 	readonly pageId: string;
-	/** Revision of the page payload the surface was built from. */
+	/** Combined Page payload and execution-authority revision. */
 	readonly pageUpdatedAt: string;
+	/** Normalized route passed to the page workflow. */
+	readonly routeKey: string;
 	/** Normalized query parameters, from `pageSurfaceQueryKey`. */
 	readonly queryKey: string;
 	/** Identifies the signed-in account, or "anonymous". */
@@ -55,8 +59,34 @@ export interface PageSurfaceIdentity {
 }
 
 /**
+ * Cache revision for the content and the exact governed execution contract.
+ * The execution revision is omitted for preview and legacy surfaces that do
+ * not have a Page Event authority map.
+ */
+export function pageSurfaceRevision(
+	pageRevision: string | null | undefined,
+	executionRevision?: string | null,
+): string | undefined {
+	if (!pageRevision) return undefined;
+	return executionRevision
+		? JSON.stringify([pageRevision, executionRevision])
+		: pageRevision;
+}
+
+/** Stable route input for cache and execution identity. */
+export function pageSurfaceRouteKey(route: string | undefined): string {
+	const withoutFragment = (route ?? "/").trim().split("#", 1)[0] ?? "";
+	const withoutQuery = withoutFragment.split("?", 1)[0] ?? "";
+	const withLeadingSlash = withoutQuery.startsWith("/")
+		? withoutQuery
+		: `/${withoutQuery}`;
+	const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, "");
+	return withoutTrailingSlash || "/";
+}
+
+/**
  * A stable signature for the query parameters a page was rendered with. Order must not matter
- * — `?a=1&b=2` and `?b=2&a=1` reach the workflow as the same input — so the pairs are sorted.
+ * because `?a=1&b=2` and `?b=2&a=1` reach the workflow as the same input. The pairs are sorted.
  */
 export function pageSurfaceQueryKey(search: string | undefined): string {
 	if (!search) return "";
@@ -70,7 +100,7 @@ export function pageSurfaceQueryKey(search: string | undefined): string {
 }
 
 /**
- * Only the trailing query signature is free-form, so splitting from the left stays
+ * Only the trailing route/query signature is free-form, so splitting from the left stays
  * unambiguous no matter what a parameter contains.
  */
 const SEP = " ";
@@ -82,7 +112,7 @@ export function pageSurfaceCacheKey(identity: PageSurfaceIdentity): string {
 		identity.pageId,
 		identity.userKey,
 		identity.pageUpdatedAt,
-		identity.queryKey,
+		JSON.stringify([identity.routeKey, identity.queryKey]),
 	].join(SEP);
 }
 
@@ -95,13 +125,54 @@ function revisionOf(key: string, prefix: string): string {
 	return key.slice(prefix.length).split(SEP)[0] ?? "";
 }
 
+/** Dynamic Page authorization is tied to its originating run. This includes
+ * signed capabilities and native `lda1_` action handles, neither of which may
+ * survive in IndexedDB or be replayed from a cached surface. */
+export function hasPageActionCapability(value: unknown): boolean {
+	if (Array.isArray(value)) return value.some(hasPageActionCapability);
+	if (!value || typeof value !== "object") return false;
+	for (const [key, child] of Object.entries(value)) {
+		if (
+			(key === "pageAction" || key === "page_action") &&
+			child &&
+			typeof child === "object" &&
+			!Array.isArray(child)
+		) {
+			const action = child as Record<string, unknown>;
+			const actionId = action.actionId ?? action.action_id;
+			if (typeof actionId === "string" && actionId.startsWith("lda1_")) {
+				return true;
+			}
+		}
+		if (
+			(key === "capabilityJwt" || key === "capability_jwt") &&
+			typeof child === "string" &&
+			child.length > 0
+		)
+			return true;
+		if (
+			(key === "literalJson" || key === "literal_json") &&
+			typeof child === "string"
+		) {
+			try {
+				if (hasPageActionCapability(JSON.parse(child))) return true;
+			} catch {
+				// Invalid literal JSON is handled by its renderer and carries no parsed action.
+			}
+			continue;
+		}
+		if (hasPageActionCapability(child)) return true;
+	}
+	return false;
+}
+
 async function readManifest(): Promise<CacheManifest> {
 	return (await get<CacheManifest>(MANIFEST_KEY, surfaceStore())) ?? {};
 }
 
 /**
- * Holds the cache to its budget. A page's superseded revisions go first — nothing will ever
- * ask for them again — and only then are the oldest surviving entries dropped.
+ * Holds the cache to its budget. A page's superseded revisions go first because nothing will ever
+ * ask for them again. Only then are the oldest surviving entries dropped.
  */
 export function selectEvictions(
 	manifest: CacheManifest,
@@ -143,11 +214,15 @@ export async function readPageSurfaceCache(
 		const key = pageSurfaceCacheKey(identity);
 		const record = await get<PageSurfaceCacheRecord>(key, surfaceStore());
 		if (!record?.surface) return null;
+		if (hasPageActionCapability(record.surface)) {
+			void del(key, surfaceStore()).catch(() => undefined);
+			return null;
+		}
 
 		// A surface is stored with its media already signed, and a signature outlives
 		// neither the credential that made it nor the day. Replaying one whose links
-		// have died shows broken images that nothing on the page can repair — the
-		// storage paths they were signed from are not in the record — so a stale entry
+		// have died shows broken images that nothing on the page can repair. The
+		// storage paths they were signed from are not in the record, so a stale entry
 		// is dropped and the run builds the page from scratch instead.
 		if (hasExpiredAssetUrl(record.surface)) {
 			void del(key, surfaceStore()).catch(() => undefined);
@@ -169,10 +244,14 @@ export async function writePageSurfaceCache(
 	}
 
 	try {
+		const key = pageSurfaceCacheKey(identity);
+		if (hasPageActionCapability(surface)) {
+			await del(key, surfaceStore()).catch(() => undefined);
+			return;
+		}
 		const record: PageSurfaceCacheRecord = { surface, cachedAt: Date.now() };
 		if (JSON.stringify(record.surface).length > MAX_ENTRY_BYTES) return;
 
-		const key = pageSurfaceCacheKey(identity);
 		await set(key, record, surfaceStore());
 
 		const manifest = await readManifest();
@@ -197,7 +276,7 @@ export async function writePageSurfaceCache(
 
 /**
  * Removes surfaces written under the old scheme, which shared a store with a2ui page state and
- * had no eviction of any kind — they would otherwise sit in IndexedDB forever.
+ * had no eviction of any kind. They would otherwise sit in IndexedDB forever.
  */
 export async function purgeLegacyPageSurfaceCache(): Promise<void> {
 	try {

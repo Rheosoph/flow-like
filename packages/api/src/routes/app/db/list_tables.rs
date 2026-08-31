@@ -1,22 +1,27 @@
 use crate::{
-    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_any_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::db::{TableListParams, TableListResponse, table_listing},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/db",
     tag = "database",
-    description = "List available tables in the app database.",
+    description = "List the tables in the app database. Pass `detail=summary` to get each table's row count, schema, indexes, storage footprint and the ontology objects, actions and saved queries that read it, instead of just the names.",
     params(
-        ("app_id" = String, Path, description = "Application ID")
+        ("app_id" = String, Path, description = "Application ID"),
+        ("detail" = Option<String>, Query, description = "Use 'summary' for full per-table summaries")
     ),
     responses(
-        (status = 200, description = "List tables", body = Vec<String>),
+        (status = 200, description = "Table names, or full summaries when detail=summary", body = Object),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -31,7 +36,8 @@ pub async fn list_tables(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
-) -> Result<Json<Vec<String>>, ApiError> {
+    Query(params): Query<TableListParams>,
+) -> Result<Json<TableListResponse>, ApiError> {
     ensure_any_permission!(
         user,
         &app_id,
@@ -43,13 +49,6 @@ pub async fn list_tables(
     let credentials = state.master_credentials().await?;
     let builder = credentials.to_db(&app_id).await?;
     let connection = builder.execute().await?;
-    let tables = connection
-        .table_names()
-        .execute()
-        .await?
-        .into_iter()
-        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
-        .collect();
 
-    Ok(Json(tables))
+    Ok(Json(table_listing(connection, &params).await?))
 }

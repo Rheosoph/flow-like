@@ -367,6 +367,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::validate_event::validate_event,
         crate::routes::app::events::setup_event::setup_event,
         crate::routes::app::events::prerun_event::prerun_event,
+        crate::routes::app::events::prerun_event::prerun_page_event,
         crate::routes::app::events::invoke_event::invoke_event,
         crate::routes::app::events::invoke_event_async::invoke_event_async,
         crate::routes::app::events::registrations::list_registrations,
@@ -805,6 +806,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::setup_event::SetupEventRequest,
         crate::routes::app::events::setup_event::SetupEventResponse,
         crate::routes::app::events::prerun_event::PrerunEventQuery,
+        crate::routes::app::events::prerun_event::PrerunPageEventRequest,
+        crate::routes::app::events::page_trigger::PageTrigger,
+        crate::routes::app::events::page_trigger::PageSpecialEvent,
         crate::routes::app::prerun_shared::RuntimeVariable,
         crate::routes::app::prerun_shared::OAuthRequirement,
         crate::routes::app::prerun_shared::PrerunPayload,
@@ -1084,6 +1088,32 @@ mod tests {
             dangling.is_empty(),
             "unregistered schema references: {:?}",
             dangling
+        );
+    }
+
+    #[test]
+    fn page_prerun_documents_get_and_governed_post_contracts() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let prerun = spec
+            .pointer("/paths/~1apps~1{app_id}~1events~1{event_id}~1prerun")
+            .and_then(Value::as_object)
+            .expect("Page prerun path is documented");
+
+        assert!(prerun.contains_key("get"), "Page prerun GET is missing");
+        let post = prerun
+            .get("post")
+            .expect("governed Page prerun POST is missing");
+        assert_eq!(
+            post.pointer("/requestBody/content/application~1json/schema/$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/PrerunPageEventRequest")
+        );
+        assert_eq!(
+            spec.pointer(
+                "/components/schemas/PrerunPageEventRequest/properties/page_trigger/$ref",
+            )
+            .and_then(Value::as_str),
+            Some("#/components/schemas/PageTrigger")
         );
     }
 

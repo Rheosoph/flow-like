@@ -51,6 +51,64 @@ export interface IDropTableResult {
 	warnings: string[];
 }
 
+/** Coarse type bucket the backend classifies each column into. */
+export type IColumnFamily =
+	| "text"
+	| "number"
+	| "time"
+	| "bool"
+	| "vector"
+	| "struct"
+	| "binary"
+	| "other";
+
+export interface IColumnSummary {
+	name: string;
+	data_type: string;
+	family: IColumnFamily;
+	nullable: boolean;
+	vector_size?: number;
+}
+
+export interface IIndexSummary {
+	name: string;
+	index_type: string;
+	columns: string[];
+}
+
+/** Absent when LanceDB could not report fragment statistics for the table. */
+export interface IStorageSummary {
+	total_bytes: number;
+	num_fragments: number;
+	/** Fragments below the compaction threshold — a high count means `optimize` is worth running. */
+	num_small_fragments: number;
+}
+
+/** What the semantic layer and the query workbench do with a table. */
+export interface IConsumerSummary {
+	ontology?: string;
+	ontology_id?: string;
+	object_type?: string;
+	object_color?: string;
+	object_icon?: string;
+	relations: number;
+	actions: number;
+	views: number;
+	queries: number;
+	exposed: boolean;
+}
+
+export interface ITableSummary {
+	name: string;
+	rows?: number;
+	columns: IColumnSummary[];
+	indexes: IIndexSummary[];
+	storage?: IStorageSummary;
+	consumers: IConsumerSummary;
+	/** Set when this one table failed to read; the rest of the listing still resolved. */
+	error?: string;
+}
+
 export interface IDatabaseState {
 	createTable(
 		appId: string,
@@ -117,6 +175,15 @@ export interface IDatabaseState {
 	): Promise<void>;
 	listTables(appId: string): Promise<string[]>;
 	listTablesUser(appId: string): Promise<string[]>;
+	/**
+	 * One metadata-only pass over every table: rows, schema, indexes, storage
+	 * footprint and the ontology objects, actions and saved queries that read it.
+	 * Costs more than {@link listTables} — use it only where the detail is shown.
+	 */
+	listTableSummaries(
+		appId: string,
+		userScoped?: boolean,
+	): Promise<ITableSummary[]>;
 	optimize(
 		appId: string,
 		tableName: string,

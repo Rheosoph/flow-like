@@ -499,8 +499,46 @@ describe("doPinsMatch treats an open-object schema as no schema", () => {
 		).toBe(false);
 	});
 
+	/**
+	 * Cast to Struct's donor pin starts on the open marker and adopts whatever it is handed, so it
+	 * belongs in the same hatch as `struct_in`/`struct_out`. The pins it is most useful with are
+	 * the typed struct outputs that set `enforce_schema`, and those are exactly the ones step 9 of
+	 * `doPinsMatch` refuses against a pin with no concrete schema.
+	 */
+	test("an enforcing typed output connects to Cast to Struct's struct_shape", () => {
+		expect(
+			doPinsMatch(
+				structPin("user_context", {
+					schema: USER_SCHEMA,
+					options: { enforce_schema: true },
+				}),
+				structPin("struct_shape", {
+					pin_type: IPinType.Input,
+					schema: OPEN_SCHEMA,
+					options: { enforce_schema: false },
+				}),
+				{},
+			),
+		).toBe(true);
+	});
+
+	test("struct_shape can be re-pointed at a different shape", () => {
+		expect(
+			doPinsMatch(
+				structPin("rows", { schema: OTHER_SCHEMA }),
+				structPin("struct_shape", {
+					pin_type: IPinType.Input,
+					schema: USER_SCHEMA,
+					options: { enforce_schema: false },
+				}),
+				{},
+			),
+		).toBe(true);
+	});
+
 	test("an enforcing output still cannot reach a shapeless plain 'struct' input", () => {
-		// Pre-existing behavior, unchanged: only struct_in/struct_out get the adopt-any hatch.
+		// Pre-existing behavior, unchanged: only struct_in/struct_out/struct_shape get the
+		// adopt-any hatch.
 		expect(
 			doPinsMatch(
 				structPin("user_context", {

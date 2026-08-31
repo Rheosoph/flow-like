@@ -80,8 +80,8 @@ function errorText(error: unknown): string {
  * The message the interface card shows.
  *
  * A page read that fails because its board is missing reports the missing file, while the
- * reason the board never arrived — a stale offline flag, a failed write, a server that no
- * longer has it — travels as `cause`. Showing only the outer message turned every distinct
+ * reason the board never arrived, such as a stale offline flag, a failed write, or a server that no
+ * longer has it, travels as `cause`. Showing only the outer message turned every distinct
  * cause into the same undiagnosable "file not found", so the cause is appended when it adds
  * something the outer message does not already say.
  */
@@ -215,7 +215,7 @@ export interface IStoreRedirectState {
  * the hub know it, or its event catalog produced nothing to render.
  *
  * A refresh that failed while usable data survived must never eject a working
- * interface — routes in particular are optional metadata whose absence simply
+ * interface. Routes in particular are optional metadata whose absence simply
  * falls back to the default event.
  */
 export function resolveStoreRedirect(state: IStoreRedirectState): {
@@ -256,7 +256,7 @@ export interface IRouteResolution {
 	/**
 	 * A route other than "/" was asked for and nothing matched it. The caller still
 	 * receives the default mapping to render, but a miss is a misconfigured link or
-	 * a route list this device has not synced — not a normal navigation.
+	 * a route list this device has not synced. This is not a normal navigation.
 	 */
 	readonly missed: boolean;
 }
@@ -362,6 +362,7 @@ export function UsePageContent({
 	const auth = useAuth();
 	const isOnline = useNetworkStatus();
 	const hasAccessToken = Boolean(auth.user?.access_token);
+	const backendNeedsSignIn = backend.capabilities().needsSignIn;
 	const shouldWaitForPageBoardSync = backend.capabilities().canExecuteLocally;
 
 	const appId = appIdProp ?? searchParams.get("id");
@@ -378,20 +379,17 @@ export function UsePageContent({
 		() => runtimeBootstrapTarget(routePath, eventId, preferEventId),
 		[routePath, eventId, preferEventId],
 	);
-	const supportsPageBootstrap = Boolean(
-		backend.pageState.getPageBootstrap,
-	);
+	const supportsPageBootstrap = Boolean(backend.pageState.getPageBootstrap);
 	const bootstrapEnabled = Boolean(
-		appId && hasAccessToken && supportsPageBootstrap && !auth.isLoading,
+		appId &&
+			(hasAccessToken || !backendNeedsSignIn) &&
+			supportsPageBootstrap &&
+			!auth.isLoading,
 	);
 	const bootstrap = useInvoke(
 		backend.pageState.getPageBootstrap ?? unsupportedPageBootstrap,
 		backend.pageState,
-		[
-			appId ?? "",
-			bootstrapTarget.route,
-			bootstrapTarget.eventId,
-		] as const,
+		[appId ?? "", bootstrapTarget.route, bootstrapTarget.eventId] as const,
 		bootstrapEnabled,
 		[auth.user?.profile?.sub ?? "anonymous"],
 		0,
@@ -444,10 +442,7 @@ export function UsePageContent({
 		!bootstrapEnabled || bootstrap.isError,
 	);
 	const needsLocalProfileCheck = Boolean(
-		appId &&
-			!embedded &&
-			!auth.isLoading &&
-			needsFallbackAccessChecks,
+		appId && !embedded && !auth.isLoading && needsFallbackAccessChecks,
 	);
 
 	const localProfiles = useInvoke(
@@ -461,12 +456,7 @@ export function UsePageContent({
 		backend.appState.getApp,
 		backend.appState,
 		[appId ?? ""],
-		Boolean(
-			appId &&
-				!embedded &&
-				hasAccessToken &&
-				needsFallbackAccessChecks,
-		),
+		Boolean(appId && !embedded && hasAccessToken && needsFallbackAccessChecks),
 	);
 
 	const storeHref = useMemo(
@@ -495,10 +485,7 @@ export function UsePageContent({
 			!localProfiles.isError);
 
 	const needsAuthenticatedRemoteCheck = Boolean(
-		appId &&
-			!embedded &&
-			hasAccessToken &&
-			needsFallbackAccessChecks,
+		appId && !embedded && hasAccessToken && needsFallbackAccessChecks,
 	);
 	const authenticatedRemoteCheckPending =
 		bootstrapPending ||
@@ -864,10 +851,23 @@ export function UsePageContent({
 		if (validatedBootstrap.page.id !== pageId) return null;
 		return validatedBootstrap.page;
 	}, [validatedBootstrap, pageEventId, pageId]);
-	const resolvedPageData = bootstrapPageData ?? pageData;
+	// A backend that supports governed Page bootstrap must never downgrade to
+	// separately fetched Event/Page data when that bootstrap fails.
+	const resolvedPageData = supportsPageBootstrap ? bootstrapPageData : pageData;
 	const pageContentRevision = bootstrapPageData
 		? (validatedBootstrap?.revision ?? undefined)
 		: undefined;
+	const pageExecutionRevision = bootstrapPageData
+		? (validatedBootstrap?.executionRevision ?? undefined)
+		: undefined;
+	const pageExecutionAuthorityUnavailable = Boolean(
+		pageEvent &&
+			!bootstrapPending &&
+			(!supportsPageBootstrap ||
+				bootstrap.isError ||
+				!bootstrapPageData ||
+				!pageExecutionRevision),
+	);
 
 	useEffect(() => {
 		if (!pageEventId || !pageId) return;
@@ -955,6 +955,13 @@ export function UsePageContent({
 			setPageLoading(false);
 			return;
 		}
+		if (supportsPageBootstrap) {
+			setPageData(null);
+			setPageError(null);
+			setResolvedPageKey(pageKey);
+			setPageLoading(false);
+			return;
+		}
 		if (isRoutePending || routeLoading || isDirectEventPending) {
 			return;
 		}
@@ -1029,6 +1036,7 @@ export function UsePageContent({
 		appId,
 		pageId,
 		bootstrapPageData,
+		supportsPageBootstrap,
 		pageBoardId,
 		pageKey,
 		isRoutePending,
@@ -1210,7 +1218,7 @@ export function UsePageContent({
 	// --- Render logic ---
 
 	// A silent token renewal or a background access re-check must not tear down an
-	// interface that already resolved — it would remount the whole event tree and
+	// interface that already resolved. It would remount the whole event tree and
 	// look like the app reloading itself.
 	const accessGateBlocking = Boolean(
 		(redirectCheckPending || shouldRedirectToStore) && !activeEvent,
@@ -1243,16 +1251,29 @@ export function UsePageContent({
 
 		// Page-target event (from route or event fallback)
 		if (pageEvent) {
+			if (bootstrapPending) return <LoadingScreen />;
+			if (pageExecutionAuthorityUnavailable) {
+				return (
+					<InterfaceLoadError
+						message="This Page could not load its execution authorization. Reload and try again."
+						offline={!isOnline}
+						retrying={bootstrapPending}
+						onRetry={retryCatalog}
+					/>
+				);
+			}
 			if (resolvedPageData && !isPagePending) {
 				return (
 					<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
 						<PageInterface
+							key={`${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`}
 							appId={appId}
 							event={pageEvent}
 							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
 							route={effectiveRouteMapping?.path ?? routePath}
 							page={resolvedPageData}
 							pageRevision={pageContentRevision}
+							pageExecutionRevision={pageExecutionRevision}
 							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
 							active={active}
 							onNavigationMessage={
@@ -1265,7 +1286,7 @@ export function UsePageContent({
 				);
 			}
 			if (pageLoading || isPagePending) return <LoadingScreen />;
-			// The event does declare an interface — it could not be read here. Saying
+			// The event does declare an interface, but it could not be read here. Saying
 			// "no interface" would send the user to event configuration to fix data
 			// that is already correct.
 			if (pageError)
@@ -1364,6 +1385,8 @@ export function UsePageContent({
 		isDirectEventPending,
 		resolvedPageData,
 		pageContentRevision,
+		pageExecutionRevision,
+		pageExecutionAuthorityUnavailable,
 		pageLoading,
 		pageError,
 		pageRetryPending,

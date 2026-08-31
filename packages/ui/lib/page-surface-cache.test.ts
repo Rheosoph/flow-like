@@ -1,9 +1,122 @@
 import { describe, expect, test } from "bun:test";
 import {
+	hasPageActionCapability,
 	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
+	pageSurfaceRevision,
+	pageSurfaceRouteKey,
 	selectEvictions,
 } from "./page-surface-cache";
+
+describe("page surface capability storage", () => {
+	test("detects dynamic Page capabilities at any component depth", () => {
+		expect(
+			hasPageActionCapability({
+				components: {
+					button: {
+						actions: [
+							{
+								pageAction: {
+									actionId: "da1_action",
+									capabilityJwt: "signed-value",
+								},
+							},
+						],
+					},
+				},
+			}),
+		).toBe(true);
+	});
+
+	test("allows static opaque action references", () => {
+		expect(
+			hasPageActionCapability({
+				pageAction: {
+					actionId: "pa1_action",
+					manifestRevision: "per1_revision",
+				},
+			}),
+		).toBe(false);
+	});
+
+	test("detects capabilities nested inside literalJson bindings", () => {
+		expect(
+			hasPageActionCapability({
+				data: {
+					literalJson: JSON.stringify({
+						rows: [
+							{
+								action: {
+									pageAction: {
+										actionId: "da1_nested",
+										capabilityJwt: "signed-value",
+									},
+								},
+							},
+						],
+					}),
+				},
+			}),
+		).toBe(true);
+	});
+
+	test("detects snake-case capabilities inside literal_json bindings", () => {
+		expect(
+			hasPageActionCapability({
+				data: {
+					literal_json: JSON.stringify({
+						page_action: {
+							action_id: "da1_nested",
+							capability_jwt: "signed-value",
+						},
+					}),
+				},
+			}),
+		).toBe(true);
+	});
+
+	test("rejects native dynamic Page actions without a JWT", () => {
+		expect(
+			hasPageActionCapability({
+				component: {
+					actions: [
+						{
+							pageAction: {
+								actionId: "lda1_native-runtime-action",
+								manifestRevision: "per1_revision",
+							},
+						},
+					],
+				},
+			}),
+		).toBe(true);
+	});
+
+	test("rejects native dynamic Page actions encoded in literal JSON", () => {
+		expect(
+			hasPageActionCapability({
+				data: {
+					literal_json: JSON.stringify({
+						page_action: {
+							action_id: "lda1_native-runtime-binding",
+						},
+					}),
+				},
+			}),
+		).toBe(true);
+	});
+
+	test("does not interpret arbitrary strings as executable JSON", () => {
+		const encodedCapability = JSON.stringify({
+			pageAction: {
+				actionId: "da1_nested",
+				capabilityJwt: "signed-value",
+			},
+		});
+		expect(hasPageActionCapability({ label: encodedCapability })).toBe(false);
+		expect(hasPageActionCapability({ literalJson: "not-json" })).toBe(false);
+	});
+});
 
 describe("page surface query signature", () => {
 	test("is independent of parameter order", () => {
@@ -25,11 +138,41 @@ describe("page surface query signature", () => {
 	});
 });
 
+describe("page surface authority revision", () => {
+	test("changes when either Page content or execution authority changes", () => {
+		const current = pageSurfaceRevision("page-revision", "per2_current");
+		expect(pageSurfaceRevision("other-page", "per2_current")).not.toBe(current);
+		expect(pageSurfaceRevision("page-revision", "per2_other")).not.toBe(
+			current,
+		);
+	});
+
+	test("keeps legacy and preview identities compatible without authority", () => {
+		expect(pageSurfaceRevision("page-revision")).toBe("page-revision");
+		expect(pageSurfaceRevision(undefined, "per2_current")).toBeUndefined();
+	});
+});
+
+describe("page surface route signature", () => {
+	test("normalizes equivalent route spellings", () => {
+		expect(pageSurfaceRouteKey("settings/?tab=api#keys")).toBe("/settings");
+		expect(pageSurfaceRouteKey("/settings")).toBe("/settings");
+		expect(pageSurfaceRouteKey(undefined)).toBe("/");
+	});
+
+	test("separates different route inputs", () => {
+		expect(pageSurfaceRouteKey("/orders")).not.toBe(
+			pageSurfaceRouteKey("/customers"),
+		);
+	});
+});
+
 describe("page surface identity key", () => {
 	const identity = {
 		appId: "app",
 		pageId: "page",
 		pageUpdatedAt: "2026-08-31T10:00:00Z",
+		routeKey: "/orders",
 		queryKey: "item=1",
 		userKey: "user-a",
 	};
@@ -40,6 +183,7 @@ describe("page surface identity key", () => {
 			{ ...identity, appId: "other-app" },
 			{ ...identity, pageId: "other-page" },
 			{ ...identity, pageUpdatedAt: "2026-08-31T10:00:01Z" },
+			{ ...identity, routeKey: "/customers" },
 			{ ...identity, queryKey: "item=2" },
 			{ ...identity, userKey: "user-b" },
 		]) {
@@ -51,7 +195,7 @@ describe("page surface identity key", () => {
 describe("page surface eviction", () => {
 	const prefix = "app page user ";
 	const keyFor = (revision: string, query: string) =>
-		`${prefix}${revision}${" "}${query}`;
+		`${prefix}${revision}${" "}${JSON.stringify(["/route", query])}`;
 
 	test("drops the page's superseded revisions", () => {
 		const current = keyFor("2026-08-09T10:00:00Z", "item=1");

@@ -25,9 +25,10 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, completed_run_status, fetch_profile_for_dispatch, is_jwt_configured,
-        payload_storage, proxy_sse_response, rejection, resolve_wasm_packages, sign_execution_jwt,
-        update_run_on_completion,
+        PageActionSealingContext, PageExecutionJwtContext, TokenType, completed_run_status,
+        fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
+        proxy_sse_response_with_page_actions, rejection, resolve_wasm_packages, sign_execution_jwt,
+        sign_execution_jwt_with_page_context, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -77,6 +78,11 @@ pub struct InvokeEventRequest {
     /// the process case this run belongs to. Used for process mining.
     #[serde(default)]
     pub correlation: Option<std::collections::HashMap<String, String>>,
+    /// Governed Page action or lifecycle trigger. This capability is request
+    /// data only; normal user authentication remains in the Authorization
+    /// header.
+    #[serde(default)]
+    pub page_trigger: Option<super::page_trigger::PageTrigger>,
 }
 
 /// Response from event invocation
@@ -213,11 +219,63 @@ async fn invoke_event_impl(
     if !governed_connected_app_call {
         super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     }
-    let board_id = event.board_id.clone();
+    let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())
+    {
+        (Some(_), Some(trigger)) => Some(
+            super::page_trigger::resolve_page_trigger(
+                &state,
+                &permission,
+                &app_id,
+                &event,
+                trigger,
+            )
+            .await?,
+        ),
+        (Some(_), None) => {
+            return Err(ApiError::bad_request(
+                "Invoking a Page Event requires page_trigger",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(ApiError::bad_request(
+                "page_trigger is valid only for an Event that owns a Page",
+            ));
+        }
+        (None, None) => None,
+    };
+    let board_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_id.clone())
+        .unwrap_or_else(|| event.board_id.clone());
+    let board_version = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_version)
+        .unwrap_or(event.board_version);
+    let node_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.node_id.clone())
+        .unwrap_or_else(|| event.node_id.clone());
+    let resolved_version =
+        board_version.map(|(major, minor, patch)| format!("{major}_{minor}_{patch}"));
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
     let run_id = create_id();
+    let page_action_sealing = resolved_page_trigger.as_ref().map(|resolved| {
+        std::sync::Arc::new(PageActionSealingContext {
+            sub: sub.clone(),
+            technical_user_id: technical_user_id.clone(),
+            source_app_id: app_id.clone(),
+            source_event_id: event_id.clone(),
+            source_page_id: resolved.page_id.clone(),
+            source_manifest_revision: resolved.manifest_revision.clone(),
+            target_app_id: app_id.clone(),
+            target_board_id: resolved.board_id.clone(),
+            target_board_version: resolved.board_version,
+            origin_run_id: run_id.clone(),
+            allowed_entry_nodes: resolved.entry_node_ids.clone(),
+        })
+    });
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = params
@@ -297,9 +355,9 @@ async fn invoke_event_impl(
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id.clone()),
-        version: Set(params.version.clone()),
+        version: Set(resolved_version.clone()),
         event_id: Set(Some(event_id.clone())),
-        node_id: Set(Some(event.id.clone())),
+        node_id: Set(Some(node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(run_mode.clone()),
         log_level: Set(0),
@@ -327,8 +385,8 @@ async fn invoke_event_impl(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
-        node_id: Some(event.id.clone()),
-        version: params.version.clone(),
+        node_id: Some(node_id.clone()),
+        version: resolved_version.clone(),
         mode: run_mode.clone(),
         status: RunStatus::Pending,
         input_payload_len,
@@ -374,7 +432,7 @@ async fn invoke_event_impl(
     // for. A malformed version string is likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
         let reason = match super::parse_version_tuple(requested) {
-            Some(parsed) if event.board_version == Some(parsed) => None,
+            Some(parsed) if board_version == Some(parsed) => None,
             Some(_) => Some(
                 "Executing a board version other than the event's configured version is not supported"
                     .to_string(),
@@ -420,7 +478,7 @@ async fn invoke_event_impl(
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
+    let executor_jwt_params = ExecutionJwtParams {
         user_id: sub.clone(),
         technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
@@ -432,7 +490,19 @@ async fn invoke_event_impl(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
-    })
+    };
+    let executor_jwt = if let Some(resolved) = &resolved_page_trigger {
+        sign_execution_jwt_with_page_context(
+            executor_jwt_params,
+            PageExecutionJwtContext {
+                page_id: resolved.page_id.clone(),
+                manifest_revision: resolved.manifest_revision.clone(),
+                board_version: resolved.board_version,
+            },
+        )
+    } else {
+        sign_execution_jwt(executor_jwt_params)
+    }
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
@@ -447,8 +517,8 @@ async fn invoke_event_impl(
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id,
-        board_version: event.board_version,
-        node_id: event.node_id.clone(),
+        board_version,
+        node_id,
         event_json: Some(event_json),
         payload: params.payload,
         user_id: sub,
@@ -527,6 +597,7 @@ async fn invoke_event_impl(
                 byte_stream,
                 run_id,
                 Some(std::sync::Arc::new(state.db.clone())),
+                page_action_sealing,
             )
             .into_response())
         }
@@ -543,14 +614,55 @@ async fn invoke_event_impl(
 
             tracing::info!(run_id = %run_id, "Got executor response, starting stream proxy");
 
-            Ok(proxy_sse_response(
+            Ok(proxy_sse_response_with_page_actions(
                 executor_response,
                 run_id,
                 Some(std::sync::Arc::new(state.db.clone())),
+                page_action_sealing,
             )
             .into_response())
         }
     }
+}
+
+fn seal_lambda_page_actions(
+    data: &str,
+    run_id: &str,
+    event_ordinal: u64,
+    context: Option<&PageActionSealingContext>,
+) -> String {
+    let Some(context) = context else {
+        return data.to_string();
+    };
+    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(data) else {
+        return data.to_string();
+    };
+    let Some(envelope_object) = envelope.as_object_mut() else {
+        return data.to_string();
+    };
+    let message_id = ["event_id", "eventId", "id"]
+        .iter()
+        .find_map(|key| {
+            envelope_object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| format!("{run_id}:lambda:{event_ordinal}"));
+    let report = envelope_object
+        .get_mut("payload")
+        .map(|payload| context.seal_payload(&message_id, payload))
+        .unwrap_or_default();
+    if report.rejected > 0 {
+        tracing::warn!(
+            run_id,
+            message_id,
+            rejected = report.rejected,
+            "stripped rejected dynamic Page action targets from Lambda output"
+        );
+    }
+    serde_json::to_string(&envelope).unwrap_or_else(|_| data.to_string())
 }
 
 /// Create an SSE stream from a Lambda ByteStream response
@@ -558,6 +670,7 @@ fn proxy_lambda_sse_response(
     stream: ByteStream,
     run_id: String,
     db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
+    page_actions: Option<std::sync::Arc<PageActionSealingContext>>,
 ) -> axum::response::sse::Sse<
     impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
 > {
@@ -568,6 +681,7 @@ fn proxy_lambda_sse_response(
     let stream = async_stream::stream! {
         let mut byte_stream = stream;
         let mut buffer = Vec::new();
+        let mut event_ordinal = 0_u64;
 
         while let Some(result) = byte_stream.next().await {
             match result {
@@ -577,9 +691,16 @@ fn proxy_lambda_sse_response(
 
                     // Try to parse complete SSE events from buffer
                     while let Some(event) = extract_sse_event(&mut buffer) {
+                        let event_data = seal_lambda_page_actions(
+                            &event.data,
+                            &run_id,
+                            event_ordinal,
+                            page_actions.as_deref(),
+                        );
+                        event_ordinal = event_ordinal.saturating_add(1);
                         // Check if this is a completed event and update the database
                         if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
+                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event_data)
                                 && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
                                     && event_type == "completed" {
                                         let log_level = parsed.get("payload")
@@ -599,7 +720,7 @@ fn proxy_lambda_sse_response(
 
                         let sse_event = Event::default()
                             .event(&event.event_type)
-                            .data(event.data);
+                            .data(event_data);
                         yield Ok(sse_event);
                     }
                 }

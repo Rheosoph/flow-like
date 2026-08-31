@@ -138,6 +138,8 @@ export interface IPageBootstrap {
 	readonly event: IEvent;
 	readonly page?: IPage | null;
 	readonly revision?: string | null;
+	/** Authority revision used by governed Page actions and lifecycle hooks. */
+	readonly executionRevision?: string | null;
 	readonly canonicalRoute?: string | null;
 	readonly routeMiss?: boolean;
 }

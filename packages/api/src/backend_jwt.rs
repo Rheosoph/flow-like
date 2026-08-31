@@ -57,6 +57,9 @@ pub enum TokenType {
     /// Token for one app to call another app it is connected to.
     /// Carries both the origin and target app id; only valid for the target.
     AppConnection,
+    /// Capability carried as Page-action request data. It authorizes one exact
+    /// Page action target and must never be treated as an authenticated actor.
+    PageAction,
 }
 
 impl TokenType {
@@ -69,6 +72,7 @@ impl TokenType {
             TokenType::Realtime => "y-webrtc",
             TokenType::ChannelResponder => "flow-like-channel-responder",
             TokenType::AppConnection => "flow-like-app-connection",
+            TokenType::PageAction => "flow-like-page-action",
         }
     }
 
@@ -81,6 +85,7 @@ impl TokenType {
             TokenType::Realtime => 3 * 60 * 60,     // 3 hours
             TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
             TokenType::AppConnection => 10 * 60,    // 10 minutes
+            TokenType::PageAction => 24 * 60 * 60, // 24 hours
         }
     }
 }

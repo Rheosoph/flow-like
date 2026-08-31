@@ -84,6 +84,7 @@ export type {
 	BoundValue,
 	Style,
 	Action,
+	PageActionInvocation,
 	EventHandlers,
 	Widget,
 	Page,

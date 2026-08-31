@@ -26,6 +26,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like::a2ui::widget::Page;
+use flow_like::flow::compiled::prerun::{
+    decorate_page_actions, redact_page_execution_routes,
+};
 use flow_like::flow::event::Event;
 use flow_like_types::anyhow;
 use serde::{Deserialize, Serialize};
@@ -59,6 +62,9 @@ pub struct BootstrapResponse {
     /// BLAKE3 of the encoded page payload, or `null` when the Event has no custom page. This is
     /// for a surface cache that is independent of Event metadata and HTTP freshness.
     pub revision: Option<String>,
+    /// Revision of the Page execution authority map. Clients return this with
+    /// lifecycle and static action invocations.
+    pub execution_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +150,7 @@ fn resolve_route(events: &[Event], requested_route: &str) -> RouteResolution {
 fn bootstrap_response(
     event: Event,
     page: Option<Page>,
+    execution_revision: Option<String>,
     canonical_route: Option<String>,
     route_miss: bool,
     headers: &HeaderMap,
@@ -164,6 +171,7 @@ fn bootstrap_response(
         event,
         page,
         revision,
+        execution_revision,
     })
     .map_err(|error| ApiError::internal_error(anyhow!("failed to encode bootstrap: {error}")))?;
     // The HTTP validator covers the entire sanitized document. A permission-safe Event change,
@@ -198,6 +206,7 @@ fn bootstrap_response(
     get,
     path = "/apps/{app_id}/pages/bootstrap",
     tag = "pages",
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = [])),
     description = "Resolve a /use route or direct Event and return its active, sanitized Event and optional exact bound custom page.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
@@ -224,6 +233,8 @@ pub async fn bootstrap(
 ) -> Result<Response, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
+    let can_use_direct_board = permission.has_permission(RolePermissions::ReadBoards)
+        && permission.has_permission(RolePermissions::ExecuteBoards);
     let principal_id = permission.identifier();
     let app = state.master_app(&principal_id, &app_id, &state).await?;
     let is_visible_runtime_event = |event: &Event| {
@@ -274,13 +285,51 @@ pub async fn bootstrap(
     // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
     // chats, and other runnable surfaces. When it declares a custom page, however, that page is
     // part of the contract and a missing version-bound artifact remains a uniform 404.
-    let page = if event.default_page_id.is_some() {
-        Some(load_event_bound_page(&app, &event).await?)
+    let (page, execution_revision) = if event.default_page_id.is_some() {
+        if event.board_version.is_none() {
+            return Err(ApiError::bad_request(
+                "Governed Page Events must pin an immutable board version",
+            ));
+        }
+        let page = load_event_bound_page(&app, &event).await?;
+        let board = app
+            .open_board(event.board_id.clone(), None, event.board_version)
+            .await
+            .map_err(|_| ApiError::NOT_FOUND)?;
+        let board = board.lock().await;
+        if board.id != event.board_id || Some(board.version) != event.board_version {
+            return Err(ApiError::bad_request(
+                "The Page Event configuration is invalid",
+            ));
+        }
+        let (page_execution, _, execution_revision) =
+            crate::routes::app::events::page_trigger::compile_page_contract(&board, &page)?;
+        let mut page = decorate_page_actions(&page, &page_execution, &execution_revision).map_err(
+            |error| {
+                ApiError::internal_error(anyhow!(
+                    "failed to project governed Page actions: {error}"
+                ))
+            },
+        )?;
+        if !can_use_direct_board {
+            page = redact_page_execution_routes(&page).map_err(ApiError::internal_error)?;
+        }
+        (Some(page), Some(execution_revision))
     } else {
-        None
+        (None, None)
     };
-    let event = filter_event_list_execution(filter_event_secrets(event));
-    bootstrap_response(event, page, canonical_route, route_miss, &headers)
+    let mut event = filter_event_list_execution(filter_event_secrets(event));
+    if !can_use_direct_board && event.default_page_id.is_some() {
+        event.node_id.clear();
+    }
+    bootstrap_response(
+        event,
+        page,
+        execution_revision,
+        canonical_route,
+        route_miss,
+        &headers,
+    )
 }
 
 #[cfg(test)]
@@ -361,6 +410,7 @@ mod tests {
         let response = bootstrap_response(
             event("event", Some("/"), true),
             Some(page.clone()),
+            Some("per1_test".to_string()),
             Some("/".to_string()),
             false,
             &headers,
@@ -381,6 +431,7 @@ mod tests {
         let unchanged = bootstrap_response(
             event("event", Some("/"), true),
             Some(page.clone()),
+            Some("per1_test".to_string()),
             Some("/".to_string()),
             false,
             &conditional,
@@ -391,6 +442,7 @@ mod tests {
         let not_modified = bootstrap_response(
             event("renamed", Some("/"), true),
             Some(page),
+            Some("per1_test".to_string()),
             Some("/".to_string()),
             false,
             &conditional,
@@ -407,6 +459,7 @@ mod tests {
             event: event("chat", Some("/chat"), false),
             page: None,
             revision: None,
+            execution_revision: None,
         };
         let value = flow_like_types::json::to_value(response).unwrap();
         assert!(value["event"].is_object());

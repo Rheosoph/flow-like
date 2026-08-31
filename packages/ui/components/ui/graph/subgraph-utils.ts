@@ -8,10 +8,15 @@ import type {
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
 
+/**
+ * Degree-based by default: connectivity is the one visual encoding a graph can
+ * always honestly carry, and an 8px floor keeps the icon glyph readable —
+ * the old 6px fixed default rendered it at ~2px.
+ */
 export const DEFAULT_LABEL_STYLE: LabelStyle = {
 	color: "#6b7280",
 	icon: "circle",
-	size: { mode: "fixed", value: 6 },
+	size: { mode: "by-degree", min: 8, max: 20 },
 };
 
 const SYNTHETIC_PALETTE = [
@@ -141,7 +146,7 @@ function syntheticStyle(label: string): LabelStyle {
 	return {
 		color: SYNTHETIC_PALETTE[labelSeed(label) % SYNTHETIC_PALETTE.length],
 		icon: "circle",
-		size: { mode: "fixed", value: 6 },
+		size: { mode: "by-degree", min: 8, max: 20 },
 	};
 }
 

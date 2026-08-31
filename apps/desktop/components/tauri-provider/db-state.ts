@@ -7,6 +7,7 @@ import type {
 	IDropTableResult,
 	IIndexConfig,
 	IQueryTablePayload,
+	ITableSummary,
 } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
@@ -363,6 +364,29 @@ export class DatabaseState implements IDatabaseState {
 		}
 
 		return await invoke("db_table_names_user", { appId });
+	}
+
+	async listTableSummaries(
+		appId: string,
+		userScoped?: boolean,
+	): Promise<ITableSummary[]> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return await fetcher(
+				this.backend.profile!,
+				`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke(
+			userScoped ? "db_table_summaries_user" : "db_table_summaries",
+			{ appId },
+		);
 	}
 
 	async countItems(
