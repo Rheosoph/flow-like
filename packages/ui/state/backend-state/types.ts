@@ -17,6 +17,31 @@ export interface IBackendRole {
 	created_at: string;
 }
 
+/**
+ * The signed-in user's own role on an app, as reported by
+ * `GET /apps/{app_id}/roles/me`.
+ *
+ * Every member may read it without `ReadRoles` — it says nothing about anyone
+ * else — so the UI can decide whether a destructive action is offered at all
+ * instead of letting the server answer with a 403 nobody surfaces.
+ */
+export interface IOwnRole {
+	role_id: string;
+	role_name: string;
+	/** Raw permission bits; wrap in `RolePermissions` to test individual flags. */
+	permissions: number;
+	/**
+	 * Whether the caller may delete the app. Mirrors the server's `Owner`
+	 * check, which `Admin` also satisfies.
+	 */
+	is_owner: boolean;
+	/**
+	 * Whether the caller may quit the app. An owner cannot: the team endpoint
+	 * refuses to remove a membership whose role carries the `Owner` bit.
+	 */
+	can_leave: boolean;
+}
+
 export interface IInviteLink {
 	id: string;
 	app_id: string;
@@ -459,4 +484,8 @@ export interface IPrerunEventResponse {
 	wasm_package_permissions?: Record<string, string[]>;
 	/** See {@link IPrerunBoardResponse.signature}. */
 	signature?: string;
+	/** Present for a governed Page trigger prerun. */
+	page_id?: string;
+	/** Authority revision that must accompany the Page invocation. */
+	manifest_revision?: string;
 }

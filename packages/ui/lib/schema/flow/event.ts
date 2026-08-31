@@ -8,6 +8,10 @@ export interface IEvent {
 	description: string;
 	/** A2UI: default page to render for this event (page-target events). */
 	default_page_id?: string | null;
+	/** URL route path that maps to this event (for example, "/" or "/dashboard"). */
+	route?: string | null;
+	/** Whether this event is the app's default event/route. */
+	is_default?: boolean;
 	event_type: string;
 	event_version: number[];
 	/**

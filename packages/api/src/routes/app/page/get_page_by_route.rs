@@ -42,7 +42,7 @@ pub async fn get_page_by_route(
     Path(app_id): Path<String>,
     Query(params): Query<RouteQuery>,
 ) -> Result<Json<Option<PageWithBoardId>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
 
     let app = state.master_app(&user.sub()?, &app_id, &state).await?;
 

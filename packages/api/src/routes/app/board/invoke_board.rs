@@ -136,7 +136,7 @@ pub async fn invoke_board(
     Json(params): Json<InvokeBoardRequest>,
 ) -> Result<Response, ApiError> {
     super::ensure_connected_app_board_invoke_denied(&user)?;
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteBoards);
     let sub = permission.effective_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
             "Invoking requires a caller that is linked to a user account",

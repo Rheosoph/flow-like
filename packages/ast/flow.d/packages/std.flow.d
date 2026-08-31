@@ -4235,6 +4235,28 @@ declare namespace struct {
     function break(this: Struct, { structIn: Struct }): void;
 
     /**
+     * Checks a struct against a JSON schema and hands it on carrying that shape
+     * @node struct_cast_to_schema @receiver struct_in @alias structCastToSchema
+     * @param structIn — The struct to cast. Whatever schema it arrives with is ignored (receiver: `this` in `x.castToSchema(...)`)
+     * @param schema (optional) — JSON Schema or OpenAI function definition describing the target shape
+     * @returns structOut — The same value, now declaring the target shape
+     * @returns errorMessage — What did not fit, naming the field
+     * @impure has side effects / drives control flow
+     */
+    function castToSchema(this: Struct, { structIn: Struct, schema?: string }): { structOut: Struct, errorMessage: string };
+
+    /**
+     * Checks a struct against the shape of another struct and hands it on carrying that shape
+     * @node struct_cast_to_struct @receiver struct_in @alias structCastToStruct
+     * @param structIn — The struct to cast. Whatever schema it arrives with is ignored (receiver: `this` in `x.castToStruct(...)`)
+     * @param structShape — A struct of the shape to cast to. Only its schema is read — its value is never evaluated
+     * @returns structOut — The same value, now declaring the target shape
+     * @returns errorMessage — What did not fit, naming the field
+     * @impure has side effects / drives control flow
+     */
+    function castToStruct(this: Struct, { structIn: Struct, structShape: Struct }): { structOut: Struct, errorMessage: string };
+
+    /**
      * Creates a new struct
      * @node struct_make @alias structMake
      * @returns struct — Struct Output
@@ -4491,7 +4513,7 @@ declare namespace ui {
      * Fetches elements from the live page in one round-trip so later reads hit the cache
      * @node a2ui_request_elements @alias a2uiRequestElements
      * @param elementIds — Element selectors, e.g. ['main/input-field', 'type:switch', 'glob:feed-row-*/subscribed', 'children:main/list', 'host:main/feed-row-1']
-     * @param timeoutMs — How long to wait for the page to answer
+     * @param timeoutMs (optional) — How long to wait for the page to answer
      * @impure has side effects / drives control flow
      */
     function requestElements({ elementIds: string[], timeoutMs?: int }): void;

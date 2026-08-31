@@ -2,6 +2,9 @@
 
 import type { WidgetContract } from "@flow-like/widget-sdk";
 import type { IChannelHandle } from "../../lib/schema/channel";
+import type { PageActionInvocation } from "../../lib/schema/flow/page-trigger";
+
+export type { PageActionInvocation } from "../../lib/schema/flow/page-trigger";
 
 export interface SelectOption {
 	value: string;
@@ -19,6 +22,8 @@ export type BoundValue =
 export interface Action {
 	name: string;
 	context: Record<string, unknown>;
+	/** Opaque Page Event routing. Raw board and node ids are never authoritative. */
+	pageAction?: PageActionInvocation;
 }
 
 export type EventHandlers = Record<string, Action[]>;
@@ -2015,7 +2020,7 @@ export interface WidgetActionContextField {
 }
 
 export type ActionBinding =
-	| { workflow: WorkflowBinding }
+	| { workflow: WorkflowBinding; pageAction?: PageActionInvocation }
 	| { command: CommandBinding };
 
 export interface WorkflowBinding {

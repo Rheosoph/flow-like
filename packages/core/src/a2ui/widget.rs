@@ -15,6 +15,7 @@ pub type Version = (u32, u32, u32);
 pub struct Widget {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub root_component_id: String,
     pub components: Vec<SurfaceComponent>,
@@ -23,10 +24,13 @@ pub struct Widget {
     /// Props exposed from widget components that can be customized when used in a page
     #[serde(default)]
     pub exposed_props: Vec<ExposedProp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<String>,
     pub tags: Vec<String>,
     /// Semantic versioning
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
     #[serde(
         serialize_with = "crate::utils::serde_helpers::serialize_systemtime",
@@ -120,10 +124,13 @@ impl Widget {
 pub struct CustomizationOption {
     pub id: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub customization_type: CustomizationType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<Vec<u8>>,
     pub validations: Vec<ValidationRule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
 }
 
@@ -154,6 +161,7 @@ pub struct ExposedProp {
     /// Display label in the UI
     pub label: String,
     /// Description of what this prop does
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// The component ID within the widget that this prop targets
     pub target_component_id: String,
@@ -162,8 +170,10 @@ pub struct ExposedProp {
     /// The type of value this prop accepts
     pub prop_type: ExposedPropType,
     /// Default value (serialized)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<Vec<u8>>,
     /// Group for organizing props in the UI (e.g., "Content", "Style", "Data")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
 }
 
@@ -250,7 +260,9 @@ pub enum CustomizationType {
 #[serde(rename_all = "camelCase")]
 pub struct ValidationRule {
     pub rule_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
@@ -263,8 +275,10 @@ pub struct WidgetAction {
     /// Display label for the UI
     pub label: String,
     /// Description of what this action does
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Icon name for the UI (e.g., "trash", "external-link")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     /// Context schema - defines what data is passed with the action
     #[serde(default)]
@@ -309,8 +323,10 @@ pub struct WidgetActionContextField {
     /// Type of the field value
     pub field_type: ExposedPropType,
     /// Description of the field
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Default data path binding
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_path: Option<String>,
 }
 
@@ -359,6 +375,7 @@ pub struct WidgetRef {
     /// The widget ID
     pub widget_id: String,
     /// Optional version pinning (latest if None)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
 }
 
@@ -414,16 +431,20 @@ pub struct Page {
     pub id: String,
     pub name: String,
     pub route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Canvas settings for page styling (background, padding, custom CSS)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas_settings: Option<CanvasSettings>,
     pub content: Vec<PageContent>,
     pub layout_type: PageLayoutType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attached_element_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<PageMeta>,
     pub components: Vec<SurfaceComponent>,
     /// Semantic versioning
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
     #[serde(
         serialize_with = "crate::utils::serde_helpers::serialize_systemtime",
@@ -436,14 +457,19 @@ pub struct Page {
     )]
     pub updated_at: SystemTime,
     /// Reference to parent board
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
     /// Node ID (from events_simple) to execute when page loads
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_load_event_id: Option<String>,
     /// Node ID to execute when page unloads/user navigates away
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_unload_event_id: Option<String>,
     /// Node ID to execute on a timed interval
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_interval_event_id: Option<String>,
     /// Interval time in seconds (must be > 0)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on_interval_seconds: Option<u32>,
     /// Widget definitions referenced by widget instances on this page
     /// Key is the instance ID, value is the widget definition
@@ -451,7 +477,7 @@ pub struct Page {
     pub widget_refs: HashMap<String, Widget>,
     /// When true, the frontend caches the last rendered state and shows it
     /// instantly while the onLoad event runs in the background.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cache: bool,
 }
 
@@ -521,10 +547,14 @@ impl Page {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub padding: Option<String>,
     /// Custom CSS to inject into the page (scoped to page container).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_css: Option<String>,
 }
 
@@ -543,16 +573,19 @@ pub enum PageContent {
 pub struct WidgetInstance {
     pub widget_id: String,
     pub instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<super::Position>,
     pub customization_values: std::collections::HashMap<String, Vec<u8>>,
     /// Values for exposed props (key is the exposed prop id)
     #[serde(default)]
     pub exposed_prop_values: std::collections::HashMap<String, Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style_override: Option<super::Style>,
     /// Action bindings - map action_id to binding configuration
     #[serde(default)]
     pub action_bindings: std::collections::HashMap<String, ActionBinding>,
     /// Widget reference for cross-app widgets (optional - if not same app)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub widget_ref: Option<WidgetRef>,
 }
 
@@ -612,10 +645,14 @@ pub enum PageLayoutType {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PageMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub og_image: Option<String>,
     pub keywords: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub favicon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_color: Option<String>,
 }
 
@@ -679,6 +716,26 @@ mod tests {
         assert_eq!(page.route, "/");
         assert!(page.title.is_none());
         assert_eq!(page.version, Some((0, 0, 1)));
+    }
+
+    #[test]
+    fn page_json_omits_absent_optionals_and_default_cache() {
+        let page = Page::new("page-1", "Home", "/");
+        let encoded = flow_like_types::json::to_value(&page).expect("serialize page");
+        let object = encoded.as_object().expect("page object");
+
+        assert_eq!(
+            object.get("id"),
+            Some(&flow_like_types::json::json!("page-1"))
+        );
+        assert!(object.get("title").is_none());
+        assert!(object.get("canvasSettings").is_none());
+        assert!(object.get("cache").is_none());
+
+        let decoded: Page = flow_like_types::json::from_value(encoded).expect("deserialize page");
+        assert_eq!(decoded.id, page.id);
+        assert!(decoded.title.is_none());
+        assert!(!decoded.cache);
     }
 
     #[test]

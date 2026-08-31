@@ -623,10 +623,18 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// driveGlobalChatStream creates the store record itself.
 			setActiveRun(sessionId, responseMessage.id, turnSelection);
 
-			const historyPayload = priorMessages.map((m) => ({
-				role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
-				content: typeof m.inner.content === "string" ? m.inner.content : "",
-			}));
+			// A turn that failed carries its reason on `error`, not in the text — an assistant entry
+			// with nothing in it teaches the model nothing, so drop it from the history instead.
+			const historyPayload = priorMessages
+				.filter(
+					(m) =>
+						!m.error ||
+						(typeof m.inner.content === "string" && m.inner.content.trim()),
+				)
+				.map((m) => ({
+					role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
+					content: typeof m.inner.content === "string" ? m.inner.content : "",
+				}));
 
 			// Snapshot the latest assistant message's embedded widgets so the
 			// model can see the rendered UI state the user is reacting to.

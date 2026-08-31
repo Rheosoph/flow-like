@@ -10,6 +10,7 @@ use crate::{
     entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
     error::ApiError,
     execution::{
+        ExecutionClaims, PageActionSealingContext,
         state::{
             CreateEventInput, EventQuery, ExecutionStateStore, RunLeaseClaim,
             RunMode as StateRunMode, RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
@@ -26,7 +27,7 @@ use axum::{
 use flow_like_types::{anyhow, create_id, tokio};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use utoipa::{IntoParams, ToSchema};
 
 // ============================================================================
@@ -340,7 +341,7 @@ pub async fn report_progress(
 pub async fn push_events(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<PushEventsRequest>,
+    Json(mut body): Json<PushEventsRequest>,
 ) -> Result<Json<PushEventsResponse>, ApiError> {
     let token = extract_bearer_token(&headers)?;
 
@@ -371,6 +372,14 @@ pub async fn push_events(
                 "Cosmos queue events require job_id and lease_token",
             ));
         }
+    }
+
+    // Executors are allowed to produce A2UI, but they do not hold the API's
+    // Page-action signing key. Resolve the board identity from the signed
+    // executor claims and replace every executable route before any payload
+    // crosses the persistence boundary.
+    if let Some(context) = page_action_sealing_context(&state, &claims).await? {
+        seal_page_event_payloads(&context, &mut body.events);
     }
 
     let expires_at = chrono::Utc::now().timestamp_millis() + 24 * 60 * 60 * 1000; // 24 hours
@@ -713,6 +722,120 @@ fn execution_claim_user_id(subject: &str) -> Option<&str> {
 // Helpers
 // ============================================================================
 
+async fn page_action_sealing_context(
+    state: &AppState,
+    claims: &ExecutionClaims,
+) -> Result<Option<PageActionSealingContext>, ApiError> {
+    let Some(page) = claims.page_execution.as_ref() else {
+        return Ok(None);
+    };
+
+    let event_id = claims
+        .event_id
+        .as_deref()
+        .filter(|event_id| !event_id.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request("A Page execution token must identify its source Event")
+        })?;
+    if claims.app_id.trim().is_empty()
+        || claims.board_id.trim().is_empty()
+        || claims.run_id.trim().is_empty()
+        || page.page_id.trim().is_empty()
+        || page.manifest_revision.trim().is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "The Page execution token has an incomplete sealing context",
+        ));
+    }
+
+    let cached = state
+        .master_board_shared(&claims.app_id, &claims.board_id, state, page.board_version)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                error = %error,
+                app_id = %claims.app_id,
+                board_id = %claims.board_id,
+                version = ?page.board_version,
+                "Failed to load the board for Page action sealing"
+            );
+            ApiError::internal_error(anyhow!(
+                "Failed to validate the Page execution board context"
+            ))
+        })?;
+    let board = cached.board.as_ref();
+    if board.id != claims.board_id
+        || page
+            .board_version
+            .is_some_and(|expected| board.version != expected)
+    {
+        tracing::error!(
+            claims_board_id = %claims.board_id,
+            loaded_board_id = %board.id,
+            expected_version = ?page.board_version,
+            loaded_version = ?board.version,
+            "Loaded board does not match the signed Page execution context"
+        );
+        return Err(ApiError::bad_request(
+            "The Page execution board context is invalid",
+        ));
+    }
+
+    let allowed_entry_nodes = board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .filter(|node| node.start == Some(true))
+        .map(|node| node.id.clone())
+        .collect::<HashSet<_>>();
+
+    Ok(Some(PageActionSealingContext {
+        sub: claims.sub.clone(),
+        technical_user_id: claims.technical_user_id.clone(),
+        source_app_id: claims.app_id.clone(),
+        source_event_id: event_id.to_string(),
+        source_page_id: page.page_id.clone(),
+        source_manifest_revision: page.manifest_revision.clone(),
+        target_app_id: claims.app_id.clone(),
+        target_board_id: claims.board_id.clone(),
+        target_board_version: page.board_version,
+        origin_run_id: claims.run_id.clone(),
+        allowed_entry_nodes,
+    }))
+}
+
+fn seal_page_event_payloads(
+    context: &PageActionSealingContext,
+    events: &mut [ExecutionEventInput],
+) {
+    for (batch_index, event) in events.iter_mut().enumerate() {
+        let message_id = page_event_message_id(event, batch_index);
+        let report = context.seal_payload(&message_id, &mut event.payload);
+        if report.sealed > 0 || report.rejected > 0 {
+            tracing::debug!(
+                message_id,
+                sealed = report.sealed,
+                rejected = report.rejected,
+                "Sealed dynamic Page actions in an executor event"
+            );
+        }
+    }
+}
+
+fn page_event_message_id(event: &ExecutionEventInput, batch_index: usize) -> String {
+    event
+        .id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            event
+                .sequence
+                .map(|sequence| format!("sequence:{sequence}"))
+        })
+        .unwrap_or_else(|| format!("batch-index:{batch_index}"))
+}
+
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     crate::middleware::jwt::viewer_authorization(headers)
         .ok_or_else(|| ApiError::bad_request("Missing Authorization header".to_string()))?
@@ -786,4 +909,117 @@ pub(crate) async fn get_state_store(
     crate::execution::state::create_state_store(config)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to create state store: {}", e)))
+}
+
+#[cfg(test)]
+mod page_action_delivery_tests {
+    use super::*;
+
+    fn unpinned_context() -> PageActionSealingContext {
+        PageActionSealingContext {
+            sub: "user-1".into(),
+            technical_user_id: None,
+            source_app_id: "app-1".into(),
+            source_event_id: "event-1".into(),
+            source_page_id: "page-1".into(),
+            source_manifest_revision: "revision-1".into(),
+            target_app_id: "app-1".into(),
+            target_board_id: "board-1".into(),
+            target_board_version: None,
+            origin_run_id: "run-1".into(),
+            allowed_entry_nodes: HashSet::from(["entry-1".into()]),
+        }
+    }
+
+    #[test]
+    fn page_event_message_identity_prefers_id_then_sequence_then_batch_index() {
+        let with_id = ExecutionEventInput {
+            id: Some("executor-event-1".into()),
+            sequence: Some(41),
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+        let with_sequence = ExecutionEventInput {
+            id: None,
+            sequence: Some(42),
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+        let without_identity = ExecutionEventInput {
+            id: None,
+            sequence: None,
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+
+        assert_eq!(page_event_message_id(&with_id, 3), "executor-event-1");
+        assert_eq!(page_event_message_id(&with_sequence, 3), "sequence:42");
+        assert_eq!(page_event_message_id(&without_identity, 3), "batch-index:3");
+    }
+
+    #[test]
+    fn unpinned_page_strips_routes_without_changing_event_order_or_identity() {
+        let mut events = vec![
+            ExecutionEventInput {
+                id: Some("event-a".into()),
+                sequence: Some(7),
+                event_type: "first".into(),
+                payload: serde_json::json!({
+                    "ordinal": 1,
+                    "actions": [{
+                        "name": "workflow_event",
+                        "context": {"nodeId": "entry-1", "payload": "kept"}
+                    }]
+                }),
+            },
+            ExecutionEventInput {
+                id: Some("event-b".into()),
+                sequence: Some(8),
+                event_type: "second".into(),
+                payload: serde_json::json!({
+                    "ordinal": 2,
+                    "actions": [{
+                        "name": "workflow_event",
+                        "context": {"nodeId": "entry-1"}
+                    }]
+                }),
+            },
+        ];
+
+        seal_page_event_payloads(&unpinned_context(), &mut events);
+
+        assert_eq!(events[0].id.as_deref(), Some("event-a"));
+        assert_eq!(events[0].sequence, Some(7));
+        assert_eq!(events[0].event_type, "first");
+        assert_eq!(events[0].payload["ordinal"], 1);
+        assert!(
+            events[0].payload["actions"][0]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+        assert!(
+            events[0].payload["actions"][0]
+                .get("pageAction")
+                .is_none()
+        );
+        assert_eq!(
+            events[0].payload["actions"][0]["context"]["payload"],
+            "kept"
+        );
+
+        assert_eq!(events[1].id.as_deref(), Some("event-b"));
+        assert_eq!(events[1].sequence, Some(8));
+        assert_eq!(events[1].event_type, "second");
+        assert_eq!(events[1].payload["ordinal"], 2);
+        assert!(
+            events[1].payload["actions"][0]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+        assert!(
+            events[1].payload["actions"][0]
+                .get("pageAction")
+                .is_none()
+        );
+    }
 }

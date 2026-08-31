@@ -109,6 +109,8 @@ export interface A2UIRendererProps {
 	boardId?: string;
 	boardVersion?: BoardVersion;
 	eventId?: string;
+	/** True when workflow routes must come from the Page Event projection. */
+	governedPage?: boolean;
 	isPreviewMode?: boolean;
 	openDialog?: (
 		route: string,
@@ -133,6 +135,7 @@ export function A2UIRenderer({
 	boardId,
 	boardVersion,
 	eventId,
+	governedPage = false,
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
@@ -228,6 +231,7 @@ export function A2UIRenderer({
 					boardId={boardId}
 					boardVersion={boardVersion}
 					eventId={eventId}
+					governedPage={governedPage}
 					components={components}
 					isPreviewMode={isPreviewMode}
 					openDialog={openDialog}

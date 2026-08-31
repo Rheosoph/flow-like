@@ -6,6 +6,7 @@ pub mod get_event_versions;
 pub mod get_events;
 pub mod invoke_event;
 pub mod invoke_event_async;
+pub mod page_trigger;
 pub mod prerun_event;
 pub mod registrations;
 pub mod remote_proxy;
@@ -80,7 +81,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/{event_id}/validate", post(validate_event::validate_event))
         .route("/{event_id}/setup", post(setup_event::setup_event))
-        .route("/{event_id}/prerun", get(prerun_event::prerun_event))
+        .route(
+            "/{event_id}/prerun",
+            get(prerun_event::prerun_event).post(prerun_event::prerun_page_event),
+        )
         .route("/{event_id}/invoke", post(invoke_event::invoke_event))
         .route(
             "/{event_id}/invoke/async",

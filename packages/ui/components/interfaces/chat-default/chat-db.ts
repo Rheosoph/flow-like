@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { IHistoryMessage } from "../../../lib";
+import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 
 export type IAttachment =
@@ -204,6 +205,12 @@ export interface IMessage {
 	run_context?: IChatRunContext;
 	/** a2ui widgets embedded in this message (from the Push Widget node). */
 	widgets?: IChatWidget[];
+	/**
+	 * Why this turn failed, classified. Set instead of writing an error sentence into the content so
+	 * the failure renders as a card with its own recovery action — and so history never carries the
+	 * apology back to the model.
+	 */
+	error?: IChatMessageError;
 }
 
 export interface ISession {

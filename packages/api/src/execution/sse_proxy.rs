@@ -6,6 +6,7 @@
 use crate::entity::sea_orm_active_enums::{ExecutionStatus, RunStatus};
 use crate::entity::{execution_run, execution_usage_tracking, prelude::*};
 use crate::execution::dispatch::ByteStream;
+use crate::execution::page_action_sealer::{PageActionSealingContext, PageActionSealingReport};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use eventsource_stream::Eventsource;
 use flow_like_types::create_id;
@@ -41,7 +42,21 @@ pub fn proxy_sse_response(
     run_id: String,
     db: Option<Arc<DatabaseConnection>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = create_sse_stream(response, run_id, db);
+    proxy_sse_response_with_page_actions(response, run_id, db, None)
+}
+
+/// Create an SSE stream and govern executable actions emitted by a Page run.
+///
+/// The Page capability is inserted only into the JSON envelope's `payload`.
+/// The caller's normal authentication remains separate, and streams without a
+/// sealing context retain the existing byte-for-byte data behavior.
+pub fn proxy_sse_response_with_page_actions(
+    response: reqwest::Response,
+    run_id: String,
+    db: Option<Arc<DatabaseConnection>>,
+    page_actions: Option<Arc<PageActionSealingContext>>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = create_sse_stream(response, run_id, db, page_actions);
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
@@ -54,19 +69,56 @@ fn create_sse_stream(
     response: reqwest::Response,
     run_id: String,
     db: Option<Arc<DatabaseConnection>>,
+    page_actions: Option<Arc<PageActionSealingContext>>,
 ) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
     let byte_stream = response.bytes_stream();
     let event_stream = byte_stream.eventsource();
 
     let stream = async_stream::stream! {
         let mut es = event_stream;
+        let mut event_ordinal = 0_u64;
 
         while let Some(result) = es.next().await {
             match result {
                 Ok(sse_event) => {
+                    let ordinal = event_ordinal;
+                    event_ordinal = event_ordinal.saturating_add(1);
+                    let transformed = page_actions.as_deref().map(|context| {
+                        seal_page_action_sse_envelope(
+                            &sse_event.data,
+                            &sse_event.id,
+                            &run_id,
+                            ordinal,
+                            context,
+                        )
+                    });
+                    let data = transformed
+                        .as_ref()
+                        .map(|result| result.data.as_str())
+                        .unwrap_or(sse_event.data.as_str());
+
+                    if let Some(transformed) = &transformed {
+                        if transformed.report.rejected > 0 {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                message_id = %transformed.message_id,
+                                rejected = transformed.report.rejected,
+                                "stripped rejected dynamic Page action targets from executor output"
+                            );
+                        }
+                        if transformed.report.sealed > 0 {
+                            tracing::debug!(
+                                run_id = %run_id,
+                                message_id = %transformed.message_id,
+                                sealed = transformed.report.sealed,
+                                "sealed dynamic Page actions in executor output"
+                            );
+                        }
+                    }
+
                     // Check if this is a completed event and update the database
                     if let Some(db) = &db
-                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&sse_event.data)
+                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
                             && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
                                 && event_type == "completed" {
                                     let log_level = parsed.get("payload")
@@ -86,7 +138,7 @@ fn create_sse_stream(
 
                     let event = Event::default()
                         .event(&sse_event.event)
-                        .data(sse_event.data);
+                        .data(data.to_owned());
 
                     yield Ok(event);
                 }
@@ -110,6 +162,68 @@ fn create_sse_stream(
     };
 
     Box::pin(stream)
+}
+
+#[derive(Debug)]
+struct SealedSseEnvelope {
+    data: String,
+    message_id: String,
+    report: PageActionSealingReport,
+}
+
+/// Transform one executor SSE envelope without depending on HTTP state.
+///
+/// Executor event ids are stable across delivery retries. Older executors may
+/// omit them, so the SSE id is scoped to the run, followed by the run-local
+/// ordinal as the final deterministic fallback.
+fn seal_page_action_sse_envelope(
+    data: &str,
+    sse_id: &str,
+    run_id: &str,
+    event_ordinal: u64,
+    context: &PageActionSealingContext,
+) -> SealedSseEnvelope {
+    let fallback_message_id = if sse_id.trim().is_empty() {
+        format!("{run_id}:stream:{event_ordinal}")
+    } else {
+        format!("{run_id}:sse:{sse_id}")
+    };
+    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(data) else {
+        return SealedSseEnvelope {
+            data: data.to_owned(),
+            message_id: fallback_message_id,
+            report: PageActionSealingReport::default(),
+        };
+    };
+    let Some(envelope_object) = envelope.as_object_mut() else {
+        return SealedSseEnvelope {
+            data: data.to_owned(),
+            message_id: fallback_message_id,
+            report: PageActionSealingReport::default(),
+        };
+    };
+
+    let message_id = ["event_id", "eventId", "id"]
+        .iter()
+        .find_map(|key| {
+            envelope_object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or(fallback_message_id);
+    let report = envelope_object
+        .get_mut("payload")
+        .map(|payload| context.seal_payload(&message_id, payload))
+        .unwrap_or_default();
+    let data = serde_json::to_string(&envelope).unwrap_or_else(|_| data.to_owned());
+
+    SealedSseEnvelope {
+        data,
+        message_id,
+        report,
+    }
 }
 
 /// Consume an executor SSE response and return a single JSON body built from
@@ -363,6 +477,24 @@ async fn track_execution_usage_from_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    fn page_action_context() -> PageActionSealingContext {
+        crate::backend_jwt::init_for_tests();
+        PageActionSealingContext {
+            sub: "user-1".into(),
+            technical_user_id: None,
+            source_app_id: "app-1".into(),
+            source_event_id: "page-event-1".into(),
+            source_page_id: "page-1".into(),
+            source_manifest_revision: "manifest-1".into(),
+            target_app_id: "app-1".into(),
+            target_board_id: "board-1".into(),
+            target_board_version: Some((2, 1, 0)),
+            origin_run_id: "run-1".into(),
+            allowed_entry_nodes: HashSet::from(["entry-1".into()]),
+        }
+    }
 
     #[test]
     fn completion_status_parsing_matches_executor_serialization() {
@@ -387,5 +519,97 @@ mod tests {
             RunStatus::Failed
         ));
         assert!(matches!(completed_run_status(None), RunStatus::Failed));
+    }
+
+    #[test]
+    fn page_action_transform_uses_executor_event_id_and_strips_raw_routing() {
+        let input = serde_json::json!({
+            "event_id": "executor-message-1",
+            "event_type": "a2ui_update",
+            "payload": {
+                "actions": [{
+                    "name": "workflow_event",
+                    "context": {
+                        "nodeId": "entry-1",
+                        "appId": "app-1",
+                        "boardId": "board-1",
+                        "input": "kept"
+                    }
+                }]
+            }
+        });
+
+        let transformed = seal_page_action_sse_envelope(
+            &serde_json::to_string(&input).unwrap(),
+            "transport-message-1",
+            "run-1",
+            9,
+            &page_action_context(),
+        );
+        let output: serde_json::Value = serde_json::from_str(&transformed.data).unwrap();
+        let action = &output["payload"]["actions"][0];
+
+        assert_eq!(transformed.message_id, "executor-message-1");
+        assert_eq!(transformed.report.sealed, 1);
+        assert_eq!(transformed.report.rejected, 0);
+        assert_eq!(action["context"]["input"], "kept");
+        assert!(action["context"].get("nodeId").is_none());
+        assert!(action["context"].get("appId").is_none());
+        assert!(action["context"].get("boardId").is_none());
+        assert!(action["pageAction"]["capabilityJwt"].is_string());
+    }
+
+    #[test]
+    fn page_action_transform_falls_back_to_sse_id_then_run_ordinal() {
+        let input = serde_json::json!({
+            "event_type": "a2ui_update",
+            "payload": {"value": true}
+        });
+        let encoded = serde_json::to_string(&input).unwrap();
+
+        let with_sse_id = seal_page_action_sse_envelope(
+            &encoded,
+            "transport-2",
+            "run-4",
+            5,
+            &page_action_context(),
+        );
+        let with_ordinal =
+            seal_page_action_sse_envelope(&encoded, "", "run-4", 5, &page_action_context());
+
+        assert_eq!(with_sse_id.message_id, "run-4:sse:transport-2");
+        assert_eq!(with_ordinal.message_id, "run-4:stream:5");
+    }
+
+    #[test]
+    fn page_action_transform_preserves_non_json_and_removes_rejected_targets() {
+        let context = page_action_context();
+        let plain = "executor sent a diagnostic line";
+        let unchanged = seal_page_action_sse_envelope(plain, "", "run-1", 0, &context);
+        assert_eq!(unchanged.data, plain);
+
+        let input = serde_json::json!({
+            "event_type": "a2ui_update",
+            "payload": {
+                "actions": [{
+                    "name": "workflow_event",
+                    "context": {"nodeId": "foreign-entry", "other": 42}
+                }]
+            }
+        });
+        let rejected = seal_page_action_sse_envelope(
+            &serde_json::to_string(&input).unwrap(),
+            "",
+            "run-1",
+            1,
+            &context,
+        );
+        let output: serde_json::Value = serde_json::from_str(&rejected.data).unwrap();
+        let action = &output["payload"]["actions"][0];
+
+        assert_eq!(rejected.report.rejected, 1);
+        assert!(action.get("pageAction").is_none());
+        assert!(action["context"].get("nodeId").is_none());
+        assert_eq!(action["context"]["other"], 42);
     }
 }

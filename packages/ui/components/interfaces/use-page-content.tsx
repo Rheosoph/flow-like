@@ -19,6 +19,7 @@ import {
 	boardReadinessKey,
 	trackBoardReadiness,
 } from "../../lib/board-readiness";
+import { normalizeRoutePath, routePathsEqual } from "../../lib/route-path";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
@@ -28,6 +29,7 @@ import type { IBoardState } from "../../state/backend-state/board-state";
 import type {
 	IGetPageOptions,
 	IPage,
+	IPageBootstrap,
 	IPageState,
 } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
@@ -56,6 +58,10 @@ import { PageInterface } from "./page-interface";
  */
 const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 
+const unsupportedPageBootstrap = async (): Promise<IPageBootstrap> => {
+	throw new Error("Page bootstrap is not supported by this backend");
+};
+
 function errorText(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string") return error;
@@ -74,8 +80,8 @@ function errorText(error: unknown): string {
  * The message the interface card shows.
  *
  * A page read that fails because its board is missing reports the missing file, while the
- * reason the board never arrived — a stale offline flag, a failed write, a server that no
- * longer has it — travels as `cause`. Showing only the outer message turned every distinct
+ * reason the board never arrived, such as a stale offline flag, a failed write, or a server that no
+ * longer has it, travels as `cause`. Showing only the outer message turned every distinct
  * cause into the same undiagnosable "file not found", so the cause is appended when it adds
  * something the outer message does not already say.
  */
@@ -209,7 +215,7 @@ export interface IStoreRedirectState {
  * the hub know it, or its event catalog produced nothing to render.
  *
  * A refresh that failed while usable data survived must never eject a working
- * interface — routes in particular are optional metadata whose absence simply
+ * interface. Routes in particular are optional metadata whose absence simply
  * falls back to the default event.
  */
 export function resolveStoreRedirect(state: IStoreRedirectState): {
@@ -245,6 +251,97 @@ export function resolveStoreRedirect(state: IStoreRedirectState): {
 	return { pending: false, redirect: hasNoAccess || catalogUnavailable };
 }
 
+export interface IRouteResolution {
+	readonly mapping: IRouteMapping | null;
+	/**
+	 * A route other than "/" was asked for and nothing matched it. The caller still
+	 * receives the default mapping to render, but a miss is a misconfigured link or
+	 * a route list this device has not synced. This is not a normal navigation.
+	 */
+	readonly missed: boolean;
+}
+
+/**
+ * Pick the route mapping for a requested path.
+ *
+ * Paths are compared in canonical form so a route stored as `/config/` still answers
+ * a link for `/config`; an unmatched path falls back to the app's default route,
+ * which is what makes an unresolvable link look like an ordinary page load. The
+ * fallback is reported through `missed` so callers can say so out loud.
+ */
+export function resolveRouteMapping(
+	availableRoutes: readonly IRouteMapping[],
+	routePath: string | null | undefined,
+): IRouteResolution {
+	const defaultRoute =
+		availableRoutes.find((route) => routePathsEqual(route.path, "/")) ?? null;
+	const requested = normalizeRoutePath(routePath);
+
+	if (requested === "/") return { mapping: defaultRoute, missed: false };
+
+	const matched =
+		availableRoutes.find((route) => routePathsEqual(route.path, requested)) ??
+		null;
+
+	return matched
+		? { mapping: matched, missed: false }
+		: { mapping: defaultRoute, missed: true };
+}
+
+/**
+ * Build the runtime route index from the event catalog.
+ *
+ * Routes are stored on the event row, so asking the route endpoint after the event catalog has
+ * arrived only repeats the same read. Keep the first event for a canonical path when malformed or
+ * legacy data contains duplicates. Explicit routes win over the synthesized "/" mapping for a
+ * default event whose route field is missing, matching the route endpoint's persisted rows.
+ */
+export function deriveRouteMappings(
+	events: readonly IEvent[] | null | undefined,
+): IRouteMapping[] {
+	const mappings = new Map<string, IRouteMapping>();
+	const add = (path: string, eventId: string) => {
+		const key = normalizeRoutePath(path);
+		if (!mappings.has(key)) mappings.set(key, { path, eventId });
+	};
+
+	for (const event of events ?? []) {
+		const path = event.route?.trim();
+		if (path) add(path, event.id);
+	}
+
+	for (const event of events ?? []) {
+		if (!event.is_default || event.route?.trim()) continue;
+		add("/", event.id);
+	}
+
+	return [...mappings.values()];
+}
+
+/** An inactive Event is configuration data, never a runnable interface target. */
+export function isUsableRuntimeEvent(
+	event: IEvent | null | undefined,
+	usableEventTypes: { has(value: string): boolean },
+): boolean {
+	return Boolean(
+		event?.active &&
+			(event.default_page_id || usableEventTypes.has(event.event_type)),
+	);
+}
+
+/**
+ * Match the bootstrap endpoint's precedence to the runtime URL resolver. A URL that only names an
+ * Event must not accidentally resolve the app's root route first.
+ */
+export function runtimeBootstrapTarget(
+	routePath: string,
+	eventId: string | null,
+	preferEventId: boolean,
+): { route?: string; eventId?: string } {
+	if (preferEventId && eventId) return { eventId };
+	return { route: routePath };
+}
+
 export function UsePageContent({
 	eventConfig,
 	notFound,
@@ -265,6 +362,7 @@ export function UsePageContent({
 	const auth = useAuth();
 	const isOnline = useNetworkStatus();
 	const hasAccessToken = Boolean(auth.user?.access_token);
+	const backendNeedsSignIn = backend.capabilities().needsSignIn;
 	const shouldWaitForPageBoardSync = backend.capabilities().canExecuteLocally;
 
 	const appId = appIdProp ?? searchParams.get("id");
@@ -277,6 +375,34 @@ export function UsePageContent({
 		eventIdTakesPrecedence ||
 		Boolean(eventId && routePathProp == null && !searchParams.has("route"));
 	const authCheckPending = Boolean(appId && !embedded && auth.isLoading);
+	const bootstrapTarget = useMemo(
+		() => runtimeBootstrapTarget(routePath, eventId, preferEventId),
+		[routePath, eventId, preferEventId],
+	);
+	const supportsPageBootstrap = Boolean(backend.pageState.getPageBootstrap);
+	const bootstrapEnabled = Boolean(
+		appId &&
+			(hasAccessToken || !backendNeedsSignIn) &&
+			supportsPageBootstrap &&
+			!auth.isLoading,
+	);
+	const bootstrap = useInvoke(
+		backend.pageState.getPageBootstrap ?? unsupportedPageBootstrap,
+		backend.pageState,
+		[appId ?? "", bootstrapTarget.route, bootstrapTarget.eventId] as const,
+		bootstrapEnabled,
+		[auth.user?.profile?.sub ?? "anonymous"],
+		0,
+	);
+	// Persisted query data is useful only after this mount has validated it against the endpoint.
+	// `Cache-Control: no-cache` lets the browser turn an unchanged body into a cheap ETag round trip.
+	const validatedBootstrap =
+		bootstrap.isFetchedAfterMount && !bootstrap.isError
+			? bootstrap.data
+			: undefined;
+	const bootstrapPending = Boolean(
+		bootstrapEnabled && !bootstrap.isFetchedAfterMount && !bootstrap.isError,
+	);
 
 	const headerRef = useRef<IToolBarActions>(
 		null,
@@ -288,32 +414,36 @@ export function UsePageContent({
 
 	// --- Data fetching (force-fresh with offline fallback) ---
 
-	const routes = useInvoke(
-		backend.routeState.getRoutes,
-		backend.routeState,
-		[appId ?? "", true],
-		typeof appId === "string",
+	const shouldLoadEventCatalog = Boolean(
+		appId &&
+			(!bootstrapEnabled ||
+				bootstrap.isError ||
+				(validatedBootstrap && !validatedBootstrap.page)),
 	);
-
 	const events = useInvoke(
 		backend.eventState.getEvents,
 		backend.eventState,
 		[appId ?? "", true],
-		(appId ?? "") !== "",
+		shouldLoadEventCatalog,
 		[],
 	);
-
-	const metadata = useInvoke(
-		backend.appState.getAppMeta,
-		backend.appState,
-		[appId ?? ""],
-		typeof appId === "string",
-		[],
-	);
+	// The web query cache is persisted. While online, do not expose a restored catalog until this
+	// mount has checked it; the bootstrap-selected Event remains available during that validation.
+	const confirmedEventCatalog =
+		supportsPageBootstrap && isOnline
+			? events.isFetchedAfterMount && !events.isError
+				? events.data
+				: undefined
+			: events.data;
 
 	// Signed-in users open locally installed apps too, so the local profiles
 	// stay authoritative for access even when a hub lookup is available.
-	const needsLocalProfileCheck = Boolean(appId && !embedded && !auth.isLoading);
+	const needsFallbackAccessChecks = Boolean(
+		!bootstrapEnabled || bootstrap.isError,
+	);
+	const needsLocalProfileCheck = Boolean(
+		appId && !embedded && !auth.isLoading && needsFallbackAccessChecks,
+	);
 
 	const localProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
@@ -326,7 +456,7 @@ export function UsePageContent({
 		backend.appState.getApp,
 		backend.appState,
 		[appId ?? ""],
-		Boolean(appId && !embedded && hasAccessToken),
+		Boolean(appId && !embedded && hasAccessToken && needsFallbackAccessChecks),
 	);
 
 	const storeHref = useMemo(
@@ -348,19 +478,21 @@ export function UsePageContent({
 	}, [appId, localProfiles.data]);
 
 	const localProfileCheckPending =
-		needsLocalProfileCheck &&
-		localProfiles.isFetching &&
-		!localProfiles.data &&
-		!localProfiles.isError;
+		bootstrapPending ||
+		(needsLocalProfileCheck &&
+			localProfiles.isFetching &&
+			!localProfiles.data &&
+			!localProfiles.isError);
 
 	const needsAuthenticatedRemoteCheck = Boolean(
-		appId && !embedded && hasAccessToken,
+		appId && !embedded && hasAccessToken && needsFallbackAccessChecks,
 	);
 	const authenticatedRemoteCheckPending =
-		needsAuthenticatedRemoteCheck &&
-		remoteApp.isFetching &&
-		!remoteApp.data &&
-		!remoteApp.isError;
+		bootstrapPending ||
+		(needsAuthenticatedRemoteCheck &&
+			remoteApp.isFetching &&
+			!remoteApp.data &&
+			!remoteApp.isError);
 
 	const storeRedirect = useMemo(
 		() =>
@@ -371,11 +503,11 @@ export function UsePageContent({
 				appInLocalProfile: appIsInAnyLocalProfile,
 				localProfileCheckPending,
 				remoteAppCheckPending: authenticatedRemoteCheckPending,
-				remoteAppLoaded: Boolean(remoteApp.data),
-				remoteAppFailed: remoteApp.isError,
-				eventsLoaded: Boolean(events.data),
-				eventsFailed: events.isError,
-				eventsFetching: events.isFetching,
+				remoteAppLoaded: Boolean(remoteApp.data || validatedBootstrap),
+				remoteAppFailed: !validatedBootstrap && remoteApp.isError,
+				eventsLoaded: Boolean(confirmedEventCatalog || validatedBootstrap),
+				eventsFailed: !validatedBootstrap && events.isError,
+				eventsFetching: bootstrapPending || events.isFetching,
 				offline: !isOnline,
 			}),
 		[
@@ -388,7 +520,9 @@ export function UsePageContent({
 			authenticatedRemoteCheckPending,
 			remoteApp.data,
 			remoteApp.isError,
-			events.data,
+			validatedBootstrap,
+			bootstrapPending,
+			confirmedEventCatalog,
 			events.isError,
 			events.isFetching,
 			isOnline,
@@ -429,12 +563,30 @@ export function UsePageContent({
 		return map;
 	}, [eventConfig]);
 
+	const catalogEvents = useMemo(() => {
+		const selected = validatedBootstrap?.event;
+		// A persisted catalog may be shown after bootstrap itself failed, which preserves native and
+		// offline fallback behavior. Once bootstrap succeeds, its freshly validated selected Event
+		// wins over any older copy in that catalog.
+		if (!selected) return confirmedEventCatalog;
+		if (!confirmedEventCatalog) return [selected];
+		return [
+			selected,
+			...confirmedEventCatalog.filter((event) => event.id !== selected.id),
+		];
+	}, [confirmedEventCatalog, validatedBootstrap]);
+
 	const sortedEvents = useMemo(() => {
-		if (!events.data) return [];
-		return events.data
+		if (!catalogEvents) return [];
+		return catalogEvents
 			.filter((a) => a.active)
 			.toSorted((a, b) => a.priority - b.priority);
-	}, [events.data]);
+	}, [catalogEvents]);
+
+	const availableRoutes = useMemo(
+		() => deriveRouteMappings(catalogEvents),
+		[catalogEvents],
+	);
 
 	const currentEvent = useMemo(() => {
 		if (!eventId) return undefined;
@@ -443,9 +595,7 @@ export function UsePageContent({
 
 	const canUseEvent = useCallback(
 		(event: IEvent | null | undefined) =>
-			Boolean(
-				event && (event.default_page_id || usableEvents.has(event.event_type)),
-			),
+			isUsableRuntimeEvent(event, usableEvents),
 		[usableEvents],
 	);
 
@@ -497,27 +647,27 @@ export function UsePageContent({
 			setResolvedPageKey("");
 		}
 
-		if (routes.isFetching && !routes.data) {
+		if (events.isFetching && !catalogEvents) {
 			if (isNavigation || needsFreshResolution) {
 				setRouteLoading(true);
 			}
 			return;
 		}
 
-		const availableRoutes = routes.data ?? [];
-		const defaultRoute = availableRoutes.find((r) => r.path === "/") ?? null;
+		const { mapping, missed } = resolveRouteMapping(availableRoutes, routePath);
 
-		let mapping: IRouteMapping | null =
-			routePath && routePath !== "/"
-				? (availableRoutes.find((r) => r.path === routePath) ?? null)
-				: defaultRoute;
-
-		if (!mapping) {
-			mapping = defaultRoute;
+		if (missed) {
+			console.warn(
+				`[UsePage] No route matches "${routePath}" for app ${appId}; rendering ${
+					mapping ? `the default route "${mapping.path}"` : "no route"
+				} instead. Known routes: ${
+					availableRoutes.map((route) => route.path).join(", ") || "(none)"
+				}`,
+			);
 		}
 
 		const cachedRouteEvent = mapping
-			? (events.data?.find((event) => event.id === mapping.eventId) ?? null)
+			? (catalogEvents?.find((event) => event.id === mapping.eventId) ?? null)
 			: null;
 
 		if (!mapping || cachedRouteEvent) {
@@ -565,9 +715,9 @@ export function UsePageContent({
 	}, [
 		appId,
 		routePath,
-		routes.data,
-		routes.isFetching,
-		events.data,
+		catalogEvents,
+		events.isFetching,
+		availableRoutes,
 		backend.eventState,
 		resolvedRouteKey,
 		routeKey,
@@ -673,6 +823,16 @@ export function UsePageContent({
 		if (activeEvent?.default_page_id) return activeEvent;
 		return null;
 	}, [effectiveRouteEvent, activeEvent]);
+
+	// Page targets suppress the application header, its only metadata consumer. Wait until the
+	// Event catalog resolves before deciding, so a custom page never starts this unrelated read.
+	const metadata = useInvoke(
+		backend.appState.getAppMeta,
+		backend.appState,
+		[appId ?? ""],
+		Boolean(appId && catalogEvents && !pageEvent),
+		[],
+	);
 	const pageEventId = pageEvent?.id ?? null;
 	const pageId = pageEvent?.default_page_id ?? null;
 	const pageBoardId = pageEvent?.board_id || undefined;
@@ -685,18 +845,43 @@ export function UsePageContent({
 		appId && pageEventId && pageId
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
+	const bootstrapPageData = useMemo(() => {
+		if (!validatedBootstrap?.page || !pageEventId || !pageId) return null;
+		if (validatedBootstrap.event.id !== pageEventId) return null;
+		if (validatedBootstrap.page.id !== pageId) return null;
+		return validatedBootstrap.page;
+	}, [validatedBootstrap, pageEventId, pageId]);
+	// A backend that supports governed Page bootstrap must never downgrade to
+	// separately fetched Event/Page data when that bootstrap fails.
+	const resolvedPageData = supportsPageBootstrap ? bootstrapPageData : pageData;
+	const pageContentRevision = bootstrapPageData
+		? (validatedBootstrap?.revision ?? undefined)
+		: undefined;
+	const pageExecutionRevision = bootstrapPageData
+		? (validatedBootstrap?.executionRevision ?? undefined)
+		: undefined;
+	const pageExecutionAuthorityUnavailable = Boolean(
+		pageEvent &&
+			!bootstrapPending &&
+			(!supportsPageBootstrap ||
+				bootstrap.isError ||
+				!bootstrapPageData ||
+				!pageExecutionRevision),
+	);
 
 	useEffect(() => {
 		if (!pageEventId || !pageId) return;
 		onResolvedPage?.({ eventId: pageEventId, pageId });
 	}, [onResolvedPage, pageEventId, pageId]);
-	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
+	const isPagePending = Boolean(
+		pageKey && !bootstrapPageData && resolvedPageKey !== pageKey,
+	);
 	// Auth/profile initialization can refresh the same route/event objects after
 	// an early native page read failed. Use the query generation to retry even
 	// when every page key field remains unchanged.
 	const catalogDataUpdatedAt = Math.max(
-		routes.dataUpdatedAt,
 		events.dataUpdatedAt,
+		bootstrap.dataUpdatedAt,
 	);
 
 	// --- Pre-sync board for the active event ---
@@ -758,6 +943,22 @@ export function UsePageContent({
 			setPageData(null);
 			setPageError(null);
 			setResolvedPageKey("");
+			setPageLoading(false);
+			return;
+		}
+		if (bootstrapPageData) {
+			setPageData((current) =>
+				isEqual(current, bootstrapPageData) ? current : bootstrapPageData,
+			);
+			setPageError(null);
+			setResolvedPageKey(pageKey);
+			setPageLoading(false);
+			return;
+		}
+		if (supportsPageBootstrap) {
+			setPageData(null);
+			setPageError(null);
+			setResolvedPageKey(pageKey);
 			setPageLoading(false);
 			return;
 		}
@@ -834,6 +1035,8 @@ export function UsePageContent({
 	}, [
 		appId,
 		pageId,
+		bootstrapPageData,
+		supportsPageBootstrap,
 		pageBoardId,
 		pageKey,
 		isRoutePending,
@@ -867,9 +1070,9 @@ export function UsePageContent({
 	}, [pageKey]);
 
 	const retryCatalog = useCallback(() => {
-		void routes.refetch();
+		if (bootstrapEnabled) void bootstrap.refetch();
 		void events.refetch();
-	}, [routes.refetch, events.refetch]);
+	}, [bootstrapEnabled, bootstrap.refetch, events.refetch]);
 
 	const wasOnlineRef = useRef(isOnline);
 	useEffect(() => {
@@ -877,8 +1080,8 @@ export function UsePageContent({
 		wasOnlineRef.current = isOnline;
 		if (!reconnected) return;
 		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
-		if (!events.data) retryCatalog();
-	}, [isOnline, pageKey, pageError, events.data, retryCatalog]);
+		if (!catalogEvents) retryCatalog();
+	}, [isOnline, pageKey, pageError, catalogEvents, retryCatalog]);
 
 	// A restored event catalog can render a page before the session is: the query cache is
 	// persisted, so a cold start replays the events while sign-in is still in flight, and every
@@ -891,8 +1094,8 @@ export function UsePageContent({
 		hadAccessTokenRef.current = hasAccessToken;
 		if (!signedIn) return;
 		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
-		if (!events.data) retryCatalog();
-	}, [hasAccessToken, pageKey, pageError, events.data, retryCatalog]);
+		if (!catalogEvents) retryCatalog();
+	}, [hasAccessToken, pageKey, pageError, catalogEvents, retryCatalog]);
 
 	// --- Route/event sync effects ---
 
@@ -912,10 +1115,10 @@ export function UsePageContent({
 		if (effectiveRouteMapping) return;
 		if (routeLoading || isRoutePending || isDirectEventPending) return;
 
-		const queriesPending = routes.isFetching || events.isFetching;
+		const queriesPending = bootstrapPending || events.isFetching;
 
 		if (sortedEvents.length === 0) {
-			if (!events.data || queriesPending) return;
+			if (!catalogEvents || queriesPending) return;
 			goToStore();
 			return;
 		}
@@ -924,7 +1127,7 @@ export function UsePageContent({
 
 		if (!rerouteEvent) {
 			if (queriesPending) return;
-			if (events.data) goToStore();
+			if (catalogEvents) goToStore();
 			return;
 		}
 
@@ -956,13 +1159,13 @@ export function UsePageContent({
 		resolvedCurrentEvent,
 		switchEvent,
 		canUseEvent,
-		events.data,
+		catalogEvents,
 		events.isFetching,
+		bootstrapPending,
 		effectiveRouteMapping,
 		routeLoading,
 		isRoutePending,
 		isDirectEventPending,
-		routes.isFetching,
 		goToStore,
 	]);
 
@@ -1015,7 +1218,7 @@ export function UsePageContent({
 	// --- Render logic ---
 
 	// A silent token renewal or a background access re-check must not tear down an
-	// interface that already resolved — it would remount the whole event tree and
+	// interface that already resolved. It would remount the whole event tree and
 	// look like the app reloading itself.
 	const accessGateBlocking = Boolean(
 		(redirectCheckPending || shouldRedirectToStore) && !activeEvent,
@@ -1048,15 +1251,29 @@ export function UsePageContent({
 
 		// Page-target event (from route or event fallback)
 		if (pageEvent) {
-			if (pageData && !isPagePending) {
+			if (bootstrapPending) return <LoadingScreen />;
+			if (pageExecutionAuthorityUnavailable) {
+				return (
+					<InterfaceLoadError
+						message="This Page could not load its execution authorization. Reload and try again."
+						offline={!isOnline}
+						retrying={bootstrapPending}
+						onRetry={retryCatalog}
+					/>
+				);
+			}
+			if (resolvedPageData && !isPagePending) {
 				return (
 					<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
 						<PageInterface
+							key={`${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`}
 							appId={appId}
 							event={pageEvent}
 							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
 							route={effectiveRouteMapping?.path ?? routePath}
-							page={pageData}
+							page={resolvedPageData}
+							pageRevision={pageContentRevision}
+							pageExecutionRevision={pageExecutionRevision}
 							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
 							active={active}
 							onNavigationMessage={
@@ -1069,7 +1286,7 @@ export function UsePageContent({
 				);
 			}
 			if (pageLoading || isPagePending) return <LoadingScreen />;
-			// The event does declare an interface — it could not be read here. Saying
+			// The event does declare an interface, but it could not be read here. Saying
 			// "no interface" would send the user to event configuration to fix data
 			// that is already correct.
 			if (pageError)
@@ -1114,12 +1331,13 @@ export function UsePageContent({
 
 		// No route config - fall back to event-based interface
 		if (!activeEvent) {
-			if (events.isFetching && !events.data) return <LoadingScreen />;
+			if ((bootstrapPending || events.isFetching) && !catalogEvents)
+				return <LoadingScreen />;
 			const hasUsableEvents = sortedEvents.some((e) => canUseEvent(e));
 			if (hasUsableEvents && !eventId) return <LoadingScreen />;
 			// Nothing cached and no way to fetch it. The app is not misconfigured, this
 			// device simply has not seen its events yet.
-			if (!events.data && (events.isError || !isOnline))
+			if (!catalogEvents && (events.isError || bootstrap.isError || !isOnline))
 				return (
 					<InterfaceLoadError
 						message={
@@ -1131,7 +1349,7 @@ export function UsePageContent({
 								: undefined
 						}
 						offline={!isOnline}
-						retrying={events.isFetching}
+						retrying={bootstrapPending || events.isFetching}
 						onRetry={retryCatalog}
 					/>
 				);
@@ -1165,7 +1383,10 @@ export function UsePageContent({
 		routeLoading,
 		isRoutePending,
 		isDirectEventPending,
-		pageData,
+		resolvedPageData,
+		pageContentRevision,
+		pageExecutionRevision,
+		pageExecutionAuthorityUnavailable,
 		pageLoading,
 		pageError,
 		pageRetryPending,
@@ -1188,7 +1409,10 @@ export function UsePageContent({
 		usableEvents,
 		canUseEvent,
 		events.isFetching,
-		events.data,
+		events.isError,
+		bootstrap.isError,
+		bootstrapPending,
+		catalogEvents,
 		notFound,
 		accessGateBlocking,
 	]);
@@ -1205,7 +1429,7 @@ export function UsePageContent({
 					{shouldRenderHeader ? (
 						<Header
 							ref={headerRef}
-							routes={routes.data ?? []}
+							routes={availableRoutes}
 							currentRoutePath={effectiveRouteMapping?.path ?? routePath}
 							onNavigateRoute={switchRoute}
 							usableEvents={new Set(usableEvents.keys())}

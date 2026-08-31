@@ -6,7 +6,11 @@ use flow_like::{
     a2ui::{page_targets::retarget_page_workflow_actions, widget::Page},
     app::App,
     bit::Metadata,
-    flow::board::{Board, LoadedPages},
+    flow::{
+        board::{Board, LoadedPages},
+        compiled::prerun::{PrerunPageExecution, decorate_page_actions, page_execution_revision},
+        event::Event,
+    },
     flow_like_storage::Path,
     state::FlowLikeState,
 };
@@ -49,6 +53,201 @@ fn detached_board(app_id: &str, board_id: &str, state: Arc<FlowLikeState>) -> Bo
 fn page_revision(page: &Page) -> Option<String> {
     let datetime: chrono::DateTime<chrono::Utc> = page.updated_at.into();
     Some(datetime.to_rfc3339())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPageBootstrap {
+    pub event: Event,
+    pub page: Option<Page>,
+    /// Hash of the projected Page returned to the client.
+    pub revision: Option<String>,
+    pub execution_revision: Option<String>,
+    pub canonical_route: Option<String>,
+    pub route_miss: bool,
+}
+
+fn normalize_route_path(path: &str) -> String {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return "/".to_string();
+    }
+    let without_fragment = raw.split('#').next().unwrap_or_default();
+    let without_query = without_fragment.split('?').next().unwrap_or_default();
+    let with_leading_slash = if without_query.starts_with('/') {
+        without_query.to_string()
+    } else {
+        format!("/{without_query}")
+    };
+    let normalized = with_leading_slash.trim_end_matches('/');
+    if normalized.is_empty() {
+        "/".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn canonical_event_route(event: &Event) -> Option<String> {
+    event
+        .route
+        .as_deref()
+        .filter(|route| !route.trim().is_empty())
+        .map(normalize_route_path)
+        .or_else(|| event.is_default.then(|| "/".to_string()))
+}
+
+fn resolve_local_route(events: &[Event], requested_route: &str) -> (Option<usize>, bool) {
+    let requested = normalize_route_path(requested_route);
+    let default = events
+        .iter()
+        .position(|event| {
+            event
+                .route
+                .as_deref()
+                .is_some_and(|route| normalize_route_path(route) == "/")
+        })
+        .or_else(|| {
+            events.iter().position(|event| {
+                event.is_default
+                    && event
+                        .route
+                        .as_deref()
+                        .is_none_or(|route| route.trim().is_empty())
+            })
+        });
+
+    if requested == "/" {
+        return (default, false);
+    }
+
+    let matched = events.iter().position(|event| {
+        event
+            .route
+            .as_deref()
+            .is_some_and(|route| normalize_route_path(route) == requested)
+    });
+    (matched.or(default), matched.is_none())
+}
+
+async fn load_local_runtime_events(app: &App) -> Vec<Event> {
+    let mut events = Vec::new();
+    for event_id in &app.events {
+        if let Ok(event) = app.get_event(event_id, None).await
+            && event.active
+            && event.event_type != "ontology_action"
+        {
+            events.push(event);
+        }
+    }
+    events
+}
+
+/// Project an Event-bound Page from the exact board snapshot available on
+/// this device. The returned action ids come from the same compiler used by
+/// native execution; raw workflow targets remain only for legacy editors.
+#[tauri::command(async)]
+pub async fn get_local_page_bootstrap(
+    handler: AppHandle,
+    app_id: String,
+    route: Option<String>,
+    event_id: Option<String>,
+) -> Result<LocalPageBootstrap, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&handler).await?;
+    let app = App::load(app_id, state).await?;
+    let events = load_local_runtime_events(&app).await;
+
+    let (event, route_miss) = if let Some(route) = route.as_deref() {
+        let (index, route_miss) = resolve_local_route(&events, route);
+        let event = index
+            .and_then(|index| events.get(index).cloned())
+            .ok_or_else(|| TauriFunctionError::new("No active Page route was found"))?;
+        (event, route_miss)
+    } else if let Some(event_id) = event_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|event_id| !event_id.is_empty())
+    {
+        let event = events
+            .iter()
+            .find(|event| event.id == event_id)
+            .cloned()
+            .ok_or_else(|| TauriFunctionError::new("No active Event was found"))?;
+        (event, false)
+    } else {
+        let (index, route_miss) = resolve_local_route(&events, "/");
+        let event = index
+            .and_then(|index| events.get(index).cloned())
+            .ok_or_else(|| TauriFunctionError::new("No active default route was found"))?;
+        (event, route_miss)
+    };
+
+    let canonical_route = canonical_event_route(&event);
+    let Some(page_id) = event.default_page_id.as_deref() else {
+        return Ok(LocalPageBootstrap {
+            event,
+            page: None,
+            revision: None,
+            execution_revision: None,
+            canonical_route,
+            route_miss,
+        });
+    };
+
+    let board = app
+        .open_board(event.board_id.clone(), None, event.board_version)
+        .await
+        .map_err(|error| {
+            TauriFunctionError::new(&format!(
+                "Failed to open Event board '{}' locally: {}",
+                event.board_id, error
+            ))
+        })?;
+    let board = board.lock().await;
+    if board.id != event.board_id
+        || event
+            .board_version
+            .is_some_and(|expected| board.version != expected)
+        || !board.page_ids.iter().any(|candidate| candidate == page_id)
+    {
+        return Err(TauriFunctionError::new(
+            "The local Page Event configuration is invalid",
+        ));
+    }
+    let page = match event.board_version {
+        Some(version) => board.load_versioned_page(page_id, version, None).await,
+        None => board.load_page(page_id, None).await,
+    }
+    .map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "Failed to load Event Page '{}' locally: {}",
+            page_id, error
+        ))
+    })?;
+    if page.id != page_id
+        || page
+            .board_id
+            .as_deref()
+            .is_some_and(|page_board_id| page_board_id != board.id)
+    {
+        return Err(TauriFunctionError::new(
+            "The local Page Event configuration is invalid",
+        ));
+    }
+
+    let execution = PrerunPageExecution::from_page(&board, &page)?;
+    let execution_revision = page_execution_revision(&board, &execution)?;
+    let page = decorate_page_actions(&page, &execution, &execution_revision)?;
+    let projected = flow_like_types::json::to_vec(&page)?;
+    let revision = blake3::hash(&projected).to_hex().to_string();
+
+    Ok(LocalPageBootstrap {
+        event,
+        page: Some(page),
+        revision: Some(revision),
+        execution_revision: Some(execution_revision),
+        canonical_route,
+        route_miss,
+    })
 }
 
 fn collect_board_pages(app_id: &str, board_id: &str, loaded: LoadedPages, out: &mut Vec<PageInfo>) {

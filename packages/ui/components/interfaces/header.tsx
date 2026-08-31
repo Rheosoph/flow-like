@@ -9,6 +9,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { normalizeRoutePath } from "../../lib/route-path";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import {
 	Button,
@@ -35,15 +36,6 @@ interface HeaderProps {
 	metadata: any;
 	appId: string;
 	switchEvent: (eventId: string) => void;
-}
-
-function normalizePath(path: string | undefined | null): string {
-	const raw = (path ?? "").trim();
-	if (!raw) return "/";
-	const withoutQuery = raw.split("?")[0] ?? raw;
-	if (!withoutQuery) return "/";
-	if (withoutQuery === "/") return "/";
-	return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
 }
 
 function getRouteLabel(route: IRouteMapping): string {
@@ -91,12 +83,12 @@ const HeaderInner = ({
 	}, [routes]);
 
 	const hasRoutes = sortedRoutes.length > 0;
-	const normalizedCurrentRoutePath = normalizePath(currentRoutePath);
+	const normalizedCurrentRoutePath = normalizeRoutePath(currentRoutePath);
 	const activeRoute = useMemo(() => {
 		if (!hasRoutes) return null;
 		return (
 			sortedRoutes.find(
-				(r) => normalizePath(r.path) === normalizedCurrentRoutePath,
+				(r) => normalizeRoutePath(r.path) === normalizedCurrentRoutePath,
 			) ??
 			sortedRoutes.find((r) => r.path === "/") ??
 			sortedRoutes[0] ??
@@ -130,7 +122,7 @@ const HeaderInner = ({
 				<div className="inline-flex items-center rounded-full bg-muted/50 p-0.5">
 					{sortedRoutes.map((r) => {
 						const isActive =
-							normalizePath(r.path) === normalizedCurrentRoutePath;
+							normalizeRoutePath(r.path) === normalizedCurrentRoutePath;
 						const icon = getRouteIcon(r);
 						return (
 							<button
@@ -172,7 +164,7 @@ const HeaderInner = ({
 				<DropdownMenuContent align="start" className="min-w-[160px]">
 					{sortedRoutes.map((r) => {
 						const isActive =
-							normalizePath(r.path) === normalizedCurrentRoutePath;
+							normalizeRoutePath(r.path) === normalizedCurrentRoutePath;
 						const icon = getRouteIcon(r);
 						return (
 							<DropdownMenuItem

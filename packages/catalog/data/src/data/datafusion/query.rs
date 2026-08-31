@@ -156,6 +156,26 @@ impl NodeLogic for SqlQueryNode {
     }
 }
 
+/// Rejects a result whose column names collide.
+///
+/// A [`QueryRow`] is keyed by column name, so two columns sharing one — `SELECT t.id, u.id` across
+/// a join — leave a single entry and drop the earlier column with no error anywhere. DataFusion
+/// de-duplicates output names only inside UNION, so every other multi-table shape can produce the
+/// collision. The comparison is exact because that is what the row map itself compares: DataFusion
+/// has already normalized the identifiers, and a quoted `"ID"` really is a separate column.
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn ensure_unique_columns(headers: &[String]) -> flow_like_types::Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(headers.len());
+    for header in headers {
+        if !seen.insert(header.as_str()) {
+            return Err(flow_like_types::anyhow!(
+                "The query returns more than one column named '{header}', but a row object holds one value per name, so all but the last would be dropped. Alias them apart, e.g. SELECT t.{header} AS t_{header}, u.{header} AS u_{header}."
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "execute")]
 pub fn batches_to_rows(
     batches: &[flow_like_storage::datafusion::arrow::record_batch::RecordBatch],
@@ -166,6 +186,7 @@ pub fn batches_to_rows(
 
     let schema = batches[0].schema();
     let headers: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    ensure_unique_columns(&headers)?;
     let mut rows: Vec<QueryRow> = Vec::new();
 
     for batch in batches {
@@ -523,6 +544,50 @@ mod tests {
         let rows = batches_to_rows(&[batch]).unwrap();
         assert_eq!(rows[0].get("day"), Some(&json!("2026-08-10")));
         assert_eq!(rows[1].get("day"), Some(&Value::Null));
+    }
+
+    /// `SELECT t.id, u.id FROM t JOIN u` reaches us as two Arrow fields both named `id`. A row is
+    /// keyed by name, so the first column used to be overwritten and vanish with no error.
+    #[tokio::test]
+    async fn duplicate_column_names_are_refused_instead_of_dropped() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("id", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["alice"])),
+                Arc::new(Int64Array::from(vec![99])),
+            ],
+        )
+        .unwrap();
+
+        let error = batches_to_rows(&[batch]).unwrap_err().to_string();
+        assert!(error.contains("'id'"), "{error}");
+        assert!(error.contains("Alias them apart"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn columns_differing_only_by_case_are_distinct_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("ID", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![99])),
+            ],
+        )
+        .unwrap();
+
+        let rows = batches_to_rows(&[batch]).unwrap();
+        assert_eq!(rows[0].get("id"), Some(&json!(1)));
+        assert_eq!(rows[0].get("ID"), Some(&json!(99)));
     }
 
     #[tokio::test]

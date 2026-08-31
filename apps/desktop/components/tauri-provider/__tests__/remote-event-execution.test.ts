@@ -279,3 +279,58 @@ describe("an event that runs on this device", () => {
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 	});
 });
+
+describe("a registry-backed local Page action", () => {
+	test("uses local prerun without exposing its id to the API", async () => {
+		const localPageEvent = {
+			...remoteEvent(),
+			execution_mode: "Local",
+			default_page_id: "page-1",
+		};
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent;
+			if (command === "get_board") {
+				return {
+					id: BOARD,
+					variables: {},
+					nodes: {},
+					layers: {},
+					execution_mode: "Hybrid",
+				};
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const state = new EventState(fakeBackend() as never);
+
+		const prerun = await state.prerunEvent(APP, EVENT, undefined, {
+			kind: "action",
+			actionId: "lda1_native-grant",
+			manifestRevision: "per2-current",
+		});
+
+		expect(prerun.event_execution_mode).toBe("Local");
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("cannot enter the remote execution path", async () => {
+		const state = new EventState(fakeBackend() as never);
+
+		await expect(
+			state.executeEventRemote(
+				APP,
+				EVENT,
+				{ id: EVENT, payload: {} } as never,
+				undefined,
+				undefined,
+				undefined,
+				{
+					kind: "action",
+					actionId: "lda1_native-grant",
+					capabilityJwt: "untrusted-server-token",
+					manifestRevision: "per2-current",
+				},
+			),
+		).rejects.toThrow("cannot be sent to the server");
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
+	});
+});

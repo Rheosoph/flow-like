@@ -12,17 +12,12 @@ import {
 	Badge,
 	Button,
 	Card,
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
 	Input,
 	Label,
 	Tabs,
 	TabsContent,
 	TabsList,
 	TabsTrigger,
-	cn,
 	useAssistantSurface,
 	useBackend,
 	useInvalidateInvoke,
@@ -43,6 +38,7 @@ import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import type { ITableSummary } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
@@ -58,11 +54,9 @@ import {
 	Box,
 	Cloud,
 	Database,
-	Globe,
 	Layers3,
 	LayoutDashboard,
 	Loader2,
-	MoreVertical,
 	Network,
 	Plus,
 	RefreshCw,
@@ -70,7 +64,6 @@ import {
 	Share2,
 	SquareTerminal,
 	Trash2,
-	User,
 	Workflow,
 	X,
 } from "lucide-react";
@@ -83,6 +76,14 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+	type SourceEntry,
+	type SourceFacet,
+	SourceFacetBar,
+	SourceGrid,
+	countAttention,
+	matchesFacet,
+} from "./source-cards";
 import { DEFAULT_TABLE_PAGE_SIZE, TableInspector } from "./table-inspector";
 
 export interface ExploreDataPageProps {
@@ -293,11 +294,8 @@ function isDataStudioView(view: string | null): view is DataStudioView {
 	return DATA_STUDIO_VIEWS.includes(view as DataStudioView);
 }
 
-interface Table {
-	name: string;
-	rowCount?: number;
-	userScoped?: boolean;
-}
+/** The Sources grid and the delete dialog share one row shape. */
+type Table = SourceEntry;
 
 const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	appId,
@@ -333,6 +331,21 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		backend.dbState,
 		[appId],
 	);
+	// Summaries open every table to read its manifest, so they stay behind the
+	// tab that shows them. Names arrive first and the cards hydrate.
+	const sourcesActive = activeView === "sources";
+	const tableSummaries = useInvoke(
+		backend.dbState.listTableSummaries,
+		backend.dbState,
+		[appId],
+		sourcesActive,
+	);
+	const userTableSummaries = useInvoke(
+		backend.dbState.listTableSummaries,
+		backend.dbState,
+		[appId, true],
+		sourcesActive,
+	);
 	const ontologies = useInvoke(
 		backend.graphState.listOverlays,
 		backend.graphState,
@@ -367,6 +380,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	);
 
 	const [query, setQuery] = useState<string>("");
+	const [facet, setFacet] = useState<SourceFacet>("all");
 	const [sortAsc, setSortAsc] = useState<boolean>(true);
 	const [setupOpen, setSetupOpen] = useState(false);
 	const [designerOpen, setDesignerOpen] = useState(false);
@@ -375,12 +389,28 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const [deleteError, setDeleteError] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState(false);
 	const processedTables = useMemo(() => {
-		const projectTables = (tables.data ?? []).map((name): Table => ({ name }));
+		const byName = (summaries: ITableSummary[] | undefined) =>
+			new Map((summaries ?? []).map((summary) => [summary.name, summary]));
+		const projectSummaries = byName(tableSummaries.data);
+		const userSummaries = byName(userTableSummaries.data);
+
+		const projectTables = (tables.data ?? []).map(
+			(name): Table => ({ name, summary: projectSummaries.get(name) }),
+		);
 		const userScopedTables = (userTables.data ?? []).map(
-			(name): Table => ({ name, userScoped: true }),
+			(name): Table => ({
+				name,
+				userScoped: true,
+				summary: userSummaries.get(name),
+			}),
 		);
 		return [...projectTables, ...userScopedTables];
-	}, [tables.data, userTables.data]);
+	}, [
+		tables.data,
+		userTables.data,
+		tableSummaries.data,
+		userTableSummaries.data,
+	]);
 
 	const filteredAndSortedTables = useMemo(() => {
 		const collator = new Intl.Collator(undefined, {
@@ -391,15 +421,29 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		const queryLower = query.trim().toLowerCase();
 
 		return processedTables
+			.filter((table) => matchesFacet(table, facet))
 			.filter(
-				(table) => !queryLower || table.name.toLowerCase().includes(queryLower),
+				(table) =>
+					!queryLower ||
+					table.name.toLowerCase().includes(queryLower) ||
+					table.summary?.consumers.object_type
+						?.toLowerCase()
+						.includes(queryLower) ||
+					table.summary?.columns.some((column) =>
+						column.name.toLowerCase().includes(queryLower),
+					),
 			)
 			.sort((a, b) =>
 				sortAsc
 					? collator.compare(a.name, b.name)
 					: collator.compare(b.name, a.name),
 			);
-	}, [processedTables, query, sortAsc]);
+	}, [processedTables, query, sortAsc, facet]);
+
+	const attentionCount = useMemo(
+		() => countAttention(processedTables),
+		[processedTables],
+	);
 
 	const navigateToTable = useCallback(
 		(tableName: string, userScoped?: boolean) => {
@@ -417,6 +461,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		tables.refetch();
 		userTables.refetch();
 		ontologies.refetch();
+		if (sourcesActive) {
+			tableSummaries.refetch();
+			userTableSummaries.refetch();
+		}
 		if (activeView === "actions") boards.refetch();
 		if (remoteDataNeeded) {
 			appConnections.refetch();
@@ -426,11 +474,14 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		tables.refetch,
 		userTables.refetch,
 		ontologies.refetch,
+		tableSummaries.refetch,
+		userTableSummaries.refetch,
 		boards.refetch,
 		appConnections.refetch,
 		installedOntologies.refetch,
 		activeView,
 		remoteDataNeeded,
+		sourcesActive,
 	]);
 
 	const openRemoteSource = useCallback(
@@ -1022,20 +1073,49 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							</Button>
 						</div>
 					</div>
+					{attentionCount > 0 && facet !== "attention" && (
+						<div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-500/35 bg-amber-500/10 px-3.5 py-2.5 text-sm">
+							<AlertTriangle className="size-4 shrink-0 text-amber-500" />
+							<span className="font-semibold">
+								{t("countSourcesNeedAttention", {
+									defaultValue_one: "{{count}} source needs attention",
+									defaultValue_other: "{{count}} sources need attention",
+									count: attentionCount,
+								})}
+							</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="ml-auto"
+								onClick={() => setFacet("attention")}
+							>
+								{t("showThem", "Show them")}
+							</Button>
+						</div>
+					)}
 					<SearchInput
 						value={query}
 						onChange={setQuery}
 						onClear={clearSearch}
 					/>
-					<TableGrid
-						tables={filteredAndSortedTables}
+					<SourceFacetBar
+						entries={processedTables}
+						active={facet}
+						onChange={setFacet}
+					/>
+					<SourceGrid
+						entries={filteredAndSortedTables}
+						loading={tableSummaries.isLoading || userTableSummaries.isLoading}
+						searchQuery={query}
 						onSelectTable={navigateToTable}
 						onRequestDelete={(target) => {
 							setDeleteConfirm("");
 							setDeleteError(null);
 							setDeleteTarget(target);
 						}}
-						searchQuery={query}
+						onResolveAlert={(target) =>
+							navigateToTable(target.name, target.userScoped)
+						}
 						onCreate={() => setDesignerOpen(true)}
 					/>
 					{usableImports.length > 0 && (
@@ -1228,177 +1308,6 @@ const SearchInput: React.FC<SearchInputProps> = ({
 		)}
 	</div>
 );
-
-interface TableGridProps {
-	tables: Table[];
-	onSelectTable: (tableName: string, userScoped?: boolean) => void;
-	onRequestDelete: (table: Table) => void;
-	searchQuery: string;
-	onCreate: () => void;
-}
-
-const TableGrid: React.FC<TableGridProps> = ({
-	tables,
-	onSelectTable,
-	onRequestDelete,
-	searchQuery,
-	onCreate,
-}) => {
-	const { t } = useTranslation("settings");
-	if (!tables.length && searchQuery) {
-		return (
-			<div className="rounded-lg border bg-card p-8 text-center">
-				<Search className="mx-auto h-10 w-10 text-muted-foreground mb-4" />
-				<h3 className="text-lg font-semibold mb-2">
-					{t("noMatchesFound", "No matches found")}
-				</h3>
-				<p className="text-sm text-muted-foreground">
-					{t("noTablesMatchQuery", 'No tables match "{{query}}".', {
-						query: searchQuery,
-					})}
-				</p>
-			</div>
-		);
-	}
-
-	if (!tables.length) {
-		return (
-			<div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 p-10 text-center">
-				<div className="mb-4 rounded-2xl bg-primary/10 p-3 text-primary">
-					<Database className="h-6 w-6" />
-				</div>
-				<h3 className="font-semibold">{t("noTablesYet", "No tables yet")}</h3>
-				<p className="mt-1 max-w-sm text-sm text-muted-foreground">
-					{t(
-						"createANativeTableToStoreStructuredDataThenExploreRowsSchemaAndIndexes",
-						"Create a native table to store structured data, then explore rows, schema, and indexes.",
-					)}
-				</p>
-				<Button className="mt-5" onClick={onCreate}>
-					<Plus className="h-4 w-4" /> {t("newTable", "New table")}
-				</Button>
-			</div>
-		);
-	}
-
-	return (
-		<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-			{tables.map((table) => (
-				<TableCard
-					key={`${table.userScoped ? "user:" : ""}${table.name}`}
-					table={table}
-					onSelect={() => onSelectTable(table.name, table.userScoped)}
-					onRequestDelete={() => onRequestDelete(table)}
-				/>
-			))}
-		</div>
-	);
-};
-
-interface TableCardProps {
-	table: Table;
-	onSelect: () => void;
-	onRequestDelete: () => void;
-}
-
-const TableCard: React.FC<TableCardProps> = ({
-	table,
-	onSelect,
-	onRequestDelete,
-}) => {
-	const { t } = useTranslation("settings");
-	return (
-		<Card className="group relative cursor-pointer transition-all duration-200 hover:shadow-lg hover:bg-accent/50 border overflow-hidden">
-			<button
-				type="button"
-				onClick={onSelect}
-				className="w-full h-full p-0 text-left"
-				title={t("openTableName", "Open table: {{name}}", { name: table.name })}
-			>
-				<div className="p-5 space-y-5">
-					<div className="flex items-start justify-between gap-3 pr-8">
-						<div className="flex items-center gap-3 min-w-0">
-							<div
-								className={cn(
-									"shrink-0 rounded-xl p-2.5 transition-colors",
-									table.userScoped
-										? "bg-amber-500/10 group-hover:bg-amber-500/20"
-										: "bg-primary/10 group-hover:bg-primary/20",
-								)}
-							>
-								<Database
-									className={cn(
-										"h-5 w-5",
-										table.userScoped ? "text-amber-500" : "text-primary",
-									)}
-								/>
-							</div>
-							<div className="min-w-0">
-								<h3 className="font-semibold text-sm leading-tight truncate">
-									{table.name}
-								</h3>
-							</div>
-						</div>
-						{table.userScoped ? (
-							<Badge
-								variant="outline"
-								className="shrink-0 bg-amber-500/10 text-amber-500 border-amber-500/20 text-[10px] gap-1"
-							>
-								<User className="h-3 w-3" />
-								{t("userScoped", "User scoped")}
-							</Badge>
-						) : (
-							<Badge
-								variant="outline"
-								className="shrink-0 bg-primary/10 text-primary border-primary/20 text-[10px] gap-1"
-							>
-								<Globe className="h-3 w-3" />
-								{t("shared", "Shared")}
-							</Badge>
-						)}
-					</div>
-
-					<div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
-						<span>
-							{t(
-								"schemaAndCountsLoadOnDemand",
-								"Schema and counts load on demand",
-							)}
-						</span>
-						<span className="font-medium text-foreground">
-							{t("openTable", "Open table →")}
-						</span>
-					</div>
-				</div>
-			</button>
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label={t("actionsForName", "Actions for {{name}}", {
-							name: table.name,
-						})}
-						className="absolute right-2 top-2 h-7 w-7 opacity-0 transition-opacity max-sm:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-					>
-						<MoreVertical className="h-4 w-4" />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end">
-					<DropdownMenuItem
-						className="text-destructive focus:text-destructive"
-						onSelect={(event) => {
-							event.preventDefault();
-							onRequestDelete();
-						}}
-					>
-						<Trash2 className="h-4 w-4" /> {t("deleteTable", "Delete table")}
-					</DropdownMenuItem>
-				</DropdownMenuContent>
-			</DropdownMenu>
-		</Card>
-	);
-};
 
 interface RemoteSourceCardProps {
 	name: string;

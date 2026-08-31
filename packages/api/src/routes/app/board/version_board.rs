@@ -59,7 +59,8 @@ pub async fn version_board(
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
-    spawn_compiled_artifact_warmup(&state, &app_id, &board, published);
+    let manifest = published_prerun_manifest(&board, published).await;
+    spawn_compiled_artifact_warmup(&state, &app_id, &board, published, manifest);
 
     audit_branch!(
         state,
@@ -76,6 +77,42 @@ pub async fn version_board(
     Ok(Json(version))
 }
 
+/// Page payloads are stored beside the board, so publication must load the
+/// just-created Page snapshots explicitly before it can persist their action
+/// map in the prerun artifact.
+async fn published_prerun_manifest(
+    board: &Board,
+    published: (u32, u32, u32),
+) -> Arc<PrerunManifest> {
+    let mut pages = Vec::with_capacity(board.page_ids.len());
+    for page_id in &board.page_ids {
+        match board.load_versioned_page(page_id, published, None).await {
+            Ok(page) => pages.push(page),
+            Err(error) => {
+                tracing::warn!(
+                    board_id = %board.id,
+                    page_id,
+                    error = %error,
+                    "Published Page could not be added to the prerun manifest"
+                );
+                return Arc::new(PrerunManifest::from_board(board));
+            }
+        }
+    }
+
+    match PrerunManifest::from_board_and_pages(board, &pages) {
+        Ok(manifest) => Arc::new(manifest),
+        Err(error) => {
+            tracing::warn!(
+                board_id = %board.id,
+                error = %error,
+                "Published Page execution map is invalid; persisting board-only prerun data"
+            );
+            Arc::new(PrerunManifest::from_board(board))
+        }
+    }
+}
+
 /// Eagerly persist the prerun manifest and compile the just-published
 /// immutable snapshot so the first prerun and the executor's first run of this
 /// version start from artifacts instead of the proto.
@@ -89,6 +126,7 @@ fn spawn_compiled_artifact_warmup(
     app_id: &str,
     board: &Board,
     published: (u32, u32, u32),
+    manifest: Arc<PrerunManifest>,
 ) {
     let Some(app_state) = board.app_state.clone() else {
         return;
@@ -96,7 +134,6 @@ fn spawn_compiled_artifact_warmup(
     let board_dir = board.board_dir.clone();
     let board_id = board.id.clone();
 
-    let manifest = Arc::new(PrerunManifest::from_board(board));
     state.prerun_manifest_cache.insert(
         version_manifest_cache_key(app_id, &board_id, published),
         manifest.clone(),

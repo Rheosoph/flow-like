@@ -7,6 +7,8 @@ mod channel_jwt;
 pub mod compiled_artifacts;
 mod dispatch;
 mod jwt;
+mod page_action_jwt;
+mod page_action_sealer;
 pub mod payload_storage;
 pub mod queue;
 pub mod rejection;
@@ -27,8 +29,17 @@ pub use dispatch::{
 };
 pub use jwt::{
     ExecutionClaims, ExecutionJwk, ExecutionJwks, ExecutionJwtError, ExecutionJwtParams,
-    get_jwks as get_execution_jwks, is_configured as is_jwt_configured, sign as sign_execution_jwt,
+    PageExecutionJwtContext, get_jwks as get_execution_jwks, is_configured as is_jwt_configured,
+    sign as sign_execution_jwt, sign_with_page_context as sign_execution_jwt_with_page_context,
     verify as verify_execution_jwt, verify_user as verify_user_jwt,
+};
+pub use page_action_jwt::{
+    MAX_PAGE_ACTION_TTL_SECONDS, PAGE_ACTION_CAPABILITY_VERSION, PageActionClaims,
+    PageActionJwtError, PageActionJwtParams, sign_page_action_capability,
+    verify_page_action_capability,
+};
+pub use page_action_sealer::{
+    DYNAMIC_PAGE_ACTION_ID_PREFIX, PageActionSealingContext, PageActionSealingReport,
 };
 #[cfg(feature = "redis")]
 pub use queue::QueueWorker;
@@ -37,7 +48,7 @@ pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
 pub(crate) use sse_proxy::completed_run_status;
 pub use sse_proxy::{
     collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
-    update_run_on_completion,
+    proxy_sse_response_with_page_actions, update_run_on_completion,
 };
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,

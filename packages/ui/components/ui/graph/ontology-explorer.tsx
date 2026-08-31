@@ -288,8 +288,8 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 			seedNode?: SubgraphNode,
 			depth?: number,
 			options?: ExpansionOptions,
-		) => {
-			if (!overlay) return;
+		): Promise<string[] | undefined> => {
+			if (!overlay) return undefined;
 
 			if (seedNode) {
 				setData((prev) =>
@@ -325,7 +325,16 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 					edge_labels: options?.edgeLabels,
 				});
 				const enriched = enrichSubgraphWithStyles(result, overlay);
+				// Which of these are actually new decides what a double-click can
+				// undo later — dataRef still holds the pre-merge snapshot here.
+				const existingIds = new Set(
+					(dataRef.current?.nodes ?? []).map((node) => node.id),
+				);
+				const addedIds = enriched.nodes
+					.map((node) => node.id)
+					.filter((id) => id !== nodeId && !existingIds.has(id));
 				setData((prev) => mergeSubgraphData(prev, enriched));
+				return addedIds;
 			} catch (err) {
 				toast.error(
 					t(
@@ -334,11 +343,38 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 						{ val: extractGraphErrorMessage(err) },
 					),
 				);
+				return undefined;
 			} finally {
 				setLoading(false);
 			}
 		},
 		[backend.graphState, appId, overlayId, overlay, t],
+	);
+
+	/** Undo channel for reversible expansions and per-object hiding. */
+	const handleRemoveNodes = useCallback((nodeIds: readonly string[]) => {
+		if (nodeIds.length === 0) return;
+		const removed = new Set(nodeIds);
+		setData((prev) => removeSubtree(prev, removed));
+		setExpandedChildren((prev) => {
+			let changed = false;
+			const next = new Map(prev);
+			for (const id of removed) {
+				if (next.delete(id)) changed = true;
+			}
+			return changed ? next : prev;
+		});
+	}, []);
+
+	/** Puts externally-built results (a Cypher query, say) onto the canvas. */
+	const handleMergeSubgraph = useCallback(
+		(result: SubgraphResult) => {
+			if (!overlay) return;
+			setData((prev) =>
+				mergeSubgraphData(prev, enrichSubgraphWithStyles(result, overlay)),
+			);
+		},
+		[overlay],
 	);
 
 	const handleExpandChildren = useCallback(
@@ -683,6 +719,9 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				onExpandNode={allowExpand ? handleExpandNode : undefined}
 				onExpandChildren={allowExpand ? handleExpandChildren : undefined}
 				onCollapseChildren={allowExpand ? handleCollapseChildren : undefined}
+				onRemoveNodes={allowExpand ? handleRemoveNodes : undefined}
+				onMergeSubgraph={allowCypher ? handleMergeSubgraph : undefined}
+				persistKey={`${appId}:${overlayId}`}
 				expandedChildParents={expandedChildParents}
 				onSearchNodes={allowSearch ? handleSearchNodes : undefined}
 				onStyleChange={allowStyleEdit ? handleStyleChange : undefined}

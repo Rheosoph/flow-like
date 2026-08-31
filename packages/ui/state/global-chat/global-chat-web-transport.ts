@@ -17,6 +17,7 @@ import type {
 	FrontendToolRequest,
 	FrontendToolResponse,
 } from "../../components/global-chat/global-tool-bridge";
+import { apiResponseError } from "../../lib/api-error";
 import {
 	cancelChannel,
 	isChannelHandle,
@@ -480,11 +481,14 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 				signal: streamAbort.signal,
 			});
 
-			if (!response.ok || !response.body) {
+			if (!response.ok) {
+				// Keep the API envelope (code, message, incident id) on the error object: the chat
+				// renders a classified failure card from it, not from a stringified body.
 				const text = await response.text().catch(() => "");
-				throw new Error(
-					`FlowPilot request failed (${response.status}): ${text.slice(0, 300)}`,
-				);
+				throw apiResponseError(response, text, "/api/v1/ai/global-chat");
+			}
+			if (!response.body) {
+				throw new Error("FlowPilot accepted the request but sent no stream.");
 			}
 
 			let runId: string | undefined;

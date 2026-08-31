@@ -94,7 +94,8 @@ function messageFromUnknown(error: unknown): string {
 	return error == null ? "" : String(error).trim();
 }
 
-function redactAndBound(raw: string): string {
+/** Strip credentials and bound the length of any error text before it is stored or shown. */
+export function redactErrorText(raw: string): string {
 	return raw
 		.replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
 		.replace(
@@ -149,7 +150,7 @@ export function classifyAgentBackendError(
 	provider: AIProvider | string,
 	error: unknown,
 ): AgentBackendDiagnostic | null {
-	const rawError = redactAndBound(messageFromUnknown(error));
+	const rawError = redactErrorText(messageFromUnknown(error));
 	if (!rawError) return null;
 
 	const normalized = rawError.toLowerCase();

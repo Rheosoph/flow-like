@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Label } from "../../../components/ui/label";
 import {
 	Select,
@@ -75,6 +75,34 @@ const templateJson = (template: GenericTemplate): string => {
 	}
 };
 
+const detectTemplate = (value: string): GenericTemplate => {
+	const trimmed = value.trim();
+	if (trimmed === "") return "unset";
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		return "custom";
+	}
+
+	if (parsed === null) return "null";
+	if (Array.isArray(parsed)) return "array";
+
+	switch (typeof parsed) {
+		case "string":
+			return "string";
+		case "boolean":
+			return "boolean";
+		case "number":
+			return /[.eE]/.test(trimmed) ? "float" : "integer";
+		case "object":
+			return "object";
+		default:
+			return "custom";
+	}
+};
+
 export function GenericVariable({
 	disabled,
 	variable,
@@ -88,9 +116,10 @@ export function GenericVariable({
 	const [jsonValue, setJsonValue] = useState(() =>
 		decodeJsonBytes(variable.default_value),
 	);
-	const [template, setTemplate] = useState<GenericTemplate>("custom");
 	const [jsonError, setJsonError] = useState<string | null>(null);
 	const [isFocused, setIsFocused] = useState(false);
+
+	const template = useMemo(() => detectTemplate(jsonValue), [jsonValue]);
 
 	useEffect(() => {
 		if (isFocused) return;
@@ -99,7 +128,6 @@ export function GenericVariable({
 
 		setJsonValue(nextJsonValue);
 		setJsonError(null);
-		setTemplate("custom");
 	}, [isFocused, jsonValue, variable.default_value]);
 
 	const commitJsonText = useCallback(
@@ -122,7 +150,6 @@ export function GenericVariable({
 	const handleJsonChange = useCallback(
 		(nextJson: string) => {
 			setJsonValue(nextJson);
-			setTemplate("custom");
 
 			if (nextJson.trim() === "") {
 				setJsonError(null);
@@ -143,7 +170,8 @@ export function GenericVariable({
 
 	const handleTemplateChange = useCallback(
 		(nextTemplate: GenericTemplate) => {
-			setTemplate(nextTemplate);
+			if (nextTemplate === "custom" || nextTemplate === template) return;
+
 			setJsonError(null);
 
 			if (nextTemplate === "unset") {
@@ -152,15 +180,11 @@ export function GenericVariable({
 				return;
 			}
 
-			if (nextTemplate === "custom") {
-				return;
-			}
-
 			const nextValue = templateJson(nextTemplate);
 			setJsonValue(nextValue);
 			commitJsonText(nextValue);
 		},
-		[clearDefaultValue, commitJsonText],
+		[clearDefaultValue, commitJsonText, template],
 	);
 
 	return (
@@ -180,9 +204,11 @@ export function GenericVariable({
 						<SelectValue placeholder={t("valueType", "Value Type")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="custom">
-							{t("customJson", "Custom JSON")}
-						</SelectItem>
+						{template === "custom" && (
+							<SelectItem value="custom">
+								{t("customJson", "Custom JSON")}
+							</SelectItem>
+						)}
 						<SelectItem value="unset">
 							{t("noDefault", "No default")}
 						</SelectItem>

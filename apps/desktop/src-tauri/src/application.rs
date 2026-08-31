@@ -10,6 +10,7 @@ mod event_bus;
 mod event_sink;
 mod execution_identity;
 mod functions;
+mod local_page_actions;
 mod profile;
 mod settings;
 mod state;
@@ -1132,6 +1133,8 @@ pub fn run() {
             functions::app::fork::upload_local_app_content_bundle,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
+            functions::app::tables::db_table_summaries,
+            functions::app::tables::db_table_summaries_user,
             functions::app::tables::db_schema,
             functions::app::tables::db_create_table,
             functions::app::tables::db_list,
@@ -1280,6 +1283,7 @@ pub fn run() {
             functions::a2ui::widget::push_widget_meta,
             functions::a2ui::page::get_pages,
             functions::a2ui::page::get_page,
+            functions::a2ui::page::get_local_page_bootstrap,
             functions::a2ui::page::get_page_by_route,
             functions::a2ui::page::create_page,
             functions::a2ui::page::update_page,

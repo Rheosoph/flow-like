@@ -1,5 +1,8 @@
 import type { IRoleState } from "@flow-like/flow-like-ui";
-import type { IBackendRole } from "@flow-like/flow-like-ui/state/backend-state/types";
+import type {
+	IBackendRole,
+	IOwnRole,
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -22,6 +25,9 @@ export class WebRoleState implements IRoleState {
 		}
 	}
 
+	async getOwnRole(appId: string): Promise<IOwnRole> {
+		return await apiGet<IOwnRole>(`apps/${appId}/roles/me`, this.backend.auth);
+	}
 	async deleteRole(appId: string, roleId: string): Promise<void> {
 		await apiDelete(`apps/${appId}/roles/${roleId}`, this.backend.auth);
 	}

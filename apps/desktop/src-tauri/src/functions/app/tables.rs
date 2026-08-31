@@ -10,6 +10,7 @@ use flow_like::{
         arrow_schema::Schema,
         databases::sql_params::bind_params,
         databases::table_cascade::prune_table_references,
+        databases::table_summary::{TableSummary, summarize_tables},
         databases::vector::{
             VectorStore,
             lancedb::{IndexConfigDto, LanceDBVectorStore, record_batches_to_vec},
@@ -144,35 +145,57 @@ async fn db_connection_inner(
 pub async fn db_table_names(
     app_handle: AppHandle,
     app_id: String,
-    table_name: Option<String>,
     credentials: Option<Arc<SharedCredentials>>,
 ) -> Result<Vec<String>, TauriFunctionError> {
-    let db = db_connection_inner(&app_handle, app_id, table_name, credentials, false, None).await?;
-    let table_names = db
-        .list_tables()
-        .await?
-        .into_iter()
-        .filter(|name| !flow_like_catalog::is_reserved_table(name))
-        .collect();
-    Ok(table_names)
+    let connection = db_connection_handle(&app_handle, &app_id, credentials, false, None).await?;
+    Ok(table_names_from(&connection).await?)
 }
 
 #[tauri::command(async)]
 pub async fn db_table_names_user(
     app_handle: AppHandle,
     app_id: String,
-    table_name: Option<String>,
     credentials: Option<Arc<SharedCredentials>>,
     sub: Option<String>,
 ) -> Result<Vec<String>, TauriFunctionError> {
-    let db = db_connection_inner(&app_handle, app_id, table_name, credentials, true, sub).await?;
-    let table_names = db
-        .list_tables()
+    let connection = db_connection_handle(&app_handle, &app_id, credentials, true, sub).await?;
+    Ok(table_names_from(&connection).await?)
+}
+
+/// Offline twin of `GET /apps/{app_id}/db?detail=summary`. Offline apps have no
+/// response cache in front of them, but they also read a local filesystem, so
+/// the per-table manifest reads stay cheap.
+#[tauri::command(async)]
+pub async fn db_table_summaries(
+    app_handle: AppHandle,
+    app_id: String,
+    credentials: Option<Arc<SharedCredentials>>,
+) -> Result<Vec<TableSummary>, TauriFunctionError> {
+    let connection = db_connection_handle(&app_handle, &app_id, credentials, false, None).await?;
+    let names = table_names_from(&connection).await?;
+    Ok(summarize_tables(&connection, names).await)
+}
+
+#[tauri::command(async)]
+pub async fn db_table_summaries_user(
+    app_handle: AppHandle,
+    app_id: String,
+    credentials: Option<Arc<SharedCredentials>>,
+    sub: Option<String>,
+) -> Result<Vec<TableSummary>, TauriFunctionError> {
+    let connection = db_connection_handle(&app_handle, &app_id, credentials, true, sub).await?;
+    let names = table_names_from(&connection).await?;
+    Ok(summarize_tables(&connection, names).await)
+}
+
+async fn table_names_from(connection: &Connection) -> flow_like_types::Result<Vec<String>> {
+    Ok(connection
+        .table_names()
+        .execute()
         .await?
         .into_iter()
         .filter(|name| !flow_like_catalog::is_reserved_table(name))
-        .collect();
-    Ok(table_names)
+        .collect())
 }
 
 #[tauri::command(async)]

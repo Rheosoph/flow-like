@@ -213,7 +213,7 @@ fn object_type_is_dangling(
 /// to `Connection::open_table`), but callers occasionally carry the on-disk
 /// directory name. Stripping the suffix on both sides makes the two spellings
 /// compare equal without ever widening the match.
-fn normalize_table_name(name: &str) -> &str {
+pub(crate) fn normalize_table_name(name: &str) -> &str {
     name.strip_suffix(".lance").unwrap_or(name)
 }
 
@@ -225,7 +225,7 @@ fn is_identifier_char(character: char) -> bool {
 /// skipped, quoted and backticked identifiers are unwrapped, and a bare
 /// identifier only matches when the whole token equals the table name, so
 /// `orders` never matches `orders_archive`.
-fn sql_references_table(sql: &str, table_name: &str) -> bool {
+pub(crate) fn sql_references_table(sql: &str, table_name: &str) -> bool {
     let target = normalize_table_name(table_name);
     if target.is_empty() {
         return false;

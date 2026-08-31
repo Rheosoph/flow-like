@@ -69,7 +69,7 @@ pub async fn get_element_demand(
     Query(query): Query<ElementDemandQuery>,
 ) -> Result<Json<ElementDemandResponse>, ApiError> {
     super::ensure_connected_app_board_invoke_denied(&user)?;
-    ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
 
     let version = query.version.as_deref().and_then(parse_version);
     let manifest = load_prerun_manifest(&state, &app_id, &board_id, version).await?;

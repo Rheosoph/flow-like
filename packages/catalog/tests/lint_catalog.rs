@@ -602,7 +602,11 @@ fn warn_struct_pins_without_schema() {
 #[tokio::test]
 async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
     // Start with fixed regressions and grow this list as dynamic nodes are audited.
-    const COVERED_NODES: &[&str] = &["a2ui_update_overlay"];
+    const COVERED_NODES: &[&str] = &[
+        "a2ui_update_overlay",
+        "struct_cast_to_schema",
+        "struct_cast_to_struct",
+    ];
     const DEFAULT_SETTINGS: &[Option<&str>] = &[None];
     const OVERLAY_SETTINGS: &[Option<&str>] = &[Some("Set All"), Some("Add"), Some("Clear")];
 

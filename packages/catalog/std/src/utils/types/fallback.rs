@@ -82,5 +82,6 @@ impl NodeLogic for FallbackNode {
         let _ = node.match_type("default", board, None, None);
         let _ = node.match_type("result", board, None, None);
         node.harmonize_type(vec!["value", "default", "result"], true);
+        node.harmonize_value_type(vec!["value", "default", "result"]);
     }
 }

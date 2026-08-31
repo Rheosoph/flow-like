@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
 	fetcher: vi.fn(),
 	put: vi.fn(),
+	discardOfflineSyncForApp: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
@@ -17,7 +18,7 @@ vi.mock("../../../lib/api", () => ({
 }));
 
 // The barrel drags the whole component library into the module graph; this suite
-// only needs the enums and the one helper `app-state` reads at runtime.
+// only needs the enums and the helpers `app-state` reads at runtime.
 vi.mock("@flow-like/flow-like-ui", async () => ({
 	...(await vi.importActual<Record<string, unknown>>(
 		"@flow-like/flow-like-ui/lib/schema/app/app",
@@ -25,6 +26,7 @@ vi.mock("@flow-like/flow-like-ui", async () => ({
 	IExecutionStage: { Dev: "Dev" },
 	ILogLevel: { Debug: "Debug" },
 	injectDataFunction: vi.fn(),
+	discardOfflineSyncForApp: mocks.discardOfflineSyncForApp,
 }));
 
 vi.mock("../../../lib/apps-db", () => ({
@@ -55,6 +57,7 @@ describe("AppState.deleteApp", () => {
 	beforeEach(() => {
 		mocks.invoke.mockReset().mockResolvedValue(undefined);
 		mocks.fetcher.mockReset();
+		mocks.discardOfflineSyncForApp.mockReset().mockResolvedValue(0);
 	});
 
 	test("removes the local copy after the server accepted the delete", async () => {
@@ -112,5 +115,16 @@ describe("AppState.deleteApp", () => {
 
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 		expect(mocks.invoke).toHaveBeenCalledWith("delete_app", { appId: APP });
+	});
+
+	test("clears queued offline edits alongside the local copy", async () => {
+		mocks.fetcher.mockResolvedValue(undefined);
+
+		await new AppState(onlineBackend()).deleteApp(APP);
+
+		expect(mocks.discardOfflineSyncForApp).toHaveBeenCalledWith(
+			APP,
+			"app-deleted",
+		);
 	});
 });

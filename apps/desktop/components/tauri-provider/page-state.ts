@@ -1,6 +1,7 @@
 import {
 	type IGetPageOptions,
 	type IPage,
+	type IPageBootstrap,
 	type IPageState,
 	type PageListItem,
 	normalizePageForPersistence,
@@ -84,6 +85,46 @@ export function isCachedPageOutdated(
 
 export class PageState implements IPageState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async getLocalPageBootstrap(
+		appId: string,
+		route?: string,
+		eventId?: string,
+	): Promise<IPageBootstrap> {
+		return invoke<IPageBootstrap>("get_local_page_bootstrap", {
+			appId,
+			route,
+			eventId,
+		});
+	}
+
+	async getPageBootstrap(
+		appId: string,
+		route?: string,
+		eventId?: string,
+	): Promise<IPageBootstrap> {
+		const localOnly = await this.backend.isLocalOnly(appId).catch(() => false);
+		if (localOnly) {
+			return this.getLocalPageBootstrap(appId, route, eventId);
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				"Hosted Page bootstrap requires an authenticated hub session",
+			);
+		}
+
+		const query = new URLSearchParams();
+		if (route !== undefined) query.set("route", route);
+		if (eventId !== undefined) query.set("eventId", eventId);
+		const params = query.size > 0 ? `?${query.toString()}` : "";
+
+		return fetcher<IPageBootstrap>(
+			this.backend.profile,
+			`apps/${appId}/pages/bootstrap${params}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
 
 	private async getNativePage(
 		appId: string,
