@@ -214,6 +214,7 @@ pub async fn invoke_board_async(
         version: params
             .version
             .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat)),
+        board_etag: None,
         mode: RunMode::Queue,
         status: RunStatus::Pending,
         input_payload_len,
@@ -289,6 +290,7 @@ pub async fn invoke_board_async(
         app_id: app_id.clone(),
         board_id,
         board_version: params.version,
+        board_etag: None,
         node_id: params.node_id.clone(),
         event_json: None,
         payload: params.payload,

@@ -1,5 +1,6 @@
 import type { IEvent } from "@flow-like/flow-like-ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiResponseError } from "../../../lib/api-error";
 
 const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
@@ -21,6 +22,13 @@ vi.mock("../../../lib/api", () => ({
 	streamFetcher: mocks.streamFetcher,
 }));
 
+vi.mock("../../../lib/oauth-db", () => ({
+	oauthConsentStore: {
+		getConsentedProviderIds: vi.fn().mockResolvedValue(new Set()),
+	},
+	oauthTokenStore: {},
+}));
+
 vi.mock("sonner", () => ({
 	toast: Object.assign(vi.fn(), {
 		success: vi.fn(),
@@ -31,7 +39,28 @@ vi.mock("sonner", () => ({
 	}),
 }));
 
-import { EventState } from "../event-state";
+// The remote-known Event markers persist through localStorage, which the node
+// test environment does not provide.
+if (typeof globalThis.localStorage === "undefined") {
+	const store = new Map<string, string>();
+	Object.defineProperty(globalThis, "localStorage", {
+		configurable: true,
+		value: {
+			getItem: (key: string) => store.get(key) ?? null,
+			setItem: (key: string, value: string) => {
+				store.set(key, String(value));
+			},
+			removeItem: (key: string) => {
+				store.delete(key);
+			},
+			clear: () => {
+				store.clear();
+			},
+		},
+	});
+}
+
+import { EventState, mergeLocalAndRemoteEvents } from "../event-state";
 
 const APP = "app-1";
 const EVENT = "event-1";
@@ -79,6 +108,53 @@ beforeEach(() => {
 	mocks.invoke.mockReset();
 	mocks.fetcher.mockReset();
 	mocks.streamFetcher.mockReset();
+	localStorage.clear();
+});
+
+describe("event snapshot freshness", () => {
+	test("keeps a strictly newer local Hybrid event", () => {
+		const local = {
+			...remoteEvent(),
+			execution_mode: "Hybrid",
+			updated_at: { secs_since_epoch: 3, nanos_since_epoch: 0 },
+		} as unknown as IEvent;
+		const remote = {
+			...remoteEvent(),
+			updated_at: { secs_since_epoch: 2, nanos_since_epoch: 0 },
+		};
+
+		expect(mergeLocalAndRemoteEvents([local], [remote])).toEqual([local]);
+	});
+
+	test("accepts a newer remote event and drops a removed Remote-only cache", () => {
+		const local = {
+			...remoteEvent(),
+			execution_mode: "Hybrid",
+			updated_at: { secs_since_epoch: 2, nanos_since_epoch: 0 },
+		} as unknown as IEvent;
+		const remote = {
+			...remoteEvent(),
+			updated_at: { secs_since_epoch: 3, nanos_since_epoch: 0 },
+		};
+		const removedRemoteOnly = {
+			...remoteEvent(),
+			id: "removed-remote-event",
+		};
+
+		expect(
+			mergeLocalAndRemoteEvents([local, removedRemoteOnly], [remote]),
+		).toEqual([remote]);
+	});
+
+	test("retains a device-local event missing from the remote mirror", () => {
+		const local = {
+			...remoteEvent(),
+			id: "device-local-event",
+			execution_mode: "Local",
+		} as unknown as IEvent;
+
+		expect(mergeLocalAndRemoteEvents([local], [])).toEqual([local]);
+	});
 });
 
 /**
@@ -281,6 +357,188 @@ describe("an event that runs on this device", () => {
 });
 
 describe("a registry-backed local Page action", () => {
+	test("prefers the local Hybrid path when the exact Page contract is present", async () => {
+		const localPageEvent = {
+			...remoteEvent(),
+			execution_mode: "Local",
+			default_page_id: "page-1",
+		};
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-current" };
+			}
+			if (command === "get_event") return localPageEvent;
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue({
+			board_id: BOARD,
+			runtime_variables: [],
+			oauth_requirements: [],
+			requires_local_execution: false,
+			execution_mode: "Hybrid",
+			event_execution_mode: "Local",
+			can_execute_locally: true,
+			has_wasm_nodes: false,
+			wasm_package_ids: [],
+			wasm_package_permissions: {},
+			manifest_revision: "per2-current",
+		});
+		const backend = fakeBackend();
+		backend.profile = { id: "profile-1" } as never;
+		backend.boardState.getBoard.mockResolvedValue({
+			id: BOARD,
+			variables: {},
+			nodes: {},
+			layers: {},
+			execution_mode: "Hybrid",
+		});
+		const state = new EventState(backend as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-current",
+			},
+		);
+
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
+		expect(mocks.invoke).toHaveBeenCalledWith("get_local_page_bootstrap", {
+			appId: APP,
+			eventId: EVENT,
+		});
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({
+				appId: APP,
+				eventId: EVENT,
+				pageTrigger: {
+					kind: "action",
+					action_id: "pa1_static",
+					manifest_revision: "per2-current",
+				},
+			}),
+		);
+	});
+
+	test("falls back remotely before execution when the exact Page contract is not local", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_local_page_bootstrap") {
+				throw new Error("versioned Page is not local");
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue({
+			board_id: BOARD,
+			runtime_variables: [],
+			oauth_requirements: [],
+			requires_local_execution: false,
+			execution_mode: "Hybrid",
+			event_execution_mode: "Local",
+			can_execute_locally: true,
+			has_wasm_nodes: false,
+			wasm_package_ids: [],
+			wasm_package_permissions: {},
+			manifest_revision: "per2-current",
+		});
+		mocks.streamFetcher.mockResolvedValue(undefined);
+		const state = new EventState(fakeBackend() as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-current",
+			},
+		);
+
+		expect(mocks.streamFetcher).toHaveBeenCalledTimes(1);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"execute_event",
+			expect.anything(),
+		);
+	});
+
+	test("does not revive a remote-known Event the hub reports as deleted", async () => {
+		const localPageEvent = {
+			...remoteEvent(),
+			execution_mode: "Local",
+			default_page_id: "page-1",
+		};
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent;
+			if (command === "upsert_event") return undefined;
+			if (command === "delete_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend();
+		backend.isOffline.mockResolvedValue(false);
+		const state = new EventState(backend as never);
+
+		// The server acknowledged the Event once, so a later 404 is a revocation.
+		mocks.fetcher.mockResolvedValueOnce(localPageEvent);
+		await state.getEvent(APP, EVENT);
+
+		mocks.fetcher.mockRejectedValue(
+			new ApiResponseError({
+				status: 404,
+				message: "Event not found",
+				path: `apps/${APP}/events/${EVENT}`,
+			}),
+		);
+
+		await expect(state.getEvent(APP, EVENT)).rejects.toMatchObject({
+			status: 404,
+		});
+		expect(mocks.invoke).toHaveBeenCalledWith("delete_event", {
+			appId: APP,
+			eventId: EVENT,
+		});
+	});
+
+	test("keeps a never-uploaded local Event the server has not acknowledged", async () => {
+		const localPageEvent = {
+			...remoteEvent(),
+			execution_mode: "Local",
+			default_page_id: "page-1",
+		};
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockRejectedValue(
+			new ApiResponseError({
+				status: 404,
+				message: "Event not found",
+				path: `apps/${APP}/events/${EVENT}`,
+			}),
+		);
+		const backend = fakeBackend();
+		backend.isOffline.mockResolvedValue(false);
+		const state = new EventState(backend as never);
+
+		await expect(state.getEvent(APP, EVENT)).resolves.toEqual(localPageEvent);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"delete_event",
+			expect.anything(),
+		);
+	});
+
 	test("uses local prerun without exposing its id to the API", async () => {
 		const localPageEvent = {
 			...remoteEvent(),
@@ -331,6 +589,177 @@ describe("a registry-backed local Page action", () => {
 				},
 			),
 		).rejects.toThrow("cannot be sent to the server");
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The pre-run revision gate hands a stale local Page contract to the server —
+ * but only when the server is actually there to take it. A local-only app with
+ * a moved board must fail actionably instead of dying inside a doomed hub call.
+ */
+describe("the pre-run Page contract revision gate", () => {
+	const hybridPrerun = () => ({
+		board_id: BOARD,
+		runtime_variables: [],
+		oauth_requirements: [],
+		requires_local_execution: false,
+		execution_mode: "Hybrid",
+		event_execution_mode: "Local",
+		can_execute_locally: true,
+		has_wasm_nodes: false,
+		wasm_package_ids: [],
+		wasm_package_permissions: {},
+		manifest_revision: "per2-current",
+	});
+
+	const localPageEvent = () => ({
+		...remoteEvent(),
+		execution_mode: "Local",
+		default_page_id: "page-1",
+	});
+
+	const emptyHybridBoard = () => ({
+		id: BOARD,
+		variables: {},
+		nodes: {},
+		layers: {},
+		execution_mode: "Hybrid",
+	});
+
+	test("routes remotely when the local revision does not match", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-stale" };
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue(hybridPrerun());
+		mocks.streamFetcher.mockResolvedValue(undefined);
+		const state = new EventState(fakeBackend() as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-current",
+			},
+		);
+
+		expect(mocks.streamFetcher).toHaveBeenCalledTimes(1);
+		expect(mocks.streamFetcher.mock.calls[0][1]).toBe(
+			`apps/${APP}/events/${EVENT}/invoke`,
+		);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"execute_event",
+			expect.anything(),
+		);
+	});
+
+	test("routes remotely when the trigger carries no revision", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-current" };
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue(hybridPrerun());
+		mocks.streamFetcher.mockResolvedValue(undefined);
+		const state = new EventState(fakeBackend() as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{ kind: "action", actionId: "pa1_static" },
+		);
+
+		expect(mocks.streamFetcher).toHaveBeenCalledTimes(1);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"execute_event",
+			expect.anything(),
+		);
+	});
+
+	test("throws an actionable error instead of a doomed hub call when unreachable", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-stale" };
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const state = new EventState(fakeBackend({ localOnly: true }) as never);
+
+		await expect(
+			state.executeEvent(
+				APP,
+				EVENT,
+				{ id: EVENT, payload: {} } as never,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{
+					kind: "action",
+					actionId: "pa1_static",
+					manifestRevision: "per2-current",
+				},
+			),
+		).rejects.toThrow(
+			"The local Page contract is stale and the server is unreachable; reload the Page",
+		);
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("a local dynamic Page action skips the contract gate", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend();
+		backend.profile = { id: "profile-1" } as never;
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "lda1_native-grant",
+				manifestRevision: "per2-current",
+			},
+		);
+
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"get_local_page_bootstrap",
+			expect.anything(),
+		);
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({ appId: APP, eventId: EVENT }),
+		);
 		expect(mocks.streamFetcher).not.toHaveBeenCalled();
 	});
 });

@@ -342,7 +342,7 @@ impl GcpRuntimeCredentials {
                         vec![log_prefix.clone()],
                         GcpAccess::Append,
                     ),
-                    GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
+                    server_execute_meta_rule(&self.meta_bucket, &apps_prefix),
                 ],
             )
             .await?
@@ -496,7 +496,7 @@ impl GcpRuntimeCredentials {
                         vec![log_prefix.clone()],
                         GcpAccess::Append,
                     ),
-                    GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
+                    server_execute_meta_rule(&self.meta_bucket, &apps_prefix),
                 ],
             )
             .await?
@@ -997,12 +997,51 @@ impl GcpAccessRule {
     }
 
     fn with_access(bucket: String, prefixes: Vec<String>, access: GcpAccess) -> Self {
+        // Every prefix names a directory. Without the trailing slash,
+        // `startsWith('…/apps/app-1')` also matches `apps/app-10`.
+        let prefixes = prefixes
+            .into_iter()
+            .map(|prefix| format!("{}/", prefix.trim_end_matches('/')))
+            .collect();
         Self {
             bucket,
             prefixes,
             access,
         }
     }
+}
+
+/// Read-only meta rule for the executor: version artifacts and boards under
+/// `apps/{app_id}/`, plus draft artifacts under `tmp/apps/{app_id}/` — the
+/// drafts are written only by the API (the trust anchor for
+/// `entry_authority_revision`) and reclaimed by lifecycle rules on `tmp/`.
+#[cfg(feature = "gcp")]
+fn server_execute_meta_rule(bucket: &str, apps_prefix: &str) -> GcpAccessRule {
+    GcpAccessRule::new(
+        bucket.to_string(),
+        vec![apps_prefix.to_string(), format!("tmp/{apps_prefix}")],
+        false,
+    )
+}
+
+#[cfg(feature = "gcp")]
+fn access_boundary_condition(rule: &GcpAccessRule) -> String {
+    rule.prefixes
+        .iter()
+        .flat_map(|prefix| {
+            [
+                format!(
+                    "resource.name.startsWith('projects/_/buckets/{}/objects/{}')",
+                    rule.bucket, prefix
+                ),
+                format!(
+                    "api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('{}')",
+                    prefix
+                ),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join(" || ")
 }
 
 #[cfg(feature = "gcp")]
@@ -1014,30 +1053,11 @@ async fn downscope_token_for_rules(access_token: &str, rules: &[GcpAccessRule]) 
         .map(|rule| {
             let permission_roles = rule.access.roles();
 
-            // Build condition expression for path restrictions.
-            // This restricts both object access (resource.name) and list operations (objectListPrefix).
-            let conditions: Vec<String> = rule
-                .prefixes
-                .iter()
-                .flat_map(|prefix| {
-                    vec![
-                        format!(
-                            "resource.name.startsWith('projects/_/buckets/{}/objects/{}')",
-                            rule.bucket, prefix
-                        ),
-                        format!(
-                            "api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('{}')",
-                            prefix
-                        ),
-                    ]
-                })
-                .collect();
-
             json!({
                 "availablePermissions": permission_roles,
                 "availableResource": format!("//storage.googleapis.com/projects/_/buckets/{}", rule.bucket),
                 "availabilityCondition": {
-                    "expression": conditions.join(" || ")
+                    "expression": access_boundary_condition(rule)
                 }
             })
         })
@@ -1674,6 +1694,70 @@ mod tests {
             json.contains("ya29.scoped-token"),
             "Scoped credentials should include access token"
         );
+    }
+
+    #[test]
+    fn test_gcp_server_execute_can_read_app_scoped_draft_artifacts() {
+        let app_prefix = format!("apps/{TEST_APP_ID}");
+        let rule = server_execute_meta_rule("meta", &app_prefix);
+        let draft_artifact = flow_like::flow::compiled::draft_artifact_path(
+            TEST_APP_ID,
+            "board-1",
+            "etag",
+            &[7; 32],
+        )
+        .to_string();
+        let other_app_artifact = flow_like::flow::compiled::draft_artifact_path(
+            &format!("{TEST_APP_ID}-other"),
+            "board-1",
+            "etag",
+            &[7; 32],
+        )
+        .to_string();
+
+        assert_eq!(rule.bucket, "meta");
+        assert_eq!(
+            rule.prefixes,
+            vec![format!("{app_prefix}/"), format!("tmp/{app_prefix}/")]
+        );
+        assert_eq!(rule.access.roles(), &["inRole:roles/storage.objectViewer"]);
+        let condition = access_boundary_condition(&rule);
+        assert!(condition.contains("resource.name.startsWith"));
+        assert!(condition.contains("storage.googleapis.com/objectListPrefix"));
+        assert!(condition.contains(&format!("objects/{app_prefix}/")));
+        assert!(condition.contains(&format!("objects/tmp/{app_prefix}/")));
+        assert!(draft_artifact.starts_with(&format!("tmp/{app_prefix}/")));
+        assert!(!other_app_artifact.starts_with(&format!("tmp/{app_prefix}/")));
+    }
+
+    /// `startsWith` on an unanchored directory prefix leaks: `apps/app-1`
+    /// matches `apps/app-10`. Every rule goes through `with_access`, which
+    /// anchors each prefix with a trailing slash.
+    #[test]
+    fn test_gcp_access_rule_prefixes_never_match_a_sibling_app() {
+        let rule = GcpAccessRule::new(
+            "content".to_string(),
+            vec![
+                "apps/app-1".to_string(),
+                "users/user-1/apps/app-1".to_string(),
+                "tmp/global/apps/app-1".to_string(),
+                "runs/app-1".to_string(),
+            ],
+            true,
+        );
+
+        assert!(
+            "apps/app-10/board.board".starts_with("apps/app-1"),
+            "raw prefix would leak into app-10"
+        );
+        for prefix in &rule.prefixes {
+            assert!(prefix.ends_with('/'), "prefix must be anchored: {prefix}");
+            assert!(!"apps/app-10/board.board".starts_with(prefix.as_str()));
+            assert!(!"runs/app-10/log.lance".starts_with(prefix.as_str()));
+        }
+        let condition = access_boundary_condition(&rule);
+        assert!(condition.contains("objects/apps/app-1/'"));
+        assert!(condition.contains("startsWith('runs/app-1/')"));
     }
 
     #[test]

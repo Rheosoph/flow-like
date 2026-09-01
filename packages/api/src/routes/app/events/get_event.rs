@@ -1,6 +1,6 @@
 use crate::{
-    ensure_in_project, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    error::ApiError, middleware::jwt::AppUser, permission::role_permission::RolePermissions,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -11,8 +11,22 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::db::{
-    filter_event_list_execution, filter_event_secrets, get_event_from_db_opt, sync_event_to_db,
+    filter_event_list_execution, filter_event_secrets, get_event_from_db_opt,
+    redact_page_event_board_metadata, sync_event_to_db,
 };
+
+/// The event artifact lookup reports a plain missing object as an internal
+/// error. After membership and permission checks passed, an absent event must
+/// be a precise 404 — the desktop client keys local-tombstone behavior on it.
+fn map_missing_event_artifact(event_id: &str, error: flow_like_types::Error) -> ApiError {
+    if matches!(
+        error.downcast_ref::<flow_like_storage::object_store::Error>(),
+        Some(flow_like_storage::object_store::Error::NotFound { .. })
+    ) {
+        return ApiError::not_found(format!("Event {event_id} not found"));
+    }
+    ApiError::from(error)
+}
 
 #[derive(Deserialize, Debug, ToSchema)]
 pub struct VersionQuery {
@@ -53,7 +67,7 @@ pub async fn get_event(
     Path((app_id, event_id)): Path<(String, String)>,
     Query(query): Query<VersionQuery>,
 ) -> Result<Json<Event>, ApiError> {
-    let permission = ensure_in_project!(user, &app_id, &state);
+    let permission = user.app_permission_fresh(&app_id, &state).await?;
     if !permission.has_permission(RolePermissions::ReadEvents)
         && !permission.has_permission(RolePermissions::ExecuteEvents)
     {
@@ -61,6 +75,8 @@ pub async fn get_event(
     }
     let sub = permission.sub()?;
     let has_read = permission.has_permission(RolePermissions::ReadEvents);
+    let can_use_direct_board = permission.has_permission(RolePermissions::ReadBoards)
+        && permission.has_permission(RolePermissions::ExecuteBoards);
 
     let version_opt =
         match query.version.as_deref() {
@@ -78,7 +94,10 @@ pub async fn get_event(
             event
         } else {
             let app = state.master_app(&sub, &app_id, &state).await?;
-            let event = app.get_event(&event_id, None).await?;
+            let event = app
+                .get_event(&event_id, None)
+                .await
+                .map_err(|error| map_missing_event_artifact(&event_id, error))?;
             if event.id != event_id {
                 tracing::error!(
                     expected_event_id = %event_id,
@@ -100,15 +119,22 @@ pub async fn get_event(
         }
     } else {
         let app = state.master_app(&sub, &app_id, &state).await?;
-        app.get_event(&event_id, version_opt).await?
+        app.get_event(&event_id, version_opt)
+            .await
+            .map_err(|error| map_missing_event_artifact(&event_id, error))?
     };
 
     let event = filter_event_secrets(event);
-    let event = if has_read {
+    let mut event = if has_read {
         event
     } else {
         filter_event_list_execution(event)
     };
+    // ReadEvents callers may round-trip this definition through PUT. Runtime
+    // callers have no such editing contract and receive no direct Board path.
+    if !has_read && !can_use_direct_board {
+        event = redact_page_event_board_metadata(event);
+    }
 
     Ok(Json(event))
 }

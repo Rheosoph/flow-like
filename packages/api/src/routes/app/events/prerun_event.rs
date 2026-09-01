@@ -5,7 +5,7 @@
 //! `signature` field to detect drift.
 
 use crate::{
-    ensure_permission,
+    ensure_fresh_permission, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -103,6 +103,10 @@ fn build_response(
         page_id,
         manifest_revision,
     }
+}
+
+fn page_board_id_for_response(board_id: String, can_execute_locally: bool) -> String {
+    can_execute_locally.then_some(board_id).unwrap_or_default()
 }
 
 /// Analyze an event to determine what's needed before execution.
@@ -215,7 +219,8 @@ pub async fn prerun_page_event(
     Query(query): Query<PrerunEventQuery>,
     Json(body): Json<PrerunPageEventRequest>,
 ) -> Result<Json<PrerunEventResponse>, ApiError> {
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let permission =
+        ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
 
@@ -248,12 +253,27 @@ pub async fn prerun_page_event(
             } | PageTrigger::Special { .. }
         );
 
+    let board_id = page_board_id_for_response(resolved.board_id, can_execute_locally);
     Ok(Json(build_response(
-        resolved.board_id,
+        board_id,
         resolved.prerun,
         event.execution_mode,
         can_execute_locally,
         Some(resolved.page_id),
         Some(resolved.manifest_revision),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_board_id_for_response;
+
+    #[test]
+    fn runtime_only_page_prerun_omits_board_identity() {
+        assert_eq!(page_board_id_for_response("board-1".into(), false), "");
+        assert_eq!(
+            page_board_id_for_response("board-1".into(), true),
+            "board-1"
+        );
+    }
 }

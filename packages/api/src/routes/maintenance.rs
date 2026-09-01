@@ -7,7 +7,8 @@ use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
-        MaintenanceRunRequest, MaintenanceRunResponse, TelemetryAlertsMaintenanceResult,
+        MaintenanceRunRequest, MaintenanceRunResponse, RunSweepMaintenanceResult,
+        StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
 
@@ -15,6 +16,7 @@ use crate::{
     cache::sweeper::sweep_once as sweep_cache_once,
     channel::sweep_expired as sweep_channels_once,
     error::ApiError,
+    execution::run_sweeper::{RunSweeperConfig, sweep_once as sweep_runs_once},
     state::AppState,
     telemetry::alerts::{TelemetryAlertConfig, evaluate_once},
 };
@@ -102,6 +104,66 @@ async fn run_maintenance_job(
             Ok(Json(MaintenanceRunResponse::CacheCleanup(
                 CacheCleanupResult {
                     deleted: deleted.max(0) as u64,
+                },
+            )))
+        }
+        MaintenanceRunRequest::RunSweep => {
+            let config = RunSweeperConfig::from_env();
+            let swept = sweep_runs_once(&state.db, config.grace, config.batch_size)
+                .await
+                .map_err(|error| {
+                    tracing::error!(error = %error, "Scheduled run sweep failed");
+                    ApiError::internal_error(flow_like_types::anyhow!(
+                        "Run sweep failed: {}",
+                        error
+                    ))
+                })?;
+
+            tracing::info!(
+                swept,
+                grace_secs = config.grace.as_secs(),
+                batch_size = config.batch_size,
+                batch_full = swept >= config.batch_size,
+                "Maintenance run sweep completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::RunSweep(
+                RunSweepMaintenanceResult {
+                    swept,
+                    grace_secs: config.grace.as_secs(),
+                    batch_size: config.batch_size,
+                },
+            )))
+        }
+        MaintenanceRunRequest::StateCleanup => {
+            let store = crate::routes::execution::progress::get_state_store(&state).await?;
+
+            let deleted_runs = store.delete_expired_runs().await.map_err(|error| {
+                tracing::error!(error = %error, "Scheduled state-store run cleanup failed");
+                ApiError::internal_error(flow_like_types::anyhow!(
+                    "Expired execution run cleanup failed: {}",
+                    error
+                ))
+            })?;
+            let deleted_events = store.delete_expired_events().await.map_err(|error| {
+                tracing::error!(error = %error, "Scheduled state-store event cleanup failed");
+                ApiError::internal_error(flow_like_types::anyhow!(
+                    "Expired execution event cleanup failed: {}",
+                    error
+                ))
+            })?;
+
+            tracing::info!(
+                deleted_runs,
+                deleted_events,
+                backend = store.backend_name(),
+                "Maintenance execution-state cleanup completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::StateCleanup(
+                StateCleanupMaintenanceResult {
+                    deleted_runs,
+                    deleted_events,
                 },
             )))
         }

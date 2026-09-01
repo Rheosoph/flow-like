@@ -33,9 +33,15 @@ use crate::flow::{
 
 /// Bump on ANY change to the structs in this file or to what `from_board`
 /// extracts. A mismatch makes readers recompute from the board.
-pub const MANIFEST_FORMAT_VERSION: u16 = 2;
+///
+/// Version manifest paths embed this constant, but draft manifest paths are
+/// not format-versioned — they are namespaced only by the version byte in
+/// `draft_artifact_stem` (compiled/mod.rs). Bump that byte together with this
+/// constant.
+pub const MANIFEST_FORMAT_VERSION: u16 = 3;
 
-const LEGACY_MANIFEST_FORMAT_VERSION: u16 = 1;
+const LEGACY_MANIFEST_FORMAT_VERSION_V1: u16 = 1;
+const LEGACY_MANIFEST_FORMAT_VERSION_V2: u16 = 2;
 
 /// Public action ids are deterministic, opaque references to one workflow
 /// leaf configured on a versioned Page. The prefix lets a later extractor use
@@ -302,6 +308,9 @@ pub struct PrerunManifest {
     pub element_selectors: Vec<String>,
     /// The board also reads elements it can only name at run time.
     pub element_reads_dynamic: bool,
+    /// Every workflow entry node this exact board snapshot permits a run to seed.
+    #[serde(default)]
+    pub entry_node_ids: Vec<String>,
     /// Page execution bindings, populated only when the caller supplies the
     /// separately stored Pages through [`PrerunManifest::from_board_and_pages`].
     #[serde(default)]
@@ -327,6 +336,23 @@ struct LegacyPrerunManifestV1 {
     signature: String,
 }
 
+/// Exact v2 archive layout. Version 2 added Page execution data but did not
+/// contain the complete board entry-node authority introduced in version 3.
+#[derive(Archive, RkyvSerialize, RkyvDeserialize, Debug, Clone, PartialEq)]
+struct LegacyPrerunManifestV2 {
+    runtime_variables: Vec<PrerunVariable>,
+    oauth_requirements: Vec<PrerunOAuthRequirement>,
+    requires_local_execution: bool,
+    execution_mode: String,
+    has_wasm_nodes: bool,
+    wasm_package_ids: Vec<String>,
+    wasm_package_permissions: Vec<(String, Vec<String>)>,
+    element_selectors: Vec<String>,
+    element_reads_dynamic: bool,
+    page_events: Vec<PrerunPageExecution>,
+    signature: String,
+}
+
 impl From<LegacyPrerunManifestV1> for PrerunManifest {
     fn from(value: LegacyPrerunManifestV1) -> Self {
         Self {
@@ -339,7 +365,27 @@ impl From<LegacyPrerunManifestV1> for PrerunManifest {
             wasm_package_permissions: value.wasm_package_permissions,
             element_selectors: value.element_selectors,
             element_reads_dynamic: value.element_reads_dynamic,
+            entry_node_ids: Vec::new(),
             page_events: Vec::new(),
+            signature: value.signature,
+        }
+    }
+}
+
+impl From<LegacyPrerunManifestV2> for PrerunManifest {
+    fn from(value: LegacyPrerunManifestV2) -> Self {
+        Self {
+            runtime_variables: value.runtime_variables,
+            oauth_requirements: value.oauth_requirements,
+            requires_local_execution: value.requires_local_execution,
+            execution_mode: value.execution_mode,
+            has_wasm_nodes: value.has_wasm_nodes,
+            wasm_package_ids: value.wasm_package_ids,
+            wasm_package_permissions: value.wasm_package_permissions,
+            element_selectors: value.element_selectors,
+            element_reads_dynamic: value.element_reads_dynamic,
+            entry_node_ids: Vec::new(),
+            page_events: value.page_events,
             signature: value.signature,
         }
     }
@@ -374,6 +420,15 @@ impl PrerunManifest {
         }
 
         let demand = crate::a2ui::element_demand(board);
+        let entry_node_ids = board
+            .nodes
+            .values()
+            .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+            .filter(|node| node.start == Some(true))
+            .map(|node| node.id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
 
         let mut manifest = Self {
             runtime_variables,
@@ -385,11 +440,23 @@ impl PrerunManifest {
             wasm_package_permissions: nodes.wasm_package_permissions(),
             element_selectors: demand.selectors,
             element_reads_dynamic: demand.dynamic,
+            entry_node_ids,
             page_events: Vec::new(),
             signature: String::new(),
         };
         manifest.signature = manifest.compute_signature();
         manifest
+    }
+
+    /// Build a manifest for one Event-bound Page without requiring every
+    /// other Page owned by the Board to be loaded. This is used for floating
+    /// Page artifacts whose cache identity includes this Page payload.
+    pub fn from_board_and_page(board: &Board, page: &Page) -> Result<Self> {
+        let page_execution = extract_page_execution(board, page)?;
+        let mut manifest = Self::from_board(board);
+        manifest.page_events = vec![page_execution];
+        manifest.signature = manifest.compute_signature();
+        Ok(manifest)
     }
 
     /// Build a manifest after the caller has loaded the Pages stored beside
@@ -543,6 +610,14 @@ impl PrerunManifest {
         }
         h.update(b"|element-dynamic|");
         h.update(&[self.element_reads_dynamic as u8]);
+
+        let mut entry_node_ids = self.entry_node_ids.clone();
+        entry_node_ids.sort();
+        entry_node_ids.dedup();
+        for node_id in entry_node_ids {
+            h.update(b"|entry|");
+            hash_string(&mut h, &node_id);
+        }
 
         let mut pages: Vec<&PrerunPageExecution> = self.page_events.iter().collect();
         pages.sort_by(|a, b| a.page_id.cmp(&b.page_id));
@@ -1485,13 +1560,15 @@ fn validate_micro_widget_locator(
 /// `pageAction` selectors. The Event resolver remains the sole component that
 /// can turn those selectors into board entry nodes. Reserved lifecycle
 /// markers retain the frontend's configured/not-configured signal without
-/// exposing their node ids.
+/// exposing their node ids. The backing Board id is likewise omitted because
+/// governed remote execution addresses the Event, not the Board.
 pub fn redact_page_execution_routes(page: &Page) -> Result<Page> {
     let mut value = serde_json::to_value(page)
         .map_err(|error| anyhow!("failed to encode Page for route redaction: {error}"))?;
     let Some(root) = value.as_object_mut() else {
         return Err(anyhow!("encoded Page is not an object"));
     };
+    root.remove("boardId");
 
     for (field, marker) in [
         ("onLoadEventId", PAGE_SPECIAL_LOAD_MARKER),
@@ -1868,8 +1945,33 @@ fn extract_component_actions(
 
 #[derive(Default)]
 struct PageWidgetTraversal {
-    instance_ids: BTreeSet<String>,
+    instance_scopes: BTreeSet<PageWidgetInstanceScope>,
     active_page_refs: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PageWidgetInstanceScope {
+    // Reusable definitions keep their nested instance ids when the outer widget is copied. The
+    // rendered parent path separates those copies while an empty path keeps top-level ids unique.
+    parent_path: Vec<(String, String)>,
+    instance_id: String,
+}
+
+impl PageWidgetInstanceScope {
+    fn new(parent_widget_path: &[PrerunPageWidgetAncestor], instance_id: &str) -> Self {
+        Self {
+            parent_path: parent_widget_path
+                .iter()
+                .map(|ancestor| {
+                    (
+                        ancestor.host_component_id.clone(),
+                        ancestor.instance_id.clone(),
+                    )
+                })
+                .collect(),
+            instance_id: instance_id.to_string(),
+        }
+    }
 }
 
 fn extract_widget_bindings(
@@ -1923,7 +2025,13 @@ fn extract_widget_bindings(
             host_component_id
         ));
     }
-    if !traversal.instance_ids.insert(instance_id.to_string()) {
+    if !traversal
+        .instance_scopes
+        .insert(PageWidgetInstanceScope::new(
+            parent_widget_path,
+            instance_id,
+        ))
+    {
         return Err(anyhow!(
             "page '{}' contains duplicate widget instance id '{}'",
             page.id,
@@ -2150,7 +2258,10 @@ fn extract_micro_widget_bindings(
         .as_object()
         .expect("micro widget component type was read from an object");
     let instance_id = required_string(component, "instanceId", &page.id, host_component_id)?;
-    if !traversal.instance_ids.insert(instance_id.to_string()) {
+    if !traversal
+        .instance_scopes
+        .insert(PageWidgetInstanceScope::new(widget_path, instance_id))
+    {
         return Err(anyhow!(
             "page '{}' contains duplicate widget instance id '{}'",
             page.id,
@@ -2426,6 +2537,7 @@ fn workflow_binding_node_id(binding: &Value) -> Option<&str> {
         .or_else(|| workflow.get("nodeId"))
         .or_else(|| workflow.get("flow_id"))
         .or_else(|| workflow.get("event_id"))
+        .or_else(|| workflow.get("node_id"))
         .and_then(bound_string)
         .filter(|node_id| !node_id.is_empty())
 }
@@ -2577,10 +2689,51 @@ fn permission_string(permission: &NodePermission) -> String {
         .unwrap_or_else(|| format!("{permission:?}"))
 }
 
-/// Prerun manifest of an immutable board version, beside its compiled artifact.
+/// Current-format prerun manifest of an immutable board version.
+///
+/// The format version is part of the object key so an older Lambda can keep
+/// serving and repairing its legacy artifact during a rolling deployment
+/// without overwriting authority minted by a newer Lambda.
 pub fn manifest_path(board_dir: &Path, board_id: &str, version: (u32, u32, u32)) -> Path {
+    super::version_artifact_dir(board_dir, board_id).child(format!(
+        "{}_{}_{}.v{MANIFEST_FORMAT_VERSION}.prerun",
+        version.0, version.1, version.2
+    ))
+}
+
+/// Immutable manifest key used before format-scoped authority paths.
+///
+/// New writers leave this key untouched. It remains readable as a migration
+/// hint while old Lambdas in a rolling deployment continue using it.
+pub fn legacy_manifest_path(board_dir: &Path, board_id: &str, version: (u32, u32, u32)) -> Path {
     super::version_artifact_dir(board_dir, board_id)
         .child(format!("{}_{}_{}.prerun", version.0, version.1, version.2))
+}
+
+/// Page execution manifest of an immutable board version.
+///
+/// Page payloads are stored separately from their Board. Including their
+/// canonical revision keeps this authority immutable even if damaged data is
+/// written under an existing semantic version.
+pub fn version_page_manifest_path(
+    board_dir: &Path,
+    board_id: &str,
+    version: (u32, u32, u32),
+    page_id: &str,
+    page_revision: &str,
+) -> Path {
+    let mut hasher = Hasher::new();
+    hasher.update(b"flow-like/version-page-prerun/v1");
+    hash_string(&mut hasher, page_id);
+    hash_string(&mut hasher, page_revision);
+    let page_key = hasher.finalize().to_hex();
+    super::version_artifact_dir(board_dir, board_id).child(format!(
+        "{}_{}_{}.v{MANIFEST_FORMAT_VERSION}.{}.page.prerun",
+        version.0,
+        version.1,
+        version.2,
+        &page_key.as_str()[..32]
+    ))
 }
 
 /// Prerun manifest of a floating draft, beside its compiled artifact and keyed
@@ -2588,6 +2741,28 @@ pub fn manifest_path(board_dir: &Path, board_id: &str, version: (u32, u32, u32))
 pub fn draft_manifest_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
     super::draft_artifact_dir(app_id, board_id)
         .child(format!("{}.prerun", super::draft_artifact_stem(e_tag)))
+}
+
+/// Page-aware prerun manifest for a floating draft. The Board ETag and
+/// canonical Page revision are both part of the path because those objects
+/// are saved independently.
+pub fn draft_page_manifest_path(
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    page_id: &str,
+    page_revision: &str,
+) -> Path {
+    let mut hasher = Hasher::new();
+    hasher.update(b"flow-like/draft-page-prerun/v1");
+    hash_string(&mut hasher, page_id);
+    hash_string(&mut hasher, page_revision);
+    let page_key = hasher.finalize().to_hex();
+    super::draft_artifact_dir(app_id, board_id).child(format!(
+        "{}_{}.page.prerun",
+        super::draft_artifact_stem(e_tag),
+        &page_key.as_str()[..32]
+    ))
 }
 
 pub fn encode_manifest(manifest: &PrerunManifest) -> Result<Vec<u8>> {
@@ -2617,10 +2792,14 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<PrerunManifest> {
         return Err(anyhow!("prerun manifest has wrong magic"));
     }
     let format_version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if format_version != MANIFEST_FORMAT_VERSION && format_version != LEGACY_MANIFEST_FORMAT_VERSION
-    {
+    if !matches!(
+        format_version,
+        LEGACY_MANIFEST_FORMAT_VERSION_V1
+            | LEGACY_MANIFEST_FORMAT_VERSION_V2
+            | MANIFEST_FORMAT_VERSION
+    ) {
         return Err(anyhow!(
-            "prerun manifest format v{format_version}, this build reads v{LEGACY_MANIFEST_FORMAT_VERSION} and v{MANIFEST_FORMAT_VERSION}"
+            "prerun manifest format v{format_version}, this build reads v{LEGACY_MANIFEST_FORMAT_VERSION_V1}, v{LEGACY_MANIFEST_FORMAT_VERSION_V2}, and v{MANIFEST_FORMAT_VERSION}"
         ));
     }
 
@@ -2647,19 +2826,42 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<PrerunManifest> {
 
     let mut aligned = rkyv::util::AlignedVec::<16>::new();
     aligned.extend_from_slice(&raw);
-    if format_version == LEGACY_MANIFEST_FORMAT_VERSION {
-        let archived =
-            rkyv::access::<rkyv::Archived<LegacyPrerunManifestV1>, rkyv::rancor::Error>(&aligned)
-                .map_err(|e| anyhow!("legacy prerun manifest failed validation: {e}"))?;
-        let legacy = rkyv::deserialize::<LegacyPrerunManifestV1, rkyv::rancor::Error>(archived)
-            .map_err(|e| anyhow!("failed to deserialize legacy prerun manifest: {e}"))?;
-        return Ok(legacy.into());
+    match format_version {
+        LEGACY_MANIFEST_FORMAT_VERSION_V1 => {
+            let archived = rkyv::access::<
+                rkyv::Archived<LegacyPrerunManifestV1>,
+                rkyv::rancor::Error,
+            >(&aligned)
+            .map_err(|e| anyhow!("v1 prerun manifest failed validation: {e}"))?;
+            let legacy = rkyv::deserialize::<LegacyPrerunManifestV1, rkyv::rancor::Error>(archived)
+                .map_err(|e| anyhow!("failed to deserialize v1 prerun manifest: {e}"))?;
+            Ok(legacy.into())
+        }
+        LEGACY_MANIFEST_FORMAT_VERSION_V2 => {
+            let archived = rkyv::access::<
+                rkyv::Archived<LegacyPrerunManifestV2>,
+                rkyv::rancor::Error,
+            >(&aligned)
+            .map_err(|e| anyhow!("v2 prerun manifest failed validation: {e}"))?;
+            let legacy = rkyv::deserialize::<LegacyPrerunManifestV2, rkyv::rancor::Error>(archived)
+                .map_err(|e| anyhow!("failed to deserialize v2 prerun manifest: {e}"))?;
+            Ok(legacy.into())
+        }
+        MANIFEST_FORMAT_VERSION => {
+            let archived =
+                rkyv::access::<rkyv::Archived<PrerunManifest>, rkyv::rancor::Error>(&aligned)
+                    .map_err(|e| anyhow!("prerun manifest failed validation: {e}"))?;
+            let manifest = rkyv::deserialize::<PrerunManifest, rkyv::rancor::Error>(archived)
+                .map_err(|e| anyhow!("failed to deserialize prerun manifest: {e}"))?;
+            if manifest.signature != manifest.compute_signature() {
+                return Err(anyhow!(
+                    "prerun manifest signature does not match its contents"
+                ));
+            }
+            Ok(manifest)
+        }
+        _ => unreachable!("unsupported manifest versions returned above"),
     }
-
-    let archived = rkyv::access::<rkyv::Archived<PrerunManifest>, rkyv::rancor::Error>(&aligned)
-        .map_err(|e| anyhow!("prerun manifest failed validation: {e}"))?;
-    rkyv::deserialize::<PrerunManifest, rkyv::rancor::Error>(archived)
-        .map_err(|e| anyhow!("failed to deserialize prerun manifest: {e}"))
 }
 
 #[cfg(test)]
@@ -2735,6 +2937,7 @@ mod tests {
             )],
             element_selectors: vec!["page-1/btn-1".into(), "type:switch".into()],
             element_reads_dynamic: false,
+            entry_node_ids: Vec::new(),
             page_events: Vec::new(),
             signature: String::new(),
         };
@@ -2886,6 +3089,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_v3_manifest_with_stale_entry_authority() {
+        let mut manifest = sample_manifest();
+        manifest.entry_node_ids.push("foreign-entry".into());
+        let bytes = encode_manifest(&manifest).unwrap();
+
+        let error = decode_manifest(&bytes).unwrap_err().to_string();
+        assert!(error.contains("signature does not match"), "{error}");
+    }
+
+    #[test]
     fn from_board_extracts_every_field() {
         let manifest = PrerunManifest::from_board(&sample_board("page-1/btn-1"));
 
@@ -2937,6 +3150,7 @@ mod tests {
             manifest.element_selectors
         );
         assert!(!manifest.element_reads_dynamic);
+        assert!(manifest.entry_node_ids.is_empty());
         assert_eq!(manifest.signature.len(), 64);
         assert_eq!(manifest.signature, manifest.compute_signature());
     }
@@ -2951,7 +3165,34 @@ mod tests {
         assert_ne!(a.element_selectors, c.element_selectors);
         assert_ne!(
             a.signature, c.signature,
-            "element demand is part of the v2 drift signature"
+            "element demand is part of the drift signature"
+        );
+    }
+
+    #[test]
+    fn from_board_extracts_sorted_top_level_and_layer_entry_nodes() {
+        let mut board = sample_board("page-1/btn-1");
+        add_entry(&mut board, "top-z");
+        add_entry(&mut board, "top-a");
+
+        let mut layer_entry = Node::new("events_simple", "layer-m", "", "Events");
+        layer_entry.id = "layer-m".into();
+        layer_entry.set_start(true);
+        board
+            .layers
+            .get_mut("layer-1")
+            .unwrap()
+            .nodes
+            .insert(layer_entry.id.clone(), layer_entry);
+
+        let manifest = PrerunManifest::from_board(&board);
+        assert_eq!(
+            manifest.entry_node_ids,
+            vec![
+                "layer-m".to_string(),
+                "top-a".to_string(),
+                "top-z".to_string()
+            ]
         );
     }
 
@@ -2966,6 +3207,17 @@ mod tests {
         let mut dynamic = base.clone();
         dynamic.element_reads_dynamic = true;
         assert_ne!(dynamic.compute_signature(), base.signature);
+
+        let mut entries = base.clone();
+        entries.entry_node_ids = vec!["entry-b".into(), "entry-a".into()];
+        assert_ne!(entries.compute_signature(), base.signature);
+        let mut reordered_entries = entries.clone();
+        reordered_entries.entry_node_ids.reverse();
+        assert_eq!(
+            reordered_entries.compute_signature(),
+            entries.compute_signature(),
+            "entry node order does not shift the hash"
+        );
 
         let mut page = base.clone();
         page.page_events.push(PrerunPageExecution {
@@ -3332,6 +3584,17 @@ mod tests {
     }
 
     #[test]
+    fn widget_binding_target_accepts_existing_snake_case_node_id() {
+        let binding = json!({
+            "workflow_event": {
+                "node_id": { "literalString": "entry-node" }
+            }
+        });
+
+        assert_eq!(workflow_binding_node_id(&binding), Some("entry-node"));
+    }
+
+    #[test]
     fn page_execution_revision_rejects_noncanonical_or_foreign_inputs() {
         let board = page_board();
         let page = configured_page();
@@ -3485,6 +3748,8 @@ mod tests {
         let decorated = decorate_page_actions(&page, &execution, "revision-1").unwrap();
         let redacted = redact_page_execution_routes(&decorated).unwrap();
 
+        assert_eq!(decorated.board_id.as_deref(), Some("page-board"));
+        assert!(redacted.board_id.is_none());
         let action = &redacted.components[0].component["eventHandlers"]["click"][1];
         assert!(action["context"].get("nodeId").is_none());
         assert!(action[PAGE_ACTION_METADATA_KEY]["actionId"].is_string());
@@ -3630,6 +3895,280 @@ mod tests {
             .component;
         assert!(
             redacted_micro["actionBindings"]["selected"]["workflow"]
+                .get("flowId")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn repeated_outer_widgets_scope_nested_instance_ids_by_ancestry() {
+        let mut board = page_board();
+        add_entry(&mut board, "repeated-inline-action");
+        add_entry(&mut board, "repeated-micro-action");
+
+        let mut reusable = crate::a2ui::Widget::new(
+            "repeated-outer-widget",
+            "Repeated Outer",
+            "nested-widget-host",
+        );
+        reusable.components.push(SurfaceComponent::new(
+            "nested-widget-host",
+            json!({
+                "type": "widgetInstance",
+                "instanceId": "shared-nested-widget-instance",
+                "widgetId": "shared-nested-widget",
+                "inlineWidgetDef": {
+                    "components": [{
+                        "id": "nested-button",
+                        "component": {
+                            "type": "button",
+                            "eventHandlers": {
+                                "click": [{
+                                    "name": "workflow_event",
+                                    "context": { "nodeId": "repeated-inline-action" }
+                                }]
+                            }
+                        }
+                    }]
+                }
+            }),
+        ));
+        reusable.components.push(SurfaceComponent::new(
+            "nested-micro-host",
+            json!({
+                "type": "microWidgetInstance",
+                "instanceId": "shared-nested-micro-instance",
+                "packageId": "pkg.repeated",
+                "packageVersion": "1.0.0",
+                "widgetId": "shared-nested-micro",
+                "contract": {
+                    "events": {
+                        "selected": { "payloadSchema": { "type": "object" } }
+                    }
+                },
+                "actionBindings": {
+                    "selected": {
+                        "workflow": { "flowId": "repeated-micro-action", "inputMappings": {} }
+                    }
+                }
+            }),
+        ));
+
+        let mut page = Page::new("page-1", "Repeated Widgets", "/repeated-widgets");
+        page.board_id = Some("page-board".into());
+        for index in 1..=2 {
+            let instance_id = format!("outer-instance-{index}");
+            page.widget_refs
+                .insert(instance_id.clone(), reusable.clone());
+            page.components.push(SurfaceComponent::new(
+                format!("outer-host-{index}"),
+                json!({
+                    "type": "widgetInstance",
+                    "instanceId": instance_id,
+                    "widgetId": "repeated-outer-widget"
+                }),
+            ));
+        }
+
+        let execution = extract_page_execution(&board, &page).unwrap();
+        assert_eq!(execution.action_events.len(), 4);
+        let outer_instances: BTreeSet<_> = execution
+            .action_events
+            .iter()
+            .filter_map(|action| match &action.locator {
+                PrerunPageActionLocator::NestedWidgetChild { widget_path, .. }
+                | PrerunPageActionLocator::NestedWidgetBinding { widget_path, .. } => widget_path
+                    .first()
+                    .map(|ancestor| ancestor.instance_id.as_str()),
+                PrerunPageActionLocator::NestedMicroWidgetBinding { locator } => locator
+                    .widget_path
+                    .first()
+                    .map(|ancestor| ancestor.instance_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outer_instances,
+            BTreeSet::from(["outer-instance-1", "outer-instance-2"])
+        );
+
+        let decorated = decorate_page_actions(&page, &execution, "repeated-revision").unwrap();
+        let mut projected_action_ids = BTreeSet::new();
+        for instance_id in ["outer-instance-1", "outer-instance-2"] {
+            let components = &decorated.widget_refs[instance_id].components;
+            let nested_widget = &components
+                .iter()
+                .find(|component| component.id == "nested-widget-host")
+                .unwrap()
+                .component;
+            let nested_action = &nested_widget["inlineWidgetDef"]["components"][0]["component"]["eventHandlers"]
+                ["click"][0];
+            projected_action_ids.insert(
+                nested_action[PAGE_ACTION_METADATA_KEY]["actionId"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+
+            let micro = &components
+                .iter()
+                .find(|component| component.id == "nested-micro-host")
+                .unwrap()
+                .component;
+            projected_action_ids.insert(
+                micro["actionBindings"]["selected"][PAGE_ACTION_METADATA_KEY]["actionId"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert_eq!(projected_action_ids.len(), 4);
+
+        let redacted = redact_page_execution_routes(&decorated).unwrap();
+        for instance_id in ["outer-instance-1", "outer-instance-2"] {
+            let components = &redacted.widget_refs[instance_id].components;
+            let nested_widget = &components
+                .iter()
+                .find(|component| component.id == "nested-widget-host")
+                .unwrap()
+                .component;
+            assert!(
+                nested_widget["inlineWidgetDef"]["components"][0]["component"]
+                    ["eventHandlers"]["click"][0]["context"]
+                    .get("nodeId")
+                    .is_none()
+            );
+            let micro = &components
+                .iter()
+                .find(|component| component.id == "nested-micro-host")
+                .unwrap()
+                .component;
+            assert!(
+                micro["actionBindings"]["selected"]["workflow"]
+                    .get("flowId")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_outer_widgets_allow_shared_nested_page_refs() {
+        let mut board = page_board();
+        for id in [
+            "nested-submit",
+            "nested-first",
+            "nested-second",
+            "nested-micro",
+        ] {
+            add_entry(&mut board, id);
+        }
+
+        let mut page = nested_widget_page();
+        let reusable = page.widget_refs["outer-instance"].clone();
+        page.widget_refs.insert("outer-instance-2".into(), reusable);
+        page.components.push(SurfaceComponent::new(
+            "outer-host-2",
+            json!({
+                "type": "widgetInstance",
+                "instanceId": "outer-instance-2",
+                "widgetId": "outer-widget"
+            }),
+        ));
+
+        let execution = extract_page_execution(&board, &page).unwrap();
+        assert_eq!(execution.action_events.len(), 8);
+        let outer_instances: BTreeSet<_> = execution
+            .action_events
+            .iter()
+            .filter_map(|action| match &action.locator {
+                PrerunPageActionLocator::NestedWidgetBinding { widget_path, .. }
+                | PrerunPageActionLocator::NestedWidgetChild { widget_path, .. } => widget_path
+                    .first()
+                    .map(|ancestor| ancestor.instance_id.as_str()),
+                PrerunPageActionLocator::NestedMicroWidgetBinding { locator } => locator
+                    .widget_path
+                    .first()
+                    .map(|ancestor| ancestor.instance_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outer_instances,
+            BTreeSet::from(["outer-instance", "outer-instance-2"])
+        );
+
+        let decorated = decorate_page_actions(&page, &execution, "shared-ref-revision").unwrap();
+        let mut outer_binding_ids = BTreeSet::new();
+        for instance_id in ["outer-instance", "outer-instance-2"] {
+            let host = &decorated.widget_refs[instance_id].components[0].component;
+            outer_binding_ids.insert(
+                host["actionBindings"]["submit"][PAGE_ACTION_METADATA_KEY]["actionId"]
+                    .as_str()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(outer_binding_ids.len(), 2);
+
+        // Referenced definitions are shared by instance id. Their projected selector may come
+        // from either rendered ancestry, but it must always name a valid manifest entry for the
+        // same target node.
+        let inner = &decorated.widget_refs["inner-instance"];
+        let button = &inner
+            .components
+            .iter()
+            .find(|component| component.id == "nested-button")
+            .unwrap()
+            .component;
+        for (action, node_id) in [
+            (&button["eventHandlers"]["click"][0], "nested-first"),
+            (&button["eventHandlers"]["click"][1], "nested-second"),
+        ] {
+            let action_id = action[PAGE_ACTION_METADATA_KEY]["actionId"]
+                .as_str()
+                .unwrap();
+            assert!(
+                execution
+                    .action_events
+                    .iter()
+                    .any(|candidate| candidate.action_id == action_id
+                        && candidate.node_id == node_id)
+            );
+        }
+        let micro = &inner
+            .components
+            .iter()
+            .find(|component| component.id == "nested-micro")
+            .unwrap()
+            .component;
+        let micro_action_id =
+            micro["actionBindings"]["selected"][PAGE_ACTION_METADATA_KEY]["actionId"]
+                .as_str()
+                .unwrap();
+        assert!(execution.action_events.iter().any(|candidate| {
+            candidate.action_id == micro_action_id && candidate.node_id == "nested-micro"
+        }));
+
+        let redacted = redact_page_execution_routes(&decorated).unwrap();
+        let inner = &redacted.widget_refs["inner-instance"];
+        let button = &inner
+            .components
+            .iter()
+            .find(|component| component.id == "nested-button")
+            .unwrap()
+            .component;
+        assert!(
+            button["eventHandlers"]["click"][0]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+        let micro = &inner
+            .components
+            .iter()
+            .find(|component| component.id == "nested-micro")
+            .unwrap()
+            .component;
+        assert!(
+            micro["actionBindings"]["selected"]["workflow"]
                 .get("flowId")
                 .is_none()
         );
@@ -3924,6 +4463,22 @@ mod tests {
     }
 
     #[test]
+    fn single_page_manifest_does_not_require_sibling_page_payloads() {
+        let mut board = page_board();
+        board.page_ids.push("page-2".into());
+
+        let manifest = PrerunManifest::from_board_and_page(&board, &configured_page()).unwrap();
+        assert_eq!(manifest.page_events.len(), 1);
+        assert_eq!(manifest.page_events[0].page_id, "page-1");
+        assert_eq!(manifest.signature, manifest.compute_signature());
+
+        let strict = PrerunManifest::from_board_and_pages(&board, &[configured_page()])
+            .unwrap_err()
+            .to_string();
+        assert!(strict.contains("page-2"), "{strict}");
+    }
+
+    #[test]
     fn rejects_non_entry_targets_and_duplicate_widget_instances() {
         let mut board = page_board();
         let mut internal = Node::new("noop", "Internal", "", "Other");
@@ -3981,13 +4536,51 @@ mod tests {
         let archive = rkyv::to_bytes::<rkyv::rancor::Error>(&legacy).unwrap();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MANIFEST_MAGIC);
-        bytes.extend_from_slice(&LEGACY_MANIFEST_FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&LEGACY_MANIFEST_FORMAT_VERSION_V1.to_le_bytes());
         bytes.push(CODEC_NONE);
         bytes.push(0);
         bytes.extend_from_slice(&archive);
 
         let decoded = decode_manifest(&bytes).unwrap();
+        assert!(decoded.entry_node_ids.is_empty());
         assert!(decoded.page_events.is_empty());
+        assert_eq!(decoded.runtime_variables, current.runtime_variables);
+        assert_eq!(decoded.signature, current.signature);
+    }
+
+    #[test]
+    fn decodes_v2_archive_with_empty_entry_node_defaults() {
+        let mut current = sample_manifest();
+        current.page_events.push(PrerunPageExecution {
+            page_id: "page-1".into(),
+            action_events: Vec::new(),
+            special_events: PrerunPageSpecialEvents::default(),
+        });
+        current.signature = current.compute_signature();
+        let legacy = LegacyPrerunManifestV2 {
+            runtime_variables: current.runtime_variables.clone(),
+            oauth_requirements: current.oauth_requirements.clone(),
+            requires_local_execution: current.requires_local_execution,
+            execution_mode: current.execution_mode.clone(),
+            has_wasm_nodes: current.has_wasm_nodes,
+            wasm_package_ids: current.wasm_package_ids.clone(),
+            wasm_package_permissions: current.wasm_package_permissions.clone(),
+            element_selectors: current.element_selectors.clone(),
+            element_reads_dynamic: current.element_reads_dynamic,
+            page_events: current.page_events.clone(),
+            signature: current.signature.clone(),
+        };
+        let archive = rkyv::to_bytes::<rkyv::rancor::Error>(&legacy).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MANIFEST_MAGIC);
+        bytes.extend_from_slice(&LEGACY_MANIFEST_FORMAT_VERSION_V2.to_le_bytes());
+        bytes.push(CODEC_NONE);
+        bytes.push(0);
+        bytes.extend_from_slice(&archive);
+
+        let decoded = decode_manifest(&bytes).unwrap();
+        assert!(decoded.entry_node_ids.is_empty());
+        assert_eq!(decoded.page_events, current.page_events);
         assert_eq!(decoded.runtime_variables, current.runtime_variables);
         assert_eq!(decoded.signature, current.signature);
     }
@@ -3997,7 +4590,9 @@ mod tests {
         let manifest = sample_manifest();
         let mut value = serde_json::to_value(&manifest).unwrap();
         value.as_object_mut().unwrap().remove("page_events");
+        value.as_object_mut().unwrap().remove("entry_node_ids");
         let decoded: PrerunManifest = serde_json::from_value(value).unwrap();
+        assert!(decoded.entry_node_ids.is_empty());
         assert!(decoded.page_events.is_empty());
     }
 
@@ -4020,19 +4615,56 @@ mod tests {
         let board_dir = Path::from("apps/app-1/meta");
         let artifact = super::super::artifact_path(&board_dir, "board-1", (1, 2, 3)).to_string();
         let manifest = manifest_path(&board_dir, "board-1", (1, 2, 3)).to_string();
-        assert_eq!(manifest, "apps/app-1/meta/compiled/board-1/1_2_3.prerun");
+        let legacy = legacy_manifest_path(&board_dir, "board-1", (1, 2, 3)).to_string();
+        assert_eq!(manifest, "apps/app-1/meta/compiled/board-1/1_2_3.v3.prerun");
+        assert_eq!(legacy, "apps/app-1/meta/compiled/board-1/1_2_3.prerun");
+        assert_ne!(manifest, legacy);
         assert_eq!(
-            manifest.trim_end_matches(".prerun"),
+            legacy.trim_end_matches(".prerun"),
             artifact.trim_end_matches(".flcb")
         );
+        let version_page =
+            version_page_manifest_path(&board_dir, "board-1", (1, 2, 3), "page-1", "revision-1")
+                .to_string();
+        assert!(version_page.starts_with("apps/app-1/meta/compiled/board-1/1_2_3.v3."));
+        assert!(version_page.ends_with(".page.prerun"));
+        assert_ne!(version_page, manifest);
+        assert_ne!(
+            version_page,
+            version_page_manifest_path(&board_dir, "board-1", (1, 2, 3), "page-2", "revision-1")
+                .to_string()
+        );
+        assert_ne!(
+            version_page,
+            version_page_manifest_path(&board_dir, "board-1", (1, 2, 3), "page-1", "revision-2")
+                .to_string()
+        );
 
+        let fingerprint = [7; 32];
         let draft_artifact =
-            super::super::draft_artifact_path("app-1", "board-1", "etag").to_string();
+            super::super::draft_artifact_path("app-1", "board-1", "etag", &fingerprint).to_string();
         let draft_manifest = draft_manifest_path("app-1", "board-1", "etag").to_string();
+        let draft_page_manifest =
+            draft_page_manifest_path("app-1", "board-1", "etag", "page-1", "revision-1")
+                .to_string();
+        assert!(draft_artifact.starts_with("tmp/apps/app-1/compiled/drafts/board-1/"));
+        assert!(draft_manifest.starts_with("tmp/apps/app-1/compiled/drafts/board-1/"));
+        assert!(draft_page_manifest.starts_with("tmp/apps/app-1/compiled/drafts/board-1/"));
         assert!(draft_manifest.ends_with(".prerun"));
+        assert!(draft_page_manifest.ends_with(".page.prerun"));
+        assert_ne!(
+            draft_page_manifest,
+            draft_page_manifest_path("app-1", "board-1", "etag", "page-1", "revision-2")
+                .to_string()
+        );
         assert_eq!(
-            draft_manifest.trim_end_matches(".prerun"),
-            draft_artifact.trim_end_matches(".flcb")
+            draft_manifest.rsplit_once('/').map(|(parent, _)| parent),
+            draft_artifact.rsplit_once('/').map(|(parent, _)| parent)
+        );
+        assert_ne!(
+            super::super::draft_artifact_path("app-1", "board-1", "etag", &[8; 32]),
+            super::super::draft_artifact_path("app-1", "board-1", "etag", &fingerprint),
+            "different node registries must never overwrite one another's draft artifacts"
         );
     }
 }

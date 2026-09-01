@@ -45,6 +45,22 @@ const A2UI_UPDATE_LOG_KEY: &str = "__a2ui_update_log";
 /// retaining every payload for the whole run. Chat flows stay far below this.
 const A2UI_UPDATE_LOG_CAP: usize = 1024;
 
+pub(super) fn fresh_local_variable_scope(
+    function_variables: &std::collections::HashMap<String, Variable>,
+) -> Arc<Mutex<AHashMap<String, Variable>>> {
+    let mut local_vars = AHashMap::with_capacity(function_variables.len());
+    for (var_id, var) in function_variables {
+        let value = match &var.default_value {
+            Some(bytes) => flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null),
+            None => Value::Null,
+        };
+        let mut cloned_var = var.clone();
+        cloned_var.value = Arc::new(Mutex::new(value));
+        local_vars.insert(var_id.clone(), cloned_var);
+    }
+    Arc::new(Mutex::new(local_vars))
+}
+
 /// Run-scoped, ordered log of surface-mutating a2ui messages. Shared across
 /// nodes via the execution cache so snapshot consumers (e.g. Push Widget) can
 /// replay updates emitted earlier in the run. The lock is never held across an
@@ -643,21 +659,7 @@ impl ExecutionContext {
     ) -> ExecutionContext {
         let mut context = self.create_sub_context(node).await;
 
-        // Clone the function's local variables with fresh value handles
-        let mut local_vars = AHashMap::with_capacity(function_variables.len());
-        for (var_id, var) in function_variables {
-            let value = match &var.default_value {
-                Some(bytes) => {
-                    flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
-                }
-                None => Value::Null,
-            };
-            let mut cloned_var = var.clone();
-            cloned_var.value = Arc::new(Mutex::new(value));
-            local_vars.insert(var_id.clone(), cloned_var);
-        }
-
-        context.local_variables = Some(Arc::new(Mutex::new(local_vars)));
+        context.local_variables = Some(fresh_local_variable_scope(function_variables));
         context.context_pin_overrides = Some(BTreeMap::new());
 
         context

@@ -113,6 +113,17 @@ pub struct CreateEventInput {
     pub expires_at: i64,
 }
 
+/// Guard for cold imports from the canonical SQL run store: an expired source
+/// row must never be re-imported into a live store, otherwise delete/import
+/// cycles resurrect it (and TTL-based backends re-import it on every poll).
+/// Terminal-but-unexpired rows still import — queue redelivery convergence
+/// depends on reading the terminal state.
+pub fn source_run_expired(record: &ExecutionRunRecord, now_ms: i64) -> bool {
+    record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now_ms)
+}
+
 /// Query options for listing events
 #[derive(Clone, Debug, Default)]
 pub struct EventQuery {
@@ -258,8 +269,13 @@ pub trait ExecutionStateStore: Send + Sync + Debug {
     /// Get the max sequence number for a run
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError>;
 
-    /// Mark events as delivered
-    async fn mark_events_delivered(&self, event_ids: &[String]) -> Result<(), StateStoreError>;
+    /// Mark events of one run as delivered. Every ID must belong to `run_id`;
+    /// backends use it to scope the lookup to that run's events.
+    async fn mark_events_delivered(
+        &self,
+        run_id: &str,
+        event_ids: &[String],
+    ) -> Result<(), StateStoreError>;
 
     /// Delete expired events (for cleanup jobs)
     async fn delete_expired_events(&self) -> Result<i64, StateStoreError>;

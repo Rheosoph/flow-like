@@ -96,11 +96,15 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
     {
         let ensurer_state = state.clone();
         state.dispatcher.set_artifact_ensurer(std::sync::Arc::new(
-            move |app_id, board_id, version| {
+            move |app_id, board_id, version, board_etag| {
                 let state = ensurer_state.clone();
                 Box::pin(async move {
                     crate::execution::compiled_artifacts::ensure_compiled_artifact(
-                        &state, &app_id, &board_id, version,
+                        &state,
+                        &app_id,
+                        &board_id,
+                        version,
+                        board_etag.as_deref(),
                     )
                     .await
                 })

@@ -56,6 +56,7 @@ import type {
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
+import { pageExecutionIdentity } from "./page-execution-identity";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
 import { shouldRevealProgressively } from "./progressive-page-reveal";
 
@@ -231,6 +232,10 @@ function PageInterfaceInner({
 			? cachedSurfaceResult.surface
 			: null;
 	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
+	const pageExecutionTargetIdentity = pageExecutionIdentity(
+		pageExecutionBoardId,
+		isGovernedPage ? activePageEvent?.id : undefined,
+	);
 	const pageExecutionVersion = useMemo(
 		() =>
 			resolveEventBoardVersion(
@@ -245,12 +250,12 @@ function PageInterfaceInner({
 		],
 	);
 	const loadEventExecutionKey = useMemo(() => {
-		if (!page?.onLoadEventId || !pageExecutionBoardId) return null;
-		return `${surfaceIdentityKey ?? page.id}:${page.onLoadEventId}:${pageExecutionBoardId}:${pageExecutionVersion?.join(".") ?? "latest"}:${pageExecutionRevision ?? "unresolved"}`;
+		if (!page?.onLoadEventId || !pageExecutionTargetIdentity) return null;
+		return `${surfaceIdentityKey ?? page.id}:${page.onLoadEventId}:${pageExecutionTargetIdentity}:${pageExecutionVersion?.join(".") ?? "latest"}:${pageExecutionRevision ?? "unresolved"}`;
 	}, [
 		page?.id,
 		page?.onLoadEventId,
-		pageExecutionBoardId,
+		pageExecutionTargetIdentity,
 		pageExecutionVersion,
 		pageExecutionRevision,
 		surfaceIdentityKey,
@@ -653,9 +658,6 @@ function PageInterfaceInner({
 				return;
 			}
 
-			const boardId = pageExecutionBoardId;
-			if (!boardId) return;
-
 			// Query, account, and page revision are part of the key because onLoad receives and
 			// can render data for all three.
 			const executionKey = loadEventExecutionKey;
@@ -693,7 +695,7 @@ function PageInterfaceInner({
 		};
 
 		executeOnLoadEvent();
-	}, [page, pageExecutionBoardId, loadEventExecutionKey, executePageEvent]);
+	}, [page, loadEventExecutionKey, executePageEvent]);
 
 	// Execute onUnload event when page unmounts or user navigates away
 	useEffect(() => {

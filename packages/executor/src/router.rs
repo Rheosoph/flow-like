@@ -5,7 +5,7 @@
 use crate::config::ExecutorConfig;
 use crate::execute::execute;
 use crate::streaming::{event_to_ndjson, execute_streaming};
-use crate::types::ExecutionRequest;
+use crate::types::{DispatchPayload, ExecutionRequest};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -75,10 +75,18 @@ pub struct ExecuteResponse {
     pub duration_ms: u64,
 }
 
+/// Every direct transport POSTs the API's `DispatchPayload` wire format.
+/// Decoding through `TryFrom` (never `Json<ExecutionRequest>`) resolves the
+/// ETag-bound Latest version sentinel before validation sees the request.
+fn decode_dispatch(payload: DispatchPayload) -> Result<ExecutionRequest, (StatusCode, String)> {
+    ExecutionRequest::try_from(payload).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+}
+
 async fn execute_callback(
     State(state): State<Arc<ExecutorState>>,
-    Json(request): Json<ExecutionRequest>,
+    Json(payload): Json<DispatchPayload>,
 ) -> Result<Json<ExecuteResponse>, (StatusCode, String)> {
+    let request = decode_dispatch(payload)?;
     match execute(request, state.config.clone()).await {
         Ok(result) => Ok(Json(ExecuteResponse {
             run_id: result.run_id,
@@ -98,8 +106,9 @@ async fn execute_callback(
 /// Each line is a complete JSON object.
 async fn execute_stream(
     State(state): State<Arc<ExecutorState>>,
-    Json(request): Json<ExecutionRequest>,
+    Json(payload): Json<DispatchPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    let request = decode_dispatch(payload)?;
     let stream = execute_streaming(request, state.config.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -124,11 +133,12 @@ async fn execute_stream(
 /// Returns a streaming response using SSE format.
 async fn execute_sse(
     State(state): State<Arc<ExecutorState>>,
-    Json(request): Json<ExecutionRequest>,
+    Json(payload): Json<DispatchPayload>,
 ) -> Result<
     Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
     (StatusCode, String),
 > {
+    let request = decode_dispatch(payload)?;
     let stream = execute_streaming(request, state.config.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -149,4 +159,74 @@ async fn execute_sse(
             .interval(std::time::Duration::from_secs(15))
             .text("ping"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+    /// The exact body `build_executor_payload` POSTs to the direct transports.
+    fn wire_payload(
+        board_version: Option<(u32, u32, u32)>,
+        board_etag: Option<&str>,
+    ) -> DispatchPayload {
+        serde_json::from_value(serde_json::json!({
+            "job_id": "job-1",
+            "run_id": "run-1",
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "board_version": board_version,
+            "board_etag": board_etag,
+            "node_id": "node-1",
+            "user_id": "user-1",
+            "credentials": {
+                "Aws": {
+                    "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                    "secret_access_key": "secret",
+                    "session_token": null,
+                    "meta_bucket": "meta",
+                    "content_bucket": "content",
+                    "logs_bucket": "logs",
+                    "region": "us-east-1",
+                    "expiration": null
+                }
+            },
+            "executor_jwt": "jwt",
+            "callback_url": "https://api.example",
+            "stream_state": true
+        }))
+        .expect("wire payload deserializes as DispatchPayload")
+    }
+
+    #[test]
+    fn router_decode_resolves_the_etag_latest_sentinel_before_validation() {
+        let request = decode_dispatch(wire_payload(
+            Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+            Some("etag-a"),
+        ))
+        .expect("sentinel + etag decodes");
+
+        assert_eq!(request.board_version, None);
+        assert_eq!(request.board_etag.as_deref(), Some("etag-a"));
+    }
+
+    #[test]
+    fn router_decode_rejects_a_malformed_selector_with_bad_request() {
+        let (status, message) =
+            decode_dispatch(wire_payload(Some(ETAG_BOUND_LATEST_VERSION_SENTINEL), None))
+                .expect_err("sentinel without etag is refused");
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("board_etag"));
+    }
+
+    #[test]
+    fn router_decode_passes_pinned_versions_through_unchanged() {
+        let request =
+            decode_dispatch(wire_payload(Some((1, 2, 3)), None)).expect("pinned version decodes");
+
+        assert_eq!(request.board_version, Some((1, 2, 3)));
+        assert_eq!(request.board_etag, None);
+    }
 }

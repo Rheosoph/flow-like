@@ -683,9 +683,9 @@ pub fn run() {
                 }
             });
 
-            // Draft board artifacts under tmp/compiled/ are recreatable; the
-            // per-board purge only cleans boards that still run, so sweep the
-            // rest by age once per launch.
+            // App-scoped compiled drafts (tmp/apps/{app}/compiled/drafts/)
+            // are recreatable. Sweep stale drafts, including the legacy
+            // tmp/compiled namespace, once per launch.
             let artifact_sweep_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
                 flow_like_types::tokio::time::sleep(Duration::from_secs(10)).await;

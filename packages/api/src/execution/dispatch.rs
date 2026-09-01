@@ -126,6 +126,9 @@ use flow_like_storage::Path as StorePath;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::channel::ChannelGrant;
 use flow_like_types::create_id;
+#[cfg(feature = "lambda")]
+use flow_like_types::dispatch::DIRECT_LAMBDA_INVOKE_API_ID;
+use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
 
 use crate::channel::ChannelIssuer;
 use serde::{Deserialize, Serialize};
@@ -335,6 +338,8 @@ pub struct DispatchRequest {
     pub board_id: String,
     /// Board version as tuple (major, minor, patch) - resolved by API
     pub board_version: Option<(u32, u32, u32)>,
+    /// Exact source object ETag when `board_version` is Latest (`None`).
+    pub board_etag: Option<String>,
     /// Node ID to start execution from
     pub node_id: String,
     /// Event data (serialized Event struct) if executing via event trigger
@@ -408,6 +413,8 @@ pub enum DispatchError {
     Redis(String),
     #[error("Serialization error: {0}")]
     Serialization(String),
+    #[error("Compiled artifact error: {0}")]
+    Artifact(String),
 }
 
 /// Callback that guarantees the compiled artifact for (app, board, version)
@@ -418,6 +425,7 @@ pub type ArtifactEnsurer = Arc<
             String,
             String,
             Option<(u32, u32, u32)>,
+            Option<String>,
         ) -> futures::future::BoxFuture<'static, flow_like_types::Result<()>>
         + Send
         + Sync,
@@ -590,18 +598,51 @@ impl Dispatcher {
         }
     }
 
-    /// Best-effort: guarantee the compiled artifact exists before handing the
-    /// run to the executor. Failures never block dispatch — the executor
-    /// falls back to compiling in memory.
-    async fn ensure_artifact(&self, request: &DispatchRequest) {
-        if let Some(ensurer) = self.artifact_ensurer.get()
-            && let Err(e) = ensurer(
-                request.app_id.clone(),
-                request.board_id.clone(),
-                request.board_version,
-            )
-            .await
+    /// Guarantee the compiled artifact exists before handing the run to the
+    /// executor. Ordinary runs retain the historical best-effort fallback.
+    /// An ETag-bound Page run fails closed because compiling a newer draft in
+    /// memory would violate its authorized contract.
+    async fn ensure_artifact(&self, request: &DispatchRequest) -> Result<(), DispatchError> {
+        if request.board_version == Some(ETAG_BOUND_LATEST_VERSION_SENTINEL) {
+            return Err(DispatchError::Artifact(
+                "the requested board version is reserved for ETag-bound Latest dispatch"
+                    .to_string(),
+            ));
+        }
+        if request.board_etag.is_some() && request.board_version.is_some() {
+            return Err(DispatchError::Artifact(
+                "an ETag-bound Latest run cannot also select a board version".to_string(),
+            ));
+        }
+        if request
+            .board_etag
+            .as_deref()
+            .is_some_and(|etag| etag.trim().is_empty())
         {
+            return Err(DispatchError::Artifact(
+                "an ETag-bound Latest run requires a non-empty ETag".to_string(),
+            ));
+        }
+        let Some(ensurer) = self.artifact_ensurer.get() else {
+            if request.board_etag.is_some() {
+                return Err(DispatchError::Artifact(
+                    "the dispatcher has no compiled-artifact assurer for an ETag-bound Page run"
+                        .to_string(),
+                ));
+            }
+            return Ok(());
+        };
+        if let Err(e) = ensurer(
+            request.app_id.clone(),
+            request.board_id.clone(),
+            request.board_version,
+            request.board_etag.clone(),
+        )
+        .await
+        {
+            if request.board_etag.is_some() {
+                return Err(DispatchError::Artifact(e.to_string()));
+            }
             tracing::warn!(
                 app_id = %request.app_id,
                 board_id = %request.board_id,
@@ -609,6 +650,7 @@ impl Dispatcher {
                 "Pre-dispatch compiled-artifact check failed; executor will compile in memory"
             );
         }
+        Ok(())
     }
 
     /// Dispatch an execution request to the configured sync/streaming backend (EXECUTION_BACKEND)
@@ -644,7 +686,7 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await;
+        self.ensure_artifact(&request).await?;
         let job_id = create_id();
 
         match backend {
@@ -673,7 +715,7 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await;
+        self.ensure_artifact(&request).await?;
         let job_id = create_id();
 
         match self.config.backend {
@@ -735,7 +777,7 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await;
+        self.ensure_artifact(&request).await?;
         let url =
             self.config.executor_url.as_ref().ok_or_else(|| {
                 DispatchError::Configuration("EXECUTOR_URL not configured".into())
@@ -907,6 +949,7 @@ impl Dispatcher {
                 Err(e) => Some((Err(DispatchError::Lambda(e.to_string())), receiver)),
             }
         });
+        let stream = confirm_lambda_stream_prelude(Box::pin(stream)).await?;
 
         let response = DispatchResponse {
             job_id: job_id.to_string(),
@@ -914,7 +957,7 @@ impl Dispatcher {
             backend: "lambda_stream".into(),
         };
 
-        Ok((response, Box::pin(stream)))
+        Ok((response, stream))
     }
 
     #[cfg(not(feature = "lambda"))]
@@ -1455,12 +1498,18 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
             .collect()
     });
 
+    let board_version = request
+        .board_etag
+        .as_ref()
+        .map(|_| flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL)
+        .or(request.board_version);
     let payload = flow_like_types::dispatch::DispatchPayload {
         job_id: job_id.to_string(),
         run_id: request.run_id.clone(),
         app_id: request.app_id.clone(),
         board_id: request.board_id.clone(),
-        board_version: request.board_version,
+        board_version,
+        board_etag: request.board_etag.clone(),
         node_id: request.node_id.clone(),
         event_json: request.event_json.clone(),
         payload: request.payload.clone(),
@@ -1689,6 +1738,126 @@ fn lambda_dispatch_error<E: std::error::Error>(error: E, tenant_isolated: bool) 
     ))
 }
 
+/// The eight NUL bytes `lambda_http` writes between the metadata prelude and
+/// the body of an `application/vnd.awslambda.http-integration-response`
+/// streaming response.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_PRELUDE_SEPARATOR: [u8; 8] = [0; 8];
+
+/// A real prelude is a small JSON object (status, headers, cookies). Anything
+/// still unterminated past this many bytes is body data, not a prelude.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_PRELUDE_MAX_BYTES: usize = 64 * 1024;
+
+/// How much of a rejected response's body is quoted in the dispatch error.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_PRELUDE_ERROR_BODY_CAP: usize = 4 * 1024;
+
+#[cfg(any(feature = "lambda", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum LambdaPreludeScan {
+    /// More bytes are needed to decide.
+    Incomplete,
+    /// The bytes are not the http-integration-response format.
+    Absent,
+    /// A complete metadata prelude; the body starts at `body_offset`.
+    Complete { status: u16, body_offset: usize },
+}
+
+#[cfg(any(feature = "lambda", test))]
+fn scan_lambda_http_prelude(buffer: &[u8]) -> LambdaPreludeScan {
+    let Some(first) = buffer.first() else {
+        return LambdaPreludeScan::Incomplete;
+    };
+    if *first != b'{' {
+        return LambdaPreludeScan::Absent;
+    }
+    let Some(position) = buffer
+        .windows(LAMBDA_PRELUDE_SEPARATOR.len())
+        .position(|window| window == LAMBDA_PRELUDE_SEPARATOR)
+    else {
+        return if buffer.len() > LAMBDA_PRELUDE_MAX_BYTES {
+            LambdaPreludeScan::Absent
+        } else {
+            LambdaPreludeScan::Incomplete
+        };
+    };
+    let status = serde_json::from_slice::<serde_json::Value>(&buffer[..position])
+        .ok()
+        .and_then(|prelude| prelude.get("statusCode")?.as_u64())
+        .and_then(|status| u16::try_from(status).ok());
+    match status {
+        Some(status) => LambdaPreludeScan::Complete {
+            status,
+            body_offset: position + LAMBDA_PRELUDE_SEPARATOR.len(),
+        },
+        None => LambdaPreludeScan::Absent,
+    }
+}
+
+/// Read the `lambda_http` streaming metadata prelude off the head of a raw
+/// `InvokeWithResponseStream` payload before handing the stream to a proxy.
+///
+/// The executor's router answers a pre-stream rejection (invalid claims,
+/// unknown route) as a non-2xx prelude on an otherwise successful invocation,
+/// which no transport error surfaces. Turn that into a [`DispatchError`] so
+/// callers mark the run failed — the same contract the HTTP transport has for
+/// a non-2xx response. A 2xx prelude is stripped and the body streams through
+/// unchanged; bytes that are not that format pass through untouched.
+#[cfg(any(feature = "lambda", test))]
+async fn confirm_lambda_stream_prelude(
+    mut stream: ByteStream,
+) -> Result<ByteStream, DispatchError> {
+    use futures::StreamExt;
+
+    let mut buffered: Vec<u8> = Vec::new();
+    loop {
+        match scan_lambda_http_prelude(&buffered) {
+            LambdaPreludeScan::Complete {
+                status,
+                body_offset,
+            } => {
+                let remainder = bytes::Bytes::copy_from_slice(&buffered[body_offset..]);
+                if (200..300).contains(&status) {
+                    let head =
+                        futures::stream::iter((!remainder.is_empty()).then_some(Ok(remainder)));
+                    return Ok(Box::pin(head.chain(stream)));
+                }
+                let mut body = remainder.to_vec();
+                while body.len() < LAMBDA_PRELUDE_ERROR_BODY_CAP {
+                    match stream.next().await {
+                        Some(Ok(bytes)) => body.extend_from_slice(&bytes),
+                        _ => break,
+                    }
+                }
+                body.truncate(LAMBDA_PRELUDE_ERROR_BODY_CAP);
+                let body = String::from_utf8_lossy(&body);
+                return Err(DispatchError::Lambda(format!(
+                    "executor rejected the run before streaming: HTTP {status}: {}",
+                    body.trim()
+                )));
+            }
+            LambdaPreludeScan::Absent => {
+                let head = bytes::Bytes::from(buffered);
+                let head = futures::stream::iter((!head.is_empty()).then_some(Ok(head)));
+                return Ok(Box::pin(head.chain(stream)));
+            }
+            LambdaPreludeScan::Incomplete => match stream.next().await {
+                Some(Ok(bytes)) => buffered.extend_from_slice(&bytes),
+                Some(Err(error)) => return Err(error),
+                None => {
+                    // The stream ended before a complete prelude, so these
+                    // bytes are not the integration-response format. The
+                    // source is exhausted and must not be polled again.
+                    let head = bytes::Bytes::from(buffered);
+                    let head = futures::stream::iter((!head.is_empty()).then_some(Ok(head)));
+                    return Ok(Box::pin(head));
+                }
+            },
+        }
+    }
+}
+
 /// Wrap executor payload in API Gateway v2 HTTP event format.
 /// This is required when invoking Lambda functions that use `lambda_http`
 /// (which expects API Gateway / Function URL event structure) via direct
@@ -1721,9 +1890,9 @@ fn wrap_as_apigw_v2_event(path: &str, body: serde_json::Value) -> serde_json::Va
     // Build the request context
     let mut request_context = ApiGatewayV2httpRequestContext::default();
     request_context.account_id = Some("anonymous".to_string());
-    request_context.apiid = Some("lambda-invoke".to_string());
+    request_context.apiid = Some(DIRECT_LAMBDA_INVOKE_API_ID.to_string());
     request_context.domain_name = Some("lambda.internal".to_string());
-    request_context.domain_prefix = Some("lambda-invoke".to_string());
+    request_context.domain_prefix = Some(DIRECT_LAMBDA_INVOKE_API_ID.to_string());
     request_context.http = http_desc;
     request_context.request_id = Some(flow_like_types::create_id());
     request_context.route_key = Some("$default".to_string());
@@ -2964,12 +3133,123 @@ mod tests {
         }
     }
 
+    fn byte_stream(chunks: Vec<&[u8]>) -> ByteStream {
+        Box::pin(futures::stream::iter(
+            chunks
+                .into_iter()
+                .map(|chunk| Ok(bytes::Bytes::copy_from_slice(chunk)))
+                .collect::<Vec<StreamChunk>>(),
+        ))
+    }
+
+    async fn collect(stream: ByteStream) -> Vec<u8> {
+        use futures::StreamExt;
+        let mut collected = Vec::new();
+        let mut stream = stream;
+        while let Some(chunk) = stream.next().await {
+            collected.extend_from_slice(&chunk.expect("stream chunk"));
+        }
+        collected
+    }
+
+    #[test]
+    fn lambda_prelude_scan_recognizes_the_integration_response_format() {
+        assert_eq!(scan_lambda_http_prelude(b""), LambdaPreludeScan::Incomplete);
+        assert_eq!(
+            scan_lambda_http_prelude(b"event: message\ndata: {}\n\n"),
+            LambdaPreludeScan::Absent
+        );
+        assert_eq!(
+            scan_lambda_http_prelude(b"{\"statusCode\":200"),
+            LambdaPreludeScan::Incomplete
+        );
+
+        let mut framed = b"{\"statusCode\":500,\"headers\":{}}".to_vec();
+        framed.extend_from_slice(&LAMBDA_PRELUDE_SEPARATOR);
+        framed.extend_from_slice(b"boom");
+        assert_eq!(
+            scan_lambda_http_prelude(&framed),
+            LambdaPreludeScan::Complete {
+                status: 500,
+                body_offset: framed.len() - b"boom".len(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn lambda_pre_stream_rejection_becomes_a_dispatch_error() {
+        let mut head =
+            b"{\"statusCode\":500,\"headers\":{\"content-type\":\"text/plain\"}}".to_vec();
+        head.extend_from_slice(&LAMBDA_PRELUDE_SEPARATOR);
+        let Err(error) = confirm_lambda_stream_prelude(byte_stream(vec![
+            &head,
+            b"the executor rejected the claims",
+        ]))
+        .await
+        else {
+            panic!("a non-2xx prelude must fail dispatch");
+        };
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("HTTP 500"), "{rendered}");
+        assert!(
+            rendered.contains("the executor rejected the claims"),
+            "{rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lambda_2xx_prelude_is_stripped_and_the_body_streams_through() {
+        let mut head = b"{\"statusCode\":200,\"headers\":{}}".to_vec();
+        head.extend_from_slice(&LAMBDA_PRELUDE_SEPARATOR);
+        head.extend_from_slice(b"event: message\n");
+        let stream = confirm_lambda_stream_prelude(byte_stream(vec![
+            &head,
+            b"data: {\"event_type\":\"completed\"}\n\n",
+        ]))
+        .await
+        .expect("a 2xx prelude must keep streaming");
+
+        assert_eq!(
+            collect(stream).await,
+            b"event: message\ndata: {\"event_type\":\"completed\"}\n\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn lambda_stream_without_a_prelude_passes_through_unchanged() {
+        // The prelude may also arrive split across chunks before the verdict.
+        let stream =
+            confirm_lambda_stream_prelude(byte_stream(vec![b"event: ", b"message\ndata: {}\n\n"]))
+                .await
+                .expect("plain SSE bytes must pass through");
+        assert_eq!(
+            collect(stream).await,
+            b"event: message\ndata: {}\n\n".to_vec()
+        );
+
+        let split = confirm_lambda_stream_prelude(byte_stream(vec![
+            b"{\"statusCode\":20",
+            b"0,\"headers\":{}}\0\0\0\0",
+            b"\0\0\0\0body",
+        ]))
+        .await
+        .expect("a chunk-split 2xx prelude must keep streaming");
+        assert_eq!(collect(split).await, b"body".to_vec());
+
+        let truncated = confirm_lambda_stream_prelude(byte_stream(vec![b"{\"partial\":true}"]))
+            .await
+            .expect("an unterminated head is not a prelude");
+        assert_eq!(collect(truncated).await, b"{\"partial\":true}".to_vec());
+    }
+
     fn dispatch_request(trigger: DispatchTrigger) -> DispatchRequest {
         DispatchRequest {
             run_id: "run-1".into(),
             app_id: "app-1".into(),
             board_id: "board-1".into(),
             board_version: None,
+            board_etag: None,
             node_id: "node-1".into(),
             event_json: None,
             payload: None,
@@ -3027,6 +3307,47 @@ mod tests {
         request.channel = Some(mine.clone());
         dispatcher.attach_channel(&mut request).await;
         assert_eq!(request.channel.map(|c| c.expires_at), Some(mine.expires_at));
+    }
+
+    #[tokio::test]
+    async fn exact_etag_artifact_failure_blocks_only_the_exact_page_run() {
+        let failing_ensurer: ArtifactEnsurer = Arc::new(|_, _, _, _| {
+            Box::pin(async { Err(flow_like_types::anyhow!("artifact unavailable")) })
+        });
+
+        let exact_dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        let mut exact_without_ensurer = dispatch_request(DispatchTrigger::User);
+        exact_without_ensurer.board_etag = Some("etag-1".into());
+        assert!(matches!(
+            exact_dispatcher
+                .ensure_artifact(&exact_without_ensurer)
+                .await,
+            Err(DispatchError::Artifact(_))
+        ));
+
+        exact_dispatcher.set_artifact_ensurer(failing_ensurer.clone());
+        let mut exact = dispatch_request(DispatchTrigger::User);
+        exact.board_etag = Some("etag-1".into());
+        assert!(matches!(
+            exact_dispatcher.ensure_artifact(&exact).await,
+            Err(DispatchError::Artifact(_))
+        ));
+
+        let ordinary_dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        ordinary_dispatcher.set_artifact_ensurer(failing_ensurer);
+        let ordinary = dispatch_request(DispatchTrigger::User);
+        ordinary_dispatcher
+            .ensure_artifact(&ordinary)
+            .await
+            .expect("ordinary runs retain their in-memory fallback");
+
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        let mut reserved = dispatch_request(DispatchTrigger::User);
+        reserved.board_version = Some(ETAG_BOUND_LATEST_VERSION_SENTINEL);
+        assert!(matches!(
+            dispatcher.ensure_artifact(&reserved).await,
+            Err(DispatchError::Artifact(_))
+        ));
     }
 
     // The saving is the point of the trigger split: on a cloud transport an

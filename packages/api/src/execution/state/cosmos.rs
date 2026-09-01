@@ -30,6 +30,11 @@ const WRITE_CONCURRENCY: usize = 16;
 const UPDATE_ATTEMPTS: usize = 3;
 const MARK_QUERY_CHUNK: usize = 50;
 
+fn has_canonical_event_identity(event: &CreateEventInput) -> bool {
+    let digest = blake3::hash(format!("{}:{}", event.run_id, event.sequence).as_bytes());
+    event.id == format!("evt-{}", digest.to_hex())
+}
+
 #[derive(Clone)]
 pub struct CosmosStateStore {
     client: CosmosClient,
@@ -206,7 +211,13 @@ impl CosmosStateStore {
         let Some(record) = record else {
             return Ok(None);
         };
-        let document = self.run_document(record.clone(), chrono::Utc::now().timestamp_millis());
+        let now = chrono::Utc::now().timestamp_millis();
+        if source_run_expired(&record, now) {
+            // Reads already mask expired documents; skipping the import also
+            // avoids re-creating one that native TTL would delete again.
+            return Ok(None);
+        }
+        let document = self.run_document(record.clone(), now);
         match self
             .client
             .create_document(&self.runs_container, &record.app_id, &document)
@@ -299,13 +310,12 @@ impl CosmosStateStore {
         Ok(document.record)
     }
 
-    fn same_idempotent_event(left: &EventDocument, right: &EventDocument) -> bool {
-        left.record.id == right.record.id
-            && left.record.run_id == right.record.run_id
-            && left.record.sequence == right.record.sequence
-            && left.record.event_type == right.record.event_type
-            && left.record.payload == right.record.payload
-            && left.payload_ref == right.payload_ref
+    async fn event_exists(&self, event: &CreateEventInput) -> Result<bool, StateStoreError> {
+        self.client
+            .read_document::<EventDocument>(&self.events_container, &event.id, &event.run_id)
+            .await
+            .map(|document| document.is_some())
+            .map_err(map_error)
     }
 
     async fn query_all<T: serde::de::DeserializeOwned>(
@@ -365,8 +375,17 @@ fn map_error(error: CosmosError) -> StateStoreError {
     }
 }
 
+fn accept_event_create_outcome(outcome: MutationOutcome) -> Result<(), StateStoreError> {
+    match outcome {
+        MutationOutcome::Applied | MutationOutcome::Conflict => Ok(()),
+        other => Err(StateStoreError::Database(format!(
+            "unexpected Cosmos event create result: {other:?}"
+        ))),
+    }
+}
+
 fn apply_update(record: &mut ExecutionRunRecord, input: &UpdateRunInput, now_ms: i64) {
-    record.updated_at = now_ms;
+    record.updated_at = now_ms.max(record.updated_at.saturating_add(1));
     if let Some(progress) = input.progress {
         record.progress = progress;
     }
@@ -486,6 +505,9 @@ impl ExecutionStateStore for CosmosStateStore {
             if Self::is_expired(document.record.expires_at, now) {
                 return Err(StateStoreError::NotFound);
             }
+            if document.record.status.is_terminal() {
+                return Ok(document.record);
+            }
             if document.bound_job_id.is_some() {
                 return Err(StateStoreError::LeaseConflict(
                     "leased queue run requires ownership proof".to_string(),
@@ -571,7 +593,7 @@ impl ExecutionStateStore for CosmosStateStore {
             });
             document.record.status = RunStatus::Running;
             document.record.started_at.get_or_insert(now);
-            document.record.updated_at = now;
+            document.record.updated_at = now.max(document.record.updated_at.saturating_add(1));
             document.ttl = ttl_seconds(document.record.expires_at, now);
 
             match self
@@ -738,12 +760,16 @@ impl ExecutionStateStore for CosmosStateStore {
         if events.is_empty() {
             return Ok(0);
         }
+        let accepted_count = events.len() as i32;
         let now = chrono::Utc::now().timestamp_millis();
         let mut documents = Vec::with_capacity(events.len());
         for event in events {
             let encoded = serde_json::to_vec(&event.payload)
                 .map_err(|error| StateStoreError::Serialization(error.to_string()))?;
             let (payload, payload_ref) = if encoded.len() > PAYLOAD_OFFLOAD_BYTES {
+                if has_canonical_event_identity(&event) && self.event_exists(&event).await? {
+                    continue;
+                }
                 let reference = self
                     .store_large_payload(&event.run_id, &event.id, &encoded)
                     .await?;
@@ -764,7 +790,6 @@ impl ExecutionStateStore for CosmosStateStore {
             documents.push(Self::event_document(record, payload_ref, now));
         }
 
-        let created_count = documents.len() as i32;
         // Preserve prefix order and stop on the first failed item. Each item is
         // itself idempotent, so retrying this batch safely fills only the
         // missing suffix; concurrent unordered writes could otherwise expose
@@ -775,36 +800,14 @@ impl ExecutionStateStore for CosmosStateStore {
                 .create_document(&self.events_container, &document.record.run_id, &document)
                 .await
             {
-                Ok(MutationOutcome::Applied) => {}
-                Ok(MutationOutcome::Conflict) => {
-                    let existing = self
-                        .client
-                        .read_document::<EventDocument>(
-                            &self.events_container,
-                            &document.record.id,
-                            &document.record.run_id,
-                        )
-                        .await
-                        .map_err(map_error)?;
-                    if !existing
-                        .as_ref()
-                        .is_some_and(|existing| Self::same_idempotent_event(existing, &document))
-                    {
-                        return Err(StateStoreError::Database(
-                            "execution event ID conflicts with different immutable content"
-                                .to_string(),
-                        ));
-                    }
-                }
-                Ok(outcome) => {
-                    return Err(StateStoreError::Database(format!(
-                        "unexpected Cosmos event create result: {outcome:?}"
-                    )));
-                }
+                // `create_document` is atomic. A conflict means another
+                // request already committed this canonical ID, so the retry is
+                // successful without replacing payload or delivery state.
+                Ok(outcome) => accept_event_create_outcome(outcome)?,
                 Err(error) => return Err(map_error(error)),
             }
         }
-        Ok(created_count)
+        Ok(accepted_count)
     }
 
     async fn get_events(
@@ -865,11 +868,17 @@ impl ExecutionStateStore for CosmosStateStore {
             .unwrap_or(0))
     }
 
-    async fn mark_events_delivered(&self, event_ids: &[String]) -> Result<(), StateStoreError> {
+    async fn mark_events_delivered(
+        &self,
+        run_id: &str,
+        event_ids: &[String],
+    ) -> Result<(), StateStoreError> {
         if event_ids.is_empty() {
             return Ok(());
         }
         for ids in event_ids.chunks(MARK_QUERY_CHUNK) {
+            // Events are partitioned by run, so the run scope turns this into
+            // a single-partition query instead of a cross-partition fan-out.
             let documents = self
                 .query_all::<EventDocument>(
                     &self.events_container,
@@ -878,7 +887,7 @@ impl ExecutionStateStore for CosmosStateStore {
                         QueryParameter::new("@ids", json!(ids)),
                         QueryParameter::new("@now", chrono::Utc::now().timestamp_millis()),
                     ],
-                    None,
+                    Some(run_id),
                     Some(ids.len()),
                 )
                 .await?;
@@ -999,5 +1008,29 @@ mod tests {
         assert_eq!(record.status, RunStatus::Running);
         assert_eq!(record.updated_at, 2);
         assert_eq!(record.output_payload_len, 0);
+    }
+
+    #[test]
+    fn stateless_lambda_canonical_event_create_conflict_is_a_first_write_wins_retry() {
+        assert!(accept_event_create_outcome(MutationOutcome::Applied).is_ok());
+        assert!(accept_event_create_outcome(MutationOutcome::Conflict).is_ok());
+        assert!(accept_event_create_outcome(MutationOutcome::PreconditionFailed).is_err());
+    }
+
+    #[test]
+    fn stateless_lambda_cosmos_recognizes_canonical_event_identity() {
+        let mut event = CreateEventInput {
+            id: String::new(),
+            run_id: "run-1".into(),
+            sequence: 4,
+            event_type: "chunk".into(),
+            payload: Value::Null,
+            expires_at: 1_900_000_000_000,
+        };
+        let digest = blake3::hash(b"run-1:4");
+        event.id = format!("evt-{}", digest.to_hex());
+        assert!(has_canonical_event_identity(&event));
+        event.id = "legacy".into();
+        assert!(!has_canonical_event_identity(&event));
     }
 }

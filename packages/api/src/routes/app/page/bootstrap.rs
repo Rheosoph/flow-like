@@ -5,7 +5,7 @@
 //! accidentally combining a fresh Event with a page from a different board snapshot.
 
 use crate::{
-    ensure_permission,
+    ensure_fresh_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -13,9 +13,10 @@ use crate::{
         events::db::{
             filter_event_list_execution, filter_event_secrets, get_event_with_fallback_opt,
             get_events_for_app, get_events_with_fallback, is_listed_event_type,
-            is_user_facing_event,
+            is_user_facing_event, redact_page_event_board_metadata,
         },
-        page::get_page::{if_none_match_matches, load_event_bound_page, page_etag},
+        events::page_trigger::resolve_page_contract_for_bootstrap,
+        page::get_page::{if_none_match_matches, page_etag},
     },
     state::AppState,
 };
@@ -26,9 +27,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like::a2ui::widget::Page;
-use flow_like::flow::compiled::prerun::{
-    decorate_page_actions, redact_page_execution_routes,
-};
+use flow_like::flow::compiled::prerun::{decorate_page_actions, redact_page_execution_routes};
 use flow_like::flow::event::Event;
 use flow_like_types::anyhow;
 use serde::{Deserialize, Serialize};
@@ -231,7 +230,8 @@ pub async fn bootstrap(
     Query(params): Query<BootstrapQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let permission =
+        ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
     let can_use_direct_board = permission.has_permission(RolePermissions::ReadBoards)
         && permission.has_permission(RolePermissions::ExecuteBoards);
@@ -286,41 +286,25 @@ pub async fn bootstrap(
     // chats, and other runnable surfaces. When it declares a custom page, however, that page is
     // part of the contract and a missing version-bound artifact remains a uniform 404.
     let (page, execution_revision) = if event.default_page_id.is_some() {
-        if event.board_version.is_none() {
-            return Err(ApiError::bad_request(
-                "Governed Page Events must pin an immutable board version",
-            ));
-        }
-        let page = load_event_bound_page(&app, &event).await?;
-        let board = app
-            .open_board(event.board_id.clone(), None, event.board_version)
-            .await
-            .map_err(|_| ApiError::NOT_FOUND)?;
-        let board = board.lock().await;
-        if board.id != event.board_id || Some(board.version) != event.board_version {
-            return Err(ApiError::bad_request(
-                "The Page Event configuration is invalid",
-            ));
-        }
-        let (page_execution, _, execution_revision) =
-            crate::routes::app::events::page_trigger::compile_page_contract(&board, &page)?;
-        let mut page = decorate_page_actions(&page, &page_execution, &execution_revision).map_err(
-            |error| {
-                ApiError::internal_error(anyhow!(
-                    "failed to project governed Page actions: {error}"
-                ))
-            },
-        )?;
+        let contract = resolve_page_contract_for_bootstrap(&state, &app_id, &event).await?;
+        let mut page = decorate_page_actions(
+            &contract.page,
+            &contract.page_execution,
+            &contract.manifest_revision,
+        )
+        .map_err(|error| {
+            ApiError::internal_error(anyhow!("failed to project governed Page actions: {error}"))
+        })?;
         if !can_use_direct_board {
             page = redact_page_execution_routes(&page).map_err(ApiError::internal_error)?;
         }
-        (Some(page), Some(execution_revision))
+        (Some(page), Some(contract.manifest_revision))
     } else {
         (None, None)
     };
     let mut event = filter_event_list_execution(filter_event_secrets(event));
     if !can_use_direct_board && event.default_page_id.is_some() {
-        event.node_id.clear();
+        event = redact_page_event_board_metadata(event);
     }
     bootstrap_response(
         event,
@@ -401,6 +385,19 @@ mod tests {
                 route_miss: false
             }
         );
+    }
+
+    #[test]
+    fn runtime_only_page_event_omits_direct_board_metadata() {
+        let mut event = event("page-event", Some("/"), true);
+        event.board_version = Some((1, 2, 3));
+
+        event = redact_page_event_board_metadata(event);
+
+        assert!(event.board_id.is_empty());
+        assert!(event.board_version.is_none());
+        assert!(event.node_id.is_empty());
+        assert_eq!(event.default_page_id.as_deref(), Some("page"));
     }
 
     #[test]

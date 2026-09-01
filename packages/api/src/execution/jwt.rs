@@ -25,6 +25,24 @@ pub struct PageExecutionJwtContext {
     pub manifest_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_version: Option<(u32, u32, u32)>,
+    /// Exact object identity when the Event selector is Latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_etag: Option<String>,
+    /// The one entry selected by this invocation. The executor checks exact
+    /// equality so a queued payload cannot substitute another allowed entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_node_id: Option<String>,
+    /// Signature of the exact prerun manifest that supplies the dynamic
+    /// action allow-list at the callback boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_authority_revision: Option<String>,
+    /// Revision of the exact WASM bundle carried by this dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_authority_revision: Option<String>,
+    /// Signed allow-list used by the callback boundary to seal dynamic output
+    /// by issuers that predate compact prerun-manifest authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_entry_node_ids: Vec<String>,
 }
 
 /// Claims contained in an execution JWT
@@ -235,6 +253,11 @@ mod tests {
             page_id: "page-1".to_string(),
             manifest_revision: "revision-1".to_string(),
             board_version: Some((1, 2, 3)),
+            board_etag: None,
+            target_node_id: Some("entry-1".to_string()),
+            entry_authority_revision: Some("authority-1".to_string()),
+            wasm_authority_revision: Some("wasm-1".to_string()),
+            allowed_entry_node_ids: vec!["entry-1".to_string()],
         };
 
         let token = sign_with_page_context(params, page_execution.clone()).unwrap();

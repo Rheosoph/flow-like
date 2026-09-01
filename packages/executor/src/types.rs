@@ -28,6 +28,9 @@ pub struct ExecutionRequest {
     /// Board version as tuple (major, minor, patch) - pre-resolved by API
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board_version: Option<BoardVersion>,
+    /// Exact source object ETag for a floating Latest board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_etag: Option<String>,
     /// Node ID to start execution from
     pub node_id: String,
     /// Serialized Event struct when executing via event trigger (optional)
@@ -137,6 +140,29 @@ pub enum EventType {
     Custom(String),
 }
 
+fn decode_board_selector(
+    wire_version: Option<BoardVersion>,
+    board_etag: Option<String>,
+) -> flow_like_types::Result<(Option<BoardVersion>, Option<String>)> {
+    use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+    let board_etag = board_etag
+        .map(|etag| etag.trim().to_string())
+        .filter(|etag| !etag.is_empty());
+    match (wire_version, board_etag) {
+        (Some(version), Some(etag)) if version == ETAG_BOUND_LATEST_VERSION_SENTINEL => {
+            Ok((None, Some(etag)))
+        }
+        (Some(version), None) if version == ETAG_BOUND_LATEST_VERSION_SENTINEL => Err(
+            flow_like_types::anyhow!("ETag-bound Latest dispatch is missing board_etag"),
+        ),
+        (version, Some(_)) => Err(flow_like_types::anyhow!(
+            "board_etag requires the ETag-bound Latest wire selector, got {version:?}"
+        )),
+        (version, None) => Ok((version, None)),
+    }
+}
+
 impl TryFrom<DispatchPayload> for ExecutionRequest {
     type Error = flow_like_types::Error;
 
@@ -157,12 +183,15 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             None => None,
         };
 
+        let (board_version, board_etag) = decode_board_selector(p.board_version, p.board_etag)?;
+
         Ok(Self {
             job_id: p.job_id,
             credentials,
             app_id: p.app_id,
             board_id: p.board_id,
-            board_version: p.board_version,
+            board_version,
+            board_etag,
             node_id: p.node_id,
             event_json: p.event_json,
             payload: p.payload,
@@ -201,6 +230,75 @@ mod tests {
         assert_eq!(
             ExecutionStatus::from_final_run_status(&RunStatus::Running),
             ExecutionStatus::Failed
+        );
+    }
+
+    /// The JSON body `build_executor_payload` sends over every direct
+    /// transport (HTTP, SSE, Lambda stream) for an ETag-bound Latest run.
+    fn etag_latest_wire_json() -> serde_json::Value {
+        serde_json::json!({
+            "job_id": "job-1",
+            "run_id": "run-1",
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "board_version": [u32::MAX, u32::MAX, u32::MAX],
+            "board_etag": "etag-a",
+            "node_id": "node-1",
+            "user_id": "user-1",
+            "credentials": {
+                "Aws": {
+                    "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                    "secret_access_key": "secret",
+                    "session_token": null,
+                    "meta_bucket": "meta",
+                    "content_bucket": "content",
+                    "logs_bucket": "logs",
+                    "region": "us-east-1",
+                    "expiration": null
+                }
+            },
+            "executor_jwt": "jwt",
+            "callback_url": "https://api.example",
+            "stream_state": true
+        })
+    }
+
+    #[test]
+    fn dispatch_wire_payload_reaches_validation_with_the_sentinel_decoded() {
+        use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+        let payload: DispatchPayload = serde_json::from_value(etag_latest_wire_json())
+            .expect("wire body deserializes as DispatchPayload");
+        let request = ExecutionRequest::try_from(payload).expect("selector decodes");
+        assert_eq!(request.board_version, None);
+        assert_eq!(request.board_etag.as_deref(), Some("etag-a"));
+
+        // Deserializing the same body directly as ExecutionRequest (the old
+        // router path) leaves the raw sentinel in place, which validation
+        // rejects — the router must decode through DispatchPayload.
+        let raw: ExecutionRequest = serde_json::from_value(etag_latest_wire_json())
+            .expect("serde ignores the DispatchPayload-only fields");
+        assert_eq!(raw.board_version, Some(ETAG_BOUND_LATEST_VERSION_SENTINEL));
+        assert_eq!(raw.board_etag.as_deref(), Some("etag-a"));
+    }
+
+    #[test]
+    fn etag_latest_wire_selector_is_explicit_and_fail_closed() {
+        use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+        assert_eq!(
+            decode_board_selector(
+                Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+                Some(" etag-a ".into())
+            )
+            .unwrap(),
+            (None, Some("etag-a".into()))
+        );
+        assert!(decode_board_selector(Some(ETAG_BOUND_LATEST_VERSION_SENTINEL), None).is_err());
+        assert!(decode_board_selector(None, Some("etag-a".into())).is_err());
+        assert_eq!(
+            decode_board_selector(Some((1, 2, 3)), None).unwrap(),
+            (Some((1, 2, 3)), None)
         );
     }
 }

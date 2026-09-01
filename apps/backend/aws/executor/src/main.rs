@@ -14,10 +14,45 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_catalog::initialize as initialize_catalog;
-use flow_like_executor::{ExecutorState, executor_router};
+use flow_like_executor::{ExecutorConfig, ExecutorState, executor_router};
+use flow_like_types::dispatch::DIRECT_LAMBDA_INVOKE_API_ID;
 use flow_like_types::tokio;
-use lambda_http::{Error, run_with_streaming_response, tracing};
+use lambda_http::{
+    Error, Request, RequestExt, request::RequestContext, run_with_streaming_response, service_fn,
+    tower::ServiceExt, tracing,
+};
 use tracing_subscriber::{EnvFilter, prelude::*};
+
+fn is_direct_async_execute(request: &Request) -> bool {
+    request.uri().path() == "/execute"
+        && matches!(
+            request.request_context_ref(),
+            Some(RequestContext::ApiGatewayV2(context))
+                if context.apiid.as_deref() == Some(DIRECT_LAMBDA_INVOKE_API_ID)
+        )
+}
+
+async fn dispatch_request(
+    app: axum::Router,
+    request: Request,
+) -> Result<axum::response::Response, Error> {
+    let propagate_failure = is_direct_async_execute(&request);
+    let response = app
+        .oneshot(request)
+        .await
+        .expect("Axum routers are infallible");
+
+    if propagate_failure && !response.status().is_success() {
+        let status = response.status();
+        tracing::error!(%status, "Direct asynchronous Lambda execution failed");
+        return Err(std::io::Error::other(format!(
+            "direct asynchronous execution returned HTTP {status}"
+        ))
+        .into());
+    }
+
+    Ok(response)
+}
 
 #[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
@@ -60,11 +95,77 @@ async fn main() -> Result<(), Error> {
     initialize_catalog();
 
     // Create executor state from environment
-    let state = ExecutorState::from_env();
+    let state = ExecutorState::new(ExecutorConfig::from_env().with_required_terminal_status_ack());
 
     // Build router with all execution endpoints
     let app = executor_router(state);
+    let handler = service_fn(move |request| dispatch_request(app.clone(), request));
 
     // Run with streaming response support
-    run_with_streaming_response(app).await
+    run_with_streaming_response(handler).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use lambda_http::{Body, aws_lambda_events::apigw::ApiGatewayV2httpRequestContext};
+
+    fn request_with_api_id(path: &str, api_id: &str) -> Request {
+        let mut context = ApiGatewayV2httpRequestContext::default();
+        context.apiid = Some(api_id.to_string());
+
+        let mut request = Request::new(Body::Empty);
+        *request.uri_mut() = path.parse().unwrap();
+        request.with_request_context(RequestContext::ApiGatewayV2(context))
+    }
+
+    fn direct_request(path: &str) -> Request {
+        request_with_api_id(path, DIRECT_LAMBDA_INVOKE_API_ID)
+    }
+
+    fn response_app(status: StatusCode) -> axum::Router {
+        axum::Router::new().fallback(move || async move { status })
+    }
+
+    #[tokio::test]
+    async fn direct_async_execute_failure_becomes_invocation_error() {
+        let result = dispatch_request(
+            response_app(StatusCode::INTERNAL_SERVER_ERROR),
+            direct_request("/execute"),
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn successful_direct_async_execute_remains_a_response() {
+        let result =
+            dispatch_request(response_app(StatusCode::OK), direct_request("/execute")).await;
+
+        assert_eq!(result.unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn streaming_failures_remain_http_responses() {
+        for path in ["/execute/sse", "/execute/stream"] {
+            let result = dispatch_request(
+                response_app(StatusCode::INTERNAL_SERVER_ERROR),
+                direct_request(path),
+            )
+            .await;
+
+            assert_eq!(result.unwrap().status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_http_execute_failure_remains_an_http_response() {
+        let request = request_with_api_id("/execute", "real-api-gateway-id");
+        let result =
+            dispatch_request(response_app(StatusCode::INTERNAL_SERVER_ERROR), request).await;
+
+        assert_eq!(result.unwrap().status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

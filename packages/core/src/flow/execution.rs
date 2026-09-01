@@ -10,7 +10,7 @@ use crate::flow::execution::internal_node::{ExecutionTarget, NodeMeta};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
-use context::ExecutionContext;
+use context::{ExecutionContext, fresh_local_variable_scope};
 use flow_like_storage::Path;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -875,6 +875,46 @@ impl RunStack {
     }
 }
 
+#[derive(Clone)]
+struct RunEntryScope {
+    function_layer_id: Arc<str>,
+    local_variables: Arc<Mutex<AHashMap<String, Variable>>>,
+}
+
+impl RunEntryScope {
+    fn new(function_layer_id: Arc<str>, board: &Board) -> flow_like_types::Result<Self> {
+        let layer = board
+            .layers
+            .get(function_layer_id.as_ref())
+            .ok_or_else(|| {
+                anyhow!(
+                    "Function layer {} for the run entry is missing",
+                    function_layer_id
+                )
+            })?;
+        Ok(Self {
+            function_layer_id,
+            local_variables: fresh_local_variable_scope(&layer.variables),
+        })
+    }
+
+    fn applies_to(&self, node: &InternalNode) -> bool {
+        node.function_layer_id() == Some(self.function_layer_id.as_ref())
+    }
+
+    async fn reset(&self) {
+        for variable in self.local_variables.lock().await.values_mut() {
+            let value = variable
+                .default_value
+                .as_ref()
+                .map_or(Value::Null, |bytes| {
+                    flow_like_types::json::from_slice(bytes).unwrap_or(Value::Null)
+                });
+            *variable.value.lock().await = value;
+        }
+    }
+}
+
 pub type EventTrigger =
     Arc<dyn Fn(&InternalRun) -> BoxFuture<'_, flow_like_types::Result<()>> + Send + Sync>;
 
@@ -927,6 +967,12 @@ fn stack_for_entry(
         .get(entry_node_id)
         .cloned()
         .ok_or_else(|| anyhow!("Entry node {} not found", entry_node_id))?;
+    if !node.can_seed_run() {
+        return Err(anyhow!(
+            "Node {} is inside a function layer and is not an entry node",
+            entry_node_id
+        ));
+    }
     let mut stack = RunStack::with_capacity(1);
     stack.push(ExecutionTarget {
         node,
@@ -962,6 +1008,10 @@ pub struct InternalRun {
     pub channel: Arc<dyn Channel>,
 
     stack: Arc<RunStack>,
+    /// Fresh Function-local variables for a directly selected layer entry.
+    /// Ordinary CallFunction execution continues to create its own invocation
+    /// scope and never uses this field.
+    entry_scope: Option<RunEntryScope>,
     concurrency_limit: u64,
     cpus: usize,
     log_level: LogLevel,
@@ -1255,6 +1305,7 @@ impl InternalRun {
 
         let mut nodes = AHashMap::with_capacity(template.nodes.len());
         let mut stack = RunStack::with_capacity(1);
+        let mut entry_function_layer_id = None;
 
         for tn in template.nodes.iter() {
             let node_pins: Box<[Arc<InternalPin>]> = tn
@@ -1266,6 +1317,8 @@ impl InternalRun {
                 id: tn.id.clone(),
                 name: tn.name.clone(),
                 is_pure: tn.is_pure,
+                can_seed_run: tn.can_seed_run,
+                function_layer_id: tn.function_layer_id.clone(),
             };
             let internal_node = Arc::new(InternalNode::from_parts(
                 tn.node.clone(),
@@ -1279,15 +1332,21 @@ impl InternalRun {
                 internal_pin.init_node(Arc::downgrade(&internal_node));
             }
 
-            if !tn.in_layer_body && payload.id.as_str() == tn.id.as_ref() {
+            if tn.can_seed_run && payload.id.as_str() == tn.id.as_ref() {
                 stack.push(ExecutionTarget {
                     node: internal_node.clone(),
                     through_pins: vec![],
                 });
+                if tn.seeds_function_scope {
+                    entry_function_layer_id = tn.function_layer_id.clone();
+                }
             }
 
             nodes.insert(tn.id.to_string(), internal_node);
         }
+        let entry_scope = entry_function_layer_id
+            .map(|layer_id| RunEntryScope::new(layer_id, &board))
+            .transpose()?;
 
         tracing::debug!(
             elapsed = ?before.elapsed(),
@@ -1316,6 +1375,7 @@ impl InternalRun {
             variables,
             cache,
             stack: Arc::new(stack),
+            entry_scope,
             concurrency_limit: 128_000,
             cpus: num_cpus::get().max(4) * 4,
             callback,
@@ -1505,6 +1565,9 @@ impl InternalRun {
             });
             *variable.value.lock().await = value;
         }
+        if let Some(entry_scope) = &self.entry_scope {
+            entry_scope.reset().await;
+        }
 
         Ok(())
     }
@@ -1529,6 +1592,7 @@ impl InternalRun {
         let cancellation_token = self.cancellation_token.clone();
         let cancellation_log_level = self.cancellation_log_level;
         let cancellation_log_message = self.cancellation_log_message.clone();
+        let entry_scope = self.entry_scope.clone();
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
@@ -1548,6 +1612,7 @@ impl InternalRun {
                 let has_node_errors = has_node_errors.clone();
                 let cancellation_token = cancellation_token.clone();
                 let cancellation_log_message = cancellation_log_message.clone();
+                let entry_scope = entry_scope.clone();
 
                 async move {
                     step_core(
@@ -1557,6 +1622,7 @@ impl InternalRun {
                         &handler,
                         &run,
                         &meta,
+                        entry_scope,
                         variables,
                         cache,
                         log_level,
@@ -1623,6 +1689,7 @@ impl InternalRun {
             handler,
             &self.run,
             &self.meta,
+            self.entry_scope.clone(),
             variables,
             cache,
             log_level,
@@ -2032,6 +2099,7 @@ async fn step_core(
     handler: &Arc<FlowLikeState>,
     run: &Arc<Mutex<Run>>,
     run_meta: &RunMeta,
+    entry_scope: Option<RunEntryScope>,
     variables: &Arc<Mutex<AHashMap<String, Variable>>>,
     cache: &Arc<RwLock<AHashMap<String, Arc<dyn Cacheable>>>>,
     log_level: LogLevel,
@@ -2079,6 +2147,9 @@ async fn step_core(
         Some(channel),
     )
     .await;
+    if let Some(entry_scope) = entry_scope.filter(|scope| scope.applies_to(&target.node)) {
+        context.local_variables = Some(entry_scope.local_variables);
+    }
     context.user_context = user_context;
     if let Some(token) = cancellation_token {
         context.set_cancellation_token(token);
@@ -2224,15 +2295,20 @@ pub async fn flush_run_cancelled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::Board;
+    use crate::flow::board::commands::pins::connect_pins::connect_pins;
+    use crate::flow::board::{Board, Layer, LayerType};
     use crate::flow::node::{Node, NodeLogic};
+    use crate::flow::pin::ValueType;
+    use crate::flow::variable::VariableType;
     use crate::profile::Profile;
-    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use crate::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
     use crate::utils::http::HTTPClient;
     use flow_like_storage::Path;
     use flow_like_types::{async_trait, intercom::BufferedInterComHandler, tokio};
 
     struct NoopLogic;
+
+    const SCOPED_VARIABLE_ID: &str = "shared-variable";
 
     #[async_trait]
     impl NodeLogic for NoopLogic {
@@ -2243,6 +2319,132 @@ mod tests {
         async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
             Ok(())
         }
+    }
+
+    struct ScopedEntryLogic {
+        values_before_write: Arc<std::sync::Mutex<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl NodeLogic for ScopedEntryLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("scoped_entry", "Scoped Entry", "", "Tests");
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            node
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let variable = context.get_variable(SCOPED_VARIABLE_ID).await?;
+            let mut value = variable.value.lock().await;
+            self.values_before_write
+                .lock()
+                .expect("record entry value")
+                .push(value.clone());
+            *value = flow_like_types::json::json!("layer-mutated");
+            drop(value);
+            context.activate_exec_pin("exec_out").await
+        }
+    }
+
+    struct ScopedProbeLogic {
+        observed_values: Arc<std::sync::Mutex<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl NodeLogic for ScopedProbeLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("scoped_probe", "Scoped Probe", "", "Tests");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let variable = context.get_variable(SCOPED_VARIABLE_ID).await?;
+            let value = variable.value.lock().await.clone();
+            self.observed_values
+                .lock()
+                .expect("record probe value")
+                .push(value);
+            Ok(())
+        }
+    }
+
+    async fn state_with_node_logics(logics: Vec<Arc<dyn NodeLogic>>) -> Arc<FlowLikeState> {
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut registry = FlowNodeRegistryInner::new(logics.len());
+        for logic in logics {
+            registry.insert(logic.get_node(), logic);
+        }
+        state.node_registry.write().await.node_registry = Arc::new(registry);
+        state
+    }
+
+    async fn state_with_noop_node() -> Arc<FlowLikeState> {
+        let logic: Arc<dyn NodeLogic> = Arc::new(NoopLogic);
+        state_with_node_logics(vec![logic]).await
+    }
+
+    fn layer_entry_board(start: bool) -> (Board, String) {
+        let mut board = Board::new_detached(Some("layer-entry".to_string()), Path::default());
+        let mut node = NoopLogic.get_node();
+        node.id = if start {
+            "layer-start".to_string()
+        } else {
+            "layer-internal".to_string()
+        };
+        node.set_start(start);
+        let node_id = node.id.clone();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Function Layer".to_string(),
+            LayerType::Function,
+        );
+        layer.nodes.insert(node_id.clone(), node);
+        board.layers.insert(layer.id.clone(), layer);
+        (board, node_id)
+    }
+
+    fn tagged_layer_entry_board(start: bool) -> (Board, String) {
+        let mut board =
+            Board::new_detached(Some("tagged-layer-entry".to_string()), Path::default());
+        let layer = Layer::new(
+            "function-layer".to_string(),
+            "Function Layer".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        let mut node = NoopLogic.get_node();
+        node.id = if start {
+            "tagged-layer-start".to_string()
+        } else {
+            "tagged-layer-internal".to_string()
+        };
+        node.layer = Some("function-layer".to_string());
+        node.set_start(start);
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        (board, node_id)
+    }
+
+    fn variable_with_default(id: &str, default: Value) -> Variable {
+        let mut variable = Variable::new(id, VariableType::String, ValueType::Normal);
+        variable.id = id.to_string();
+        variable.set_default_value(default);
+        variable
+    }
+
+    fn test_intercom_callback() -> InterComCallback {
+        BufferedInterComHandler::new(
+            Arc::new(|_events| Box::pin(async { Ok(()) })),
+            Some(100),
+            Some(400),
+            Some(false),
+        )
+        .into_callback()
     }
 
     mod variable_overrides {
@@ -2550,6 +2752,276 @@ mod tests {
             Some("writer-operation")
         );
         assert_eq!(traces[0].logs[0].log_level, LogLevel::Error);
+    }
+
+    #[tokio::test]
+    async fn explicit_layer_body_start_node_seeds_and_reseeds_the_run() {
+        let state = state_with_noop_node().await;
+        let (board, entry_node_id) = layer_entry_board(true);
+        let payload = RunPayload {
+            id: entry_node_id.clone(),
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            test_intercom_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build layer-entry run");
+
+        assert_eq!(run.stack.len(), 1);
+        assert_eq!(run.stack.stack[0].node.node_id(), entry_node_id);
+        run.execute(state.clone()).await;
+        assert_eq!(run.meta.get_nodes_executed(), 1);
+        assert!(matches!(run.get_status().await, RunStatus::Success));
+
+        run.fork().await.expect("reseed explicit layer entry");
+        assert_eq!(run.stack.len(), 1);
+        run.execute(state).await;
+        assert_eq!(run.meta.get_nodes_executed(), 1);
+        assert!(matches!(run.get_status().await, RunStatus::Success));
+    }
+
+    #[tokio::test]
+    async fn non_start_layer_body_node_remains_function_only() {
+        let state = state_with_noop_node().await;
+        let (board, internal_node_id) = layer_entry_board(false);
+        let payload = RunPayload {
+            id: internal_node_id,
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            test_intercom_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build function-only layer run");
+
+        assert_eq!(run.stack.len(), 0);
+        let error = run.fork().await.unwrap_err().to_string();
+        assert!(error.contains("not an entry node"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn tagged_non_start_function_node_preserves_direct_execution_compatibility() {
+        let state = state_with_noop_node().await;
+        let (board, internal_node_id) = tagged_layer_entry_board(false);
+        let payload = RunPayload {
+            id: internal_node_id,
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            test_intercom_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build tagged function-only run");
+
+        assert_eq!(run.stack.len(), 1);
+        assert_eq!(run.stack.stack[0].node.node_id(), payload.id);
+        assert!(
+            run.entry_scope.is_none(),
+            "legacy direct targets must retain their pre-layer variable behavior"
+        );
+        run.execute(state).await;
+        assert!(matches!(run.get_status().await, RunStatus::Success));
+        run.fork()
+            .await
+            .expect("tagged Board.nodes targets remain directly executable");
+        assert_eq!(run.stack.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn tagged_layer_entry_shares_and_resets_function_local_variables() {
+        let entry_values = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let probe_values = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entry_logic: Arc<dyn NodeLogic> = Arc::new(ScopedEntryLogic {
+            values_before_write: entry_values.clone(),
+        });
+        let probe_logic: Arc<dyn NodeLogic> = Arc::new(ScopedProbeLogic {
+            observed_values: probe_values.clone(),
+        });
+        let state = state_with_node_logics(vec![entry_logic.clone(), probe_logic.clone()]).await;
+
+        let mut board =
+            Board::new_detached(Some("scoped-layer-entry".to_string()), Path::default());
+        board.variables.insert(
+            SCOPED_VARIABLE_ID.to_string(),
+            variable_with_default(
+                SCOPED_VARIABLE_ID,
+                flow_like_types::json::json!("global-default"),
+            ),
+        );
+
+        let mut function_layer = Layer::new(
+            "function-layer".to_string(),
+            "Function Layer".to_string(),
+            LayerType::Function,
+        );
+        function_layer.variables.insert(
+            SCOPED_VARIABLE_ID.to_string(),
+            variable_with_default(
+                SCOPED_VARIABLE_ID,
+                flow_like_types::json::json!("layer-default"),
+            ),
+        );
+        let mut collapsed_layer = Layer::new(
+            "collapsed-layer".to_string(),
+            "Collapsed Layer".to_string(),
+            LayerType::Collapsed,
+        );
+        collapsed_layer.parent_id = Some(function_layer.id.clone());
+        board
+            .layers
+            .insert(function_layer.id.clone(), function_layer);
+        board
+            .layers
+            .insert(collapsed_layer.id.clone(), collapsed_layer);
+
+        let mut entry = entry_logic.get_node();
+        entry.id = "scoped-entry-node".to_string();
+        entry.layer = Some("collapsed-layer".to_string());
+        entry.set_start(true);
+        let entry_id = entry.id.clone();
+        let entry_exec_pin = entry
+            .get_pin_by_name("exec_out")
+            .expect("entry execution output")
+            .id
+            .clone();
+
+        let mut probe = probe_logic.get_node();
+        probe.id = "scoped-probe-node".to_string();
+        probe.layer = Some("collapsed-layer".to_string());
+        let probe_id = probe.id.clone();
+        let probe_exec_pin = probe
+            .get_pin_by_name("exec_in")
+            .expect("probe execution input")
+            .id
+            .clone();
+
+        board.nodes.insert(entry_id.clone(), entry);
+        board.nodes.insert(probe_id.clone(), probe);
+        connect_pins(
+            &mut board,
+            &entry_id,
+            &entry_exec_pin,
+            &probe_id,
+            &probe_exec_pin,
+        )
+        .expect("connect layer entry to its successor");
+
+        let payload = RunPayload {
+            id: entry_id,
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            test_intercom_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build scoped layer-entry run");
+
+        run.execute(state.clone()).await;
+        assert_eq!(run.meta.get_nodes_executed(), 2);
+        assert!(matches!(run.get_status().await, RunStatus::Success));
+
+        run.fork().await.expect("reseed scoped layer entry");
+        run.execute(state).await;
+        assert_eq!(run.meta.get_nodes_executed(), 2);
+        assert!(matches!(run.get_status().await, RunStatus::Success));
+
+        assert_eq!(
+            *entry_values.lock().expect("entry observations"),
+            vec![
+                flow_like_types::json::json!("layer-default"),
+                flow_like_types::json::json!("layer-default"),
+            ]
+        );
+        assert_eq!(
+            *probe_values.lock().expect("probe observations"),
+            vec![
+                flow_like_types::json::json!("layer-mutated"),
+                flow_like_types::json::json!("layer-mutated"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn top_level_non_start_node_keeps_direct_execution_behavior() {
+        let state = state_with_noop_node().await;
+        let mut board = Board::new_detached(Some("top-level-entry".to_string()), Path::default());
+        let mut node = NoopLogic.get_node();
+        node.id = "top-level-non-start".to_string();
+        node.set_start(false);
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        let payload = RunPayload {
+            id: node_id,
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            test_intercom_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build top-level direct run");
+
+        assert_eq!(run.stack.len(), 1);
     }
 
     #[test]

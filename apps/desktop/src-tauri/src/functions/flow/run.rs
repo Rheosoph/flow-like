@@ -3,7 +3,7 @@
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::compiled::{
-    TemplateCache,
+    CompiledRunTemplate, TemplateCache,
     prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
 };
 use flow_like::flow::execution::log::LogMessage;
@@ -158,6 +158,7 @@ fn is_board_entry_node(board: &flow_like::flow::board::Board, node_id: &str) -> 
 }
 
 async fn resolve_local_page_target(
+    state: &Arc<FlowLikeState>,
     app: &App,
     event: &flow_like::flow::event::Event,
     trigger: &PageTrigger,
@@ -169,11 +170,6 @@ async fn resolve_local_page_target(
     if event.execution_mode == flow_like::flow::event::EventExecutionMode::Remote {
         return Err(flow_like_types::anyhow!(
             "A Remote Page Event cannot execute on the local runtime"
-        ));
-    }
-    if !matches!(&app.visibility, AppVisibility::Offline) && event.board_version.is_none() {
-        return Err(flow_like_types::anyhow!(
-            "A hosted Page Event must be pinned to an immutable board version"
         ));
     }
     let page_id = event.default_page_id.as_deref().ok_or_else(|| {
@@ -267,16 +263,26 @@ async fn resolve_local_page_target(
             "The Page action does not resolve to an executable entry"
         ));
     }
+    // Build the executable template from the same Board value that produced
+    // the Page contract. Reloading Latest through the template cache here
+    // could observe a concurrent save and execute a different revision.
+    let registry = state.node_registry.read().await.node_registry.clone();
+    let template = Arc::new(CompiledRunTemplate::from_board(
+        Arc::new(board.clone()),
+        registry.as_ref(),
+    )?);
 
     Ok(ResolvedLocalPageTarget {
         node_id,
         sealing_context: LocalPageActionSealingContext::new(scope, allowed_entry_nodes),
+        template,
     })
 }
 
 struct ResolvedLocalPageTarget {
     node_id: String,
     sealing_context: LocalPageActionSealingContext,
+    template: Arc<flow_like::flow::compiled::CompiledRunTemplate>,
 }
 
 pub(crate) async fn resolve_run_template(
@@ -286,7 +292,7 @@ pub(crate) async fn resolve_run_template(
     version: Option<(u32, u32, u32)>,
 ) -> flow_like_types::Result<Arc<flow_like::flow::compiled::CompiledRunTemplate>> {
     TEMPLATE_CACHE
-        .resolve(state, app_id, board_id, version, "")
+        .resolve(state, app_id, board_id, version, None, "")
         .await
 }
 
@@ -591,6 +597,7 @@ async fn execute_prepared(
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
     let mut page_action_sealing_context = None;
+    let mut page_template = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
     let mut version = requested_version;
@@ -623,11 +630,18 @@ async fn execute_prepared(
                     error
                 ))
             })?;
-            let target = resolve_local_page_target(&app, &intermediate_event, trigger, principal)
-                .await
-                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+            let target = resolve_local_page_target(
+                &flow_like_state,
+                &app,
+                &intermediate_event,
+                trigger,
+                principal,
+            )
+            .await
+            .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
             payload.id = target.node_id;
             page_action_sealing_context = Some(target.sealing_context);
+            page_template = Some(target.template);
         } else {
             if intermediate_event.default_page_id.is_some() {
                 return Err(TauriFunctionError::new(
@@ -659,11 +673,14 @@ async fn execute_prepared(
         })?;
     }
 
-    let template = resolve_run_template(&flow_like_state, &app_id, &board_id, version)
-        .await
-        .map_err(|e| {
-            TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
-        })?;
+    let template = match page_template {
+        Some(template) => template,
+        None => resolve_run_template(&flow_like_state, &app_id, &board_id, version)
+            .await
+            .map_err(|e| {
+                TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
+            })?,
+    };
 
     let app_handle_for_report = app_handle.clone();
     let token_for_report = token.clone();
@@ -678,7 +695,8 @@ async fn execute_prepared(
                 async move {
                     if let Some(context) = page_action_sealing_context {
                         for message in &mut event {
-                            let report = context.seal_payload(&mut message.payload);
+                            let report =
+                                context.seal_payload(&message.event_type, &mut message.payload);
                             if report.rejected > 0 {
                                 tracing::warn!(
                                     event_id = %message.event_id,

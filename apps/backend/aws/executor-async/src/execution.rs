@@ -28,7 +28,7 @@ pub async fn execute(body: &str) -> flow_like_types::Result<()> {
     let request = ExecutionRequest::try_from(payload)
         .map_err(|e| flow_like_types::anyhow!("Failed to convert dispatch payload: {}", e))?;
 
-    let config = ExecutorConfig::from_env();
+    let config = ExecutorConfig::from_env().with_required_terminal_status_ack();
 
     match flow_like_executor::execute(request, config).await {
         Ok(result) => {

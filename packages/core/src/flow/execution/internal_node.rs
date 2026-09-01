@@ -451,6 +451,12 @@ pub struct NodeMeta {
     pub id: Arc<str>,
     pub name: Arc<str>,
     pub is_pure: bool,
+    /// Whether this node may be selected as the root of an `InternalRun`.
+    /// Template-backed function-layer internals set this to false unless the
+    /// node is an explicit start node.
+    pub can_seed_run: bool,
+    /// Nearest owning Function layer for template-backed nodes.
+    pub function_layer_id: Option<Arc<str>>,
 }
 
 impl NodeMeta {
@@ -459,6 +465,11 @@ impl NodeMeta {
             id: Arc::from(node.id.as_str()),
             name: Arc::from(node.name.as_str()),
             is_pure: node.is_pure(),
+            // `Node` alone does not carry function-body ownership. Callers
+            // assembling an InternalNode outside a compiled template retain
+            // the historical direct-execution behavior.
+            can_seed_run: true,
+            function_layer_id: None,
         }
     }
 }
@@ -563,6 +574,18 @@ impl InternalNode {
     #[inline]
     pub fn is_pure_cached(&self) -> bool {
         self.meta.is_pure
+    }
+
+    /// Whether this node may be used as a run's root entry.
+    #[inline]
+    pub fn can_seed_run(&self) -> bool {
+        self.meta.can_seed_run
+    }
+
+    /// Nearest Function layer that owns this node, if any.
+    #[inline]
+    pub fn function_layer_id(&self) -> Option<&str> {
+        self.meta.function_layer_id.as_deref()
     }
 
     /// Retained for source compatibility; the immutable cache is populated eagerly by `new`.
