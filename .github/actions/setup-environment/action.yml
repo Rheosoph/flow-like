@@ -31,6 +31,11 @@ runs:
         packages: libgtk-3-dev libclang-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev pkg-config protobuf-compiler webkit2gtk-4.1 libglib2.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
         version: 1.0
 
+    - name: Ensure SPA headers satisfy libspa
+      if: runner.os == 'Linux'
+      run: .github/scripts/ensure-spa-headers.sh
+      shell: bash
+
     - name: Ensure OpenCL linker symlink
       run: |
         lib_dir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
