@@ -85,7 +85,7 @@ impl TokenType {
             TokenType::Realtime => 3 * 60 * 60,     // 3 hours
             TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
             TokenType::AppConnection => 10 * 60,    // 10 minutes
-            TokenType::PageAction => 24 * 60 * 60, // 24 hours
+            TokenType::PageAction => 24 * 60 * 60,  // 24 hours
         }
     }
 }

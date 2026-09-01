@@ -193,6 +193,7 @@ pub async fn report_run(
             event_id: body.event_id.clone(),
             node_id: Some(body.node_id.clone()),
             version: body.version.clone(),
+            board_etag: None,
             mode: RunMode::Local,
             status: run_status.clone(),
             input_payload_len: 0,

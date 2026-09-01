@@ -7,14 +7,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    app::{App, AppVisibility},
+    app::App,
     state::FlowLikeState,
     utils::compression::{compress_to_file, from_compressed},
 };
 
 use super::{
-    board::VersionType, compiled::prerun::PrerunPageExecution, pin::PinType,
-    variable::Variable,
+    board::VersionType, compiled::prerun::PrerunPageExecution, pin::PinType, variable::Variable,
 };
 
 /// Simplified input pin metadata for events (used when board can't be fetched)
@@ -318,6 +317,16 @@ impl Event {
         version_type: Option<VersionType>,
         enforce_id: bool,
     ) -> flow_like_types::Result<Self> {
+        if self.board_version == Some(flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL)
+            || self.canary.as_ref().is_some_and(|canary| {
+                canary.board_version
+                    == Some(flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL)
+            })
+        {
+            return Err(flow_like_types::anyhow!(
+                "the selected board version is reserved for ETag-bound Latest dispatch"
+            ));
+        }
         if self.id.is_empty() {
             self.id = create_id();
         }
@@ -422,9 +431,6 @@ impl Event {
         &mut self,
         app: &App,
     ) -> flow_like_types::Result<()> {
-        if self.default_page_id.is_some() {
-            return Ok(());
-        }
         if self.board_id.is_empty() {
             return Ok(());
         }
@@ -463,16 +469,10 @@ impl Event {
                     self.id
                 ));
             }
-            let version = match self.board_version {
-                Some(version) => Some(version),
-                None if matches!(app.visibility, AppVisibility::Offline) => None,
-                None => {
-                    return Err(flow_like_types::anyhow!(
-                        "Page Event '{}' must pin an immutable board version",
-                        self.id
-                    ));
-                }
-            };
+            // Page Events follow the same version selector as every other
+            // Event. `None` means the current board and is validated against
+            // the current Page contract by bootstrap/prerun/invoke.
+            let version = self.board_version;
             let board = app
                 .open_board(self.board_id.clone(), Some(false), version)
                 .await?;

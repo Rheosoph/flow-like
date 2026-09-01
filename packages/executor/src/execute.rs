@@ -4,10 +4,9 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{verify_jwt_async, ExecutorClaims};
+use crate::jwt::{verify_jwt_async, ExecutorClaims, ExecutorPageExecutionClaims};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use flow_like::credentials::StoreType;
-use flow_like::flow::board::Board;
 use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
@@ -63,25 +62,7 @@ pub(crate) fn request_registry(
 static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
 
 fn wasm_registry_signature(request: &ExecutionRequest) -> String {
-    let Some(packages) = request.wasm_packages.as_ref() else {
-        return "static".to_string();
-    };
-
-    if packages.is_empty() {
-        return "static".to_string();
-    }
-
-    let mut parts = packages
-        .iter()
-        .map(|(package_id, package_ref)| {
-            format!(
-                "{}@{}:{}:{}",
-                package_id, package_ref.version, package_ref.wasm_hash, package_ref.cwasm_checksum
-            )
-        })
-        .collect::<Vec<_>>();
-    parts.sort();
-    parts.join("|")
+    flow_like_types::dispatch::wasm_package_set_revision(request.wasm_packages.as_ref())
 }
 
 /// Resolve the request's board into a shared run template via the core
@@ -98,6 +79,7 @@ pub(crate) async fn resolve_run_template(
             &request.app_id,
             &request.board_id,
             request.board_version,
+            request.board_etag.as_deref(),
             &wasm_registry_signature(request),
         )
         .await
@@ -107,6 +89,187 @@ pub(crate) async fn resolve_run_template(
                 request.board_id, e
             ))
         })
+}
+
+fn validate_page_request_binding(
+    page: &ExecutorPageExecutionClaims,
+    board_version: Option<(u32, u32, u32)>,
+    board_etag: Option<&str>,
+    node_id: &str,
+    wasm_packages: Option<
+        &std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>,
+    >,
+) -> Result<(), ExecutorError> {
+    let page_etag = page
+        .board_etag
+        .as_deref()
+        .map(str::trim)
+        .filter(|etag| !etag.is_empty());
+    match (page.board_version, page_etag) {
+        (Some(version), None) if board_version == Some(version) && board_etag.is_none() => {}
+        (None, Some(etag)) if board_version.is_none() && board_etag == Some(etag) => {}
+        _ => {
+            return Err(ExecutorError::InvalidRequest(
+                "executor JWT Page selector does not match the queued request".to_string(),
+            ));
+        }
+    }
+
+    if let Some(target_node_id) = page.target_node_id.as_deref() {
+        if target_node_id != node_id {
+            return Err(ExecutorError::InvalidRequest(
+                "queued Page node does not match the executor JWT target".to_string(),
+            ));
+        }
+    } else if page.allowed_entry_node_ids.is_empty() {
+        // Pinned Page JWTs issued before the allow-list field existed remain
+        // compatible. Latest Page execution was not supported by those
+        // issuers, so an empty Latest list is always invalid.
+        if page.board_version.is_none() {
+            return Err(ExecutorError::InvalidRequest(
+                "Latest Page executor JWT is missing its entry-node authority".to_string(),
+            ));
+        }
+    } else if !page
+        .allowed_entry_node_ids
+        .iter()
+        .any(|allowed| allowed == node_id)
+    {
+        return Err(ExecutorError::InvalidRequest(
+            "queued Page node is outside the executor JWT entry-node authority".to_string(),
+        ));
+    }
+
+    if let Some(expected) = page.wasm_authority_revision.as_deref() {
+        if expected != flow_like_types::dispatch::wasm_package_set_revision(wasm_packages) {
+            return Err(ExecutorError::InvalidRequest(
+                "queued Page WASM bundle does not match the executor JWT authority".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_executor_request_claims(
+    claims: &ExecutorClaims,
+    request: &ExecutionRequest,
+) -> Result<(), ExecutorError> {
+    if claims.app_id != request.app_id || claims.board_id != request.board_id {
+        return Err(ExecutorError::InvalidRequest(
+            "executor JWT claims do not match the queued request".to_string(),
+        ));
+    }
+
+    match &claims.page_execution {
+        Some(page) => {
+            if claims
+                .event_id
+                .as_deref()
+                .is_none_or(|event_id| event_id.trim().is_empty())
+            {
+                return Err(ExecutorError::InvalidRequest(
+                    "Page executor JWT does not identify its source Event".to_string(),
+                ));
+            }
+            validate_page_request_binding(
+                page,
+                request.board_version,
+                request.board_etag.as_deref(),
+                &request.node_id,
+                request.wasm_packages.as_ref(),
+            )
+        }
+        None if request.board_etag.is_some() => Err(ExecutorError::InvalidRequest(
+            "ETag-bound Latest execution requires signed Page context".to_string(),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Build the `FlowLikeState` every execution path shares: stores from the
+/// request credentials, the logs database builder, and the server execution
+/// environment. WASM registry overlays are applied by the caller.
+pub(crate) async fn build_flow_state(
+    credentials: &flow_like::credentials::SharedCredentials,
+) -> Result<FlowLikeState, ExecutorError> {
+    let content_store = credentials
+        .to_store_type(StoreType::Content)
+        .await
+        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
+
+    let meta_store = credentials
+        .to_store_type(StoreType::Meta)
+        .await
+        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
+
+    let log_store = credentials
+        .to_store_type(StoreType::Logs)
+        .await
+        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
+
+    let mut flow_config = FlowLikeConfig::with_default_store(content_store);
+    flow_config.register_app_meta_store(meta_store);
+    flow_config.register_log_store(log_store);
+
+    // Request-file offloads and `/tmp` uploads live under tmp/*, which the
+    // app-scoped content credential does not necessarily cover.
+    match credentials.to_store_type(StoreType::Tmp).await {
+        Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
+        }
+    }
+
+    // Register logs database builder for LanceDB log storage
+    match credentials.to_logs_db_builder() {
+        Ok(logs_db_builder) => {
+            tracing::info!("Successfully created logs database builder");
+            flow_config.register_build_logs_database(logs_db_builder);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create logs database builder - logs will not be persisted");
+        }
+    }
+
+    // Load model provider configuration from environment
+    let model_provider_config = ModelProviderConfiguration::default();
+
+    let http_client = HTTPClient::new_without_refetch();
+    let mut state =
+        FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
+    state.execution_environment = ExecutionEnvironment::server_default();
+    Ok(state)
+}
+
+/// A claims-validation failure happens before any state exists, so build one
+/// from the request credentials just to persist the rejection. When the state
+/// itself cannot be built the rejection stays unrecorded and the caller
+/// returns the original validation error untouched.
+pub(crate) async fn record_claims_rejection(
+    request: &ExecutionRequest,
+    run_id: &str,
+    error: &ExecutorError,
+) {
+    match build_flow_state(&request.credentials).await {
+        Ok(state) => {
+            record_executor_rejection(
+                &Arc::new(state),
+                request,
+                run_id,
+                RejectionStage::Permission,
+                error.to_string(),
+            )
+            .await;
+        }
+        Err(state_error) => {
+            tracing::warn!(
+                error = %state_error,
+                run_id = %run_id,
+                app_id = %request.app_id,
+                "Failed to build state to record a rejected execution request"
+            );
+        }
+    }
 }
 
 /// A run the API already created but the executor never started leaves the run
@@ -236,10 +399,9 @@ pub async fn execute(
 
     // Verify JWT and extract claims
     let claims = verify_jwt_async(&request.executor_jwt).await?;
-    if claims.app_id != request.app_id || claims.board_id != request.board_id {
-        return Err(ExecutorError::InvalidRequest(
-            "executor JWT claims do not match the queued request".to_string(),
-        ));
+    if let Err(error) = validate_executor_request_claims(&claims, &request) {
+        record_claims_rejection(&request, &claims.run_id, &error).await;
+        return Err(error);
     }
 
     // Strict queue mode first acquires one conditional Cosmos lease. A live
@@ -304,24 +466,9 @@ pub async fn execute(
         None
     };
 
-    // Create stores from credentials
-    let content_store = request
-        .credentials
-        .to_store_type(StoreType::Content)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let meta_store = request
-        .credentials
-        .to_store_type(StoreType::Meta)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let log_store = request
-        .credentials
-        .to_store_type(StoreType::Logs)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
+    // Build FlowLike state from the request credentials
+    let state = build_flow_state(&request.credentials).await?;
+    let execution_environment = state.execution_environment;
 
     // Set up event channel for API callback batching
     let (event_tx, event_rx) = mpsc::unbounded_channel::<ExecutionEvent>();
@@ -348,40 +495,6 @@ pub async fn execute(
         }
         result
     });
-
-    // Build FlowLike state
-    let mut flow_config = FlowLikeConfig::with_default_store(content_store);
-    flow_config.register_app_meta_store(meta_store.clone());
-    flow_config.register_log_store(log_store);
-
-    // Request-file offloads and `/tmp` uploads live under tmp/*, which the
-    // app-scoped content credential does not necessarily cover.
-    match request.credentials.to_store_type(StoreType::Tmp).await {
-        Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
-        }
-    }
-
-    // Register logs database builder for LanceDB log storage
-    match request.credentials.to_logs_db_builder() {
-        Ok(logs_db_builder) => {
-            tracing::info!("Successfully created logs database builder");
-            flow_config.register_build_logs_database(logs_db_builder);
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create logs database builder - logs will not be persisted");
-        }
-    }
-
-    // Load model provider configuration from environment
-    let model_provider_config = ModelProviderConfiguration::default();
-
-    let http_client = HTTPClient::new_without_refetch();
-    let execution_environment = ExecutionEnvironment::server_default();
-    let mut state =
-        FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
-    state.execution_environment = execution_environment;
 
     let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
@@ -417,7 +530,6 @@ pub async fn execute(
     let state = Arc::new(state);
 
     let board_id = &request.board_id;
-    let storage_root = Path::from("apps").child(request.app_id.to_string());
     // Template build resolves every node against the registry, so a board
     // whose WASM packages failed to download errors here first — keep the
     // actionable package list in that error.
@@ -914,6 +1026,20 @@ fn execution_event_id(run_id: &str, sequence: i32) -> String {
     format!("evt-{}", digest.to_hex())
 }
 
+fn assign_callback_identity(event: &mut ExecutionEvent, sequence: i32) {
+    event.sequence = sequence;
+    event.id = execution_event_id(&event.run_id, sequence);
+}
+
+fn api_event_input(event: &ExecutionEvent) -> ApiEventInput {
+    ApiEventInput {
+        id: Some(event.id.clone()),
+        sequence: Some(event.sequence),
+        event_type: event_type_to_string(&event.event_type),
+        payload: event.payload.clone(),
+    }
+}
+
 async fn run_callback_batcher(
     mut event_rx: mpsc::UnboundedReceiver<ExecutionEvent>,
     claims: ExecutorClaims,
@@ -928,14 +1054,11 @@ async fn run_callback_batcher(
     let client = callback_client();
     let mut batch = Vec::new();
     // Multiple producers can reserve an AtomicI32 value and reach the channel
-    // in the opposite order. Strict mode assigns the durable sequence at the
-    // single consumer instead, guaranteeing contiguous, ordered callbacks.
-    let mut strict_next_sequence = 0_i32;
-    let send_threshold = if queue_lease.is_some() {
-        config.max_batch_size.clamp(1, 1_000)
-    } else {
-        config.max_batch_size.max(1)
-    };
+    // in the opposite order. Assign the durable identity at this single
+    // consumer for every runtime, guaranteeing contiguous ordered callbacks
+    // and avoiding the API's legacy read/max/write allocation path.
+    let mut callback_next_sequence = 0_i32;
+    let send_threshold = config.max_batch_size.clamp(1, 1_000);
     let mut interval = tokio::time::interval(config.batch_interval());
 
     loop {
@@ -961,15 +1084,12 @@ async fn run_callback_batcher(
             event = event_rx.recv() => {
                 match event {
                     Some(mut e) => {
-                        if queue_lease.is_some() {
-                            e.sequence = strict_next_sequence;
-                            e.id = execution_event_id(&e.run_id, strict_next_sequence);
-                            strict_next_sequence = strict_next_sequence.checked_add(1).ok_or_else(|| {
-                                ExecutorError::Callback(
-                                    "execution event sequence exceeded i32 capacity".to_string(),
-                                )
-                            })?;
-                        }
+                        assign_callback_identity(&mut e, callback_next_sequence);
+                        callback_next_sequence = callback_next_sequence.checked_add(1).ok_or_else(|| {
+                            ExecutorError::Callback(
+                                "execution event sequence exceeded i32 capacity".to_string(),
+                            )
+                        })?;
                         batch.push(e);
                         if batch.len() >= send_threshold {
                             if let Err(error) = send_events_to_api(
@@ -1033,15 +1153,7 @@ async fn send_events_to_api(
     client: &reqwest::Client,
     queue_lease: Option<&QueueLeaseContext>,
 ) -> Result<(), ExecutorError> {
-    let api_events: Vec<ApiEventInput> = events
-        .iter()
-        .map(|e| ApiEventInput {
-            id: queue_lease.map(|_| e.id.clone()),
-            sequence: queue_lease.map(|_| e.sequence),
-            event_type: event_type_to_string(&e.event_type),
-            payload: e.payload.clone(),
-        })
-        .collect();
+    let api_events: Vec<ApiEventInput> = events.iter().map(api_event_input).collect();
 
     let request = PushEventsRequest {
         events: api_events,
@@ -1311,6 +1423,133 @@ fn ensure_terminal_acknowledgement(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod callback_event_identity_tests {
+    use super::*;
+
+    fn event(run_id: &str, provisional_sequence: i32) -> ExecutionEvent {
+        ExecutionEvent {
+            id: "provisional".into(),
+            run_id: run_id.into(),
+            sequence: provisional_sequence,
+            event_type: EventType::Chunk,
+            payload: serde_json::json!({"sequence": provisional_sequence}),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn callback_consumer_assigns_canonical_identity_without_a_queue_lease() {
+        let mut first = event("run-1", 9);
+        let mut second = event("run-1", 3);
+        assign_callback_identity(&mut first, 0);
+        assign_callback_identity(&mut second, 1);
+
+        assert_eq!(first.sequence, 0);
+        assert_eq!(first.id, execution_event_id("run-1", 0));
+        assert_eq!(second.sequence, 1);
+        assert_eq!(second.id, execution_event_id("run-1", 1));
+        let api = api_event_input(&second);
+        assert_eq!(api.id.as_deref(), Some(second.id.as_str()));
+        assert_eq!(api.sequence, Some(1));
+    }
+}
+
+#[cfg(test)]
+mod page_request_binding_tests {
+    use super::*;
+
+    fn latest_page() -> ExecutorPageExecutionClaims {
+        ExecutorPageExecutionClaims {
+            page_id: "page-1".into(),
+            manifest_revision: "revision-1".into(),
+            board_version: None,
+            board_etag: Some("etag-a".into()),
+            target_node_id: Some("entry-1".into()),
+            entry_authority_revision: Some("authority-1".into()),
+            wasm_authority_revision: Some(flow_like_types::dispatch::wasm_package_set_revision(
+                None,
+            )),
+            allowed_entry_node_ids: vec!["entry-1".into(), "entry-2".into()],
+        }
+    }
+
+    #[test]
+    fn latest_page_selector_and_node_are_bound_by_the_executor_jwt() {
+        let page = latest_page();
+        validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None)
+            .expect("the signed selector and entry are accepted");
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-b"), "entry-1", None).is_err()
+        );
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "foreign", None).is_err()
+        );
+        assert!(
+            validate_page_request_binding(&page, Some((1, 2, 3)), None, "entry-1", None).is_err()
+        );
+    }
+
+    #[test]
+    fn latest_page_accepts_the_decoded_selector_and_rejects_the_raw_wire_sentinel() {
+        use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+        let page = latest_page();
+        validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None)
+            .expect("the decoded ETag-bound Latest selector is accepted");
+        assert!(validate_page_request_binding(
+            &page,
+            Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+            Some("etag-a"),
+            "entry-1",
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn latest_page_never_accepts_a_missing_signed_allow_list() {
+        let mut page = latest_page();
+        page.allowed_entry_node_ids.clear();
+        page.target_node_id = None;
+        page.entry_authority_revision = None;
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None).is_err()
+        );
+    }
+
+    #[test]
+    fn signed_target_cannot_be_swapped_for_another_allowed_entry() {
+        let page = latest_page();
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "entry-2", None).is_err()
+        );
+    }
+
+    #[test]
+    fn signed_wasm_authority_rejects_a_substituted_package_set() {
+        let page = latest_page();
+        let packages = std::collections::HashMap::from([(
+            "package-1".to_string(),
+            flow_like_types::dispatch::WasmPackageRef {
+                version: "1.0.0".into(),
+                wasm_hash: "wasm-hash".into(),
+                wasm_url: "https://example.invalid/package.wasm".into(),
+                cwasm_url: "https://example.invalid/package.cwasm".into(),
+                cwasm_checksum: "cwasm-checksum".into(),
+            },
+        )]);
+        assert!(validate_page_request_binding(
+            &page,
+            None,
+            Some("etag-a"),
+            "entry-1",
+            Some(&packages),
+        )
+        .is_err());
+    }
 }
 
 #[cfg(test)]

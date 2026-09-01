@@ -8,6 +8,7 @@
 use super::CompiledRunTemplate;
 use crate::flow::board::Board;
 use crate::state::{FlowLikeState, FlowNodeRegistryInner};
+use crate::utils::compression::from_compressed_with_meta;
 use flow_like_storage::Path;
 use flow_like_storage::object_store::{ObjectMeta, ObjectStore, PutPayload};
 use flow_like_types::{Result, anyhow};
@@ -63,8 +64,9 @@ impl TemplateCache {
     /// Resolve a board into a shared run template.
     ///
     /// Warm path: this cache (HEAD-revalidated for "latest"). Cold path: the
-    /// persisted artifact (`compiled/` for versions, `tmp/compiled/` keyed by
-    /// source etag for drafts), rejected on registry-fingerprint mismatch;
+    /// persisted artifact (`compiled/` for versions, app-scoped
+    /// `tmp/apps/{app_id}/compiled/drafts/` keyed by source etag for drafts),
+    /// rejected on registry-fingerprint mismatch;
     /// last resort: load the proto, run `node_updates`, compile, and persist
     /// the artifact in the background.
     ///
@@ -76,8 +78,20 @@ impl TemplateCache {
         app_id: &str,
         board_id: &str,
         version: Option<(u32, u32, u32)>,
+        expected_etag: Option<&str>,
         key_salt: &str,
     ) -> Result<Arc<CompiledRunTemplate>> {
+        if version.is_some() && expected_etag.is_some() {
+            return Err(anyhow!(
+                "A pinned board version cannot also select a Latest ETag"
+            ));
+        }
+        if expected_etag.is_some_and(|etag| etag.trim().is_empty()) {
+            return Err(anyhow!(
+                "An ETag-bound Latest board requires a non-empty ETag"
+            ));
+        }
+        let expected_etag = expected_etag.map(str::trim).filter(|etag| !etag.is_empty());
         let storage_root = Path::from("apps").child(app_id.to_string());
         let proto_path = Board::proto_path(&storage_root, board_id, version);
 
@@ -94,9 +108,11 @@ impl TemplateCache {
         let registry = state.node_registry.read().await.node_registry.clone();
         let fingerprint = registry.fingerprint();
 
-        let version_key = match version {
-            Some((m, n, p)) => format!("{m}_{n}_{p}"),
-            None => "latest".to_string(),
+        let version_key = match (version, expected_etag) {
+            (Some((m, n, p)), None) => format!("{m}_{n}_{p}"),
+            (Some(_), Some(_)) => unreachable!("validated above"),
+            (None, Some(etag)) => format!("latest@{etag}"),
+            (None, None) => "latest".to_string(),
         };
         let fingerprint_hex = blake3::Hash::from_bytes(fingerprint).to_hex();
         let cache_key = format!(
@@ -106,8 +122,8 @@ impl TemplateCache {
 
         let mut source_head: Option<ObjectMeta> = None;
         if let Some(cached) = self.inner.get(&cache_key) {
-            if version.is_some() {
-                tracing::debug!(cache_key = %cache_key, "Template cache hit (pinned)");
+            if version.is_some() || expected_etag.is_some() {
+                tracing::debug!(cache_key = %cache_key, "Template cache hit (content-addressed)");
                 return Ok(cached.template.clone());
             }
             match meta_store.head(&proto_path).await {
@@ -128,16 +144,23 @@ impl TemplateCache {
         }
 
         // Persisted artifact fast path — skips proto decode and `node_updates`.
-        let artifact_path = match version {
-            Some(v) => Some(super::artifact_path(&storage_root, board_id, v)),
-            None => {
+        let artifact_path = match (version, expected_etag) {
+            (Some(v), None) => Some(super::artifact_path(&storage_root, board_id, v)),
+            (Some(_), Some(_)) => unreachable!("validated above"),
+            (None, Some(etag)) => Some(super::draft_artifact_path(
+                app_id,
+                board_id,
+                etag,
+                &fingerprint,
+            )),
+            (None, None) => {
                 if source_head.is_none() {
                     source_head = meta_store.head(&proto_path).await.ok();
                 }
                 source_head
                     .as_ref()
                     .and_then(|h| h.e_tag.clone())
-                    .map(|e_tag| super::draft_artifact_path(app_id, board_id, &e_tag))
+                    .map(|e_tag| super::draft_artifact_path(app_id, board_id, &e_tag, &fingerprint))
             }
         };
         if let Some(ref path) = artifact_path
@@ -150,10 +173,14 @@ impl TemplateCache {
             )
             .await
         {
-            let (e_tag, last_modified) = source_head
-                .as_ref()
-                .map(|h| (h.e_tag.clone(), h.last_modified))
-                .unwrap_or((None, chrono::Utc::now()));
+            let (e_tag, last_modified) = if let Some(etag) = expected_etag {
+                (Some(etag.to_string()), chrono::Utc::now())
+            } else {
+                source_head
+                    .as_ref()
+                    .map(|h| (h.e_tag.clone(), h.last_modified))
+                    .unwrap_or((None, chrono::Utc::now()))
+            };
             self.inner.insert(
                 cache_key.clone(),
                 Arc::new(CachedTemplate {
@@ -170,10 +197,20 @@ impl TemplateCache {
         // The template's Board view is reconstructed from the compiled form
         // (see `CompiledRunTemplate::from_compiled`), which also guarantees it
         // never carries this request's credentials or logic.
-        let (loaded, meta) =
+        let (loaded, meta) = if let Some(expected_etag) = expected_etag {
+            let source_path = super::draft_source_path(app_id, board_id, expected_etag);
+            from_compressed_with_meta(meta_store.clone(), source_path.clone())
+                .await
+                .map_err(|e| {
+                    anyhow!(
+                        "Exact source snapshot for Latest board {board_id} is unavailable at {source_path}: {e}"
+                    )
+                })?
+        } else {
             Board::load_proto_with_meta(meta_store.clone(), &storage_root, board_id, version)
                 .await
-                .map_err(|e| anyhow!("Failed to load board {board_id}: {e}"))?;
+                .map_err(|e| anyhow!("Failed to load board {board_id}: {e}"))?
+        };
         let board = Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await;
 
         let compiled_board = super::compile::compile_board_with_catalog(&board, registry.as_ref())
@@ -193,10 +230,13 @@ impl TemplateCache {
         // lifecycle rules on local stores).
         let write_back = match version {
             Some(v) => Some((super::artifact_path(&storage_root, board_id, v), None)),
-            None => meta.e_tag.as_ref().map(|e_tag| {
+            None => expected_etag.or(meta.e_tag.as_deref()).map(|e_tag| {
+                // Floating artifacts are content-addressed. Keep prior ETags
+                // available to queued exact Page runs; lifecycle cleanup and
+                // the desktop startup sweep reclaim them later.
                 (
-                    super::draft_artifact_path(app_id, board_id, e_tag),
-                    Some(super::draft_artifact_dir(app_id, board_id)),
+                    super::draft_artifact_path(app_id, board_id, e_tag, &fingerprint),
+                    None,
                 )
             }),
         };
@@ -213,7 +253,7 @@ impl TemplateCache {
             cache_key.clone(),
             Arc::new(CachedTemplate {
                 template: template.clone(),
-                e_tag: meta.e_tag.clone(),
+                e_tag: expected_etag.map(str::to_string).or(meta.e_tag.clone()),
                 last_modified: meta.last_modified,
             }),
         );
@@ -270,24 +310,51 @@ fn spawn_artifact_write_back(
     });
 }
 
-/// Delete draft artifacts older than `max_age` under the store's
-/// `tmp/compiled/` prefix. Desktop runs this once at startup — local stores
-/// have no bucket lifecycle rules, and per-board purge-on-write only cleans
-/// boards that are still being executed.
+fn is_app_scoped_draft_artifact(path: &Path) -> bool {
+    let parts: Vec<&str> = path.as_ref().split('/').collect();
+    parts.len() == 7
+        && parts[0] == "tmp"
+        && parts[1] == "apps"
+        && !parts[2].is_empty()
+        && parts[3] == "compiled"
+        && parts[4] == "drafts"
+        && !parts[5].is_empty()
+        && !parts[6].is_empty()
+}
+
+/// Delete draft artifacts older than `max_age` from the app-scoped
+/// `tmp/apps/` draft namespace. The legacy `tmp/compiled/` namespace is swept
+/// too so upgrades eventually reclaim artifacts written by older builds.
+/// Desktop runs this once at startup because local stores have no bucket
+/// lifecycle rules.
 pub async fn sweep_draft_artifacts(
     meta_store: &Arc<dyn ObjectStore>,
     max_age: Duration,
 ) -> Result<usize> {
     use futures::{StreamExt, TryStreamExt};
 
-    let prefix = Path::from("tmp").child("compiled");
     let cutoff = chrono::Utc::now()
         - chrono::Duration::from_std(max_age).unwrap_or(chrono::Duration::days(7));
-    let stale = meta_store
-        .list(Some(&prefix))
+    let draft_prefix = Path::from("tmp").child("apps");
+    let current_cutoff = cutoff;
+    let current = meta_store
+        .list(Some(&draft_prefix))
+        .try_filter(move |meta| {
+            futures::future::ready(
+                meta.last_modified < current_cutoff && is_app_scoped_draft_artifact(&meta.location),
+            )
+        })
+        .map_ok(|meta| meta.location)
+        .boxed();
+
+    let legacy_prefix = Path::from("tmp").child("compiled");
+    let legacy = meta_store
+        .list(Some(&legacy_prefix))
         .try_filter(move |meta| futures::future::ready(meta.last_modified < cutoff))
         .map_ok(|meta| meta.location)
         .boxed();
+
+    let stale = futures::stream::select(current, legacy).boxed();
     let deleted = meta_store
         .delete_stream(stale)
         .try_collect::<Vec<Path>>()
@@ -325,4 +392,82 @@ pub async fn persist_artifact(
         .await
         .map_err(|e| anyhow!("failed to persist compiled artifact at {artifact_path}: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_storage::object_store::memory::InMemory;
+
+    #[test]
+    fn identifies_only_app_scoped_draft_artifacts() {
+        assert!(is_app_scoped_draft_artifact(&Path::from(
+            "tmp/apps/app-1/compiled/drafts/board-1/artifact.flcb"
+        )));
+        assert!(!is_app_scoped_draft_artifact(&Path::from(
+            "apps/app-1/compiled/drafts/board-1/artifact.flcb"
+        )));
+        assert!(!is_app_scoped_draft_artifact(&Path::from(
+            "apps/app-1/meta/compiled/board-1/1_0_0.flcb"
+        )));
+        assert!(!is_app_scoped_draft_artifact(&Path::from(
+            "tmp/apps/app-1/compiled/drafts/board-1/nested/artifact.flcb"
+        )));
+        assert!(!is_app_scoped_draft_artifact(&Path::from(
+            "tmp/compiled/app-1/board-1/artifact.flcb"
+        )));
+    }
+
+    #[tokio::test]
+    async fn sweep_removes_current_and_legacy_drafts_without_touching_version_artifacts() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let current =
+            crate::flow::compiled::draft_artifact_path("app-1", "board-1", "etag", &[7; 32]);
+        let current_manifest =
+            crate::flow::compiled::draft_manifest_path("app-1", "board-1", "etag");
+        let current_page_manifest = crate::flow::compiled::draft_page_manifest_path(
+            "app-1",
+            "board-1",
+            "etag",
+            "page-1",
+            "revision-1",
+        );
+        let current_source = crate::flow::compiled::draft_source_path("app-1", "board-1", "etag");
+        let legacy = Path::from("tmp/compiled/app-1/board-1/legacy.flcb");
+        let version = Path::from("apps/app-1/meta/compiled/board-1/1_0_0.flcb");
+        // The sweep only lists `tmp/`; anything under `apps/` — including the
+        // pre-`tmp/` draft location — is out of scope.
+        let former_draft_location = Path::from("apps/app-1/compiled/drafts/board-1/old.flcb");
+
+        assert!(
+            current
+                .as_ref()
+                .starts_with("tmp/apps/app-1/compiled/drafts/board-1/")
+        );
+
+        for path in [
+            &current,
+            &current_manifest,
+            &current_page_manifest,
+            &current_source,
+            &legacy,
+            &version,
+            &former_draft_location,
+        ] {
+            store
+                .put(path, PutPayload::from_static(b"artifact"))
+                .await
+                .unwrap();
+        }
+
+        let deleted = sweep_draft_artifacts(&store, Duration::ZERO).await.unwrap();
+        assert_eq!(deleted, 5);
+        assert!(store.head(&current).await.is_err());
+        assert!(store.head(&current_manifest).await.is_err());
+        assert!(store.head(&current_page_manifest).await.is_err());
+        assert!(store.head(&current_source).await.is_err());
+        assert!(store.head(&legacy).await.is_err());
+        assert!(store.head(&version).await.is_ok());
+        assert!(store.head(&former_draft_location).await.is_ok());
+    }
 }

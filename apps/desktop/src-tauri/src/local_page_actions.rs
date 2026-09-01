@@ -220,68 +220,293 @@ impl LocalPageActionSealingContext {
         }
     }
 
-    pub(crate) fn seal_payload(&self, payload: &mut Value) -> LocalPageActionSealingReport {
+    pub(crate) fn seal_payload(
+        &self,
+        event_type: &str,
+        payload: &mut Value,
+    ) -> LocalPageActionSealingReport {
         let mut report = LocalPageActionSealingReport::default();
-        let mut path = Vec::new();
-        self.walk(payload, &mut path, &mut report);
+        match event_type {
+            "a2ui" => self.seal_a2ui_message(payload, &mut report),
+            "chat_stream_partial" | "chat_stream" | "chat_out" => {
+                self.seal_chat_widgets(payload, &mut report);
+            }
+            _ => {}
+        }
         report
     }
 
-    fn walk(
-        &self,
-        value: &mut Value,
-        path: &mut Vec<String>,
-        report: &mut LocalPageActionSealingReport,
-    ) {
-        match value {
-            Value::Object(map) => {
-                if is_action_slot(path) && is_workflow_action(map) {
-                    self.seal_action(map, report);
-                } else if is_binding_slot(path) && is_workflow_binding(map) {
-                    self.seal_binding(map, report);
-                }
+    fn seal_chat_widgets(&self, payload: &mut Value, report: &mut LocalPageActionSealingReport) {
+        let Some(widgets) = payload
+            .as_object_mut()
+            .and_then(|payload| payload.get_mut("widgets"))
+            .and_then(Value::as_array_mut)
+        else {
+            return;
+        };
 
-                for (key, child) in map.iter_mut() {
-                    if matches!(key.as_str(), "literalJson" | "literal_json")
-                        && let Value::String(raw) = child
-                    {
-                        self.walk_embedded_json(raw, path, report);
-                        continue;
-                    }
-                    path.push(key.clone());
-                    self.walk(child, path, report);
-                    path.pop();
+        for widget in widgets {
+            let Some(widget) = widget.as_object_mut() else {
+                continue;
+            };
+            if let Some(component) = widget.get_mut("component") {
+                self.seal_component(component, report);
+            }
+            if let Some(updates) = widget.get_mut("updates").and_then(Value::as_array_mut) {
+                for update in updates {
+                    self.seal_a2ui_message(update, report);
                 }
             }
-            Value::Array(items) => {
-                for (index, child) in items.iter_mut().enumerate() {
-                    path.push(index.to_string());
-                    self.walk(child, path, report);
-                    path.pop();
+        }
+    }
+
+    fn seal_a2ui_message(&self, payload: &mut Value, report: &mut LocalPageActionSealingReport) {
+        let Some(message) = payload.as_object_mut() else {
+            return;
+        };
+        let Some(message_type) = message
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return;
+        };
+
+        match message_type.as_str() {
+            "beginRendering" | "surfaceUpdate" => {
+                self.seal_surface_components(message, "components", report);
+            }
+            "createElement" => {
+                if let Some(component) = message.get_mut("component") {
+                    self.seal_surface_component(component, report);
+                }
+            }
+            "upsertElement" => {
+                if let Some(update) = message.get_mut("value") {
+                    self.seal_element_update(update, report);
                 }
             }
             _ => {}
         }
     }
 
-    fn walk_embedded_json(
+    fn seal_surface_components(
         &self,
-        raw: &mut String,
-        path: &mut Vec<String>,
+        owner: &mut Map<String, Value>,
+        field: &str,
         report: &mut LocalPageActionSealingReport,
     ) {
-        let trimmed = raw.trim_start();
-        if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
-            return;
-        }
-        let Ok(mut parsed) = serde_json::from_str::<Value>(raw) else {
+        let Some(components) = owner.get_mut(field).and_then(Value::as_array_mut) else {
             return;
         };
-        path.push("$literalJson".to_string());
-        self.walk(&mut parsed, path, report);
-        path.pop();
-        if let Ok(encoded) = serde_json::to_string(&parsed) {
-            *raw = encoded;
+        for component in components {
+            self.seal_surface_component(component, report);
+        }
+    }
+
+    fn seal_surface_component(&self, value: &mut Value, report: &mut LocalPageActionSealingReport) {
+        let Some(surface_component) = value.as_object_mut() else {
+            return;
+        };
+        if let Some(component) = surface_component.get_mut("component") {
+            self.seal_component(component, report);
+        }
+    }
+
+    fn seal_component(&self, value: &mut Value, report: &mut LocalPageActionSealingReport) {
+        let Some(component) = value.as_object_mut() else {
+            return;
+        };
+
+        self.seal_legacy_actions(component, report);
+        for field in ["eventHandlers", "event_handlers"] {
+            self.seal_event_handlers(component, field, report);
+        }
+        let is_widget = component
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "widgetInstance" | "microWidgetInstance"));
+        if is_widget {
+            for field in ["actionBindings", "action_bindings"] {
+                self.seal_action_bindings(component, field, report);
+            }
+
+            for field in ["inlineWidgetDef", "inline_widget_def"] {
+                if let Some(definition) = component.get_mut(field).and_then(Value::as_object_mut) {
+                    self.seal_surface_components(definition, "components", report);
+                }
+            }
+
+            for field in ["runtimeChildUpdates", "runtime_child_updates"] {
+                let Some(updates) = component.get_mut(field).and_then(Value::as_object_mut) else {
+                    continue;
+                };
+                for operations in updates.values_mut() {
+                    let Some(operations) = operations.as_array_mut() else {
+                        continue;
+                    };
+                    for operation in operations {
+                        self.seal_element_update(operation, report);
+                    }
+                }
+            }
+        } else {
+            // Only widget instances route bindings; on any other component
+            // they are unreachable and must not survive the boundary.
+            strip_non_widget_bindings(component, report);
+        }
+    }
+
+    fn seal_element_update(&self, value: &mut Value, report: &mut LocalPageActionSealingReport) {
+        let Some(update) = value.as_object_mut() else {
+            return;
+        };
+        let update_type = update
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+
+        match update_type.as_deref() {
+            Some("setAction") => {
+                if let Some(action) = update.get_mut("action").and_then(Value::as_object_mut)
+                    && is_workflow_action(action)
+                {
+                    self.seal_action(action, report);
+                }
+            }
+            Some("setEventActions") => {
+                if update
+                    .get("eventName")
+                    .and_then(Value::as_str)
+                    .is_some_and(|event_name| !event_name.trim().is_empty())
+                {
+                    self.seal_action_array(update, "actions", report);
+                }
+            }
+            Some("createComponent") => {
+                if let Some(component) = update.get_mut("component") {
+                    self.seal_component(component, report);
+                }
+            }
+            Some("setProps") => {
+                // The renderer spreads `props` into the live component data,
+                // so it is an executable channel like a component body.
+                if let Some(props) = update.get_mut("props") {
+                    if let Some(props) = props.as_object_mut() {
+                        props.remove("pageAction");
+                        props.remove("page_action");
+                    }
+                    self.seal_component(props, report);
+                }
+            }
+            // The renderer's fallback spreads every field of an unrecognized
+            // update into component data. Strip anything executable; an
+            // unknown op never mints.
+            _ => strip_unknown_update_actions(update, report),
+        }
+    }
+
+    fn seal_action_array(
+        &self,
+        owner: &mut Map<String, Value>,
+        field: &str,
+        report: &mut LocalPageActionSealingReport,
+    ) {
+        let Some(actions) = owner.get_mut(field).and_then(Value::as_array_mut) else {
+            return;
+        };
+        for action in actions {
+            let Some(action) = action.as_object_mut() else {
+                continue;
+            };
+            if is_workflow_action(action) {
+                self.seal_action(action, report);
+            }
+        }
+    }
+
+    fn seal_legacy_actions(
+        &self,
+        component: &mut Map<String, Value>,
+        report: &mut LocalPageActionSealingReport,
+    ) {
+        let Some(actions) = component.get_mut("actions").and_then(Value::as_array_mut) else {
+            return;
+        };
+        for (index, action) in actions.iter_mut().enumerate() {
+            let Some(action) = action.as_object_mut() else {
+                continue;
+            };
+            if !is_workflow_action(action) {
+                continue;
+            }
+            // The renderer's legacy fallback executes only actions[0]. Named
+            // handlers keep ordered multi-action semantics above.
+            if index == 0 {
+                self.seal_action(action, report);
+            } else {
+                strip_unreachable_action(action, report);
+            }
+        }
+    }
+
+    fn seal_event_handlers(
+        &self,
+        component: &mut Map<String, Value>,
+        field: &str,
+        report: &mut LocalPageActionSealingReport,
+    ) {
+        let Some(handlers) = component.get_mut(field).and_then(Value::as_object_mut) else {
+            return;
+        };
+        for actions in handlers.values_mut() {
+            let Some(actions) = actions.as_array_mut() else {
+                continue;
+            };
+            for action in actions {
+                let Some(action) = action.as_object_mut() else {
+                    continue;
+                };
+                if is_workflow_action(action) {
+                    self.seal_action(action, report);
+                }
+            }
+        }
+    }
+
+    fn seal_action_bindings(
+        &self,
+        component: &mut Map<String, Value>,
+        field: &str,
+        report: &mut LocalPageActionSealingReport,
+    ) {
+        let mut shadowed_bindings = HashSet::new();
+        let mut wildcard_handler = false;
+        for handler_field in ["eventHandlers", "event_handlers"] {
+            let Some(handlers) = component.get(handler_field).and_then(Value::as_object) else {
+                continue;
+            };
+            wildcard_handler |= handlers.contains_key("*");
+            shadowed_bindings.extend(handlers.keys().cloned());
+        }
+        let Some(bindings) = component.get_mut(field).and_then(Value::as_object_mut) else {
+            return;
+        };
+        for (binding_id, binding) in bindings.iter_mut() {
+            let Some(binding) = binding.as_object_mut() else {
+                continue;
+            };
+            if workflow_binding(binding).is_none() {
+                continue;
+            }
+            if wildcard_handler || shadowed_bindings.contains(binding_id) {
+                binding.remove("pageAction");
+                binding.remove("page_action");
+                strip_binding_routing(binding);
+                report.rejected += 1;
+            } else {
+                self.seal_binding(binding, report);
+            }
         }
     }
 
@@ -366,24 +591,7 @@ impl LocalPageActionSealingContext {
 
         binding.remove("pageAction");
         binding.remove("page_action");
-        if let Some(workflow) = workflow_binding_mut(binding) {
-            for key in [
-                "flowId",
-                "flow_id",
-                "eventId",
-                "event_id",
-                "nodeId",
-                "node_id",
-                "appId",
-                "app_id",
-                "boardId",
-                "board_id",
-                "boardVersion",
-                "board_version",
-            ] {
-                workflow.remove(key);
-            }
-        }
+        strip_binding_routing(binding);
 
         let Some(target_node_id) = self.allowed_target(
             target_node_id.as_deref(),
@@ -440,58 +648,14 @@ fn fingerprint(parts: &[&str]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn is_action_slot(path: &[String]) -> bool {
-    let Some(index) = path.last() else {
-        return false;
-    };
-    if index.parse::<usize>().is_err() {
-        return false;
-    }
-
-    matches!(
-        path.get(path.len().saturating_sub(2)).map(String::as_str),
-        Some("actions")
-    ) || matches!(
-        path.get(path.len().saturating_sub(3)).map(String::as_str),
-        Some("eventHandlers" | "event_handlers")
-    )
-}
-
-fn is_binding_slot(path: &[String]) -> bool {
-    matches!(
-        path.get(path.len().saturating_sub(2)).map(String::as_str),
-        Some("actionBindings")
-    )
-}
-
 fn is_workflow_action(map: &Map<String, Value>) -> bool {
     map.get("name").and_then(Value::as_str) == Some("workflow_event")
-        && map.get("context").is_some_and(Value::is_object)
-}
-
-fn is_workflow_binding(map: &Map<String, Value>) -> bool {
-    workflow_binding(map).is_some_and(|workflow| {
-        [
-            "flowId", "flow_id", "eventId", "event_id", "nodeId", "node_id",
-        ]
-        .iter()
-        .any(|key| workflow.contains_key(*key))
-    })
 }
 
 fn workflow_binding(map: &Map<String, Value>) -> Option<&Map<String, Value>> {
     ["workflow", "workflowEvent", "workflow_event"]
         .iter()
         .find_map(|key| map.get(*key).and_then(Value::as_object))
-}
-
-fn workflow_binding_mut(map: &mut Map<String, Value>) -> Option<&mut Map<String, Value>> {
-    for key in ["workflow", "workflowEvent", "workflow_event"] {
-        if map.get(key).is_some_and(Value::is_object) {
-            return map.get_mut(key).and_then(Value::as_object_mut);
-        }
-    }
-    None
 }
 
 fn bound_string(value: Option<&Value>) -> Option<String> {
@@ -503,6 +667,30 @@ fn bound_string(value: Option<&Value>) -> Option<String> {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         _ => None,
+    }
+}
+
+fn strip_binding_routing(binding: &mut Map<String, Value>) {
+    for binding_key in ["workflow", "workflowEvent", "workflow_event"] {
+        let Some(workflow) = binding.get_mut(binding_key).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for route_key in [
+            "flowId",
+            "flow_id",
+            "eventId",
+            "event_id",
+            "nodeId",
+            "node_id",
+            "appId",
+            "app_id",
+            "boardId",
+            "board_id",
+            "boardVersion",
+            "board_version",
+        ] {
+            workflow.remove(route_key);
+        }
     }
 }
 
@@ -525,6 +713,56 @@ fn strip_action_routing(action: &mut Map<String, Value>) {
         "board_version",
     ] {
         context.remove(key);
+    }
+}
+
+fn strip_unreachable_action(
+    action: &mut Map<String, Value>,
+    report: &mut LocalPageActionSealingReport,
+) {
+    action.remove("pageAction");
+    action.remove("page_action");
+    strip_action_routing(action);
+    report.rejected += 1;
+}
+
+fn strip_unknown_update_actions(
+    update: &mut Map<String, Value>,
+    report: &mut LocalPageActionSealingReport,
+) {
+    for key in [
+        "actions",
+        "eventHandlers",
+        "event_handlers",
+        "actionBindings",
+        "action_bindings",
+        "pageAction",
+        "page_action",
+    ] {
+        if update.remove(key).is_some() {
+            report.rejected += 1;
+        }
+    }
+}
+
+fn strip_non_widget_bindings(
+    component: &mut Map<String, Value>,
+    report: &mut LocalPageActionSealingReport,
+) {
+    for field in ["actionBindings", "action_bindings"] {
+        let Some(bindings) = component.remove(field) else {
+            continue;
+        };
+        if let Some(bindings) = bindings.as_object() {
+            report.rejected += bindings
+                .values()
+                .filter(|binding| {
+                    binding
+                        .as_object()
+                        .is_some_and(|binding| workflow_binding(binding).is_some())
+                })
+                .count();
+        }
     }
 }
 
@@ -567,7 +805,8 @@ mod tests {
     fn seals_ordered_actions_and_resolves_only_from_the_registry() {
         let (context, registry) = context();
         let mut payload = serde_json::json!({
-            "component": {
+            "type": "surfaceUpdate",
+            "components": [{"id": "button", "component": {
                 "eventHandlers": {
                     "click": [
                         {"name": "workflow_event", "context": {"nodeId": "entry-1", "input": "kept"}},
@@ -575,13 +814,13 @@ mod tests {
                         {"name": "workflow_event", "context": {"nodeId": "entry-2"}}
                     ]
                 }
-            }
+            }}]
         });
 
-        let report = context.seal_payload(&mut payload);
+        let report = context.seal_payload("a2ui", &mut payload);
         assert_eq!(report.sealed, 2);
         assert_eq!(report.rejected, 0);
-        let actions = payload["component"]["eventHandlers"]["click"]
+        let actions = payload["components"][0]["component"]["eventHandlers"]["click"]
             .as_array()
             .unwrap();
         assert!(actions[0]["context"].get("nodeId").is_none());
@@ -598,67 +837,307 @@ mod tests {
     }
 
     #[test]
-    fn seals_widget_bindings_and_literal_json() {
+    fn legacy_actions_mint_only_the_renderer_executable_first_item() {
         let (context, _) = context();
         let mut payload = serde_json::json!({
-            "component": {
+            "type": "surfaceUpdate",
+            "components": [{"id": "button", "component": {
+                "actions": [
+                    {"name": "workflow_event", "context": {"nodeId": "entry-1"}},
+                    {"name": "workflow_event", "context": {"nodeId": "entry-2"},
+                        "pageAction": {"actionId": "attacker"}}
+                ]
+            }}]
+        });
+
+        let report = context.seal_payload("a2ui", &mut payload);
+        let actions = payload["components"][0]["component"]["actions"]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(report.sealed, 1);
+        assert_eq!(report.rejected, 1);
+        assert!(actions[0]["pageAction"]["actionId"].is_string());
+        assert!(actions[1].get("pageAction").is_none());
+        assert!(actions[1]["context"].get("nodeId").is_none());
+    }
+
+    #[test]
+    fn seals_widget_bindings_but_not_literal_json_application_data() {
+        let (context, _) = context();
+        let mut payload = serde_json::json!({
+            "type": "surfaceUpdate",
+            "components": [{"id": "widget", "component": {
+                "type": "widgetInstance",
+                "eventHandlers": {"blocked": []},
                 "actionBindings": {
                     "approve": {
-                        "workflow": {"flowId": "entry-1", "inputMappings": {"value": "kept"}}
+                        "workflow": {"flowId": "entry-1", "inputMappings": {"value": "kept"}},
+                        "workflowEvent": {"eventId": "entry-2", "boardId": "board-1"},
+                        "workflow_event": {"node_id": "entry-2", "board_version": [1, 2, 3]}
+                    },
+                    "blocked": {
+                        "workflow": {"flowId": "entry-2", "inputMappings": {}}
                     }
                 },
                 "data": {
                     "literalJson": "{\"actions\":[{\"name\":\"workflow_event\",\"context\":{\"nodeId\":\"entry-2\"}}]}"
                 }
-            }
+            }}]
         });
 
-        let report = context.seal_payload(&mut payload);
-        assert_eq!(report.sealed, 2);
-        let binding = &payload["component"]["actionBindings"]["approve"];
+        let report = context.seal_payload("a2ui", &mut payload);
+        assert_eq!(report.sealed, 1);
+        assert_eq!(report.rejected, 1);
+        let binding = &payload["components"][0]["component"]["actionBindings"]["approve"];
         assert!(binding["workflow"].get("flowId").is_none());
         assert_eq!(binding["workflow"]["inputMappings"]["value"], "kept");
+        assert!(binding["workflowEvent"].get("eventId").is_none());
+        assert!(binding["workflowEvent"].get("boardId").is_none());
+        assert!(binding["workflow_event"].get("node_id").is_none());
+        assert!(binding["workflow_event"].get("board_version").is_none());
         assert!(binding["pageAction"]["actionId"].is_string());
+        let blocked = &payload["components"][0]["component"]["actionBindings"]["blocked"];
+        assert!(blocked["workflow"].get("flowId").is_none());
+        assert!(blocked.get("pageAction").is_none());
 
         let embedded: Value = serde_json::from_str(
-            payload["component"]["data"]["literalJson"]
+            payload["components"][0]["component"]["data"]["literalJson"]
                 .as_str()
                 .unwrap(),
         )
         .unwrap();
-        assert!(embedded["actions"][0]["pageAction"]["actionId"].is_string());
+        assert!(embedded["actions"][0].get("pageAction").is_none());
+        assert_eq!(embedded["actions"][0]["context"]["nodeId"], "entry-2");
     }
 
     #[test]
-    fn seals_actions_inside_snake_case_literal_json() {
+    fn seals_chat_widget_components_and_replay_updates() {
         let (context, _) = context();
         let mut payload = serde_json::json!({
+            "widgets": [{
+                "instance_id": "widget-1",
+                "component": {
+                    "type": "microWidgetInstance",
+                    "actionBindings": {
+                        "submit": {"workflow": {"flowId": "entry-1"}}
+                    }
+                },
+                "updates": [{
+                    "type": "upsertElement",
+                    "element_id": "widget-1/button",
+                    "value": {
+                        "type": "setAction",
+                        "action": {
+                            "name": "workflow_event",
+                            "context": {"nodeId": "entry-2"}
+                        }
+                    }
+                }]
+            }]
+        });
+
+        let report = context.seal_payload("chat_stream_partial", &mut payload);
+
+        assert_eq!(report.sealed, 2);
+        assert!(
+            payload["widgets"][0]["component"]["actionBindings"]["submit"]["pageAction"]
+                ["actionId"]
+                .is_string()
+        );
+        assert!(
+            payload["widgets"][0]["updates"][0]["value"]["action"]["pageAction"]["actionId"]
+                .is_string()
+        );
+    }
+
+    #[test]
+    fn seals_set_action_and_named_event_actions() {
+        let (context, _) = context();
+        let mut payload = serde_json::json!({
+            "type": "upsertElement",
+            "element_id": "page/button",
             "value": {
-                "literal_json": "{\"actions\":[{\"name\":\"workflow_event\",\"context\":{\"nodeId\":\"entry-1\"}}]}"
+                "type": "setAction",
+                "action": {"name": "workflow_event", "context": {"nodeId": "entry-1"}}
             }
         });
 
-        assert_eq!(context.seal_payload(&mut payload).sealed, 1);
-        let embedded: Value =
-            serde_json::from_str(payload["value"]["literal_json"].as_str().unwrap()).unwrap();
-        assert!(embedded["actions"][0]["pageAction"]["actionId"].is_string());
-        assert!(embedded["actions"][0]["context"].get("nodeId").is_none());
+        assert_eq!(context.seal_payload("a2ui", &mut payload).sealed, 1);
+        assert!(payload["value"]["action"]["pageAction"]["actionId"].is_string());
+        assert!(
+            payload["value"]["action"]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+
+        payload["value"] = serde_json::json!({
+            "type": "setEventActions",
+            "eventName": "click",
+            "actions": [
+                {"name": "workflow_event", "context": {"nodeId": "entry-1"}},
+                {"name": "workflow_event", "context": {"nodeId": "entry-2"}}
+            ]
+        });
+        assert_eq!(context.seal_payload("a2ui", &mut payload).sealed, 2);
+        assert!(payload["value"]["actions"][0]["pageAction"]["actionId"].is_string());
+        assert!(payload["value"]["actions"][1]["pageAction"]["actionId"].is_string());
+
+        payload["value"] = serde_json::json!({
+            "type": "setEventActions",
+            "eventName": " ",
+            "actions": [
+                {"name": "workflow_event", "context": {"nodeId": "entry-1"}}
+            ]
+        });
+        let original = payload.clone();
+        assert_eq!(
+            context.seal_payload("a2ui", &mut payload),
+            LocalPageActionSealingReport::default()
+        );
+        assert_eq!(payload, original);
+    }
+
+    #[test]
+    fn set_props_content_is_sealed_like_a_component_body() {
+        let (context, _) = context();
+        let mut payload = serde_json::json!({
+            "type": "upsertElement",
+            "element_id": "page/button",
+            "value": {
+                "type": "setProps",
+                "props": {
+                    "pageAction": {"actionId": "attacker"},
+                    "label": {"literalString": "kept"},
+                    "eventHandlers": {
+                        "click": [
+                            {"name": "workflow_event",
+                                "context": {"nodeId": "entry-1", "input": "kept"}},
+                            {"name": "workflow_event",
+                                "context": {"nodeId": "not-an-entry", "boardId": "other-board"}}
+                        ]
+                    },
+                    "actionBindings": {
+                        "approve": {"workflow": {"flowId": "entry-1"}}
+                    }
+                }
+            }
+        });
+
+        let report = context.seal_payload("a2ui", &mut payload);
+        assert_eq!(report.sealed, 1);
+        assert_eq!(report.rejected, 2);
+        let props = &payload["value"]["props"];
+        assert!(props.get("pageAction").is_none());
+        assert_eq!(props["label"]["literalString"], "kept");
+        assert!(props.get("actionBindings").is_none());
+        let actions = props["eventHandlers"]["click"].as_array().unwrap();
+        assert!(
+            actions[0]["pageAction"]["actionId"]
+                .as_str()
+                .unwrap()
+                .starts_with(LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX)
+        );
+        assert!(actions[0]["context"].get("nodeId").is_none());
+        assert_eq!(actions[0]["context"]["input"], "kept");
+        assert!(actions[1].get("pageAction").is_none());
+        assert!(actions[1]["context"].get("nodeId").is_none());
+        assert!(actions[1]["context"].get("boardId").is_none());
+    }
+
+    #[test]
+    fn unknown_update_ops_never_pass_executable_fields_through() {
+        let (context, _) = context();
+        let mut payload = serde_json::json!({
+            "type": "upsertElement",
+            "element_id": "page/panel",
+            "value": {
+                "type": "setCustomState",
+                "state": {"literalString": "kept"},
+                "actions": [{"name": "workflow_event", "context": {"nodeId": "entry-1"}}],
+                "eventHandlers": {"click": [
+                    {"name": "workflow_event", "context": {"nodeId": "entry-1"}}
+                ]},
+                "actionBindings": {"approve": {"workflow": {"flowId": "entry-1"}}},
+                "pageAction": {"actionId": "attacker"}
+            }
+        });
+
+        let report = context.seal_payload("a2ui", &mut payload);
+        assert_eq!(report.sealed, 0);
+        assert_eq!(report.rejected, 4);
+        let update = payload["value"].as_object().unwrap();
+        for key in ["actions", "eventHandlers", "actionBindings", "pageAction"] {
+            assert!(update.get(key).is_none(), "{key} must be stripped");
+        }
+        assert_eq!(update["type"], "setCustomState");
+        assert_eq!(update["state"]["literalString"], "kept");
+
+        payload["value"] = serde_json::json!({
+            "props": {"literalString": "kept"},
+            "event_handlers": {"click": [
+                {"name": "workflow_event", "context": {"nodeId": "entry-1"}}
+            ]}
+        });
+        let report = context.seal_payload("a2ui", &mut payload);
+        assert_eq!(report.sealed, 0);
+        assert_eq!(report.rejected, 1);
+        assert!(payload["value"].get("event_handlers").is_none());
+        assert_eq!(payload["value"]["props"]["literalString"], "kept");
+    }
+
+    #[test]
+    fn non_widget_components_never_carry_action_bindings() {
+        let (context, _) = context();
+        let mut payload = serde_json::json!({
+            "type": "surfaceUpdate",
+            "components": [
+                {"id": "button", "component": {
+                    "type": "button",
+                    "actionBindings": {
+                        "approve": {"workflow": {"flowId": "entry-1"}}
+                    },
+                    "label": {"literalString": "kept"}
+                }},
+                {"id": "record", "component": {
+                    "action_bindings": {
+                        "submit": {"workflow": {"flowId": "not-an-entry"}},
+                        "noise": {"config": {"literalString": "kept"}}
+                    }
+                }}
+            ]
+        });
+
+        let report = context.seal_payload("a2ui", &mut payload);
+        assert_eq!(report.sealed, 0);
+        assert_eq!(report.rejected, 2);
+        let button = &payload["components"][0]["component"];
+        assert!(button.get("actionBindings").is_none());
+        assert_eq!(button["label"]["literalString"], "kept");
+        let record = &payload["components"][1]["component"];
+        assert!(record.get("action_bindings").is_none());
     }
 
     #[test]
     fn rejects_foreign_and_non_entry_targets_after_stripping_routes() {
         let (context, _) = context();
         let mut payload = serde_json::json!({
-            "actions": [
-                {"name": "workflow_event", "context": {"nodeId": "entry-1", "appId": "other-app"}},
-                {"name": "workflow_event", "context": {"nodeId": "not-entry", "boardId": "board-1"}}
-            ]
+            "type": "surfaceUpdate",
+            "components": [{"id": "button", "component": {
+                "actions": [
+                    {"name": "workflow_event", "context": {"nodeId": "entry-1", "appId": "other-app"}},
+                    {"name": "workflow_event", "context": {"nodeId": "not-entry", "boardId": "board-1"}}
+                ]
+            }}]
         });
 
-        let report = context.seal_payload(&mut payload);
+        let report = context.seal_payload("a2ui", &mut payload);
         assert_eq!(report.sealed, 0);
         assert_eq!(report.rejected, 2);
-        for action in payload["actions"].as_array().unwrap() {
+        for action in payload["components"][0]["component"]["actions"]
+            .as_array()
+            .unwrap()
+        {
             assert!(action.get("pageAction").is_none());
             assert!(action["context"].get("nodeId").is_none());
             assert!(action["context"].get("appId").is_none());
@@ -741,18 +1220,40 @@ mod tests {
     }
 
     #[test]
-    fn workflow_shaped_model_data_is_not_treated_as_an_action() {
+    fn generic_results_and_data_model_updates_are_not_capability_sources() {
         let (context, _) = context();
         let mut payload = serde_json::json!({
-            "model": {
-                "action": {"name": "workflow_event", "context": {"nodeId": "entry-1"}},
-                "binding": {"workflow": {"flowId": "entry-2"}}
-            }
+            "type": "surfaceUpdate",
+            "components": [{"id": "data", "component": {
+                "actions": [{"name": "workflow_event", "context": {"nodeId": "entry-1"}}]
+            }}],
+            "widgets": [{
+                "component": {
+                    "type": "widgetInstance",
+                    "actionBindings": {
+                        "submit": {"workflow": {"flowId": "entry-2"}}
+                    }
+                }
+            }]
         });
         let original = payload.clone();
 
         assert_eq!(
-            context.seal_payload(&mut payload),
+            context.seal_payload("generic_result", &mut payload),
+            LocalPageActionSealingReport::default()
+        );
+        assert_eq!(payload, original);
+
+        payload = serde_json::json!({
+            "type": "dataModelUpdate",
+            "surface_id": "page",
+            "contents": [{"key": "rows", "value": {"actions": [{
+                "name": "workflow_event", "context": {"nodeId": "entry-1"}
+            }]}}]
+        });
+        let original = payload.clone();
+        assert_eq!(
+            context.seal_payload("a2ui", &mut payload),
             LocalPageActionSealingReport::default()
         );
         assert_eq!(payload, original);

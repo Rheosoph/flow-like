@@ -164,6 +164,7 @@ mod tests {
             user_content_sas_token: None,
             logs_sas_token: Some("?sv=2022-11-02&ss=b&sig=logs".to_string()),
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_container: "azure-meta".to_string(),
             content_container: "azure-content".to_string(),
             logs_container: "azure-logs".to_string(),
@@ -172,6 +173,7 @@ mod tests {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
         }
     }
 

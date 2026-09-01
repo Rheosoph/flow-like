@@ -18,9 +18,10 @@ queue and no Cosmos/PostgreSQL access.
   trimming. Seed it once in Key Vault (`scripts/generate-maintenance-token.sh`)
   and let the job reference the secret; never bake it into the image or the
   Terraform variables file.
-- `MAINTENANCE_JOB`: `telemetry_alerts`, `cache_cleanup` or `all` (default and
-  the image's baked-in value). `all` runs telemetry alerts first, then cache
-  cleanup, as two independent requests. Any other value fails startup.
+- `MAINTENANCE_JOB`: `telemetry_alerts`, `cache_cleanup`, `run_sweep`,
+  `state_cleanup` or `all` (default and the image's baked-in value). `all` runs
+  telemetry alerts, cache cleanup, run reconciliation, and expired-state
+  cleanup as independent requests. Any other value fails startup.
 - `ALLOW_INSECURE_API_BASE_URL`: `1`/`true` permits an `http://` base URL for
   trusted development only. It has the same meaning as on AWS and does not
   touch TLS verification: `https://` endpoints are always verified against the
@@ -60,16 +61,26 @@ Apps (no execution name) it is `<job>:<UTC minute the run started>`, e.g.
 dedup and the next day's run is a new key. The minute is sampled once per run;
 the second job of `all` never rolls into a new key because the first was slow.
 The API currently uses the key for correlation only, and the jobs are safe to
-repeat: alert transitions are transactional and cache cleanup is a sweep.
+repeat: alert transitions are transactional, cache cleanup is a sweep, and run
+reconciliation conditionally updates stale non-terminal rows.
+
+The `run_sweep` request reads `RUN_SWEEPER_GRACE_SECS` and
+`RUN_SWEEPER_BATCH_SIZE` from the API deployment. The batch defaults to 500 and
+is capped at 900. The existing daily schedule provides only daily
+reconciliation. Use a separate, more frequent `run_sweep` schedule when stuck
+runs must become terminal sooner. Set the grace period above the longest
+legitimate queue delay plus `EXECUTOR_TIMEOUT_SECS`; otherwise the sweep can
+classify a live run as stale. The job reconciles the canonical SQL run row
+only. It does not mutate a separately configured execution state backend.
 
 ## Exit status and retries
 
 - Exit `0` only when every requested job returned a matching `2xx`
-  `MaintenanceRunResponse` (`evaluated/triggered/resolved` or `deleted` counts
-  are logged at INFO).
+  `MaintenanceRunResponse`. Evaluation, deletion, and run sweep counts are
+  logged at INFO.
 - Any request error, non-`2xx` status, unparsable body, or a response for a
-  different job than requested fails that job; in `all` mode the remaining job
-  still runs and the process exits `1` at the end. HTTP `408`, `429` and `5xx`
+  different job than requested fails that job; in `all` mode the remaining jobs
+  still run and the process exits `1` at the end. HTTP `408`, `429` and `5xx`
   are logged as transient, other `4xx` as deployment/configuration errors, so
   the execution history in Container Apps tells the two apart.
 - Startup validation failures (missing or short token, bad URL, unknown

@@ -252,6 +252,22 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
                 "Cache cleanup maintenance completed"
             )
         }
+        (MaintenanceJob::RunSweep, MaintenanceRunResponse::RunSweep(result)) => {
+            tracing::info!(
+                swept = result.swept,
+                grace_secs = result.grace_secs,
+                batch_size = result.batch_size,
+                batch_full = result.swept >= result.batch_size,
+                "Run sweep maintenance completed"
+            )
+        }
+        (MaintenanceJob::StateCleanup, MaintenanceRunResponse::StateCleanup(result)) => {
+            tracing::info!(
+                deleted_runs = result.deleted_runs,
+                deleted_events = result.deleted_events,
+                "State cleanup maintenance completed"
+            )
+        }
         (job, response) => {
             // The API answered for a different job than we asked for. Fail the
             // invocation so the mismatch surfaces instead of being logged as success.
@@ -296,6 +312,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.job, MaintenanceJob::TelemetryAlerts);
+    }
+
+    #[test]
+    fn scheduler_payload_accepts_run_sweep() {
+        let parsed: ScheduledMaintenancePayload = serde_json::from_value(serde_json::json!({
+            "job": "run_sweep",
+            "scheduled_time": "2026-07-27T10:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.job, MaintenanceJob::RunSweep);
+        assert_eq!(
+            MaintenanceRunRequest::from(parsed.job),
+            MaintenanceRunRequest::RunSweep
+        );
+    }
+
+    #[test]
+    fn scheduler_payload_accepts_state_cleanup() {
+        let parsed: ScheduledMaintenancePayload = serde_json::from_value(serde_json::json!({
+            "job": "state_cleanup",
+            "scheduled_time": "2026-07-27T10:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.job, MaintenanceJob::StateCleanup);
+        assert_eq!(
+            MaintenanceRunRequest::from(parsed.job),
+            MaintenanceRunRequest::StateCleanup
+        );
     }
 
     #[test]

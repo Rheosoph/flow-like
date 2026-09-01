@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub enum MaintenanceJob {
     TelemetryAlerts,
     CacheCleanup,
+    RunSweep,
+    StateCleanup,
 }
 
 impl MaintenanceJob {
@@ -20,6 +22,8 @@ impl MaintenanceJob {
         match self {
             Self::TelemetryAlerts => "telemetry_alerts",
             Self::CacheCleanup => "cache_cleanup",
+            Self::RunSweep => "run_sweep",
+            Self::StateCleanup => "state_cleanup",
         }
     }
 }
@@ -29,6 +33,8 @@ impl MaintenanceJob {
 pub enum MaintenanceRunRequest {
     TelemetryAlerts,
     CacheCleanup,
+    RunSweep,
+    StateCleanup,
 }
 
 impl MaintenanceRunRequest {
@@ -36,6 +42,8 @@ impl MaintenanceRunRequest {
         match self {
             Self::TelemetryAlerts => MaintenanceJob::TelemetryAlerts,
             Self::CacheCleanup => MaintenanceJob::CacheCleanup,
+            Self::RunSweep => MaintenanceJob::RunSweep,
+            Self::StateCleanup => MaintenanceJob::StateCleanup,
         }
     }
 }
@@ -45,8 +53,18 @@ impl From<MaintenanceJob> for MaintenanceRunRequest {
         match job {
             MaintenanceJob::TelemetryAlerts => Self::TelemetryAlerts,
             MaintenanceJob::CacheCleanup => Self::CacheCleanup,
+            MaintenanceJob::RunSweep => Self::RunSweep,
+            MaintenanceJob::StateCleanup => Self::StateCleanup,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSweepMaintenanceResult {
+    pub swept: u64,
+    pub grace_secs: u64,
+    pub batch_size: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -57,11 +75,22 @@ pub struct TelemetryAlertsMaintenanceResult {
     pub resolved: u64,
 }
 
+/// Expired execution runs/events removed from the selected live state store.
+/// Backends with native TTL delete on their own and report zero here.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateCleanupMaintenanceResult {
+    pub deleted_runs: i64,
+    pub deleted_events: i64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "job", content = "result", rename_all = "snake_case")]
 pub enum MaintenanceRunResponse {
     TelemetryAlerts(TelemetryAlertsMaintenanceResult),
     CacheCleanup(CacheCleanupResult),
+    RunSweep(RunSweepMaintenanceResult),
+    StateCleanup(StateCleanupMaintenanceResult),
 }
 
 #[cfg(test)]
@@ -106,6 +135,61 @@ mod tests {
             }))
             .unwrap(),
             json!({ "job": "cache_cleanup", "result": { "deleted": 7 } })
+        );
+    }
+
+    #[test]
+    fn run_sweep_round_trips() {
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunRequest::RunSweep).unwrap(),
+            json!({ "job": "run_sweep" })
+        );
+        assert_eq!(MaintenanceRunRequest::RunSweep.job().as_str(), "run_sweep");
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunResponse::RunSweep(
+                RunSweepMaintenanceResult {
+                    swept: 7,
+                    grace_secs: 3_600,
+                    batch_size: 500,
+                }
+            ))
+            .unwrap(),
+            json!({
+                "job": "run_sweep",
+                "result": {
+                    "swept": 7,
+                    "graceSecs": 3_600,
+                    "batchSize": 500,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn state_cleanup_round_trips() {
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunRequest::StateCleanup).unwrap(),
+            json!({ "job": "state_cleanup" })
+        );
+        assert_eq!(
+            MaintenanceRunRequest::StateCleanup.job().as_str(),
+            "state_cleanup"
+        );
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunResponse::StateCleanup(
+                StateCleanupMaintenanceResult {
+                    deleted_runs: 3,
+                    deleted_events: 41,
+                }
+            ))
+            .unwrap(),
+            json!({
+                "job": "state_cleanup",
+                "result": {
+                    "deletedRuns": 3,
+                    "deletedEvents": 41,
+                }
+            })
         );
     }
 

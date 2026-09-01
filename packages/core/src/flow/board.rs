@@ -1395,6 +1395,14 @@ impl Board {
         version: (u32, u32, u32),
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
+        if version == flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL {
+            return Err(flow_like_types::anyhow!(
+                "board version {}.{}.{} is reserved for ETag-bound Latest dispatch",
+                version.0,
+                version.1,
+                version.2
+            ));
+        }
         let store = self.get_store(store).await?;
 
         // Always serialize a board whose embedded version agrees with the
@@ -1752,6 +1760,11 @@ impl Board {
         version: (u32, u32, u32),
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<PreparedBoardSnapshot> {
+        if version == flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL {
+            return Err(flow_like_types::anyhow!(
+                "the requested board version is reserved for ETag-bound Latest dispatch"
+            ));
+        }
         if !self.snapshot_matches_current(version, store).await? {
             return Err(Self::immutable_snapshot_conflict(version));
         }
@@ -1827,6 +1840,11 @@ impl Board {
         prepared: &PreparedBoardSnapshot,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<bool> {
+        if prepared.version == flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL {
+            return Err(flow_like_types::anyhow!(
+                "the prepared board version is reserved for ETag-bound Latest dispatch"
+            ));
+        }
         if prepared.board_id != self.id || prepared.version < self.version {
             return Ok(false);
         }
@@ -3714,6 +3732,20 @@ mod tests {
             "a post-prepare edit must keep the floating draft at its current version"
         );
         assert_eq!(newer_draft.version, prepared.version());
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_the_etag_dispatch_sentinel_version() {
+        let state = flow_state().await;
+        let board = super::Board::new(None, Path::from("boards"), state);
+        let error = board
+            .snapshot_at_version(
+                flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("reserved"));
     }
 
     #[tokio::test]

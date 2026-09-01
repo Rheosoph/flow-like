@@ -35,6 +35,8 @@ pub struct SweepRunsResponse {
     pub swept: u64,
     /// Grace period (in seconds) actually used for this sweep.
     pub grace_secs: u64,
+    /// Maximum number of runs considered by this sweep.
+    pub batch_size: u64,
 }
 
 /// POST /admin/runs/sweep
@@ -75,13 +77,16 @@ pub async fn sweep_runs(
         .map(Duration::from_secs)
         .unwrap_or(configured.grace);
 
-    let swept = sweep_once(&state.db, grace).await.map_err(|e| {
-        tracing::error!(error = %e, "Admin run sweep failed");
-        ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", e))
-    })?;
+    let swept = sweep_once(&state.db, grace, configured.batch_size)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Admin run sweep failed");
+            ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", e))
+        })?;
 
     Ok(Json(SweepRunsResponse {
         swept,
         grace_secs: grace.as_secs(),
+        batch_size: configured.batch_size,
     }))
 }

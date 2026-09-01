@@ -13,9 +13,9 @@ pub type PageActionJwtError = BackendJwtError;
 /// Wire version for Page-action capability claims.
 pub const PAGE_ACTION_CAPABILITY_VERSION: u8 = 1;
 
-/// Dynamic actions remain usable for the lifetime of an executor result. The
-/// token is still secondary to normal auth, current permission, and manifest
-/// checks, and clients never persist it in the Page surface cache.
+/// Dynamic actions remain usable for the lifetime of an executor result while
+/// their exact Board artifacts and executable WASM package set remain valid.
+/// The token is still secondary to normal auth and current runtime permission.
 pub const MAX_PAGE_ACTION_TTL_SECONDS: i64 = 24 * 60 * 60;
 const MIN_PAGE_ACTION_TTL_SECONDS: i64 = 60;
 const PAGE_ACTION_CLOCK_SKEW_SECONDS: i64 = 30;
@@ -45,7 +45,17 @@ pub struct PageActionClaims {
 
     pub target_app_id: String,
     pub target_board_id: String,
-    pub target_board_version: (u32, u32, u32),
+    /// Immutable version selector. `None` retains the Event's `Latest`
+    /// semantics and requires `target_board_etag`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_board_version: Option<(u32, u32, u32)>,
+    /// Exact source object identity for a floating Latest board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_board_etag: Option<String>,
+    /// Executable WASM package-set revision of the run that emitted this
+    /// action. Older capabilities omit it for rolling compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_wasm_authority_revision: Option<String>,
     pub target_node_id: String,
 
     /// Public action identity paired with this token in the invoke request.
@@ -75,7 +85,9 @@ pub struct PageActionJwtParams {
     pub source_manifest_revision: String,
     pub target_app_id: String,
     pub target_board_id: String,
-    pub target_board_version: (u32, u32, u32),
+    pub target_board_version: Option<(u32, u32, u32)>,
+    pub target_board_etag: Option<String>,
+    pub target_wasm_authority_revision: Option<String>,
     pub target_node_id: String,
     pub action_id: String,
     pub origin_run_id: String,
@@ -108,6 +120,24 @@ fn validate_claims(claims: &PageActionClaims) -> Result<(), String> {
     ensure_nonempty("source_manifest_revision", &claims.source_manifest_revision)?;
     ensure_nonempty("target_app_id", &claims.target_app_id)?;
     ensure_nonempty("target_board_id", &claims.target_board_id)?;
+    match (&claims.target_board_version, &claims.target_board_etag) {
+        (Some(_), None) => {}
+        (None, Some(etag)) => ensure_nonempty("target_board_etag", etag)?,
+        (Some(_), Some(_)) => {
+            return Err(
+                "Page-action capability cannot bind both a board version and Latest ETag"
+                    .to_string(),
+            );
+        }
+        (None, None) => {
+            return Err(
+                "Page-action capability must bind a board version or Latest ETag".to_string(),
+            );
+        }
+    }
+    if let Some(revision) = &claims.target_wasm_authority_revision {
+        ensure_nonempty("target_wasm_authority_revision", revision)?;
+    }
     ensure_nonempty("target_node_id", &claims.target_node_id)?;
     ensure_nonempty("action_id", &claims.action_id)?;
     ensure_nonempty("origin_run_id", &claims.origin_run_id)?;
@@ -159,6 +189,8 @@ pub fn sign_page_action_capability(
         target_app_id: params.target_app_id,
         target_board_id: params.target_board_id,
         target_board_version: params.target_board_version,
+        target_board_etag: params.target_board_etag,
+        target_wasm_authority_revision: params.target_wasm_authority_revision,
         target_node_id: params.target_node_id,
         action_id: params.action_id,
         origin_run_id: params.origin_run_id,
@@ -204,7 +236,9 @@ mod tests {
             source_manifest_revision: "manifest-revision-1".into(),
             target_app_id: "app-1".into(),
             target_board_id: "board-1".into(),
-            target_board_version: (4, 2, 1),
+            target_board_version: Some((4, 2, 1)),
+            target_board_etag: None,
+            target_wasm_authority_revision: Some("wasm-revision-1".into()),
             target_node_id: "node-1".into(),
             action_id: "pa1_action".into(),
             origin_run_id: "run-1".into(),
@@ -229,7 +263,12 @@ mod tests {
         assert_eq!(claims.source_manifest_revision, "manifest-revision-1");
         assert_eq!(claims.target_app_id, "app-1");
         assert_eq!(claims.target_board_id, "board-1");
-        assert_eq!(claims.target_board_version, (4, 2, 1));
+        assert_eq!(claims.target_board_version, Some((4, 2, 1)));
+        assert_eq!(claims.target_board_etag, None);
+        assert_eq!(
+            claims.target_wasm_authority_revision.as_deref(),
+            Some("wasm-revision-1")
+        );
         assert_eq!(claims.target_node_id, "node-1");
         assert_eq!(claims.action_id, "pa1_action");
         assert_eq!(claims.origin_run_id, "run-1");
@@ -238,6 +277,30 @@ mod tests {
         assert_eq!(claims.aud, "flow-like-page-action");
         assert_eq!(claims.exp - claims.iat, 120);
         assert!(!claims.jti.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_binds_a_latest_board_to_its_etag() {
+        backend_jwt::init_for_tests();
+        let mut params = params(Some(120));
+        params.target_board_version = None;
+        params.target_board_etag = Some("etag-latest-1".into());
+
+        let token = sign_page_action_capability(params).unwrap();
+        let claims = verify_page_action_capability(&token).unwrap();
+
+        assert_eq!(claims.target_board_version, None);
+        assert_eq!(claims.target_board_etag.as_deref(), Some("etag-latest-1"));
+    }
+
+    #[test]
+    fn signer_rejects_an_unbound_board_selector() {
+        backend_jwt::init_for_tests();
+        let mut params = params(Some(120));
+        params.target_board_version = None;
+        params.target_board_etag = None;
+
+        assert!(sign_page_action_capability(params).is_err());
     }
 
     #[test]

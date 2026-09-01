@@ -5,17 +5,14 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
+use crate::execute::validate_executor_request_claims;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
-use flow_like::credentials::StoreType;
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::RejectionStage;
-use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
+use flow_like::flow::execution::{InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
-use flow_like::state::{FlowLikeConfig, FlowLikeState};
-use flow_like::utils::http::HTTPClient;
 use flow_like_storage::Path;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use futures_util::Stream;
@@ -63,6 +60,39 @@ pub fn error_event(message: &str) -> StreamEvent {
     InterComEvent::with_type("error", serde_json::json!({ "message": message }))
 }
 
+const PAGE_EXECUTION_FAILURE_MESSAGE: &str = "Page execution failed";
+
+fn fallback_error_message(error: &ExecutorError, is_page_execution: bool) -> String {
+    if is_page_execution {
+        PAGE_EXECUTION_FAILURE_MESSAGE.to_string()
+    } else {
+        error.to_string()
+    }
+}
+
+fn send_fallback_failure(
+    tx: &mpsc::UnboundedSender<StreamEvent>,
+    run_id: &str,
+    duration_ms: u64,
+    error: &ExecutorError,
+    is_page_execution: bool,
+) {
+    tracing::error!(
+        run_id,
+        error = %error,
+        is_page_execution,
+        "Streaming execution failed before the workflow could report a result"
+    );
+    let message = fallback_error_message(error, is_page_execution);
+    let _ = tx.send(error_event(&message));
+    let _ = tx.send(completed_event(
+        run_id,
+        ExecutionStatus::Failed,
+        duration_ms,
+        Some(4),
+    ));
+}
+
 /// Stream of execution events
 pub struct ExecutionStream {
     rx: mpsc::UnboundedReceiver<StreamEvent>,
@@ -82,6 +112,10 @@ pub async fn execute_streaming(
     config: ExecutorConfig,
 ) -> Result<ExecutionStream, ExecutorError> {
     let claims = verify_jwt_async(&request.executor_jwt).await?;
+    if let Err(error) = validate_executor_request_claims(&claims, &request) {
+        crate::execute::record_claims_rejection(&request, &claims.run_id, &error).await;
+        return Err(error);
+    }
 
     let (tx, rx) = mpsc::unbounded_channel::<StreamEvent>();
 
@@ -95,6 +129,7 @@ pub async fn execute_streaming(
         claims.run_id,
         claims.callback_url,
         claims.sub,
+        claims.page_execution.is_some(),
         tx,
     ));
 
@@ -107,6 +142,7 @@ async fn run_execution(
     run_id: String,
     callback_url: String,
     executor_subject: String,
+    is_page_execution: bool,
     tx: mpsc::UnboundedSender<StreamEvent>,
 ) {
     let start = Instant::now();
@@ -128,7 +164,7 @@ async fn run_execution(
             let _ = tx.send(completed_event(&run_id, status, duration_ms, log_level));
         }
         Err(e) => {
-            let _ = tx.send(error_event(&e.to_string()));
+            send_fallback_failure(&tx, &run_id, duration_ms, &e, is_page_execution);
         }
     }
 }
@@ -149,55 +185,8 @@ async fn execute_inner(
     ),
     ExecutorError,
 > {
-    let content_store = request
-        .credentials
-        .to_store_type(StoreType::Content)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let meta_store = request
-        .credentials
-        .to_store_type(StoreType::Meta)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let log_store = request
-        .credentials
-        .to_store_type(StoreType::Logs)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let mut flow_config = FlowLikeConfig::with_default_store(content_store);
-    flow_config.register_app_meta_store(meta_store.clone());
-    flow_config.register_log_store(log_store);
-
-    // Request-file offloads and `/tmp` uploads live under tmp/*, which the
-    // app-scoped content credential does not necessarily cover.
-    match request.credentials.to_store_type(StoreType::Tmp).await {
-        Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
-        }
-    }
-
-    match request.credentials.to_logs_db_builder() {
-        Ok(logs_db_builder) => {
-            tracing::info!("Successfully created logs database builder");
-            flow_config.register_build_logs_database(logs_db_builder);
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create logs database builder - logs will not be persisted");
-        }
-    }
-
-    // Load model provider configuration from environment
-    let model_provider_config = ModelProviderConfiguration::default();
-
-    let http_client = HTTPClient::new_without_refetch();
-    let execution_environment = ExecutionEnvironment::server_default();
-    let mut state =
-        FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
-    state.execution_environment = execution_environment;
+    let state = crate::execute::build_flow_state(&request.credentials).await?;
+    let execution_environment = state.execution_environment;
 
     let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
@@ -233,7 +222,6 @@ async fn execute_inner(
     let state = Arc::new(state);
 
     let board_id = &request.board_id;
-    let storage_root = Path::from("apps").child(request.app_id.to_string());
     let template = match crate::execute::resolve_run_template(&state, request)
         .await
         .map_err(|e| match e {
@@ -494,4 +482,63 @@ fn emit_event(
     payload: serde_json::Value,
 ) {
     let _ = tx.send(InterComEvent::with_type(event_type, payload));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_fallback_error_hides_board_resolution_details() {
+        let error = ExecutorError::BoardLoad(
+            "Failed to resolve board hidden-board at apps/app-1/boards/hidden-board".to_string(),
+        );
+
+        let message = fallback_error_message(&error, true);
+
+        assert_eq!(message, PAGE_EXECUTION_FAILURE_MESSAGE);
+        assert!(!message.contains("hidden-board"));
+        assert!(!message.contains("apps/app-1"));
+    }
+
+    #[test]
+    fn direct_board_fallback_error_keeps_existing_diagnostic() {
+        let error = ExecutorError::BoardLoad(
+            "Failed to resolve board visible-board at apps/app-1/boards/visible-board".to_string(),
+        );
+
+        let message = fallback_error_message(&error, false);
+
+        assert!(message.contains("visible-board"));
+        assert!(message.contains("apps/app-1"));
+    }
+
+    #[test]
+    fn fallback_failure_always_finishes_the_stream_with_terminal_status() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let error = ExecutorError::BoardLoad("resolver failed".to_string());
+
+        send_fallback_failure(&tx, "run-1", 42, &error, true);
+
+        let error_event = rx.try_recv().expect("error event");
+        assert_eq!(error_event.event_type, "error");
+        assert_eq!(
+            error_event
+                .payload
+                .get("message")
+                .and_then(|value| value.as_str()),
+            Some(PAGE_EXECUTION_FAILURE_MESSAGE)
+        );
+
+        let completed = rx.try_recv().expect("completed event");
+        assert_eq!(completed.event_type, "completed");
+        assert_eq!(
+            completed
+                .payload
+                .get("status")
+                .and_then(|value| value.as_str()),
+            Some("failed")
+        );
+        assert!(rx.try_recv().is_err());
+    }
 }

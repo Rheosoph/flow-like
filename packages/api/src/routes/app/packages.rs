@@ -260,7 +260,6 @@ pub async fn add_package(
     };
 
     let inserted = model.insert(&state.db).await?;
-    state.invalidate_wasm_resolve(&app_id);
 
     let metas = meta::Entity::find()
         .filter(meta::Column::WasmPackageId.eq(&request.package_id))
@@ -320,8 +319,6 @@ pub async fn remove_package(
     if result.rows_affected == 0 {
         return Err(ApiError::not_found("Package not found in app"));
     }
-
-    state.invalidate_wasm_resolve(&app_id);
 
     Ok(Json(()))
 }
@@ -400,7 +397,6 @@ pub async fn update_package(
     }
 
     let updated = active.update(&state.db).await?;
-    state.invalidate_wasm_resolve(&app_id);
 
     let wasm_with_meta = wasm_package::Entity::find_by_id(&updated.package_id)
         .filter(
@@ -625,7 +621,6 @@ pub async fn reactivate_package(
     active.stale = Set(false);
     active.membership_id = Set(Some(mem.id));
     let updated = active.update(&state.db).await?;
-    state.invalidate_wasm_resolve(&app_id);
 
     let metas = meta::Entity::find()
         .filter(meta::Column::WasmPackageId.eq(&package_id))

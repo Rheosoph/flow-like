@@ -207,7 +207,8 @@ pub async fn get_local_page_bootstrap(
         || event
             .board_version
             .is_some_and(|expected| board.version != expected)
-        || !board.page_ids.iter().any(|candidate| candidate == page_id)
+        || (!board.page_ids.is_empty()
+            && !board.page_ids.iter().any(|candidate| candidate == page_id))
     {
         return Err(TauriFunctionError::new(
             "The local Page Event configuration is invalid",

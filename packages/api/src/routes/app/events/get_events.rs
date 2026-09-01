@@ -1,10 +1,11 @@
 use crate::{
-    ensure_permission,
+    ensure_fresh_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::events::db::{
         filter_event_list_execution, is_listed_event_type, is_user_facing_event,
+        redact_page_event_board_metadata,
     },
     state::AppState,
 };
@@ -41,7 +42,7 @@ pub async fn get_events(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<Event>>, ApiError> {
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
+    let permission = ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ListEvents);
 
     // Prefer the database mirror, but recover legacy/interrupted-sync apps when
     // the mirror is empty. The fallback also backfills rows for future reads.
@@ -59,12 +60,24 @@ pub async fn get_events(
         .map(filter_event_secrets)
         .collect();
 
-    if !permission.has_permission(RolePermissions::ReadEvents) {
+    let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
+    if !can_read_events {
         events = events
             .into_iter()
             .filter(|e| e.active)
             .filter(is_user_facing_event)
             .map(filter_event_list_execution)
+            .collect();
+    }
+
+    let can_use_direct_board = permission.has_permission(RolePermissions::ReadBoards)
+        && permission.has_permission(RolePermissions::ExecuteBoards);
+    // ReadEvents callers may edit and PUT these complete definitions. The
+    // runtime-only projection hides Page Board selectors.
+    if !can_read_events && !can_use_direct_board {
+        events = events
+            .into_iter()
+            .map(redact_page_event_board_metadata)
             .collect();
     }
 

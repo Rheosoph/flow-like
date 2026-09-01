@@ -122,3 +122,16 @@ impl ExecutorConfig {
         Duration::from_secs(self.execution_timeout_secs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_runtime_must_explicitly_enable_terminal_acknowledgement() {
+        assert!(!ExecutorConfig::default().terminal_status_ack_required());
+        assert!(ExecutorConfig::default()
+            .with_required_terminal_status_ack()
+            .terminal_status_ack_required());
+    }
+}

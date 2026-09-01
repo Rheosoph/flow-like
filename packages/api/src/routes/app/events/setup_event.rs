@@ -341,6 +341,7 @@ pub(crate) async fn run_event_setup(
         app_id: app_id.clone(),
         board_id,
         board_version,
+        board_etag: None,
         node_id: core_event.node_id.clone(),
         event_json: Some(event_json),
         payload: body.payload.clone().or_else(|| Some(serde_json::json!({}))),

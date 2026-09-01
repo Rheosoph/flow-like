@@ -213,9 +213,15 @@ fn seal_page_action_sse_envelope(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or(fallback_message_id);
+    let event_type = envelope_object
+        .get("event_type")
+        .or_else(|| envelope_object.get("eventType"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let report = envelope_object
         .get_mut("payload")
-        .map(|payload| context.seal_payload(&message_id, payload))
+        .map(|payload| context.seal_payload(&event_type, &message_id, payload))
         .unwrap_or_default();
     let data = serde_json::to_string(&envelope).unwrap_or_else(|_| data.to_owned());
 
@@ -491,6 +497,8 @@ mod tests {
             target_app_id: "app-1".into(),
             target_board_id: "board-1".into(),
             target_board_version: Some((2, 1, 0)),
+            target_board_etag: None,
+            wasm_authority_revision: Some("wasm-revision-1".into()),
             origin_run_id: "run-1".into(),
             allowed_entry_nodes: HashSet::from(["entry-1".into()]),
         }
@@ -525,17 +533,20 @@ mod tests {
     fn page_action_transform_uses_executor_event_id_and_strips_raw_routing() {
         let input = serde_json::json!({
             "event_id": "executor-message-1",
-            "event_type": "a2ui_update",
+            "event_type": "a2ui",
             "payload": {
-                "actions": [{
-                    "name": "workflow_event",
-                    "context": {
-                        "nodeId": "entry-1",
-                        "appId": "app-1",
-                        "boardId": "board-1",
-                        "input": "kept"
-                    }
-                }]
+                "type": "surfaceUpdate",
+                "components": [{"id": "button", "component": {
+                    "actions": [{
+                        "name": "workflow_event",
+                        "context": {
+                            "nodeId": "entry-1",
+                            "appId": "app-1",
+                            "boardId": "board-1",
+                            "input": "kept"
+                        }
+                    }]
+                }}]
             }
         });
 
@@ -547,7 +558,7 @@ mod tests {
             &page_action_context(),
         );
         let output: serde_json::Value = serde_json::from_str(&transformed.data).unwrap();
-        let action = &output["payload"]["actions"][0];
+        let action = &output["payload"]["components"][0]["component"]["actions"][0];
 
         assert_eq!(transformed.message_id, "executor-message-1");
         assert_eq!(transformed.report.sealed, 1);
@@ -562,7 +573,7 @@ mod tests {
     #[test]
     fn page_action_transform_falls_back_to_sse_id_then_run_ordinal() {
         let input = serde_json::json!({
-            "event_type": "a2ui_update",
+            "event_type": "a2ui",
             "payload": {"value": true}
         });
         let encoded = serde_json::to_string(&input).unwrap();
@@ -589,12 +600,15 @@ mod tests {
         assert_eq!(unchanged.data, plain);
 
         let input = serde_json::json!({
-            "event_type": "a2ui_update",
+            "event_type": "a2ui",
             "payload": {
-                "actions": [{
-                    "name": "workflow_event",
-                    "context": {"nodeId": "foreign-entry", "other": 42}
-                }]
+                "type": "surfaceUpdate",
+                "components": [{"id": "button", "component": {
+                    "actions": [{
+                        "name": "workflow_event",
+                        "context": {"nodeId": "foreign-entry", "other": 42}
+                    }]
+                }}]
             }
         });
         let rejected = seal_page_action_sse_envelope(
@@ -605,7 +619,7 @@ mod tests {
             &context,
         );
         let output: serde_json::Value = serde_json::from_str(&rejected.data).unwrap();
-        let action = &output["payload"]["actions"][0];
+        let action = &output["payload"]["components"][0]["component"]["actions"][0];
 
         assert_eq!(rejected.report.rejected, 1);
         assert!(action.get("pageAction").is_none());

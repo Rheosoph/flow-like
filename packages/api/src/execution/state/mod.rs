@@ -218,7 +218,7 @@ pub async fn create_state_store(
 
         #[cfg(feature = "redis")]
         StateBackend::Redis => {
-            let store = RedisStateStore::from_env().await?;
+            let store = RedisStateStore::from_env_with_source(config.db).await?;
             Ok(Arc::new(store))
         }
 
@@ -226,9 +226,9 @@ pub async fn create_state_store(
         StateBackend::DynamoDB => {
             // Prefer using provided AWS config and content store from AppState
             match (config.aws_config, config.content_store) {
-                (Some(aws_cfg), Some(store)) => {
-                    Ok(Arc::new(DynamoDbStateStore::new(&aws_cfg, store)))
-                }
+                (Some(aws_cfg), Some(store)) => Ok(Arc::new(DynamoDbStateStore::new_with_source(
+                    &aws_cfg, store, config.db,
+                ))),
                 _ => {
                     // Fallback to environment configuration
                     let store = DynamoDbStateStore::from_env().await?;
@@ -255,7 +255,9 @@ pub async fn create_state_store(
 
         #[cfg(feature = "s3")]
         StateBackend::ObjectStorage => match config.meta_store {
-            Some(store) => Ok(Arc::new(ObjectStorageStateStore::new(store))),
+            Some(store) => Ok(Arc::new(ObjectStorageStateStore::new_with_source(
+                store, config.db,
+            ))),
             None => {
                 let store = ObjectStorageStateStore::from_env().await?;
                 Ok(Arc::new(store))

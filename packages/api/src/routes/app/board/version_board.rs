@@ -3,7 +3,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::prerun_shared::{persist_prerun_manifest, version_manifest_cache_key},
+    routes::app::prerun_shared::{
+        page_payload_revision, persist_prerun_manifest, version_manifest_cache_key,
+        version_page_manifest_cache_key,
+    },
     state::AppState,
 };
 use axum::{
@@ -12,7 +15,7 @@ use axum::{
 };
 use flow_like::flow::{
     board::{Board, VersionType},
-    compiled::{PrerunManifest, manifest_path},
+    compiled::{PrerunManifest, manifest_path, version_page_manifest_path},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -59,8 +62,51 @@ pub async fn version_board(
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
-    let manifest = published_prerun_manifest(&board, published).await;
-    spawn_compiled_artifact_warmup(&state, &app_id, &board, published, manifest);
+    let manifest = Arc::new(PrerunManifest::from_board(&board));
+    let page_manifests = published_page_prerun_manifests(&board, published).await;
+    let manifest_path = manifest_path(&board.board_dir, &board.id, published);
+    let manifest_persisted = persist_prerun_manifest(
+        state.meta_bucket.as_generic().as_ref(),
+        &manifest_path,
+        &manifest,
+    )
+    .await;
+    // Board-only entry authority never shares a key with Page action maps, so
+    // a later Page write cannot invalidate an already queued callback.
+    if manifest_persisted {
+        state.prerun_manifest_cache.insert(
+            version_manifest_cache_key(&app_id, &board.id, published),
+            manifest,
+        );
+    }
+    for (page_id, page_revision, page_manifest) in page_manifests {
+        let path = version_page_manifest_path(
+            &board.board_dir,
+            &board.id,
+            published,
+            &page_id,
+            &page_revision,
+        );
+        if persist_prerun_manifest(
+            state.meta_bucket.as_generic().as_ref(),
+            &path,
+            &page_manifest,
+        )
+        .await
+        {
+            state.prerun_manifest_cache.insert(
+                version_page_manifest_cache_key(
+                    &app_id,
+                    &board.id,
+                    published,
+                    &page_id,
+                    &page_revision,
+                ),
+                page_manifest,
+            );
+        }
+    }
+    spawn_compiled_artifact_warmup(&board, published);
 
     audit_branch!(
         state,
@@ -77,67 +123,69 @@ pub async fn version_board(
     Ok(Json(version))
 }
 
-/// Page payloads are stored beside the board, so publication must load the
-/// just-created Page snapshots explicitly before it can persist their action
-/// map in the prerun artifact.
-async fn published_prerun_manifest(
+/// Build one immutable artifact per Page. A damaged Page does not prevent the
+/// board-only authority or unrelated Pages from being published.
+async fn published_page_prerun_manifests(
     board: &Board,
     published: (u32, u32, u32),
-) -> Arc<PrerunManifest> {
-    let mut pages = Vec::with_capacity(board.page_ids.len());
+) -> Vec<(String, String, Arc<PrerunManifest>)> {
+    let mut manifests = Vec::with_capacity(board.page_ids.len());
     for page_id in &board.page_ids {
-        match board.load_versioned_page(page_id, published, None).await {
-            Ok(page) => pages.push(page),
+        let page = match board.load_versioned_page(page_id, published, None).await {
+            Ok(page) => page,
             Err(error) => {
                 tracing::warn!(
                     board_id = %board.id,
                     page_id,
                     error = %error,
-                    "Published Page could not be added to the prerun manifest"
+                    "Published Page prerun artifact could not be built"
                 );
-                return Arc::new(PrerunManifest::from_board(board));
+                continue;
             }
-        }
+        };
+        let page_revision = match page_payload_revision(&page) {
+            Ok(revision) => revision,
+            Err(error) => {
+                tracing::warn!(
+                    board_id = %board.id,
+                    page_id,
+                    error = %error,
+                    "Published Page revision could not be derived"
+                );
+                continue;
+            }
+        };
+        let manifest = match PrerunManifest::from_board_and_page(board, &page) {
+            Ok(manifest) => Arc::new(manifest),
+            Err(error) => {
+                tracing::warn!(
+                    board_id = %board.id,
+                    page_id,
+                    error = %error,
+                    "Published Page execution map is invalid"
+                );
+                continue;
+            }
+        };
+        manifests.push((page.id, page_revision, manifest));
     }
-
-    match PrerunManifest::from_board_and_pages(board, &pages) {
-        Ok(manifest) => Arc::new(manifest),
-        Err(error) => {
-            tracing::warn!(
-                board_id = %board.id,
-                error = %error,
-                "Published Page execution map is invalid; persisting board-only prerun data"
-            );
-            Arc::new(PrerunManifest::from_board(board))
-        }
-    }
+    manifests
 }
 
-/// Eagerly persist the prerun manifest and compile the just-published
-/// immutable snapshot so the first prerun and the executor's first run of this
-/// version start from artifacts instead of the proto.
+/// Eagerly compile the just-published immutable snapshot so the executor's
+/// first run of this version can start from an artifact instead of the proto.
 ///
-/// The manifest is registry-independent and always written. Boards containing
-/// WASM nodes skip the compile: their `on_update` runs against a per-request
-/// bundle registry only the executor has, so its lazy compile is authoritative
-/// there. Failures only cost warmth — both readers self-heal.
-fn spawn_compiled_artifact_warmup(
-    state: &AppState,
-    app_id: &str,
-    board: &Board,
-    published: (u32, u32, u32),
-    manifest: Arc<PrerunManifest>,
-) {
+/// Board and Page prerun manifests are persisted synchronously before this
+/// best-effort task starts because a Lambda may freeze as soon as the response
+/// is returned. Boards containing WASM nodes skip the compile: their
+/// `on_update` runs against a per-request bundle registry only the executor
+/// has, so its lazy compile is authoritative there.
+fn spawn_compiled_artifact_warmup(board: &Board, published: (u32, u32, u32)) {
     let Some(app_state) = board.app_state.clone() else {
         return;
     };
     let board_dir = board.board_dir.clone();
     let board_id = board.id.clone();
-
-    state.prerun_manifest_cache.insert(
-        version_manifest_cache_key(app_id, &board_id, published),
-        manifest.clone(),
-    );
 
     let has_wasm = board.nodes.values().any(|n| n.wasm.is_some())
         || board
@@ -156,12 +204,6 @@ fn spawn_compiled_artifact_warmup(
             return;
         };
         let store = store.as_generic();
-        persist_prerun_manifest(
-            store.as_ref(),
-            &manifest_path(&board_dir, &board_id, published),
-            &manifest,
-        )
-        .await;
         if has_wasm {
             return;
         }

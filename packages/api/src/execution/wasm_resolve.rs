@@ -3,20 +3,19 @@
 //! Queries AppPackage records for an app, looks up the compiled artifact paths,
 //! and generates presigned download URLs so the executor can fetch them.
 //!
-//! Results are cached on `AppState::wasm_resolve_cache` keyed by `app_id` —
-//! the per-app bundle is small and changes only when the package list is
-//! mutated, so caching cuts the AWS-SDK round-trips out of the hot dispatch
-//! path. The cache TTL is set below the signed-URL TTL so callers always
-//! receive a signature with safe remaining lifetime.
+//! Package authority is read from the shared database for every dispatch.
+//! Process-local caches cannot be invalidated across stateless API instances,
+//! so using one here could dispatch a package after its app pin was changed or
+//! removed. The returned URLs are fresh transport credentials for that exact
+//! database snapshot.
 
 use crate::entity::{
     app_package, sea_orm_active_enums::WasmCompilationStatus, wasm_package_version,
 };
 use crate::routes::registry::server::executor_target_platform;
 use crate::state::AppState;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Resolve all WASM packages for an app, returning presigned download URLs.
 ///
@@ -25,10 +24,6 @@ pub async fn resolve_wasm_packages(
     state: &AppState,
     app_id: &str,
 ) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
-    if let Some(cached) = state.wasm_resolve_cache.get(app_id) {
-        return Some((*cached).clone());
-    }
-
     let registry = state.wasm_registry.as_ref()?;
     let target = executor_target_platform();
 
@@ -43,17 +38,29 @@ pub async fn resolve_wasm_packages(
         return None;
     }
 
+    // One batched lookup instead of a query per pinned package.
+    let version_filter = packages.iter().fold(Condition::any(), |filter, pkg| {
+        filter.add(
+            Condition::all()
+                .add(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
+                .add(wasm_package_version::Column::Version.eq(&pkg.version)),
+        )
+    });
+    let mut version_records: HashMap<(String, String), wasm_package_version::Model> =
+        wasm_package_version::Entity::find()
+            .filter(version_filter)
+            .all(&state.db)
+            .await
+            .ok()?
+            .into_iter()
+            .map(|record| ((record.package_id.clone(), record.version.clone()), record))
+            .collect();
+
     let mut result: HashMap<String, flow_like_types::dispatch::WasmPackageRef> = HashMap::new();
     let mut had_errors = false;
 
     for pkg in &packages {
-        let version_record = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
-            .filter(wasm_package_version::Column::Version.eq(&pkg.version))
-            .one(&state.db)
-            .await
-            .ok()
-            .flatten();
+        let version_record = version_records.remove(&(pkg.package_id.clone(), pkg.version.clone()));
 
         let version_record = match version_record {
             Some(v) => v,
@@ -141,11 +148,8 @@ pub async fn resolve_wasm_packages(
                 app_id = %app_id,
                 resolved = result.len(),
                 total = packages.len(),
-                "Resolved WASM packages with skipped entries; not caching partial result"
+                "Resolved WASM packages with skipped entries"
             );
-        } else {
-            let arc = Arc::new(result.clone());
-            state.wasm_resolve_cache.insert(app_id.to_string(), arc);
         }
         Some(result)
     }

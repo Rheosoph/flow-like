@@ -154,17 +154,22 @@ fn validate_token(value: &str) -> Result<String> {
 }
 
 /// `all` is the deployed default: the GCP root schedules one daily execution
-/// and sets no `MAINTENANCE_JOB`, so both jobs run from that single execution.
+/// and sets no `MAINTENANCE_JOB`, so every maintenance job runs from that
+/// single execution.
 fn select_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>> {
     match value.map(str::to_ascii_lowercase).as_deref() {
         None | Some("all") => Ok(vec![
             MaintenanceJob::TelemetryAlerts,
             MaintenanceJob::CacheCleanup,
+            MaintenanceJob::RunSweep,
+            MaintenanceJob::StateCleanup,
         ]),
         Some("telemetry_alerts") => Ok(vec![MaintenanceJob::TelemetryAlerts]),
         Some("cache_cleanup") => Ok(vec![MaintenanceJob::CacheCleanup]),
+        Some("run_sweep") => Ok(vec![MaintenanceJob::RunSweep]),
+        Some("state_cleanup") => Ok(vec![MaintenanceJob::StateCleanup]),
         Some(other) => bail!(
-            "MAINTENANCE_JOB must be 'telemetry_alerts', 'cache_cleanup' or 'all', not {other:?}"
+            "MAINTENANCE_JOB must be 'telemetry_alerts', 'cache_cleanup', 'run_sweep', 'state_cleanup' or 'all', not {other:?}"
         ),
     }
 }
@@ -361,6 +366,22 @@ async fn run_job(client: &reqwest::Client, config: &Config, job: MaintenanceJob)
                 "cache cleanup maintenance completed"
             )
         }
+        (MaintenanceJob::RunSweep, MaintenanceRunResponse::RunSweep(result)) => {
+            tracing::info!(
+                swept = result.swept,
+                grace_secs = result.grace_secs,
+                batch_size = result.batch_size,
+                batch_full = result.swept >= result.batch_size,
+                "run sweep maintenance completed"
+            )
+        }
+        (MaintenanceJob::StateCleanup, MaintenanceRunResponse::StateCleanup(result)) => {
+            tracing::info!(
+                deleted_runs = result.deleted_runs,
+                deleted_events = result.deleted_events,
+                "state cleanup maintenance completed"
+            )
+        }
         (job, response) => {
             // The API answered for a different job than we asked for. Fail the
             // job so the mismatch surfaces instead of being logged as success.
@@ -395,14 +416,18 @@ mod tests {
             select_jobs(None).unwrap(),
             vec![
                 MaintenanceJob::TelemetryAlerts,
-                MaintenanceJob::CacheCleanup
+                MaintenanceJob::CacheCleanup,
+                MaintenanceJob::RunSweep,
+                MaintenanceJob::StateCleanup
             ]
         );
         assert_eq!(
             select_jobs(Some("all")).unwrap(),
             vec![
                 MaintenanceJob::TelemetryAlerts,
-                MaintenanceJob::CacheCleanup
+                MaintenanceJob::CacheCleanup,
+                MaintenanceJob::RunSweep,
+                MaintenanceJob::StateCleanup
             ]
         );
         assert_eq!(
@@ -412,6 +437,14 @@ mod tests {
         assert_eq!(
             select_jobs(Some("CACHE_CLEANUP")).unwrap(),
             vec![MaintenanceJob::CacheCleanup]
+        );
+        assert_eq!(
+            select_jobs(Some("RUN_SWEEP")).unwrap(),
+            vec![MaintenanceJob::RunSweep]
+        );
+        assert_eq!(
+            select_jobs(Some("state_cleanup")).unwrap(),
+            vec![MaintenanceJob::StateCleanup]
         );
     }
 

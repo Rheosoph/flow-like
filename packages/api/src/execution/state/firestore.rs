@@ -46,6 +46,11 @@ const UPDATE_ATTEMPTS: usize = 3;
 /// limit.
 const MAX_SCAN_PAGES: usize = 10_000;
 
+fn has_canonical_event_identity(event: &CreateEventInput) -> bool {
+    let digest = blake3::hash(format!("{}:{}", event.run_id, event.sequence).as_bytes());
+    event.id == format!("evt-{}", digest.to_hex())
+}
+
 #[derive(Clone)]
 pub struct FirestoreStateStore {
     client: FirestoreClient,
@@ -213,6 +218,11 @@ impl FirestoreStateStore {
         let Some(record) = record else {
             return Ok(None);
         };
+        if source_run_expired(&record, chrono::Utc::now().timestamp_millis()) {
+            // Reads already mask expired documents; skipping the import also
+            // avoids re-creating one that native TTL would delete again.
+            return Ok(None);
+        }
         let expires_at = record.expires_at;
         let document = Self::run_document(record.clone());
         match self
@@ -319,15 +329,6 @@ impl FirestoreStateStore {
         Ok(document.record)
     }
 
-    fn same_idempotent_event(left: &EventDocument, right: &EventDocument) -> bool {
-        left.record.id == right.record.id
-            && left.record.run_id == right.record.run_id
-            && left.record.sequence == right.record.sequence
-            && left.record.event_type == right.record.event_type
-            && left.record.payload == right.record.payload
-            && left.payload_ref == right.payload_ref
-    }
-
     /// Page a query until `limit` documents have survived `keep`, or the result set is
     /// exhausted.
     ///
@@ -383,11 +384,16 @@ impl FirestoreStateStore {
     /// Flip one event to delivered under its `updateTime`. A lost race or a TTL collection
     /// between the read and the write is not an error: the flag is delivery bookkeeping,
     /// and re-delivering an event the poller already has is cheaper than failing the batch.
-    async fn mark_delivered(&self, event_id: &str, now_ms: i64) -> Result<(), StateStoreError> {
+    async fn mark_delivered(
+        &self,
+        run_id: &str,
+        event_id: &str,
+        now_ms: i64,
+    ) -> Result<(), StateStoreError> {
         let Some(mut document) = self.read_event_document(event_id).await? else {
             return Ok(());
         };
-        if document.record.expires_at <= now_ms {
+        if document.record.run_id != run_id || document.record.expires_at <= now_ms {
             return Ok(());
         }
         document.record.delivered = true;
@@ -429,6 +435,15 @@ fn map_error(error: FirestoreError) -> StateStoreError {
         }
         FirestoreError::Serialization(message) => StateStoreError::Serialization(message),
         error @ FirestoreError::Service { .. } => StateStoreError::Database(error.to_string()),
+    }
+}
+
+fn accept_event_create_outcome(outcome: MutationOutcome) -> Result<(), StateStoreError> {
+    match outcome {
+        MutationOutcome::Applied | MutationOutcome::Conflict => Ok(()),
+        other => Err(StateStoreError::Database(format!(
+            "unexpected Firestore event create result: {other:?}"
+        ))),
     }
 }
 
@@ -523,7 +538,7 @@ fn restore_expires_at(map: &mut Map<String, Value>) -> Result<(), StateStoreErro
 }
 
 fn apply_update(record: &mut ExecutionRunRecord, input: &UpdateRunInput, now_ms: i64) {
-    record.updated_at = now_ms;
+    record.updated_at = now_ms.max(record.updated_at.saturating_add(1));
     if let Some(progress) = input.progress {
         record.progress = progress;
     }
@@ -648,6 +663,9 @@ impl ExecutionStateStore for FirestoreStateStore {
             if Self::is_expired(document.record.expires_at, now) {
                 return Err(StateStoreError::NotFound);
             }
+            if document.record.status.is_terminal() {
+                return Ok(document.record);
+            }
             if document.bound_job_id.is_some() {
                 return Err(StateStoreError::LeaseConflict(
                     "leased queue run requires ownership proof".to_string(),
@@ -732,7 +750,7 @@ impl ExecutionStateStore for FirestoreStateStore {
             });
             document.record.status = RunStatus::Running;
             document.record.started_at.get_or_insert(now);
-            document.record.updated_at = now;
+            document.record.updated_at = now.max(document.record.updated_at.saturating_add(1));
 
             // `updateTime` is what makes this a claim rather than an announcement: two
             // workers reading the same unleased run both write, and the one whose read
@@ -918,12 +936,18 @@ impl ExecutionStateStore for FirestoreStateStore {
         if events.is_empty() {
             return Ok(0);
         }
+        let accepted_count = events.len() as i32;
         let now = chrono::Utc::now().timestamp_millis();
         let mut documents = Vec::with_capacity(events.len());
         for event in events {
             let encoded = serde_json::to_vec(&event.payload)
                 .map_err(|error| StateStoreError::Serialization(error.to_string()))?;
             let (payload, payload_ref) = if encoded.len() > PAYLOAD_OFFLOAD_BYTES {
+                if has_canonical_event_identity(&event)
+                    && self.read_event_document(&event.id).await?.is_some()
+                {
+                    continue;
+                }
                 let reference = self
                     .store_large_payload(&event.run_id, &event.id, &encoded)
                     .await?;
@@ -944,7 +968,6 @@ impl ExecutionStateStore for FirestoreStateStore {
             documents.push(Self::event_document(record, payload_ref));
         }
 
-        let created_count = documents.len() as i32;
         // Preserve prefix order and stop on the first failed item. Each item is
         // itself idempotent, so retrying this batch safely fills only the
         // missing suffix; concurrent unordered writes could otherwise expose
@@ -963,28 +986,14 @@ impl ExecutionStateStore for FirestoreStateStore {
                 )
                 .await
             {
-                Ok(MutationOutcome::Applied) => {}
-                Ok(MutationOutcome::Conflict) => {
-                    let existing = self.read_event_document(&document.record.id).await?;
-                    if !existing
-                        .as_ref()
-                        .is_some_and(|existing| Self::same_idempotent_event(existing, &document))
-                    {
-                        return Err(StateStoreError::Database(
-                            "execution event ID conflicts with different immutable content"
-                                .to_string(),
-                        ));
-                    }
-                }
-                Ok(outcome) => {
-                    return Err(StateStoreError::Database(format!(
-                        "unexpected Firestore event create result: {outcome:?}"
-                    )));
-                }
+                // `create_document` is atomic. A conflict means another
+                // request already committed this canonical ID, so the retry is
+                // successful without replacing payload or delivery state.
+                Ok(outcome) => accept_event_create_outcome(outcome)?,
                 Err(error) => return Err(map_error(error)),
             }
         }
-        Ok(created_count)
+        Ok(accepted_count)
     }
 
     async fn get_events(
@@ -1073,7 +1082,11 @@ impl ExecutionStateStore for FirestoreStateStore {
         })
     }
 
-    async fn mark_events_delivered(&self, event_ids: &[String]) -> Result<(), StateStoreError> {
+    async fn mark_events_delivered(
+        &self,
+        run_id: &str,
+        event_ids: &[String],
+    ) -> Result<(), StateStoreError> {
         if event_ids.is_empty() {
             return Ok(());
         }
@@ -1089,7 +1102,7 @@ impl ExecutionStateStore for FirestoreStateStore {
         // Constructing the futures in a plain loop pins every lifetime up front.
         let mut writes = Vec::with_capacity(event_ids.len());
         for event_id in event_ids {
-            writes.push(self.mark_delivered(event_id.as_str(), now));
+            writes.push(self.mark_delivered(run_id, event_id.as_str(), now));
         }
         let outcomes = stream::iter(writes)
             .buffer_unordered(WRITE_CONCURRENCY)
@@ -1211,7 +1224,36 @@ mod tests {
         );
         assert_eq!(record.progress, 50);
         assert_eq!(record.status, RunStatus::Running);
-        assert_eq!(record.updated_at, 2);
+        // A stale clock cannot move `updated_at` backwards; it bumps past the
+        // stored value so OCC re-reads always observe a change.
+        assert_eq!(record.updated_at, 1_001);
         assert_eq!(record.output_payload_len, 0);
+
+        apply_update(&mut record, &UpdateRunInput::default(), 2_000);
+        assert_eq!(record.updated_at, 2_000);
+    }
+
+    #[test]
+    fn stateless_lambda_canonical_event_create_conflict_is_a_first_write_wins_retry() {
+        assert!(accept_event_create_outcome(MutationOutcome::Applied).is_ok());
+        assert!(accept_event_create_outcome(MutationOutcome::Conflict).is_ok());
+        assert!(accept_event_create_outcome(MutationOutcome::PreconditionFailed).is_err());
+    }
+
+    #[test]
+    fn stateless_lambda_firestore_recognizes_canonical_event_identity() {
+        let mut event = CreateEventInput {
+            id: String::new(),
+            run_id: "run-1".into(),
+            sequence: 4,
+            event_type: "chunk".into(),
+            payload: Value::Null,
+            expires_at: 1_900_000_000_000,
+        };
+        let digest = blake3::hash(b"run-1:4");
+        event.id = format!("evt-{}", digest.to_hex());
+        assert!(has_canonical_event_identity(&event));
+        event.id = "legacy".into();
+        assert!(!has_canonical_event_identity(&event));
     }
 }

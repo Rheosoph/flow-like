@@ -32,6 +32,7 @@ import type {
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
+import { isMissingResourceError } from "../../lib/api-error";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
@@ -104,6 +105,79 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 		});
 
 	return hubCachePromise;
+}
+
+/**
+ * Events this client has seen acknowledged by the server, keyed
+ * `${appId}:${eventId}`.
+ *
+ * An authoritative 404/410 is only a revocation for an event the server has
+ * previously served to this device — an event created offline for a hosted app
+ * and never uploaded 404s the same way, and deleting it would destroy the only
+ * copy. Persistence mirrors the page-etag cache: a lost marker merely keeps a
+ * local copy alive on a later 404, never the other way around.
+ */
+const REMOTE_KNOWN_EVENTS_KEY = "flow-like:remote-known-events";
+const MAX_REMOTE_KNOWN_EVENTS = 2000;
+
+type RemoteKnownEventMap = Record<string, number>;
+
+function remoteKnownEventKey(appId: string, eventId: string): string {
+	return `${appId}:${eventId}`;
+}
+
+function readRemoteKnownEvents(): RemoteKnownEventMap {
+	if (typeof localStorage === "undefined") return {};
+	try {
+		const raw = localStorage.getItem(REMOTE_KNOWN_EVENTS_KEY);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object"
+			? (parsed as RemoteKnownEventMap)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function writeRemoteKnownEvents(map: RemoteKnownEventMap): void {
+	if (typeof localStorage === "undefined") return;
+	try {
+		const entries = Object.entries(map);
+		const bounded =
+			entries.length <= MAX_REMOTE_KNOWN_EVENTS
+				? map
+				: Object.fromEntries(
+						entries
+							.toSorted((a, b) => b[1] - a[1])
+							.slice(0, MAX_REMOTE_KNOWN_EVENTS),
+					);
+		localStorage.setItem(REMOTE_KNOWN_EVENTS_KEY, JSON.stringify(bounded));
+	} catch {
+		// Quota or private-mode failures only keep a local copy alive longer.
+	}
+}
+
+function markEventsRemoteKnown(appId: string, eventIds: string[]): void {
+	if (eventIds.length === 0) return;
+	const map = readRemoteKnownEvents();
+	const now = Date.now();
+	for (const eventId of eventIds) {
+		map[remoteKnownEventKey(appId, eventId)] = now;
+	}
+	writeRemoteKnownEvents(map);
+}
+
+function isEventRemoteKnown(appId: string, eventId: string): boolean {
+	return remoteKnownEventKey(appId, eventId) in readRemoteKnownEvents();
+}
+
+function clearEventRemoteKnown(appId: string, eventId: string): void {
+	const map = readRemoteKnownEvents();
+	const key = remoteKnownEventKey(appId, eventId);
+	if (!(key in map)) return;
+	delete map[key];
+	writeRemoteKnownEvents(map);
 }
 
 function eventUpdatedAtMs(event?: IEvent): number {
@@ -253,6 +327,8 @@ export class EventState implements IEventState {
 				throw new Error("Failed to fetch event data");
 			}
 
+			markEventsRemoteKnown(appId, [eventId]);
+
 			const localUpdated = eventUpdatedAtMs(event);
 			const remoteUpdated = eventUpdatedAtMs(remoteData);
 			const shouldUseRemote =
@@ -286,6 +362,35 @@ export class EventState implements IEventState {
 
 			return remoteData;
 		} catch (error) {
+			// An authoritative 404/410 means the hosted Event was removed. A
+			// local Hybrid run may operate without a cloud execution hop, but it
+			// must never revive an Event the hub explicitly revoked. That only
+			// holds for an Event the server has acknowledged before: one created
+			// offline and never uploaded 404s identically, and this device holds
+			// its only copy.
+			if (isMissingResourceError(error)) {
+				if (event && typeof version === "undefined") {
+					if (!isEventRemoteKnown(appId, eventId)) {
+						console.warn(
+							"[EventSync] Event unknown to the server but never synced from it; keeping the local copy:",
+							error,
+						);
+						return event;
+					}
+					await invoke("delete_event", {
+						appId,
+						eventId,
+					})
+						.then(() => clearEventRemoteKnown(appId, eventId))
+						.catch((deleteError) => {
+							console.warn(
+								"[EventSync] Failed to remove a revoked local Event:",
+								deleteError,
+							);
+						});
+				}
+				throw error;
+			}
 			if (event) {
 				console.warn(
 					"[EventSync] Event fetch failed, falling back to local event:",
@@ -327,6 +432,10 @@ export class EventState implements IEventState {
 						method: "GET",
 					},
 					this.backend.auth,
+				);
+				markEventsRemoteKnown(
+					appId,
+					remoteData.map((event) => event.id),
 				);
 				const localById = new Map(events.map((event) => [event.id, event]));
 				const toPersist = remoteData.filter(
@@ -580,6 +689,7 @@ export class EventState implements IEventState {
 				appId: appId,
 				eventId: eventId,
 			});
+			if (!isOffline) clearEventRemoteKnown(appId, eventId);
 		} catch (e) {
 			if (isOffline) throw e;
 			console.warn("[EventState] Local event deletion failed (non-fatal):", e);
@@ -733,6 +843,38 @@ export class EventState implements IEventState {
 				}
 				return runRemotely();
 			}
+
+			// The server can establish permission and mode, but only the
+			// device can prove that it holds the exact Board and Page contract.
+			// Keep local execution preferred when revisions match; otherwise
+			// use the already-authorized remote path before a local run starts.
+			if (!localDynamicPageAction) {
+				let holdsExactContract = false;
+				try {
+					const localBootstrap = await invoke<{
+						executionRevision?: string;
+					}>("get_local_page_bootstrap", {
+						appId,
+						eventId,
+					});
+					holdsExactContract =
+						Boolean(pageTrigger.manifestRevision) &&
+						localBootstrap.executionRevision === pageTrigger.manifestRevision;
+				} catch (error) {
+					console.warn(
+						"[executeEvent] Exact Page contract is unavailable locally:",
+						error,
+					);
+				}
+				if (!holdsExactContract) {
+					if (!(await this.canReachServer(appId))) {
+						throw new Error(
+							"The local Page contract is stale and the server is unreachable; reload the Page",
+						);
+					}
+					return runRemotely();
+				}
+			}
 		}
 
 		const event = await this.getEvent(appId, eventId);
@@ -885,9 +1027,7 @@ export class EventState implements IEventState {
 			credentials,
 			token,
 			oauthTokens,
-			pageTrigger: pageTrigger
-				? serializePageTrigger(pageTrigger)
-				: undefined,
+			pageTrigger: pageTrigger ? serializePageTrigger(pageTrigger) : undefined,
 		});
 
 		closed = true;
@@ -1302,7 +1442,9 @@ export class EventState implements IEventState {
 				return buildLocalPrerun();
 			}
 			const dynamic = isServerDynamicPageTrigger(pageTrigger);
-			const localOnly = await this.backend.isLocalOnly(appId).catch(() => false);
+			const localOnly = await this.backend
+				.isLocalOnly(appId)
+				.catch(() => false);
 
 			if (localOnly && !dynamic) {
 				return buildLocalPrerun();
