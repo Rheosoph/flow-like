@@ -5,17 +5,17 @@ import CheckIcon from "lucide-react/dist/esm/icons/check.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import CopyIcon from "lucide-react/dist/esm/icons/copy.js";
-import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
 import MessageSquareIcon from "lucide-react/dist/esm/icons/message-square.js";
+import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
 import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
 import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { cn } from "../../../lib/utils";
-import { IRole } from "../../../lib/schema/llm/history";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
+import { IRole } from "../../../lib/schema/llm/history";
+import { cn } from "../../../lib/utils";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -28,10 +28,10 @@ import {
 	DialogTitle,
 } from "../../ui/dialog";
 import { Label } from "../../ui/label";
+import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { Switch } from "../../ui/switch";
 import { TextEditor } from "../../ui/text-editor";
 import { Textarea } from "../../ui/textarea";
-import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { AgentDebugReport } from "./agent-debug-report";
 import { AppReferences } from "./app-references";
 import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
@@ -43,6 +43,7 @@ import {
 } from "./attachment-dialog";
 import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
+import { ChatMessageError } from "./chat-message-error";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
 import { buildInlineSegments } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
@@ -694,6 +695,11 @@ export const MessageComponent = memo(
 			};
 		}, [inlineSegments, currentPlanStepId]);
 
+		// A failed turn that never produced text has nothing to render but the error card — an empty
+		// prose block would still reserve a line above it.
+		const hideEmptyBody =
+			!isUser && !loading && !messageContent.text && Boolean(message.error);
+
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
 		const hasFooterContent =
@@ -769,7 +775,7 @@ export const MessageComponent = memo(
 									: undefined
 							}
 						>
-							{inlineSegments ? (
+							{hideEmptyBody ? null : inlineSegments ? (
 								<>
 									{inlineSegments.map((segment, index) =>
 										segment.steps ? (
@@ -853,6 +859,9 @@ export const MessageComponent = memo(
 									</>
 								)}
 							</Button>
+						)}
+						{!isUser && message.error && (
+							<ChatMessageError error={message.error} />
 						)}
 						<AttachmentStrip
 							files={processedAttachments}
@@ -979,6 +988,7 @@ export const MessageComponent = memo(
 			prev.message.debug_report === next.message.debug_report &&
 			prev.message.app_refs === next.message.app_refs &&
 			prev.message.widgets === next.message.widgets &&
+			prev.message.error === next.message.error &&
 			prev.appId === next.appId &&
 			prev.boardId === next.boardId &&
 			prev.eventId === next.eventId &&

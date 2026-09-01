@@ -56,6 +56,7 @@ import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
 } from "@flow-like/flow-like-ui/lib/oauth/types";
+import { normalizeRoutePath } from "@flow-like/flow-like-ui/lib/route-path";
 import {
 	isEventOverridable,
 	isRuntimeConfigured,
@@ -204,14 +205,6 @@ export default function EventsPage({
 		() => new Set(uiEventTypes ?? []),
 		[uiEventTypes],
 	);
-	const normalizePath = useCallback((path: unknown): string => {
-		const raw = String(path ?? "").trim();
-		if (!raw) return "/";
-		const withoutQuery = raw.split("?")[0] ?? raw;
-		if (!withoutQuery || withoutQuery === "/") return "/";
-		return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-	}, []);
-
 	const router = useRouter();
 	const events = useInvoke(
 		backend.eventState.getEvents,
@@ -354,7 +347,7 @@ export default function EventsPage({
 					!!savedEvent.default_page_id
 				) {
 					try {
-						const path = normalizePath((newEvent as any)?.path);
+						const path = normalizeRoutePath((newEvent as any)?.path);
 						await backend.routeState.setRoute(id, path, savedEvent.id);
 						await invalidate(backend.routeState.getRoutes, [id]);
 					} catch (error) {
@@ -387,7 +380,6 @@ export default function EventsPage({
 			eventMapping,
 			isOffline,
 			uiEventTypeSet,
-			normalizePath,
 			invalidate,
 			isCreating,
 		],
@@ -487,7 +479,7 @@ export default function EventsPage({
 						!!savedEvent.default_page_id
 					) {
 						try {
-							const path = normalizePath(pendingRoutePath);
+							const path = normalizeRoutePath(pendingRoutePath);
 							await backend.routeState.setRoute(id, path, savedEvent.id);
 							await invalidate(backend.routeState.getRoutes, [id]);
 						} catch (error) {
@@ -518,7 +510,6 @@ export default function EventsPage({
 			backend.routeState,
 			events,
 			uiEventTypeSet,
-			normalizePath,
 			invalidate,
 			isCreating,
 		],
@@ -693,13 +684,6 @@ function EventConfiguration({
 		() => new Set(uiEventTypes ?? []),
 		[uiEventTypes],
 	);
-	const normalizePath = useCallback((path: unknown): string => {
-		const raw = String(path ?? "").trim();
-		if (!raw) return "/";
-		const withoutQuery = raw.split("?")[0] ?? raw;
-		if (!withoutQuery || withoutQuery === "/") return "/";
-		return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-	}, []);
 	const [routePathDraft, setRoutePathDraft] = useState<string>("/");
 	const [routePathError, setRoutePathError] = useState<string | null>(null);
 	// Case-key mapping rows are edited locally (index-stable, so typing a key
@@ -884,7 +868,7 @@ function EventConfiguration({
 		const isPageTargetEvent = !!formData.default_page_id;
 		const shouldHaveRoute = isUiEvent || isPageTargetEvent;
 		const desiredRoutePath = shouldHaveRoute
-			? normalizePath(routePathDraft)
+			? normalizeRoutePath(routePathDraft)
 			: null;
 
 		// The draft is only trustworthy once the existing routes are known —
@@ -973,7 +957,7 @@ function EventConfiguration({
 			const existingRoutes =
 				routes.data ?? (await backend.routeState.getRoutes(appId));
 			const conflict = existingRoutes.find((r) => {
-				const normalized = normalizePath(r.path);
+				const normalized = normalizeRoutePath(r.path);
 				if (normalized !== desiredRoutePath) return false;
 				// Allow if this event already owns this path
 				return r.eventId !== event.id;

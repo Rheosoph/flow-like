@@ -18,7 +18,7 @@ mismatch check.
 |---|---|---|
 | `API_BASE_URL` | yes | absolute `https://` URL of the API, no credentials, no query, no fragment; a trailing slash is stripped. `API_URL` is accepted as an alias; `API_BASE_URL` wins when both are set |
 | `MAINTENANCE_TOKEN` | yes | at least 32 bytes after trimming; the same value the API holds. Injected from Secret Manager (`secret_env`), never as plain env |
-| `MAINTENANCE_JOB` | no (`all`) | `telemetry_alerts`, `cache_cleanup` or `all`; case-insensitive. `all` runs both, in that order, and exits non-zero if either failed |
+| `MAINTENANCE_JOB` | no (`all`) | `telemetry_alerts`, `cache_cleanup`, `run_sweep`, `state_cleanup` or `all`; case-insensitive. `all` runs all four in that order and exits non-zero if any failed |
 | `ALLOW_INSECURE_API_BASE_URL` | no | `1` or `true` permits an `http://` base URL. Only for trusted development or private networking; the token is a bearer credential |
 | `CLOUD_RUN_EXECUTION` | set by Cloud Run | the execution name; used as the idempotency-key suffix (see below). Not something to set by hand |
 
@@ -58,10 +58,20 @@ dedups an in-minute retry and makes the next day's run a new key. A
 outside `[A-Za-z0-9._-]`) is logged and ignored, and the minute key is used.
 
 The API uses `Idempotency-Key` for log correlation, not as a durable dedup
-ledger; both jobs are idempotent on their own (telemetry alert transitions are
-row-locked and transactional, cache cleanup deletes what has already expired),
-so a repeat is safe. Future jobs must either be inherently idempotent or add
+ledger; the jobs are idempotent on their own. Telemetry alert transitions are
+row-locked and transactional, cache cleanup deletes what has already expired,
+and run reconciliation conditionally updates only stale non-terminal rows. A
+repeat is safe. Future jobs must either be inherently idempotent or add
 durable idempotency storage before being enabled here.
+
+The `run_sweep` request reads `RUN_SWEEPER_GRACE_SECS` and
+`RUN_SWEEPER_BATCH_SIZE` from the API deployment. The batch defaults to 500 and
+is capped at 900. A daily `all` schedule provides only daily reconciliation.
+Use a separate, more frequent `run_sweep` schedule when stuck runs must become
+terminal sooner. Set the grace period above the longest legitimate queue delay
+plus `EXECUTOR_TIMEOUT_SECS`; otherwise the sweep can classify a live run as
+stale. The job reconciles the canonical SQL run row only. It does not mutate a
+separately configured execution state backend.
 
 ## Failure semantics
 
@@ -74,10 +84,10 @@ durable idempotency storage before being enabled here.
   of either, and the retry repeats the same idempotency key.
 - With `MAINTENANCE_JOB=all`, a failed job does not stop the next one: every
   selected job runs, then the process exits non-zero if any failed. The retry
-  re-issues both keys; the job that already succeeded is a dedup-able repeat.
+  re-issues all three keys; a job that already succeeded is a safe repeat.
 - Each request has a 5-second connect timeout and a 300-second overall timeout,
-  matching the API service's Cloud Run `timeout_seconds`. Two sequential jobs
-  therefore finish inside roughly 610 seconds, well under the job's
+  matching the API service's Cloud Run `timeout_seconds`. Three sequential jobs
+  therefore finish inside roughly 915 seconds, well under the job's
   `task_timeout` of 1800 seconds. Raise the client timeout together with the
   API's request timeout, never independently.
 

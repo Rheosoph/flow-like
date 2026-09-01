@@ -16,6 +16,7 @@ pub(crate) async fn page_id_mutation_guard(
         .await
 }
 
+pub mod bootstrap;
 pub mod delete_page;
 pub mod get_page;
 pub mod get_page_by_route;
@@ -25,6 +26,7 @@ pub mod upsert_page;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_pages::get_pages))
+        .route("/bootstrap", get(bootstrap::bootstrap))
         .route("/by-route", get(get_page_by_route::get_page_by_route))
         .route(
             "/{page_id}",

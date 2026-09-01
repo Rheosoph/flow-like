@@ -16,6 +16,35 @@ pub type ExecutionJwks = Jwks;
 /// Execution JWT error type (wraps BackendJwtError)
 pub type ExecutionJwtError = BackendJwtError;
 
+/// Signed context needed to sanitize actions created during a Page run.
+/// Executors may report output with this token, but cannot alter the Page
+/// identity or authority revision used by the API delivery boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageExecutionJwtContext {
+    pub page_id: String,
+    pub manifest_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_version: Option<(u32, u32, u32)>,
+    /// Exact object identity when the Event selector is Latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_etag: Option<String>,
+    /// The one entry selected by this invocation. The executor checks exact
+    /// equality so a queued payload cannot substitute another allowed entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_node_id: Option<String>,
+    /// Signature of the exact prerun manifest that supplies the dynamic
+    /// action allow-list at the callback boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_authority_revision: Option<String>,
+    /// Revision of the exact WASM bundle carried by this dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_authority_revision: Option<String>,
+    /// Signed allow-list used by the callback boundary to seal dynamic output
+    /// by issuers that predate compact prerun-manifest authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_entry_node_ids: Vec<String>,
+}
+
 /// Claims contained in an execution JWT
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionClaims {
@@ -42,6 +71,9 @@ pub struct ExecutionClaims {
     /// tokens minted during this run pass it to downstream apps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation: Option<crate::correlation::CorrelationContext>,
+    /// Present only for a run resolved through a governed Page trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_execution: Option<PageExecutionJwtContext>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -88,6 +120,22 @@ pub fn is_configured() -> bool {
 
 /// Sign an execution JWT with the configured private key
 pub fn sign(params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
+    sign_inner(params, None)
+}
+
+/// Sign an executor token for a governed Page run. The context is later used
+/// to seal dynamic A2UI actions before they are delivered to a user.
+pub fn sign_with_page_context(
+    params: ExecutionJwtParams,
+    page_execution: PageExecutionJwtContext,
+) -> Result<String, ExecutionJwtError> {
+    sign_inner(params, Some(page_execution))
+}
+
+fn sign_inner(
+    params: ExecutionJwtParams,
+    page_execution: Option<PageExecutionJwtContext>,
+) -> Result<String, ExecutionJwtError> {
     let time = make_time_claims(params.token_type, params.ttl_seconds);
 
     let claims = ExecutionClaims {
@@ -99,6 +147,7 @@ pub fn sign(params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
         event_id: params.event_id,
         app_chain: params.app_chain,
         correlation: params.correlation,
+        page_execution,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -178,5 +227,41 @@ mod tests {
         assert_eq!(claims.board_id, params.board_id);
         assert_eq!(claims.event_id, params.event_id);
         assert_eq!(claims.callback_url, params.callback_url);
+        assert!(claims.page_execution.is_none());
+    }
+
+    #[test]
+    fn page_execution_context_roundtrips_only_when_requested() {
+        if !is_configured() {
+            return;
+        }
+
+        let params = ExecutionJwtParams {
+            user_id: "user123".to_string(),
+            technical_user_id: None,
+            run_id: "run456".to_string(),
+            app_id: "app789".to_string(),
+            board_id: "board012".to_string(),
+            event_id: Some("event345".to_string()),
+            app_chain: None,
+            correlation: None,
+            callback_url: "http://localhost:8080".to_string(),
+            token_type: TokenType::Executor,
+            ttl_seconds: Some(3600),
+        };
+        let page_execution = PageExecutionJwtContext {
+            page_id: "page-1".to_string(),
+            manifest_revision: "revision-1".to_string(),
+            board_version: Some((1, 2, 3)),
+            board_etag: None,
+            target_node_id: Some("entry-1".to_string()),
+            entry_authority_revision: Some("authority-1".to_string()),
+            wasm_authority_revision: Some("wasm-1".to_string()),
+            allowed_entry_node_ids: vec!["entry-1".to_string()],
+        };
+
+        let token = sign_with_page_context(params, page_execution.clone()).unwrap();
+        let claims = verify(&token).unwrap();
+        assert_eq!(claims.page_execution, Some(page_execution));
     }
 }

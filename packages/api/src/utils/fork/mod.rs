@@ -22,7 +22,7 @@ use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
 };
 use flow_like_storage::Path;
-use flow_like_types::{anyhow, create_id, proto};
+use flow_like_types::{anyhow, create_id, dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL, proto};
 use futures_util::TryStreamExt;
 pub use policy::{ForkDatabaseMode, ForkPolicy};
 use sea_orm::{
@@ -586,6 +586,10 @@ pub async fn compute_offline_fork_bundle(
             continue;
         }
 
+        if !guard_reserved_event_versions(&mut event_proto, &src_event_id, &mut skipped) {
+            continue;
+        }
+
         if !event_target_available(&event_proto, &shipped_boards, &maps) {
             skipped.push(SkippedItem {
                 kind: SkippedKind::Other,
@@ -661,6 +665,15 @@ pub async fn compute_offline_fork_bundle(
 
     // ---- 4. Versioned boards pointed to by surviving events --------
     for (src_board_id, version) in &pointed_board_versions {
+        if is_reserved_etag_dispatch_version_tuple(*version) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_board_id.clone(),
+                reason: "the version reserved for ETag-bound Latest execution was not copied"
+                    .to_string(),
+            });
+            continue;
+        }
         let dst_board_id = maps.translate_board(src_board_id);
         let src_versioned_path = src_prefix
             .child("versions")
@@ -1064,6 +1077,53 @@ fn is_remote_event(event: &proto::Event) -> bool {
         .as_deref()
         .map(|m| m.eq_ignore_ascii_case("remote"))
         .unwrap_or(false)
+}
+
+fn is_reserved_etag_dispatch_version_tuple(version: (u32, u32, u32)) -> bool {
+    version == ETAG_BOUND_LATEST_VERSION_SENTINEL
+}
+
+fn is_reserved_etag_dispatch_version(version: &proto::Version) -> bool {
+    is_reserved_etag_dispatch_version_tuple((version.major, version.minor, version.patch))
+}
+
+fn guard_reserved_event_versions(
+    event: &mut proto::Event,
+    source_event_id: &str,
+    skipped: &mut Vec<SkippedItem>,
+) -> bool {
+    if event
+        .board_version
+        .as_ref()
+        .is_some_and(is_reserved_etag_dispatch_version)
+    {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Other,
+            source_id: source_event_id.to_string(),
+            reason: format!(
+                "event {} selects the version reserved for ETag-bound Latest execution and was not forked",
+                source_event_id
+            ),
+        });
+        return false;
+    }
+    if event
+        .canary
+        .as_ref()
+        .and_then(|canary| canary.board_version.as_ref())
+        .is_some_and(is_reserved_etag_dispatch_version)
+    {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Other,
+            source_id: source_event_id.to_string(),
+            reason: format!(
+                "canary target for event {} selected the version reserved for ETag-bound Latest execution and was cleared",
+                source_event_id
+            ),
+        });
+        event.canary = None;
+    }
+    true
 }
 
 fn event_target_available(
@@ -1678,6 +1738,10 @@ pub async fn fork_app_with_visibility(
         };
         let mut event_proto = core_event.to_proto();
 
+        if !guard_reserved_event_versions(&mut event_proto, &src_event_id, &mut skipped) {
+            continue;
+        }
+
         if !event_target_available(&event_proto, &shipped_boards, &maps) {
             skipped.push(SkippedItem {
                 kind: SkippedKind::Other,
@@ -1767,6 +1831,15 @@ pub async fn fork_app_with_visibility(
     // line up with the live board), and save under the destination
     // versions tree. Version tuple stays the same — we don't re-bump.
     for (src_board_id, version) in &pointed_board_versions {
+        if is_reserved_etag_dispatch_version_tuple(*version) {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Other,
+                source_id: src_board_id.clone(),
+                reason: "the version reserved for ETag-bound Latest execution was not copied"
+                    .to_string(),
+            });
+            continue;
+        }
         let dst_board_id = maps.translate_board(src_board_id);
         let src_path = src_prefix
             .child("versions")
@@ -4166,6 +4239,54 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    fn proto_version(version: (u32, u32, u32)) -> proto::Version {
+        proto::Version {
+            major: version.0,
+            minor: version.1,
+            patch: version.2,
+        }
+    }
+
+    #[test]
+    fn reserved_etag_dispatch_version_is_detected_on_primary_and_canary_selectors() {
+        assert!(is_reserved_etag_dispatch_version_tuple(
+            ETAG_BOUND_LATEST_VERSION_SENTINEL
+        ));
+        assert!(!is_reserved_etag_dispatch_version_tuple((1, 2, 3)));
+
+        let mut event = proto::Event {
+            board_version: Some(proto_version(ETAG_BOUND_LATEST_VERSION_SENTINEL)),
+            canary: Some(proto::Canary {
+                board_version: Some(proto_version(ETAG_BOUND_LATEST_VERSION_SENTINEL)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+        assert!(
+            !guard_reserved_event_versions(&mut event, "event-1", &mut skipped),
+            "a reserved primary selector causes the whole event to be skipped"
+        );
+        assert_eq!(skipped.len(), 1);
+
+        event.board_version = Some(proto_version((1, 2, 3)));
+        skipped.clear();
+        assert!(
+            guard_reserved_event_versions(&mut event, "event-1", &mut skipped),
+            "a reserved canary selector is cleared while the primary event survives"
+        );
+        assert!(event.canary.is_none());
+        assert_eq!(skipped.len(), 1);
+
+        skipped.clear();
+        assert!(guard_reserved_event_versions(
+            &mut event,
+            "event-1",
+            &mut skipped
+        ));
+        assert!(skipped.is_empty());
     }
 
     #[test]

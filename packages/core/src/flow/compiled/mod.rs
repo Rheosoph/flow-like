@@ -35,7 +35,8 @@ pub use compile::{compile_board, compile_board_with_catalog};
 pub use format::{CompiledBoard, FORMAT_VERSION, MAGIC};
 pub use prerun::{
     MANIFEST_FORMAT_VERSION, PrerunManifest, PrerunOAuthRequirement, PrerunVariable,
-    decode_manifest, draft_manifest_path, encode_manifest, manifest_path,
+    decode_manifest, draft_manifest_path, draft_page_manifest_path, encode_manifest,
+    legacy_manifest_path, manifest_path, version_page_manifest_path,
 };
 pub use resolver::{TemplateCache, persist_artifact};
 pub use template::CompiledRunTemplate;
@@ -65,25 +66,63 @@ pub fn artifact_path(board_dir: &Path, board_id: &str, version: (u32, u32, u32))
         .child(format!("{}_{}_{}.flcb", version.0, version.1, version.2))
 }
 
-/// Directory holding a board's draft artifacts; writers purge it down to the
-/// newest entry (local stores have no lifecycle rules).
+/// Directory holding a board's content-addressed draft artifacts.
+///
+/// Contract: `tmp/` so storage lifecycle rules on that prefix reclaim stale
+/// drafts; `{app_id}` inside it so per-app executor credentials can read
+/// exact drafts read-only. Only the API writes here — that write asymmetry
+/// is the trust anchor for `entry_authority_revision`. The desktop startup
+/// sweep removes old entries from local stores, which have no lifecycle rules.
 pub fn draft_artifact_dir(app_id: &str, board_id: &str) -> Path {
     Path::from("tmp")
-        .child("compiled")
+        .child("apps")
         .child(app_id)
+        .child("compiled")
+        .child("drafts")
         .child(board_id)
 }
 
-/// Compiled artifact of a floating draft, keyed by the source `.board`'s etag.
-/// Recreatable at any time — parked under the meta store's `tmp/` prefix so
-/// bucket lifecycle rules may purge stale ones.
-pub fn draft_artifact_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
-    draft_artifact_dir(app_id, board_id).child(format!("{}.flcb", draft_artifact_stem(e_tag)))
+/// Compiled artifact of a floating draft, keyed by the source `.board`'s ETag
+/// and the registry that resolved its node implementations.
+/// Recreatable at any time and stored below `tmp/apps/{app_id}/` so app-scoped
+/// executor credentials can read, but never write, exact drafts.
+pub fn draft_artifact_path(
+    app_id: &str,
+    board_id: &str,
+    e_tag: &str,
+    registry_fingerprint: &[u8; 32],
+) -> Path {
+    let fingerprint = blake3::Hash::from_bytes(*registry_fingerprint).to_hex();
+    draft_artifact_dir(app_id, board_id).child(format!(
+        "{}_{}.flcb",
+        draft_artifact_stem(e_tag),
+        &fingerprint.as_str()[..16]
+    ))
+}
+
+/// Execution source snapshot for a floating draft, keyed by the ETag of the
+/// `.board` object that produced it. This lets an executor rebuild an exact
+/// artifact after the floating source advances.
+pub fn draft_source_path(app_id: &str, board_id: &str, e_tag: &str) -> Path {
+    draft_artifact_dir(app_id, board_id).child(format!("{}.board", draft_artifact_stem(e_tag)))
 }
 
 /// File stem shared by every draft artifact of one `.board` etag.
 fn draft_artifact_stem(e_tag: &str) -> String {
-    blake3::hash(e_tag.as_bytes()).to_hex().as_str()[..32].to_string()
+    // Version the namespace when the trust contract of a draft artifact
+    // changes. Version 2 guarantees writers verified the loaded Board still
+    // matched this ETag before placing bytes at the content-addressed path.
+    //
+    // Unlike version manifests, the draft manifest path carries no
+    // `.v{MANIFEST_FORMAT_VERSION}` segment — this byte is its only format
+    // namespace. Bumping `MANIFEST_FORMAT_VERSION` (prerun.rs) therefore
+    // requires bumping this byte too, or a rolling deployment's old and new
+    // writers would race on one draft manifest path.
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like/draft-artifact");
+    hasher.update(&[2]);
+    hasher.update(e_tag.as_bytes());
+    hasher.finalize().to_hex().as_str()[..32].to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

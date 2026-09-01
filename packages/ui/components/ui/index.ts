@@ -33,7 +33,6 @@ export * from "./file-type-visuals";
 export * from "./storage-file-cell";
 export * from "./flow-background";
 // graph components use sigma.js (WebGL) — import from ./graph directly with ssr:false
-export * from "./graph/overlay-builder";
 export * from "./graph/icons";
 export * from "./graph/presets";
 export * from "./hover-card";

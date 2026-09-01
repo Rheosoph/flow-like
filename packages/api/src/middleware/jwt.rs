@@ -89,15 +89,40 @@ fn extract_client_ip(request: &Request) -> Option<String> {
 }
 
 fn pat_id_from_token(pat_str: &str) -> Result<String> {
-    if !pat_str.starts_with("pat_") {
-        return Err(anyhow!("Not a PAT"));
+    pat_lookup_parts(pat_str)
+        .map(|(id, _)| id.to_string())
+        .ok_or_else(|| anyhow!("Invalid PAT format"))
+}
+
+fn pat_lookup_parts(pat_str: &str) -> Option<(&str, String)> {
+    let mut parts = pat_str.strip_prefix("pat_")?.split('.');
+    let id = parts.next()?.trim();
+    let secret = parts.next()?;
+    if id.is_empty() || secret.is_empty() || parts.next().is_some() {
+        return None;
     }
-    let pat_parts = &pat_str[4..];
-    let parts: Vec<&str> = pat_parts.split('.').collect();
-    if parts.len() != 2 {
-        return Err(anyhow!("Invalid PAT format"));
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(secret.as_bytes());
+    Some((id, hasher.finalize().to_hex().to_string().to_lowercase()))
+}
+
+fn api_key_lookup_parts(api_key: &str) -> Option<(&str, &str, String)> {
+    let mut parts = api_key.strip_prefix("flk_")?.split('.');
+    let app_id = parts.next()?.trim();
+    let key_id = parts.next()?.trim();
+    let secret = parts.next()?;
+    if app_id.is_empty() || key_id.is_empty() || secret.is_empty() || parts.next().is_some() {
+        return None;
     }
-    Ok(parts[0].to_string())
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(secret.as_bytes());
+    Some((
+        app_id,
+        key_id,
+        hasher.finalize().to_hex().to_string().to_lowercase(),
+    ))
 }
 
 fn deserialize_opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
@@ -682,6 +707,36 @@ impl AppUser {
         Err(self.app_permission_denial())
     }
 
+    /// Resolve app permissions from the canonical database for
+    /// security-sensitive runtime entry points. PAT and API-key credentials are
+    /// revalidated, API-key permissions are read from the current technical-user
+    /// role, and user or app-connection roles bypass the process-local cache.
+    pub async fn app_permission_fresh(
+        &self,
+        app_id: &str,
+        state: &AppState,
+    ) -> Result<AppPermissionResponse, ApiError> {
+        match self {
+            AppUser::OpenID(user) => user_app_permission_uncached(&user.sub, app_id, state).await,
+            AppUser::PAT(user) => {
+                validate_pat_fresh(user, state).await?;
+                user_app_permission_uncached(&user.sub, app_id, state).await
+            }
+            AppUser::ConnectedApp(connected) => {
+                connected_app_permission_uncached(connected, app_id, state).await
+            }
+            AppUser::APIKey(api_key) => {
+                validate_api_key_fresh(api_key, state).await?;
+                // API-key roles already bypass the permission cache and are
+                // joined to the freshly revalidated technical user.
+                self.app_permission(app_id, state).await
+            }
+            AppUser::Executor(_) | AppUser::Unauthorized => {
+                self.app_permission(app_id, state).await
+            }
+        }
+    }
+
     pub async fn execution_app_permission(
         &self,
         app_id: &str,
@@ -779,6 +834,92 @@ impl AppUser {
     }
 }
 
+async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
+    let cache_key = hash_token(&user.pat);
+    let Some((pat_id, secret_hash)) = pat_lookup_parts(&user.pat) else {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("PAT is no longer valid"));
+    };
+
+    let current = Pat::find()
+        .filter(
+            pat::Column::Id
+                .eq(pat_id)
+                .and(pat::Column::Key.eq(secret_hash)),
+        )
+        .one(&state.db)
+        .await?;
+    let now = chrono::Utc::now().naive_utc();
+    let is_current = current.is_some_and(|pat| pat_is_current(&pat, &user.sub, now));
+    if !is_current {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("PAT is no longer valid"));
+    }
+
+    Ok(())
+}
+
+fn pat_is_current(pat: &pat::Model, expected_sub: &str, now: sea_orm::prelude::DateTime) -> bool {
+    pat.user_id == expected_sub && pat.valid_until.is_none_or(|valid_until| valid_until >= now)
+}
+
+async fn validate_api_key_fresh(api_key: &ApiKey, state: &AppState) -> Result<(), ApiError> {
+    let cache_key = hash_token(&api_key.api_key);
+    let Some((token_app_id, token_key_id, secret_hash)) = api_key_lookup_parts(&api_key.api_key)
+    else {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("API key is no longer valid"));
+    };
+    if token_app_id != api_key.app_id || token_key_id != api_key.key_id {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("API key is no longer valid"));
+    }
+
+    let current = TechnicalUser::find()
+        .filter(
+            technical_user::Column::Id
+                .eq(token_key_id)
+                .and(technical_user::Column::AppId.eq(token_app_id))
+                .and(technical_user::Column::Key.eq(secret_hash)),
+        )
+        .one(&state.db)
+        .await?;
+    let Some(current) = current else {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("API key is no longer valid"));
+    };
+
+    let current_creator_user_id = match current.creator_user_id.clone() {
+        Some(creator_user_id) => Some(creator_user_id),
+        None => resolve_legacy_api_key_creator_user_id(state, &current.app_id).await?,
+    };
+    if !api_key_record_is_current(
+        &current,
+        api_key,
+        current_creator_user_id.as_deref(),
+        chrono::Utc::now().naive_utc(),
+    ) {
+        state.auth_cache.invalidate(&cache_key);
+        return Err(ApiError::unauthorized("API key is no longer valid"));
+    }
+
+    Ok(())
+}
+
+fn api_key_record_is_current(
+    record: &technical_user::Model,
+    cached: &ApiKey,
+    current_creator_user_id: Option<&str>,
+    now: sea_orm::prelude::DateTime,
+) -> bool {
+    record.id == cached.key_id
+        && record.app_id == cached.app_id
+        && record
+            .valid_until
+            .is_none_or(|valid_until| valid_until >= now)
+        && current_creator_user_id == cached.creator_user_id.as_deref()
+}
+
 /// The plan tier of a user id. Split out of [`AppUser::tier`] so background work
 /// that only carries a `sub` — the copilot profile loader, for one — can apply the
 /// same plan rules the request-scoped routes do.
@@ -815,10 +956,72 @@ pub fn app_connection_cache_sub(origin_app_id: &str) -> String {
     format!("app-connection::{}", origin_app_id)
 }
 
+fn permission_cache_lookup<T>(
+    allow_cached_value: bool,
+    lookup: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    allow_cached_value.then(lookup).flatten()
+}
+
+async fn user_app_permission_uncached(
+    sub: &str,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    let role_model = role::Entity::find()
+        .join(JoinType::InnerJoin, role::Relation::Membership.def())
+        .filter(
+            membership::Column::UserId
+                .eq(sub)
+                .and(membership::Column::AppId.eq(app_id)),
+        )
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| {
+            tracing::debug!(sub, app_id, "Current app membership role was not found");
+            ApiError::FORBIDDEN
+        })?;
+    let permissions = RolePermissions::from_bits(role_model.permissions)
+        .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+    let role_model = Arc::new(role_model);
+
+    // Fresh callers never read this cache. Publishing the authoritative value
+    // still helps ordinary routes after this request completes.
+    state.put_permission(sub, app_id, role_model.clone());
+    Ok(AppPermissionResponse {
+        state: state.clone(),
+        permissions,
+        role: role_model,
+        sub: Some(sub.to_string()),
+        effective_user_id: Some(sub.to_string()),
+        technical_user_id: None,
+        identifier: sub.to_string(),
+        principal: ExecutionPrincipal::User,
+        origin_app_id: None,
+    })
+}
+
 async fn connected_app_permission(
     connected_app: &ConnectedAppUser,
     app_id: &str,
     state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    connected_app_permission_inner(connected_app, app_id, state, true).await
+}
+
+async fn connected_app_permission_uncached(
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    connected_app_permission_inner(connected_app, app_id, state, false).await
+}
+
+async fn connected_app_permission_inner(
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+    state: &AppState,
+    allow_cached_role: bool,
 ) -> Result<AppPermissionResponse, ApiError> {
     if connected_app.target_app_id != app_id {
         tracing::warn!(
@@ -832,7 +1035,10 @@ async fn connected_app_permission(
 
     let cache_sub = app_connection_cache_sub(&connected_app.origin_app_id);
 
-    let role_model = if let Some(role_model) = state.check_permission(&cache_sub, app_id) {
+    let cached_role = permission_cache_lookup(allow_cached_role, || {
+        state.check_permission(&cache_sub, app_id)
+    });
+    let role_model = if let Some(role_model) = cached_role {
         role_model
     } else {
         let (connection, role) = app_connection::Entity::find()
@@ -1462,5 +1668,123 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(response.headers().get("x-error-id").is_none());
+    }
+
+    #[test]
+    fn stateless_lambda_fresh_page_permission_bypasses_preseeded_cache() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reads = AtomicUsize::new(0);
+        let fresh = permission_cache_lookup(false, || {
+            reads.fetch_add(1, Ordering::SeqCst);
+            Some("revoked-role")
+        });
+        assert_eq!(fresh, None);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        let ordinary = permission_cache_lookup(true, || {
+            reads.fetch_add(1, Ordering::SeqCst);
+            Some("current-role")
+        });
+        assert_eq!(ordinary, Some("current-role"));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn stateless_lambda_fresh_page_pat_validation_binds_format_secret_subject_and_expiry() {
+        let (id, secret_hash) = pat_lookup_parts("pat_pat-1.secret").unwrap();
+        assert_eq!(id, "pat-1");
+        assert_eq!(secret_hash, blake3::hash(b"secret").to_hex().to_string());
+        for malformed in [
+            "pat_",
+            "pat_only-id",
+            "pat_.secret",
+            "pat_pat-1.",
+            "pat_pat-1.secret.extra",
+            "not-a-pat",
+        ] {
+            assert!(pat_lookup_parts(malformed).is_none(), "{malformed}");
+        }
+
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .naive_utc();
+        let record = pat::Model {
+            id: "pat-1".into(),
+            name: "Page runtime".into(),
+            key: secret_hash,
+            permissions: 1,
+            user_id: "user-1".into(),
+            valid_until: Some(now + chrono::Duration::minutes(1)),
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(pat_is_current(&record, "user-1", now));
+        assert!(!pat_is_current(&record, "user-2", now));
+
+        let mut expired = record;
+        expired.valid_until = Some(now - chrono::Duration::milliseconds(1));
+        assert!(!pat_is_current(&expired, "user-1", now));
+    }
+
+    #[test]
+    fn stateless_lambda_fresh_page_api_key_validation_binds_format_app_id_key_id_and_secret() {
+        let (app_id, key_id, secret_hash) = api_key_lookup_parts("flk_app-1.key-1.secret").unwrap();
+        assert_eq!(app_id, "app-1");
+        assert_eq!(key_id, "key-1");
+        assert_eq!(secret_hash, blake3::hash(b"secret").to_hex().to_string());
+        for malformed in [
+            "flk_",
+            "flk_app-1.key-1",
+            "flk_.key-1.secret",
+            "flk_app-1..secret",
+            "flk_app-1.key-1.",
+            "flk_app-1.key-1.secret.extra",
+            "not-an-api-key",
+        ] {
+            assert!(api_key_lookup_parts(malformed).is_none(), "{malformed}");
+        }
+
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .naive_utc();
+        let cached = ApiKey {
+            key_id: "key-1".into(),
+            api_key: "flk_app-1.key-1.secret".into(),
+            app_id: "app-1".into(),
+            creator_user_id: Some("creator-1".into()),
+        };
+        let mut record = technical_user::Model {
+            id: "key-1".into(),
+            name: "Page runtime".into(),
+            description: None,
+            key: secret_hash,
+            role_id: Some("role-1".into()),
+            app_id: "app-1".into(),
+            valid_until: Some(now + chrono::Duration::minutes(1)),
+            created_at: now,
+            updated_at: now,
+            creator_membership_id: None,
+            creator_user_id: Some("creator-1".into()),
+        };
+        assert!(api_key_record_is_current(
+            &record,
+            &cached,
+            Some("creator-1"),
+            now
+        ));
+        assert!(!api_key_record_is_current(
+            &record,
+            &cached,
+            Some("creator-2"),
+            now
+        ));
+        record.valid_until = Some(now - chrono::Duration::milliseconds(1));
+        assert!(!api_key_record_is_current(
+            &record,
+            &cached,
+            Some("creator-1"),
+            now
+        ));
     }
 }

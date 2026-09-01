@@ -17,20 +17,24 @@
 //! - `isolated=true`: Use isolated K8s job instead of pool (Kubernetes only)
 
 use crate::{
-    ensure_permission,
+    ensure_fresh_permission, ensure_permission,
     entity::{
         execution_run,
         sea_orm_active_enums::{RunMode, RunStatus},
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, completed_run_status, fetch_profile_for_dispatch, is_jwt_configured,
-        payload_storage, proxy_sse_response, rejection, resolve_wasm_packages, sign_execution_jwt,
+        ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
+        ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext, TokenType,
+        completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
+        proxy_sse_response_with_page_actions, rejection, resolve_wasm_packages, sign_execution_jwt,
+        sign_execution_jwt_with_page_context,
+        state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
         update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::execution::progress::get_state_store,
     state::AppState,
 };
 use axum::{
@@ -39,11 +43,112 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::db::get_event_from_db;
+
+fn sync_dispatch_failure_message(error: &DispatchError) -> String {
+    match error {
+        DispatchError::Artifact(_) => format!("Failed exact artifact preflight: {error}"),
+        _ => format!("Failed to dispatch job: {error}"),
+    }
+}
+
+fn sql_dispatch_failure_update(
+    run_id: &str,
+    app_id: &str,
+    now: sea_orm::prelude::DateTime,
+    error_message: String,
+) -> sea_orm::UpdateMany<execution_run::Entity> {
+    execution_run::Entity::update_many()
+        .set(execution_run::ActiveModel {
+            status: Set(RunStatus::Failed),
+            completed_at: Set(Some(now)),
+            updated_at: Set(now),
+            error_message: Set(Some(error_message)),
+            ..Default::default()
+        })
+        .filter(execution_run::Column::Id.eq(run_id))
+        .filter(execution_run::Column::AppId.eq(app_id))
+        .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+}
+
+/// Terminalize the just-inserted run row after any sync dispatch failure.
+/// Mirrors `invoke_event_async::mark_async_dispatch_failure`: app-scoped,
+/// terminal-monotonic, with the SQL fallback when the state backend is down.
+async fn mark_sync_dispatch_failure(
+    state: &AppState,
+    run_id: &str,
+    app_id: &str,
+    error: &DispatchError,
+) {
+    let now = chrono::Utc::now();
+    let error_message = sync_dispatch_failure_message(error);
+    let update = UpdateRunInput {
+        status: Some(StateRunStatus::Failed),
+        error_message: Some(error_message.clone()),
+        completed_at: Some(now.timestamp_millis()),
+        ..Default::default()
+    };
+
+    match get_state_store(state).await {
+        Ok(store) => {
+            let terminal = match store.get_run_for_app(run_id, app_id).await {
+                Ok(Some(run)) if run.status.is_terminal() => Ok(run),
+                Ok(Some(_)) => store.update_run(run_id, update).await,
+                Ok(None) => Err(crate::execution::StateStoreError::NotFound),
+                Err(error) => Err(error),
+            };
+            match terminal {
+                Ok(_) if store.backend_name() == "postgres" => return,
+                Ok(run) => {
+                    match PostgresStateStore::new(std::sync::Arc::new(state.db.clone()))
+                        .mirror_run_update(&run)
+                        .await
+                    {
+                        Ok(()) => return,
+                        Err(error) => tracing::error!(
+                            run_id,
+                            app_id,
+                            error = %error,
+                            "Failed to mirror the terminal dispatch failure into SQL"
+                        ),
+                    }
+                }
+                Err(error) => tracing::error!(
+                    run_id,
+                    app_id,
+                    backend = store.backend_name(),
+                    error = %error,
+                    "Failed to terminalize the shared execution state after dispatch failure"
+                ),
+            }
+        }
+        Err(error) => tracing::error!(
+            run_id,
+            app_id,
+            error = %error,
+            "Failed to open the execution state store after dispatch failure"
+        ),
+    }
+
+    // The state backend may be unavailable. Preserve any terminal winner and
+    // scope the fallback to this app instead of overwriting a completed run.
+    if let Err(update_error) =
+        sql_dispatch_failure_update(run_id, app_id, now.naive_utc(), error_message)
+            .exec(&state.db)
+            .await
+    {
+        tracing::error!(
+            run_id,
+            app_id,
+            error = %update_error,
+            "Failed to mark the SQL run as failed after dispatch error"
+        );
+    }
+}
 
 /// Query parameters for event invocation
 #[derive(Clone, Debug, Deserialize, Default, ToSchema)]
@@ -77,6 +182,11 @@ pub struct InvokeEventRequest {
     /// the process case this run belongs to. Used for process mining.
     #[serde(default)]
     pub correlation: Option<std::collections::HashMap<String, String>>,
+    /// Governed Page action or lifecycle trigger. This capability is request
+    /// data only; normal user authentication remains in the Authorization
+    /// header.
+    #[serde(default)]
+    pub page_trigger: Option<super::page_trigger::PageTrigger>,
 }
 
 /// Response from event invocation
@@ -179,7 +289,11 @@ async fn invoke_event_impl(
     resolved_event: Option<flow_like::flow::event::Event>,
     governed_connected_app_call: bool,
 ) -> Result<Response, ApiError> {
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let permission = if params.page_trigger.is_some() {
+        ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
+    } else {
+        ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
+    };
     let sub = permission.effective_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
             "Invoking requires a caller that is linked to a user account",
@@ -213,11 +327,81 @@ async fn invoke_event_impl(
     if !governed_connected_app_call {
         super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     }
-    let board_id = event.board_id.clone();
+    let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())
+    {
+        (Some(_), Some(trigger)) => Some(
+            super::page_trigger::resolve_page_trigger(
+                &state,
+                &permission,
+                &app_id,
+                &event,
+                trigger,
+            )
+            .await?,
+        ),
+        (Some(_), None) => {
+            return Err(ApiError::bad_request(
+                "Invoking a Page Event requires page_trigger",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(ApiError::bad_request(
+                "page_trigger is valid only for an Event that owns a Page",
+            ));
+        }
+        (None, None) => None,
+    };
+    let board_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_id.clone())
+        .unwrap_or_else(|| event.board_id.clone());
+    let board_version = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.board_version)
+        .unwrap_or(event.board_version);
+    let board_etag = resolved_page_trigger
+        .as_ref()
+        .and_then(|resolved| resolved.board_etag.clone());
+    let node_id = resolved_page_trigger
+        .as_ref()
+        .map(|resolved| resolved.node_id.clone())
+        .unwrap_or_else(|| event.node_id.clone());
+    let resolved_version = board_version
+        .map(|(major, minor, patch)| format!("{major}_{minor}_{patch}"))
+        .or_else(|| board_etag.as_ref().map(|etag| format!("etag:{etag}")));
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
+    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
+    let wasm_authority_revision =
+        flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
+    if resolved_page_trigger
+        .as_ref()
+        .and_then(|resolved| resolved.wasm_authority_revision.as_deref())
+        .is_some_and(|expected| expected != wasm_authority_revision)
+    {
+        return Err(ApiError::bad_request(
+            "The Page action WASM package set changed; reload the Page action",
+        ));
+    }
     let run_id = create_id();
+    let page_action_sealing = resolved_page_trigger.as_ref().map(|resolved| {
+        std::sync::Arc::new(PageActionSealingContext {
+            sub: sub.clone(),
+            technical_user_id: technical_user_id.clone(),
+            source_app_id: app_id.clone(),
+            source_event_id: event_id.clone(),
+            source_page_id: resolved.page_id.clone(),
+            source_manifest_revision: resolved.manifest_revision.clone(),
+            target_app_id: app_id.clone(),
+            target_board_id: resolved.board_id.clone(),
+            target_board_version: resolved.board_version,
+            target_board_etag: resolved.board_etag.clone(),
+            wasm_authority_revision: Some(wasm_authority_revision.clone()),
+            origin_run_id: run_id.clone(),
+            allowed_entry_nodes: resolved.entry_node_ids.clone(),
+        })
+    });
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = params
@@ -297,9 +481,9 @@ async fn invoke_event_impl(
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id.clone()),
-        version: Set(params.version.clone()),
+        version: Set(resolved_version.clone()),
         event_id: Set(Some(event_id.clone())),
-        node_id: Set(Some(event.id.clone())),
+        node_id: Set(Some(node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(run_mode.clone()),
         log_level: Set(0),
@@ -327,8 +511,9 @@ async fn invoke_event_impl(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
-        node_id: Some(event.id.clone()),
-        version: params.version.clone(),
+        node_id: Some(node_id.clone()),
+        version: resolved_version.clone(),
+        board_etag: board_etag.clone(),
         mode: run_mode.clone(),
         status: RunStatus::Pending,
         input_payload_len,
@@ -374,7 +559,7 @@ async fn invoke_event_impl(
     // for. A malformed version string is likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
         let reason = match super::parse_version_tuple(requested) {
-            Some(parsed) if event.board_version == Some(parsed) => None,
+            Some(parsed) if board_version == Some(parsed) => None,
             Some(_) => Some(
                 "Executing a board version other than the event's configured version is not supported"
                     .to_string(),
@@ -420,7 +605,7 @@ async fn invoke_event_impl(
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
+    let executor_jwt_params = ExecutionJwtParams {
         user_id: sub.clone(),
         technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
@@ -432,7 +617,30 @@ async fn invoke_event_impl(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
-    })
+    };
+    let executor_jwt = if let Some(resolved) = &resolved_page_trigger {
+        sign_execution_jwt_with_page_context(
+            executor_jwt_params,
+            PageExecutionJwtContext {
+                page_id: resolved.page_id.clone(),
+                manifest_revision: resolved.manifest_revision.clone(),
+                board_version: resolved.board_version,
+                board_etag: resolved.board_etag.clone(),
+                target_node_id: Some(resolved.node_id.clone()),
+                entry_authority_revision: resolved.entry_authority_revision.clone(),
+                wasm_authority_revision: Some(wasm_authority_revision.clone()),
+                allowed_entry_node_ids: if resolved.entry_authority_revision.is_none() {
+                    let mut ids = resolved.entry_node_ids.iter().cloned().collect::<Vec<_>>();
+                    ids.sort();
+                    ids
+                } else {
+                    Vec::new()
+                },
+            },
+        )
+    } else {
+        sign_execution_jwt(executor_jwt_params)
+    }
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
@@ -441,14 +649,13 @@ async fn invoke_event_impl(
     let profile =
         fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true).await;
 
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
-
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id,
-        board_version: event.board_version,
-        node_id: event.node_id.clone(),
+        board_version,
+        board_etag,
+        node_id,
         event_json: Some(event_json),
         payload: params.payload,
         user_id: sub,
@@ -477,14 +684,21 @@ async fn invoke_event_impl(
         })?;
         crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
-        let response = state
+        let response = match state
             .dispatcher
             .dispatch_with_backend(ExecutionBackend::KubernetesJob, request)
             .await
-            .map_err(|e| {
+        {
+            Ok(response) => response,
+            Err(e) => {
+                mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
                 tracing::error!(error = %e, "Failed to dispatch job");
-                ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
-            })?;
+                return Err(ApiError::internal_error(anyhow!(
+                    "Failed to dispatch job: {}",
+                    e
+                )));
+            }
+        };
 
         return Ok(Json(InvokeEventResponse {
             run_id,
@@ -512,14 +726,18 @@ async fn invoke_event_impl(
     match backend {
         ExecutionBackend::LambdaStream => {
             // Use Lambda SDK streaming
-            let (_dispatch_response, byte_stream) = state
-                .dispatcher
-                .dispatch_streaming(request)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
-                    ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
-                })?;
+            let (_dispatch_response, byte_stream) =
+                match state.dispatcher.dispatch_streaming(request).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
+                        tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
+                        return Err(ApiError::internal_error(anyhow!(
+                            "Failed to dispatch job: {}",
+                            e
+                        )));
+                    }
+                };
 
             tracing::info!(run_id = %run_id, "Got Lambda response, starting stream proxy");
 
@@ -527,30 +745,82 @@ async fn invoke_event_impl(
                 byte_stream,
                 run_id,
                 Some(std::sync::Arc::new(state.db.clone())),
+                page_action_sealing,
             )
             .into_response())
         }
         _ => {
             // Use HTTP SSE for all other backends (Http, etc.)
-            let (_dispatch_response, executor_response) = state
-                .dispatcher
-                .dispatch_http_sse(request)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
-                    ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
-                })?;
+            let (_dispatch_response, executor_response) =
+                match state.dispatcher.dispatch_http_sse(request).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
+                        tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
+                        return Err(ApiError::internal_error(anyhow!(
+                            "Failed to dispatch job: {}",
+                            e
+                        )));
+                    }
+                };
 
             tracing::info!(run_id = %run_id, "Got executor response, starting stream proxy");
 
-            Ok(proxy_sse_response(
+            Ok(proxy_sse_response_with_page_actions(
                 executor_response,
                 run_id,
                 Some(std::sync::Arc::new(state.db.clone())),
+                page_action_sealing,
             )
             .into_response())
         }
     }
+}
+
+fn seal_lambda_page_actions(
+    data: &str,
+    run_id: &str,
+    event_ordinal: u64,
+    context: Option<&PageActionSealingContext>,
+) -> String {
+    let Some(context) = context else {
+        return data.to_string();
+    };
+    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(data) else {
+        return data.to_string();
+    };
+    let Some(envelope_object) = envelope.as_object_mut() else {
+        return data.to_string();
+    };
+    let message_id = ["event_id", "eventId", "id"]
+        .iter()
+        .find_map(|key| {
+            envelope_object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| format!("{run_id}:lambda:{event_ordinal}"));
+    let event_type = envelope_object
+        .get("event_type")
+        .or_else(|| envelope_object.get("eventType"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let report = envelope_object
+        .get_mut("payload")
+        .map(|payload| context.seal_payload(&event_type, &message_id, payload))
+        .unwrap_or_default();
+    if report.rejected > 0 {
+        tracing::warn!(
+            run_id,
+            message_id,
+            rejected = report.rejected,
+            "stripped rejected dynamic Page action targets from Lambda output"
+        );
+    }
+    serde_json::to_string(&envelope).unwrap_or_else(|_| data.to_string())
 }
 
 /// Create an SSE stream from a Lambda ByteStream response
@@ -558,6 +828,7 @@ fn proxy_lambda_sse_response(
     stream: ByteStream,
     run_id: String,
     db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
+    page_actions: Option<std::sync::Arc<PageActionSealingContext>>,
 ) -> axum::response::sse::Sse<
     impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
 > {
@@ -568,6 +839,7 @@ fn proxy_lambda_sse_response(
     let stream = async_stream::stream! {
         let mut byte_stream = stream;
         let mut buffer = Vec::new();
+        let mut event_ordinal = 0_u64;
 
         while let Some(result) = byte_stream.next().await {
             match result {
@@ -577,9 +849,16 @@ fn proxy_lambda_sse_response(
 
                     // Try to parse complete SSE events from buffer
                     while let Some(event) = extract_sse_event(&mut buffer) {
+                        let event_data = seal_lambda_page_actions(
+                            &event.data,
+                            &run_id,
+                            event_ordinal,
+                            page_actions.as_deref(),
+                        );
+                        event_ordinal = event_ordinal.saturating_add(1);
                         // Check if this is a completed event and update the database
                         if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
+                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event_data)
                                 && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
                                     && event_type == "completed" {
                                         let log_level = parsed.get("payload")
@@ -599,7 +878,7 @@ fn proxy_lambda_sse_response(
 
                         let sse_event = Event::default()
                             .event(&event.event_type)
-                            .data(event.data);
+                            .data(event_data);
                         yield Ok(sse_event);
                     }
                 }
@@ -663,4 +942,42 @@ fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DatabaseBackend, QueryTrait};
+
+    #[test]
+    fn sync_dispatch_failure_keeps_artifact_specific_messaging() {
+        let artifact = DispatchError::Artifact("missing artifact".into());
+        assert_eq!(
+            sync_dispatch_failure_message(&artifact),
+            "Failed exact artifact preflight: Compiled artifact error: missing artifact"
+        );
+
+        let network = DispatchError::Network("connection refused".into());
+        assert_eq!(
+            sync_dispatch_failure_message(&network),
+            "Failed to dispatch job: Network error: connection refused"
+        );
+    }
+
+    #[test]
+    fn sync_dispatch_failure_fallback_is_app_scoped_and_terminal_monotonic() {
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .naive_utc();
+        let statement =
+            sql_dispatch_failure_update("run-1", "app-1", now, "Failed to dispatch job".into())
+                .build(DatabaseBackend::Postgres)
+                .to_string();
+
+        assert!(statement.contains("\"ExecutionRun\".\"id\" = 'run-1'"));
+        assert!(statement.contains("\"ExecutionRun\".\"appId\" = 'app-1'"));
+        assert!(statement.contains("\"ExecutionRun\".\"status\" IN"));
+        assert!(statement.contains("'PENDING'"));
+        assert!(statement.contains("'RUNNING'"));
+    }
 }

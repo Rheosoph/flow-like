@@ -187,6 +187,52 @@ export interface RelaxOverlapsOptions {
 	iterations?: number;
 	gap?: number;
 	maxPairChecks?: number;
+	/**
+	 * Estimated caption width extending to the RIGHT of each node, in layout
+	 * units. When present, a node also defends the horizontal strip its label
+	 * occupies, which is what keeps captions from running into the next disc.
+	 */
+	labelExtents?: ReadonlyMap<string, number>;
+}
+
+/** Vertical half-band a caption occupies around its node's centre line. */
+const LABEL_BAND = 14;
+/** Gentler than the circle pass, so the two never fight into oscillation. */
+const LABEL_RELAX_STRENGTH = 0.35;
+/** Past this many nodes label culling thins captions out; reserving for all of them would waste the stage. */
+export const LABEL_EXTENT_NODE_CAP = 300;
+
+/**
+ * Approximate on-screen caption widths for the relaxation pass. Returns nothing
+ * above the cap — at those counts sigma's label grid already culls most
+ * captions, and spacing for invisible text would spread the layout for no one.
+ */
+export function computeLabelExtents(
+	graph: Graph,
+	nodeIds: readonly string[],
+	options: { labelSize?: number; maxChars?: number } = {},
+): Map<string, number> | undefined {
+	if (nodeIds.length === 0 || nodeIds.length > LABEL_EXTENT_NODE_CAP) {
+		return undefined;
+	}
+	const labelSize = options.labelSize ?? 12;
+	const maxChars = options.maxChars ?? 28;
+	// As the count grows the grid shows fewer captions, so the reservation fades
+	// out instead of switching off at a cliff.
+	const density = Math.max(
+		0.35,
+		Math.min(1, Math.sqrt(60 / Math.max(1, nodeIds.length))),
+	);
+
+	const extents = new Map<string, number>();
+	for (const nodeId of nodeIds) {
+		if (!graph.hasNode(nodeId)) continue;
+		const caption = graph.getNodeAttribute(nodeId, "label");
+		if (typeof caption !== "string" || caption.length === 0) continue;
+		const chars = Math.min(caption.length, maxChars);
+		extents.set(nodeId, (chars * labelSize * 0.6 + 10) * density);
+	}
+	return extents.size > 0 ? extents : undefined;
 }
 
 /**
@@ -208,11 +254,15 @@ export function relaxOverlaps(
 	const gap = options.gap ?? NODE_GAP;
 	const iterations = options.iterations ?? defaultRelaxIterations(count);
 	const pairBudget = options.maxPairChecks ?? MAX_PAIR_CHECKS;
+	const labelExtents = options.labelExtents;
 
 	const xs = new Float64Array(count);
 	const ys = new Float64Array(count);
 	const radii = new Float64Array(count);
+	const extents = labelExtents ? new Float64Array(count) : null;
+	const pinned = new Uint8Array(count);
 	let maxRadius = 0;
+	let maxExtent = 0;
 
 	for (let index = 0; index < count; index += 1) {
 		const nodeId = nodeIds[index];
@@ -220,9 +270,16 @@ export function relaxOverlaps(
 		ys[index] = readCoordinate(graph, nodeId, "y");
 		radii[index] = readRadius(graph, nodeId);
 		maxRadius = Math.max(maxRadius, radii[index]);
+		if (extents && labelExtents) {
+			extents[index] = labelExtents.get(nodeId) ?? 0;
+			maxExtent = Math.max(maxExtent, extents[index]);
+		}
+		// A hand-placed node holds its ground; its overlaps resolve by moving the
+		// other node the full distance instead.
+		if (graph.getNodeAttribute(nodeId, "pinned") === true) pinned[index] = 1;
 	}
 
-	const cellSize = 2 * maxRadius + gap;
+	const cellSize = 2 * maxRadius + gap + maxExtent;
 	const buckets = new Map<number, number[]>();
 	let performed = 0;
 
@@ -253,31 +310,61 @@ export function relaxOverlaps(
 					for (const j of bucket) {
 						if (j <= i) continue;
 						checks += 1;
+						// Two pinned nodes hold whatever positions the user gave them.
+						const weightI = pinned[i] ? 0 : 1;
+						const weightJ = pinned[j] ? 0 : 1;
+						const weightSum = weightI + weightJ;
+						if (weightSum === 0) continue;
 
 						const deltaX = xs[j] - xs[i];
 						const deltaY = ys[j] - ys[i];
 						const minDistance = radii[i] + radii[j] + gap;
 						const squared = deltaX * deltaX + deltaY * deltaY;
-						if (squared >= minDistance * minDistance) continue;
 
-						const distance = Math.sqrt(squared);
-						let normalX: number;
-						let normalY: number;
-						if (distance < 1e-6) {
-							const angle = ((hashLayoutSeed(`${i}:${j}`) % 3600) / 3600) * TAU;
-							normalX = Math.cos(angle);
-							normalY = Math.sin(angle);
-						} else {
-							normalX = deltaX / distance;
-							normalY = deltaY / distance;
+						if (squared < minDistance * minDistance) {
+							const distance = Math.sqrt(squared);
+							let normalX: number;
+							let normalY: number;
+							if (distance < 1e-6) {
+								const angle =
+									((hashLayoutSeed(`${i}:${j}`) % 3600) / 3600) * TAU;
+								normalX = Math.cos(angle);
+								normalY = Math.sin(angle);
+							} else {
+								normalX = deltaX / distance;
+								normalY = deltaY / distance;
+							}
+
+							const shift = (minDistance - distance) * RELAX_STRENGTH;
+							xs[i] -= normalX * shift * (weightI / weightSum);
+							ys[i] -= normalY * shift * (weightI / weightSum);
+							xs[j] += normalX * shift * (weightJ / weightSum);
+							ys[j] += normalY * shift * (weightJ / weightSum);
+							resolved += 1;
+							continue;
 						}
 
-						const shift = (minDistance - distance) * RELAX_STRENGTH * 0.5;
-						xs[i] -= normalX * shift;
-						ys[i] -= normalY * shift;
-						xs[j] += normalX * shift;
-						ys[j] += normalY * shift;
-						resolved += 1;
+						// Captions extend to the right, so a node also defends that strip
+						// against neighbours sitting on its centre line.
+						if (extents && Math.abs(deltaY) < LABEL_BAND) {
+							if (deltaX > 0 && extents[i] > 0) {
+								const required = radii[i] + extents[i] + radii[j] + gap;
+								if (deltaX < required) {
+									const shift = (required - deltaX) * LABEL_RELAX_STRENGTH;
+									xs[i] -= shift * (weightI / weightSum);
+									xs[j] += shift * (weightJ / weightSum);
+									resolved += 1;
+								}
+							} else if (deltaX < 0 && extents[j] > 0) {
+								const required = radii[j] + extents[j] + radii[i] + gap;
+								if (-deltaX < required) {
+									const shift = (required + deltaX) * LABEL_RELAX_STRENGTH;
+									xs[j] -= shift * (weightJ / weightSum);
+									xs[i] += shift * (weightI / weightSum);
+									resolved += 1;
+								}
+							}
+						}
 					}
 				}
 			}
@@ -600,6 +687,14 @@ export interface ClusterLayoutOptions {
 	clusterGap?: number;
 	padding?: number;
 	relaxIterations?: number;
+	/** Caption widths, so per-group relaxation clears label strips too. */
+	labelExtents?: ReadonlyMap<string, number>;
+	/**
+	 * A short whole-graph pass after packing. The per-group passes cannot see a
+	 * caption crossing into the neighbouring disc; a few gentle global rounds
+	 * can, without smearing the group boundaries a long one would.
+	 */
+	globalRelaxIterations?: number;
 	onProgress?: (fraction: number) => void;
 	/** Hands the frame back so progress paints and the page stays responsive. */
 	yieldToFrame?: () => Promise<void>;
@@ -641,6 +736,7 @@ export function layoutCluster(
 	relaxOverlaps(graph, memberIds, {
 		gap,
 		iterations: options.relaxIterations ?? CLUSTER_RELAX_ITERATIONS,
+		labelExtents: options.labelExtents,
 	});
 
 	const bounds = getLayoutBounds(graph, memberIds);
@@ -704,5 +800,304 @@ export async function applyClusterLayout(
 		placed.push(...memberIds);
 	}
 
+	const globalIterations = options.globalRelaxIterations ?? 0;
+	if (globalIterations > 0 && placed.length > 1) {
+		relaxOverlaps(graph, placed, {
+			gap: options.gap ?? NODE_GAP,
+			iterations: globalIterations,
+			labelExtents: options.labelExtents,
+		});
+	}
+
 	return getLayoutBounds(graph, placed);
+}
+
+/**
+ * How a scene is arranged. `auto` is the build-time pipeline (grouping, then
+ * force); the rest are deterministic arrangements applied to the live graph.
+ */
+export type GraphLayoutMode =
+	| "auto"
+	| "force"
+	| "hierarchy"
+	| "radial"
+	| "circular"
+	| "grid";
+
+function labelOf(graph: Graph, nodeId: string): string {
+	const label = graph.getNodeAttribute(nodeId, "nodeLabel");
+	return typeof label === "string" ? label : "";
+}
+
+export interface CircularLayoutOptions {
+	gap?: number;
+	centerX?: number;
+	centerY?: number;
+}
+
+/**
+ * One ring, grouped by object type so same-typed runs sit together. Captions
+ * point outward-ish to the right, so the ring is pitched for label room.
+ */
+export function placeCircularLayout(
+	graph: Graph,
+	nodeIds: readonly string[],
+	options: CircularLayoutOptions = {},
+): LayoutBounds | null {
+	const members = nodeIds.filter((nodeId) => graph.hasNode(nodeId));
+	if (members.length === 0) return null;
+
+	const gap = options.gap ?? NODE_GAP;
+	const centerX = options.centerX ?? 0;
+	const centerY = options.centerY ?? 0;
+	const ordered = [...members].sort(
+		(a, b) =>
+			labelOf(graph, a).localeCompare(labelOf(graph, b)) ||
+			graph.degree(b) - graph.degree(a) ||
+			compareIds(a, b),
+	);
+
+	const pitch = (2 * maxRadiusOf(graph, ordered) + gap) * 1.6;
+	const radius = Math.max(pitch, (ordered.length * pitch) / TAU);
+
+	for (let index = 0; index < ordered.length; index += 1) {
+		const angle = (index / ordered.length) * TAU - Math.PI / 2;
+		graph.setNodeAttribute(
+			ordered[index],
+			"x",
+			centerX + Math.cos(angle) * radius,
+		);
+		graph.setNodeAttribute(
+			ordered[index],
+			"y",
+			centerY + Math.sin(angle) * radius,
+		);
+	}
+
+	return getLayoutBounds(graph, ordered);
+}
+
+export interface RadialLayoutOptions {
+	/** Object at the centre; defaults to the best-connected node in the set. */
+	centerId?: string | null;
+	gap?: number;
+}
+
+/**
+ * Concentric rings by hop distance from a chosen centre — the layout for
+ * "everything about this one object". Subtrees stay angularly grouped because
+ * each ring is ordered by its parents' angles.
+ */
+export function placeRadialLayout(
+	graph: Graph,
+	nodeIds: readonly string[],
+	options: RadialLayoutOptions = {},
+): LayoutBounds | null {
+	const members = nodeIds.filter((nodeId) => graph.hasNode(nodeId));
+	if (members.length === 0) return null;
+	const memberSet = new Set(members);
+
+	let center =
+		options.centerId && memberSet.has(options.centerId)
+			? options.centerId
+			: null;
+	if (!center) {
+		center = members.reduce((best, candidate) =>
+			graph.degree(candidate) > graph.degree(best) ? candidate : best,
+		);
+	}
+
+	const gap = options.gap ?? NODE_GAP;
+	const depth = new Map<string, number>([[center, 0]]);
+	const parent = new Map<string, string>();
+	let frontier = [center];
+	while (frontier.length > 0) {
+		const next: string[] = [];
+		for (const nodeId of frontier) {
+			for (const neighbor of graph.neighbors(nodeId)) {
+				if (!memberSet.has(neighbor) || depth.has(neighbor)) continue;
+				depth.set(neighbor, (depth.get(nodeId) ?? 0) + 1);
+				parent.set(neighbor, nodeId);
+				next.push(neighbor);
+			}
+		}
+		frontier = next;
+	}
+
+	// Disconnected members join an outermost ring rather than vanishing.
+	let maxDepth = 0;
+	for (const value of depth.values()) maxDepth = Math.max(maxDepth, value);
+	const detachedDepth = maxDepth + 1;
+	for (const nodeId of members) {
+		if (!depth.has(nodeId)) depth.set(nodeId, detachedDepth);
+	}
+
+	const rings = new Map<number, string[]>();
+	for (const nodeId of members) {
+		const ring = depth.get(nodeId) ?? detachedDepth;
+		const bucket = rings.get(ring);
+		if (bucket) bucket.push(nodeId);
+		else rings.set(ring, [nodeId]);
+	}
+
+	const pitch = 2 * maxRadiusOf(graph, members) + gap;
+	const ringGap = pitch * 2.4;
+	graph.setNodeAttribute(center, "x", 0);
+	graph.setNodeAttribute(center, "y", 0);
+
+	const angleOf = new Map<string, number>([[center, 0]]);
+	let previousRadius = readRadius(graph, center) + gap;
+
+	for (let ring = 1; ring <= detachedDepth; ring += 1) {
+		const bucket = rings.get(ring);
+		if (!bucket || bucket.length === 0) continue;
+
+		// Children follow their parents' bearings, so branches read as wedges.
+		const ordered = [...bucket].sort((a, b) => {
+			const angleA = angleOf.get(parent.get(a) ?? "") ?? 0;
+			const angleB = angleOf.get(parent.get(b) ?? "") ?? 0;
+			return (
+				angleA - angleB || graph.degree(b) - graph.degree(a) || compareIds(a, b)
+			);
+		});
+
+		const capacityRadius = (ordered.length * pitch * 1.4) / TAU;
+		const radius = Math.max(previousRadius + ringGap, capacityRadius);
+		previousRadius = radius;
+
+		const phase = ((hashLayoutSeed(`radial:${ring}`) % 3600) / 3600) * TAU;
+		for (let slot = 0; slot < ordered.length; slot += 1) {
+			const angle = phase + (slot / ordered.length) * TAU;
+			angleOf.set(ordered[slot], angle);
+			graph.setNodeAttribute(ordered[slot], "x", Math.cos(angle) * radius);
+			graph.setNodeAttribute(ordered[slot], "y", Math.sin(angle) * radius);
+		}
+	}
+
+	return getLayoutBounds(graph, members);
+}
+
+export interface HierarchyLayoutOptions {
+	gap?: number;
+}
+
+/**
+ * Left-to-right layers by hop distance from the roots — the natural reading
+ * for directed ontologies. One barycenter pass per layer keeps children near
+ * their parents without the cost of full crossing minimisation.
+ */
+export function placeHierarchyLayout(
+	graph: Graph,
+	nodeIds: readonly string[],
+	options: HierarchyLayoutOptions = {},
+): LayoutBounds | null {
+	const members = nodeIds.filter((nodeId) => graph.hasNode(nodeId));
+	if (members.length === 0) return null;
+	const memberSet = new Set(members);
+
+	const inDegree = new Map<string, number>();
+	const outNeighbors = new Map<string, string[]>();
+	for (const nodeId of members) inDegree.set(nodeId, 0);
+	graph.forEachEdge((_edge, _attrs, source, target) => {
+		if (!memberSet.has(source) || !memberSet.has(target) || source === target)
+			return;
+		inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+		const bucket = outNeighbors.get(source);
+		if (bucket) bucket.push(target);
+		else outNeighbors.set(source, [target]);
+	});
+
+	const depth = new Map<string, number>();
+	const roots = members
+		.filter((nodeId) => (inDegree.get(nodeId) ?? 0) === 0)
+		.sort((a, b) => graph.degree(b) - graph.degree(a) || compareIds(a, b));
+
+	let frontier: string[] = [];
+	for (const root of roots) {
+		depth.set(root, 0);
+		frontier.push(root);
+	}
+	// A cyclic component has no true root; its best-connected node stands in.
+	if (frontier.length === 0) {
+		const anchor = members.reduce((best, candidate) =>
+			graph.degree(candidate) > graph.degree(best) ? candidate : best,
+		);
+		depth.set(anchor, 0);
+		frontier = [anchor];
+	}
+
+	while (frontier.length > 0) {
+		const next: string[] = [];
+		for (const nodeId of frontier) {
+			const nodeDepth = depth.get(nodeId) ?? 0;
+			for (const neighbor of outNeighbors.get(nodeId) ?? []) {
+				if (depth.has(neighbor)) continue;
+				depth.set(neighbor, nodeDepth + 1);
+				next.push(neighbor);
+			}
+			// Follow undirected adjacency too, or a child pointing back up would
+			// strand everything behind it.
+			for (const neighbor of graph.neighbors(nodeId)) {
+				if (!memberSet.has(neighbor) || depth.has(neighbor)) continue;
+				depth.set(neighbor, nodeDepth + 1);
+				next.push(neighbor);
+			}
+		}
+		frontier = next;
+	}
+	for (const nodeId of members) {
+		if (!depth.has(nodeId)) depth.set(nodeId, 0);
+	}
+
+	const layers = new Map<number, string[]>();
+	let maxDepth = 0;
+	for (const nodeId of members) {
+		const nodeDepth = depth.get(nodeId) ?? 0;
+		maxDepth = Math.max(maxDepth, nodeDepth);
+		const bucket = layers.get(nodeDepth);
+		if (bucket) bucket.push(nodeId);
+		else layers.set(nodeDepth, [nodeId]);
+	}
+
+	const gap = options.gap ?? NODE_GAP;
+	const rowPitch = 2 * maxRadiusOf(graph, members) + gap;
+	const columnPitch = rowPitch * LABEL_PITCH * 1.6;
+
+	const slotOf = new Map<string, number>();
+
+	for (let layerIndex = 0; layerIndex <= maxDepth; layerIndex += 1) {
+		const layer = layers.get(layerIndex);
+		if (!layer) continue;
+
+		const ordered = [...layer].sort((a, b) => {
+			if (layerIndex === 0) {
+				return graph.degree(b) - graph.degree(a) || compareIds(a, b);
+			}
+			const barycenter = (nodeId: string): number => {
+				let total = 0;
+				let found = 0;
+				for (const neighbor of graph.neighbors(nodeId)) {
+					const slot = slotOf.get(neighbor);
+					if (slot === undefined) continue;
+					total += slot;
+					found += 1;
+				}
+				return found > 0 ? total / found : Number.MAX_SAFE_INTEGER;
+			};
+			return (
+				barycenter(a) - barycenter(b) ||
+				graph.degree(b) - graph.degree(a) ||
+				compareIds(a, b)
+			);
+		});
+
+		const startY = -((ordered.length - 1) * rowPitch) / 2;
+		for (let slot = 0; slot < ordered.length; slot += 1) {
+			slotOf.set(ordered[slot], slot);
+			graph.setNodeAttribute(ordered[slot], "x", layerIndex * columnPitch);
+			graph.setNodeAttribute(ordered[slot], "y", startY + slot * rowPitch);
+		}
+	}
+
+	return getLayoutBounds(graph, members);
 }

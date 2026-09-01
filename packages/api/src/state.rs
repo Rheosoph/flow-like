@@ -392,7 +392,8 @@ pub struct State {
     pub meta_bucket: Arc<FlowLikeStore>,
     /// Positive cache for the pre-dispatch compiled-artifact check, keyed by
     /// (app, board, version|etag, registry fingerprint). Entries are
-    /// content-addressed, so they never go stale — TTL only bounds memory.
+    /// content-addressed. ETag-bound dispatches revalidate object existence
+    /// because lifecycle cleanup can remove an artifact before this entry.
     pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
     /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
     /// like `compiled_artifact_cache`, so entries never go stale.
@@ -430,14 +431,6 @@ pub struct State {
     /// invocation-unique key to collapse automatic retries into a single run.
     pub trigger_idempotency:
         moka::sync::Cache<String, crate::routes::sink::trigger::ServiceTriggerResponse>,
-    /// Cached WASM package resolution — bundle of presigned URLs that the
-    /// executor uses to download `.cwasm` artifacts. Keyed by `app_id`.
-    /// Invalidated when an app's package list changes; the TTL is set well
-    /// below the URL signing duration so signatures are always fresh.
-    pub wasm_resolve_cache: moka::sync::Cache<
-        String,
-        Arc<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
-    >,
 }
 
 impl State {
@@ -946,24 +939,7 @@ impl State {
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(15 * 60))
                 .build(),
-            wasm_resolve_cache: moka::sync::Cache::builder()
-                .max_capacity(1_000)
-                // Presigned URLs are signed for 1h. Cap our cache at half of
-                // that so callers always receive a URL with ≥30 min remaining.
-                .time_to_live(Duration::from_secs(30 * 60))
-                .time_to_idle(Duration::from_secs(10 * 60))
-                .build(),
         }
-    }
-
-    /// Invalidate the cached WASM package resolution for an app. Call this
-    /// when the app's package list changes (add/update/delete).
-    ///
-    /// `app_wasm_nodes_cache` is deliberately absent: its key carries a digest of the app's package
-    /// pins, so a changed package list misses on its own — including on the replicas this call
-    /// never reaches.
-    pub fn invalidate_wasm_resolve(&self, app_id: &str) {
-        self.wasm_resolve_cache.invalidate(app_id);
     }
 
     fn openid_validation_settings(&self) -> Result<OpenIdValidationSettings> {
@@ -1152,7 +1128,10 @@ impl State {
     }
 
     /// The process-wide master `FlowLikeState`, built lazily and rotated by `state_cache`'s TTL.
-    async fn master_state(&self, state: &AppState) -> flow_like_types::Result<Arc<FlowLikeState>> {
+    pub(crate) async fn master_state(
+        &self,
+        state: &AppState,
+    ) -> flow_like_types::Result<Arc<FlowLikeState>> {
         if let Some(app_state) = self.state_cache.get("master") {
             return Ok(app_state);
         }

@@ -127,6 +127,7 @@ export type { SinkType } from "./backend-state/sink-state";
 
 export type {
 	IGetPageOptions,
+	IPageBootstrap,
 	IPage,
 	IWidgetRef,
 	PageContent,
@@ -167,6 +168,7 @@ export type {
 	IGroupPublicationRequest,
 	IGroupPublicationStatus,
 	IMemberReadiness,
+	IOwnRole,
 	IUpdateGroupPayload,
 	IBackendRole,
 	IInvite,

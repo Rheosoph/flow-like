@@ -10,12 +10,15 @@ use crate::{
     entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
     error::ApiError,
     execution::{
+        ExecutionClaims, PageActionSealingContext,
         state::{
-            CreateEventInput, EventQuery, ExecutionStateStore, RunLeaseClaim,
-            RunMode as StateRunMode, RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
+            CreateEventInput, EventQuery, ExecutionRunRecord, ExecutionStateStore,
+            PostgresStateStore, RunLeaseClaim, RunMode as StateRunMode,
+            RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
         },
         verify_execution_jwt, verify_user_jwt,
     },
+    routes::app::prerun_shared::load_exact_prerun_manifest,
     state::AppState,
 };
 use axum::{
@@ -26,7 +29,7 @@ use axum::{
 use flow_like_types::{anyhow, create_id, tokio};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use utoipa::{IntoParams, ToSchema};
 
 // ============================================================================
@@ -68,8 +71,8 @@ pub struct PushEventsRequest {
 /// Single event input from executor
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct ExecutionEventInput {
-    /// Stable executor-generated identity and sequence. Both are mandatory in
-    /// strict queue mode so HTTP retries are idempotent.
+    /// Stable executor-generated identity and sequence. New executors send
+    /// both in every mode; older non-queue executors may omit both.
     pub id: Option<String>,
     pub sequence: Option<i32>,
     /// Event type (log, progress, output, error, chunk, etc.)
@@ -141,8 +144,8 @@ pub async fn report_progress(
     let lease_identity = queue_lease_identity(body.job_id.as_deref(), body.lease_token.as_deref())?;
 
     // Running is the atomic claim/renew operation for strict queue workers.
-    // The Cosmos ETag write is the serialization point; a competing delivery
-    // receives Busy until expiry, then may take over with a new token.
+    // The selected store's conditional write is the serialization point; a
+    // competing delivery receives Busy until expiry.
     if matches!(&body.status, Some(ProgressStatus::Running))
         && let Some((job_id, lease_token)) = lease_identity
     {
@@ -165,24 +168,30 @@ pub async fn report_progress(
             .await
             .map_err(map_lease_error)?;
         return Ok(Json(match claim {
-            RunLeaseClaim::Acquired { run, expires_at } => ProgressUpdateResponse {
-                accepted: true,
-                status: format!("{:?}", run.status),
-                lease_acquired: Some(true),
-                lease_expires_at: Some(expires_at),
-            },
+            RunLeaseClaim::Acquired { run, expires_at } => {
+                mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
+                ProgressUpdateResponse {
+                    accepted: true,
+                    status: format!("{:?}", run.status),
+                    lease_acquired: Some(true),
+                    lease_expires_at: Some(expires_at),
+                }
+            }
             RunLeaseClaim::Busy { run, expires_at } => ProgressUpdateResponse {
                 accepted: false,
                 status: format!("{:?}", run.status),
                 lease_acquired: Some(false),
                 lease_expires_at: Some(expires_at),
             },
-            RunLeaseClaim::Terminal { run } => ProgressUpdateResponse {
-                accepted: false,
-                status: format!("{:?}", run.status),
-                lease_acquired: Some(false),
-                lease_expires_at: None,
-            },
+            RunLeaseClaim::Terminal { run } => {
+                mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
+                ProgressUpdateResponse {
+                    accepted: false,
+                    status: format!("{:?}", run.status),
+                    lease_acquired: Some(false),
+                    lease_expires_at: None,
+                }
+            }
         }));
     }
     if lease_identity.is_some() && body.lease_duration_ms.is_some() {
@@ -197,20 +206,20 @@ pub async fn report_progress(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get run: {}", e)))?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    // A Cosmos-backed queued run is the Azure Service Bus contract. Once it
-    // uses that backend, omitting ownership proof must never downgrade the
-    // request to the legacy best-effort path.
+    // Lease-backed queue workers must never downgrade an ownership-protected
+    // callback to the legacy best-effort path.
     if lease_identity.is_none()
-        && store.backend_name() == "cosmos"
+        && backend_requires_queue_lease(store.backend_name())
         && run.mode == StateRunMode::Queue
     {
         return Err(ApiError::bad_request(
-            "Cosmos queue progress requires job_id and lease_token",
+            "queue progress requires job_id and lease_token for this state backend",
         ));
     }
 
     // Don't accept updates for terminal states
     if run.status.is_terminal() {
+        mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
         return Ok(Json(ProgressUpdateResponse {
             accepted: false,
             status: format!("{:?}", run.status),
@@ -283,6 +292,8 @@ pub async fn report_progress(
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?
     };
 
+    mirror_run_update_to_sql(&state, store.as_ref(), &updated).await?;
+
     if updated.status.is_terminal() {
         let duration_us = match (updated.started_at, updated.completed_at) {
             (Some(start), Some(end)) => (end - start) * 1000,
@@ -320,6 +331,26 @@ pub async fn report_progress(
     }))
 }
 
+async fn mirror_run_update_to_sql(
+    state: &AppState,
+    store: &dyn ExecutionStateStore,
+    run: &ExecutionRunRecord,
+) -> Result<(), ApiError> {
+    if store.backend_name() == "postgres" {
+        return Ok(());
+    }
+
+    PostgresStateStore::new(Arc::new(state.db.clone()))
+        .mirror_run_update(run)
+        .await
+        .map_err(|error| {
+            ApiError::internal_error(anyhow!(
+                "Failed to mirror run '{}' into canonical SQL: {error}",
+                run.id
+            ))
+        })
+}
+
 /// POST /execution/events
 ///
 /// Push streaming events from executor. Requires executor JWT.
@@ -340,7 +371,7 @@ pub async fn report_progress(
 pub async fn push_events(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<PushEventsRequest>,
+    Json(mut body): Json<PushEventsRequest>,
 ) -> Result<Json<PushEventsResponse>, ApiError> {
     let token = extract_bearer_token(&headers)?;
 
@@ -360,7 +391,7 @@ pub async fn push_events(
             .validate_run_lease(&claims.run_id, &claims.app_id, job_id, lease_token)
             .await
             .map_err(map_lease_error)?;
-    } else if store.backend_name() == "cosmos" {
+    } else if backend_requires_queue_lease(store.backend_name()) {
         let run = store
             .get_run_for_app(&claims.run_id, &claims.app_id)
             .await
@@ -368,49 +399,26 @@ pub async fn push_events(
             .ok_or(ApiError::NOT_FOUND)?;
         if run.mode == StateRunMode::Queue {
             return Err(ApiError::bad_request(
-                "Cosmos queue events require job_id and lease_token",
+                "queue events require job_id and lease_token for this state backend",
             ));
         }
     }
 
+    // Executors are allowed to produce A2UI, but they do not hold the API's
+    // Page-action signing key. Resolve the board identity from the signed
+    // executor claims and replace every executable route before any payload
+    // crosses the persistence boundary.
+    if let Some(context) = page_action_sealing_context(&state, &claims).await? {
+        seal_page_event_payloads(&context, &mut body.events);
+    }
+
     let expires_at = chrono::Utc::now().timestamp_millis() + 24 * 60 * 60 * 1000; // 24 hours
-    let (events, next_seq) =
-        if lease_identity.is_some() {
-            let mut previous_sequence = None;
-            let mut events = Vec::with_capacity(body.events.len());
-            for event in &body.events {
-                let id = event.id.as_deref().ok_or_else(|| {
-                    ApiError::bad_request("strict queue events require a stable id")
-                })?;
-                validate_lease_component("event id", id)?;
-                let sequence = event.sequence.ok_or_else(|| {
-                    ApiError::bad_request("strict queue events require a stable sequence")
-                })?;
-                if sequence < 0 || previous_sequence.is_some_and(|previous| sequence <= previous) {
-                    return Err(ApiError::bad_request(
-                        "strict queue event sequences must be non-negative and strictly increasing",
-                    ));
-                }
-                let canonical_id = execution_event_id(&claims.run_id, sequence);
-                if id != canonical_id {
-                    return Err(ApiError::bad_request(
-                        "strict queue event id does not match its run and sequence",
-                    ));
-                }
-                previous_sequence = Some(sequence);
-                events.push(CreateEventInput {
-                    id: id.to_string(),
-                    run_id: claims.run_id.clone(),
-                    sequence,
-                    event_type: event.event_type.clone(),
-                    payload: event.payload.clone(),
-                    expires_at,
-                });
-            }
-            let next = previous_sequence.map_or(0, |sequence| sequence.saturating_add(1));
-            (events, next)
-        } else {
-            // Preserve the legacy allocation contract for non-queue runtimes.
+    let identity_mode = event_identity_mode(&body.events, lease_identity.is_some())?;
+    let (events, next_seq) = match identity_mode {
+        EventIdentityMode::Stable => stable_event_inputs(&claims.run_id, &body.events, expires_at)?,
+        EventIdentityMode::Legacy => {
+            // Old executors omitted identity. Keep their allocation contract,
+            // while new executors avoid this cross-instance read/max/write race.
             let max_seq = store.get_max_sequence(&claims.run_id).await.map_err(|e| {
                 ApiError::internal_error(anyhow!("Failed to get max sequence: {}", e))
             })?;
@@ -427,12 +435,13 @@ pub async fn push_events(
                         payload: event.payload.clone(),
                         expires_at,
                     };
-                    next += 1;
+                    next = next.saturating_add(1);
                     input
                 })
                 .collect();
             (events, next)
-        };
+        }
+    };
 
     let accepted = store
         .push_events(events)
@@ -480,6 +489,17 @@ pub struct ExecutionEventOutput {
     pub created_at: String,
 }
 
+fn poll_after_sequence(after_sequence: Option<i32>) -> i32 {
+    // Redis and DynamoDB turn this exclusive cursor into an inclusive lower
+    // bound by adding one. Keep the public cursor inside that safe range and
+    // treat older negative sentinels like the documented initial value.
+    after_sequence.unwrap_or(-1).clamp(-1, i32::MAX - 1)
+}
+
+fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
+    after_sequence.is_some()
+}
+
 /// GET /execution/poll
 ///
 /// Long poll for run status and events. Requires user JWT in Authorization header.
@@ -512,7 +532,8 @@ pub async fn poll_status(
     let store = get_state_store(&state).await?;
 
     let timeout = params.timeout.unwrap_or(10).min(30);
-    let after_seq = params.after_sequence.unwrap_or(0);
+    let after_seq = poll_after_sequence(params.after_sequence);
+    let cursor_manages_delivery = cursor_manages_delivery(params.after_sequence);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
 
     loop {
@@ -523,12 +544,15 @@ pub async fn poll_status(
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to get run: {}", e)))?
             .ok_or(ApiError::NOT_FOUND)?;
 
-        // Get undelivered events
+        // Get events after the client's acknowledged sequence.
         let events = store
             .get_events(EventQuery {
                 run_id: claims.run_id.clone(),
                 after_sequence: Some(after_seq),
-                only_undelivered: true,
+                // Cursor-aware clients advance only after receiving the
+                // response. Returning previously delivered events after the
+                // cursor makes a dropped Lambda response safely replayable.
+                only_undelivered: !cursor_manages_delivery,
                 limit: Some(100),
             })
             .await
@@ -537,10 +561,12 @@ pub async fn poll_status(
         // Return immediately if terminal state or we have events
         let is_terminal = run.status.is_terminal();
         if is_terminal || !events.is_empty() || std::time::Instant::now() >= deadline {
-            // Mark events as delivered
-            if !events.is_empty() {
+            // Legacy clients have no cursor, so retain their delivery marker.
+            if !events.is_empty() && !cursor_manages_delivery {
                 let event_ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
-                let _ = store.mark_events_delivered(&event_ids).await;
+                let _ = store
+                    .mark_events_delivered(&claims.run_id, &event_ids)
+                    .await;
             }
 
             return Ok(Json(PollResponse {
@@ -713,6 +739,202 @@ fn execution_claim_user_id(subject: &str) -> Option<&str> {
 // Helpers
 // ============================================================================
 
+async fn page_action_sealing_context(
+    state: &AppState,
+    claims: &ExecutionClaims,
+) -> Result<Option<PageActionSealingContext>, ApiError> {
+    let Some(page) = claims.page_execution.as_ref() else {
+        return Ok(None);
+    };
+
+    let event_id = claims
+        .event_id
+        .as_deref()
+        .filter(|event_id| !event_id.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request("A Page execution token must identify its source Event")
+        })?;
+    if claims.app_id.trim().is_empty()
+        || claims.board_id.trim().is_empty()
+        || claims.run_id.trim().is_empty()
+        || page.page_id.trim().is_empty()
+        || page.manifest_revision.trim().is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "The Page execution token has an incomplete sealing context",
+        ));
+    }
+
+    let board_etag = page
+        .board_etag
+        .as_deref()
+        .map(str::trim)
+        .filter(|etag| !etag.is_empty());
+    if !matches!(
+        (page.board_version, board_etag),
+        (Some(_), None) | (None, Some(_))
+    ) {
+        return Err(ApiError::bad_request(
+            "The Page execution token has an invalid board selector",
+        ));
+    }
+
+    let authority_revision = page
+        .entry_authority_revision
+        .as_deref()
+        .map(str::trim)
+        .filter(|revision| !revision.is_empty());
+    let allowed_entry_nodes = if let Some(authority_revision) = authority_revision {
+        let manifest = load_exact_prerun_manifest(
+            state,
+            &claims.app_id,
+            &claims.board_id,
+            page.board_version,
+            board_etag,
+        )
+        .await?;
+        if manifest.signature != authority_revision
+            || manifest.entry_node_ids.is_empty()
+            || manifest
+                .entry_node_ids
+                .iter()
+                .any(|node_id| node_id.trim().is_empty())
+        {
+            return Err(ApiError::bad_request(
+                "The Page execution token has stale or invalid entry-node authority",
+            ));
+        }
+        let allowed = manifest
+            .entry_node_ids
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        if page
+            .target_node_id
+            .as_deref()
+            .is_none_or(|target| !allowed.contains(target))
+        {
+            return Err(ApiError::bad_request(
+                "The Page execution token target is outside its entry-node authority",
+            ));
+        }
+        allowed
+    } else if page.allowed_entry_node_ids.is_empty() && page.board_version.is_some() {
+        // Compatibility for pinned Page executor JWTs minted before the
+        // signed allow-list field existed. Pinned boards are immutable, so
+        // reloading the selected version reproduces the original authority.
+        let cached = state
+            .master_board_shared(&claims.app_id, &claims.board_id, state, page.board_version)
+            .await
+            .map_err(|error| {
+                tracing::error!(
+                    error = %error,
+                    app_id = %claims.app_id,
+                    board_id = %claims.board_id,
+                    version = ?page.board_version,
+                    "Failed to load the pinned board for Page action sealing"
+                );
+                ApiError::internal_error(anyhow!(
+                    "Failed to validate the Page execution board context"
+                ))
+            })?;
+        let board = cached.board.as_ref();
+        if board.id != claims.board_id
+            || page
+                .board_version
+                .is_some_and(|expected| board.version != expected)
+        {
+            return Err(ApiError::bad_request(
+                "The Page execution board context is invalid",
+            ));
+        }
+        board
+            .nodes
+            .values()
+            .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+            .filter(|node| node.start == Some(true))
+            .map(|node| node.id.clone())
+            .collect::<HashSet<_>>()
+    } else if page.allowed_entry_node_ids.is_empty() {
+        return Err(ApiError::bad_request(
+            "The Latest Page execution token is missing its entry-node authority",
+        ));
+    } else {
+        if page
+            .allowed_entry_node_ids
+            .iter()
+            .any(|node_id| node_id.trim().is_empty())
+        {
+            return Err(ApiError::bad_request(
+                "The Page execution token has an invalid entry-node authority",
+            ));
+        }
+        let allowed = page
+            .allowed_entry_node_ids
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        if page
+            .target_node_id
+            .as_deref()
+            .is_some_and(|target| !allowed.contains(target))
+        {
+            return Err(ApiError::bad_request(
+                "The Page execution token target is outside its entry-node authority",
+            ));
+        }
+        allowed
+    };
+
+    Ok(Some(PageActionSealingContext {
+        sub: claims.sub.clone(),
+        technical_user_id: claims.technical_user_id.clone(),
+        source_app_id: claims.app_id.clone(),
+        source_event_id: event_id.to_string(),
+        source_page_id: page.page_id.clone(),
+        source_manifest_revision: page.manifest_revision.clone(),
+        target_app_id: claims.app_id.clone(),
+        target_board_id: claims.board_id.clone(),
+        target_board_version: page.board_version,
+        target_board_etag: page.board_etag.clone(),
+        wasm_authority_revision: page.wasm_authority_revision.clone(),
+        origin_run_id: claims.run_id.clone(),
+        allowed_entry_nodes,
+    }))
+}
+
+fn seal_page_event_payloads(
+    context: &PageActionSealingContext,
+    events: &mut [ExecutionEventInput],
+) {
+    for (batch_index, event) in events.iter_mut().enumerate() {
+        let message_id = page_event_message_id(event, batch_index);
+        let report = context.seal_payload(&event.event_type, &message_id, &mut event.payload);
+        if report.sealed > 0 || report.rejected > 0 {
+            tracing::debug!(
+                message_id,
+                sealed = report.sealed,
+                rejected = report.rejected,
+                "Sealed dynamic Page actions in an executor event"
+            );
+        }
+    }
+}
+
+fn page_event_message_id(event: &ExecutionEventInput, batch_index: usize) -> String {
+    event
+        .id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            event
+                .sequence
+                .map(|sequence| format!("sequence:{sequence}"))
+        })
+        .unwrap_or_else(|| format!("batch-index:{batch_index}"))
+}
+
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     crate::middleware::jwt::viewer_authorization(headers)
         .ok_or_else(|| ApiError::bad_request("Missing Authorization header".to_string()))?
@@ -756,12 +978,99 @@ fn execution_event_id(run_id: &str, sequence: i32) -> String {
     format!("evt-{}", digest.to_hex())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EventIdentityMode {
+    Stable,
+    Legacy,
+}
+
+fn event_identity_mode(
+    events: &[ExecutionEventInput],
+    stable_required: bool,
+) -> Result<EventIdentityMode, ApiError> {
+    let mut saw_stable = false;
+    let mut saw_legacy = false;
+    for event in events {
+        match (&event.id, event.sequence) {
+            (Some(_), Some(_)) => saw_stable = true,
+            (None, None) => saw_legacy = true,
+            _ => {
+                return Err(ApiError::bad_request(
+                    "execution event id and sequence must be supplied together",
+                ));
+            }
+        }
+    }
+
+    if saw_stable && saw_legacy {
+        return Err(ApiError::bad_request(
+            "an execution event batch cannot mix stable and legacy identities",
+        ));
+    }
+    if stable_required && saw_legacy {
+        return Err(ApiError::bad_request(
+            "strict queue events require stable ids and sequences",
+        ));
+    }
+
+    if saw_stable || stable_required {
+        Ok(EventIdentityMode::Stable)
+    } else {
+        Ok(EventIdentityMode::Legacy)
+    }
+}
+
+fn stable_event_inputs(
+    run_id: &str,
+    events: &[ExecutionEventInput],
+    expires_at: i64,
+) -> Result<(Vec<CreateEventInput>, i32), ApiError> {
+    let mut previous_sequence = None;
+    let mut inputs = Vec::with_capacity(events.len());
+    for event in events {
+        let id = event
+            .id
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("execution events require a stable id"))?;
+        validate_lease_component("event id", id)?;
+        let sequence = event
+            .sequence
+            .ok_or_else(|| ApiError::bad_request("execution events require a stable sequence"))?;
+        if sequence < 0 || previous_sequence.is_some_and(|previous| sequence <= previous) {
+            return Err(ApiError::bad_request(
+                "execution event sequences must be non-negative and strictly increasing",
+            ));
+        }
+        if id != execution_event_id(run_id, sequence) {
+            return Err(ApiError::bad_request(
+                "execution event id does not match its run and sequence",
+            ));
+        }
+        previous_sequence = Some(sequence);
+        inputs.push(CreateEventInput {
+            id: id.to_string(),
+            run_id: run_id.to_string(),
+            sequence,
+            event_type: event.event_type.clone(),
+            payload: event.payload.clone(),
+            expires_at,
+        });
+    }
+
+    let next = previous_sequence.map_or(0, |sequence| sequence.saturating_add(1));
+    Ok((inputs, next))
+}
+
 fn map_lease_error(error: StateStoreError) -> ApiError {
     match error {
         StateStoreError::NotFound => ApiError::NOT_FOUND,
         StateStoreError::LeaseConflict(message) => ApiError::conflict(message),
         other => ApiError::internal_error(anyhow!("Execution lease operation failed: {other}")),
     }
+}
+
+fn backend_requires_queue_lease(backend: &str) -> bool {
+    matches!(backend, "cosmos" | "dynamodb" | "firestore")
 }
 
 /// Get or create the execution state store from app state
@@ -778,12 +1087,224 @@ pub(crate) async fn get_state_store(
         config = config.with_aws_config(state.aws_client.clone());
     }
 
-    #[cfg(any(feature = "dynamodb", feature = "cosmos"))]
+    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
     {
         config = config.with_content_store(state.content_bucket.clone());
+    }
+
+    #[cfg(feature = "s3")]
+    {
+        config = config.with_meta_store(state.meta_bucket.clone());
     }
 
     crate::execution::state::create_state_store(config)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to create state store: {}", e)))
+}
+
+#[cfg(test)]
+mod page_action_delivery_tests {
+    use super::*;
+
+    fn callback_event(run_id: &str, sequence: Option<i32>) -> ExecutionEventInput {
+        ExecutionEventInput {
+            id: sequence.map(|sequence| execution_event_id(run_id, sequence)),
+            sequence,
+            event_type: "chunk".into(),
+            payload: serde_json::json!({"value": sequence}),
+        }
+    }
+
+    #[test]
+    fn stateless_lambda_nonlease_callbacks_accept_canonical_identity() {
+        let events = vec![
+            callback_event("run-1", Some(0)),
+            callback_event("run-1", Some(1)),
+        ];
+        assert_eq!(
+            event_identity_mode(&events, false).expect("stable callback should be accepted"),
+            EventIdentityMode::Stable
+        );
+        let (stored, next) =
+            stable_event_inputs("run-1", &events, 1_900_000_000_000).expect("valid identity");
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].id, execution_event_id("run-1", 0));
+        assert_eq!(stored[1].sequence, 1);
+        assert_eq!(next, 2);
+    }
+
+    #[test]
+    fn stateless_lambda_cloud_queue_backends_require_lease_proof() {
+        for backend in ["cosmos", "dynamodb", "firestore"] {
+            assert!(backend_requires_queue_lease(backend));
+        }
+        for backend in ["postgres", "redis", "object_storage"] {
+            assert!(!backend_requires_queue_lease(backend));
+        }
+    }
+
+    #[test]
+    fn legacy_callbacks_remain_compatible_but_cannot_mix_identity_modes() {
+        let legacy = vec![callback_event("run-1", None)];
+        assert_eq!(
+            event_identity_mode(&legacy, false).expect("old executor should remain compatible"),
+            EventIdentityMode::Legacy
+        );
+        assert!(event_identity_mode(&legacy, true).is_err());
+
+        let mixed = vec![
+            callback_event("run-1", Some(0)),
+            callback_event("run-1", None),
+        ];
+        assert!(event_identity_mode(&mixed, false).is_err());
+        let partial = vec![ExecutionEventInput {
+            id: Some(execution_event_id("run-1", 0)),
+            sequence: None,
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        }];
+        assert!(event_identity_mode(&partial, false).is_err());
+    }
+
+    #[test]
+    fn canonical_identity_rejects_wrong_run_and_nonmonotonic_sequences() {
+        let wrong_run = vec![callback_event("other-run", Some(0))];
+        assert!(stable_event_inputs("run-1", &wrong_run, 1_900_000_000_000).is_err());
+
+        let duplicate = vec![
+            callback_event("run-1", Some(0)),
+            callback_event("run-1", Some(0)),
+        ];
+        assert!(stable_event_inputs("run-1", &duplicate, 1_900_000_000_000).is_err());
+        let negative = vec![callback_event("run-1", Some(-1))];
+        assert!(stable_event_inputs("run-1", &negative, 1_900_000_000_000).is_err());
+    }
+
+    #[test]
+    fn stateless_lambda_first_poll_starts_before_executor_sequence_zero() {
+        assert_eq!(poll_after_sequence(None), -1);
+        assert_eq!(poll_after_sequence(Some(0)), 0);
+        assert_eq!(poll_after_sequence(Some(41)), 41);
+        assert_eq!(poll_after_sequence(Some(i32::MIN)), -1);
+        assert_eq!(poll_after_sequence(Some(i32::MAX)), i32::MAX - 1);
+        assert!(!cursor_manages_delivery(None));
+        assert!(cursor_manages_delivery(Some(-1)));
+        assert!(cursor_manages_delivery(Some(41)));
+    }
+
+    fn unpinned_context() -> PageActionSealingContext {
+        PageActionSealingContext {
+            sub: "user-1".into(),
+            technical_user_id: None,
+            source_app_id: "app-1".into(),
+            source_event_id: "event-1".into(),
+            source_page_id: "page-1".into(),
+            source_manifest_revision: "revision-1".into(),
+            target_app_id: "app-1".into(),
+            target_board_id: "board-1".into(),
+            target_board_version: None,
+            target_board_etag: None,
+            wasm_authority_revision: None,
+            origin_run_id: "run-1".into(),
+            allowed_entry_nodes: HashSet::from(["entry-1".into()]),
+        }
+    }
+
+    #[test]
+    fn page_event_message_identity_prefers_id_then_sequence_then_batch_index() {
+        let with_id = ExecutionEventInput {
+            id: Some("executor-event-1".into()),
+            sequence: Some(41),
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+        let with_sequence = ExecutionEventInput {
+            id: None,
+            sequence: Some(42),
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+        let without_identity = ExecutionEventInput {
+            id: None,
+            sequence: None,
+            event_type: "chunk".into(),
+            payload: serde_json::Value::Null,
+        };
+
+        assert_eq!(page_event_message_id(&with_id, 3), "executor-event-1");
+        assert_eq!(page_event_message_id(&with_sequence, 3), "sequence:42");
+        assert_eq!(page_event_message_id(&without_identity, 3), "batch-index:3");
+    }
+
+    #[test]
+    fn unpinned_page_strips_routes_without_changing_event_order_or_identity() {
+        let mut events = vec![
+            ExecutionEventInput {
+                id: Some("event-a".into()),
+                sequence: Some(7),
+                event_type: "a2ui".into(),
+                payload: serde_json::json!({
+                    "type": "surfaceUpdate",
+                    "ordinal": 1,
+                    "components": [{"id": "first", "component": {
+                        "actions": [{
+                            "name": "workflow_event",
+                            "context": {"nodeId": "entry-1", "payload": "kept"}
+                        }]
+                    }}]
+                }),
+            },
+            ExecutionEventInput {
+                id: Some("event-b".into()),
+                sequence: Some(8),
+                event_type: "a2ui".into(),
+                payload: serde_json::json!({
+                    "type": "surfaceUpdate",
+                    "ordinal": 2,
+                    "components": [{"id": "second", "component": {
+                        "actions": [{
+                            "name": "workflow_event",
+                            "context": {"nodeId": "entry-1"}
+                        }]
+                    }}]
+                }),
+            },
+        ];
+
+        seal_page_event_payloads(&unpinned_context(), &mut events);
+
+        assert_eq!(events[0].id.as_deref(), Some("event-a"));
+        assert_eq!(events[0].sequence, Some(7));
+        assert_eq!(events[0].event_type, "a2ui");
+        assert_eq!(events[0].payload["ordinal"], 1);
+        assert!(
+            events[0].payload["components"][0]["component"]["actions"][0]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+        assert!(
+            events[0].payload["components"][0]["component"]["actions"][0]
+                .get("pageAction")
+                .is_none()
+        );
+        assert_eq!(
+            events[0].payload["components"][0]["component"]["actions"][0]["context"]["payload"],
+            "kept"
+        );
+
+        assert_eq!(events[1].id.as_deref(), Some("event-b"));
+        assert_eq!(events[1].sequence, Some(8));
+        assert_eq!(events[1].event_type, "a2ui");
+        assert_eq!(events[1].payload["ordinal"], 2);
+        assert!(
+            events[1].payload["components"][0]["component"]["actions"][0]["context"]
+                .get("nodeId")
+                .is_none()
+        );
+        assert!(
+            events[1].payload["components"][0]["component"]["actions"][0]
+                .get("pageAction")
+                .is_none()
+        );
+    }
 }

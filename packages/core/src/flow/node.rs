@@ -628,12 +628,15 @@ impl Node {
     }
 
     pub fn harmonize_value_type(&mut self, pins: Vec<&str>) -> Option<ValueType> {
-        let value_type = match self.pins.iter().find(|(_, pin)| {
-            pins.contains(&pin.name.as_str()) && pin.value_type != ValueType::Normal
-        }) {
-            Some((_, pin)) => pin.value_type.clone(),
-            None => return None,
-        };
+        // Scan in the caller's pin order, not map iteration order, so two peers wired to
+        // different container kinds still resolve to the same donor on every pass. The pin
+        // hash covers `value_type`, so an order-dependent winner would churn the board hash.
+        let value_type = pins.iter().find_map(|name| {
+            self.pins
+                .values()
+                .find(|pin| pin.name == *name && pin.value_type != ValueType::Normal)
+                .map(|pin| pin.value_type.clone())
+        })?;
 
         for pin in self.pins.values_mut() {
             if pins.contains(&pin.name.as_str()) {

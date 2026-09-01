@@ -47,8 +47,34 @@ the following target input:
 }
 ```
 
-Set Lambda reserved concurrency to `1`; the API row locks remain the final
-correctness boundary.
+Create a separate fixed-rate schedule for stuck run reconciliation. Five
+minutes is a reasonable starting interval:
+
+```json
+{
+  "job": "run_sweep",
+  "schedule_arn": "<aws.scheduler.schedule-arn>",
+  "scheduled_time": "<aws.scheduler.scheduled-time>",
+  "execution_id": "<aws.scheduler.execution-id>",
+  "attempt_number": "<aws.scheduler.attempt-number>"
+}
+```
+
+Configure `RUN_SWEEPER_GRACE_SECS` and `RUN_SWEEPER_BATCH_SIZE` on the API.
+The batch size defaults to 500 and is capped at 900. Each invocation handles
+the oldest stale runs first. A response that fills the batch indicates that
+the next scheduled invocation may still have backlog to reconcile.
+Set the grace period above the longest legitimate queue delay plus
+`EXECUTOR_TIMEOUT_SECS`; otherwise the sweep can classify a live run as stale.
+The job reconciles the canonical SQL run row only. It does not mutate a
+separately configured execution state backend.
+
+Create a daily schedule for expired-state cleanup with the same envelope and
+`"job": "state_cleanup"`. It calls the state store's expired-run and
+expired-event deletion; the operation is idempotent and safe to repeat.
+
+Set Lambda reserved concurrency to `1`; the API's transactional alert updates
+and conditional sweeps remain the final correctness boundary.
 
 There are two distinct failure paths to configure:
 

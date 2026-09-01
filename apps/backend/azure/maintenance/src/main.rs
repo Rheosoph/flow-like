@@ -25,6 +25,8 @@ const API_BASE_URL_ENVS: &[&str] = &["API_BASE_URL", "API_URL"];
 const ALL_JOBS: &[MaintenanceJob] = &[
     MaintenanceJob::TelemetryAlerts,
     MaintenanceJob::CacheCleanup,
+    MaintenanceJob::RunSweep,
+    MaintenanceJob::StateCleanup,
 ];
 
 struct Config {
@@ -114,15 +116,15 @@ fn normalize_api_base_url(value: &str, allow_insecure: bool) -> Result<String, S
 fn parse_maintenance_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>, String> {
     match value.map(str::trim) {
         None | Some("") | Some("all") => Ok(ALL_JOBS.to_vec()),
-        Some(name) => {
-            serde_json::from_value::<MaintenanceJob>(serde_json::Value::String(name.to_string()))
-                .map(|job| vec![job])
-                .map_err(|error| {
-                    format!(
-                        "MAINTENANCE_JOB must be telemetry_alerts, cache_cleanup or all: {error}"
-                    )
-                })
-        }
+        Some(name) => serde_json::from_value::<MaintenanceJob>(serde_json::Value::String(
+            name.to_string(),
+        ))
+        .map(|job| vec![job])
+        .map_err(|error| {
+            format!(
+                "MAINTENANCE_JOB must be telemetry_alerts, cache_cleanup, run_sweep, state_cleanup or all: {error}"
+            )
+        }),
     }
 }
 
@@ -307,6 +309,22 @@ async fn run_job(
                 "Cache cleanup maintenance completed"
             )
         }
+        (MaintenanceJob::StateCleanup, MaintenanceRunResponse::StateCleanup(result)) => {
+            tracing::info!(
+                deleted_runs = result.deleted_runs,
+                deleted_events = result.deleted_events,
+                "State cleanup maintenance completed"
+            )
+        }
+        (MaintenanceJob::RunSweep, MaintenanceRunResponse::RunSweep(result)) => {
+            tracing::info!(
+                swept = result.swept,
+                grace_secs = result.grace_secs,
+                batch_size = result.batch_size,
+                batch_full = result.swept >= result.batch_size,
+                "Run sweep maintenance completed"
+            )
+        }
         (job, response) => {
             // The API answered for a different job than we asked for. Fail the
             // job so the mismatch surfaces instead of being logged as success.
@@ -347,6 +365,10 @@ mod tests {
             parse_maintenance_jobs(Some(" cache_cleanup ")).unwrap(),
             vec![MaintenanceJob::CacheCleanup]
         );
+        assert_eq!(
+            parse_maintenance_jobs(Some(" run_sweep ")).unwrap(),
+            vec![MaintenanceJob::RunSweep]
+        );
     }
 
     #[test]
@@ -357,14 +379,16 @@ mod tests {
     }
 
     #[test]
-    fn all_is_the_default_and_runs_both_jobs_in_order() {
-        let both = vec![
+    fn all_is_the_default_and_runs_every_job_in_order() {
+        let all = vec![
             MaintenanceJob::TelemetryAlerts,
             MaintenanceJob::CacheCleanup,
+            MaintenanceJob::RunSweep,
+            MaintenanceJob::StateCleanup,
         ];
-        assert_eq!(parse_maintenance_jobs(None).unwrap(), both);
-        assert_eq!(parse_maintenance_jobs(Some("")).unwrap(), both);
-        assert_eq!(parse_maintenance_jobs(Some(" all ")).unwrap(), both);
+        assert_eq!(parse_maintenance_jobs(None).unwrap(), all);
+        assert_eq!(parse_maintenance_jobs(Some("")).unwrap(), all);
+        assert_eq!(parse_maintenance_jobs(Some(" all ")).unwrap(), all);
     }
 
     #[test]
@@ -441,6 +465,14 @@ mod tests {
                 Some(EXECUTION_NAME),
                 at(3, 0, 0)
             )
+        );
+        assert_ne!(
+            build_idempotency_key(
+                MaintenanceJob::CacheCleanup,
+                Some(EXECUTION_NAME),
+                at(3, 0, 0)
+            ),
+            build_idempotency_key(MaintenanceJob::RunSweep, Some(EXECUTION_NAME), at(3, 0, 0))
         );
     }
 

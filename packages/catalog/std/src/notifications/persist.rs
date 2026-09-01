@@ -93,12 +93,30 @@ fn prefix_reserved_user_query(query: &str) -> String {
         .join("&")
 }
 
+/// Canonical form of a route path, mirroring `normalizeRoutePath` in
+/// `packages/ui/lib/route-path.ts`.
+///
+/// The `/use` shell matches this string against the paths stored on events, and a
+/// miss falls back to the default route without saying so — so a link that differs
+/// only by a trailing slash silently opens the wrong page.
+fn normalize_route_path(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    match trimmed.strip_prefix('/') {
+        Some(rest) => format!("/{rest}"),
+        None => format!("/{trimmed}"),
+    }
+}
+
 /// Build a notification link from an app_id and a user-provided path.
 ///
 /// If `user_link` is already a non-empty relative path (e.g. `/dashboard`
 /// or `/store?item=abc`), it is turned into `/use?id={app_id}&route={path}&extra=params`.
 /// If `user_link` is empty or missing, defaults to `/use?id={app_id}&route=/`.
-/// Absolute URLs are rejected (security: avoids phishing via push notifications).
+/// Absolute URLs are rejected (security: avoids phishing via push notifications);
+/// the link then opens the app's default route rather than the requested one.
 ///
 /// Query keys reserved by the `/use` shell (`id`, `route`, `eventId`) are
 /// `_`-prefixed when forwarded so user values never overwrite framework
@@ -120,11 +138,12 @@ pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String 
 
     // Split into path and query parts
     let (path_part, query_part) = trimmed.split_once('?').unwrap_or((trimmed, ""));
+    let route = normalize_route_path(path_part);
 
     let mut link = format!(
         "/use?id={}&route={}",
         urlencoding::encode(app_id),
-        urlencoding::encode(&format!("/{path_part}")),
+        urlencoding::encode(&route),
     );
 
     // Append any extra query params from the user-provided link, prefixing
@@ -294,6 +313,62 @@ mod tests {
             build_notification_link("app1", Some("/mail?mailid=xyz&from=abc")),
             "/use?id=app1&route=%2Fmail&mailid=xyz&from=abc"
         );
+    }
+
+    #[test]
+    fn builds_the_reported_config_link() {
+        assert_eq!(
+            build_notification_link("app1", Some("/config?config_id=abc")),
+            "/use?id=app1&route=%2Fconfig&config_id=abc"
+        );
+    }
+
+    /// The `/use` shell compares the route against the path stored on the event with
+    /// no normalization of its own, and a miss silently renders the default route.
+    #[test]
+    fn route_paths_are_canonical() {
+        for link in ["/config/", "config", "config/", "  /config  ", "/config//"] {
+            assert_eq!(
+                build_notification_link("app1", Some(link)),
+                "/use?id=app1&route=%2Fconfig",
+                "link {link} should canonicalize to /config"
+            );
+        }
+
+        assert_eq!(
+            build_notification_link("app1", Some("/config/?config_id=abc")),
+            "/use?id=app1&route=%2Fconfig&config_id=abc"
+        );
+    }
+
+    #[test]
+    fn nested_paths_keep_their_segments() {
+        assert_eq!(
+            build_notification_link("app1", Some("/config/general/?tab=2")),
+            "/use?id=app1&route=%2Fconfig%2Fgeneral&tab=2"
+        );
+    }
+
+    #[test]
+    fn empty_and_root_links_target_the_default_route() {
+        assert_eq!(build_notification_link("app1", None), "/use?id=app1");
+        assert_eq!(build_notification_link("app1", Some("")), "/use?id=app1");
+        assert_eq!(build_notification_link("app1", Some("/")), "/use?id=app1");
+    }
+
+    #[test]
+    fn absolute_urls_fall_back_to_the_default_route() {
+        for link in [
+            "https://evil.example/steal",
+            "http://evil.example/steal",
+            "//evil.example/steal",
+        ] {
+            assert_eq!(
+                build_notification_link("app1", Some(link)),
+                "/use?id=app1",
+                "absolute link {link} must not be followed"
+            );
+        }
     }
 
     #[test]

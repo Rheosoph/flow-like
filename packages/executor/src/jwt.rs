@@ -33,6 +33,25 @@ struct Jwk {
 
 /// Claims embedded in the executor JWT (must match ExecutionClaims from API)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutorPageExecutionClaims {
+    pub page_id: String,
+    pub manifest_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_version: Option<(u32, u32, u32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_authority_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_authority_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_entry_node_ids: Vec<String>,
+}
+
+/// Claims embedded in the executor JWT (must match ExecutionClaims from API)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutorClaims {
     /// Subject (user ID)
     pub sub: String,
@@ -45,6 +64,9 @@ pub struct ExecutorClaims {
     /// Optional event ID if triggered by an event
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
+    /// Signed Page selector and entry authority for governed Page runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_execution: Option<ExecutorPageExecutionClaims>,
     /// Callback URL for progress reporting
     pub callback_url: String,
     /// Token type

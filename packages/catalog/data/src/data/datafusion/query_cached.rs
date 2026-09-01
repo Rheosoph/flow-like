@@ -1,9 +1,9 @@
 #[cfg(feature = "execute")]
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-#[cfg(any(feature = "execute", test))]
-use crate::data::datafusion::query::QueryRow;
 #[cfg(feature = "execute")]
 use crate::data::datafusion::query::batches_to_csv_table;
+#[cfg(any(feature = "execute", test))]
+use crate::data::datafusion::query::{QueryRow, ensure_unique_columns};
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use crate::data::query_params as params;
@@ -79,13 +79,14 @@ fn result_cache_key(
 /// Row objects rebuilt from the columnar table, so the `rows` output is identical
 /// whether the result came from the engine or from the cache.
 #[cfg(any(feature = "execute", test))]
-fn table_to_rows(table: &CSVTable) -> Vec<QueryRow> {
+fn table_to_rows(table: &CSVTable) -> flow_like_types::Result<Vec<QueryRow>> {
     let headers = table.headers();
-    table
+    ensure_unique_columns(&headers)?;
+    Ok(table
         .rows_as_values()
         .into_iter()
         .map(|row| headers.iter().cloned().zip(row).collect::<QueryRow>())
-        .collect()
+        .collect())
 }
 
 #[async_trait]
@@ -303,7 +304,7 @@ impl NodeLogic for CachedSqlQueryNode {
             }
         };
 
-        let rows = table_to_rows(&csv_table);
+        let rows = table_to_rows(&csv_table)?;
         let row_count = csv_table.row_count() as i64;
 
         context.set_pin_value("table", json!(csv_table)).await?;
@@ -392,6 +393,18 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_headers_are_refused_instead_of_dropped() {
+        let table = CSVTable::new(
+            vec!["id".to_string(), "name".to_string(), "id".to_string()],
+            vec![vec![json!(1), json!("alice"), json!(99)]],
+            None,
+        );
+
+        let error = table_to_rows(&table).unwrap_err().to_string();
+        assert!(error.contains("'id'"), "{error}");
+    }
+
+    #[test]
     fn cached_table_roundtrips_into_identical_rows() {
         let table = CSVTable::new(
             vec!["id".to_string(), "name".to_string(), "score".to_string()],
@@ -402,11 +415,11 @@ mod tests {
             None,
         );
 
-        let direct_rows = table_to_rows(&table);
+        let direct_rows = table_to_rows(&table).unwrap();
 
         let cached: Value = json!(table);
         let restored: CSVTable = flow_like_types::json::from_value(cached).unwrap();
-        let restored_rows = table_to_rows(&restored);
+        let restored_rows = table_to_rows(&restored).unwrap();
 
         assert_eq!(restored.row_count(), 2);
         assert_eq!(restored.headers(), table.headers());

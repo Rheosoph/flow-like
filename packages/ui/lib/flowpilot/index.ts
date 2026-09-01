@@ -22,3 +22,10 @@ export type {
 	UseA2UIGenerationOptions,
 	StreamingGenerationOptions,
 } from "./use-a2ui-generation";
+
+export { buildChatMessageError } from "./chat-error";
+export type {
+	ChatErrorKind,
+	IChatErrorAction,
+	IChatMessageError,
+} from "./chat-error";

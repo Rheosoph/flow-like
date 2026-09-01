@@ -22,6 +22,11 @@ import {
 	resolveEventBoardVersion,
 	withBoardVersion,
 } from "../../lib/schema/flow/board-version";
+import type { ILogMetadata } from "../../lib/schema/flow/log-metadata";
+import {
+	mayDispatchRawPageBoardAction,
+	pageTriggerFromAction,
+} from "../../lib/schema/flow/page-trigger";
 import {
 	type ITemporaryUploadExecutionTarget,
 	useBackend,
@@ -164,6 +169,7 @@ interface ActionContextValue {
 	boardId?: string;
 	boardVersion?: BoardVersion;
 	eventId?: string;
+	isGovernedPage: boolean;
 	components?: Record<string, SurfaceComponent>;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
@@ -198,6 +204,7 @@ interface ActionProviderProps {
 	boardId?: string;
 	boardVersion?: BoardVersion;
 	eventId?: string;
+	governedPage?: boolean;
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
 	isPreviewMode?: boolean;
@@ -220,6 +227,7 @@ export function ActionProvider({
 	boardId,
 	boardVersion,
 	eventId,
+	governedPage = false,
 	components,
 	children,
 	isPreviewMode = false,
@@ -389,17 +397,13 @@ export function ActionProvider({
 				eventId ? boardVersion : undefined,
 				effectiveBoardId,
 			);
-			if (!backend.boardState.prerunBoard) return "remote";
+			const prerunBoard = backend.boardState.prerunBoard;
+			if (!prerunBoard) return "remote";
 
 			try {
 				const prerun = await prerunSwr(
 					prerunBoardKey(effectiveAppId, effectiveBoardId, effectiveVersion),
-					() =>
-						backend.boardState.prerunBoard!(
-							effectiveAppId,
-							effectiveBoardId,
-							effectiveVersion,
-						),
+					() => prerunBoard(effectiveAppId, effectiveBoardId, effectiveVersion),
 				);
 
 				return prerun.can_execute_locally &&
@@ -649,6 +653,7 @@ export function ActionProvider({
 				boardId,
 				boardVersion,
 				eventId,
+				isGovernedPage: governedPage,
 				components,
 				globalState,
 				pageState,
@@ -680,6 +685,7 @@ export function useActionContext() {
 			boardVersion: undefined,
 			eventId: undefined,
 			surfaceId: "",
+			isGovernedPage: false,
 			isPreviewMode: false,
 			resolveTemporaryUploadTarget: undefined,
 			globalState: EMPTY_STATE,
@@ -692,6 +698,7 @@ export function useActionContext() {
 		boardVersion: context.boardVersion,
 		eventId: context.eventId,
 		surfaceId: context.surfaceId,
+		isGovernedPage: context.isGovernedPage,
 		isPreviewMode: context.isPreviewMode,
 		resolveTemporaryUploadTarget: context.resolveTemporaryUploadTarget,
 		globalState: context.globalState,
@@ -946,6 +953,7 @@ export function useExecuteAction() {
 		boardId,
 		boardVersion,
 		eventId,
+		isGovernedPage: governedPage,
 		components,
 		globalState,
 		pageState,
@@ -1403,16 +1411,58 @@ export function useExecuteAction() {
 						const nodeId = context.nodeId as string | undefined;
 						const actionBoardId = context.boardId as string | undefined;
 						const contextAppId = context.appId as string | undefined;
+						const pageAction = action.pageAction;
+						const pageTrigger = pageAction
+							? pageTriggerFromAction(pageAction)
+							: undefined;
+						const rawBoardActionAllowed =
+							mayDispatchRawPageBoardAction(governedPage);
 
-						const effectiveAppId = contextAppId || appId;
-						const effectiveBoardId = actionBoardId || boardId;
+						if (!pageAction && !rawBoardActionAllowed) {
+							console.warn(
+								"[A2UI] Refusing a raw workflow_event route on a governed Page.",
+								{ surfaceId, triggeringComponentId },
+							);
+							toast.error(
+								"This Page action is missing its execution authorization. Reload the Page.",
+							);
+							break;
+						}
+
+						// A projected Page action is governed by its opaque action id. Raw
+						// routing fields remain available only for legacy preview/direct-board
+						// actions that do not carry Page invocation metadata.
+						const effectiveAppId = pageAction ? appId : contextAppId || appId;
+						const effectiveBoardId = pageAction
+							? boardId
+							: actionBoardId || boardId;
 						const inheritedBoardVersion = resolveEventBoardVersion(
 							boardId,
 							boardVersion,
 							effectiveBoardId,
 						);
+						const invocationId = pageAction?.actionId ?? nodeId;
 
-						if (nodeId && effectiveBoardId && effectiveAppId) {
+						if (pageAction && (!effectiveAppId || !eventId)) {
+							console.warn(
+								"[A2UI] Governed workflow_event is missing Page Event context:",
+								{
+									actionId: pageAction.actionId,
+									appId: effectiveAppId,
+									eventId,
+								},
+							);
+							toast.error(
+								"This Page action is not attached to an executable Event.",
+							);
+							break;
+						}
+
+						if (
+							invocationId &&
+							effectiveAppId &&
+							(pageAction || effectiveBoardId)
+						) {
 							try {
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
@@ -1430,26 +1480,28 @@ export function useExecuteAction() {
 									componentIds: Object.keys(components ?? {}),
 								});
 
-								try {
-									const currentBoard = await backend.boardState.getBoard(
-										effectiveAppId,
-										effectiveBoardId,
-										inheritedBoardVersion,
-									);
-									console.log(
-										"[A2UI] workflow_event local board element refs:",
-										{
-											boardId: effectiveBoardId,
-											pageIds: currentBoard.page_ids,
-											updatedAt: currentBoard.updated_at,
-											elementRefs: summarizeBoardElementRefs(currentBoard),
-										},
-									);
-								} catch (boardErr) {
-									console.warn(
-										"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
-										boardErr,
-									);
+								if (!pageAction && effectiveBoardId) {
+									try {
+										const currentBoard = await backend.boardState.getBoard(
+											effectiveAppId,
+											effectiveBoardId,
+											inheritedBoardVersion,
+										);
+										console.log(
+											"[A2UI] workflow_event local board element refs:",
+											{
+												boardId: effectiveBoardId,
+												pageIds: currentBoard.page_ids,
+												updatedAt: currentBoard.updated_at,
+												elementRefs: summarizeBoardElementRefs(currentBoard),
+											},
+										);
+									} catch (boardErr) {
+										console.warn(
+											"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
+											boardErr,
+										);
+									}
 								}
 
 								// Always fetch the current element demand in preview mode.
@@ -1458,7 +1510,10 @@ export function useExecuteAction() {
 								const mergedElements = await collectRunElements({
 									backend,
 									appId: effectiveAppId,
-									boardId: effectiveBoardId,
+									// Governed Page runs do not need Board read permission. Until the
+									// Event prerun response exposes its selector set, materialize the
+									// current surface without calling the Board demand endpoint.
+									boardId: pageAction ? undefined : effectiveBoardId,
 									boardVersion: inheritedBoardVersion,
 									surfaceId: surfaceId ?? "",
 									components,
@@ -1483,7 +1538,7 @@ export function useExecuteAction() {
 								);
 
 								const basePayload = compactWorkflowPayload({
-									id: nodeId,
+									id: invocationId,
 									payload: {
 										_elements: mergedElements,
 										_elements_mode: "demand",
@@ -1501,26 +1556,50 @@ export function useExecuteAction() {
 									id: string;
 									payload: Record<string, unknown>;
 								};
-								const payload = withBoardVersion(
-									basePayload,
-									inheritedBoardVersion,
-								);
+								const payload = pageAction
+									? basePayload
+									: withBoardVersion(basePayload, inheritedBoardVersion);
 
-								// Use execution service if available (checks runtime variables)
-								const execFn =
-									executionService?.executeBoard ??
-									backend.boardState.executeBoard;
 								let capturedRunId: string | undefined;
-								const runMeta = await execFn(
-									effectiveAppId,
-									effectiveBoardId,
-									payload,
-									false, // streamState
-									(id) => {
-										capturedRunId = id;
-									},
-									handleA2UIEvents, // callback for A2UI events
-								);
+								const captureRunId = (id: string) => {
+									capturedRunId = id;
+								};
+								let runMeta: ILogMetadata | undefined;
+								if (pageAction) {
+									if (!eventId) {
+										throw new Error(
+											"Governed Page action is missing its Event id.",
+										);
+									}
+									runMeta = await (
+										executionService?.executeEvent ??
+										backend.eventState.executeEvent.bind(backend.eventState)
+									)(
+										effectiveAppId,
+										eventId,
+										payload,
+										false,
+										captureRunId,
+										handleA2UIEvents,
+										undefined,
+										pageTrigger,
+									);
+								} else {
+									if (!effectiveBoardId) {
+										throw new Error("Raw action is missing its Board id.");
+									}
+									runMeta = await (
+										executionService?.executeBoard ??
+										backend.boardState.executeBoard
+									)(
+										effectiveAppId,
+										effectiveBoardId,
+										payload,
+										false,
+										captureRunId,
+										handleA2UIEvents,
+									);
+								}
 								// No metadata AND no run_initiated means nothing executed (e.g. the
 								// execution service resolved undefined after a declined consent) —
 								// that must never read as a successful run. A run that dispatched but
@@ -1535,7 +1614,7 @@ export function useExecuteAction() {
 											: "ok",
 									runId: runMeta?.run_id ?? capturedRunId,
 									componentId: triggeringComponentId ?? undefined,
-									nodeId,
+									nodeId: invocationId,
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
 									logMeta: runMeta,
@@ -1552,7 +1631,7 @@ export function useExecuteAction() {
 								notifyLivePageRun(surfaceId, {
 									status: "error",
 									componentId: triggeringComponentId ?? undefined,
-									nodeId,
+									nodeId: invocationId,
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
 									errorMessage:
@@ -1577,7 +1656,7 @@ export function useExecuteAction() {
 							}
 						} else {
 							console.warn("Missing required context for workflow_event:", {
-								nodeId,
+								nodeId: invocationId,
 								boardId: effectiveBoardId,
 								appId: effectiveAppId,
 							});
@@ -1660,6 +1739,23 @@ export function useExecuteAction() {
 						}
 
 						const nodeId = binding.workflow.flowId;
+						const pageAction = binding.pageAction;
+						const pageTrigger = pageAction
+							? pageTriggerFromAction(pageAction)
+							: undefined;
+						const rawBoardActionAllowed =
+							mayDispatchRawPageBoardAction(governedPage);
+
+						if (!pageAction && !rawBoardActionAllowed) {
+							console.warn(
+								"[A2UI] Refusing a raw widget workflow binding on a governed Page.",
+								{ actionId, surfaceId, triggeringComponentId },
+							);
+							toast.error(
+								"This widget action is missing its execution authorization. Reload the Page.",
+							);
+							break;
+						}
 
 						const effectiveAppId = appId;
 						const effectiveBoardId = boardId;
@@ -1668,8 +1764,24 @@ export function useExecuteAction() {
 							boardVersion,
 							effectiveBoardId,
 						);
+						const invocationId = pageAction?.actionId ?? nodeId;
 
-						if (effectiveBoardId && effectiveAppId) {
+						if (pageAction && (!effectiveAppId || !eventId)) {
+							console.warn(
+								"[A2UI] Governed widget_event is missing Page Event context:",
+								{
+									actionId: pageAction.actionId,
+									appId: effectiveAppId,
+									eventId,
+								},
+							);
+							toast.error(
+								"This widget action is not attached to an executable Event.",
+							);
+							break;
+						}
+
+						if (effectiveAppId && (pageAction || effectiveBoardId)) {
 							try {
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
@@ -1690,7 +1802,7 @@ export function useExecuteAction() {
 								const mergedElements = await collectRunElements({
 									backend,
 									appId: effectiveAppId,
-									boardId: effectiveBoardId,
+									boardId: pageAction ? undefined : effectiveBoardId,
 									boardVersion: inheritedBoardVersion,
 									surfaceId: surfaceId ?? "",
 									components,
@@ -1714,7 +1826,7 @@ export function useExecuteAction() {
 								);
 
 								const basePayload = compactWorkflowPayload({
-									id: nodeId,
+									id: invocationId,
 									payload: {
 										_elements: mergedElements,
 										_elements_mode: "demand",
@@ -1730,22 +1842,45 @@ export function useExecuteAction() {
 										),
 									},
 								}) as { id: string; payload: Record<string, unknown> };
-								const payload = withBoardVersion(
-									basePayload,
-									inheritedBoardVersion,
-								);
+								const payload = pageAction
+									? basePayload
+									: withBoardVersion(basePayload, inheritedBoardVersion);
 
-								const execFn =
-									executionService?.executeBoard ??
-									backend.boardState.executeBoard;
-								await execFn(
-									effectiveAppId,
-									effectiveBoardId,
-									payload,
-									false,
-									undefined,
-									handleA2UIEvents,
-								);
+								if (pageAction) {
+									if (!eventId) {
+										throw new Error(
+											"Governed widget action is missing its Event id.",
+										);
+									}
+									await (
+										executionService?.executeEvent ??
+										backend.eventState.executeEvent.bind(backend.eventState)
+									)(
+										effectiveAppId,
+										eventId,
+										payload,
+										false,
+										undefined,
+										handleA2UIEvents,
+										undefined,
+										pageTrigger,
+									);
+								} else {
+									if (!effectiveBoardId) {
+										throw new Error("Widget action is missing its Board id.");
+									}
+									await (
+										executionService?.executeBoard ??
+										backend.boardState.executeBoard
+									)(
+										effectiveAppId,
+										effectiveBoardId,
+										payload,
+										false,
+										undefined,
+										handleA2UIEvents,
+									);
+								}
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event:", error);
 								toast.error(
@@ -1819,6 +1954,7 @@ export function useExecuteAction() {
 			boardId,
 			boardVersion,
 			eventId,
+			governedPage,
 			components,
 			globalState,
 			pageState,

@@ -19,7 +19,9 @@ import {
 	LoaderCircle,
 	Maximize,
 	Network,
+	PinOff,
 	RotateCcw,
+	Square,
 	ZoomIn,
 	ZoomOut,
 } from "lucide-react";
@@ -46,8 +48,10 @@ import type { ClusterModel } from "./graph-clusters";
 import {
 	type ConnectivityPartition,
 	DEFAULT_NODE_SIZE,
+	type GraphLayoutMode,
 	type LayoutPosition as GraphPosition,
 	applyClusterLayout,
+	computeLabelExtents,
 	computeSeedSpread,
 	createAnchoredPosition,
 	createDeterministicPosition,
@@ -55,9 +59,13 @@ import {
 	getLayoutBounds,
 	packNodesOnGrid,
 	partitionByConnectivity,
+	placeCircularLayout,
 	placeDetachedNodes,
+	placeHierarchyLayout,
+	placeRadialLayout,
 	relaxOverlaps,
 } from "./graph-layout";
+import { loadGraphScene, saveGraphScene } from "./graph-position-store";
 import { getIconDataUri } from "./icon-svg";
 import { drawNodeHover, drawNodeLabel } from "./label-renderer";
 import { getGraphTheme, invalidateGraphTheme } from "./theme-colors";
@@ -106,6 +114,21 @@ type ForceAtlas2WorkerConstructor = new (
 const ForceAtlas2Worker =
 	ForceAtlas2WorkerLayout as unknown as ForceAtlas2WorkerConstructor;
 
+/** An explicit arrangement request; a new `seq` applies it to the live scene. */
+export interface GraphLayoutCommand {
+	mode: GraphLayoutMode;
+	seq: number;
+	/** Anchor for the radial arrangement; ignored by the other modes. */
+	centerNodeId?: string | null;
+}
+
+/** Imperative surface the canvas hands its host for pin management. */
+export interface GraphCanvasApi {
+	pinNode: (nodeId: string, pinned: boolean) => void;
+	unpinAll: () => void;
+	isPinned: (nodeId: string) => boolean;
+}
+
 export interface GraphCanvasProps {
 	data: SubgraphResult | null;
 	loading?: boolean;
@@ -123,8 +146,21 @@ export interface GraphCanvasProps {
 	clusters?: ClusterModel | null;
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
+	/** Double-click, with sigma's double-click zoom suppressed. */
+	onNodeDoubleClick?: (nodeId: string) => void;
+	/** Right-click; the position is in container-relative viewport pixels. */
+	onNodeContextMenu?: (
+		nodeId: string,
+		position: { x: number; y: number },
+	) => void;
 	onEdgeClick?: (edgeKey: string) => void;
 	onStageClick?: () => void;
+	/** Storage key under which positions and pins survive a reload. */
+	persistKey?: string;
+	/** Applies deterministic layouts to the live scene, animated. */
+	layoutCommand?: GraphLayoutCommand | null;
+	/** Hands the host the pin API once the canvas is interactive. */
+	onCanvasApi?: (api: GraphCanvasApi | null) => void;
 	className?: string;
 }
 
@@ -434,6 +470,9 @@ function getFA2Settings(
 	// graphs it wins against repulsion and collapses everything into one disc.
 	// Plain gravity is a constant inward force: it still keeps components from
 	// drifting off, but lets `scalingRatio` decide the spacing.
+	//
+	// `outboundAttractionDistribution` divides a hub's attraction across its
+	// edges, so satellites spread around it instead of collapsing into it.
 	return {
 		gravity: isDense ? 0.5 : isSparse ? 0.6 : 1,
 		scalingRatio: isDense ? 8 : isSparse ? 24 : 14,
@@ -442,6 +481,7 @@ function getFA2Settings(
 		barnesHutTheta: 0.5,
 		strongGravityMode: false,
 		linLogMode: true,
+		outboundAttractionDistribution: true,
 		edgeWeightInfluence: isDense ? 0 : 1,
 		adjustSizes: true,
 	};
@@ -467,13 +507,17 @@ async function finishLayoutAsync(
 	const { connected, isolated } = partition;
 	const totalIterations = defaultRelaxIterations(connected.length);
 	const batchIterations = getRelaxBatchIterations(connected.length);
+	const labelExtents = computeLabelExtents(graph, connected);
 	let completed = 0;
 
 	while (completed < totalIterations) {
 		if (isCancelled()) return;
 
 		const batch = Math.min(batchIterations, totalIterations - completed);
-		const performed = relaxOverlaps(graph, connected, { iterations: batch });
+		const performed = relaxOverlaps(graph, connected, {
+			iterations: batch,
+			labelExtents,
+		});
 		completed += batch;
 
 		updateProgress?.(
@@ -569,6 +613,8 @@ interface GraphBuildOptions {
 	anchorNodeId?: string | null;
 	forceLayout?: boolean;
 	clusters?: ClusterModel | null;
+	/** Nodes the user placed by hand; they keep their spot through every layout. */
+	pinnedIds?: ReadonlySet<string>;
 }
 
 interface GraphBuildResult {
@@ -680,6 +726,7 @@ async function buildGraphAsync(
 		anchorNodeId,
 		forceLayout = false,
 		clusters,
+		pinnedIds,
 	}: GraphBuildOptions,
 ): Promise<GraphBuildResult | null> {
 	const graph = new Graph({ multi: true, type: "directed" });
@@ -699,6 +746,10 @@ async function buildGraphAsync(
 	const degreeMap = new Map<string, number>();
 	const assignedPositions = new Map<string, GraphPosition>();
 	const neighborLookup = buildNeighborLookup(data);
+	// Endpoint labels are stamped onto edges so the edge reducer never has to
+	// walk back to the nodes — that walk is what made reducers unaffordable at
+	// the large tiers.
+	const labelById = new Map(data.nodes.map((node) => [node.id, node.label]));
 	const columnRanges = computeColumnRanges(data.nodes);
 	// Groups arrive ranked by population, so the biggest hubs keep their captions.
 	const forcedHubIds = new Set(
@@ -766,6 +817,12 @@ async function buildGraphAsync(
 				usesDefaultColor: !node.style?.color,
 			};
 
+			if (pinnedIds?.has(node.id)) {
+				attrs.pinned = true;
+				// `fixed` is what the ForceAtlas2 kernels read to skip a node.
+				attrs.fixed = true;
+			}
+
 			// Written at every graph size: above LARGE_THRESHOLD the reducers are
 			// skipped entirely, so raw attributes are all the renderer still sees.
 			const assignment = clusters?.byNode.get(node.id);
@@ -820,6 +877,8 @@ async function buildGraphAsync(
 				originalColor: edgeHex,
 				type: "arrow",
 				edgeId: edge.id,
+				srcLabel: labelById.get(edge.source),
+				tgtLabel: labelById.get(edge.target),
 				forceLabel: false,
 				usesDefaultColor: !edge.style?.color,
 			});
@@ -841,7 +900,9 @@ async function buildGraphAsync(
 
 	if (!edgesBuilt || isCancelled()) return null;
 
-	if (!isLarge) {
+	// Below the huge tier parallel edges get separated into curves; past it the
+	// indexation cost buys nothing the faint straight lines would show anyway.
+	if (!isHuge) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT,
 			"Optimizing connections",
@@ -883,17 +944,17 @@ async function buildGraphAsync(
 			if (!graph.hasNode(node.id)) return;
 
 			const assignment = clusters?.byNode.get(node.id);
-			// Only the default fixed size is overridden — a user who chose
-			// by-degree or by-column sizing keeps the encoding they picked.
-			const baseSize =
-				assignment?.isHub && node.style?.size?.mode === "fixed"
-					? hubNodeSize(assignment.represented)
-					: styleToNodeSize(
-							node.style,
-							degreeMap.get(node.id),
-							columnRanges,
-							node.props,
-						);
+			const styledSize = styleToNodeSize(
+				node.style,
+				degreeMap.get(node.id),
+				columnRanges,
+				node.props,
+			);
+			// A hub is never smaller than its population suggests, but a user's own
+			// sizing can still make it bigger — max() keeps both encodings honest.
+			const baseSize = assignment?.isHub
+				? Math.max(styledSize, hubNodeSize(assignment.represented))
+				: styledSize;
 
 			const scaledSize = Math.max(
 				MIN_RENDERED_NODE_SIZE,
@@ -923,8 +984,10 @@ async function buildGraphAsync(
 	if (preserveLayout) {
 		// Expansions must not reshuffle the view, so only the stacking that the
 		// anchored seeding introduced gets nudged apart.
-		relaxOverlaps(graph, Array.from(nodeIds), {
+		const preservedIds = Array.from(nodeIds);
+		relaxOverlaps(graph, preservedIds, {
 			iterations: PRESERVE_RELAX_ITERATIONS,
+			labelExtents: computeLabelExtents(graph, preservedIds),
 		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
@@ -953,7 +1016,13 @@ async function buildGraphAsync(
 			),
 			"layout",
 		);
+		const clusterLabelExtents = computeLabelExtents(graph, [...nodeIds]);
 		await applyClusterLayout(graph, clusters.clusters, {
+			labelExtents: clusterLabelExtents,
+			// On graphs small enough for dense captions the groups also get more
+			// clearance and a gentle whole-stage pass against cross-group label hits.
+			clusterGap: clusterLabelExtents ? 48 : undefined,
+			globalRelaxIterations: clusterLabelExtents ? 10 : 0,
 			onProgress: (fraction) => {
 				publish(
 					base + LAYOUT_PROGRESS_WEIGHT * fraction,
@@ -1063,14 +1132,35 @@ interface HighlightState {
 	visibleNodeIds: Set<string> | undefined;
 	neighborSet: Set<string> | null;
 	connectedEdgeSet: Set<string> | null;
+	/** The few neighbours whose captions are worth forcing — see the cap below. */
+	labeledNeighborSet: Set<string> | null;
+	/** >1 when a filter shrank the visible set: survivors get the freed room. */
+	visibleBoost: number;
+	visibleSizeCap: number;
 }
+
+/**
+ * Forcing a caption bypasses both the density grid and the size threshold, so
+ * forcing every neighbour of a 200-degree hub is a wall of text the culling
+ * exists to prevent. Only the biggest few earn it; the rest still compete in
+ * the grid like everyone else.
+ */
+const MAX_LABELED_NEIGHBORS = 10;
 
 function computeNeighborSets(
 	graph: Graph,
 	activeNode: string | null,
-): { neighborSet: Set<string> | null; connectedEdgeSet: Set<string> | null } {
+): {
+	neighborSet: Set<string> | null;
+	connectedEdgeSet: Set<string> | null;
+	labeledNeighborSet: Set<string> | null;
+} {
 	if (!activeNode || !graph.hasNode(activeNode))
-		return { neighborSet: null, connectedEdgeSet: null };
+		return {
+			neighborSet: null,
+			connectedEdgeSet: null,
+			labeledNeighborSet: null,
+		};
 	const neighborSet = new Set<string>([activeNode]);
 	for (const neighbor of graph.neighbors(activeNode)) {
 		neighborSet.add(neighbor);
@@ -1079,7 +1169,20 @@ function computeNeighborSets(
 	for (const edge of graph.edges(activeNode)) {
 		connectedEdgeSet.add(edge);
 	}
-	return { neighborSet, connectedEdgeSet };
+
+	const labeledNeighborSet = new Set<string>([activeNode]);
+	const ranked = [...neighborSet]
+		.filter((nodeId) => nodeId !== activeNode)
+		.sort((a, b) => {
+			const sizeA = (graph.getNodeAttribute(a, "size") as number) ?? 0;
+			const sizeB = (graph.getNodeAttribute(b, "size") as number) ?? 0;
+			return sizeB - sizeA || (a < b ? -1 : 1);
+		});
+	for (const nodeId of ranked.slice(0, MAX_LABELED_NEIGHBORS)) {
+		labeledNeighborSet.add(nodeId);
+	}
+
+	return { neighborSet, connectedEdgeSet, labeledNeighborSet };
 }
 
 function formatOverlayMetric(value: number): string {
@@ -1188,41 +1291,72 @@ function GraphCanvasLoadingOverlay({
 	);
 }
 
+/** Viewport pixels a press may wander before it counts as a drag, not a click. */
+const DRAG_START_THRESHOLD = 3;
+
 function GraphEvents({
 	onNodeClick,
 	onNodeShiftClick,
+	onNodeDoubleClick,
+	onNodeContextMenu,
 	onEdgeClick,
 	onStageClick,
+	onNodeDragged,
 	highlightRef,
 	graph,
 }: {
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
+	onNodeDoubleClick?: (nodeId: string) => void;
+	onNodeContextMenu?: (
+		nodeId: string,
+		position: { x: number; y: number },
+	) => void;
 	onEdgeClick?: (edgeKey: string) => void;
 	onStageClick?: () => void;
+	/** Fires when a drag ends with real movement; the node arrives pinned. */
+	onNodeDragged?: (nodeId: string) => void;
 	highlightRef: React.MutableRefObject<HighlightState>;
 	graph: Graph;
 }) {
 	const sigma = useSigma();
 	const registerEvents = useRegisterEvents();
+	const dragRef = useRef<{
+		node: string;
+		startX: number;
+		startY: number;
+		moved: boolean;
+	} | null>(null);
+
+	// A fresh graph deserves a fresh framing: the custom bbox a drag froze must
+	// not survive into the next dataset.
+	useEffect(() => {
+		void graph;
+		try {
+			sigma.setCustomBBox(null);
+		} catch {
+			// The instance may be mid-teardown.
+		}
+	}, [graph, sigma]);
 
 	useEffect(() => {
+		const applyNeighborSets = (activeNode: string | null) => {
+			const sets = computeNeighborSets(graph, activeNode);
+			highlightRef.current.neighborSet = sets.neighborSet;
+			highlightRef.current.connectedEdgeSet = sets.connectedEdgeSet;
+			highlightRef.current.labeledNeighborSet = sets.labeledNeighborSet;
+		};
+
 		registerEvents({
 			enterNode: ({ node }) => {
 				highlightRef.current.hoveredNode = node;
 				highlightRef.current.hoveredEdge = null;
-				const activeNode = highlightRef.current.selectedNodeId ?? node;
-				const sets = computeNeighborSets(graph, activeNode);
-				highlightRef.current.neighborSet = sets.neighborSet;
-				highlightRef.current.connectedEdgeSet = sets.connectedEdgeSet;
+				applyNeighborSets(highlightRef.current.selectedNodeId ?? node);
 				sigma.refresh({ skipIndexation: true });
 			},
 			leaveNode: () => {
 				highlightRef.current.hoveredNode = null;
-				const activeNode = highlightRef.current.selectedNodeId;
-				const sets = computeNeighborSets(graph, activeNode);
-				highlightRef.current.neighborSet = sets.neighborSet;
-				highlightRef.current.connectedEdgeSet = sets.connectedEdgeSet;
+				applyNeighborSets(highlightRef.current.selectedNodeId);
 				sigma.refresh({ skipIndexation: true });
 			},
 			enterEdge: ({ edge }) => {
@@ -1233,6 +1367,55 @@ function GraphEvents({
 				highlightRef.current.hoveredEdge = null;
 				sigma.refresh({ skipIndexation: true });
 			},
+			downNode: ({ node, event }) => {
+				const original = event.original;
+				if (
+					!(original instanceof MouseEvent) ||
+					original.button !== 0 ||
+					original.shiftKey
+				) {
+					return;
+				}
+				dragRef.current = {
+					node,
+					startX: event.x,
+					startY: event.y,
+					moved: false,
+				};
+			},
+			mousemovebody: (event) => {
+				const drag = dragRef.current;
+				if (!drag) return;
+				if (
+					!drag.moved &&
+					Math.hypot(event.x - drag.startX, event.y - drag.startY) <
+						DRAG_START_THRESHOLD
+				) {
+					return;
+				}
+				// `autoRescale` re-fits the stage to the bbox, so without freezing it a
+				// dragged node would drag the whole framing along with it.
+				if (!sigma.getCustomBBox()) sigma.setCustomBBox(sigma.getBBox());
+				drag.moved = true;
+				const position = sigma.viewportToGraph({ x: event.x, y: event.y });
+				graph.setNodeAttribute(drag.node, "x", position.x);
+				graph.setNodeAttribute(drag.node, "y", position.y);
+				event.preventSigmaDefault();
+				event.original.preventDefault();
+				event.original.stopPropagation();
+			},
+			mouseup: () => {
+				const drag = dragRef.current;
+				if (!drag) return;
+				dragRef.current = null;
+				if (!drag.moved) return;
+				// A hand-placed node stays where it was put: pinned for the relax pass,
+				// fixed for the force simulation.
+				graph.setNodeAttribute(drag.node, "pinned", true);
+				graph.setNodeAttribute(drag.node, "fixed", true);
+				onNodeDragged?.(drag.node);
+				sigma.refresh({ skipIndexation: true });
+			},
 			clickNode: ({ node, event }) => {
 				if (event.original.shiftKey) {
 					const label = graph.getNodeAttribute(node, "nodeLabel") as string;
@@ -1240,6 +1423,17 @@ function GraphEvents({
 				} else {
 					onNodeClick?.(node);
 				}
+			},
+			doubleClickNode: ({ node, event }) => {
+				if (!onNodeDoubleClick) return;
+				event.preventSigmaDefault();
+				onNodeDoubleClick(node);
+			},
+			rightClickNode: ({ node, event }) => {
+				if (!onNodeContextMenu) return;
+				event.preventSigmaDefault();
+				event.original.preventDefault();
+				onNodeContextMenu(node, { x: event.x, y: event.y });
 			},
 			clickEdge: ({ edge }) => {
 				const edgeId = graph.getEdgeAttribute(edge, "edgeId") as
@@ -1257,8 +1451,11 @@ function GraphEvents({
 		graph,
 		onNodeClick,
 		onNodeShiftClick,
+		onNodeDoubleClick,
+		onNodeContextMenu,
 		onEdgeClick,
 		onStageClick,
+		onNodeDragged,
 		highlightRef,
 	]);
 
@@ -1278,20 +1475,35 @@ function SigmaRefresher({ refreshKey }: { refreshKey: readonly unknown[] }) {
 	return null;
 }
 
+/** How often the background layout is checked for having settled, in ms. */
+const WORKER_CONVERGENCE_INTERVAL_MS = 400;
+/** Mean per-node movement between checks below which the layout counts as settled. */
+const WORKER_CONVERGENCE_EPSILON = 0.35;
+/** Consecutive settled checks required — one quiet sample can be a coincidence. */
+const WORKER_CONVERGENCE_STREAK = 2;
+/** Nodes sampled per check; a spread sample tracks the whole graph closely enough. */
+const WORKER_CONVERGENCE_SAMPLE = 150;
+/** The old wall-clock stop survives as a backstop, no longer as the stop rule. */
+const WORKER_MAX_DURATION_FACTOR = 5;
+
 function SigmaWorkerLayout({
 	enabled,
 	graphRevision,
 	nodeCount,
 	edgeCount,
+	stopToken,
 	onRunningChange,
 }: {
 	enabled: boolean;
 	graphRevision: number;
 	nodeCount: number;
 	edgeCount: number;
+	/** Bumping this asks the running layout to stop and settle now. */
+	stopToken: number;
 	onRunningChange?: (running: boolean) => void;
 }) {
 	const sigma = useSigma();
+	const stopFnRef = useRef<(() => void) | null>(null);
 	const layoutSettings = useMemo(
 		() => getFA2Settings(nodeCount, edgeCount),
 		[nodeCount, edgeCount],
@@ -1300,6 +1512,10 @@ function SigmaWorkerLayout({
 		() => getWorkerLayoutDuration(nodeCount, edgeCount),
 		[nodeCount, edgeCount],
 	);
+
+	useEffect(() => {
+		if (stopToken > 0) stopFnRef.current?.();
+	}, [stopToken]);
 
 	useEffect(() => {
 		void graphRevision;
@@ -1319,33 +1535,59 @@ function SigmaWorkerLayout({
 			settings: layoutSettings,
 		});
 		let disposed = false;
+		let finished = false;
 		let frameId = 0;
+		let intervalId = 0;
+		let maxTimeoutId = 0;
 
-		const refresh = () => {
+		const refreshLoop = () => {
 			if (disposed) return;
 			try {
 				sigma.refresh({ skipIndexation: true });
 			} catch {
 				// WebGL context may be lost during background layout updates
 			}
-			frameId = window.requestAnimationFrame(refresh);
+			frameId = window.requestAnimationFrame(refreshLoop);
 		};
 
-		try {
-			layout.start();
-			onRunningChange?.(true);
-			frameId = window.requestAnimationFrame(refresh);
-		} catch {
-			try {
-				layout.kill();
-			} catch {
-				// Layout worker may already be disposed
-			}
-			return;
-		}
+		// The layout stops when it has measurably settled instead of on a fixed
+		// timer: sampled positions are compared between checks, and a graph whose
+		// nodes have stopped moving is done arranging itself. On a big graph the
+		// old timer routinely cut the untangling off mid-swing.
+		const sampleStep = Math.max(
+			1,
+			Math.floor(currentGraph.order / WORKER_CONVERGENCE_SAMPLE),
+		);
+		let previousSample: Float64Array | null = null;
+		let settledStreak = 0;
+		const startedAt = Date.now();
 
-		const timeoutId = window.setTimeout(() => {
-			if (disposed) return;
+		const takeSample = (): Float64Array => {
+			const sample = new Float64Array(
+				(Math.floor((currentGraph.order - 1) / sampleStep) + 1) * 2,
+			);
+			let cursor = 0;
+			let index = 0;
+			currentGraph.forEachNode((nodeId) => {
+				if (index % sampleStep === 0 && cursor < sample.length) {
+					sample[cursor] = currentGraph.getNodeAttribute(nodeId, "x") as number;
+					sample[cursor + 1] = currentGraph.getNodeAttribute(
+						nodeId,
+						"y",
+					) as number;
+					cursor += 2;
+				}
+				index += 1;
+			});
+			return sample;
+		};
+
+		const finish = () => {
+			if (disposed || finished) return;
+			finished = true;
+			stopFnRef.current = null;
+			window.clearInterval(intervalId);
+			window.clearTimeout(maxTimeoutId);
 			window.cancelAnimationFrame(frameId);
 			try {
 				layout.stop();
@@ -1353,9 +1595,8 @@ function SigmaWorkerLayout({
 				// Layout worker may already be disposed
 			}
 			onRunningChange?.(false);
-			// The worker stops on a timer, not on convergence, so the graph it
-			// leaves behind still overlaps. Settle it in rAF-sized batches — a
-			// synchronous pass over a large graph would drop frames.
+			// Settle leftover overlap in rAF-sized batches — a synchronous pass over
+			// a large graph would drop frames.
 			const refresh = () => {
 				try {
 					sigma.refresh({ skipIndexation: true });
@@ -1371,11 +1612,59 @@ function SigmaWorkerLayout({
 			).then(() => {
 				if (!disposed) refresh();
 			});
-		}, duration);
+		};
+		stopFnRef.current = finish;
+
+		try {
+			layout.start();
+			onRunningChange?.(true);
+			frameId = window.requestAnimationFrame(refreshLoop);
+		} catch {
+			try {
+				layout.kill();
+			} catch {
+				// Layout worker may already be disposed
+			}
+			return;
+		}
+
+		intervalId = window.setInterval(() => {
+			if (disposed || finished) return;
+			const sample = takeSample();
+			if (previousSample && previousSample.length === sample.length) {
+				let total = 0;
+				for (let index = 0; index < sample.length; index += 2) {
+					total += Math.hypot(
+						sample[index] - previousSample[index],
+						sample[index + 1] - previousSample[index + 1],
+					);
+				}
+				const meanMovement = total / Math.max(1, sample.length / 2);
+				settledStreak =
+					meanMovement < WORKER_CONVERGENCE_EPSILON ? settledStreak + 1 : 0;
+				// The minimum runtime keeps a briefly-quiet start from ending the
+				// layout before it has begun pulling anything apart.
+				if (
+					settledStreak >= WORKER_CONVERGENCE_STREAK &&
+					Date.now() - startedAt >= duration
+				) {
+					finish();
+					return;
+				}
+			}
+			previousSample = sample;
+		}, WORKER_CONVERGENCE_INTERVAL_MS);
+
+		maxTimeoutId = window.setTimeout(
+			finish,
+			duration * WORKER_MAX_DURATION_FACTOR,
+		);
 
 		return () => {
 			disposed = true;
-			window.clearTimeout(timeoutId);
+			stopFnRef.current = null;
+			window.clearInterval(intervalId);
+			window.clearTimeout(maxTimeoutId);
 			window.cancelAnimationFrame(frameId);
 			try {
 				layout.stop();
@@ -1407,10 +1696,161 @@ function SigmaWorkerLayout({
 	return null;
 }
 
+/** How long an explicit layout change animates. Long enough to track, short enough to not wait for. */
+const LAYOUT_ANIMATION_MS = 450;
+
+function easeOutCubic(t: number): number {
+	return 1 - (1 - t) ** 3;
+}
+
+/**
+ * Applies an explicit arrangement to the live scene and animates every node to
+ * its new position — the reader keeps their mental map because they can watch
+ * the old picture become the new one.
+ */
+function SigmaLayoutApplier({
+	command,
+	onApplied,
+}: {
+	command: GraphLayoutCommand | null;
+	onApplied?: () => void;
+}) {
+	const sigma = useSigma();
+	const lastSeqRef = useRef(0);
+	const animationRef = useRef(0);
+
+	useEffect(() => {
+		if (
+			!command ||
+			command.mode === "auto" ||
+			command.seq === lastSeqRef.current
+		)
+			return;
+		lastSeqRef.current = command.seq;
+
+		const graph = sigma.getGraph();
+		if (graph.order === 0) return;
+
+		const before = snapshotGraphPositions(graph);
+		const partition = partitionByConnectivity(graph);
+		const coreBounds = () => getLayoutBounds(graph, partition.connected);
+
+		switch (command.mode) {
+			case "grid":
+				packNodesOnGrid(graph, [...partition.connected, ...partition.isolated]);
+				break;
+			case "circular":
+				placeCircularLayout(graph, partition.connected);
+				placeDetachedNodes(graph, partition.isolated, coreBounds());
+				break;
+			case "radial":
+				placeRadialLayout(graph, partition.connected, {
+					centerId: command.centerNodeId ?? null,
+				});
+				placeDetachedNodes(graph, partition.isolated, coreBounds());
+				break;
+			case "hierarchy":
+				placeHierarchyLayout(graph, partition.connected);
+				placeDetachedNodes(graph, partition.isolated, coreBounds());
+				break;
+			case "force": {
+				// A synchronous run with a bounded budget: an explicit command should
+				// land as one movement, not as a background simmer.
+				const iterations =
+					graph.order <= 300 ? 300 : graph.order <= 1500 ? 150 : 60;
+				forceAtlas2.assign(graph, {
+					iterations,
+					settings: getFA2Settings(partition.connected.length, graph.size),
+				});
+				relaxOverlaps(graph, partition.connected, {
+					labelExtents: computeLabelExtents(graph, partition.connected),
+				});
+				placeDetachedNodes(graph, partition.isolated, coreBounds());
+				break;
+			}
+		}
+
+		if (
+			command.mode === "circular" ||
+			command.mode === "radial" ||
+			command.mode === "hierarchy"
+		) {
+			const labelExtents = computeLabelExtents(graph, partition.connected);
+			if (labelExtents) {
+				relaxOverlaps(graph, partition.connected, {
+					iterations: 6,
+					labelExtents,
+				});
+			}
+		}
+
+		const after = snapshotGraphPositions(graph);
+		for (const [nodeId, position] of before) {
+			if (!graph.hasNode(nodeId)) continue;
+			graph.setNodeAttribute(nodeId, "x", position.x);
+			graph.setNodeAttribute(nodeId, "y", position.y);
+		}
+		try {
+			// A drag may have frozen the framing; a new arrangement needs a new fit.
+			sigma.setCustomBBox(null);
+		} catch {
+			// The instance may be mid-teardown.
+		}
+
+		const startedAt = performance.now();
+		window.cancelAnimationFrame(animationRef.current);
+		const step = (now: number) => {
+			const t = Math.min(1, (now - startedAt) / LAYOUT_ANIMATION_MS);
+			const eased = easeOutCubic(t);
+			for (const [nodeId, target] of after) {
+				if (!graph.hasNode(nodeId)) continue;
+				const from = before.get(nodeId) ?? target;
+				graph.setNodeAttribute(
+					nodeId,
+					"x",
+					from.x + (target.x - from.x) * eased,
+				);
+				graph.setNodeAttribute(
+					nodeId,
+					"y",
+					from.y + (target.y - from.y) * eased,
+				);
+			}
+			try {
+				sigma.refresh({ skipIndexation: true });
+			} catch {
+				// WebGL context may be lost during the animation
+			}
+			if (t < 1) {
+				animationRef.current = window.requestAnimationFrame(step);
+			} else {
+				try {
+					sigma.refresh();
+				} catch {
+					// WebGL context may be lost during the final refresh
+				}
+				onApplied?.();
+			}
+		};
+		animationRef.current = window.requestAnimationFrame(step);
+	}, [command, sigma, onApplied]);
+
+	useEffect(() => () => window.cancelAnimationFrame(animationRef.current), []);
+
+	return null;
+}
+
 function SigmaControls({
 	onResetLayout,
+	onUnpinAll,
+	pinnedCount,
 	disabled,
-}: { onResetLayout: () => void; disabled?: boolean }) {
+}: {
+	onResetLayout: () => void;
+	onUnpinAll?: () => void;
+	pinnedCount?: number;
+	disabled?: boolean;
+}) {
 	const { t } = useTranslation("common");
 	const sigma = useSigma();
 	const buttonClassName = `h-8 w-8 flex items-center justify-center rounded transition-colors ${
@@ -1470,6 +1910,19 @@ function SigmaControls({
 			>
 				<RotateCcw className="h-4 w-4" />
 			</button>
+			{onUnpinAll && (pinnedCount ?? 0) > 0 && (
+				<button
+					type="button"
+					className={buttonClassName}
+					onClick={onUnpinAll}
+					title={t("unpinAllNodes", "Unpin all nodes ({{count}})", {
+						count: pinnedCount,
+					})}
+					disabled={disabled}
+				>
+					<PinOff className="h-4 w-4" />
+				</button>
+			)}
 		</div>
 	);
 }
@@ -1486,8 +1939,13 @@ export function GraphCanvas({
 	clusters,
 	onNodeClick,
 	onNodeShiftClick,
+	onNodeDoubleClick,
+	onNodeContextMenu,
 	onEdgeClick,
 	onStageClick,
+	persistKey,
+	layoutCommand,
+	onCanvasApi,
 	className,
 }: GraphCanvasProps) {
 	const { t } = useTranslation("common");
@@ -1500,6 +1958,8 @@ export function GraphCanvas({
 		useState<GraphPreparationState>(IDLE_PREPARATION_STATE);
 	const [showOverlay, setShowOverlay] = useState(false);
 	const [isWorkerLayoutRunning, setIsWorkerLayoutRunning] = useState(false);
+	const [workerStopToken, setWorkerStopToken] = useState(0);
+	const [pinnedCount, setPinnedCount] = useState(0);
 	const preparedDataRef = useRef<SubgraphResult | null>(null);
 	const graphRef = useRef<Graph | null>(graph);
 	const loadingRef = useRef(loading);
@@ -1507,10 +1967,53 @@ export function GraphCanvas({
 	const forceLayoutRef = useRef(false);
 	const lastClusterEpochRef = useRef<string | null>(null);
 	const lastPaletteKeyRef = useRef<string>("");
+	const pinnedNodesRef = useRef<Set<string>>(new Set());
+	const storedSceneAppliedRef = useRef(false);
+	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastAutoLayoutSeqRef = useRef(0);
 
 	graphRef.current = graph;
 	loadingRef.current = loading;
 	selectedNodeIdRef.current = selectedNodeId ?? null;
+
+	// Loaded once per storage key; hydrates both positions and pins so a scene a
+	// reader arranged yesterday comes back arranged.
+	const storedScene = useMemo(() => {
+		storedSceneAppliedRef.current = false;
+		return persistKey ? loadGraphScene(persistKey) : null;
+	}, [persistKey]);
+
+	useEffect(() => {
+		if (!storedScene) return;
+		pinnedNodesRef.current = new Set(storedScene.pinned);
+		setPinnedCount(storedScene.pinned.size);
+	}, [storedScene]);
+
+	const scheduleSceneSave = useCallback(() => {
+		if (!persistKey) return;
+		if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+		saveTimerRef.current = setTimeout(() => {
+			saveTimerRef.current = null;
+			const currentGraph = graphRef.current;
+			if (currentGraph) {
+				saveGraphScene(persistKey, currentGraph, pinnedNodesRef.current);
+			}
+		}, 1000);
+	}, [persistKey]);
+
+	useEffect(
+		() => () => {
+			// Flush a pending save on unmount so the arrangement survives navigation.
+			if (saveTimerRef.current) {
+				clearTimeout(saveTimerRef.current);
+				saveTimerRef.current = null;
+				if (persistKey && graphRef.current) {
+					saveGraphScene(persistKey, graphRef.current, pinnedNodesRef.current);
+				}
+			}
+		},
+		[persistKey],
+	);
 
 	useEffect(() => {
 		const paletteKey = () => {
@@ -1539,14 +2042,29 @@ export function GraphCanvas({
 	useEffect(() => {
 		void layoutRunKey;
 		const nextData = data;
-		const previousPositions = snapshotGraphPositions(graphRef.current);
+		let previousPositions = snapshotGraphPositions(graphRef.current);
+		// The first build of a persisted scene starts from the stored arrangement
+		// instead of a fresh layout — the preserve path then keeps it.
+		let restoredScene = false;
+		if (
+			previousPositions.size === 0 &&
+			storedScene &&
+			!storedSceneAppliedRef.current
+		) {
+			storedSceneAppliedRef.current = true;
+			previousPositions = storedScene.positions;
+			restoredScene = true;
+		}
 		// A regrouping has to relayout. Raising the node limit keeps enough old
 		// positions to clear the preserve threshold, which would otherwise swallow
 		// the new grouping and leave a stale-but-plausible arrangement on screen.
+		// The one exception is the build that restored a stored scene: its epoch
+		// change is bookkeeping, not a regroup, and forcing a layout there would
+		// discard the arrangement the reader saved.
 		const clusterEpoch = clusters?.epoch ?? null;
 		const regrouped = clusterEpoch !== lastClusterEpochRef.current;
 		lastClusterEpochRef.current = clusterEpoch;
-		const forceLayout = forceLayoutRef.current || regrouped;
+		const forceLayout = forceLayoutRef.current || (regrouped && !restoredScene);
 		forceLayoutRef.current = false;
 		let cancelled = false;
 
@@ -1595,10 +2113,23 @@ export function GraphCanvas({
 					anchorNodeId: selectedNodeIdRef.current,
 					forceLayout,
 					clusters,
+					pinnedIds: pinnedNodesRef.current,
 				},
 			);
 
 			if (!buildResult || cancelled) return;
+
+			// A pin on a node the new sample no longer contains is dead weight.
+			if (pinnedNodesRef.current.size > 0) {
+				const survivors = new Set<string>();
+				for (const nodeId of pinnedNodesRef.current) {
+					if (buildResult.graph.hasNode(nodeId)) survivors.add(nodeId);
+				}
+				if (survivors.size !== pinnedNodesRef.current.size) {
+					pinnedNodesRef.current = survivors;
+					setPinnedCount(survivors.size);
+				}
+			}
 
 			preparedDataRef.current = nextData;
 			startTransition(() => {
@@ -1620,7 +2151,18 @@ export function GraphCanvas({
 		return () => {
 			cancelled = true;
 		};
-	}, [data, layoutRunKey, clusters]);
+	}, [data, layoutRunKey, clusters, storedScene]);
+
+	// Every settled build is a scene worth remembering.
+	useEffect(() => {
+		if (graphRevision > 0) scheduleSceneSave();
+	}, [graphRevision, scheduleSceneSave]);
+
+	// The background layout keeps refining after the build's save; capture where
+	// it actually settled.
+	useEffect(() => {
+		if (!isWorkerLayoutRunning) scheduleSceneSave();
+	}, [isWorkerLayoutRunning, scheduleSceneSave]);
 
 	const theme = useMemo(() => {
 		void themeTick;
@@ -1789,6 +2331,9 @@ export function GraphCanvas({
 		visibleNodeIds,
 		neighborSet: null,
 		connectedEdgeSet: null,
+		labeledNeighborSet: null,
+		visibleBoost: 1,
+		visibleSizeCap: Number.POSITIVE_INFINITY,
 	});
 
 	// Keep ref in sync with props (no re-render)
@@ -1799,11 +2344,35 @@ export function GraphCanvas({
 	highlightRef.current.hiddenLabels = hiddenLabels;
 	highlightRef.current.visibleNodeIds = visibleNodeIds;
 
+	// Synced during render, not in an effect: the refresh that reads these runs
+	// from a child effect, which fires before this component's own effects would.
+	// When a filter leaves a fraction of the sample visible, the survivors get
+	// back the pixel size the full sample's fit had taken from them.
+	if (
+		graph &&
+		visibleNodeIds &&
+		visibleNodeIds.size > 0 &&
+		visibleNodeIds.size < graph.order
+	) {
+		highlightRef.current.visibleBoost = Math.max(
+			1,
+			Math.min(
+				3,
+				fitSizeScale(visibleNodeIds.size) / fitSizeScale(graph.order),
+			),
+		);
+		highlightRef.current.visibleSizeCap = maxNodeSize(visibleNodeIds.size);
+	} else {
+		highlightRef.current.visibleBoost = 1;
+		highlightRef.current.visibleSizeCap = Number.POSITIVE_INFINITY;
+	}
+
 	// Recompute neighbor sets when selectedNodeId changes
 	useEffect(() => {
 		if (!graph) {
 			highlightRef.current.neighborSet = null;
 			highlightRef.current.connectedEdgeSet = null;
+			highlightRef.current.labeledNeighborSet = null;
 			return;
 		}
 
@@ -1811,7 +2380,69 @@ export function GraphCanvas({
 		const sets = computeNeighborSets(graph, activeNode);
 		highlightRef.current.neighborSet = sets.neighborSet;
 		highlightRef.current.connectedEdgeSet = sets.connectedEdgeSet;
+		highlightRef.current.labeledNeighborSet = sets.labeledNeighborSet;
 	}, [selectedNodeId, graph]);
+
+	// Pin management, exposed to the host for context-menu actions.
+	const handleNodeDragged = useCallback(
+		(nodeId: string) => {
+			pinnedNodesRef.current.add(nodeId);
+			setPinnedCount(pinnedNodesRef.current.size);
+			scheduleSceneSave();
+		},
+		[scheduleSceneSave],
+	);
+
+	const setNodePinned = useCallback(
+		(nodeId: string, pinned: boolean) => {
+			const currentGraph = graphRef.current;
+			if (!currentGraph || !currentGraph.hasNode(nodeId)) return;
+			currentGraph.setNodeAttribute(nodeId, "pinned", pinned);
+			currentGraph.setNodeAttribute(nodeId, "fixed", pinned);
+			if (pinned) pinnedNodesRef.current.add(nodeId);
+			else pinnedNodesRef.current.delete(nodeId);
+			setPinnedCount(pinnedNodesRef.current.size);
+			scheduleSceneSave();
+		},
+		[scheduleSceneSave],
+	);
+
+	const handleUnpinAll = useCallback(() => {
+		const currentGraph = graphRef.current;
+		if (currentGraph) {
+			for (const nodeId of pinnedNodesRef.current) {
+				if (!currentGraph.hasNode(nodeId)) continue;
+				currentGraph.setNodeAttribute(nodeId, "pinned", false);
+				currentGraph.setNodeAttribute(nodeId, "fixed", false);
+			}
+		}
+		pinnedNodesRef.current.clear();
+		setPinnedCount(0);
+		scheduleSceneSave();
+	}, [scheduleSceneSave]);
+
+	useEffect(() => {
+		if (!onCanvasApi) return;
+		onCanvasApi({
+			pinNode: setNodePinned,
+			unpinAll: handleUnpinAll,
+			isPinned: (nodeId: string) => pinnedNodesRef.current.has(nodeId),
+		});
+		return () => onCanvasApi(null);
+	}, [onCanvasApi, setNodePinned, handleUnpinAll]);
+
+	// An explicit "auto" layout request is the reset gesture from the host.
+	useEffect(() => {
+		if (
+			!layoutCommand ||
+			layoutCommand.mode !== "auto" ||
+			layoutCommand.seq === lastAutoLayoutSeqRef.current
+		) {
+			return;
+		}
+		lastAutoLayoutSeqRef.current = layoutCommand.seq;
+		handleResetLayout();
+	}, [layoutCommand, handleResetLayout]);
 
 	// Sigma renders from mutable graph attributes, so a prop that only feeds the
 	// reducers needs an explicit refresh. This tuple's IDENTITY is the trigger —
@@ -1838,16 +2469,17 @@ export function GraphCanvas({
 		],
 	);
 
-	// Stable reducers — read all dynamic state from ref
+	// Stable reducers — read all dynamic state from the ref, and everything about
+	// the element from its own attributes: attribute-only reducers are what makes
+	// keeping them enabled affordable at the huge tier, where they used to be
+	// switched off (silently killing legend toggles, focus and search highlight).
 	const nodeReducer = useCallback(
 		(node: string, attrs: Record<string, unknown>) => {
 			const res = { ...attrs };
 			const hl = highlightRef.current;
 
-			if (!graph || !graph.hasNode(node)) return res;
-
-			const nodeLabel = graph.getNodeAttribute(node, "nodeLabel") as string;
-			const origColor = graph.getNodeAttribute(node, "originalColor") as string;
+			const nodeLabel = attrs.nodeLabel as string;
+			const origColor = attrs.originalColor as string;
 
 			if (hl.hiddenLabels?.has(nodeLabel)) {
 				res.hidden = true;
@@ -1857,6 +2489,20 @@ export function GraphCanvas({
 			if (hl.visibleNodeIds && !hl.visibleNodeIds.has(node)) {
 				res.hidden = true;
 				return res;
+			}
+
+			if (hl.visibleBoost > 1) {
+				res.size = Math.min(
+					((res.size as number) ?? DEFAULT_NODE_SIZE) * hl.visibleBoost,
+					hl.visibleSizeCap,
+				);
+			}
+
+			// A hand-pinned node wears a contrasting ring, so "why is this one not
+			// moving" always has a visible answer.
+			if (attrs.pinned === true) {
+				const [fgR, fgG, fgB] = getGraphTheme().fgRgb;
+				res.borderColor = `rgb(${fgR},${fgG},${fgB})`;
 			}
 
 			// Dropping back to a plain circle is what makes dimming visible at all:
@@ -1895,14 +2541,16 @@ export function GraphCanvas({
 					res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) * 1.3;
 				} else if (hl.neighborSet.has(node)) {
 					pullToForeground(2);
-					res.forceLabel = true;
+					// Only the biggest few neighbours get a forced caption; forcing all
+					// of them around a hub was a wall of text the grid exists to prevent.
+					if (hl.labeledNeighborSet?.has(node)) res.forceLabel = true;
 				} else {
 					pushToBackground();
 				}
 			}
 			return res;
 		},
-		[graph],
+		[],
 	);
 
 	const edgeReducer = useCallback(
@@ -1913,8 +2561,8 @@ export function GraphCanvas({
 			if (!graph || !graph.hasEdge(edge)) return res;
 
 			const [src, tgt] = graph.extremities(edge);
-			const srcLabel = graph.getNodeAttribute(src, "nodeLabel") as string;
-			const tgtLabel = graph.getNodeAttribute(tgt, "nodeLabel") as string;
+			const srcLabel = attrs.srcLabel as string;
+			const tgtLabel = attrs.tgtLabel as string;
 			const storedLabel = res.label as string | undefined;
 			if (
 				hl.hiddenLabels?.has(srcLabel) ||
@@ -1927,7 +2575,13 @@ export function GraphCanvas({
 				return res;
 			}
 
-			const origColor = graph.getEdgeAttribute(edge, "originalColor") as string;
+			// Relationship names appear on hover, selection and highlight only. The
+			// legend already names the types; drawn on every edge they were most of
+			// the unreadable text in a dense view.
+			res.label = undefined;
+
+			const origColor = attrs.originalColor as string;
+			const edgeId = attrs.edgeId as string | undefined;
 			const isHoveredEdge = hl.hoveredEdge === edge;
 
 			const hasNodeHighlight = Boolean(
@@ -1940,9 +2594,6 @@ export function GraphCanvas({
 			// Either channel alone drives the dim treatment. Gating the edge set behind a
 			// non-empty node set made "highlight these relationships" unexpressible.
 			if (hasNodeHighlight || hasEdgeHighlight) {
-				const edgeId = graph.getEdgeAttribute(edge, "edgeId") as
-					| string
-					| undefined;
 				const isHighlighted = hasEdgeHighlight
 					? Boolean(edgeId && hl.highlightedEdgeIds?.has(edgeId))
 					: Boolean(
@@ -1953,12 +2604,12 @@ export function GraphCanvas({
 					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;
-					res.label = undefined;
 					res.forceLabel = false;
 					return res;
 				}
 				res.color = hexToRgba(origColor, 0.5);
 				res.size = 1;
+				res.label = storedLabel;
 				res.forceLabel = true;
 				return res;
 			}
@@ -1972,13 +2623,11 @@ export function GraphCanvas({
 					res.color = hexToRgba(srcNodeColor, 0.7);
 					res.size = 1.5;
 					res.zIndex = 1;
-					res.label = undefined;
 					res.forceLabel = false;
 				} else {
 					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;
-					res.label = undefined;
 					res.forceLabel = false;
 				}
 				if (isHoveredEdge) {
@@ -1989,23 +2638,19 @@ export function GraphCanvas({
 					res.zIndex = 2;
 				}
 			} else if (isHoveredEdge) {
+				res.label = storedLabel;
 				res.forceLabel = true;
 				res.size = 1.5;
 				res.color = hexToRgba(origColor, 0.7);
 				res.zIndex = 1;
 			}
 
-			if (hl.selectedEdgeKey) {
-				const eid = graph.getEdgeAttribute(edge, "edgeId") as
-					| string
-					| undefined;
-				if (eid === hl.selectedEdgeKey) {
-					res.size = 2.5;
-					res.zIndex = 2;
-					res.color = hexToRgba(origColor, 0.9);
-					res.label = storedLabel;
-					res.forceLabel = true;
-				}
+			if (hl.selectedEdgeKey && edgeId === hl.selectedEdgeKey) {
+				res.size = 2.5;
+				res.zIndex = 2;
+				res.color = hexToRgba(origColor, 0.9);
+				res.label = storedLabel;
+				res.forceLabel = true;
 			}
 
 			return res;
@@ -2040,6 +2685,10 @@ export function GraphCanvas({
 			},
 			renderEdgeLabels: !isHuge,
 			enableEdgeEvents: !isHuge,
+			// Text and faint edges are what the eye cannot track mid-pan anyway;
+			// dropping them while the camera moves keeps the motion fluid.
+			hideLabelsOnMove: isLarge,
+			hideEdgesOnMove: isHuge,
 			edgeLabelSize: 10,
 			labelSize: isHuge ? 10 : isLarge ? 11 : 12,
 			// A rendered-pixel cutoff, so it tracks the same fit scale the nodes get:
@@ -2057,8 +2706,11 @@ export function GraphCanvas({
 			defaultDrawNodeLabel: drawNodeLabel,
 			defaultDrawNodeHover: drawNodeHover,
 			zIndex: !isHuge,
-			nodeReducer: isHuge ? undefined : nodeReducer,
-			edgeReducer: isHuge ? undefined : edgeReducer,
+			// Attribute-only reducers stay on at every size: turning them off above
+			// the huge threshold silently killed legend toggles, focus, search
+			// highlight and selection dimming exactly where orientation matters most.
+			nodeReducer,
+			edgeReducer,
 			// Sigma's default is `sqrt(ratio)`, which shrinks a node far slower than
 			// it shrinks the distance to its neighbours: zooming out to take in the
 			// whole graph is exactly when circles swallow the edges between them.
@@ -2084,7 +2736,12 @@ export function GraphCanvas({
 	const [bgR, bgG, bgB] = theme.bgRgb;
 
 	return (
-		<div className={`relative h-full w-full ${className ?? ""}`}>
+		<div
+			className={`relative h-full w-full ${className ?? ""}`}
+			onContextMenu={
+				onNodeContextMenu ? (event) => event.preventDefault() : undefined
+			}
+		>
 			{graph ? (
 				<SigmaContainer
 					graph={graph}
@@ -2101,8 +2758,11 @@ export function GraphCanvas({
 					<GraphEvents
 						onNodeClick={onNodeClick}
 						onNodeShiftClick={onNodeShiftClick}
+						onNodeDoubleClick={onNodeDoubleClick}
+						onNodeContextMenu={onNodeContextMenu}
 						onEdgeClick={onEdgeClick}
 						onStageClick={onStageClick}
+						onNodeDragged={handleNodeDragged}
 						highlightRef={highlightRef}
 						graph={graph}
 					/>
@@ -2112,11 +2772,21 @@ export function GraphCanvas({
 							graphRevision={graphRevision}
 							nodeCount={graph.order}
 							edgeCount={graph.size}
+							stopToken={workerStopToken}
 							onRunningChange={setIsWorkerLayoutRunning}
 						/>
 					) : null}
+					<SigmaLayoutApplier
+						command={layoutCommand ?? null}
+						onApplied={scheduleSceneSave}
+					/>
 					<SigmaRefresher refreshKey={sigmaRefreshTrigger} />
-					<SigmaControls onResetLayout={handleResetLayout} disabled={isBusy} />
+					<SigmaControls
+						onResetLayout={handleResetLayout}
+						onUnpinAll={handleUnpinAll}
+						pinnedCount={pinnedCount}
+						disabled={isBusy}
+					/>
 				</SigmaContainer>
 			) : null}
 
@@ -2124,6 +2794,15 @@ export function GraphCanvas({
 				<div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-full border bg-background/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
 					<LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
 					<span>{t("refiningLayout", "Refining layout")}</span>
+					<button
+						type="button"
+						className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] hover:bg-accent"
+						onClick={() => setWorkerStopToken((token) => token + 1)}
+						title={t("stopArranging", "Stop arranging and settle the layout")}
+					>
+						<Square className="h-2.5 w-2.5" />
+						{t("stop", "Stop")}
+					</button>
 				</div>
 			) : null}
 

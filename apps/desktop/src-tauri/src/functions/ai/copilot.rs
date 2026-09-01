@@ -5864,7 +5864,10 @@ async fn external_code_agent_chat_internal(
                 flow_like::flow::copilot::stream::safe_text_preview(error, 600),
             ));
         }
-        prompt = match (claude_role_appendix.as_deref(), resume_session_id.as_deref()) {
+        prompt = match (
+            claude_role_appendix.as_deref(),
+            resume_session_id.as_deref(),
+        ) {
             // Resumed continuation: the session already holds the platform prompt and the
             // model's own transcript — send only the compact continuation payload.
             (Some(_), Some(session)) => {
@@ -13946,7 +13949,10 @@ impl ExternalAgentInvocation {
         // The bounded role/lifecycle appendix belongs in the real system prompt, not the user
         // message; the board-embedding platform content stays on stdin because argv has OS
         // length limits.
-        if let Some(appendix) = append_system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(appendix) = append_system_prompt
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             args.extend(["--append-system-prompt".to_string(), appendix.to_string()]);
         }
         // Continuation phases within one run resume the previous phase's session so the model

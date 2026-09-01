@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="980" viewBox="0 0 1000 980" role="img" aria-labelledby="title desc">
+  <title id="title">How a browser reply reaches the waiting run</title>
+  <desc id="desc">The executor opens a ticket and registers the waiter before sending an interaction request and its ticket handle to the browser. The executor then waits. The browser sends a reply through the transport named by the handle. For cloud handles only, a failed primary delivery retries once through the API forwarder. The reply becomes visible to the registered request, its registration is removed, wait returns the response, and the run resumes.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="0.55" stop-color="#f2f7ff"/>
+      <stop offset="1" stop-color="#f8f5ff"/>
+    </linearGradient>
+    <linearGradient id="request" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7767ed"/>
+      <stop offset="1" stop-color="#a65cf3"/>
+    </linearGradient>
+    <linearGradient id="reply" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#10b5d4"/>
+      <stop offset="1" stop-color="#2787f5"/>
+    </linearGradient>
+    <filter id="shadow" x="-25%" y="-30%" width="150%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#6577a0" flood-opacity="0.15"/>
+    </filter>
+    <marker id="arrow-request" markerUnits="userSpaceOnUse" viewBox="0 0 18 18" refX="16" refY="9" markerWidth="18" markerHeight="18" orient="auto">
+      <path d="M1 1 17 9 1 17Z" fill="#9561ef"/>
+    </marker>
+    <marker id="arrow-reply" markerUnits="userSpaceOnUse" viewBox="0 0 18 18" refX="16" refY="9" markerWidth="18" markerHeight="18" orient="auto">
+      <path d="M1 1 17 9 1 17Z" fill="#188fdd"/>
+    </marker>
+    <marker id="arrow-fallback" markerUnits="userSpaceOnUse" viewBox="0 0 18 18" refX="16" refY="9" markerWidth="18" markerHeight="18" orient="auto">
+      <path d="M1 1 17 9 1 17Z" fill="#ef746a"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="980" rx="36" fill="url(#background)"/>
+  <circle cx="900" cy="70" r="185" fill="#c8d9ff" opacity="0.22"/>
+  <circle cx="65" cy="920" r="230" fill="#d8cbff" opacity="0.18"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="50" y="58" fill="#15213a" font-size="32" font-weight="730" letter-spacing="-0.8">How a browser reply reaches the waiting run</text>
+    <text x="50" y="94" fill="#55657e" font-size="18">Register, emit, wait, then accept one direct or forwarded reply.</text>
+
+    <g transform="translate(700 34)">
+      <rect width="270" height="58" rx="20" fill="#ffffff" opacity="0.96" stroke="#cbd6e5" stroke-width="2"/>
+      <circle cx="27" cy="29" r="6" fill="#9364ef"/>
+      <text x="43" y="35" fill="#55657e" font-size="14">request</text>
+      <circle cx="116" cy="29" r="6" fill="#159bd9"/>
+      <text x="132" y="35" fill="#55657e" font-size="14">reply</text>
+      <path d="M196 29h22" stroke="#ef746a" stroke-width="4" stroke-dasharray="6 6"/>
+      <text x="226" y="35" fill="#55657e" font-size="14">fallback</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <g transform="translate(20 126)">
+        <rect width="260" height="100" rx="23" fill="#ffffff" stroke="#cbd6e5" stroke-width="2"/>
+        <rect x="18" y="18" width="62" height="62" rx="18" fill="#edf0ff"/>
+        <path d="M38 37h22M38 49h31M38 61h18" stroke="#7268e8" stroke-width="5" stroke-linecap="round"/>
+        <text x="96" y="43" fill="#17213a" font-size="18" font-weight="750">RUN + CHANNEL</text>
+        <text x="96" y="69" fill="#55657e" font-size="16">waiting run</text>
+      </g>
+      <g transform="translate(370 126)">
+        <rect width="260" height="100" rx="23" fill="#ffffff" stroke="#cbd6e5" stroke-width="2"/>
+        <rect x="18" y="18" width="62" height="62" rx="18" fill="#e8f8fd"/>
+        <rect x="34" y="36" width="32" height="25" rx="4" fill="none" stroke="#15a8ca" stroke-width="5"/>
+        <path d="M34 45h32" stroke="#15a8ca" stroke-width="4"/>
+        <text x="96" y="43" fill="#17213a" font-size="18" font-weight="750">BROWSER CLIENT</text>
+        <text x="96" y="69" fill="#55657e" font-size="16">request responder</text>
+      </g>
+      <g transform="translate(730 126)">
+        <rect width="260" height="100" rx="23" fill="#ffffff" stroke="#cbd6e5" stroke-width="2"/>
+        <rect x="18" y="18" width="62" height="62" rx="18" fill="#e9f4ff"/>
+        <circle cx="49" cy="49" r="19" fill="none" stroke="#3288ee" stroke-width="5"/>
+        <path d="M41 49l6 6 12-14" fill="none" stroke="#3288ee" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="96" y="35" fill="#17213a" font-size="18" font-weight="750">REPLY BACKEND</text>
+        <text x="96" y="60" fill="#55657e" font-size="15">named by handle</text>
+        <text x="96" y="80" fill="#64748b" font-size="13">run-scoped grant</text>
+      </g>
+    </g>
+
+    <g stroke="#8495ad" stroke-width="3" stroke-dasharray="4 10" stroke-linecap="round" opacity="0.8">
+      <path d="M150 244V950"/>
+      <path d="M500 244V950"/>
+      <path d="M860 244V950"/>
+    </g>
+
+    <g transform="translate(30 262)" filter="url(#shadow)">
+      <rect width="370" height="74" rx="20" fill="#ffffff" stroke="#bcc9db" stroke-width="2"/>
+      <circle cx="38" cy="37" r="18" fill="#7166e8"/>
+      <text x="38" y="44" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="800">1</text>
+      <text x="72" y="30" fill="#17213a" font-size="18" font-weight="730">ticket = channel.open(ttl)</text>
+      <text x="72" y="55" fill="#55657e" font-size="15">connect if lazy; register before emit</text>
+    </g>
+
+    <g transform="translate(210 350)">
+      <rect width="350" height="45" rx="22" fill="#ffffff" stroke="#d5c9f2" stroke-width="2"/>
+      <text x="175" y="29" text-anchor="middle" fill="#654b9f" font-size="16" font-weight="720">2  interaction request + ticket.handle</text>
+    </g>
+    <path d="M172 412H478" fill="none" stroke="#8b61eb" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-request)"/>
+    <text x="300" y="440" fill="#65517f" font-size="16" font-weight="650">existing event stream</text>
+
+    <g transform="translate(30 462)" filter="url(#shadow)">
+      <rect width="398" height="72" rx="20" fill="#ffffff" stroke="#b9cfe0" stroke-width="2"/>
+      <circle cx="38" cy="36" r="18" fill="#258fd7"/>
+      <text x="38" y="43" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="800">3</text>
+      <text x="72" y="29" fill="#17213a" font-size="17" font-weight="730">channel.wait(&amp;ticket, cancel)</text>
+      <text x="72" y="54" fill="#55657e" font-size="14">an early registered reply resolves immediately</text>
+    </g>
+
+    <g>
+      <rect x="430" y="468" width="540" height="226" rx="24" fill="#ffffff" fill-opacity="0.68" stroke="#b9cde1" stroke-width="2"/>
+      <g transform="translate(450 452)">
+        <rect width="202" height="34" rx="17" fill="#eef6ff" stroke="#b8cde1" stroke-width="2"/>
+        <text x="101" y="23" text-anchor="middle" fill="#385671" font-size="14" font-weight="780" letter-spacing="0.4">4  CLIENT DELIVERY</text>
+      </g>
+
+      <g transform="translate(540 486)">
+        <rect width="392" height="43" rx="21" fill="#ffffff" stroke="#b8dcea" stroke-width="2"/>
+        <text x="196" y="27" text-anchor="middle" fill="#0d6f9b" font-size="16" font-weight="720">4a  Send ChannelPush via handle.transport</text>
+      </g>
+      <path d="M522 541H838" fill="none" stroke="#188fdd" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-reply)"/>
+
+      <path d="M452 577H948" stroke="#b7c4d5" stroke-width="2" stroke-dasharray="7 9"/>
+      <g transform="translate(460 561)">
+        <rect width="282" height="32" rx="16" fill="#f8faff"/>
+        <text x="141" y="22" text-anchor="middle" fill="#55657e" font-size="14" font-weight="680">cloud only · non-abort error</text>
+      </g>
+
+      <text x="520" y="620" fill="#a3453f" font-size="16" font-weight="700">4b  Retry through HTTP fallback</text>
+      <path d="M522 654H604" fill="none" stroke="#ef746a" stroke-width="6" stroke-dasharray="10 10" stroke-linecap="round" marker-end="url(#arrow-fallback)"/>
+      <g transform="translate(620 625)">
+        <rect width="170" height="58" rx="18" fill="#fff7f5" stroke="#edaaa4" stroke-width="2"/>
+        <text x="85" y="26" text-anchor="middle" fill="#9c3f39" font-size="16" font-weight="720">API forwarder</text>
+        <text x="85" y="47" text-anchor="middle" fill="#a8514b" font-size="13">forwards same push</text>
+      </g>
+      <path d="M806 654H838" fill="none" stroke="#ef746a" stroke-width="6" stroke-dasharray="10 10" stroke-linecap="round" marker-end="url(#arrow-fallback)"/>
+    </g>
+
+    <g transform="translate(250 704)">
+      <rect width="500" height="45" rx="22" fill="#ffffff" stroke="#b8dcea" stroke-width="2"/>
+      <text x="250" y="29" text-anchor="middle" fill="#0d6f9b" font-size="16" font-weight="720">5  reply becomes visible to the registered request</text>
+    </g>
+    <path d="M838 765H172" fill="none" stroke="#188fdd" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-reply)"/>
+    <text x="215" y="794" fill="#4f647d" font-size="16" font-weight="650">HTTP: poll observes row · cloud/desktop: router wakes waiter</text>
+
+    <g transform="translate(30 820)" filter="url(#shadow)">
+      <rect width="420" height="72" rx="20" fill="#ffffff" stroke="#9fd3e7" stroke-width="2"/>
+      <circle cx="38" cy="36" r="18" fill="#168fdb"/>
+      <text x="38" y="43" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="800">6</text>
+      <text x="72" y="29" fill="#17213a" font-size="17" font-weight="730">registration cleanup is complete</text>
+      <text x="72" y="54" fill="#55657e" font-size="15">wait() → Responded(value)</text>
+    </g>
+
+    <g transform="translate(30 908)" filter="url(#shadow)">
+      <rect width="268" height="58" rx="19" fill="#ffffff" stroke="#9fd3e7" stroke-width="2"/>
+      <circle cx="36" cy="29" r="17" fill="#168fdb"/>
+      <text x="36" y="36" text-anchor="middle" fill="#ffffff" font-size="17" font-weight="800">7</text>
+      <text x="68" y="36" fill="#17213a" font-size="18" font-weight="730">run resumes</text>
+    </g>
+  </g>
+</svg>

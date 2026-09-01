@@ -83,6 +83,18 @@ pub fn filter_event_list_execution(mut event: CoreEvent) -> CoreEvent {
     event
 }
 
+/// Remove the direct Board selector from a Page Event returned to a caller
+/// that cannot use the direct Board path. The Event and Page IDs remain
+/// sufficient for bootstrap and invoke-event requests.
+pub fn redact_page_event_board_metadata(mut event: CoreEvent) -> CoreEvent {
+    if event.default_page_id.is_some() {
+        event.board_id.clear();
+        event.board_version = None;
+        event.node_id.clear();
+    }
+    event
+}
+
 const USER_FACING_EVENT_TYPES: &[&str] = &["simple_chat", "generic_form", "quick_action"];
 
 /// Event types backing generated machinery rather than an author-managed event.
@@ -1075,5 +1087,24 @@ mod tests {
             .default_value
             .clone();
         assert_eq!(restored, Some(b"stored".to_vec()));
+    }
+
+    #[test]
+    fn runtime_page_event_redaction_hides_only_the_direct_board_selector() {
+        let ordinary = event_with(HashMap::new());
+        assert_eq!(
+            redact_page_event_board_metadata(ordinary.clone()).board_id,
+            ordinary.board_id
+        );
+
+        let mut page = ordinary;
+        page.default_page_id = Some("page-1".to_string());
+        page.board_version = Some((1, 2, 3));
+        let redacted = redact_page_event_board_metadata(page);
+
+        assert_eq!(redacted.default_page_id.as_deref(), Some("page-1"));
+        assert!(redacted.board_id.is_empty());
+        assert!(redacted.board_version.is_none());
+        assert!(redacted.node_id.is_empty());
     }
 }

@@ -12,6 +12,12 @@ export interface GraphQueryPanelProps {
 	results: unknown[] | null;
 	loading?: boolean;
 	error?: string | null;
+	/**
+	 * Puts the current results onto the canvas. Offered only when the rows
+	 * could be resolved back into nodes and edges of this ontology.
+	 */
+	onAddToCanvas?: () => void;
+	addToCanvasCount?: number;
 }
 
 export function GraphQueryPanel({
@@ -19,6 +25,8 @@ export function GraphQueryPanel({
 	results,
 	loading,
 	error,
+	onAddToCanvas,
+	addToCanvasCount,
 }: GraphQueryPanelProps) {
 	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
@@ -43,18 +51,36 @@ export function GraphQueryPanel({
 	return (
 		<div className="flex flex-col border rounded-lg bg-background overflow-hidden">
 			<div className="p-3 border-b space-y-2">
-				<div className="flex items-center justify-between">
+				<div className="flex items-center justify-between gap-2">
 					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
 						{t("cypherQuery", "Cypher Query")}
 					</p>
-					<Button
-						size="sm"
-						onClick={handleRun}
-						disabled={loading || !query.trim()}
-					>
-						<Play className="h-3.5 w-3.5 mr-1" />
-						{loading ? "Running..." : "Run"}
-					</Button>
+					<div className="flex items-center gap-1.5">
+						{onAddToCanvas && (addToCanvasCount ?? 0) > 0 && (
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={onAddToCanvas}
+								title={t(
+									"drawTheseResultsOnTheGraphCanvas",
+									"Draw these results on the graph canvas",
+								)}
+							>
+								<Network className="h-3.5 w-3.5 mr-1" />
+								{t("addCountToCanvas", "Add {{count}} to canvas", {
+									count: addToCanvasCount,
+								})}
+							</Button>
+						)}
+						<Button
+							size="sm"
+							onClick={handleRun}
+							disabled={loading || !query.trim()}
+						>
+							<Play className="h-3.5 w-3.5 mr-1" />
+							{loading ? "Running..." : "Run"}
+						</Button>
+					</div>
 				</div>
 				<textarea
 					value={query}

@@ -70,6 +70,11 @@ pub struct AzureRuntimeCredentials {
     /// SAS token for the caller's scratch directory (tmp/user/{sub}/apps/{app_id})
     #[serde(default)]
     pub tmp_sas_token: Option<String>,
+    /// Read-only SAS for draft artifacts (tmp/apps/{app_id}) on the meta
+    /// container. A directory SAS signs exactly one directory, so the
+    /// `apps/{app_id}` meta SAS cannot also cover the draft prefix.
+    #[serde(default)]
+    pub draft_meta_sas_token: Option<String>,
     pub meta_container: String,
     pub content_container: String,
     pub logs_container: String,
@@ -85,6 +90,9 @@ pub struct AzureRuntimeCredentials {
     pub content_path_prefix: Option<String>,
     /// User-level content path prefix (e.g., "users/{sub}/apps/{app_id}")
     pub user_content_path_prefix: Option<String>,
+    /// Directory signed by `draft_meta_sas_token` (e.g., "tmp/apps/{app_id}")
+    #[serde(default)]
+    pub draft_meta_path_prefix: Option<String>,
 }
 
 #[cfg(feature = "azure")]
@@ -110,6 +118,10 @@ impl std::fmt::Debug for AzureRuntimeCredentials {
             .field(
                 "tmp_sas_token",
                 &self.tmp_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "draft_meta_sas_token",
+                &self.draft_meta_sas_token.as_ref().map(|_| "[REDACTED]"),
             )
             .field("meta_container", &self.meta_container)
             .field("content_container", &self.content_container)
@@ -138,6 +150,7 @@ impl AzureRuntimeCredentials {
             user_content_sas_token: None,
             logs_sas_token: None,
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_container: meta_container.to_string(),
             content_container: content_container.to_string(),
             logs_container: logs_container.to_string(),
@@ -146,6 +159,7 @@ impl AzureRuntimeCredentials {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
         }
     }
 
@@ -164,6 +178,7 @@ impl AzureRuntimeCredentials {
             user_content_sas_token: None,
             logs_sas_token: None,
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_container: std::env::var("AZURE_META_CONTAINER")
                 .or_else(|_| std::env::var("META_BUCKET"))
                 .unwrap_or_default(),
@@ -176,6 +191,7 @@ impl AzureRuntimeCredentials {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
         }
     }
 
@@ -186,6 +202,7 @@ impl AzureRuntimeCredentials {
             user_content_sas_token: None,
             logs_sas_token: None,
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_container: self.meta_container.clone(),
             content_container: self.content_container.clone(),
             logs_container: self.logs_container.clone(),
@@ -194,6 +211,7 @@ impl AzureRuntimeCredentials {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
         }
     }
 
@@ -237,11 +255,13 @@ impl AzureRuntimeCredentials {
         self.expiration.is_some()
             || self.content_path_prefix.is_some()
             || self.user_content_path_prefix.is_some()
+            || self.draft_meta_path_prefix.is_some()
             || self.meta_sas_token.is_some()
             || self.content_sas_token.is_some()
             || self.user_content_sas_token.is_some()
             || self.logs_sas_token.is_some()
             || self.tmp_sas_token.is_some()
+            || self.draft_meta_sas_token.is_some()
     }
 
     /// Mirrors `AzureSharedCredentials::lance_sas_or_ambient`. `make_azure_builder`
@@ -303,6 +323,11 @@ impl AzureRuntimeCredentials {
                 &issuer,
             )
         };
+
+        // Only ServerExecute reads draft artifacts, mirroring the AWS/GCP/R2
+        // executor policies; every other mode leaves both slots empty.
+        let mut draft_meta_sas_token = None;
+        let mut draft_meta_path_prefix = None;
 
         // Determine which containers and paths need SAS tokens based on access mode
         let (
@@ -585,14 +610,30 @@ impl AzureRuntimeCredentials {
                 )
             }
             CredentialsAccess::ServerExecute => {
+                let (meta_prefix, meta_permissions) = server_execute_meta_scope(app_id);
                 let meta_sas = generate_directory_sas(
                     &self.account_name,
                     &self.meta_container,
-                    &format!("apps/{}", app_id),
-                    "rl",
+                    &meta_prefix,
+                    meta_permissions,
                     &expiry_str,
                     &issuer,
                 )?;
+                // Draft artifacts (compiled boards, exact `.board` snapshots,
+                // prerun manifests) live under `tmp/apps/{app_id}` on the meta
+                // container. A directory SAS signs exactly one directory, so
+                // unlike the AWS/GCP prefix lists this needs a second,
+                // read-only token beside the `apps/{app_id}` meta SAS.
+                let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(app_id);
+                draft_meta_sas_token = Some(generate_directory_sas(
+                    &self.account_name,
+                    &self.meta_container,
+                    &draft_prefix,
+                    draft_permissions,
+                    &expiry_str,
+                    &issuer,
+                )?);
+                draft_meta_path_prefix = Some(draft_prefix);
                 let app_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -649,6 +690,7 @@ impl AzureRuntimeCredentials {
             user_content_sas_token: user_content_sas,
             logs_sas_token: logs_sas,
             tmp_sas_token,
+            draft_meta_sas_token,
             meta_container: self.meta_container.clone(),
             content_container: self.content_container.clone(),
             logs_container: self.logs_container.clone(),
@@ -657,6 +699,7 @@ impl AzureRuntimeCredentials {
             expiration: Some(expiry),
             content_path_prefix,
             user_content_path_prefix,
+            draft_meta_path_prefix,
         })
     }
 
@@ -868,6 +911,29 @@ impl AzureUserDelegationSasIssuer {
     }
 }
 
+/// Read-only meta scope for the executor: version artifacts and boards under
+/// `apps/{app_id}`.
+///
+/// Draft artifacts live under `tmp/apps/{app_id}` and are covered by the
+/// separate SAS from [`server_execute_draft_meta_scope`] — an Azure directory
+/// SAS signs exactly one directory, and widening this one to the container
+/// root would expose every app's metadata.
+#[cfg(feature = "azure")]
+fn server_execute_meta_scope(app_id: &str) -> (String, &'static str) {
+    (format!("apps/{app_id}"), "rl")
+}
+
+/// Read-only draft-artifact scope for the executor: compiled drafts, exact
+/// `.board` snapshots and prerun manifests under `tmp/apps/{app_id}`
+/// (see `flow_like::flow::compiled::draft_artifact_dir`), lifecycle-reclaimed
+/// via the `tmp/` prefix. Read+list only — only the API writes drafts, which
+/// anchors `entry_authority_revision`. The executor routes meta reads under
+/// this directory through the token (`AzureSharedCredentials::to_store_type`).
+#[cfg(feature = "azure")]
+fn server_execute_draft_meta_scope(app_id: &str) -> (String, &'static str) {
+    (format!("tmp/apps/{app_id}"), "rl")
+}
+
 /// Generates an HTTPS-only directory SAS for an HNS/ADLS Gen2 path.
 /// The secure Azure API reaches this through a Microsoft Entra user delegation
 /// key; shared-key signing remains only for backward-compatible callers that
@@ -1054,6 +1120,7 @@ impl RuntimeCredentialsTrait for AzureRuntimeCredentials {
             user_content_sas_token: self.user_content_sas_token.clone(),
             logs_sas_token: self.logs_sas_token.clone(),
             tmp_sas_token: self.tmp_sas_token.clone(),
+            draft_meta_sas_token: self.draft_meta_sas_token.clone(),
             meta_container: self.meta_container.clone(),
             content_container: self.content_container.clone(),
             logs_container: self.logs_container.clone(),
@@ -1062,6 +1129,7 @@ impl RuntimeCredentialsTrait for AzureRuntimeCredentials {
             expiration: self.expiration,
             content_path_prefix: self.content_path_prefix.clone(),
             user_content_path_prefix: self.user_content_path_prefix.clone(),
+            draft_meta_path_prefix: self.draft_meta_path_prefix.clone(),
         })
     }
 
@@ -1217,6 +1285,7 @@ mod integration_tests {
             user_content_sas_token: None,
             logs_sas_token: None,
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_container: "meta-secret".to_string(),
             content_container: "content-data".to_string(),
             logs_container: "logs".to_string(),
@@ -1225,6 +1294,7 @@ mod integration_tests {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
         }
     }
 
@@ -1234,8 +1304,8 @@ mod integration_tests {
 
     /// Signed directory depth. The container and directory are signed but not
     /// emitted in the token, so `sdd` is the only handle a unit test has on which
-    /// directory a SAS actually covers: `apps/{app}` is 2, `users/{sub}/apps/{app}`
-    /// is 4, `tmp/user/{sub}/apps/{app}` is 5.
+    /// directory a SAS actually covers: `apps/{app}` is 2, `tmp/apps/{app}` is 3,
+    /// `users/{sub}/apps/{app}` is 4, `tmp/user/{sub}/apps/{app}` is 5.
     fn sas_directory_depth(token: &str) -> Option<u32> {
         token
             .split('&')
@@ -1260,6 +1330,10 @@ mod integration_tests {
             assert!(
                 scoped.meta_sas_token.is_none(),
                 "{mode} must not expose app metadata"
+            );
+            assert!(
+                scoped.draft_meta_sas_token.is_none(),
+                "{mode} must not expose draft artifacts - only ServerExecute reads them"
             );
         }
     }
@@ -1321,6 +1395,68 @@ mod integration_tests {
             .as_deref()
             .expect("ServerExecute should include meta read credentials");
         assert_eq!(sas_permissions(meta), Some("rl"));
+        assert_eq!(sas_directory_depth(meta), Some(2));
+        let (meta_prefix, meta_permissions) = server_execute_meta_scope(TEST_APP_ID);
+        assert_eq!(meta_prefix, format!("apps/{TEST_APP_ID}"));
+        assert_eq!(meta_permissions, "rl");
+
+        // Draft artifacts live under tmp/apps/{app_id}, which a directory SAS
+        // for apps/{app_id} cannot cover — ServerExecute therefore carries a
+        // second meta SAS scoped to exactly that directory, read+list only:
+        // only the API writes drafts (the trust anchor for
+        // `entry_authority_revision`).
+        let draft_meta = scoped
+            .draft_meta_sas_token
+            .as_deref()
+            .expect("ServerExecute should include draft-artifact read credentials");
+        let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(TEST_APP_ID);
+        assert_eq!(draft_prefix, format!("tmp/apps/{TEST_APP_ID}"));
+        assert_eq!(draft_permissions, "rl");
+        assert_eq!(sas_permissions(draft_meta), Some("rl"));
+        let draft_meta_permissions =
+            sas_permissions(draft_meta).expect("draft SAS should carry permissions");
+        assert!(
+            !draft_meta_permissions.contains('w')
+                && !draft_meta_permissions.contains('d')
+                && !draft_meta_permissions.contains('a')
+                && !draft_meta_permissions.contains('c'),
+            "the draft SAS must never grant a write, got {draft_meta_permissions}"
+        );
+        // tmp/apps/{app_id}
+        assert_eq!(sas_directory_depth(draft_meta), Some(3));
+        assert_eq!(
+            scoped.draft_meta_path_prefix.as_deref(),
+            Some(draft_prefix.as_str()),
+            "the executor routes meta reads by this prefix"
+        );
+
+        let draft_artifact = flow_like::flow::compiled::draft_artifact_path(
+            TEST_APP_ID,
+            "board-1",
+            "etag",
+            &[7; 32],
+        )
+        .to_string();
+        let draft_source =
+            flow_like::flow::compiled::draft_source_path(TEST_APP_ID, "board-1", "etag")
+                .to_string();
+        let draft_manifest =
+            flow_like::flow::compiled::draft_manifest_path(TEST_APP_ID, "board-1", "etag")
+                .to_string();
+        let other_app_artifact = flow_like::flow::compiled::draft_artifact_path(
+            &format!("{TEST_APP_ID}-other"),
+            "board-1",
+            "etag",
+            &[7; 32],
+        )
+        .to_string();
+        for path in [&draft_artifact, &draft_source, &draft_manifest] {
+            assert!(
+                path.starts_with(&format!("{draft_prefix}/")),
+                "{path} must be inside the ServerExecute draft meta scope {draft_prefix}"
+            );
+        }
+        assert!(!other_app_artifact.starts_with(&format!("{draft_prefix}/")));
 
         let content = scoped
             .content_sas_token
@@ -1397,6 +1533,10 @@ mod integration_tests {
             assert!(
                 scoped.tmp_sas_token.is_none(),
                 "{mode} has no reason to reach scratch storage"
+            );
+            assert!(
+                scoped.draft_meta_sas_token.is_none(),
+                "{mode} has no reason to reach draft artifacts - only ServerExecute reads them"
             );
         }
     }
@@ -1725,6 +1865,7 @@ mod integration_tests {
             content_sas_token: None,
             logs_sas_token: None,
             tmp_sas_token: None,
+            draft_meta_sas_token: None,
             meta_sas_token: None,
             meta_container: "meta".to_string(),
             logs_container: "logs".to_string(),
@@ -1734,6 +1875,7 @@ mod integration_tests {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+            draft_meta_path_prefix: None,
             user_content_sas_token: None,
         };
 

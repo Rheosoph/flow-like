@@ -1641,6 +1641,25 @@ const customerOperationsSubgraph = {
 	truncated: false,
 };
 
+/** Doc fixtures only need the fields the Sources cards read. */
+const docTableColumns = (columns: [string, string][]) =>
+	columns.map(([name, family]) => ({
+		name,
+		data_type: family === "vector" ? "FixedSizeList(Float32, 768)" : family,
+		family,
+		nullable: true,
+		...(family === "vector" ? { vector_size: 768 } : {}),
+	}));
+
+const docConsumers = (overrides: JsonRecord = {}) => ({
+	relations: 0,
+	actions: 0,
+	views: 0,
+	queries: 0,
+	exposed: false,
+	...overrides,
+});
+
 const baseResponses: Record<string, unknown> = {
 	...onboardingFixture.responses,
 	get_current_profile: settingsProfile,
@@ -1732,6 +1751,265 @@ const baseResponses: Record<string, unknown> = {
 		"workflow_runs",
 	],
 	db_table_names_user: [],
+	// Mirrors db_table_names so the Sources cards render with real metrics rather
+	// than empty placeholders. Only the fields the cards read are filled in.
+	db_table_summaries: [
+		{
+			name: "accounts",
+			rows: 1_284,
+			columns: docTableColumns([
+				["account_id", "text"],
+				["name", "text"],
+				["tier", "text"],
+				["seats", "number"],
+				["renews_at", "time"],
+				["active", "bool"],
+			]),
+			indexes: [
+				{
+					name: "account_id_idx",
+					index_type: "BTree",
+					columns: ["account_id"],
+				},
+			],
+			storage: {
+				total_bytes: 4_194_304,
+				num_fragments: 2,
+				num_small_fragments: 0,
+			},
+			consumers: docConsumers({
+				object_type: "Account",
+				object_color: "#6ea8fe",
+				relations: 1,
+				views: 1,
+			}),
+		},
+		{
+			name: "customer_accounts",
+			rows: 1_284,
+			columns: docTableColumns([
+				["customer_id", "text"],
+				["account_id", "text"],
+				["role", "text"],
+				["joined_at", "time"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 786_432,
+				num_fragments: 1,
+				num_small_fragments: 1,
+			},
+			consumers: docConsumers({ relations: 2 }),
+		},
+		{
+			name: "customers",
+			rows: 8_642,
+			columns: docTableColumns([
+				["customer_id", "text"],
+				["name", "text"],
+				["plan", "text"],
+				["status", "text"],
+				["open_tickets", "number"],
+				["last_contact", "time"],
+			]),
+			indexes: [
+				{
+					name: "customer_id_idx",
+					index_type: "BTree",
+					columns: ["customer_id"],
+				},
+				{ name: "status_idx", index_type: "Bitmap", columns: ["status"] },
+			],
+			storage: {
+				total_bytes: 18_874_368,
+				num_fragments: 3,
+				num_small_fragments: 0,
+			},
+			consumers: docConsumers({
+				object_type: "Customer",
+				object_color: "#34d399",
+				relations: 2,
+				actions: 1,
+				views: 1,
+				queries: 2,
+			}),
+		},
+		{
+			name: "knowledge_articles",
+			rows: 412,
+			columns: docTableColumns([
+				["article_id", "text"],
+				["title", "text"],
+				["body", "text"],
+				["published", "bool"],
+				["updated_at", "time"],
+				["embedding", "vector"],
+			]),
+			indexes: [
+				{ name: "body_fts", index_type: "FTS", columns: ["body"] },
+				{ name: "embedding_idx", index_type: "IvfPq", columns: ["embedding"] },
+			],
+			storage: {
+				total_bytes: 134_217_728,
+				num_fragments: 5,
+				num_small_fragments: 0,
+			},
+			consumers: docConsumers({
+				object_type: "Article",
+				object_color: "#a78bfa",
+				relations: 1,
+				views: 1,
+				queries: 1,
+			}),
+		},
+		{
+			name: "products",
+			rows: 96,
+			columns: docTableColumns([
+				["product_id", "text"],
+				["name", "text"],
+				["family", "text"],
+				["list_price", "number"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 131_072,
+				num_fragments: 1,
+				num_small_fragments: 1,
+			},
+			consumers: docConsumers({
+				object_type: "Product",
+				object_color: "#fbbf24",
+				relations: 1,
+				views: 1,
+			}),
+		},
+		{
+			name: "support_agents",
+			rows: 34,
+			columns: docTableColumns([
+				["agent_id", "text"],
+				["name", "text"],
+				["team", "text"],
+				["available", "bool"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 65_536,
+				num_fragments: 1,
+				num_small_fragments: 1,
+			},
+			consumers: docConsumers({
+				object_type: "Agent",
+				object_color: "#f472b6",
+				relations: 1,
+				actions: 1,
+			}),
+		},
+		{
+			name: "support_tickets",
+			rows: 24_918,
+			columns: docTableColumns([
+				["ticket_id", "text"],
+				["customer_id", "text"],
+				["agent_id", "text"],
+				["subject", "text"],
+				["body", "text"],
+				["priority", "number"],
+				["status", "text"],
+				["opened_at", "time"],
+				["closed_at", "time"],
+				["escalated", "bool"],
+				["tags", "struct"],
+			]),
+			indexes: [
+				{ name: "body_fts", index_type: "FTS", columns: ["body"] },
+				{ name: "opened_at_idx", index_type: "BTree", columns: ["opened_at"] },
+				{ name: "status_idx", index_type: "Bitmap", columns: ["status"] },
+			],
+			storage: {
+				total_bytes: 402_653_184,
+				num_fragments: 9,
+				num_small_fragments: 1,
+			},
+			consumers: docConsumers({
+				object_type: "Ticket",
+				object_color: "#f97362",
+				relations: 4,
+				actions: 3,
+				views: 1,
+				queries: 4,
+			}),
+		},
+		{
+			name: "ticket_articles",
+			rows: 6_204,
+			columns: docTableColumns([
+				["ticket_id", "text"],
+				["article_id", "text"],
+				["helpful", "bool"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 2_097_152,
+				num_fragments: 2,
+				num_small_fragments: 0,
+			},
+			consumers: docConsumers({ relations: 2 }),
+		},
+		{
+			name: "ticket_assignments",
+			rows: 31_402,
+			columns: docTableColumns([
+				["ticket_id", "text"],
+				["agent_id", "text"],
+				["assigned_at", "time"],
+				["released_at", "time"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 12_582_912,
+				num_fragments: 41,
+				num_small_fragments: 33,
+			},
+			consumers: docConsumers({ relations: 2 }),
+		},
+		{
+			name: "ticket_products",
+			rows: 18_770,
+			columns: docTableColumns([
+				["ticket_id", "text"],
+				["product_id", "text"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 5_242_880,
+				num_fragments: 2,
+				num_small_fragments: 0,
+			},
+			consumers: docConsumers({ relations: 2 }),
+		},
+		{
+			name: "workflow_runs",
+			rows: 142_880,
+			columns: docTableColumns([
+				["run_id", "text"],
+				["board_id", "text"],
+				["status", "text"],
+				["started_at", "time"],
+				["duration_ms", "number"],
+				["payload", "struct"],
+			]),
+			indexes: [],
+			storage: {
+				total_bytes: 268_435_456,
+				num_fragments: 12,
+				num_small_fragments: 2,
+			},
+			consumers: docConsumers({ queries: 1 }),
+		},
+	],
+	db_table_summaries_user: [],
 	db_schema: {
 		metadata: { name: "customers" },
 		fields: [

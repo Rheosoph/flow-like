@@ -5523,7 +5523,10 @@ mod tests {
             .expect("commit returns structured source response");
         assert_eq!(committed["status"], "queued", "{committed:#}");
         assert!(committed.get("source").is_none(), "{committed:#}");
-        assert_eq!(committed["source_bytes"].as_u64(), Some(source.len() as u64));
+        assert_eq!(
+            committed["source_bytes"].as_u64(),
+            Some(source.len() as u64)
+        );
         assert!(committed.get("commands").is_none());
 
         let mut queued = queue.lock().expect("command queue lock");

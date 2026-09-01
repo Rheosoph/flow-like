@@ -386,10 +386,21 @@ function callFunctionData(
 }
 
 /**
- * Check if this is a struct_in or struct_out pin from break/make struct nodes.
+ * Check if this is a boundary pin of the Structs family (break/make/cast).
+ *
+ * These pins adopt whatever schema they are handed in `on_update`, so they must be wireable
+ * before they have one. `struct_shape` is Cast to Struct's shape donor: it starts on the open
+ * marker and would otherwise be refused by the enforce_schema rule below against exactly the
+ * typed producers it exists to read a shape from.
+ *
+ * Mirrored in Rust by `schema_constraints_are_compatible` in `flow/ast/reconcile.rs`.
  */
 function isStructIOPin(pin: IPin): boolean {
-	return pin.name === "struct_in" || pin.name === "struct_out";
+	return (
+		pin.name === "struct_in" ||
+		pin.name === "struct_out" ||
+		pin.name === "struct_shape"
+	);
 }
 
 const OPEN_OBJECT_SCHEMA_KEYS = new Set(["type", "additionalProperties"]);

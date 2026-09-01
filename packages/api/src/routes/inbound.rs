@@ -1909,6 +1909,7 @@ async fn dispatch_event_collect(
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
         board_version: core_event.board_version,
+        board_etag: None,
         node_id: target_node_id,
         event_json: Some(event_json),
         payload,

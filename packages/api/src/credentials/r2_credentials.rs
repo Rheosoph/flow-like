@@ -272,15 +272,9 @@ impl R2RuntimeCredentials {
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
 
-        let apps_prefix = format!("apps/{}/", app_id);
-        self.scoped_bucket_credentials(
-            &self.meta_bucket,
-            "object-read-only",
-            vec![apps_prefix],
-            None,
-            None,
-        )
-        .await
+        let (permission, prefixes) = server_execute_meta_scope(app_id);
+        self.scoped_bucket_credentials(&self.meta_bucket, permission, prefixes, None, None)
+            .await
     }
 
     async fn scoped_server_content_write_credentials(
@@ -454,6 +448,17 @@ impl R2RuntimeCredentials {
         resp.result
             .ok_or_else(|| anyhow!("R2 temp credentials response missing result"))
     }
+}
+
+/// Read-only meta scope for the executor: version artifacts and boards under
+/// `apps/{app_id}/`, plus draft artifacts under `tmp/apps/{app_id}/` — the
+/// drafts are written only by the API (the trust anchor for
+/// `entry_authority_revision`) and reclaimed by lifecycle rules on `tmp/`.
+fn server_execute_meta_scope(app_id: &str) -> (&'static str, Vec<String>) {
+    (
+        "object-read-only",
+        vec![format!("apps/{app_id}/"), format!("tmp/apps/{app_id}/")],
+    )
 }
 
 fn scoped_content_path_prefixes(
@@ -634,5 +639,25 @@ mod tests {
             assert_eq!(app, Some("apps/app-1".to_string()));
             assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
         }
+    }
+
+    #[test]
+    fn test_r2_server_execute_can_read_app_scoped_draft_artifacts() {
+        let (permission, prefixes) = server_execute_meta_scope("app-1");
+        let draft_artifact =
+            flow_like::flow::compiled::draft_artifact_path("app-1", "board-1", "etag", &[7; 32])
+                .to_string();
+        let other_app_artifact =
+            flow_like::flow::compiled::draft_artifact_path("app-10", "board-1", "etag", &[7; 32])
+                .to_string();
+
+        assert_eq!(permission, "object-read-only");
+        assert_eq!(
+            prefixes,
+            vec!["apps/app-1/".to_string(), "tmp/apps/app-1/".to_string()]
+        );
+        assert!(draft_artifact.starts_with(&prefixes[1]));
+        assert!(!other_app_artifact.starts_with(&prefixes[1]));
+        assert!(!other_app_artifact.starts_with(&prefixes[0]));
     }
 }

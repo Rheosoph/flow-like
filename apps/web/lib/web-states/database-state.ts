@@ -7,6 +7,7 @@ import {
 	type IIndexConfig,
 	IIndexType,
 	type IQueryTablePayload,
+	type ITableSummary,
 } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import {
 	type WebBackendRef,
@@ -208,6 +209,20 @@ export class WebDatabaseState implements IDatabaseState {
 	async listTablesUser(appId: string): Promise<string[]> {
 		try {
 			return await apiGet<string[]>(`apps/${appId}/db/user`, this.backend.auth);
+		} catch {
+			return [];
+		}
+	}
+
+	async listTableSummaries(
+		appId: string,
+		userScoped?: boolean,
+	): Promise<ITableSummary[]> {
+		try {
+			return await apiGet<ITableSummary[]>(
+				`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
+				this.backend.auth,
+			);
 		} catch {
 			return [];
 		}

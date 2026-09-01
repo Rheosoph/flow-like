@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    QueryOrder, QuerySelect, Set, sea_query::OnConflict,
 };
 use std::sync::Arc;
 
@@ -26,6 +26,118 @@ impl PostgresStateStore {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
+
+    /// Mirror an update accepted by a non-Postgres execution store into the
+    /// canonical SQL run row. Non-terminal updates are ordered by the source
+    /// timestamp. Terminal updates win over mutable SQL state, but never
+    /// replace an existing terminal result.
+    pub async fn mirror_run_update(&self, run: &ExecutionRunRecord) -> Result<(), StateStoreError> {
+        let result = run_mirror_update(run)
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|error| StateStoreError::Database(error.to_string()))?;
+
+        if result.rows_affected > 0 {
+            return Ok(());
+        }
+
+        // A retried callback may find a terminal SQL row, while an out-of-order
+        // non-terminal callback may find a newer mutable row. Both are safe
+        // no-ops. Other zero-row results indicate a lost or inconsistent
+        // canonical handoff and must remain retryable.
+        let accepted_updated_at = ts_to_datetime(run.updated_at);
+        match execution_run::Entity::find_by_id(&run.id)
+            .filter(execution_run::Column::AppId.eq(&run.app_id))
+            .one(self.db.as_ref())
+            .await
+            .map_err(|error| StateStoreError::Database(error.to_string()))?
+        {
+            Some(existing)
+                if accepted_mirror_is_obsolete(
+                    &existing.status,
+                    existing.updated_at,
+                    run,
+                    accepted_updated_at,
+                ) =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(StateStoreError::Database(format!(
+                "canonical SQL run '{}' rejected an accepted state-store update",
+                run.id
+            ))),
+            None => Err(StateStoreError::NotFound),
+        }
+    }
+}
+
+fn accepted_mirror_is_obsolete(
+    existing_status: &EntityRunStatus,
+    existing_updated_at: sea_orm::prelude::DateTime,
+    accepted: &ExecutionRunRecord,
+    accepted_updated_at: sea_orm::prelude::DateTime,
+) -> bool {
+    matches!(
+        existing_status,
+        EntityRunStatus::Completed
+            | EntityRunStatus::Failed
+            | EntityRunStatus::Cancelled
+            | EntityRunStatus::Timeout
+    ) || (!accepted.status.is_terminal() && existing_updated_at > accepted_updated_at)
+}
+
+fn run_mirror_update(run: &ExecutionRunRecord) -> sea_orm::UpdateMany<execution_run::Entity> {
+    let mut update = execution_run::Entity::update_many()
+        .set(run_mirror_model(run))
+        .filter(execution_run::Column::Id.eq(&run.id))
+        .filter(execution_run::Column::AppId.eq(&run.app_id))
+        .filter(
+            execution_run::Column::Status
+                .is_in([EntityRunStatus::Pending, EntityRunStatus::Running]),
+        );
+
+    if !run.status.is_terminal() {
+        update =
+            update.filter(execution_run::Column::UpdatedAt.lte(ts_to_datetime(run.updated_at)));
+        if run.status == RunStatus::Pending {
+            update = update.filter(execution_run::Column::Status.eq(EntityRunStatus::Pending));
+        }
+    }
+
+    update
+}
+
+fn run_mirror_model(run: &ExecutionRunRecord) -> execution_run::ActiveModel {
+    execution_run::ActiveModel {
+        status: Set(type_run_status_to_entity(run.status.clone())),
+        output_payload_len: Set(run.output_payload_len),
+        error_message: Set(run.error_message.clone()),
+        progress: Set(run.progress),
+        current_step: Set(run.current_step.clone()),
+        started_at: Set(run.started_at.map(ts_to_datetime)),
+        completed_at: Set(run.completed_at.map(ts_to_datetime)),
+        updated_at: Set(ts_to_datetime(run.updated_at)),
+        ..Default::default()
+    }
+}
+
+fn mutable_run_update(
+    run_id: &str,
+    model: execution_run::ActiveModel,
+) -> sea_orm::UpdateMany<execution_run::Entity> {
+    execution_run::Entity::update_many()
+        .set(model)
+        .filter(execution_run::Column::Id.eq(run_id))
+        .filter(
+            execution_run::Column::Status
+                .is_in([EntityRunStatus::Pending, EntityRunStatus::Running]),
+        )
+}
+
+fn event_first_write_wins() -> OnConflict {
+    OnConflict::column(execution_event::Column::Id)
+        .do_nothing()
+        .to_owned()
 }
 
 // Conversion helpers
@@ -206,6 +318,16 @@ impl ExecutionStateStore for PostgresStateStore {
             .map_err(|e| StateStoreError::Database(e.to_string()))?
             .ok_or(StateStoreError::NotFound)?;
 
+        if matches!(
+            existing.status,
+            EntityRunStatus::Completed
+                | EntityRunStatus::Failed
+                | EntityRunStatus::Cancelled
+                | EntityRunStatus::Timeout
+        ) {
+            return Ok(run_model_to_record(existing));
+        }
+
         let mut model: execution_run::ActiveModel = existing.into();
         model.updated_at = Set(chrono::Utc::now().naive_utc());
 
@@ -231,12 +353,32 @@ impl ExecutionStateStore for PostgresStateStore {
             model.completed_at = Set(Some(ts_to_datetime(completed_at)));
         }
 
-        let result = model
-            .update(self.db.as_ref())
+        let result = mutable_run_update(run_id, model)
+            .exec(self.db.as_ref())
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
-        Ok(run_model_to_record(result))
+        if result.rows_affected == 0 {
+            let current = execution_run::Entity::find_by_id(run_id)
+                .one(self.db.as_ref())
+                .await
+                .map_err(|e| StateStoreError::Database(e.to_string()))?
+                .ok_or(StateStoreError::NotFound)?;
+            if matches!(
+                current.status,
+                EntityRunStatus::Completed
+                    | EntityRunStatus::Failed
+                    | EntityRunStatus::Cancelled
+                    | EntityRunStatus::Timeout
+            ) {
+                return Ok(run_model_to_record(current));
+            }
+            return Err(StateStoreError::Database(format!(
+                "execution run '{run_id}' changed while applying progress"
+            )));
+        }
+
+        self.get_run(run_id).await?.ok_or(StateStoreError::NotFound)
     }
 
     async fn list_runs_for_app(
@@ -299,7 +441,10 @@ impl ExecutionStateStore for PostgresStateStore {
 
         let count = models.len() as i32;
         execution_event::Entity::insert_many(models)
-            .exec(self.db.as_ref())
+            // Canonical IDs make HTTP retries the same logical event. Keep the
+            // first accepted payload and never reset its delivery state.
+            .on_conflict(event_first_write_wins())
+            .exec_without_returning(self.db.as_ref())
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
@@ -346,7 +491,11 @@ impl ExecutionStateStore for PostgresStateStore {
         Ok(result.map(|m| m.sequence).unwrap_or(0))
     }
 
-    async fn mark_events_delivered(&self, event_ids: &[String]) -> Result<(), StateStoreError> {
+    async fn mark_events_delivered(
+        &self,
+        run_id: &str,
+        event_ids: &[String],
+    ) -> Result<(), StateStoreError> {
         if event_ids.is_empty() {
             return Ok(());
         }
@@ -356,6 +505,7 @@ impl ExecutionStateStore for PostgresStateStore {
                 execution_event::Column::Delivered,
                 sea_orm::sea_query::Expr::value(true),
             )
+            .filter(execution_event::Column::RunId.eq(run_id))
             .filter(execution_event::Column::Id.is_in(event_ids.to_vec()))
             .exec(self.db.as_ref())
             .await
@@ -373,5 +523,159 @@ impl ExecutionStateStore for PostgresStateStore {
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         Ok(result.rows_affected as i64)
+    }
+}
+
+#[cfg(test)]
+mod terminal_mirror_tests {
+    use super::*;
+    use sea_orm::{DatabaseBackend, QueryTrait};
+
+    fn terminal_run() -> ExecutionRunRecord {
+        ExecutionRunRecord {
+            id: "run-1".into(),
+            board_id: "board-1".into(),
+            version: Some("3".into()),
+            event_id: Some("event-1".into()),
+            status: RunStatus::Completed,
+            mode: RunMode::Queue,
+            input_payload_len: 12,
+            output_payload_len: 34,
+            error_message: Some("accepted error field".into()),
+            progress: 100,
+            current_step: Some("complete".into()),
+            started_at: Some(1_800_000_000_000),
+            completed_at: Some(1_800_000_010_000),
+            expires_at: Some(1_900_000_000_000),
+            user_id: Some("user-1".into()),
+            technical_user_id: None,
+            app_id: "app-1".into(),
+            created_at: 1_799_999_999_000,
+            updated_at: 1_800_000_010_001,
+        }
+    }
+
+    #[test]
+    fn stateless_lambda_sql_mirror_copies_accepted_fields() {
+        let run = terminal_run();
+        let model = run_mirror_model(&run);
+
+        assert_eq!(model.status, Set(EntityRunStatus::Completed));
+        assert_eq!(model.output_payload_len, Set(34));
+        assert_eq!(
+            model.error_message,
+            Set(Some("accepted error field".into()))
+        );
+        assert_eq!(model.progress, Set(100));
+        assert_eq!(model.current_step, Set(Some("complete".into())));
+        assert_eq!(
+            model.started_at,
+            Set(Some(ts_to_datetime(1_800_000_000_000)))
+        );
+        assert_eq!(
+            model.completed_at,
+            Set(Some(ts_to_datetime(1_800_000_010_000)))
+        );
+        assert_eq!(model.updated_at, Set(ts_to_datetime(1_800_000_010_001)));
+    }
+
+    #[test]
+    fn stateless_lambda_terminal_mirror_is_app_scoped_and_monotonic() {
+        let statement = run_mirror_update(&terminal_run())
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+
+        assert!(statement.contains("\"ExecutionRun\".\"id\" = 'run-1'"));
+        assert!(statement.contains("\"ExecutionRun\".\"appId\" = 'app-1'"));
+        assert!(statement.contains("\"ExecutionRun\".\"status\" IN"));
+        assert!(statement.contains("'PENDING'"));
+        assert!(statement.contains("'RUNNING'"));
+        assert!(!statement.contains("\"ExecutionRun\".\"updatedAt\" <="));
+    }
+
+    #[test]
+    fn stateless_lambda_nonterminal_mirror_rejects_stale_updates() {
+        let mut run = terminal_run();
+        run.status = RunStatus::Running;
+        run.updated_at = 1_800_000_005_000;
+
+        let statement = run_mirror_update(&run)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        assert!(statement.contains("\"ExecutionRun\".\"updatedAt\" <="));
+
+        let accepted_at = ts_to_datetime(run.updated_at);
+        assert!(accepted_mirror_is_obsolete(
+            &EntityRunStatus::Running,
+            accepted_at + chrono::Duration::milliseconds(1),
+            &run,
+            accepted_at,
+        ));
+        assert!(!accepted_mirror_is_obsolete(
+            &EntityRunStatus::Running,
+            accepted_at,
+            &run,
+            accepted_at,
+        ));
+    }
+
+    #[test]
+    fn stateless_lambda_terminal_mirror_never_overwrites_terminal_sql() {
+        let run = terminal_run();
+        let accepted_at = ts_to_datetime(run.updated_at);
+
+        assert!(accepted_mirror_is_obsolete(
+            &EntityRunStatus::Timeout,
+            accepted_at - chrono::Duration::hours(1),
+            &run,
+            accepted_at,
+        ));
+        assert!(!accepted_mirror_is_obsolete(
+            &EntityRunStatus::Running,
+            accepted_at + chrono::Duration::hours(1),
+            &run,
+            accepted_at,
+        ));
+    }
+
+    #[test]
+    fn stateless_lambda_postgres_update_is_atomically_terminal_monotonic() {
+        let statement = mutable_run_update(
+            "run-1",
+            execution_run::ActiveModel {
+                status: Set(EntityRunStatus::Running),
+                progress: Set(50),
+                ..Default::default()
+            },
+        )
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+
+        assert!(statement.contains("\"ExecutionRun\".\"id\" = 'run-1'"));
+        assert!(statement.contains("\"ExecutionRun\".\"status\" IN"));
+        assert!(statement.contains("'PENDING'"));
+        assert!(statement.contains("'RUNNING'"));
+        assert!(!statement.contains("'COMPLETED'"));
+        assert!(!statement.contains("'FAILED'"));
+    }
+
+    #[test]
+    fn stateless_lambda_event_retries_are_first_write_wins() {
+        let statement = execution_event::Entity::insert(execution_event::ActiveModel {
+            id: Set("evt-1".into()),
+            run_id: Set("run-1".into()),
+            sequence: Set(0),
+            event_type: Set("chunk".into()),
+            payload: Set(serde_json::json!({"value": 1})),
+            delivered: Set(false),
+            expires_at: Set(ts_to_datetime(1_900_000_000_000)),
+            created_at: Set(ts_to_datetime(1_800_000_000_000)),
+        })
+        .on_conflict(event_first_write_wins())
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+
+        assert!(statement.contains("ON CONFLICT (\"id\") DO NOTHING"));
+        assert!(!statement.contains("DO UPDATE"));
     }
 }

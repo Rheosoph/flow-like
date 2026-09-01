@@ -1,6 +1,14 @@
 export * from "./developer";
 export type { IIntercomEvent } from "./events/intercom-event";
 export type { IRunPayload } from "./flow/run-payload";
+export {
+	pageTriggerFromAction,
+	serializePageTrigger,
+	type PageActionInvocation,
+	type PageSpecialEvent,
+	type PageTrigger,
+	type PageTriggerRequest,
+} from "./flow/page-trigger";
 export * from "./bit/bit";
 export type {
 	IBitPack,

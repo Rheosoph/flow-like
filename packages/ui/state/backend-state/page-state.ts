@@ -1,4 +1,5 @@
 import type { SurfaceComponent } from "../../components/a2ui/types";
+import type { IEvent } from "../../lib/schema/flow/event";
 import type { Version } from "./widget-state";
 
 export type PageLayoutType =
@@ -132,8 +133,24 @@ export interface IGetPageOptions {
 	readonly onRevalidated?: (page: IPage) => void;
 }
 
+/** The single authenticated payload needed to resolve a `/use` surface. */
+export interface IPageBootstrap {
+	readonly event: IEvent;
+	readonly page?: IPage | null;
+	readonly revision?: string | null;
+	/** Authority revision used by governed Page actions and lifecycle hooks. */
+	readonly executionRevision?: string | null;
+	readonly canonicalRoute?: string | null;
+	readonly routeMiss?: boolean;
+}
+
 export interface IPageState {
 	getPages(appId: string, boardId?: string): Promise<PageListItem[]>;
+	getPageBootstrap?(
+		appId: string,
+		route?: string,
+		eventId?: string,
+	): Promise<IPageBootstrap>;
 	/**
 	 * `version` reads the page snapshot published with that board version. Without it
 	 * the current (draft) page is returned.

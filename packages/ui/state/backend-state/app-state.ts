@@ -61,6 +61,15 @@ export interface IAppState {
 		template?: IBoard,
 	): Promise<IApp>;
 	deleteApp(appId: string): Promise<void>;
+	/**
+	 * Give up membership of an app someone else owns. The app itself survives —
+	 * only this user's access to it ends — and the local copy goes with it, so
+	 * nothing is left behind syncing against a project the hub will now refuse.
+	 *
+	 * An owner cannot leave: the hub refuses to remove a membership whose role
+	 * carries the `Owner` bit. Check `roleState.getOwnRole` before offering it.
+	 */
+	leaveApp(appId: string): Promise<void>;
 	searchApps(
 		id?: string,
 		query?: string,

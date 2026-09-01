@@ -5,6 +5,7 @@ import { GaugeIcon, RouteIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
+import { removeAppFromProfile } from "../../../lib/add-app-to-profile";
 import { detectAppType } from "../../../lib/app-type";
 import { boardListing } from "../../../lib/schema/flow/board-summary";
 import { useBackend } from "../../../state/backend-state";
@@ -35,7 +36,10 @@ import {
 export interface ProjectDashboardProps {
 	appId: string;
 	canEdit?: boolean;
-	/** Fired after the app is deleted so the host can navigate away. */
+	/**
+	 * Fired once the app has left the user's library — deleted outright, or
+	 * quit by a member who does not own it — so the host can navigate away.
+	 */
 	onDeleted: () => void | Promise<void>;
 	/**
 	 * Host-provided sections. Desktop and web differ only in how forking and
@@ -234,6 +238,19 @@ export function ProjectDashboard({
 		await onDeleted();
 	}, [appId, backend.appState, invalidate, onDeleted]);
 
+	const handleLeave = useCallback(async () => {
+		await backend.appState.leaveApp(appId);
+		// The profile is what the library actually lists, and every per-app query
+		// now answers 403 — clear both before the host navigates away, or the user
+		// lands back on a listing that still holds the project.
+		await removeAppFromProfile(backend, appId);
+		await invalidate(backend.appState.getApps, []);
+		await invalidate(backend.userState.getSettingsProfile, []);
+		await invalidate(backend.appState.getApp, [appId]);
+		await invalidate(backend.appState.getAppMeta, [appId]);
+		await onDeleted();
+	}, [appId, backend, invalidate, onDeleted]);
+
 	if (!app.data || !metadata.data) {
 		return (
 			<div className="mx-auto w-full max-w-6xl px-1 py-4">
@@ -298,6 +315,7 @@ export function ProjectDashboard({
 					onOpenChange={setInspectorOpen}
 					onPanelChange={setPanel}
 					onDeleted={handleDelete}
+					onLeft={handleLeave}
 					onMediaChanged={refreshApp}
 					suggestedType={suggestedType}
 					slots={slots}

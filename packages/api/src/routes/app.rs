@@ -132,6 +132,19 @@ macro_rules! ensure_permission {
     }};
 }
 
+/// Permission guard for runtime entry points where revocation must take effect
+/// on the next request even when another API instance populated a local cache.
+#[macro_export]
+macro_rules! ensure_fresh_permission {
+    ($user:expr, $app_id:expr, $state:expr, $perm:expr) => {{
+        let sub = $user.app_permission_fresh($app_id, $state).await?;
+        if !sub.has_permission($perm) {
+            return Err($crate::error::ApiError::FORBIDDEN);
+        }
+        sub
+    }};
+}
+
 /// Like `ensure_permission!`, but passes when the principal holds ANY of the
 /// listed permissions (e.g. `ReadFiles` OR `ReadDatabase`).
 #[macro_export]

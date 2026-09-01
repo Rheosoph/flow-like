@@ -5,6 +5,17 @@
 
 use crate::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
+
+/// Wire-only version selector for an ETag-bound Latest run. Executors that
+/// predate ETag selection interpret this as an immutable version that cannot
+/// exist and fail closed during rolling deployments. Current executors decode
+/// it back to `None` only when a non-empty `board_etag` accompanies it.
+pub const ETAG_BOUND_LATEST_VERSION_SENTINEL: (u32, u32, u32) = (u32::MAX, u32::MAX, u32::MAX);
+
+/// Synthetic API Gateway identity used only by direct asynchronous Lambda
+/// dispatch. The executor uses it to turn route failures into invocation
+/// errors without changing Function URL or API Gateway HTTP behavior.
+pub const DIRECT_LAMBDA_INVOKE_API_ID: &str = "lambda-invoke";
 use std::collections::HashMap;
 
 /// Store reference used for files uploaded through HTTP event sink requests.
@@ -24,6 +35,31 @@ pub struct WasmPackageRef {
     pub wasm_url: String,
     pub cwasm_url: String,
     pub cwasm_checksum: String,
+}
+
+/// Deterministic authority revision for the executable WASM package set.
+/// Presigned URLs are transport details and do not participate.
+pub fn wasm_package_set_revision(packages: Option<&HashMap<String, WasmPackageRef>>) -> String {
+    let mut entries = packages
+        .into_iter()
+        .flat_map(HashMap::iter)
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like/wasm-package-set/v1");
+    for (package_id, package) in entries {
+        for value in [
+            package_id.as_str(),
+            package.version.as_str(),
+            package.wasm_hash.as_str(),
+            package.cwasm_checksum.as_str(),
+        ] {
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 // ============================================================================
@@ -170,6 +206,9 @@ pub struct DispatchPayload {
     pub board_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_version: Option<(u32, u32, u32)>,
+    /// Exact source object ETag for a floating Latest board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_etag: Option<String>,
     pub node_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_json: Option<String>,

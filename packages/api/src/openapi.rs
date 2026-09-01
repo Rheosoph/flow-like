@@ -244,6 +244,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
         crate::routes::app::board::flow_ir_commit::apply_flow_ir_commit,
         // Page routes
+		crate::routes::app::page::bootstrap::bootstrap,
         crate::routes::app::page::get_page::get_page,
         crate::routes::app::page::get_pages::get_pages,
         crate::routes::app::page::get_page_by_route::get_page_by_route,
@@ -277,6 +278,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::meta::remove_media::remove_media,
         // Role routes
         crate::routes::app::roles::get_roles::get_roles,
+        crate::routes::app::roles::get_own_role::get_own_role,
         crate::routes::app::roles::upsert_role::upsert_role,
         crate::routes::app::roles::delete_role::delete_role,
         crate::routes::app::roles::make_role_default::make_role_default,
@@ -365,6 +367,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::validate_event::validate_event,
         crate::routes::app::events::setup_event::setup_event,
         crate::routes::app::events::prerun_event::prerun_event,
+        crate::routes::app::events::prerun_event::prerun_page_event,
         crate::routes::app::events::invoke_event::invoke_event,
         crate::routes::app::events::invoke_event_async::invoke_event_async,
         crate::routes::app::events::registrations::list_registrations,
@@ -721,6 +724,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::summaries::BoardSummary,
         crate::routes::app::board::get_board_variables::BoardVariables,
         crate::routes::app::page::get_pages::PageInfo,
+		crate::routes::app::page::bootstrap::BootstrapResponse,
         crate::routes::app::publication::get_publication::AppPublicationActor,
         crate::routes::app::publication::get_publication::AppPublicationLogItem,
         crate::routes::app::publication::get_publication::AppPublicationRequestItem,
@@ -802,6 +806,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::setup_event::SetupEventRequest,
         crate::routes::app::events::setup_event::SetupEventResponse,
         crate::routes::app::events::prerun_event::PrerunEventQuery,
+        crate::routes::app::events::prerun_event::PrerunPageEventRequest,
+        crate::routes::app::events::page_trigger::PageTrigger,
+        crate::routes::app::events::page_trigger::PageSpecialEvent,
         crate::routes::app::prerun_shared::RuntimeVariable,
         crate::routes::app::prerun_shared::OAuthRequirement,
         crate::routes::app::prerun_shared::PrerunPayload,
@@ -1081,6 +1088,32 @@ mod tests {
             dangling.is_empty(),
             "unregistered schema references: {:?}",
             dangling
+        );
+    }
+
+    #[test]
+    fn page_prerun_documents_get_and_governed_post_contracts() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let prerun = spec
+            .pointer("/paths/~1apps~1{app_id}~1events~1{event_id}~1prerun")
+            .and_then(Value::as_object)
+            .expect("Page prerun path is documented");
+
+        assert!(prerun.contains_key("get"), "Page prerun GET is missing");
+        let post = prerun
+            .get("post")
+            .expect("governed Page prerun POST is missing");
+        assert_eq!(
+            post.pointer("/requestBody/content/application~1json/schema/$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/PrerunPageEventRequest")
+        );
+        assert_eq!(
+            spec.pointer(
+                "/components/schemas/PrerunPageEventRequest/properties/page_trigger/$ref",
+            )
+            .and_then(Value::as_str),
+            Some("#/components/schemas/PageTrigger")
         );
     }
 

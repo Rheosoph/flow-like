@@ -511,6 +511,12 @@ fn server_execute_policy(
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
 ) -> flow_like_types::Value {
+    // Draft artifacts (compiled boards, exact `.board` snapshots, prerun
+    // manifests) live under `tmp/apps/{app_id}/` on the meta bucket so
+    // lifecycle rules on `tmp/` reclaim them. The executor gets the same
+    // read-only grant there as on `apps/{app_id}` — only the API writes
+    // drafts, which anchors `entry_authority_revision`.
+    let draft_meta_prefix = format!("tmp/{apps_prefix}");
     json!({
         "Version": "2012-10-17",
         "Statement": [
@@ -589,7 +595,8 @@ fn server_execute_policy(
             "Condition": {
                 "StringLike": {
                     "s3:prefix": [
-                        format!("{}/*", apps_prefix)
+                        format!("{}/*", apps_prefix),
+                        format!("{}/*", draft_meta_prefix)
                     ]
                 }
             }
@@ -601,7 +608,9 @@ fn server_execute_policy(
             ],
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, apps_prefix),
+                format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
                 format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, apps_prefix),
+                format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
             ],
           },
           {
@@ -1267,9 +1276,10 @@ mod tests {
     #[test]
     fn test_aws_server_execute_grants_meta_read_only() {
         let creds = test_aws_runtime_credentials();
+        let app_prefix = "apps/app-1";
         let policy = server_execute_policy(
             &creds,
-            "apps/app-1",
+            app_prefix,
             "users/user-1/apps/app-1",
             "runs/app-1",
             "tmp/user/user-1/apps/app-1",
@@ -1286,11 +1296,50 @@ mod tests {
                     .contains("meta-secret/apps")
             })
             .expect("server execute should include meta object access");
+        let meta_list_statement = statements
+            .iter()
+            .find(|statement| {
+                statement["Resource"]
+                    .to_string()
+                    .contains("arn:aws:s3:::meta-secret")
+                    && statement["Condition"].to_string().contains(app_prefix)
+            })
+            .expect("server execute should include app-scoped meta listing");
         let meta_actions = meta_object_statement["Action"].to_string();
+        let meta_resources = meta_object_statement["Resource"].to_string();
+        let meta_list_actions = meta_list_statement["Action"].to_string();
+        let meta_list_prefixes = meta_list_statement["Condition"].to_string();
+        for statement in statements {
+            let actions = statement["Action"].to_string();
+            if statement["Resource"].to_string().contains("meta-secret") {
+                assert!(
+                    !actions.contains("PutObject") && !actions.contains("DeleteObject"),
+                    "no ServerExecute statement may write the meta bucket: {statement}"
+                );
+            }
+        }
         let policy = to_string(&policy).expect("policy should serialize");
+        let draft_artifact =
+            flow_like::flow::compiled::draft_artifact_path("app-1", "board-1", "etag", &[7; 32])
+                .to_string();
+        let other_app_artifact =
+            flow_like::flow::compiled::draft_artifact_path("app-10", "board-1", "etag", &[7; 32])
+                .to_string();
 
         assert!(policy.contains("meta-secret/apps/app-1/*"));
-        assert!(policy.contains("\"s3:GetObject\""));
+        assert!(meta_actions.contains("GetObject"));
+        assert!(meta_list_actions.contains("ListBucket"));
+        assert!(draft_artifact.starts_with("tmp/apps/app-1/"));
+        assert!(!other_app_artifact.starts_with("tmp/apps/app-1/"));
+        assert!(
+            meta_resources.contains("meta-secret/tmp/apps/app-1/*")
+                && meta_resources.contains("s3express:::meta-secret/tmp/apps/app-1/*"),
+            "draft artifacts under tmp/apps must stay readable: {meta_resources}"
+        );
+        assert!(
+            meta_list_prefixes.contains("tmp/apps/app-1/*"),
+            "draft artifacts under tmp/apps must stay listable: {meta_list_prefixes}"
+        );
         assert!(policy.contains("content-data/apps/app-1/*"));
         assert!(policy.contains("logs/runs/app-1/*"));
         let logs_actions = statements

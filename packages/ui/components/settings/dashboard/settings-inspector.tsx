@@ -48,7 +48,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { TextEditor } from "../../ui/text-editor";
 import { Textarea } from "../../ui/textarea";
-import { VerificationDialog } from "../../verification-dialog";
+import { AppDangerZone } from "./app-danger-zone";
 import type { ProjectDraft } from "./use-project-draft";
 import type { InspectorPanel } from "./use-project-signals";
 
@@ -162,6 +162,7 @@ export function SettingsInspector({
 	onOpenChange,
 	onPanelChange,
 	onDeleted,
+	onLeft,
 	onMediaChanged,
 	suggestedType,
 	slots,
@@ -176,6 +177,8 @@ export function SettingsInspector({
 	onOpenChange: (open: boolean) => void;
 	onPanelChange: (panel: InspectorPanel) => void;
 	onDeleted: () => Promise<void> | void;
+	/** Give up membership of an app owned by someone else. */
+	onLeft: () => Promise<void> | void;
 	onMediaChanged: () => Promise<void> | void;
 	/** Guess derived from the app's contents, offered when no type is set. */
 	suggestedType?: IAppType | null;
@@ -726,30 +729,12 @@ export function SettingsInspector({
 							{activePanel === "advanced" && (
 								<div className="space-y-4">
 									{slots?.advanced}
-									{canEdit && (
-										<div className="space-y-2 rounded-lg border border-destructive/40 p-4">
-											<h4 className="text-sm font-semibold text-destructive">
-												{t("deleteThisApp", "Delete this app")}
-											</h4>
-											<p className="text-xs text-muted-foreground">
-												{t(
-													"removesEveryFlowEventPageAndStoredFileThisCannotBeUndone",
-													"Removes every flow, event, page and stored file. This cannot be undone.",
-												)}
-											</p>
-											<VerificationDialog
-												dialog="You cannot undo this action. This will permanently delete the app!"
-												onConfirm={async () => {
-													await onDeleted();
-												}}
-											>
-												<Button variant="destructive" size="sm">
-													<BombIcon className="mr-1.5 h-3 w-3" />
-													{t("deleteApp", "Delete app")}
-												</Button>
-											</VerificationDialog>
-										</div>
-									)}
+									<AppDangerZone
+										appId={appId}
+										canEdit={canEdit}
+										onDeleted={onDeleted}
+										onLeft={onLeft}
+									/>
 								</div>
 							)}
 						</div>

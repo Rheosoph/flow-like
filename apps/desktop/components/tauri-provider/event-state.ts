@@ -10,6 +10,7 @@ import {
 	type INode,
 	type IOAuthProvider,
 	type IOAuthToken,
+	type PageTrigger,
 	type IPrerunEventResponse,
 	type IRunPayload,
 	type IVersionType,
@@ -20,6 +21,7 @@ import {
 	finishAllProgressToasts,
 	getCurrentPageContext,
 	injectDataFunction,
+	serializePageTrigger,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type {
@@ -30,6 +32,7 @@ import type {
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
+import { isMissingResourceError } from "../../lib/api-error";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
@@ -46,6 +49,25 @@ import { resolveLocalFirstPrerun } from "./prerun-utils";
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
+
+const LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX = "lda1_";
+const SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX = "da1_";
+
+function isLocalDynamicPageTrigger(trigger?: PageTrigger): boolean {
+	return (
+		trigger?.kind === "action" &&
+		trigger.actionId.startsWith(LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX)
+	);
+}
+
+function isServerDynamicPageTrigger(trigger?: PageTrigger): boolean {
+	return (
+		trigger?.kind === "action" &&
+		!trigger.actionId.startsWith(LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX) &&
+		(Boolean(trigger.capabilityJwt) ||
+			trigger.actionId.startsWith(SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX))
+	);
+}
 
 function withFeedbackPageContext(localState?: Record<string, any>) {
 	if (
@@ -83,6 +105,79 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 		});
 
 	return hubCachePromise;
+}
+
+/**
+ * Events this client has seen acknowledged by the server, keyed
+ * `${appId}:${eventId}`.
+ *
+ * An authoritative 404/410 is only a revocation for an event the server has
+ * previously served to this device — an event created offline for a hosted app
+ * and never uploaded 404s the same way, and deleting it would destroy the only
+ * copy. Persistence mirrors the page-etag cache: a lost marker merely keeps a
+ * local copy alive on a later 404, never the other way around.
+ */
+const REMOTE_KNOWN_EVENTS_KEY = "flow-like:remote-known-events";
+const MAX_REMOTE_KNOWN_EVENTS = 2000;
+
+type RemoteKnownEventMap = Record<string, number>;
+
+function remoteKnownEventKey(appId: string, eventId: string): string {
+	return `${appId}:${eventId}`;
+}
+
+function readRemoteKnownEvents(): RemoteKnownEventMap {
+	if (typeof localStorage === "undefined") return {};
+	try {
+		const raw = localStorage.getItem(REMOTE_KNOWN_EVENTS_KEY);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object"
+			? (parsed as RemoteKnownEventMap)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function writeRemoteKnownEvents(map: RemoteKnownEventMap): void {
+	if (typeof localStorage === "undefined") return;
+	try {
+		const entries = Object.entries(map);
+		const bounded =
+			entries.length <= MAX_REMOTE_KNOWN_EVENTS
+				? map
+				: Object.fromEntries(
+						entries
+							.toSorted((a, b) => b[1] - a[1])
+							.slice(0, MAX_REMOTE_KNOWN_EVENTS),
+					);
+		localStorage.setItem(REMOTE_KNOWN_EVENTS_KEY, JSON.stringify(bounded));
+	} catch {
+		// Quota or private-mode failures only keep a local copy alive longer.
+	}
+}
+
+function markEventsRemoteKnown(appId: string, eventIds: string[]): void {
+	if (eventIds.length === 0) return;
+	const map = readRemoteKnownEvents();
+	const now = Date.now();
+	for (const eventId of eventIds) {
+		map[remoteKnownEventKey(appId, eventId)] = now;
+	}
+	writeRemoteKnownEvents(map);
+}
+
+function isEventRemoteKnown(appId: string, eventId: string): boolean {
+	return remoteKnownEventKey(appId, eventId) in readRemoteKnownEvents();
+}
+
+function clearEventRemoteKnown(appId: string, eventId: string): void {
+	const map = readRemoteKnownEvents();
+	const key = remoteKnownEventKey(appId, eventId);
+	if (!(key in map)) return;
+	delete map[key];
+	writeRemoteKnownEvents(map);
 }
 
 function eventUpdatedAtMs(event?: IEvent): number {
@@ -232,6 +327,8 @@ export class EventState implements IEventState {
 				throw new Error("Failed to fetch event data");
 			}
 
+			markEventsRemoteKnown(appId, [eventId]);
+
 			const localUpdated = eventUpdatedAtMs(event);
 			const remoteUpdated = eventUpdatedAtMs(remoteData);
 			const shouldUseRemote =
@@ -265,6 +362,35 @@ export class EventState implements IEventState {
 
 			return remoteData;
 		} catch (error) {
+			// An authoritative 404/410 means the hosted Event was removed. A
+			// local Hybrid run may operate without a cloud execution hop, but it
+			// must never revive an Event the hub explicitly revoked. That only
+			// holds for an Event the server has acknowledged before: one created
+			// offline and never uploaded 404s identically, and this device holds
+			// its only copy.
+			if (isMissingResourceError(error)) {
+				if (event && typeof version === "undefined") {
+					if (!isEventRemoteKnown(appId, eventId)) {
+						console.warn(
+							"[EventSync] Event unknown to the server but never synced from it; keeping the local copy:",
+							error,
+						);
+						return event;
+					}
+					await invoke("delete_event", {
+						appId,
+						eventId,
+					})
+						.then(() => clearEventRemoteKnown(appId, eventId))
+						.catch((deleteError) => {
+							console.warn(
+								"[EventSync] Failed to remove a revoked local Event:",
+								deleteError,
+							);
+						});
+				}
+				throw error;
+			}
 			if (event) {
 				console.warn(
 					"[EventSync] Event fetch failed, falling back to local event:",
@@ -306,6 +432,10 @@ export class EventState implements IEventState {
 						method: "GET",
 					},
 					this.backend.auth,
+				);
+				markEventsRemoteKnown(
+					appId,
+					remoteData.map((event) => event.id),
 				);
 				const localById = new Map(events.map((event) => [event.id, event]));
 				const toPersist = remoteData.filter(
@@ -559,6 +689,7 @@ export class EventState implements IEventState {
 				appId: appId,
 				eventId: eventId,
 			});
+			if (!isOffline) clearEventRemoteKnown(appId, eventId);
 		} catch (e) {
 			if (isOffline) throw e;
 			console.warn("[EventState] Local event deletion failed (non-fatal):", e);
@@ -679,8 +810,8 @@ export class EventState implements IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined> {
-		const event = await this.getEvent(appId, eventId);
 		const runRemotely = () =>
 			this.executeEventRemote(
 				appId,
@@ -689,16 +820,77 @@ export class EventState implements IEventState {
 				streamState,
 				onEventId,
 				cb,
+				pageTrigger,
 			);
+		const localDynamicPageAction = isLocalDynamicPageTrigger(pageTrigger);
+
+		if (pageTrigger) {
+			if (isServerDynamicPageTrigger(pageTrigger)) {
+				return runRemotely();
+			}
+
+			const prerun = await this.prerunEvent(
+				appId,
+				eventId,
+				undefined,
+				pageTrigger,
+			);
+			if (!prerun.can_execute_locally) {
+				if (localDynamicPageAction) {
+					throw new Error(
+						"This local Page action cannot execute on this device; reload the Page",
+					);
+				}
+				return runRemotely();
+			}
+
+			// The server can establish permission and mode, but only the
+			// device can prove that it holds the exact Board and Page contract.
+			// Keep local execution preferred when revisions match; otherwise
+			// use the already-authorized remote path before a local run starts.
+			if (!localDynamicPageAction) {
+				let holdsExactContract = false;
+				try {
+					const localBootstrap = await invoke<{
+						executionRevision?: string;
+					}>("get_local_page_bootstrap", {
+						appId,
+						eventId,
+					});
+					holdsExactContract =
+						Boolean(pageTrigger.manifestRevision) &&
+						localBootstrap.executionRevision === pageTrigger.manifestRevision;
+				} catch (error) {
+					console.warn(
+						"[executeEvent] Exact Page contract is unavailable locally:",
+						error,
+					);
+				}
+				if (!holdsExactContract) {
+					if (!(await this.canReachServer(appId))) {
+						throw new Error(
+							"The local Page contract is stale and the server is unreachable; reload the Page",
+						);
+					}
+					return runRemotely();
+				}
+			}
+		}
+
+		const event = await this.getEvent(appId, eventId);
 
 		// An event pinned to Remote has no board on this device. Reading one only
 		// fails on the way to a run that belongs on the server anyway, so the
 		// dispatch happens here rather than after a "board not found".
-		if (
-			event.execution_mode === IEventExecutionMode.Remote &&
-			(await this.canReachServer(appId))
-		) {
-			return runRemotely();
+		if (event.execution_mode === IEventExecutionMode.Remote) {
+			if (localDynamicPageAction) {
+				throw new Error(
+					"A local Page action cannot be sent to a Remote Event; reload the Page",
+				);
+			}
+			if (await this.canReachServer(appId)) {
+				return runRemotely();
+			}
 		}
 
 		const channel = new Channel<IIntercomEvent[]>();
@@ -749,7 +941,9 @@ export class EventState implements IEventState {
 			// its board — the normal shape of a published app — gets nothing back
 			// from any of it, and the server can run it instead: it holds the
 			// board, and resolves permissions, secrets and OAuth on its own.
-			if (!(await this.canReachServer(appId))) throw error;
+			if (localDynamicPageAction || !(await this.canReachServer(appId))) {
+				throw error;
+			}
 			console.warn(
 				"[executeEvent] Board unavailable for local execution, running on the server:",
 				error,
@@ -823,7 +1017,6 @@ export class EventState implements IEventState {
 		};
 
 		const token = this.backend.auth?.user?.access_token;
-		console.log("Using token:", token);
 
 		const metadata: ILogMetadata | undefined = await invoke("execute_event", {
 			appId: appId,
@@ -834,6 +1027,7 @@ export class EventState implements IEventState {
 			credentials,
 			token,
 			oauthTokens,
+			pageTrigger: pageTrigger ? serializePageTrigger(pageTrigger) : undefined,
 		});
 
 		closed = true;
@@ -848,7 +1042,13 @@ export class EventState implements IEventState {
 		streamState?: boolean,
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined> {
+		if (isLocalDynamicPageTrigger(pageTrigger)) {
+			throw new Error(
+				"A local Page action cannot be sent to the server; reload the Page",
+			);
+		}
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile and auth required for remote execution");
 		}
@@ -868,6 +1068,9 @@ export class EventState implements IEventState {
 					oauth_tokens: undefined,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
+					page_trigger: pageTrigger
+						? serializePageTrigger(pageTrigger)
+						: undefined,
 				}),
 			},
 			this.backend.auth,
@@ -1138,6 +1341,7 @@ export class EventState implements IEventState {
 		appId: string,
 		eventId: string,
 		version?: [number, number, number],
+		pageTrigger?: PageTrigger,
 	): Promise<IPrerunEventResponse> {
 		const loadLocalEvent = async (): Promise<IEvent> =>
 			invoke<IEvent>("get_event", { appId, eventId, version });
@@ -1145,6 +1349,11 @@ export class EventState implements IEventState {
 		// Helper to build prerun response from local event/board
 		const buildLocalPrerun = async (): Promise<IPrerunEventResponse> => {
 			const event: IEvent = await loadLocalEvent();
+			if (pageTrigger && (!event.active || !event.default_page_id)) {
+				throw new Error(
+					"Page triggers require an active Event with a configured Page",
+				);
+			}
 			const board: IBoard = await invoke("get_board", {
 				appId,
 				boardId: event.board_id,
@@ -1215,11 +1424,42 @@ export class EventState implements IEventState {
 						return fetcher<IPrerunEventResponse>(
 							this.backend.profile!,
 							url,
-							{ method: "GET" },
+							pageTrigger
+								? {
+										method: "POST",
+										body: JSON.stringify({
+											page_trigger: serializePageTrigger(pageTrigger),
+										}),
+									}
+								: { method: "GET" },
 							this.backend.auth!,
 						);
 					}
 				: undefined;
+
+		if (pageTrigger) {
+			if (isLocalDynamicPageTrigger(pageTrigger)) {
+				return buildLocalPrerun();
+			}
+			const dynamic = isServerDynamicPageTrigger(pageTrigger);
+			const localOnly = await this.backend
+				.isLocalOnly(appId)
+				.catch(() => false);
+
+			if (localOnly && !dynamic) {
+				return buildLocalPrerun();
+			}
+			if (!fetchRemotePrerun) {
+				throw new Error(
+					"Page action authorization requires a remote prerun endpoint",
+				);
+			}
+
+			// Hosted Page execution always obtains a fresh governed server
+			// decision first. The native command then independently rechecks the
+			// same caller and exact local contract before starting the run.
+			return fetchRemotePrerun();
+		}
 
 		// An event pinned to Remote never runs on this device, so its board is not
 		// expected to be here. Answering that preflight from a local board would

@@ -38,6 +38,9 @@ export class EmptyAppState implements IAppState {
 	deleteApp(appId: string): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
+	leaveApp(appId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 	searchApps(
 		id?: string,
 		query?: string,

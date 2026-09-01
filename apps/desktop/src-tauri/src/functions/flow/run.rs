@@ -2,7 +2,10 @@
 
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::compiled::TemplateCache;
+use flow_like::flow::compiled::{
+    CompiledRunTemplate, TemplateCache,
+    prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
+};
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{
@@ -18,17 +21,21 @@ use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{json, tokio};
 use futures::TryStreamExt;
-use serde::Serialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::utils::{UiEmitTarget, local_execution_environment};
 use crate::{
     functions::TauriFunctionError,
+    local_page_actions::{
+        LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX, LocalPageActionScope, LocalPageActionSealingContext,
+        LocalPagePrincipalBinding, resolve_local_dynamic_page_action,
+    },
     state::{TauriFlowLikeState, TauriSettingsState},
+    utils::{UiEmitTarget, local_execution_environment},
 };
 
 /// Desktop-wide template cache. Runs skip proto decode + `node_updates`
@@ -37,6 +44,247 @@ use crate::{
 /// changes.
 static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
 
+const SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX: &str = "da1_";
+
+/// A Page-owned selector passed beside the caller's normal authentication.
+/// This value chooses from authority compiled out of the local Page; it never
+/// carries a board or node supplied by JavaScript.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PageTrigger {
+    Action {
+        action_id: String,
+        #[serde(default)]
+        capability_jwt: Option<String>,
+        #[serde(default)]
+        manifest_revision: Option<String>,
+    },
+    Special {
+        special_event: PageSpecialEvent,
+        manifest_revision: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PageSpecialEvent {
+    Load,
+    Unload,
+    Interval,
+}
+
+fn require_page_execution_revision(
+    requested: Option<&str>,
+    current: &str,
+) -> flow_like_types::Result<()> {
+    let requested = requested
+        .map(str::trim)
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| flow_like_types::anyhow!("The Page manifest revision is required"))?;
+    if requested != current {
+        return Err(flow_like_types::anyhow!(
+            "The Page manifest is stale; reload the Page"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_compiled_page_trigger(
+    execution: &PrerunPageExecution,
+    current_revision: &str,
+    trigger: &PageTrigger,
+) -> flow_like_types::Result<String> {
+    match trigger {
+        PageTrigger::Action {
+            action_id,
+            capability_jwt,
+            manifest_revision,
+        } => {
+            require_page_execution_revision(manifest_revision.as_deref(), current_revision)?;
+
+            if action_id.starts_with(SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX)
+                || capability_jwt.is_some()
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Dynamic Page actions must execute on the server"
+                ));
+            }
+            if !action_id.starts_with(PAGE_ACTION_ID_PREFIX) {
+                return Err(flow_like_types::anyhow!("The Page action id is invalid"));
+            }
+
+            execution
+                .action_events
+                .iter()
+                .find(|action| action.action_id == *action_id)
+                .map(|action| action.node_id.clone())
+                .ok_or_else(|| flow_like_types::anyhow!("The Page action is stale or invalid"))
+        }
+        PageTrigger::Special {
+            special_event,
+            manifest_revision,
+        } => {
+            require_page_execution_revision(Some(manifest_revision), current_revision)?;
+            let node_id = match special_event {
+                PageSpecialEvent::Load => execution
+                    .special_events
+                    .load
+                    .as_ref()
+                    .map(|target| target.node_id.clone()),
+                PageSpecialEvent::Unload => execution
+                    .special_events
+                    .unload
+                    .as_ref()
+                    .map(|target| target.node_id.clone()),
+                PageSpecialEvent::Interval => execution
+                    .special_events
+                    .interval
+                    .as_ref()
+                    .map(|target| target.node_id.clone()),
+            };
+            node_id.ok_or_else(|| {
+                flow_like_types::anyhow!("The Page lifecycle event is not configured")
+            })
+        }
+    }
+}
+
+fn is_board_entry_node(board: &flow_like::flow::board::Board, node_id: &str) -> bool {
+    board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .any(|node| node.id == node_id && node.start == Some(true))
+}
+
+async fn resolve_local_page_target(
+    state: &Arc<FlowLikeState>,
+    app: &App,
+    event: &flow_like::flow::event::Event,
+    trigger: &PageTrigger,
+    principal: LocalPagePrincipalBinding,
+) -> flow_like_types::Result<ResolvedLocalPageTarget> {
+    if !event.active {
+        return Err(flow_like_types::anyhow!("The Page Event is not active"));
+    }
+    if event.execution_mode == flow_like::flow::event::EventExecutionMode::Remote {
+        return Err(flow_like_types::anyhow!(
+            "A Remote Page Event cannot execute on the local runtime"
+        ));
+    }
+    let page_id = event.default_page_id.as_deref().ok_or_else(|| {
+        flow_like_types::anyhow!("Page triggers can only invoke Events that own a Page")
+    })?;
+
+    let board = app
+        .open_board(event.board_id.clone(), None, event.board_version)
+        .await
+        .map_err(|error| {
+            flow_like_types::anyhow!(
+                "Page Event board '{}' is unavailable on this device: {}",
+                event.board_id,
+                error
+            )
+        })?;
+    let board = board.lock().await;
+    if board.id != event.board_id {
+        return Err(flow_like_types::anyhow!(
+            "The Page Event resolved an unexpected board"
+        ));
+    }
+    if let Some(configured_version) = event.board_version
+        && board.version != configured_version
+    {
+        return Err(flow_like_types::anyhow!(
+            "The Page Event resolved board version {}.{}.{} instead of {}.{}.{}",
+            board.version.0,
+            board.version.1,
+            board.version.2,
+            configured_version.0,
+            configured_version.1,
+            configured_version.2,
+        ));
+    }
+
+    let page = match event.board_version {
+        Some(version) => board.load_versioned_page(page_id, version, None).await,
+        None => board.load_page(page_id, None).await,
+    }
+    .map_err(|error| {
+        flow_like_types::anyhow!(
+            "Page '{}' for Event '{}' is unavailable on this device: {}",
+            page_id,
+            event.id,
+            error
+        )
+    })?;
+    if page.id != page_id || page.board_id.as_deref().is_some_and(|id| id != board.id) {
+        return Err(flow_like_types::anyhow!(
+            "The Page Event configuration is invalid"
+        ));
+    }
+
+    let execution = PrerunPageExecution::from_page(&board, &page)?;
+    let revision = page_execution_revision(&board, &execution)?;
+    let allowed_entry_nodes = board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .filter(|node| node.start == Some(true))
+        .map(|node| node.id.clone())
+        .collect::<HashSet<_>>();
+    let scope = LocalPageActionScope {
+        app_id: app.id.clone(),
+        event_id: event.id.clone(),
+        page_id: page.id.clone(),
+        board_id: board.id.clone(),
+        board_version: board.version,
+        manifest_revision: revision.clone(),
+        principal,
+    };
+    let node_id = match trigger {
+        PageTrigger::Action {
+            action_id,
+            capability_jwt,
+            manifest_revision,
+        } if action_id.starts_with(LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX) => {
+            require_page_execution_revision(manifest_revision.as_deref(), &revision)?;
+            if capability_jwt.is_some() {
+                return Err(flow_like_types::anyhow!(
+                    "A local Page action cannot carry a server capability"
+                ));
+            }
+            resolve_local_dynamic_page_action(action_id, &scope)?
+        }
+        _ => resolve_compiled_page_trigger(&execution, &revision, trigger)?,
+    };
+    if !is_board_entry_node(&board, &node_id) {
+        return Err(flow_like_types::anyhow!(
+            "The Page action does not resolve to an executable entry"
+        ));
+    }
+    // Build the executable template from the same Board value that produced
+    // the Page contract. Reloading Latest through the template cache here
+    // could observe a concurrent save and execute a different revision.
+    let registry = state.node_registry.read().await.node_registry.clone();
+    let template = Arc::new(CompiledRunTemplate::from_board(
+        Arc::new(board.clone()),
+        registry.as_ref(),
+    )?);
+
+    Ok(ResolvedLocalPageTarget {
+        node_id,
+        sealing_context: LocalPageActionSealingContext::new(scope, allowed_entry_nodes),
+        template,
+    })
+}
+
+struct ResolvedLocalPageTarget {
+    node_id: String,
+    sealing_context: LocalPageActionSealingContext,
+    template: Arc<flow_like::flow::compiled::CompiledRunTemplate>,
+}
+
 pub(crate) async fn resolve_run_template(
     state: &Arc<flow_like::state::FlowLikeState>,
     app_id: &str,
@@ -44,7 +292,7 @@ pub(crate) async fn resolve_run_template(
     version: Option<(u32, u32, u32)>,
 ) -> flow_like_types::Result<Arc<flow_like::flow::compiled::CompiledRunTemplate>> {
     TEMPLATE_CACHE
-        .resolve(state, app_id, board_id, version, "")
+        .resolve(state, app_id, board_id, version, None, "")
         .await
 }
 
@@ -278,6 +526,7 @@ async fn execute_internal(
     requested_version: Option<(u32, u32, u32)>,
     events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
     event_id: Option<String>,
+    page_trigger: Option<PageTrigger>,
     stream_state: bool,
     credentials: Option<SharedCredentials>,
     token: Option<String>,
@@ -299,6 +548,7 @@ async fn execute_internal(
         requested_version,
         events,
         event_id,
+        page_trigger,
         stream_state,
         credentials,
         token,
@@ -337,6 +587,7 @@ async fn execute_prepared(
     requested_version: Option<(u32, u32, u32)>,
     events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
     event_id: Option<String>,
+    page_trigger: Option<PageTrigger>,
     stream_state: bool,
     credentials: Option<SharedCredentials>,
     token: Option<String>,
@@ -345,6 +596,8 @@ async fn execute_prepared(
     started: Arc<AtomicBool>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
+    let mut page_action_sealing_context = None;
+    let mut page_template = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
     let mut version = requested_version;
@@ -355,32 +608,105 @@ async fn execute_prepared(
     // Desktop execution is trusted — allow secret overrides from local runtime vars
     payload.filter_secrets = Some(false);
 
+    let profile = TauriSettingsState::current_profile(&app_handle).await?;
+
     if let Some(event_id) = &event_id {
         let intermediate_event = app.get_event(event_id, None).await?;
-        payload.id = intermediate_event.node_id.clone();
         version = intermediate_event.board_version;
         board_id = intermediate_event.board_id.clone();
+
+        if let Some(trigger) = page_trigger.as_ref() {
+            let principal = crate::execution_identity::ensure_page_local_execution_authorized(
+                &app.visibility,
+                &app_id,
+                token.as_deref(),
+                &profile.hub_profile.hub,
+                &flow_like_state,
+            )
+            .await
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Page local execution is not authorized: {}",
+                    error
+                ))
+            })?;
+            let target = resolve_local_page_target(
+                &flow_like_state,
+                &app,
+                &intermediate_event,
+                trigger,
+                principal,
+            )
+            .await
+            .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+            payload.id = target.node_id;
+            page_action_sealing_context = Some(target.sealing_context);
+            page_template = Some(target.template);
+        } else {
+            if intermediate_event.default_page_id.is_some() {
+                return Err(TauriFunctionError::new(
+                    "Invoking a Page Event requires pageTrigger",
+                ));
+            }
+            payload.id = intermediate_event.node_id.clone();
+        }
         event = Some(intermediate_event);
+    } else {
+        if page_trigger.is_some() {
+            return Err(TauriFunctionError::new(
+                "pageTrigger is valid only for Event execution",
+            ));
+        }
+        crate::execution_identity::ensure_board_local_execution_authorized(
+            &app.visibility,
+            &app_id,
+            token.as_deref(),
+            &profile.hub_profile.hub,
+            &flow_like_state,
+        )
+        .await
+        .map_err(|error| {
+            TauriFunctionError::new(&format!(
+                "Direct local board execution is not authorized: {}",
+                error
+            ))
+        })?;
     }
 
-    let template = resolve_run_template(&flow_like_state, &app_id, &board_id, version)
-        .await
-        .map_err(|e| {
-            TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
-        })?;
-
-    let profile = TauriSettingsState::current_profile(&app_handle).await?;
+    let template = match page_template {
+        Some(template) => template,
+        None => resolve_run_template(&flow_like_state, &app_id, &board_id, version)
+            .await
+            .map_err(|e| {
+                TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
+            })?,
+    };
 
     let app_handle_for_report = app_handle.clone();
     let token_for_report = token.clone();
     let app_visibility_for_report = app.visibility.clone();
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
-        Arc::new(move |event| {
+        Arc::new(move |mut event| {
             let events_cb = events.as_ref().cloned();
             let app_handle = app_handle.clone();
+            let page_action_sealing_context = page_action_sealing_context.clone();
             Box::pin({
                 async move {
+                    if let Some(context) = page_action_sealing_context {
+                        for message in &mut event {
+                            let report =
+                                context.seal_payload(&message.event_type, &mut message.payload);
+                            if report.rejected > 0 {
+                                tracing::warn!(
+                                    event_id = %message.event_id,
+                                    rejected = report.rejected,
+                                    "stripped unauthorized dynamic actions from local Page output"
+                                );
+                            }
+                        }
+                    }
+
                     // Update last_node_update for run events
                     touch_run_last_update(&app_handle, &event);
 
@@ -698,6 +1024,7 @@ pub(crate) async fn execute_daemon_event(
         None,
         None,
         Some(event_id),
+        None,
         false,
         credentials,
         token,
@@ -736,6 +1063,7 @@ pub async fn execute_board(
         version,
         Some(events),
         None,
+        None,
         stream_state,
         credentials,
         token,
@@ -756,6 +1084,7 @@ pub async fn execute_event(
     credentials: Option<SharedCredentials>,
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    page_trigger: Option<PageTrigger>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let stream_state = stream_state.unwrap_or(false);
     execute_internal(
@@ -766,6 +1095,7 @@ pub async fn execute_event(
         None,
         Some(events),
         Some(event_id),
+        page_trigger,
         stream_state,
         credentials,
         token,
@@ -937,6 +1267,31 @@ pub async fn query_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::flow::compiled::prerun::{
+        PrerunPageActionEvent, PrerunPageActionHandler, PrerunPageActionLocator,
+        PrerunPageEventTarget, PrerunPageSpecialEvents,
+    };
+
+    fn page_execution() -> PrerunPageExecution {
+        PrerunPageExecution {
+            page_id: "page-1".to_string(),
+            action_events: vec![PrerunPageActionEvent {
+                action_id: "pa1_action".to_string(),
+                node_id: "node-action".to_string(),
+                locator: PrerunPageActionLocator::Component {
+                    component_id: "button-1".to_string(),
+                    handler: PrerunPageActionHandler::Exact("click".to_string()),
+                    action_index: 0,
+                },
+            }],
+            special_events: PrerunPageSpecialEvents {
+                load: Some(PrerunPageEventTarget {
+                    node_id: "node-load".to_string(),
+                }),
+                ..Default::default()
+            },
+        }
+    }
 
     #[test]
     fn offline_apps_are_not_reported_to_the_backend() {
@@ -953,5 +1308,49 @@ mod tests {
         ] {
             assert!(should_report_run_to_backend(&visibility));
         }
+    }
+
+    #[test]
+    fn static_page_action_resolves_only_at_the_current_revision() {
+        let trigger = PageTrigger::Action {
+            action_id: "pa1_action".to_string(),
+            capability_jwt: None,
+            manifest_revision: Some("per1_current".to_string()),
+        };
+        assert_eq!(
+            resolve_compiled_page_trigger(&page_execution(), "per1_current", &trigger).unwrap(),
+            "node-action"
+        );
+
+        let stale = PageTrigger::Action {
+            action_id: "pa1_action".to_string(),
+            capability_jwt: None,
+            manifest_revision: Some("per1_stale".to_string()),
+        };
+        assert!(resolve_compiled_page_trigger(&page_execution(), "per1_current", &stale).is_err());
+    }
+
+    #[test]
+    fn native_page_resolver_rejects_dynamic_capabilities() {
+        let trigger = PageTrigger::Action {
+            action_id: "da1_dynamic".to_string(),
+            capability_jwt: Some("secondary-token".to_string()),
+            manifest_revision: Some("per1_current".to_string()),
+        };
+        assert!(
+            resolve_compiled_page_trigger(&page_execution(), "per1_current", &trigger).is_err()
+        );
+    }
+
+    #[test]
+    fn lifecycle_hooks_use_the_reserved_map() {
+        let trigger = PageTrigger::Special {
+            special_event: PageSpecialEvent::Load,
+            manifest_revision: "per1_current".to_string(),
+        };
+        assert_eq!(
+            resolve_compiled_page_trigger(&page_execution(), "per1_current", &trigger).unwrap(),
+            "node-load"
+        );
     }
 }

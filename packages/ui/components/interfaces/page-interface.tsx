@@ -14,18 +14,18 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { useAssetSource } from "../../hooks/use-asset-source";
-import { boardReadinessKey, whenBoardReady } from "../../lib/board-readiness";
 import {
 	type PageSurfaceIdentity,
+	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
+	pageSurfaceRevision,
+	pageSurfaceRouteKey,
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
-import {
-	resolveEventBoardVersion,
-	withBoardVersion,
-} from "../../lib/schema/flow/board-version";
+import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
+import type { PageSpecialEvent } from "../../lib/schema/flow/page-trigger";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
@@ -56,28 +56,22 @@ import type {
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
+import { pageExecutionIdentity } from "./page-execution-identity";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
+import { shouldRevealProgressively } from "./progressive-page-reveal";
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
 }
 
-interface WidgetWarmup {
-	readonly promise: Promise<void>;
-	completedAt?: number;
-}
-
-/**
- * Warming widget definitions is shared across every page of an app, so the record outlives any
- * one interface. It expires so that widgets published mid-session still reach local execution.
- */
-const widgetWarmups = new Map<string, WidgetWarmup>();
-const WIDGET_WARMUP_TTL_MS = 60_000;
-
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
 	route?: string;
 	page?: IPage;
+	/** Exact page payload revision returned by a freshness-validating bootstrap read. */
+	pageRevision?: string;
+	/** Exact Page execution authority revision returned by bootstrap. */
+	pageExecutionRevision?: string;
 	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
 	queryParams?: Record<string, string>;
 	/** Consume page-owned route and query changes inside an embedded runtime. */
@@ -99,7 +93,7 @@ function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
 		{} as Record<string, SurfaceComponent>,
 	);
 
-	const rootComponentId = componentsRecord["root"]
+	const rootComponentId = componentsRecord.root
 		? "root"
 		: page.components[0]?.id || "";
 
@@ -136,6 +130,8 @@ function PageInterfaceInner({
 	config,
 	route,
 	page: providedPage,
+	pageRevision,
+	pageExecutionRevision,
 	queryParams: providedQueryParams,
 	onNavigationMessage,
 	active = true,
@@ -168,37 +164,78 @@ function PageInterfaceInner({
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
-	const [page, setPage] = useState<IPage | null>(null);
+	// The parent already resolved the page for the normal `/use` path. Seed local state from
+	// that value so the first render can build its surface without an effect handoff.
+	const [page, setPage] = useState<IPage | null>(() => providedPage ?? null);
 	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
-	const [isLoading, setIsLoading] = useState(true);
+	const [isLoading, setIsLoading] = useState(() => !providedPage);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
-	const [isCacheLoading, setIsCacheLoading] = useState(false);
 	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [loadEventPhase, setLoadEventPhase] = useState<
 		"idle" | "preparing" | "running"
 	>("idle");
+	const [completedLoadEventKey, setCompletedLoadEventKey] = useState<
+		string | null
+	>(null);
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
-	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
+	const [cachedSurfaceResult, setCachedSurfaceResult] = useState<{
+		readonly identityKey: string;
+		readonly surface: Surface | null;
+	} | null>(null);
 
 	const pageRoute = route || (config?.route as string);
 	const cacheSource = providedPage ?? page;
 	const activePageEvent = event ?? routeEvent;
+	const isGovernedPage = Boolean(activePageEvent?.default_page_id);
+	const cacheEnabled = cacheSource?.cache === true;
 
 	// A cached surface may only be replayed for the same parameters and the same account that
 	// produced it: the onLoad workflow receives both, and its output is built from them.
 	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
-		if (!appId || !cacheSource?.id || !cacheSource.updatedAt) return null;
+		const revision = pageSurfaceRevision(
+			pageRevision ?? cacheSource?.updatedAt,
+			pageExecutionRevision,
+		);
+		if (!appId || !cacheSource?.id || !revision) return null;
 		return {
 			appId,
 			pageId: cacheSource.id,
-			pageUpdatedAt: cacheSource.updatedAt,
+			pageUpdatedAt: revision,
+			routeKey: pageSurfaceRouteKey(pageRoute),
 			queryKey: pageSurfaceQueryKey(search),
 			userKey: currentUserKey,
 		};
-	}, [appId, cacheSource?.id, cacheSource?.updatedAt, currentUserKey, search]);
+	}, [
+		appId,
+		cacheSource?.id,
+		cacheSource?.updatedAt,
+		pageRevision,
+		pageExecutionRevision,
+		currentUserKey,
+		pageRoute,
+		search,
+	]);
+	const surfaceIdentityKey = surfaceIdentity
+		? pageSurfaceCacheKey(surfaceIdentity)
+		: null;
+	const shouldReadCachedSurface = Boolean(
+		cacheEnabled && surfaceIdentityKey && cacheSource?.onLoadEventId,
+	);
+	const isCacheLoading = Boolean(
+		shouldReadCachedSurface &&
+			cachedSurfaceResult?.identityKey !== surfaceIdentityKey,
+	);
+	const cachedSurface =
+		cacheEnabled && cachedSurfaceResult?.identityKey === surfaceIdentityKey
+			? cachedSurfaceResult.surface
+			: null;
 	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
+	const pageExecutionTargetIdentity = pageExecutionIdentity(
+		pageExecutionBoardId,
+		isGovernedPage ? activePageEvent?.id : undefined,
+	);
 	const pageExecutionVersion = useMemo(
 		() =>
 			resolveEventBoardVersion(
@@ -212,12 +249,29 @@ function PageInterfaceInner({
 			pageExecutionBoardId,
 		],
 	);
+	const loadEventExecutionKey = useMemo(() => {
+		if (!page?.onLoadEventId || !pageExecutionTargetIdentity) return null;
+		return `${surfaceIdentityKey ?? page.id}:${page.onLoadEventId}:${pageExecutionTargetIdentity}:${pageExecutionVersion?.join(".") ?? "latest"}:${pageExecutionRevision ?? "unresolved"}`;
+	}, [
+		page?.id,
+		page?.onLoadEventId,
+		pageExecutionTargetIdentity,
+		pageExecutionVersion,
+		pageExecutionRevision,
+		surfaceIdentityKey,
+	]);
+	const loadEventExecutionKeyRef = useRef(loadEventExecutionKey);
+	loadEventExecutionKeyRef.current = loadEventExecutionKey;
 
 	useEffect(() => {
+		let cancelled = false;
+
 		if (providedPage) {
 			setPage(providedPage);
 			setIsLoading(false);
-			return;
+			return () => {
+				cancelled = true;
+			};
 		}
 
 		const loadPageFromRoute = async () => {
@@ -232,6 +286,7 @@ function PageInterfaceInner({
 				} else {
 					mapping = await backend.routeState.getDefaultRoute(appId);
 				}
+				if (cancelled) return;
 
 				if (!mapping) {
 					setRouteMapping(null);
@@ -248,6 +303,7 @@ function PageInterfaceInner({
 					appId,
 					mapping.eventId,
 				);
+				if (cancelled) return;
 				setRouteEvent(eventData);
 
 				// If event has default_page_id, it's a page-target event
@@ -257,6 +313,7 @@ function PageInterfaceInner({
 						eventData.default_page_id,
 						eventData.board_id || undefined,
 					);
+					if (cancelled) return;
 					if (pageResult) {
 						setPage(pageResult);
 					} else {
@@ -267,14 +324,18 @@ function PageInterfaceInner({
 					setPage(null);
 				}
 			} catch (e) {
+				if (cancelled) return;
 				console.error("Failed to load page:", e);
 				setError("Failed to load page");
 			} finally {
-				setIsLoading(false);
+				if (!cancelled) setIsLoading(false);
 			}
 		};
 
-		loadPageFromRoute();
+		void loadPageFromRoute();
+		return () => {
+			cancelled = true;
+		};
 	}, [
 		appId,
 		pageRoute,
@@ -284,34 +345,34 @@ function PageInterfaceInner({
 		backend.eventState,
 	]);
 
-	// Every page keeps its last rendered surface, not only those that opt in: the alternative
-	// to showing it is a skeleton for the whole length of the onLoad run, and the run replaces
-	// it either way. Pages without an onLoad event build their surface from the payload and
-	// never consult this.
+	// Only pages that explicitly opt in keep a last rendered surface. Pages without the opt-in
+	// always render their fresh page payload while the onLoad workflow updates it.
 	useEffect(() => {
 		let cancelled = false;
 
-		if (!surfaceIdentity || !cacheSource?.onLoadEventId) {
-			setCachedSurface(null);
-			setIsCacheLoading(false);
+		if (
+			!cacheEnabled ||
+			!surfaceIdentity ||
+			!surfaceIdentityKey ||
+			!cacheSource?.onLoadEventId
+		) {
 			return;
 		}
 
-		setIsCacheLoading(true);
-		void readPageSurfaceCache(surfaceIdentity)
-			.then((surface) => {
-				if (cancelled) return;
-				setCachedSurface(surface);
-			})
-			.finally(() => {
-				if (cancelled) return;
-				setIsCacheLoading(false);
-			});
+		void readPageSurfaceCache(surfaceIdentity).then((surface) => {
+			if (cancelled) return;
+			setCachedSurfaceResult({ identityKey: surfaceIdentityKey, surface });
+		});
 
 		return () => {
 			cancelled = true;
 		};
-	}, [surfaceIdentity, cacheSource?.onLoadEventId]);
+	}, [
+		cacheEnabled,
+		surfaceIdentity,
+		surfaceIdentityKey,
+		cacheSource?.onLoadEventId,
+	]);
 
 	const initialSurface = useMemo(() => {
 		if (cachedSurface) return cachedSurface;
@@ -338,13 +399,26 @@ function PageInterfaceInner({
 		};
 	}, []);
 
-	// Written only once the run that produced it has finished, so a half-built surface is never
-	// what the next visit replays.
+	// For opted-in pages, write only once the run that produced the surface has finished, so a
+	// half-built surface is never what the next visit replays.
 	useEffect(() => {
 		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!page?.onLoadEventId) return;
+		if (!cacheEnabled || !cacheSource?.onLoadEventId) return;
+		if (
+			!loadEventExecutionKey ||
+			completedLoadEventKey !== loadEventExecutionKey
+		)
+			return;
 		void writePageSurfaceCache(surfaceIdentity, surface);
-	}, [surfaceIdentity, page?.onLoadEventId, surface, isLoadEventRunning]);
+	}, [
+		surfaceIdentity,
+		cacheEnabled,
+		cacheSource?.onLoadEventId,
+		surface,
+		isLoadEventRunning,
+		loadEventExecutionKey,
+		completedLoadEventKey,
+	]);
 
 	// Comprehensive A2UI message handler for page events
 	const handleA2UIMessage = useCallback(
@@ -367,6 +441,10 @@ function PageInterfaceInner({
 			if (message.type === "showScreen") {
 				setIsScreenRevealed(true);
 				return;
+			}
+
+			if (shouldRevealProgressively(message)) {
+				setIsScreenRevealed(true);
 			}
 
 			// Handle navigation
@@ -481,125 +559,75 @@ function PageInterfaceInner({
 
 	const pageContainerRef = useRef<HTMLDivElement | null>(null);
 
-	const prepareLocalWidgetDefinitions = useCallback(async () => {
-		if (!appId || !backend.capabilities().canExecuteLocally) return;
-
-		const tracked = widgetWarmups.get(appId);
-		// A completed warm-up was kept forever, so a widget published or edited later in the
-		// session never reached local execution. Concurrent runs still share one pass; a
-		// finished one only counts as current for as long as the list plausibly is.
-		if (
-			tracked &&
-			(tracked.completedAt === undefined ||
-				Date.now() - tracked.completedAt < WIDGET_WARMUP_TTL_MS)
-		) {
-			await tracked.promise.catch(() => undefined);
-			return;
-		}
-
-		const entry: WidgetWarmup = {
-			promise: (async () => {
-				const widgets = await backend.widgetState.getWidgets(appId);
-				const results = await Promise.allSettled(
-					widgets.map(([widgetAppId, widgetId]) =>
-						backend.widgetState.getWidget(widgetAppId, widgetId),
-					),
-				);
-				const failedCount = results.filter(
-					(result) => result.status === "rejected",
-				).length;
-				if (failedCount > 0) {
-					console.warn(
-						`[PageInterface] Failed to warm ${failedCount} widget definition(s) before local execution`,
-					);
-				}
-			})(),
-		};
-
-		widgetWarmups.set(appId, entry);
-		try {
-			await entry.promise;
-			entry.completedAt = Date.now();
-		} catch (e) {
-			// A failed pass must not be remembered as current, or the next run inherits it.
-			if (widgetWarmups.get(appId) === entry) widgetWarmups.delete(appId);
-			console.warn(
-				"[PageInterface] Failed to warm widget definitions before local execution:",
-				e,
-			);
-		}
-	}, [appId, backend]);
-
 	// Helper to execute a page lifecycle event
 	const executePageEvent = useCallback(
 		async (
-			eventNodeId: string | undefined,
+			specialEvent: PageSpecialEvent,
 			eventName: string,
 			extraPayload?: Record<string, unknown>,
 			onRunStarted?: (runId: string) => void,
+			isCurrent?: () => boolean,
 		) => {
-			if (!eventNodeId || !page) return;
-
-			const boardId = pageExecutionBoardId;
-			if (!boardId) {
-				console.warn(`[PageInterface] No boardId for ${eventName} event`);
+			if (!page) return;
+			if (!activePageEvent?.id || !pageExecutionRevision) {
+				console.warn(
+					`[PageInterface] Missing governed Page context for ${eventName} event`,
+				);
 				return;
 			}
 
 			try {
-				// The render no longer waits for the board refresh, so the run does: a device
-				// that has only ever synced the board manifest must not execute the stale copy,
-				// nor read the element demand of the copy it replaces.
-				await Promise.all([
-					whenBoardReady(
-						boardReadinessKey(
-							appId,
-							boardId,
-							pageExecutionVersion ?? undefined,
-						),
-					),
-					prepareLocalWidgetDefinitions(),
-				]);
-
 				const currentSurface = surfaceRef.current;
 				const surfaceElements = currentSurface
 					? await collectRunElements({
 							backend,
 							appId,
-							boardId,
-							boardVersion: pageExecutionVersion,
+							// The Event endpoint resolves the configured board. Omitting it here
+							// avoids requiring Page users to read that board.
+							boardId: undefined,
 							surfaceId: currentSurface.id,
 							components: currentSurface.components,
 							storedValues: {},
 						})
 					: {};
+				if (isCurrent && !isCurrent()) return;
 
-				const payload = withBoardVersion(
-					{
-						id: eventNodeId,
-						payload: {
-							_elements: surfaceElements,
-							_elements_mode: "demand",
-							_route: pageRoute || "/",
-							_query_params: { ...runtimeQueryParamsRef.current },
-							_page_id: page.id,
-							_event_type: eventName,
-							...extraPayload,
-						},
+				const payload = {
+					id: `page_${specialEvent}`,
+					payload: {
+						_elements: surfaceElements,
+						_elements_mode: "demand",
+						_route: pageRoute || "/",
+						_query_params: { ...runtimeQueryParamsRef.current },
+						_page_id: page.id,
+						_event_type: eventName,
+						...extraPayload,
 					},
-					pageExecutionVersion,
-				);
+				};
 
-				// Use execution service if available (checks runtime variables)
 				const execFn =
-					executionService?.executeBoard ?? backend.boardState.executeBoard;
-				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
-					for (const evt of events) {
-						if (evt.event_type === "a2ui") {
-							handleA2UIMessage(evt.payload as A2UIServerMessage);
+					executionService?.executeEvent ?? backend.eventState.executeEvent;
+				await execFn(
+					appId,
+					activePageEvent.id,
+					payload,
+					false,
+					onRunStarted,
+					(events) => {
+						if (isCurrent && !isCurrent()) return;
+						for (const evt of events) {
+							if (evt.event_type === "a2ui") {
+								handleA2UIMessage(evt.payload as A2UIServerMessage);
+							}
 						}
-					}
-				});
+					},
+					undefined,
+					{
+						kind: "special",
+						specialEvent,
+						manifestRevision: pageExecutionRevision,
+					},
+				);
 			} catch (e) {
 				console.error(
 					`[PageInterface] Failed to execute ${eventName} event:`,
@@ -610,50 +638,64 @@ function PageInterfaceInner({
 		[
 			appId,
 			page,
-			pageExecutionBoardId,
-			pageExecutionVersion,
+			activePageEvent?.id,
+			pageExecutionRevision,
 			pageRoute,
 			backend,
 			executionService,
 			handleA2UIMessage,
-			prepareLocalWidgetDefinitions,
 		],
 	);
 
 	// Execute onLoad event if configured (from page settings)
 	useEffect(() => {
 		const executeOnLoadEvent = async () => {
-			if (!page?.onLoadEventId) return;
+			if (!page?.onLoadEventId || !loadEventExecutionKey) {
+				loadEventExecutedRef.current = null;
+				setCompletedLoadEventKey(null);
+				setLoadEventPhase("idle");
+				setIsLoadEventRunning(false);
+				return;
+			}
 
-			const boardId = pageExecutionBoardId;
-			if (!boardId) return;
-
-			// Prevent duplicate execution for the same page + event combination
-			const executionKey = `${page.id}:${page.onLoadEventId}:${boardId}:${pageExecutionVersion?.join(".") ?? "latest"}`;
+			// Query, account, and page revision are part of the key because onLoad receives and
+			// can render data for all three.
+			const executionKey = loadEventExecutionKey;
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
+			setCompletedLoadEventKey(null);
 			setIsScreenRevealed(false);
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
 			try {
-				await executePageEvent(page.onLoadEventId, "onLoad", undefined, () =>
-					setLoadEventPhase("running"),
+				await executePageEvent(
+					"load",
+					"onLoad",
+					undefined,
+					() => {
+						if (
+							loadEventExecutionKeyRef.current === executionKey &&
+							loadEventExecutedRef.current === executionKey
+						)
+							setLoadEventPhase("running");
+					},
+					() =>
+						loadEventExecutionKeyRef.current === executionKey &&
+						loadEventExecutedRef.current === executionKey,
 				);
 			} finally {
-				setLoadEventPhase("idle");
-				setIsLoadEventRunning(false);
+				// A superseded run must not mark the current page as hydrated or stop its loader.
+				if (loadEventExecutedRef.current === executionKey) {
+					setCompletedLoadEventKey(executionKey);
+					setLoadEventPhase("idle");
+					setIsLoadEventRunning(false);
+				}
 			}
 		};
 
 		executeOnLoadEvent();
-	}, [
-		appId,
-		page,
-		pageExecutionBoardId,
-		pageExecutionVersion,
-		executePageEvent,
-	]);
+	}, [page, loadEventExecutionKey, executePageEvent]);
 
 	// Execute onUnload event when page unmounts or user navigates away
 	useEffect(() => {
@@ -661,7 +703,7 @@ function PageInterfaceInner({
 
 		const handleBeforeUnload = () => {
 			// Fire and forget - can't await in beforeunload
-			executePageEvent(page.onUnloadEventId, "onUnload");
+			executePageEvent("unload", "onUnload");
 		};
 
 		window.addEventListener("beforeunload", handleBeforeUnload);
@@ -669,7 +711,7 @@ function PageInterfaceInner({
 		return () => {
 			window.removeEventListener("beforeunload", handleBeforeUnload);
 			// Also fire on component unmount (navigation within SPA)
-			executePageEvent(page.onUnloadEventId, "onUnload");
+			executePageEvent("unload", "onUnload");
 		};
 	}, [page?.onUnloadEventId, executePageEvent]);
 
@@ -690,7 +732,7 @@ function PageInterfaceInner({
 		const intervalMs = page.onIntervalSeconds * 1000;
 		const tick = () => {
 			lastIntervalTickRef.current = Date.now();
-			executePageEvent(page.onIntervalEventId, "onInterval", {
+			executePageEvent("interval", "onInterval", {
 				_interval_seconds: page.onIntervalSeconds,
 			});
 		};
@@ -709,7 +751,7 @@ function PageInterfaceInner({
 		active,
 	]);
 
-	// Strip canvasSettings from the surface for A2UIRenderer — this component
+	// Strip canvasSettings from the surface for A2UIRenderer. This component
 	// already handles CSS injection and canvas styling at the outer level.
 	// Passing it again would cause double CSS scoping and inline-style conflicts.
 	const surfaceForRenderer = useMemo(() => {
@@ -787,7 +829,18 @@ function PageInterfaceInner({
 		);
 	}
 
-	if (!activeSurface) {
+	if (isGovernedPage && !pageExecutionRevision) {
+		return (
+			<div className="flex items-center justify-center h-full text-muted-foreground">
+				<p>
+					This Page could not load its execution authorization. Reload and try
+					again.
+				</p>
+			</div>
+		);
+	}
+
+	if (!activeSurface || !activeSurfaceForRenderer) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
 				<p>{t("noContentToDisplay", "No content to display")}</p>
@@ -829,13 +882,14 @@ function PageInterfaceInner({
 			>
 				<DataProvider initialData={[]}>
 					<A2UIRenderer
-						surface={activeSurfaceForRenderer!}
+						surface={activeSurfaceForRenderer}
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
 						boardId={pageExecutionBoardId}
 						boardVersion={pageExecutionVersion}
 						eventId={activePageEvent?.id}
+						governedPage={isGovernedPage}
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={true}

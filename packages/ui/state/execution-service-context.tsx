@@ -17,6 +17,7 @@ import { IExecutionMode } from "../lib/schema/flow/board";
 import { normalizeBoardVersion } from "../lib/schema/flow/board-version";
 import type { IEvent } from "../lib/schema/flow/event";
 import { IEventExecutionMode } from "../lib/schema/flow/event";
+import type { PageTrigger } from "../lib/schema/flow/page-trigger";
 import { useBackend } from "./backend-state";
 import {
 	prerunBoardKey,
@@ -50,6 +51,7 @@ interface PendingExecution {
 	eventId?: (id: string) => void;
 	cb?: (event: IIntercomEvent[]) => void;
 	skipConsentCheck?: boolean;
+	pageTrigger?: PageTrigger;
 	isRemote: boolean;
 	isEvent: boolean;
 	eventIdStr?: string;
@@ -131,6 +133,7 @@ export interface ExecutionServiceContextValue {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	) => Promise<ILogMetadata | undefined>;
 
 	/**
@@ -158,6 +161,7 @@ export interface ExecutionServiceContextValue {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	) => Promise<ILogMetadata | undefined>;
 }
 
@@ -573,6 +577,7 @@ export function ExecutionServiceProvider({
 			onEventId: ((id: string) => void) | undefined,
 			cb: ((event: IIntercomEvent[]) => void) | undefined,
 			skipConsentCheck: boolean | undefined,
+			pageTrigger: PageTrigger | undefined,
 		): Promise<ILogMetadata | undefined> => {
 			const backendAlwaysRemote = backend.eventState.alwaysRemote === true;
 			const executeEventRemote = backend.eventState.executeEventRemote;
@@ -590,6 +595,7 @@ export function ExecutionServiceProvider({
 							streamState,
 							onEventId,
 							cb,
+							pageTrigger,
 						)
 					: backend.eventState.executeEvent(
 							appId,
@@ -599,6 +605,7 @@ export function ExecutionServiceProvider({
 							onEventId,
 							cb,
 							skipConsentCheck,
+							pageTrigger,
 						);
 
 			// Run WASM consent check first (independent of runtime vars).
@@ -609,12 +616,16 @@ export function ExecutionServiceProvider({
 
 			if (backend.eventState.prerunEvent) {
 				try {
-					const fetchPrerun = backend.eventState.prerunEvent;
-					prerunResult = await prerunSwr(
-						prerunEventKey(appId, eventIdStr),
-						() => fetchPrerun(appId, eventIdStr),
-						{ onDrift: (key) => notifyPrerunDrift(key) },
+					const fetchPrerun = backend.eventState.prerunEvent.bind(
+						backend.eventState,
 					);
+					prerunResult = pageTrigger
+						? await fetchPrerun(appId, eventIdStr, undefined, pageTrigger)
+						: await prerunSwr(
+								prerunEventKey(appId, eventIdStr),
+								() => fetchPrerun(appId, eventIdStr),
+								{ onDrift: (key) => notifyPrerunDrift(key) },
+							);
 
 					if (
 						prerunResult.has_wasm_nodes &&
@@ -643,6 +654,7 @@ export function ExecutionServiceProvider({
 					onEventId,
 					cb,
 					skipConsentCheck,
+					pageTrigger,
 				);
 			}
 
@@ -677,6 +689,11 @@ export function ExecutionServiceProvider({
 						// Fall back to prerun variables if board fetch fails
 					}
 				}
+			} else if (pageTrigger) {
+				// A governed Page action must not fall back to reading its backing
+				// Event or Board. The invoke endpoint remains the authority when
+				// prerun is temporarily unavailable.
+				return dispatch(true, payload);
 			} else {
 				// Prerun is unavailable or failed. The event record alone already says
 				// where the run belongs, so it is read before the board: an event pinned
@@ -753,6 +770,7 @@ export function ExecutionServiceProvider({
 					eventId: onEventId,
 					cb,
 					skipConsentCheck,
+					pageTrigger,
 					isRemote,
 					isEvent: true,
 					eventIdStr,
@@ -849,6 +867,7 @@ export function ExecutionServiceProvider({
 			onEventId?: (id: string) => void,
 			cb?: (event: IIntercomEvent[]) => void,
 			skipConsentCheck?: boolean,
+			pageTrigger?: PageTrigger,
 		) =>
 			checkAndExecuteEvent(
 				appId,
@@ -858,6 +877,7 @@ export function ExecutionServiceProvider({
 				onEventId,
 				cb,
 				skipConsentCheck,
+				pageTrigger,
 			),
 		[checkAndExecuteEvent],
 	);
@@ -871,6 +891,7 @@ export function ExecutionServiceProvider({
 			onEventId?: (id: string) => void,
 			cb?: (event: IIntercomEvent[]) => void,
 			skipConsentCheck?: boolean,
+			pageTrigger?: PageTrigger,
 		) =>
 			backend.eventState.executeEvent(
 				appId,
@@ -880,6 +901,7 @@ export function ExecutionServiceProvider({
 				onEventId,
 				cb,
 				skipConsentCheck,
+				pageTrigger,
 			),
 		[backend.eventState],
 	);
@@ -896,6 +918,7 @@ export function ExecutionServiceProvider({
 				eventId,
 				cb,
 				skipConsentCheck,
+				pageTrigger,
 				isRemote,
 				isEvent,
 				eventIdStr,
@@ -964,6 +987,7 @@ export function ExecutionServiceProvider({
 							streamState,
 							eventId,
 							cb,
+							pageTrigger,
 						);
 					} else {
 						result = await backend.eventState.executeEvent(
@@ -974,6 +998,7 @@ export function ExecutionServiceProvider({
 							eventId,
 							cb,
 							skipConsentCheck,
+							pageTrigger,
 						);
 					}
 				} else if (isRemote && backend.boardState.executeBoardRemote) {

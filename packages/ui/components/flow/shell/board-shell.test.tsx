@@ -62,6 +62,7 @@ const { BoardPane, BoardPanel, usePanelToolbarSlot } = await import(
 	"./board-panes"
 );
 const { BoardInspector } = await import("./board-inspector");
+const { BoardShell } = await import("./board-shell");
 
 const roots: ReturnType<typeof createRoot>[] = [];
 
@@ -267,6 +268,30 @@ describe("board shell surfaces", () => {
 		expect(container.textContent).toContain("Step 2");
 		expect(container.textContent).toContain("Not connected");
 		expect(container.textContent).toContain("performance");
+	});
+
+	test("toggling the script pane keeps the canvas mounted", () => {
+		// The graph owns the xyflow store and refits on mount, so a remount here
+		// dropped the user back to the whole-board overview on every open/close.
+		const shell = (script: boolean) =>
+			createElement(BoardShell, {
+				rail: null,
+				canvas: createElement("div", { id: "canvas" }, "graph"),
+				script: script ? createElement("div", null, "flowscript") : undefined,
+				statusBar: null,
+			});
+
+		const container = render(shell(false));
+		const canvas = container.querySelector("#canvas");
+		expect(canvas).not.toBeNull();
+
+		act(() => roots[roots.length - 1].render(shell(true)));
+		expect(container.textContent).toContain("flowscript");
+		expect(container.querySelector("#canvas")).toBe(canvas as never);
+
+		act(() => roots[roots.length - 1].render(shell(false)));
+		expect(container.textContent).not.toContain("flowscript");
+		expect(container.querySelector("#canvas")).toBe(canvas as never);
 	});
 
 	test("the inspector says what to do when the selection is not one node", () => {

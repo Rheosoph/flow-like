@@ -2,10 +2,11 @@
 //!
 //! When the executor crashes, the SSE connection drops, or any other
 //! infrastructure failure prevents the `completed` event from reaching
-//! the API, the run row stays at `Pending`/`Running` forever. The
-//! sweeper runs on a fixed interval, finds runs that have been
-//! non-terminal for longer than the configured grace period, and marks
-//! them as `Timeout` so operators can see them in the UI.
+//! the API, the run row stays at `Pending`/`Running` forever. Long-running
+//! API processes run the sweeper on a fixed interval. Stateless deployments
+//! invoke the same bounded pass through the maintenance endpoint. Each pass
+//! finds runs that have been non-terminal for longer than the configured grace
+//! period and marks them as `Timeout` so operators can see them in the UI.
 //!
 //! `Local` runs are skipped — they have no executor lifecycle and the
 //! caller controls completion explicitly.
@@ -14,7 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 use crate::entity::execution_run;
 use crate::entity::prelude::ExecutionRun;
@@ -22,18 +25,24 @@ use crate::entity::sea_orm_active_enums::{RunMode, RunStatus};
 
 const DEFAULT_INTERVAL_SECS: u64 = 300;
 const DEFAULT_GRACE_SECS: u64 = 3600;
+const DEFAULT_BATCH_SIZE: u64 = 500;
+// Keep the generated `WHERE id IN (...)` statement below conservative bind
+// parameter limits on every supported SQL backend.
+const MAX_BATCH_SIZE: u64 = 900;
 
 /// Configuration for the run sweeper.
 #[derive(Clone, Debug)]
 pub struct RunSweeperConfig {
     pub interval: Duration,
     pub grace: Duration,
+    pub batch_size: u64,
 }
 
 impl RunSweeperConfig {
     /// Build config from environment variables.
     /// - `RUN_SWEEPER_INTERVAL_SECS`: how often to sweep (default 300)
     /// - `RUN_SWEEPER_GRACE_SECS`: how long a run can stay Pending/Running before being marked Timeout (default 3600)
+    /// - `RUN_SWEEPER_BATCH_SIZE`: maximum rows reconciled per pass (default 500, maximum 900)
     pub fn from_env() -> Self {
         let interval = std::env::var("RUN_SWEEPER_INTERVAL_SECS")
             .ok()
@@ -43,11 +52,22 @@ impl RunSweeperConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_GRACE_SECS);
+        let batch_size =
+            normalized_batch_size(std::env::var("RUN_SWEEPER_BATCH_SIZE").ok().as_deref());
         Self {
             interval: Duration::from_secs(interval),
             grace: Duration::from_secs(grace),
+            batch_size,
         }
     }
+}
+
+fn normalized_batch_size(value: Option<&str>) -> u64 {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_BATCH_SIZE)
+        .min(MAX_BATCH_SIZE)
 }
 
 /// Spawn the run sweeper as a background task.
@@ -70,6 +90,7 @@ pub fn spawn_run_sweeper(
     tracing::info!(
         interval_secs = config.interval.as_secs(),
         grace_secs = config.grace.as_secs(),
+        batch_size = config.batch_size,
         "Spawning run sweeper"
     );
 
@@ -81,7 +102,7 @@ pub fn spawn_run_sweeper(
 
         loop {
             ticker.tick().await;
-            match sweep_once(db.as_ref(), config.grace).await {
+            match sweep_once(db.as_ref(), config.grace, config.batch_size).await {
                 Ok(0) => {}
                 Ok(n) => tracing::warn!(swept = n, "Run sweeper marked stale runs as Timeout"),
                 Err(e) => tracing::error!(error = %e, "Run sweeper iteration failed"),
@@ -92,19 +113,28 @@ pub fn spawn_run_sweeper(
     Some(handle)
 }
 
-/// Run one sweeper iteration. Returns the number of rows updated.
+/// Run one bounded sweeper iteration. The oldest stale runs are reconciled
+/// first. Returns the number of rows updated.
 ///
 /// Exposed for tests and ad-hoc reconciliation; the spawned task calls
 /// this on each interval tick.
-pub async fn sweep_once(db: &DatabaseConnection, grace: Duration) -> Result<u64, sea_orm::DbErr> {
+pub async fn sweep_once(
+    db: &DatabaseConnection,
+    grace: Duration,
+    batch_size: u64,
+) -> Result<u64, sea_orm::DbErr> {
     let now = chrono::Utc::now().naive_utc();
     let threshold =
         now - chrono::Duration::from_std(grace).unwrap_or_else(|_| chrono::Duration::seconds(3600));
+    let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);
 
     let stale = ExecutionRun::find()
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
         .filter(execution_run::Column::Mode.ne(RunMode::Local))
         .filter(execution_run::Column::UpdatedAt.lt(threshold))
+        .order_by_asc(execution_run::Column::UpdatedAt)
+        .order_by_asc(execution_run::Column::Id)
+        .limit(batch_size)
         .all(db)
         .await?;
 
@@ -135,8 +165,26 @@ pub async fn sweep_once(db: &DatabaseConnection, grace: Duration) -> Result<u64,
         })
         .filter(execution_run::Column::Id.is_in(ids))
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+        // A callback may refresh a run after the selection query. Keep the
+        // age predicate in the conditional update so the sweep cannot time out
+        // a run that became active in that window.
+        .filter(execution_run::Column::UpdatedAt.lt(threshold))
         .exec(db)
         .await?;
 
     Ok(result.rows_affected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_size_defaults_and_is_bounded() {
+        assert_eq!(normalized_batch_size(None), DEFAULT_BATCH_SIZE);
+        assert_eq!(normalized_batch_size(Some("")), DEFAULT_BATCH_SIZE);
+        assert_eq!(normalized_batch_size(Some("0")), DEFAULT_BATCH_SIZE);
+        assert_eq!(normalized_batch_size(Some("25")), 25);
+        assert_eq!(normalized_batch_size(Some("50000")), MAX_BATCH_SIZE);
+    }
 }

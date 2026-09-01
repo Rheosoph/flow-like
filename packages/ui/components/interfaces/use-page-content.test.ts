@@ -6,10 +6,160 @@ import {
 } from "../../lib/board-readiness";
 import {
 	type IStoreRedirectState,
+	deriveRouteMappings,
+	isUsableRuntimeEvent,
 	loadPageWithBoardSync,
 	pageLoadErrorMessage,
+	resolveRouteMapping,
 	resolveStoreRedirect,
+	runtimeBootstrapTarget,
 } from "./use-page-content";
+
+const ROUTES = [
+	{ path: "/", eventId: "home" },
+	{ path: "/config", eventId: "config" },
+];
+
+describe("route mapping resolution", () => {
+	test("derives explicit mappings from the event catalog", () => {
+		expect(
+			deriveRouteMappings([
+				{ id: "home", route: "/", is_default: true },
+				{ id: "config", route: "/config" },
+			] as never),
+		).toEqual([
+			{ path: "/", eventId: "home" },
+			{ path: "/config", eventId: "config" },
+		]);
+	});
+
+	test("derives the root mapping when a default event has no route", () => {
+		expect(
+			deriveRouteMappings([
+				{ id: "home", is_default: true },
+				{ id: "other", route: "/other" },
+			] as never),
+		).toEqual([
+			{ path: "/other", eventId: "other" },
+			{ path: "/", eventId: "home" },
+		]);
+	});
+
+	test("keeps the first event for duplicate canonical paths", () => {
+		expect(
+			deriveRouteMappings([
+				{ id: "first", route: "/config/" },
+				{ id: "second", route: "config" },
+				{ id: "default", is_default: true },
+			] as never),
+		).toEqual([
+			{ path: "/config/", eventId: "first" },
+			{ path: "/", eventId: "default" },
+		]);
+	});
+
+	test("prefers an explicit root route over a synthesized default", () => {
+		expect(
+			deriveRouteMappings([
+				{ id: "default", is_default: true },
+				{ id: "home", route: "/" },
+			] as never),
+		).toEqual([{ path: "/", eventId: "home" }]);
+	});
+
+	test("matches the requested route", () => {
+		expect(resolveRouteMapping(ROUTES, "/config")).toEqual({
+			mapping: { path: "/config", eventId: "config" },
+			missed: false,
+		});
+	});
+
+	test("matches regardless of trailing or leading slash", () => {
+		for (const requested of ["/config/", "config", "config/"]) {
+			expect(resolveRouteMapping(ROUTES, requested).mapping?.eventId).toBe(
+				"config",
+			);
+		}
+		expect(
+			resolveRouteMapping([{ path: "config", eventId: "config" }], "/config")
+				.mapping?.eventId,
+		).toBe("config");
+	});
+
+	test("an unknown route falls back to the default but reports the miss", () => {
+		expect(resolveRouteMapping(ROUTES, "/missing")).toEqual({
+			mapping: { path: "/", eventId: "home" },
+			missed: true,
+		});
+	});
+
+	test("the default route is not a miss", () => {
+		for (const requested of ["/", "", null, undefined]) {
+			expect(resolveRouteMapping(ROUTES, requested)).toEqual({
+				mapping: { path: "/", eventId: "home" },
+				missed: false,
+			});
+		}
+	});
+
+	test("reports a miss even when there is no default route to fall back to", () => {
+		expect(
+			resolveRouteMapping([{ path: "/other", eventId: "other" }], "/config"),
+		).toEqual({ mapping: null, missed: true });
+	});
+
+	test("an empty route list yields no mapping", () => {
+		expect(resolveRouteMapping([], "/config")).toEqual({
+			mapping: null,
+			missed: true,
+		});
+		expect(resolveRouteMapping([], "/")).toEqual({
+			mapping: null,
+			missed: false,
+		});
+	});
+});
+
+describe("runtime event eligibility", () => {
+	const eventTypes = new Set(["generic_form"]);
+
+	test("never treats an inactive Event as a runnable interface", () => {
+		expect(
+			isUsableRuntimeEvent(
+				{
+					id: "inactive-page",
+					active: false,
+					default_page_id: "page",
+				} as never,
+				eventTypes,
+			),
+		).toBe(false);
+		expect(
+			isUsableRuntimeEvent(
+				{
+					id: "inactive-form",
+					active: false,
+					event_type: "generic_form",
+				} as never,
+				eventTypes,
+			),
+		).toBe(false);
+	});
+});
+
+describe("runtime bootstrap target", () => {
+	test("uses the route when route resolution has precedence", () => {
+		expect(runtimeBootstrapTarget("/dashboard", "event-1", false)).toEqual({
+			route: "/dashboard",
+		});
+	});
+
+	test("uses only the direct Event when the URL did not name a route", () => {
+		expect(runtimeBootstrapTarget("/", "event-1", true)).toEqual({
+			eventId: "event-1",
+		});
+	});
+});
 
 function redirectState(
 	overrides: Partial<IStoreRedirectState> = {},

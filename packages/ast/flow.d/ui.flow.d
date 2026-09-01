@@ -109,7 +109,7 @@ declare namespace ui {
      * Fetches elements from the live page in one round-trip so later reads hit the cache
      * @node a2ui_request_elements @alias a2uiRequestElements
      * @param elementIds — Element selectors, e.g. ['main/input-field', 'type:switch', 'glob:feed-row-*/subscribed', 'children:main/list', 'host:main/feed-row-1']
-     * @param timeoutMs — How long to wait for the page to answer
+     * @param timeoutMs (optional) — How long to wait for the page to answer
      * @impure has side effects / drives control flow
      */
     function requestElements({ elementIds: string[], timeoutMs?: int }): void;

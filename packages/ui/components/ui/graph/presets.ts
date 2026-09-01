@@ -155,7 +155,7 @@ function defaultStyle(icon: string, color: string): LabelStyle {
 	return {
 		color,
 		icon,
-		size: { mode: "fixed", value: 5 },
+		size: { mode: "by-degree", min: 8, max: 20 },
 	};
 }
 

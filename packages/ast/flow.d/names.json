@@ -13481,6 +13481,24 @@
     "class": "struct",
     "category": "Structs"
   },
+  "struct_cast_to_schema": {
+    "qualified": "struct::castToSchema",
+    "namespace": "struct",
+    "alias": "castToSchema",
+    "flat": "structCastToSchema",
+    "receiver": "struct_in",
+    "class": "struct",
+    "category": "Structs"
+  },
+  "struct_cast_to_struct": {
+    "qualified": "struct::castToStruct",
+    "namespace": "struct",
+    "alias": "castToStruct",
+    "flat": "structCastToStruct",
+    "receiver": "struct_in",
+    "class": "struct",
+    "category": "Structs"
+  },
   "struct_get": {
     "qualified": "struct::get",
     "namespace": "struct",

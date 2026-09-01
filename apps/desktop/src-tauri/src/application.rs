@@ -10,6 +10,7 @@ mod event_bus;
 mod event_sink;
 mod execution_identity;
 mod functions;
+mod local_page_actions;
 mod profile;
 mod settings;
 mod state;
@@ -682,9 +683,9 @@ pub fn run() {
                 }
             });
 
-            // Draft board artifacts under tmp/compiled/ are recreatable; the
-            // per-board purge only cleans boards that still run, so sweep the
-            // rest by age once per launch.
+            // App-scoped compiled drafts (tmp/apps/{app}/compiled/drafts/)
+            // are recreatable. Sweep stale drafts, including the legacy
+            // tmp/compiled namespace, once per launch.
             let artifact_sweep_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
                 flow_like_types::tokio::time::sleep(Duration::from_secs(10)).await;
@@ -1132,6 +1133,8 @@ pub fn run() {
             functions::app::fork::upload_local_app_content_bundle,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
+            functions::app::tables::db_table_summaries,
+            functions::app::tables::db_table_summaries_user,
             functions::app::tables::db_schema,
             functions::app::tables::db_create_table,
             functions::app::tables::db_list,
@@ -1280,6 +1283,7 @@ pub fn run() {
             functions::a2ui::widget::push_widget_meta,
             functions::a2ui::page::get_pages,
             functions::a2ui::page::get_page,
+            functions::a2ui::page::get_local_page_bootstrap,
             functions::a2ui::page::get_page_by_route,
             functions::a2ui::page::create_page,
             functions::a2ui::page::update_page,

@@ -1,8 +1,12 @@
+use super::schema::{
+    add_root_definitions, capitalize_first, get_schema_type, object_properties, resolve_schema,
+    resolve_schema_ref, retain_declared_field_pins, union_object_properties, unwrap_item_schema,
+};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_unwired_pins},
-    pin::{PinOptions, PinType, ValueType},
+    node::{Node, NodeLogic},
+    pin::{PinOptions, PinType},
     variable::VariableType,
 };
 use flow_like_types::{
@@ -22,151 +26,6 @@ impl BreakStructNode {
     pub fn new() -> Self {
         BreakStructNode {}
     }
-}
-
-/// Resolve a $ref reference to its definition in the schema
-fn resolve_ref<'a>(ref_path: &str, root_schema: &'a Value) -> Option<&'a Value> {
-    // $ref format: "#/definitions/TypeName" or "#/$defs/TypeName"
-    let path = ref_path.strip_prefix("#/")?;
-    let parts: Vec<&str> = path.split('/').collect();
-
-    let mut current = root_schema;
-    for part in parts {
-        current = current.get(part)?;
-    }
-    Some(current)
-}
-
-/// Resolve a schema that might contain $ref, anyOf, or be direct
-fn resolve_schema<'a>(schema: &'a Value, root_schema: &'a Value) -> &'a Value {
-    // Handle $ref
-    if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str())
-        && let Some(resolved) = resolve_ref(ref_path, root_schema)
-    {
-        return resolved;
-    }
-
-    // Handle anyOf (often used for nullable types)
-    if let Some(any_of) = schema.get("anyOf").and_then(|a| a.as_array()) {
-        for variant in any_of {
-            // Skip null types
-            if variant.get("type").and_then(|t| t.as_str()) == Some("null") {
-                continue;
-            }
-            // Recursively resolve the non-null variant
-            return resolve_schema(variant, root_schema);
-        }
-    }
-
-    schema
-}
-
-fn is_null_schema(schema: &Value) -> bool {
-    schema.get("type").and_then(|t| t.as_str()) == Some("null")
-}
-
-fn union_object_properties(schema: &Value, root_schema: &Value) -> Option<Map<String, Value>> {
-    let one_of = schema.get("oneOf").and_then(|a| a.as_array())?;
-    let mut properties = Map::new();
-
-    for variant in one_of {
-        if is_null_schema(variant) {
-            continue;
-        }
-
-        let resolved = resolve_schema(variant, root_schema);
-        if let Some(variant_properties) = resolved.get("properties").and_then(|p| p.as_object()) {
-            for (name, prop_schema) in variant_properties {
-                properties.insert(name.clone(), prop_schema.clone());
-            }
-        }
-    }
-
-    if properties.is_empty() {
-        None
-    } else {
-        Some(properties)
-    }
-}
-
-fn add_root_definitions(schema: &mut Value, root_schema: &Value) {
-    if let Some(defs) = root_schema.get("definitions") {
-        schema["definitions"] = defs.clone();
-    } else if let Some(defs) = root_schema.get("$defs") {
-        schema["$defs"] = defs.clone();
-    }
-}
-
-fn is_date_format(schema: &Value) -> bool {
-    matches!(
-        schema.get("format").and_then(|format| format.as_str()),
-        Some("date-time") | Some("date")
-    )
-}
-
-fn scalar_type(type_str: &str, schema: &Value) -> VariableType {
-    match type_str {
-        "boolean" => VariableType::Boolean,
-        "integer" => VariableType::Integer,
-        "number" => VariableType::Float,
-        "string" if is_date_format(schema) => VariableType::Date,
-        "string" => VariableType::String,
-        "object" => VariableType::Struct,
-        _ => VariableType::Generic,
-    }
-}
-
-fn array_type(resolved: &Value, root_schema: &Value) -> (VariableType, ValueType) {
-    if let Some(items) = resolved.get("items") {
-        let item_resolved = resolve_schema(items, root_schema);
-        match item_resolved
-            .get("type")
-            .and_then(|item_type| item_type.as_str())
-        {
-            Some(item_type) => (scalar_type(item_type, item_resolved), ValueType::Array),
-            None => (VariableType::Struct, ValueType::Array),
-        }
-    } else {
-        (VariableType::Generic, ValueType::Array)
-    }
-}
-
-/// Get the variable type from a resolved schema
-fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueType) {
-    let resolved = resolve_schema(schema, root_schema);
-
-    if union_object_properties(resolved, root_schema).is_some() {
-        return (VariableType::Struct, ValueType::Normal);
-    }
-
-    if let Some(type_val) = resolved.get("type") {
-        if let Some(type_str) = type_val.as_str() {
-            return match type_str {
-                "array" => array_type(resolved, root_schema),
-                other => (scalar_type(other, resolved), ValueType::Normal),
-            };
-        }
-        // Nullable types (for example `["string", "null"]`) retain sibling format/items.
-        if let Some(types) = type_val.as_array() {
-            for t in types {
-                if let Some(ts) = t.as_str()
-                    && ts != "null"
-                {
-                    return match ts {
-                        "array" => array_type(resolved, root_schema),
-                        other => (scalar_type(other, resolved), ValueType::Normal),
-                    };
-                }
-            }
-        }
-    }
-
-    // If it has properties or $ref to an object, treat as struct
-    if resolved.get("properties").is_some() {
-        return (VariableType::Struct, ValueType::Normal);
-    }
-
-    (VariableType::Generic, ValueType::Normal)
 }
 
 /// Build a standalone schema for a property, inlining any $ref definitions
@@ -229,47 +88,6 @@ fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
     resolved.clone()
 }
 
-/// A producer pin for a `Struct[]` carries the schema one level up from what Break Struct works on.
-/// `Get Element`/`For Each` hand over a single item, so unwrap `items` before looking for fields —
-/// the same unwrapping [`build_standalone_schema`] already does for nested array properties.
-fn unwrap_item_schema<'a>(schema: &'a Value, root_schema: &'a Value) -> &'a Value {
-    if schema.get("type").and_then(|t| t.as_str()) != Some("array") {
-        return schema;
-    }
-
-    match schema.get("items") {
-        Some(items) => resolve_schema(items, root_schema),
-        None => schema,
-    }
-}
-
-/// The fields a schema exposes, whether declared directly or spread across a `oneOf` union.
-fn object_properties(schema: &Value, root_schema: &Value) -> Option<Map<String, Value>> {
-    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-        return Some(properties.clone());
-    }
-
-    union_object_properties(schema, root_schema)
-}
-
-/// Drop the field pins the current schema no longer declares — but never one the user has wired.
-///
-/// A field pin that disappears takes its half of the edge with it, and `fix_pin_connections` then
-/// prunes the surviving half on the producer, so the connection vanishes from both ends with no
-/// error anywhere. Every schema change would silently cut the wires of every field that moved.
-/// `remove_unwired_pins` keeps anything still attached and names it on `node.error` instead, so a
-/// mismatch is something the user reads and resolves rather than something they lose.
-fn retain_declared_field_pins(node: &mut Node, declared: &HashSet<String>) {
-    let stale: Vec<String> = node
-        .pins
-        .values()
-        .filter(|pin| !declared.contains(&pin.name))
-        .map(|pin| pin.id.clone())
-        .collect();
-
-    remove_unwired_pins(node, &stale);
-}
-
 /// Give up on deriving fields: hand `struct_in` its open marker back and drop the unwired pins.
 ///
 /// The marker is what lets any struct producer be wired in. Leaving the last resolved schema on the
@@ -280,14 +98,6 @@ fn reset_to_open(node: &mut Node, error: Option<String>) {
     retain_declared_field_pins(node, &HashSet::from(["struct_in".to_string()]));
     if let Some(input_pin) = node.get_pin_mut_by_name("struct_in") {
         input_pin.set_open_schema();
-    }
-}
-
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 
@@ -382,11 +192,7 @@ impl NodeLogic for BreakStructNode {
         };
 
         // Schema might be stored as a reference in board.refs - look it up
-        let schema_str = board
-            .refs
-            .get(&schema_ref)
-            .cloned()
-            .unwrap_or(schema_ref.clone());
+        let schema_str = resolve_schema_ref(schema_ref, &board.refs);
 
         if flow_like::flow::pin::is_open_object_schema(&schema_str) {
             reset_to_open(
@@ -414,7 +220,7 @@ impl NodeLogic for BreakStructNode {
 
         // Extract properties from the schema
         // JSON Schema stores properties under "properties" key
-        let properties = match object_properties(resolved_schema, &schema) {
+        let properties: Map<String, Value> = match object_properties(resolved_schema, &schema) {
             Some(props) => props,
             None => {
                 // Check if this is a dynamic object type (additionalProperties without properties)
@@ -501,6 +307,7 @@ impl NodeLogic for BreakStructNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::flow::pin::ValueType;
 
     #[test]
     fn date_and_date_time_formats_become_date_pins() {

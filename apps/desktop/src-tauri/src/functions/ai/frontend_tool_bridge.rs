@@ -712,7 +712,9 @@ impl FrontendToolBridge {
                     "pending_registration",
                     false,
                     false,
-                    Some(format!("The run channel refused to register the request: {error}")),
+                    Some(format!(
+                        "The run channel refused to register the request: {error}"
+                    )),
                 );
             }
         };
@@ -1499,7 +1501,10 @@ mod tests {
         assert_eq!(ok.outcome, "ok");
         assert_eq!(ok.phase, "completed");
         assert!(ok.cancel_reason.is_none());
-        assert_eq!(ok.lifecycle.last().map(String::as_str), Some("completed_ok"));
+        assert_eq!(
+            ok.lifecycle.last().map(String::as_str),
+            Some("completed_ok")
+        );
 
         let denied = resolve_wait_outcome(
             "database_tool",
@@ -1627,7 +1632,10 @@ mod tests {
             Some("cancelled")
         );
         assert_eq!(
-            scope_cancelled.result.get("message").and_then(Value::as_str),
+            scope_cancelled
+                .result
+                .get("message")
+                .and_then(Value::as_str),
             Some("The owning MCP request disconnected; its frontend work was cancelled.")
         );
         assert_eq!(
@@ -1652,8 +1660,14 @@ mod tests {
         let channel = InProcessChannel::register("bridge-run-test", Duration::from_secs(60)).await;
         let ticket = channel.open(Duration::from_secs(5)).await.unwrap();
         assert_eq!(ticket.handle.channel_id, "bridge-run-test");
-        assert_eq!(ticket.handle.request_id.as_deref(), Some(ticket.request_id.as_str()));
-        assert_eq!(ticket.handle.transport, ChannelClientDescriptor::InProcess {});
+        assert_eq!(
+            ticket.handle.request_id.as_deref(),
+            Some(ticket.request_id.as_str())
+        );
+        assert_eq!(
+            ticket.handle.transport,
+            ChannelClientDescriptor::InProcess {}
+        );
 
         let waiter = {
             let channel = channel.clone();
@@ -1669,7 +1683,12 @@ mod tests {
         };
         InProcessChannel::deliver(push.clone()).await;
         let outcome = waiter.await.unwrap();
-        let resolved = resolve_wait_outcome("flowpilot_board", outcome, false, &test_trace("flowpilot_board"));
+        let resolved = resolve_wait_outcome(
+            "flowpilot_board",
+            outcome,
+            false,
+            &test_trace("flowpilot_board"),
+        );
         assert_eq!(
             resolved.result.get("status").and_then(Value::as_str),
             Some("queued")

@@ -144,8 +144,11 @@ pub enum Background {
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundImage {
     pub url: super::BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repeat: Option<String>,
 }
 
@@ -219,9 +222,13 @@ pub struct GradientStop {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Border {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub radius: Option<String>,
 }
 
@@ -598,9 +605,13 @@ impl Size {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub right: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<String>,
     #[serde(rename = "type", alias = "positionType")]
     pub position_type: String,
@@ -672,10 +683,15 @@ impl Position {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Transform {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub translate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rotate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transform_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skew: Option<String>,
 }
 
@@ -713,30 +729,50 @@ impl Transform {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BreakpointStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub class_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flex_direction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub justify_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub align_items: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_cols: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub padding: Option<Spacing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub margin: Option<Spacing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_align: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<i32>,
 }
 
 /// Responsive overrides for different breakpoints
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ResponsiveOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sm: Option<BreakpointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub md: Option<BreakpointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lg: Option<BreakpointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub xl: Option<BreakpointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub xxl: Option<BreakpointStyle>,
 }
 
@@ -744,57 +780,111 @@ pub struct ResponsiveOverrides {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Style {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub class_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Background>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub border: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub padding: Option<Spacing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub margin: Option<Spacing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_width: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_width: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_height: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<Size>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Position>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub z_index: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transform: Option<Transform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow: Option<Overflow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
-    #[serde(rename = "responsiveOverrides", alias = "responsive")]
+    #[serde(
+        rename = "responsiveOverrides",
+        alias = "responsive",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub responsive: Option<ResponsiveOverrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flex_grow: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flex_shrink: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flex_basis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub align_self: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_column: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_row: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grid_area: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub justify_self: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub line_height: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub letter_spacing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_align: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_decoration: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_transform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub white_space: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub word_break: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_select: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer_events: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transition: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub animation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub outline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_offset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub backdrop_filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub aspect_ratio: Option<String>,
 }
 

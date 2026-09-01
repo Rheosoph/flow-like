@@ -1186,6 +1186,7 @@ pub async fn invoke_ontology_action(
             runtime_variables: None,
             profile_id: request.profile_id,
             correlation: Some(correlation),
+            page_trigger: None,
         },
     )
     .await

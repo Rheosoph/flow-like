@@ -1,5 +1,26 @@
-export { GraphCanvas, type GraphCanvasProps } from "./graph-canvas";
+export {
+	GraphCanvas,
+	type GraphCanvasProps,
+	type GraphCanvasApi,
+	type GraphLayoutCommand,
+} from "./graph-canvas";
+export {
+	GraphContextMenu,
+	type GraphContextMenuProps,
+	type GraphContextMenuState,
+} from "./graph-context-menu";
 export { GraphControls, type GraphControlsProps } from "./graph-controls";
+export {
+	GraphHistogramPanel,
+	type GraphHistogramPanelProps,
+} from "./graph-histogram-panel";
+export { subgraphFromCypherRows } from "./cypher-subgraph";
+export type { GraphLayoutMode } from "./graph-layout";
+export {
+	loadGraphScene,
+	saveGraphScene,
+	clearGraphScene,
+} from "./graph-position-store";
 export {
 	GraphEdgeInspector,
 	type GraphEdgeInspectorProps,
@@ -50,4 +71,3 @@ export {
 } from "./graph-viewer";
 export { GRAPH_ICONS, getGraphIcon, type IconKey } from "./icons";
 export { getPresets, applyPreset, type DomainPreset } from "./presets";
-export * from "./overlay-builder";

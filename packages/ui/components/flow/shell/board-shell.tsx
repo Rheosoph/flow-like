@@ -96,35 +96,41 @@ export const BoardShell = memo(function BoardShell({
 									{tabs}
 									{breadcrumb}
 									<div className="min-h-0 flex-1">
-										{script ? (
-											<ResizablePanelGroup
-												direction="horizontal"
-												autoSaveId="flow-board-split"
-												className="h-full"
+										{/*
+										 * The split group is unconditional. Swapping it for a
+										 * plain wrapper when the script pane closes changes the
+										 * element type above the canvas, so React remounts the
+										 * graph — which loses the xyflow store and re-runs
+										 * `fitView`, throwing the user back to the overview on
+										 * every open and close.
+										 */}
+										<ResizablePanelGroup
+											direction="horizontal"
+											autoSaveId="flow-board-split"
+											className="h-full"
+										>
+											<ResizablePanel
+												id="board-canvas"
+												order={1}
+												minSize={20}
+												className="flex min-h-0 flex-col"
 											>
-												<ResizablePanel
-													id="board-canvas"
-													order={1}
-													minSize={20}
-													className="flex min-h-0 flex-col"
-												>
-													{canvas}
-												</ResizablePanel>
-												<ResizableHandle withHandle />
-												<ResizablePanel
-													id="board-script"
-													order={2}
-													defaultSize={45}
-													minSize={20}
-												>
-													{script}
-												</ResizablePanel>
-											</ResizablePanelGroup>
-										) : (
-											<div className="flex h-full min-h-0 flex-col">
 												{canvas}
-											</div>
-										)}
+											</ResizablePanel>
+											{script && (
+												<>
+													<ResizableHandle withHandle />
+													<ResizablePanel
+														id="board-script"
+														order={2}
+														defaultSize={45}
+														minSize={20}
+													>
+														{script}
+													</ResizablePanel>
+												</>
+											)}
+										</ResizablePanelGroup>
 									</div>
 								</div>
 							</ResizablePanel>

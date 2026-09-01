@@ -1,0 +1,112 @@
+---
+title: "How We Let a Lambda Ask the Browser a Question"
+description: "One production timeout led us from five competing reply paths to a single on-demand Channel."
+date: 2026-08-28
+tags: ["architecture", "distributed-systems", "serverless", "channels", "aws", "azure", "gcp", "rust", "flow-like"]
+cover: "/images/on-demand-bidirectional-channels-hero.jpg"
+draft: false
+---
+
+The browser answered. Our Lambda kept waiting.
+
+The reply had reached the right API endpoint and the wrong process.
+
+A live widget query had stored its waiter in a process-global map. That worked on a development machine, where the question and answer usually met inside one process. On Lambda, the answer landed on another warm instance. It had no waiter to wake, so the reply disappeared and the run eventually timed out.
+
+That should have been one bug. Instead, it showed us how many times we had solved the same problem.
+
+Any Flow-Like run can pause to ask for something: a form, an approval, a browser tool result, a live value, a steering message. The question goes to a client. The answer has to find its way back to one exact execution, even when that execution is running inside a stateless function.
+
+We had five different ways to make that return trip.
+
+## We found the same idea five times
+
+Forms wrote a database row, kept an event stream open between the executor and API, and waited while the API polled Postgres. Agent browser tools had another table, another polling loop, and ID prefixes such as `run:`, `cancel:`, and `steer:` to distinguish messages.
+
+Desktop execution had two in-memory registries. Widget queries had the global map that failed on Lambda.
+
+Each path had grown around a feature, so each one made its own decisions about identity, cancellation, expiry, and cleanup. One deleted rows from a detached task after a delay. A frozen Lambda might never resume long enough to run that deletion. Another swept old rows after roughly one in every 20 completed runs.
+
+> Five mechanisms, three authorization models, three different owners of “expired,” and one path that did not work in production at all.
+
+<figure>
+  <img
+    src="/posts/on-demand-bidirectional-channels/five-paths-one-channel-v2.png"
+    alt="Five interaction mechanisms, including an approval, converging on one Channel contract with one of four network transports selected"
+    loading="lazy"
+  />
+  <figcaption>Five callers now share one Channel contract.</figcaption>
+</figure>
+
+Once we stopped treating these as separate features, the replacement became much smaller.
+
+## Half the channel already existed
+
+Every connected run already had a path to its client. Web runs stream events through Server-Sent Events. Desktop runs use a Tauri channel. Questions, progress updates, and results were already moving outward.
+
+We only needed the return trip.
+
+`Channel` gives each interactive request a return address called a `ChannelHandle`. Form, tool, and widget code pass the answer to a shared client layer. That layer reads the handle's transport descriptor, sends the reply, and hides the API instance and executor location from the caller.
+
+The core loop fits in one sentence: register the question, stream it with its reply address, then wait.
+
+The order matters. `open()` must finish before the request leaves. Otherwise a fast browser can answer before the waiter exists. Registering first makes that race impossible at the caller boundary.
+
+Replies, steering messages, and cancellation all use the same `ChannelPush` body. Unsolicited messages set `request_id` to `null`, which let us remove the old ID-prefix convention.
+
+<figure>
+  <picture>
+    <source
+      media="(max-width: 640px)"
+      srcSet="/posts/on-demand-bidirectional-channels/channel-sequence-mobile.svg"
+    />
+    <img
+      src="/posts/on-demand-bidirectional-channels/channel-sequence.svg"
+      alt="Sequence showing ticket registration, request emission, waiting, direct or cloud fallback delivery, cleanup, and run resumption"
+      loading="lazy"
+    />
+  </picture>
+  <figcaption>The existing event stream carries the question. Channel gives the answer a route home.</figcaption>
+</figure>
+
+## Start with the boring route
+
+The first Channel transport uses infrastructure every Flow-Like server deployment already has: HTTP and Postgres.
+
+Opening a ticket creates a pending row. The browser answers through a channel-scoped API endpoint. While it waits, the executor makes short requests that back off from 500 milliseconds to three seconds. Completion attempts to remove the row, and a periodic sweep catches leftovers.
+
+This changed an important cost on serverless deployments. The executor no longer holds a second event stream open to the API while someone considers a form or approval. On a response-streaming Lambda, every wait now uses short polls instead of occupying another API invocation for its full duration.
+
+That plain HTTP path works on a laptop, in Docker Compose, on Kubernetes, and in clouds where another messaging service would add more weight than value. It is the baseline, so a deployment never needs extra infrastructure just to ask a question.
+
+The managed transports are optional ways to shorten the return path.
+
+On AWS, we found [`SendDirectMessage`](https://docs.aws.amazon.com/iot/latest/developerguide/direct-messaging.html), an IoT Core API released in [May 2026](https://aws.amazon.com/about-aws/whats-new/2026/05/aws-iot-core-direct-messaging/). It sends an HTTP request directly to an MQTT client ID, can wait for an acknowledgement, and returns `404` when the client is gone.
+
+The browser answers with one SigV4-signed `fetch` built on WebCrypto, so we ship no MQTT library to it. The executor keeps the MQTT-over-WebSocket connection. A retried invocation using the same client ID replaces the older connection.
+
+Azure Web PubSub uses one group per run. The executor joins and receives the acknowledgement before the first question leaves. Firebase stores replies under a run-scoped path, so an early answer can wait for the listener. Its database rules are part of the protocol because they decide exactly what the browser may create.
+
+All of those credentials reach browser code. The API therefore mints them per run and ships the scoped credentials beside the signed executor JWT. The resulting permission is short-lived and can answer one run. The `ChannelHandle` carries that capability, so the same form component works across HTTP, AWS, Azure, GCP, and desktop.
+
+## Most runs never ask
+
+Our first cloud version connected every run at startup. Most runs never asked the user anything.
+
+`LazyChannel` now holds the run-scoped configuration without opening a network connection. The first `open()` starts the listener and registers the question. AWS and Azure wait for the listener to be ready; Firebase persistence covers the brief stream startup window. A run that stays silent never connects. That saves real money on AWS, where [idle connection minutes are billable](https://aws.amazon.com/iot-core/pricing/).
+
+Agent chat is the deliberate exception. Stop and steer messages can arrive before a tool asks a question, so that channel connects eagerly.
+
+Every cloud handle also carries an HTTP fallback. If direct delivery fails in the browser, the shared client retries once through the API. An explicit browser abort ends the attempt without retrying. The API forwards the same push to the selected transport, and the waiter does not need to know which route worked.
+
+Fallback cannot revive an executor that has disappeared. AWS does not queue direct messages for disconnected clients. The socket adapters reconnect after interruptions, but there still has to be a listener on the other side.
+
+Cleanup follows the same principle. The ticket owns the question's deadline. The lifecycle attempts cleanup on each exit, and a Postgres sweeper removes expired HTTP rows. Firebase deletes its run node on a clean close; stale nodes after an unclean exit remain a known limitation.
+
+The cloud-specific details still had teeth. Our rustls build had enabled both `ring` and `aws-lc-rs`, so the default TLS builder could not choose a crypto provider and panicked at runtime. The MQTT adapter now selects its provider and root store explicitly. Details like that stay inside the adapters instead of spreading into every form, tool, and widget.
+
+The widget query that failed on Lambda now uses the same Channel as approvals, browser tools, and steering. Two database tables became one. Desktop and server execution share one caller model. Adding a transport no longer means inventing another interaction system.
+
+Most of the work was finding the five hidden copies of the protocol and writing down what each one promised. Once ownership, ordering, expiry, and cleanup had names, the interface itself was small.
+
+Now a Lambda can ask the browser a question and trust that the answer will find the run that is waiting.

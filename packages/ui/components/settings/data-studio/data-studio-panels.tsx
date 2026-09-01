@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
+	ArrowLeftRight,
 	ArrowRight,
 	Box,
 	Braces,
@@ -104,6 +105,14 @@ import {
 } from "../../ui/sheet";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import {
+	AddRelationshipForm,
+	type WizardEdge,
+	isValidGraphIdentifier,
+	nodeToEndpoint,
+	reversedEdge,
+	toEdgeMapping,
+} from "./relationship-form";
 
 interface StudioPanelBaseProps {
 	ontologies: GraphOverlay[];
@@ -1837,16 +1846,33 @@ function RelationshipRow({
 	index,
 	otherOntologies,
 	installedOntologies,
+	takenLabels,
 	onChange,
+	onReverse,
+	onRemove,
 }: Readonly<{
 	edge: EdgeLabelMapping;
 	index: number;
 	otherOntologies: GraphOverlay[];
 	installedOntologies: RemoteOntologyImport[];
+	takenLabels: Set<string>;
 	onChange?: (index: number, patch: Partial<EdgeLabelMapping>) => void;
+	onReverse?: (index: number) => void;
+	onRemove?: (index: number) => void;
 }>) {
 	const { t } = useTranslation("settings");
 	const rowId = edge.id ?? edge.api_name ?? `edge-${index}`;
+	// Saves are serialized per edit, so the label commits on blur rather than
+	// enqueuing a write per keystroke.
+	const [labelDraft, setLabelDraft] = useState(edge.label);
+	useEffect(() => setLabelDraft(edge.label), [edge.label]);
+	const trimmedLabel = labelDraft.trim();
+	const labelIssue = !isValidGraphIdentifier(trimmedLabel)
+		? "invalid"
+		: takenLabels.has(trimmedLabel.toLowerCase()) &&
+				trimmedLabel.toLowerCase() !== edge.label.trim().toLowerCase()
+			? "duplicate"
+			: undefined;
 	const summary = (
 		<div className="flex items-center gap-2 text-sm">
 			<Badge variant="outline">{edge.src_label}</Badge>
@@ -1854,7 +1880,7 @@ function RelationshipRow({
 			<span className="font-medium">{humanizeIdentifier(edge.label)}</span>
 			<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
 			<Badge variant="outline">{edge.dst_label}</Badge>
-			<code className="ml-auto hidden text-[10px] text-muted-foreground sm:block">{`${edge.table}.${edge.dst_column}`}</code>
+			<code className="ml-auto hidden text-[10px] text-muted-foreground sm:block">{`${edge.table}.${edge.src_column} → ${edge.table}.${edge.dst_column}`}</code>
 		</div>
 	);
 
@@ -1864,7 +1890,75 @@ function RelationshipRow({
 
 	return (
 		<div className="space-y-2.5 rounded-lg border px-3 py-2.5">
-			{summary}
+			<div className="flex items-start justify-between gap-2">
+				<div className="min-w-0 flex-1">{summary}</div>
+				<div className="flex items-center">
+					{onReverse && (
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
+							onClick={() => onReverse(index)}
+							title={t("reverseDirection", "Reverse direction")}
+						>
+							<ArrowLeftRight className="h-3.5 w-3.5" />
+						</Button>
+					)}
+					{onRemove && (
+						<Button
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
+							onClick={() => onRemove(index)}
+							title={t("removeRelationship", "Remove relationship")}
+						>
+							<Trash2 className="h-3.5 w-3.5" />
+						</Button>
+					)}
+				</div>
+			</div>
+			<div className="space-y-1">
+				<Label
+					htmlFor={`edge-label-${rowId}`}
+					className="text-[10px] font-medium text-muted-foreground"
+				>
+					{t("relationshipLabel", "Relationship label")}
+				</Label>
+				<Input
+					id={`edge-label-${rowId}`}
+					value={labelDraft}
+					onChange={(event) => setLabelDraft(event.target.value)}
+					onBlur={() => {
+						if (labelIssue) {
+							setLabelDraft(edge.label);
+							return;
+						}
+						if (trimmedLabel !== edge.label) {
+							onChange(index, { label: trimmedLabel });
+						}
+					}}
+					aria-invalid={Boolean(labelIssue)}
+					className={`h-8 font-mono text-xs${
+						labelIssue ? " border-destructive" : ""
+					}`}
+				/>
+				{labelIssue === "duplicate" && (
+					<p className="text-[10px] text-destructive">
+						{t(
+							"thisLabelIsAlreadyUsedByAnotherObjectOrRelationship",
+							"This label is already used by another object or relationship.",
+						)}
+					</p>
+				)}
+				{labelIssue === "invalid" && (
+					<p className="text-[10px] text-destructive">
+						{t(
+							"useLettersDigitsAndUnderscoresStartingWithALetter",
+							"Use letters, digits and underscores, starting with a letter.",
+						)}
+					</p>
+				)}
+			</div>
 			<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 				<div className="flex items-center gap-2">
 					<Switch
@@ -1950,11 +2044,14 @@ export function OntologyModelPanel({
 >) {
 	const { t } = useTranslation("settings");
 	const [selectedId, setSelectedId] = useState(ontologies[0]?.id ?? "");
+	const [addingEdge, setAddingEdge] = useState(false);
 	const selected =
 		ontologies.find((ontology) => ontology.id === selectedId) ?? ontologies[0];
 	useEffect(() => {
 		if (selected) setSelectedId(selected.id);
 	}, [selected]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: closes the add form when the user switches ontology
+	useEffect(() => setAddingEdge(false), [selectedId]);
 	const [edgesDraft, setEdgesDraft] = useState<EdgeLabelMapping[]>(
 		() => ontologies[0]?.edges ?? [],
 	);
@@ -2003,12 +2100,11 @@ export function OntologyModelPanel({
 		() => ontologies.filter((ontology) => ontology.id !== selected?.id),
 		[ontologies, selected?.id],
 	);
-	const handleEdgeChange = useCallback(
-		(index: number, patch: Partial<EdgeLabelMapping>) => {
+	// One commit path for every relationship mutation — edit, add, remove and
+	// reverse all go through the same optimistic draft and serialized save.
+	const commitEdges = useCallback(
+		(next: EdgeLabelMapping[]) => {
 			if (!selected || !onSaveEdges) return;
-			const next = edgesDraftRef.current.map((edge, edgeIndex) =>
-				edgeIndex === index ? { ...edge, ...patch } : edge,
-			);
 			edgesDraftRef.current = next;
 			edgesDraftsRef.current.set(selected.id, next);
 			setEdgesDraft(next);
@@ -2063,8 +2159,69 @@ export function OntologyModelPanel({
 					else pendingSavesRef.current.delete(ontologyId);
 				});
 		},
-		[onSaveEdges, selected],
+		[onSaveEdges, selected, t],
 	);
+
+	const handleEdgeChange = useCallback(
+		(index: number, patch: Partial<EdgeLabelMapping>) => {
+			commitEdges(
+				edgesDraftRef.current.map((edge, edgeIndex) =>
+					edgeIndex === index ? { ...edge, ...patch } : edge,
+				),
+			);
+		},
+		[commitEdges],
+	);
+
+	const handleEdgeReverse = useCallback(
+		(index: number) => {
+			commitEdges(
+				edgesDraftRef.current.map((edge, edgeIndex) =>
+					edgeIndex === index ? reversedEdge(edge) : edge,
+				),
+			);
+		},
+		[commitEdges],
+	);
+
+	const handleEdgeRemove = useCallback(
+		(index: number) => {
+			commitEdges(
+				edgesDraftRef.current.filter((_, edgeIndex) => edgeIndex !== index),
+			);
+		},
+		[commitEdges],
+	);
+
+	const handleEdgeAdd = useCallback(
+		(edge: WizardEdge) => {
+			commitEdges([...edgesDraftRef.current, toEdgeMapping(edge)]);
+			setAddingEdge(false);
+		},
+		[commitEdges],
+	);
+
+	// Saved nodes carry every column in `property_columns`, so a relationship can
+	// be authored here without re-inspecting the source schemas.
+	const endpoints = useMemo(
+		() => (selected?.nodes ?? []).map(nodeToEndpoint),
+		[selected?.nodes],
+	);
+
+	// Object and relationship labels share one case-insensitive namespace.
+	const takenLabels = useMemo(
+		() =>
+			new Set(
+				[
+					...(selected?.nodes ?? []).map((node) => node.label),
+					...edgesDraft.map((edge) => edge.label),
+				]
+					.map((label) => label.trim().toLowerCase())
+					.filter(Boolean),
+			),
+		[edgesDraft, selected?.nodes],
+	);
+
 	if (ontologies.length === 0)
 		return (
 			<EmptyStudioState
@@ -2214,45 +2371,68 @@ export function OntologyModelPanel({
 						</div>
 					</div>
 					<div>
-						<div className="mb-3 flex items-center justify-between">
+						<div className="mb-3 flex items-center justify-between gap-3">
 							<div>
 								<h3 className="text-sm font-medium">
 									{t("relationships", "Relationships")}
 								</h3>
 								<p className="text-xs text-muted-foreground">
 									{t(
-										"inferredLinksCanBeRefinedInTheGraphEditor",
-										"Inferred links can be refined in the graph editor",
+										"howObjectsLinkToEachOtherEditReverseOrAddYourOwn",
+										"How objects link to each other. Edit, reverse or add your own.",
 									)}
 								</p>
 							</div>
-							<Badge variant="secondary">{selected.edges.length}</Badge>
-						</div>
-						{selected.edges.length === 0 ? (
-							<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
-								{t(
-									"noRelationshipsInferredYet",
-									"No relationships inferred yet.",
+							<div className="flex items-center gap-2">
+								<Badge variant="secondary">{edgesDraft.length}</Badge>
+								{onSaveEdges && !addingEdge && (
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => setAddingEdge(true)}
+										disabled={endpoints.length === 0}
+									>
+										<Plus className="h-4 w-4" />
+										{t("addRelationship", "Add relationship")}
+									</Button>
 								)}
 							</div>
-						) : (
-							<div className="space-y-2">
-								{edgesDraft.map((edge, index) => (
-									<RelationshipRow
-										key={
-											edge.id ??
-											edge.api_name ??
-											`${edge.src_label}-${edge.dst_label}-${index}`
-										}
-										edge={edge}
-										index={index}
-										otherOntologies={otherOntologies}
-										installedOntologies={installedOntologies ?? []}
-										onChange={onSaveEdges ? handleEdgeChange : undefined}
-									/>
-								))}
-							</div>
-						)}
+						</div>
+						<div className="space-y-2">
+							{addingEdge && (
+								<AddRelationshipForm
+									endpoints={endpoints}
+									takenLabels={takenLabels}
+									onAdd={handleEdgeAdd}
+									onCancel={() => setAddingEdge(false)}
+								/>
+							)}
+							{edgesDraft.length === 0 && !addingEdge && (
+								<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
+									{t(
+										"noRelationshipsYetAddOneToLinkTwoObjects",
+										"No relationships yet. Add one to link two objects.",
+									)}
+								</div>
+							)}
+							{edgesDraft.map((edge, index) => (
+								<RelationshipRow
+									key={
+										edge.id ??
+										edge.api_name ??
+										`${edge.src_label}-${edge.dst_label}-${index}`
+									}
+									edge={edge}
+									index={index}
+									otherOntologies={otherOntologies}
+									installedOntologies={installedOntologies ?? []}
+									takenLabels={takenLabels}
+									onChange={onSaveEdges ? handleEdgeChange : undefined}
+									onReverse={onSaveEdges ? handleEdgeReverse : undefined}
+									onRemove={onSaveEdges ? handleEdgeRemove : undefined}
+								/>
+							))}
+						</div>
 					</div>
 				</div>
 			)}

@@ -19,10 +19,18 @@ use flow_like::{
     state::FlowLikeState,
 };
 
+use crate::local_page_actions::LocalPagePrincipalBinding;
+
 /// How long a resolved identity is reused without asking the hub again. Sinks
 /// fire as often as every minute, and the answer only changes when an admin
 /// edits a role, so a per-run round trip would be pure latency.
 const IDENTITY_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// App permissions required before a hosted Page Event may leave the server
+/// and execute against the project stored on this device.
+const READ_BOARDS_PERMISSION: i64 = 0x100;
+const EXECUTE_BOARDS_PERMISSION: i64 = 0x200;
+const EXECUTE_EVENTS_PERMISSION: i64 = 0x2000;
 
 static IDENTITY_CACHE: OnceLock<Mutex<HashMap<String, CachedIdentity>>> = OnceLock::new();
 
@@ -58,6 +66,117 @@ pub async fn apply_local_run_identity(
         LocalIdentity::Hosted(context) => run.set_resolved_user_context(*context).await,
         LocalIdentity::Unresolved => run.set_unresolved_user_context().await,
     }
+}
+
+/// Authorize the narrower local path used by governed Page actions.
+///
+/// The capability-like Page action id only selects an entry from the Page
+/// manifest. It does not grant local access. Offline apps are owned by the
+/// device, while hosted apps must resolve the ordinary caller token and carry
+/// board-read, board-execution, and Event-execution authority. A failed hub
+/// lookup never falls back to a cached role for this security decision.
+pub(crate) async fn ensure_page_local_execution_authorized(
+    visibility: &AppVisibility,
+    app_id: &str,
+    token: Option<&str>,
+    hub_url: &str,
+    state: &Arc<FlowLikeState>,
+) -> flow_like_types::Result<LocalPagePrincipalBinding> {
+    let Some(context) =
+        resolve_strict_local_authority(visibility, app_id, token, hub_url, state).await?
+    else {
+        return Ok(LocalPagePrincipalBinding::offline_owner(app_id));
+    };
+
+    if !has_page_local_permissions(&context) {
+        return Err(flow_like_types::anyhow!(
+            "Page local execution requires ReadBoards, ExecuteBoards, and ExecuteEvents permissions"
+        ));
+    }
+
+    let token = token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Hosted local execution requires the caller's authentication token"
+            )
+        })?;
+    Ok(LocalPagePrincipalBinding::authenticated(
+        &context,
+        token,
+        hub_url.trim(),
+    ))
+}
+
+fn has_page_local_permissions(context: &UserExecutionContext) -> bool {
+    context.has_permission(READ_BOARDS_PERMISSION)
+        && context.has_permission(EXECUTE_BOARDS_PERMISSION)
+        && context.has_permission(EXECUTE_EVENTS_PERMISSION)
+}
+
+/// Direct board execution accepts a raw node id, so a hosted caller must
+/// carry ExecuteBoards independently of any Page or Event permission.
+pub(crate) async fn ensure_board_local_execution_authorized(
+    visibility: &AppVisibility,
+    app_id: &str,
+    token: Option<&str>,
+    hub_url: &str,
+    state: &Arc<FlowLikeState>,
+) -> flow_like_types::Result<()> {
+    let Some(context) =
+        resolve_strict_local_authority(visibility, app_id, token, hub_url, state).await?
+    else {
+        return Ok(());
+    };
+    if !has_board_local_permissions(&context) {
+        return Err(flow_like_types::anyhow!(
+            "Direct local board execution requires ExecuteBoards permission"
+        ));
+    }
+    Ok(())
+}
+
+fn has_board_local_permissions(context: &UserExecutionContext) -> bool {
+    context.has_permission(EXECUTE_BOARDS_PERMISSION)
+}
+
+/// Return `None` for device-owned apps and a freshly valid hosted identity for
+/// server-backed apps. Unlike ordinary run attribution, this authorization
+/// path resolves against the hub on every invocation and never reuses a cached
+/// role when the hub cannot be reached.
+async fn resolve_strict_local_authority(
+    visibility: &AppVisibility,
+    app_id: &str,
+    token: Option<&str>,
+    hub_url: &str,
+    state: &Arc<FlowLikeState>,
+) -> flow_like_types::Result<Option<UserExecutionContext>> {
+    if matches!(visibility, AppVisibility::Offline) {
+        return Ok(None);
+    }
+
+    let token = token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Hosted local execution requires the caller's authentication token"
+            )
+        })?;
+    let hub_url = hub_url.trim();
+    if hub_url.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "Hosted local execution requires a configured hub"
+        ));
+    }
+
+    let hub = Hub::new(hub_url, state.http_client.clone()).await?;
+    let context = hub.execution_context(token, app_id).await?;
+    // Run attribution may reuse this answer after the authorization decision;
+    // subsequent Board/Page authorization calls still query the hub again.
+    store(&cache_key(app_id, token), &context);
+    Ok(Some(context))
 }
 
 async fn resolve_local_identity(
@@ -192,5 +311,68 @@ mod tests {
             cached(&key, None).map(|context| context.sub).as_deref(),
             Some("user-1")
         );
+    }
+
+    #[test]
+    fn page_local_execution_requires_all_three_permissions() {
+        let context = |permissions| {
+            UserExecutionContext::new("user-1").with_role(RoleContext {
+                id: "role-1".to_string(),
+                name: "Runtime".to_string(),
+                permissions,
+                attributes: Vec::new(),
+                custom_attributes: HashMap::new(),
+            })
+        };
+
+        assert!(!has_page_local_permissions(&context(
+            READ_BOARDS_PERMISSION
+        )));
+        assert!(!has_page_local_permissions(&context(
+            READ_BOARDS_PERMISSION | EXECUTE_EVENTS_PERMISSION
+        )));
+        assert!(!has_page_local_permissions(&context(
+            READ_BOARDS_PERMISSION | EXECUTE_BOARDS_PERMISSION
+        )));
+        assert!(has_page_local_permissions(&context(
+            READ_BOARDS_PERMISSION | EXECUTE_BOARDS_PERMISSION | EXECUTE_EVENTS_PERMISSION
+        )));
+    }
+
+    #[test]
+    fn owner_and_admin_roles_imply_page_local_permissions() {
+        for permissions in [RoleContext::OWNER_PERMISSION, RoleContext::ADMIN_PERMISSION] {
+            let context = UserExecutionContext::new("user-1").with_role(RoleContext {
+                id: "role-1".to_string(),
+                name: "Privileged".to_string(),
+                permissions,
+                attributes: Vec::new(),
+                custom_attributes: HashMap::new(),
+            });
+            assert!(has_page_local_permissions(&context));
+        }
+    }
+
+    #[test]
+    fn direct_board_execution_requires_execute_boards() {
+        let context = |permissions| {
+            UserExecutionContext::new("user-1").with_role(RoleContext {
+                id: "role-1".to_string(),
+                name: "Runtime".to_string(),
+                permissions,
+                attributes: Vec::new(),
+                custom_attributes: HashMap::new(),
+            })
+        };
+
+        assert!(!has_board_local_permissions(&context(
+            EXECUTE_EVENTS_PERMISSION
+        )));
+        assert!(has_board_local_permissions(&context(
+            EXECUTE_BOARDS_PERMISSION
+        )));
+        assert!(has_board_local_permissions(&context(
+            RoleContext::ADMIN_PERMISSION
+        )));
     }
 }

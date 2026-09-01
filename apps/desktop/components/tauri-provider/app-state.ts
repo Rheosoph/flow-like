@@ -11,6 +11,7 @@ import {
 	type IPurchaseResponse,
 	type UpsertAppCommentRequest,
 	type UpsertAppCommentResponse,
+	discardOfflineSyncForApp,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
@@ -266,9 +267,7 @@ export class AppState implements IAppState {
 	async deleteApp(appId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
-			await invoke("delete_app", {
-				appId: appId,
-			});
+			await this.wipeLocalApp(appId, "app-deleted");
 			return;
 		}
 
@@ -301,9 +300,70 @@ export class AppState implements IAppState {
 			);
 		}
 
+		await this.wipeLocalApp(appId, "app-deleted");
+	}
+
+	/**
+	 * Drop this device's copy of an app it no longer has access to.
+	 *
+	 * `delete_app` clears the manifest, the project store and the profile
+	 * entries, but not the sync outbox — and age-based cleanup never reclaims a
+	 * row that still holds commands, so queued board edits for a project that
+	 * is gone would stay queued forever.
+	 */
+	private async wipeLocalApp(appId: string, reason: string): Promise<void> {
 		await invoke("delete_app", {
 			appId: appId,
 		});
+		try {
+			await discardOfflineSyncForApp(appId, reason);
+		} catch (error) {
+			console.warn(
+				`Failed to clear queued offline edits for app ${appId}:`,
+				error,
+			);
+		}
+	}
+
+	async leaveApp(appId: string): Promise<void> {
+		if (await this.backend.isLocalOnly(appId)) {
+			throw new Error(
+				`App ${appId} is local-only. There is no team to leave — delete it instead.`,
+			);
+		}
+
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth not set. Cannot leave app.");
+		}
+
+		const sub = this.backend.auth.user?.profile.sub;
+		if (!sub) {
+			throw new Error("No signed-in user. Cannot leave app.");
+		}
+
+		try {
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/team/${sub}`,
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		} catch (error) {
+			// A membership that is already gone — revoked elsewhere, or the app
+			// itself deleted — leaves the device holding a copy it can no longer
+			// sync. Refusing to clean up would strand it, so "there is nothing
+			// here" still counts as having left.
+			if (!isMissingResourceError(error)) throw error;
+			console.warn(
+				`Membership for app ${appId} no longer exists, removing the local copy only.`,
+			);
+		}
+
+		// The same local wipe a delete performs: a copy kept here could never
+		// sync again, and the hub now answers 403 to everything it holds.
+		await this.wipeLocalApp(appId, "app-left");
 	}
 
 	async searchApps(

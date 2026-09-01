@@ -1,7 +1,11 @@
+use super::schema::{
+    add_root_definitions, capitalize_first, get_schema_type, resolve_schema, resolve_schema_ref,
+    retain_declared_field_pins, union_object_properties,
+};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_unwired_pins},
+    node::{Node, NodeLogic},
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
@@ -22,156 +26,6 @@ impl MakeStructFromSchemaNode {
     pub fn new() -> Self {
         MakeStructFromSchemaNode {}
     }
-}
-
-/// Resolve a $ref reference to its definition in the schema
-fn resolve_ref<'a>(ref_path: &str, root_schema: &'a Value) -> Option<&'a Value> {
-    // $ref format: "#/definitions/TypeName" or "#/$defs/TypeName"
-    let path = ref_path.strip_prefix("#/")?;
-    let parts: Vec<&str> = path.split('/').collect();
-
-    let mut current = root_schema;
-    for part in parts {
-        current = current.get(part)?;
-    }
-    Some(current)
-}
-
-/// Resolve a schema that might contain $ref, anyOf, or be direct
-fn resolve_schema<'a>(schema: &'a Value, root_schema: &'a Value) -> &'a Value {
-    // Handle $ref
-    if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str())
-        && let Some(resolved) = resolve_ref(ref_path, root_schema)
-    {
-        return resolved;
-    }
-
-    // Handle anyOf (often used for nullable types)
-    if let Some(any_of) = schema.get("anyOf").and_then(|a| a.as_array()) {
-        for variant in any_of {
-            // Skip null types
-            if variant.get("type").and_then(|t| t.as_str()) == Some("null") {
-                continue;
-            }
-            // Recursively resolve the non-null variant
-            return resolve_schema(variant, root_schema);
-        }
-    }
-
-    schema
-}
-
-fn is_null_schema(schema: &Value) -> bool {
-    schema.get("type").and_then(|t| t.as_str()) == Some("null")
-}
-
-fn union_object_properties(schema: &Value, root_schema: &Value) -> Option<Map<String, Value>> {
-    let one_of = schema.get("oneOf").and_then(|a| a.as_array())?;
-    let mut properties = Map::new();
-
-    for variant in one_of {
-        if is_null_schema(variant) {
-            continue;
-        }
-
-        let resolved = resolve_schema(variant, root_schema);
-        if let Some(variant_properties) = resolved.get("properties").and_then(|p| p.as_object()) {
-            for (name, prop_schema) in variant_properties {
-                properties.insert(name.clone(), prop_schema.clone());
-            }
-        }
-    }
-
-    if properties.is_empty() {
-        None
-    } else {
-        Some(properties)
-    }
-}
-
-fn add_root_definitions(schema: &mut Value, root_schema: &Value) {
-    if let Some(defs) = root_schema.get("definitions") {
-        schema["definitions"] = defs.clone();
-    } else if let Some(defs) = root_schema.get("$defs") {
-        schema["$defs"] = defs.clone();
-    }
-}
-
-fn is_date_format(schema: &Value) -> bool {
-    matches!(
-        schema.get("format").and_then(|f| f.as_str()),
-        Some("date-time") | Some("date")
-    )
-}
-
-/// Map a scalar JSON-schema type to a pin type ("format": "date-time"/"date"
-/// strings become Date pins).
-fn scalar_type(type_str: &str, schema: &Value) -> VariableType {
-    match type_str {
-        "boolean" => VariableType::Boolean,
-        "integer" => VariableType::Integer,
-        "number" => VariableType::Float,
-        "string" => {
-            if is_date_format(schema) {
-                VariableType::Date
-            } else {
-                VariableType::String
-            }
-        }
-        "object" => VariableType::Struct,
-        _ => VariableType::Generic,
-    }
-}
-
-fn array_type(resolved: &Value, root_schema: &Value) -> (VariableType, ValueType) {
-    if let Some(items) = resolved.get("items") {
-        let item_resolved = resolve_schema(items, root_schema);
-        match item_resolved.get("type").and_then(|t| t.as_str()) {
-            Some(ts) => (scalar_type(ts, item_resolved), ValueType::Array),
-            None => (VariableType::Struct, ValueType::Array),
-        }
-    } else {
-        (VariableType::Generic, ValueType::Array)
-    }
-}
-
-/// Get the variable type from a resolved schema
-fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueType) {
-    let resolved = resolve_schema(schema, root_schema);
-
-    if union_object_properties(resolved, root_schema).is_some() {
-        return (VariableType::Struct, ValueType::Normal);
-    }
-
-    if let Some(type_val) = resolved.get("type") {
-        if let Some(type_str) = type_val.as_str() {
-            return match type_str {
-                "array" => array_type(resolved, root_schema),
-                other => (scalar_type(other, resolved), ValueType::Normal),
-            };
-        }
-        // Nullable types (e.g. ["string", "null"]) keep their sibling keywords
-        // (items/format) on the same schema — infer from the non-null type.
-        if let Some(types) = type_val.as_array() {
-            for t in types {
-                if let Some(ts) = t.as_str()
-                    && ts != "null"
-                {
-                    return match ts {
-                        "array" => array_type(resolved, root_schema),
-                        other => (scalar_type(other, resolved), ValueType::Normal),
-                    };
-                }
-            }
-        }
-    }
-
-    // If it has properties or $ref to an object, treat as struct
-    if resolved.get("properties").is_some() {
-        return (VariableType::Struct, ValueType::Normal);
-    }
-
-    (VariableType::Generic, ValueType::Normal)
 }
 
 /// Build a standalone schema for a property, inlining any $ref definitions
@@ -229,14 +83,6 @@ fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
     resolved.clone()
 }
 
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
-}
-
 fn get_default_value_for_type(var_type: &VariableType, value_type: &ValueType) -> Option<Value> {
     if *value_type == ValueType::Array {
         return Some(json!([]));
@@ -249,23 +95,6 @@ fn get_default_value_for_type(var_type: &VariableType, value_type: &ValueType) -
         VariableType::Struct => Some(json!({})),
         _ => None,
     }
-}
-
-/// Drop the field pins the current schema no longer declares — but never one the user has wired.
-///
-/// A field pin that disappears takes its half of the edge with it, and `fix_pin_connections` then
-/// prunes the surviving half on the producer, so the connection vanishes from both ends with no
-/// error anywhere. `remove_unwired_pins` keeps anything still attached and names it on
-/// `node.error`, turning a schema change into something the user reads instead of loses.
-fn retain_declared_field_pins(node: &mut Node, declared: &HashSet<String>) {
-    let stale: Vec<String> = node
-        .pins
-        .values()
-        .filter(|pin| !declared.contains(&pin.name))
-        .map(|pin| pin.id.clone())
-        .collect();
-
-    remove_unwired_pins(node, &stale);
 }
 
 /// Give up on deriving fields: hand `struct_out` its open marker back and drop the unwired pins.
@@ -374,11 +203,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
         };
 
         // Schema might be stored as a reference in board.refs - look it up
-        let schema_str = board
-            .refs
-            .get(&schema_ref)
-            .cloned()
-            .unwrap_or(schema_ref.clone());
+        let schema_str = resolve_schema_ref(schema_ref, &board.refs);
 
         if flow_like::flow::pin::is_open_object_schema(&schema_str) {
             reset_to_open(
@@ -402,7 +227,7 @@ impl NodeLogic for MakeStructFromSchemaNode {
 
         // Extract properties from the schema, resolving a top-level `$ref`/`anyOf` wrapper first
         // so a consumer that declares its shape indirectly reads the same as an inline one.
-        let properties = match resolve_schema(&schema, &schema)
+        let properties: Map<String, Value> = match resolve_schema(&schema, &schema)
             .get("properties")
             .and_then(|p| p.as_object())
         {

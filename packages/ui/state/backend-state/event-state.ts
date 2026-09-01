@@ -5,6 +5,7 @@ import type {
 	IOAuthProvider,
 	IOAuthToken,
 	IRunPayload,
+	PageTrigger,
 	IVersionType,
 } from "../../lib";
 import type { IPrerunEventResponse } from "./types";
@@ -115,6 +116,7 @@ export interface IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined>;
 
 	/** Execute an event remotely via the server-side SSE invoke endpoint */
@@ -125,6 +127,7 @@ export interface IEventState {
 		streamState?: boolean,
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
+		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined>;
 
 	cancelExecution(runId: string): Promise<void>;
@@ -167,5 +170,6 @@ export interface IEventState {
 		appId: string,
 		eventId: string,
 		version?: [number, number, number],
+		pageTrigger?: PageTrigger,
 	): Promise<IPrerunEventResponse>;
 }

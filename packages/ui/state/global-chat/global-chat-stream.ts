@@ -10,9 +10,9 @@ import {
 } from "../../lib/flowpilot-debug";
 import {
 	classifyAgentBackendError,
-	formatAgentBackendFailure,
 	shouldPersistAgentBackendDiagnostic,
 } from "../../lib/flowpilot/agent-backend-diagnostics";
+import { buildChatMessageError } from "../../lib/flowpilot/chat-error";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
@@ -494,7 +494,6 @@ export async function driveGlobalChatStream({
 		invokeResult = await start(onChunk);
 	} catch (error) {
 		const normalizedProvider = normalizeAIProvider(turnSelection.provider);
-		let message = error instanceof Error ? error.message : String(error);
 		if (isAgentBackendProvider(normalizedProvider)) {
 			const diagnostic = classifyAgentBackendError(normalizedProvider, error);
 			if (diagnostic && shouldPersistAgentBackendDiagnostic(diagnostic)) {
@@ -503,8 +502,13 @@ export async function driveGlobalChatStream({
 					error,
 				);
 			}
-			message = formatAgentBackendFailure(turnSelection.provider, error);
 		}
+		// The failure rides on the message as structured data, not as an apology pasted into the
+		// answer: the bubble renders it as a card with its own recovery action, and the next turn's
+		// history stays free of text the model would otherwise read back as its own reply.
+		const chatError = buildChatMessageError(turnSelection.provider, error);
+		responseMessage.error = chatError;
+		const message = `${chatError.title}: ${chatError.message}`;
 		streamFailure = message;
 		store.getState().recordDebugEvent(responseMessage.id, {
 			id: `main:${responseMessage.id}:lifecycle:stream-error`,
@@ -513,22 +517,20 @@ export async function driveGlobalChatStream({
 			status: "error",
 			timestamp_ms: Date.now(),
 			ended_at_ms: Date.now(),
-			error: message,
+			error: chatError.detail ?? message,
 		});
 		// Surface mid-stream failures even when partial content already arrived — a silent stop
 		// reads as a crash. The failed step keeps the panel open.
 		acc.stepOrder.push("stream-error");
 		acc.steps.set("stream-error", {
 			id: "stream-error",
-			title: "Stream failed",
-			description: message.slice(0, 300),
+			title:
+				chatError.kind === "cancelled" ? "Response stopped" : "Stream failed",
+			description: chatError.message.slice(0, 300),
 			status: "failed",
 			timestamp: Date.now(),
 			content_offset: acc.content.length,
 		});
-		if (!acc.content) {
-			acc.content = `Something went wrong: ${message}`;
-		}
 	} finally {
 		// Emit any held-back partial-tag fragment so replies ending in '<...' are not lost.
 		for (const event of debugStream.flush()) {

@@ -14,13 +14,13 @@
 use super::codes;
 use super::format::{CompiledBoard, NONE_IDX};
 use super::view::reconstruct_board;
-use crate::flow::board::{Board, ExecutionStage};
+use crate::flow::board::{Board, ExecutionStage, LayerType};
 use crate::flow::execution::LogLevel;
 use crate::flow::node::{Node, NodeLogic};
 use crate::flow::pin::PinType;
 use crate::flow::variable::{Variable, VariableType};
 use crate::state::FlowNodeRegistryInner;
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use flow_like_storage::Path;
 use flow_like_types::{Result, Value, anyhow, sync::Mutex};
 use std::sync::Arc;
@@ -53,8 +53,19 @@ pub struct TemplateNode {
     pub is_pure: bool,
     pub id: Arc<str>,
     pub name: Arc<str>,
-    /// Nodes inside a function-layer body cannot seed the run stack.
-    pub in_layer_body: bool,
+    /// Top-level nodes retain the historical direct-execution behavior. A
+    /// function-layer body node may seed a run only when it is an explicit
+    /// entry (`start = true`); ordinary function internals remain callable
+    /// only through their layer boundary.
+    pub can_seed_run: bool,
+    /// An explicit start node inside a Function layer initializes a fresh
+    /// Function-local variable scope when selected directly.
+    pub seeds_function_scope: bool,
+    /// Nearest owning Function layer across both supported board shapes:
+    /// legacy nodes physically stored in `Layer.nodes`, and current nodes in
+    /// `Board.nodes` carrying a layer tag. Presentational sub-layers inherit
+    /// their nearest Function ancestor.
+    pub function_layer_id: Option<Arc<str>>,
 }
 
 pub struct TemplateVariable {
@@ -128,6 +139,7 @@ impl CompiledRunTemplate {
         let mut node_idx_by_id: AHashMap<Arc<str>, u32> =
             AHashMap::with_capacity(compiled.nodes.len());
         for (i, cn) in compiled.nodes.iter().enumerate() {
+            let function_layer_idx = owning_function_layer_idx(compiled, cn);
             let source = if cn.body_layer == NONE_IDX {
                 view.nodes.get(&cn.id)
             } else {
@@ -169,7 +181,14 @@ impl CompiledRunTemplate {
                 is_pure,
                 id,
                 name: Arc::from(cn.name.as_str()),
-                in_layer_body: cn.body_layer != NONE_IDX,
+                // Nodes stored in Board.nodes were historically valid direct
+                // executeBoard targets even when tagged into a Function layer.
+                // Preserve that path, while `start` additionally admits legacy
+                // nodes stored inside Layer.nodes for governed Page events.
+                can_seed_run: cn.body_layer == NONE_IDX || cn.start,
+                seeds_function_scope: cn.start && function_layer_idx.is_some(),
+                function_layer_id: function_layer_idx
+                    .map(|idx| Arc::from(compiled.layers[idx as usize].id.as_str())),
             });
         }
 
@@ -195,4 +214,32 @@ impl CompiledRunTemplate {
             board: view,
         })
     }
+}
+
+fn owning_function_layer_idx(
+    compiled: &CompiledBoard,
+    node: &super::format::CompiledNode,
+) -> Option<u32> {
+    let mut current = match (node.body_layer, node.layer) {
+        (body_layer, _) if body_layer != NONE_IDX => Some(body_layer),
+        (_, layer) if layer != NONE_IDX => Some(layer),
+        _ => None,
+    };
+    let mut seen = AHashSet::with_capacity(4);
+
+    while let Some(idx) = current {
+        if !seen.insert(idx) {
+            return None;
+        }
+        let layer = compiled.layers.get(idx as usize)?;
+        if matches!(
+            codes::layer_type_from(layer.layer_type),
+            Ok(LayerType::Function)
+        ) {
+            return Some(idx);
+        }
+        current = (layer.parent_layer != NONE_IDX).then_some(layer.parent_layer);
+    }
+
+    None
 }
