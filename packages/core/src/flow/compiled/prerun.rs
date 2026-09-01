@@ -1022,21 +1022,31 @@ pub fn extract_page_execution(board: &Board, page: &Page) -> Result<PrerunPageEx
         optional_special_target(board, page, "unload", page.on_unload_event_id.as_deref())?;
     let interval = match page.on_interval_event_id.as_deref() {
         Some(node_id) if !node_id.is_empty() => {
-            validate_entry_node(board, &page.id, "special interval", node_id)?;
-            let seconds = page
-                .on_interval_seconds
-                .filter(|seconds| *seconds > 0)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "page '{}' configures interval node '{}' without a positive interval",
-                        page.id,
-                        node_id
-                    )
-                })?;
-            Some(PrerunPageIntervalEvent {
-                node_id: node_id.to_string(),
-                interval_seconds: Some(seconds),
-            })
+            // Tolerant like the other hooks: a stale target or broken period
+            // disables the interval instead of making the Page unloadable.
+            match validate_entry_node(board, &page.id, "special interval", node_id) {
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "Skipping non-executable Page interval hook during extraction"
+                    );
+                    None
+                }
+                Ok(()) => match page.on_interval_seconds.filter(|seconds| *seconds > 0) {
+                    Some(seconds) => Some(PrerunPageIntervalEvent {
+                        node_id: node_id.to_string(),
+                        interval_seconds: Some(seconds),
+                    }),
+                    None => {
+                        tracing::warn!(
+                            page_id = %page.id,
+                            node_id,
+                            "Skipping Page interval hook without a positive period"
+                        );
+                        None
+                    }
+                },
+            }
         }
         _ => None,
     };
@@ -1872,7 +1882,12 @@ fn optional_special_target(
     let Some(node_id) = node_id.filter(|node_id| !node_id.is_empty()) else {
         return Ok(None);
     };
-    validate_entry_node(board, &page.id, &format!("special {kind}"), node_id)?;
+    // Same tolerance as `push_action`: a hook whose target left the board is
+    // disabled rather than making the Page unloadable.
+    if let Err(error) = validate_entry_node(board, &page.id, &format!("special {kind}"), node_id) {
+        tracing::warn!(%error, "Skipping non-executable Page lifecycle hook during extraction");
+        return Ok(None);
+    }
     Ok(Some(PrerunPageEventTarget {
         node_id: node_id.to_string(),
     }))
@@ -2557,7 +2572,15 @@ fn push_action(
     locator: PrerunPageActionLocator,
     out: &mut Vec<PrerunPageActionEvent>,
 ) -> Result<()> {
-    validate_entry_node(board, page_id, "action", node_id)?;
+    // A Page may reference a node that was since edited out of its board. Only
+    // that action becomes non-executable — absent from the contract it can
+    // never be decorated, sealed, or redeemed — while the Page keeps loading.
+    // Failing the whole extraction would brick every surface of the Page until
+    // someone repairs the stale reference.
+    if let Err(error) = validate_entry_node(board, page_id, "action", node_id) {
+        tracing::warn!(%error, "Skipping non-executable Page action during extraction");
+        return Ok(());
+    }
     out.push(PrerunPageActionEvent {
         action_id: page_action_id(page_id, node_id, &locator),
         node_id: node_id.to_string(),
@@ -4479,7 +4502,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_entry_targets_and_duplicate_widget_instances() {
+    fn stale_targets_are_dropped_but_structural_damage_still_rejects() {
+        // A target that is no longer an entry node (or no longer exists at
+        // all) disables that one action; the Page must keep extracting so it
+        // can still load and render its remaining, valid actions.
         let mut board = page_board();
         let mut internal = Node::new("noop", "Internal", "", "Other");
         internal.id = "internal".into();
@@ -4487,10 +4513,34 @@ mod tests {
         let mut page = configured_page();
         page.components[0].component["eventHandlers"]["click"][1]["context"]["nodeId"] =
             json!("internal");
-        let error = extract_page_execution(&board, &page)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("not an entry node"), "{error}");
+        let execution = extract_page_execution(&board, &page).unwrap();
+        assert!(
+            execution
+                .action_events
+                .iter()
+                .all(|action| action.node_id != "internal"),
+            "a non-entry target must be dropped, not extracted"
+        );
+        assert!(
+            !execution.action_events.is_empty(),
+            "valid actions must survive a sibling's stale target"
+        );
+
+        let mut missing = configured_page();
+        missing.components[0].component["eventHandlers"]["click"][1]["context"]["nodeId"] =
+            json!("deleted-node");
+        missing.on_load_event_id = Some("deleted-node".into());
+        let execution = extract_page_execution(&board, &missing).unwrap();
+        assert!(
+            execution
+                .action_events
+                .iter()
+                .all(|action| action.node_id != "deleted-node"),
+        );
+        assert!(
+            execution.special_events.load.is_none(),
+            "a lifecycle hook with a deleted target must be disabled"
+        );
 
         let mut duplicate = configured_page();
         duplicate.components.push(SurfaceComponent::new(
