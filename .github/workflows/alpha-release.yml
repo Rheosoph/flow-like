@@ -249,6 +249,13 @@ jobs:
         shell: bash
         run: .github/scripts/ensure-spa-headers.sh
 
+      # Runs before the Rust cache so the RUSTFLAGS it exports are part of the
+      # cache key.
+      - name: Prepare ONNX Runtime glibc shim (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash .github/scripts/prepare-ort-glibc-compat.sh
+
       - name: Configure bounded macOS codesign retries
         if: runner.os == 'macOS'
         shell: bash
