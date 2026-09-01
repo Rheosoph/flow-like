@@ -104,7 +104,11 @@ tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-rem
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
-xcap = "0.8.1"
+# Pinned: xcap >= 0.8.2 pulls pipewire/libspa 0.9, whose bindings assume the
+# PipeWire >= 1.4 `spa_video_info_raw` layout. Ubuntu 22.04/24.04 CI runners ship
+# 0.3.48/1.0.5 headers, and libspa-sys only requires libpipewire-0.3 >= 0.3, so
+# the mismatch surfaces as a compile error instead of a pkg-config failure.
+xcap = "=0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"
 
