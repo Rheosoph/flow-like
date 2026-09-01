@@ -244,6 +244,11 @@ jobs:
           fi
           test -e "$lib_dir/libOpenCL.so"
 
+      - name: Ensure SPA headers satisfy libspa
+        if: runner.os == 'Linux'
+        shell: bash
+        run: .github/scripts/ensure-spa-headers.sh
+
       - name: Configure bounded macOS codesign retries
         if: runner.os == 'macOS'
         shell: bash
