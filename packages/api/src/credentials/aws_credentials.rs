@@ -230,6 +230,7 @@ impl AwsRuntimeCredentials {
                 &runs_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
+                meta_bucket_express_zone(),
             ),
             CredentialsAccess::ReadLogs => read_logs_policy(self, &runs_prefix),
         };
@@ -303,13 +304,27 @@ fn scoped_content_path_prefixes(
     (app, user)
 }
 
+/// Whether the meta bucket is an S3 Express directory bucket. On a directory
+/// bucket the CreateSession token — not per-object IAM — authorizes every
+/// zonal request, so the two bucket flavors need disjoint policy statements.
+/// Emitting both flavors in one session policy pushed AssumeRole past its
+/// packed-policy budget (PackedPolicyTooLargeException at dispatch).
+/// Deployment configuration never changes within a process, so the env var is
+/// read once.
+fn meta_bucket_express_zone() -> bool {
+    static META_BUCKET_EXPRESS_ZONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *META_BUCKET_EXPRESS_ZONE.get_or_init(|| {
+        std::env::var("META_BUCKET_EXPRESS_ZONE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(feature = "aws")]
 #[async_trait]
 impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
     fn into_shared_credentials(&self) -> SharedCredentials {
-        let meta_express = std::env::var("META_BUCKET_EXPRESS_ZONE")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+        let meta_express = meta_bucket_express_zone();
         let content_express = std::env::var("CONTENT_BUCKET_EXPRESS_ZONE")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
@@ -510,6 +525,7 @@ fn server_execute_policy(
     runs_prefix: &str,
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
+    meta_express: bool,
 ) -> flow_like_types::Value {
     // Draft artifacts (compiled boards, exact `.board` snapshots, prerun
     // manifests) live under `tmp/apps/{app_id}/` on the meta bucket so
@@ -517,121 +533,124 @@ fn server_execute_policy(
     // read-only grant there as on `apps/{app_id}` — only the API writes
     // drafts, which anchors `entry_authority_revision`.
     let draft_meta_prefix = format!("tmp/{apps_prefix}");
+    let mut statements = vec![
+        json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:ListBucket"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}", credentials.content_bucket)
+          ],
+          "Condition": {
+              "StringLike": {
+                  "s3:prefix": [
+                      format!("{}/*", apps_prefix),
+                      format!("{}/*", user_prefix),
+                      format!("{}/*", temporary_user_prefix),
+                      format!("{}/*", temporary_global_prefix)
+                  ]
+              }
+          }
+        }),
+        json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
+          ],
+        }),
+        json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:ListBucket"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}", credentials.logs_bucket)
+          ],
+          "Condition": {
+              "StringLike": {
+                  "s3:prefix": [
+                      format!("{}/*", runs_prefix)
+                  ]
+              }
+          }
+        }),
+        // Run logs are append-only: the executor creates and appends Lance
+        // tables (fresh data files, `.txn` files, conditional-put manifests)
+        // and never deletes; Lance's auto-cleanup is best-effort and logs on
+        // denial. Without DeleteObject a compromised run cannot erase or
+        // rewrite another run's audit trail.
+        json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:GetObject",
+              "s3:PutObject"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}/{}/*", credentials.logs_bucket, runs_prefix),
+          ],
+        }),
+    ];
+    if meta_express {
+        // On a directory bucket the session token — not per-object IAM —
+        // authorizes every zonal request, so the `s3:*` meta statements would
+        // never be evaluated; emitting them anyway blew the AssumeRole packed
+        // policy budget. Pin the session to ReadOnly so this mode cannot
+        // write the meta bucket.
+        statements.push(json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3express:CreateSession",
+          ],
+          "Resource": [
+              "*"
+          ],
+          "Condition": {
+              "StringEquals": {
+                  "s3express:SessionMode": "ReadOnly"
+              }
+          }
+        }));
+    } else {
+        statements.push(json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:ListBucket"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}", credentials.meta_bucket)
+          ],
+          "Condition": {
+              "StringLike": {
+                  "s3:prefix": [
+                      format!("{}/*", apps_prefix),
+                      format!("{}/*", draft_meta_prefix)
+                  ]
+              }
+          }
+        }));
+        statements.push(json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:GetObject"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, apps_prefix),
+              format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
+          ],
+        }));
+    }
     json!({
         "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}", credentials.content_bucket)
-            ],
-            "Condition": {
-                "StringLike": {
-                    "s3:prefix": [
-                        format!("{}/*", apps_prefix),
-                        format!("{}/*", user_prefix),
-                        format!("{}/*", temporary_user_prefix),
-                        format!("{}/*", temporary_global_prefix)
-                    ]
-                }
-            }
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
-            ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}", credentials.logs_bucket)
-            ],
-            "Condition": {
-                "StringLike": {
-                    "s3:prefix": [
-                        format!("{}/*", runs_prefix)
-                    ]
-                }
-            }
-          },
-          // Run logs are append-only: the executor creates and appends Lance
-          // tables (fresh data files, `.txn` files, conditional-put manifests)
-          // and never deletes; Lance's auto-cleanup is best-effort and logs on
-          // denial. Without DeleteObject a compromised run cannot erase or
-          // rewrite another run's audit trail.
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}/{}/*", credentials.logs_bucket, runs_prefix),
-            ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}", credentials.meta_bucket)
-            ],
-            "Condition": {
-                "StringLike": {
-                    "s3:prefix": [
-                        format!("{}/*", apps_prefix),
-                        format!("{}/*", draft_meta_prefix)
-                    ]
-                }
-            }
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject"
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, apps_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
-                format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, apps_prefix),
-                format!("arn:aws:s3express:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
-            ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3express:CreateSession",
-            ],
-            "Resource": [
-                "*"
-            ],
-            // On a directory bucket the session token — not per-object IAM —
-            // authorizes every zonal request, and object_store asks for the
-            // maximum privilege. Pin the session to ReadOnly so this mode
-            // cannot write to the meta bucket.
-            "Condition": {
-                "StringEquals": {
-                    "s3express:SessionMode": "ReadOnly"
-                }
-            }
-          }
-        ],
+        "Statement": statements,
     })
 }
 
@@ -1284,6 +1303,7 @@ mod tests {
             "runs/app-1",
             "tmp/user/user-1/apps/app-1",
             "tmp/global/apps/app-1",
+            false,
         );
         let statements = policy["Statement"]
             .as_array()
@@ -1332,13 +1352,16 @@ mod tests {
         assert!(draft_artifact.starts_with("tmp/apps/app-1/"));
         assert!(!other_app_artifact.starts_with("tmp/apps/app-1/"));
         assert!(
-            meta_resources.contains("meta-secret/tmp/apps/app-1/*")
-                && meta_resources.contains("s3express:::meta-secret/tmp/apps/app-1/*"),
+            meta_resources.contains("meta-secret/tmp/apps/app-1/*"),
             "draft artifacts under tmp/apps must stay readable: {meta_resources}"
         );
         assert!(
             meta_list_prefixes.contains("tmp/apps/app-1/*"),
             "draft artifacts under tmp/apps must stay listable: {meta_list_prefixes}"
+        );
+        assert!(
+            !policy.to_string().contains("s3express"),
+            "a standard meta bucket needs no express statements"
         );
         assert!(policy.contains("content-data/apps/app-1/*"));
         assert!(policy.contains("logs/runs/app-1/*"));
@@ -1359,6 +1382,47 @@ mod tests {
         assert!(
             !meta_actions.contains("DeleteObject"),
             "ServerExecute must not grant meta deletes"
+        );
+    }
+
+    /// On an express meta bucket the CreateSession token authorizes every
+    /// zonal request, so the per-object meta statements are dead weight — and
+    /// carrying both flavors once pushed AssumeRole past its packed-policy
+    /// budget in production (PackedPolicyTooLargeException at dispatch).
+    #[test]
+    fn test_aws_server_execute_express_variant_stays_within_policy_budget() {
+        let creds = test_aws_runtime_credentials();
+        // Realistic id lengths: generated app ids and IdP subjects are long,
+        // and every prefix repeats them several times.
+        let app = "apps/v8f5p73w00itor03zlrai22w";
+        let user = "users/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
+        let runs = "runs/v8f5p73w00itor03zlrai22w";
+        let tmp_user = "tmp/user/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
+        let tmp_global = "tmp/global/apps/v8f5p73w00itor03zlrai22w";
+
+        let express = server_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, true);
+        let express_json = to_string(&express).expect("policy should serialize");
+        assert!(
+            !express_json.contains("arn:aws:s3:::meta-secret"),
+            "express meta access flows through CreateSession, not per-object IAM"
+        );
+        assert!(express_json.contains("s3express:CreateSession"));
+        assert!(express_json.contains("ReadOnly"));
+
+        let standard = server_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, false);
+        let standard_json = to_string(&standard).expect("policy should serialize");
+
+        // STS caps the plaintext at 2048 characters and packs it into a
+        // shared binary quota; both variants must keep real headroom.
+        assert!(
+            express_json.len() < 1600,
+            "express ServerExecute policy grew to {} chars",
+            express_json.len()
+        );
+        assert!(
+            standard_json.len() < 1900,
+            "standard ServerExecute policy grew to {} chars",
+            standard_json.len()
         );
     }
 
@@ -1392,6 +1456,7 @@ mod tests {
                 "runs/app-1",
                 "tmp/user/user-1/apps/app-1",
                 "tmp/global/apps/app-1",
+                true,
             ))
             .as_deref(),
             Some("\"ReadOnly\""),

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::SystemTime};
 
-use flow_like_storage::Path;
+use flow_like_storage::{Path, object_store};
 use flow_like_types::{FromProto, ToProto, create_id, proto};
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app::App,
     state::FlowLikeState,
-    utils::compression::{compress_to_file, from_compressed},
+    utils::compression::{compress_to_file, compress_to_file_create, from_compressed},
 };
 
 use super::{
@@ -253,6 +253,20 @@ pub enum EventPayload {
     QuickAction,
 }
 
+/// Whether a failed [`Event::load`] means the object is genuinely absent, as
+/// opposed to unreadable (transient store error, truncated/corrupt bytes).
+/// Only absence may fall through to the create branch of [`Event::upsert`] —
+/// anything else must abort the write, or one flaky read forks the event into
+/// a duplicate under a fresh id.
+fn load_error_is_not_found(error: &flow_like_types::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<object_store::Error>(),
+            Some(object_store::Error::NotFound { .. })
+        )
+    })
+}
+
 pub fn canary_equal(a: &Option<CanaryEvent>, b: &Option<CanaryEvent>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => {
@@ -343,8 +357,17 @@ impl Event {
             tracing::warn!("Failed to populate event inputs during upsert: {}", e);
         }
 
-        let old_event = Event::load(&self.id, app, None).await;
-        if let Ok(mut old_event) = old_event {
+        let old_event = match Event::load(&self.id, app, None).await {
+            Ok(event) => Some(event),
+            Err(error) if load_error_is_not_found(&error) => None,
+            Err(error) => {
+                return Err(error.context(format!(
+                    "loading existing event {} failed during upsert; refusing to recreate it under a fresh id",
+                    self.id
+                )));
+            }
+        };
+        if let Some(mut old_event) = old_event {
             if old_event.node_id != self.node_id
                 || old_event.board_id != self.board_id
                 || !canary_equal(&old_event.canary, &self.canary)
@@ -600,15 +623,41 @@ impl Event {
             .await?
             .as_generic();
 
-        let event_path = match version {
-            Some(version) => storage_root
-                .child("versions")
-                .child(self.id.clone())
-                .child(format!("{}.{}.{}", version.0, version.1, version.2)),
-            None => storage_root.child(format!("{}.event", self.id)),
+        let proto = self.to_proto();
+        let Some(version) = version else {
+            let event_path = storage_root.child(format!("{}.event", self.id));
+            compress_to_file(store, event_path, &proto).await?;
+            return Ok(());
         };
 
-        compress_to_file(store, event_path, &self.to_proto()).await?;
+        // Archived versions are immutable, like board snapshots: a create-only
+        // write means two racing publishers cannot destroy each other's slot.
+        // An identical occupant is success — it is also the crash-recovery path
+        // where an earlier upsert archived this version but died before writing
+        // the live object; without it the event would wedge unsaveable.
+        let event_path = storage_root
+            .child("versions")
+            .child(self.id.clone())
+            .child(format!("{}.{}.{}", version.0, version.1, version.2));
+        if let Err(create_error) =
+            compress_to_file_create(store.clone(), event_path.clone(), &proto).await
+        {
+            let existing: flow_like_types::Result<proto::Event> =
+                from_compressed(store, event_path).await;
+            match existing {
+                Ok(existing) if existing == proto => {}
+                Ok(_) => {
+                    return Err(flow_like_types::anyhow!(
+                        "archived version {}.{}.{} of event {} already exists with different content; refusing to overwrite it",
+                        version.0,
+                        version.1,
+                        version.2,
+                        self.id
+                    ));
+                }
+                Err(_) => return Err(create_error),
+            }
+        }
         Ok(())
     }
 
@@ -650,8 +699,143 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatEventParameters, EventPayload};
+    use super::{ChatEventParameters, Event, EventPayload, load_error_is_not_found};
+    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use flow_like_storage::{
+        Path,
+        files::store::FlowLikeStore,
+        object_store::{self, PutPayload},
+    };
+    use flow_like_types::tokio;
     use serde_json::json;
+    use std::{collections::HashMap, sync::Arc, time::SystemTime};
+
+    async fn test_app() -> crate::app::App {
+        let mut config = FlowLikeConfig::new();
+        config.register_app_meta_store(FlowLikeStore::Other(Arc::new(
+            object_store::memory::InMemory::new(),
+        )));
+        config.register_app_storage_store(FlowLikeStore::Other(Arc::new(
+            object_store::memory::InMemory::new(),
+        )));
+        let state = Arc::new(FlowLikeState::new(
+            config,
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        crate::app::App::new(None, crate::bit::Metadata::default(), vec![], state)
+            .await
+            .unwrap()
+    }
+
+    fn storage_event(id: &str) -> Event {
+        Event {
+            id: id.to_string(),
+            name: "Storage Fixture".to_string(),
+            description: String::new(),
+            board_id: String::new(),
+            board_version: None,
+            node_id: String::new(),
+            variables: HashMap::new(),
+            config: Vec::new(),
+            active: false,
+            canary: None,
+            priority: 0,
+            event_type: "quick_action".to_string(),
+            notes: None,
+            event_version: (0, 0, 0),
+            created_at: SystemTime::UNIX_EPOCH,
+            updated_at: SystemTime::UNIX_EPOCH,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode: super::EventExecutionMode::Local,
+            exposure: super::EventExposure::Public,
+            correlation_mappings: None,
+        }
+    }
+
+    #[test]
+    fn load_error_classification_only_treats_missing_objects_as_absent() {
+        let not_found: flow_like_types::Error = object_store::Error::NotFound {
+            path: "apps/a/events/e.event".to_string(),
+            source: "gone".into(),
+        }
+        .into();
+        assert!(load_error_is_not_found(&not_found));
+        assert!(load_error_is_not_found(
+            &not_found.context("loading event failed")
+        ));
+
+        assert!(!load_error_is_not_found(&flow_like_types::anyhow!(
+            "connection reset"
+        )));
+        let other_store_error: flow_like_types::Error = object_store::Error::Generic {
+            store: "s3",
+            source: "throttled".into(),
+        }
+        .into();
+        assert!(!load_error_is_not_found(&other_store_error));
+    }
+
+    #[tokio::test]
+    async fn archived_event_versions_are_immutable() {
+        let app = test_app().await;
+        let event = storage_event("evt-immutable");
+
+        event.save(&app, Some((1, 0, 0))).await.unwrap();
+        // The identical occupant is the crash-recovery path: archiving again
+        // after a died live-write must not wedge the event.
+        event.save(&app, Some((1, 0, 0))).await.unwrap();
+
+        let mut changed = event.clone();
+        changed.name = "Different Content".to_string();
+        let error = changed.save(&app, Some((1, 0, 0))).await.unwrap_err();
+        assert!(
+            error.to_string().contains("refusing to overwrite"),
+            "unexpected error: {error:#}"
+        );
+
+        // The live object stays last-write-wins.
+        changed.save(&app, None).await.unwrap();
+        event.save(&app, None).await.unwrap();
+        let live = Event::load(&event.id, &app, None).await.unwrap();
+        assert_eq!(live.name, event.name);
+    }
+
+    #[tokio::test]
+    async fn upsert_creates_on_absence_but_refuses_unreadable_events() {
+        let app = test_app().await;
+
+        let mut fresh = storage_event("evt-upsert");
+        let created = fresh.upsert(&app, None, true).await.unwrap();
+        assert_eq!(created.id, "evt-upsert");
+        assert_eq!(created.event_version, (0, 0, 0));
+
+        // Corrupt the live object: the next upsert must surface the read
+        // failure instead of forking the event under a fresh id.
+        let store = FlowLikeState::project_meta_store(app.app_state.as_ref().unwrap())
+            .await
+            .unwrap()
+            .as_generic();
+        let live_path = Path::from("apps")
+            .child(app.id.clone())
+            .child("events")
+            .child("evt-upsert.event");
+        store
+            .put(&live_path, PutPayload::from_static(b"not lz4 protobuf"))
+            .await
+            .unwrap();
+
+        let mut update = storage_event("evt-upsert");
+        update.name = "Update Attempt".to_string();
+        let error = update.upsert(&app, None, true).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("refusing to recreate"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(update.id, "evt-upsert");
+    }
 
     #[test]
     fn chat_event_parameters_default_presentation_fields_to_none() {
