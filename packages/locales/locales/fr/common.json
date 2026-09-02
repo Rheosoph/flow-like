@@ -142,6 +142,8 @@
 	"apiEndpointsAndIntegrations": "",
 	"apiexamplecomCdnexamplecom": "",
 	"apiKey": "",
+	"apiSurface": "",
+	"apiSurfaceHint": "",
 	"app": "",
 	"appConfigurationAndEnvironmentVariables": "",
 	"appExportedSuccessfully": "",

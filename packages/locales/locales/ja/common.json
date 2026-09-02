@@ -140,6 +140,8 @@
 	"apiEndpointsAndIntegrations": "APIエンドポイントと連携",
 	"apiexamplecomCdnexamplecom": "api.example.com, cdn.example.com",
 	"apiKey": "APIキー",
+	"apiSurface": "",
+	"apiSurfaceHint": "",
 	"app": "アプリ",
 	"appConfigurationAndEnvironmentVariables": "アプリの設定と環境変数",
 	"appExportedSuccessfully": "アプリをエクスポートしました!",

@@ -141,6 +141,8 @@
 	"apiEndpointsAndIntegrations": "API endpoints and integrations",
 	"apiexamplecomCdnexamplecom": "api.example.com, cdn.example.com",
 	"apiKey": "API key",
+	"apiSurface": "API Surface",
+	"apiSurfaceHint": "Which upstream API the model speaks. Responses is required by newer OpenAI models.",
 	"app": "App",
 	"appConfigurationAndEnvironmentVariables": "App configuration and environment variables",
 	"appExportedSuccessfully": "App exported successfully!",

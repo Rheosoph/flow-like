@@ -140,6 +140,8 @@
 	"apiEndpointsAndIntegrations": "API 端点与集成",
 	"apiexamplecomCdnexamplecom": "api.example.com, cdn.example.com",
 	"apiKey": "API 密钥",
+	"apiSurface": "",
+	"apiSurfaceHint": "",
 	"app": "应用",
 	"appConfigurationAndEnvironmentVariables": "应用配置和环境变量",
 	"appExportedSuccessfully": "应用导出成功!",

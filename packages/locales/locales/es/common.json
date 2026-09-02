@@ -142,6 +142,8 @@
 	"apiEndpointsAndIntegrations": "Endpoints e integraciones de la API",
 	"apiexamplecomCdnexamplecom": "api.example.com, cdn.example.com",
 	"apiKey": "Clave de API",
+	"apiSurface": "",
+	"apiSurfaceHint": "",
 	"app": "Aplicación",
 	"appConfigurationAndEnvironmentVariables": "Configuración de la aplicación y variables de entorno",
 	"appExportedSuccessfully": "¡Aplicación exportada correctamente!",

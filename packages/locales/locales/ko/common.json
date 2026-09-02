@@ -140,6 +140,8 @@
 	"apiEndpointsAndIntegrations": "API 엔드포인트 및 통합",
 	"apiexamplecomCdnexamplecom": "api.example.com, cdn.example.com",
 	"apiKey": "API 키",
+	"apiSurface": "",
+	"apiSurfaceHint": "",
 	"app": "앱",
 	"appConfigurationAndEnvironmentVariables": "앱 구성 및 환경 변수",
 	"appExportedSuccessfully": "앱을 내보냈습니다!",
