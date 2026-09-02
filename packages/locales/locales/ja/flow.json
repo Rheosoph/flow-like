@@ -111,6 +111,7 @@
 	"callsCallNodesWillBeLeftUnresolvedTheyStayOnTheirBoardsButCanNoLongerRun": "",
 	"callsCallSites": "",
 	"canary": "カナリア",
+	"canaryCount_other": "",
 	"cancel": "キャンセル",
 	"cannotChangeOldVersion": "古いバージョンは変更できません",
 	"cannotModifyOldVersion": "古いバージョンは編集できません",

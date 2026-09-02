@@ -111,6 +111,8 @@
 	"callsCallNodesWillBeLeftUnresolvedTheyStayOnTheirBoardsButCanNoLongerRun": "",
 	"callsCallSites": "",
 	"canary": "Canary",
+	"canaryCount_one": "",
+	"canaryCount_other": "",
 	"cancel": "Abbrechen",
 	"cannotChangeOldVersion": "Alte Version kann nicht geändert werden",
 	"cannotModifyOldVersion": "Alte Version kann nicht geändert werden",

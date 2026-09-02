@@ -111,6 +111,7 @@
 	"callsCallNodesWillBeLeftUnresolvedTheyStayOnTheirBoardsButCanNoLongerRun": "",
 	"callsCallSites": "",
 	"canary": "金丝雀版",
+	"canaryCount_other": "",
 	"cancel": "取消",
 	"cannotChangeOldVersion": "无法更改旧版本",
 	"cannotModifyOldVersion": "无法修改旧版本",

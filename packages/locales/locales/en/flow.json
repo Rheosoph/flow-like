@@ -111,6 +111,8 @@
 	"callsCallNodesWillBeLeftUnresolvedTheyStayOnTheirBoardsButCanNoLongerRun": "{{calls}} Call nodes will be left unresolved — they stay on their boards but can no longer run.",
 	"callsCallSites": "{{calls}} call sites",
 	"canary": "Canary",
+	"canaryCount_one": "Canary ×{{count}}",
+	"canaryCount_other": "Canary ×{{count}}",
 	"cancel": "Cancel",
 	"cannotChangeOldVersion": "Cannot change old version",
 	"cannotModifyOldVersion": "Cannot modify old version",

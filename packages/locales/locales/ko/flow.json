@@ -111,6 +111,7 @@
 	"callsCallNodesWillBeLeftUnresolvedTheyStayOnTheirBoardsButCanNoLongerRun": "",
 	"callsCallSites": "",
 	"canary": "카나리",
+	"canaryCount_other": "",
 	"cancel": "취소",
 	"cannotChangeOldVersion": "이전 버전은 변경할 수 없습니다",
 	"cannotModifyOldVersion": "이전 버전은 수정할 수 없습니다",
