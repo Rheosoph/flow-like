@@ -418,3 +418,26 @@ describe("processChatEvents step anchors", () => {
 		});
 	});
 });
+
+describe("processChatEvents reasoning repair", () => {
+	const tokenized = Array.from({ length: 8 }, (_, i) => `tok${i}`).join("\n");
+
+	test("streams reasoning raw and repairs it once on the final flush", () => {
+		const events = tokenized
+			.split("\n")
+			.map((token, i) =>
+				chunkEvent({ reasoning: i === 0 ? token : `\n${token}` }),
+			);
+		const live = processChatEvents(events, baseState(baseMessage()));
+		expect(live.responseMessage.plan_steps?.[0]?.reasoning).toBe(tokenized);
+
+		const settled = processChatEvents(
+			[...events, chatOutEvent("done")],
+			baseState(baseMessage()),
+		);
+		expect(settled.responseMessage.plan_steps?.[0]?.reasoning).toBe(
+			tokenized.replaceAll("\n", " "),
+		);
+		expect(settled.responseMessage.plan_steps?.[0]?.status).toBe("done");
+	});
+});

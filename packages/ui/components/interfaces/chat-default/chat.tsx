@@ -23,6 +23,7 @@ import { ChatRunControls } from "./chat-run-controls";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { MessageShell } from "./message-shell";
 import { useAnswerPlayback } from "./use-answer-playback";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -34,6 +35,13 @@ type ChatItem =
 			data: IInteractionRequest[];
 			timestamp: number;
 	  };
+
+/**
+ * Settled rows this close to the end mount at once so the initial
+ * scroll-to-bottom lands on real content; everything above is a placeholder
+ * until it scrolls near.
+ */
+const IMMEDIATE_MESSAGE_TAIL = 8;
 
 function getInteractionCreatedAt(interaction: IInteractionRequest): number {
 	return (interaction.expires_at - interaction.ttl_seconds) * 1000;
@@ -561,7 +569,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						data-fl-chat-messages
 						style={{ WebkitOverflowScrolling: "touch" }}
 					>
-						{chatItems.map((item) => (
+						{chatItems.map((item, index) => (
 							<div
 								className="w-full px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
@@ -570,13 +578,18 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
-								<MessageComponent
-									message={item.data as IMessage}
-									onMessageUpdate={onMessageUpdate}
-									appId={appId}
-									boardId={boardId}
-									eventId={eventId}
-								/>
+								<MessageShell
+									immediate={index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL}
+									root={scrollContainerRef}
+								>
+									<MessageComponent
+										message={item.data as IMessage}
+										onMessageUpdate={onMessageUpdate}
+										appId={appId}
+										boardId={boardId}
+										eventId={eventId}
+									/>
+								</MessageShell>
 							</div>
 						))}
 						{isSending &&

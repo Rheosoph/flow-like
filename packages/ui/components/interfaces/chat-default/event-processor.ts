@@ -68,11 +68,9 @@ function appendFallbackReasoningStep(
 	reasoning: string,
 	replace = false,
 ) {
-	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
-
 	if (
 		(!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) &&
-		!hasVisibleReasoning(sanitizedReasoning)
+		!hasVisibleReasoning(reasoning)
 	) {
 		return;
 	}
@@ -82,7 +80,7 @@ function appendFallbackReasoningStep(
 			id: "step-0",
 			title: "Thinking",
 			status: "progress",
-			reasoning: sanitizedReasoning,
+			reasoning,
 		};
 		// A live delta marks where the thinking started; a replayed transcript does not.
 		if (!replace) {
@@ -115,17 +113,35 @@ function appendFallbackReasoningStep(
 
 	if (
 		!hasVisibleReasoning(currentStep.reasoning) &&
-		!hasVisibleReasoning(sanitizedReasoning)
+		!hasVisibleReasoning(reasoning)
 	) {
 		return;
 	}
 
 	currentStep.reasoning = replace
-		? sanitizedReasoning
-		: sanitizeReasoningForDisplay(
-				(currentStep.reasoning || "") + sanitizedReasoning,
-			);
+		? reasoning
+		: (currentStep.reasoning || "") + reasoning;
 	responseMessage.current_step_id = currentStep.id;
+}
+
+/**
+ * The tokenized-reasoning repair is a display heuristic for rows persisted before the producers
+ * were fixed. Running it on the whole transcript for every chunk made the processor superlinear
+ * in stream length, so it runs exactly once, on the settled message.
+ */
+export function finalizePlanSteps(responseMessage: IMessage) {
+	for (const step of responseMessage.plan_steps ?? []) {
+		if (step.status === "progress") {
+			step.status = "done";
+			if (!step.endTime) {
+				step.endTime = Date.now();
+			}
+		}
+		if (step.reasoning) {
+			step.reasoning = sanitizeReasoningForDisplay(step.reasoning);
+		}
+	}
+	responseMessage.current_step_id = undefined;
 }
 
 /**
@@ -365,7 +381,7 @@ function applyBackendPlan(
 			reasoning:
 				stepId === reasoning.current_step &&
 				hasVisibleReasoning(reasoning.current_message)
-					? sanitizeReasoningForDisplay(reasoning.current_message)
+					? reasoning.current_message
 					: undefined,
 			content_offset: prior ? prior.content_offset : textLength,
 		});
@@ -605,17 +621,8 @@ export function processChatEvents(
 				shouldUpdate = true;
 			}
 
-			// Finalize plan steps - mark all as done if not already
 			if (responseMessage.plan_steps) {
-				for (const step of responseMessage.plan_steps) {
-					if (step.status === "progress") {
-						step.status = "done";
-						if (!step.endTime) {
-							step.endTime = Date.now();
-						}
-					}
-				}
-				responseMessage.current_step_id = undefined;
+				finalizePlanSteps(responseMessage);
 				shouldUpdate = true;
 			}
 		}

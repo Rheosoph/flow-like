@@ -4,7 +4,12 @@ import { useTranslation } from "@flow-like/locales";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
+import {
+	registerWidgetSnapshotSource,
+	scheduleWidgetSnapshot,
+	unregisterWidgetSnapshotSource,
+	widgetSnapshotAttribute,
+} from "../../../lib/widget-snapshot";
 import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
 	applyA2UIMessage,
@@ -62,6 +67,29 @@ function updateSignature(
 	return JSON.stringify(updates[index]);
 }
 
+interface ReplayState {
+	instanceId: string;
+	appliedCount: number;
+	lastSig: string | null;
+	/** Unpersisted action-feedback messages applied on top of the replay. */
+	feedbackCount: number;
+}
+
+function replayState(widget: IChatWidget): ReplayState {
+	const updates = widget.updates ?? [];
+	return {
+		instanceId: widget.instance_id,
+		appliedCount: updates.length,
+		lastSig: updateSignature(updates, updates.length - 1),
+		feedbackCount: 0,
+	};
+}
+
+/** Keys the snapshot cache: changes exactly when the rendered state does. */
+function contentSignature(state: ReplayState): string {
+	return `${state.feedbackCount}:${state.appliedCount}:${state.lastSig ?? ""}`;
+}
+
 function MessageWidget({
 	widget,
 	appId,
@@ -79,21 +107,21 @@ function MessageWidget({
 	// component snapshot never changes for an instance (re-registrations ride
 	// the updates array), so a shrunk or diverged updates array is the only
 	// full-reseed trigger.
-	const replayRef = useRef({
+	const replayRef = useRef<ReplayState>({
 		instanceId: "",
 		appliedCount: 0,
-		lastSig: null as string | null,
+		lastSig: null,
+		feedbackCount: 0,
 	});
 	const [surface, setSurface] = useState<Surface>(() => {
-		const updates = widget.updates ?? [];
-		replayRef.current = {
-			instanceId: widget.instance_id,
-			appliedCount: updates.length,
-			lastSig: updateSignature(updates, updates.length - 1),
-		};
+		replayRef.current = replayState(widget);
 		return replaySurface(widget);
 	});
+	const [signature, setSignature] = useState(() =>
+		contentSignature(replayRef.current),
+	);
 	const [maximized, setMaximized] = useState(false);
+	const containerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		const updates = widget.updates ?? [];
@@ -115,22 +143,33 @@ function MessageWidget({
 			);
 			state.appliedCount = updates.length;
 			state.lastSig = updateSignature(updates, updates.length - 1);
+			setSignature(contentSignature(state));
 			return;
 		}
 
-		replayRef.current = {
-			instanceId: widget.instance_id,
-			appliedCount: updates.length,
-			lastSig: updateSignature(updates, updates.length - 1),
-		};
+		replayRef.current = replayState(widget);
 		setSurface(replaySurface(widget));
+		setSignature(contentSignature(replayRef.current));
 	}, [widget]);
 
 	const onA2UIMessage = useCallback((message: A2UIServerMessage) => {
 		setSurface((prev) =>
 			applyA2UIMessage(prev, normalizeA2UIWireMessage(message)),
 		);
+		replayRef.current.feedbackCount += 1;
+		setSignature(contentSignature(replayRef.current));
 	}, []);
+
+	// The inline container is the capture source; while maximized it is empty,
+	// so pre-capture pauses and the last inline capture keeps serving.
+	useEffect(() => {
+		const instanceId = widget.instance_id;
+		registerWidgetSnapshotSource(instanceId, signature);
+		if (!maximized) {
+			scheduleWidgetSnapshot(instanceId, signature, () => containerRef.current);
+		}
+		return () => unregisterWidgetSnapshotSource(instanceId);
+	}, [widget.instance_id, signature, maximized]);
 
 	const renderer = (
 		<A2UIRenderer
@@ -155,6 +194,7 @@ function MessageWidget({
 				<Maximize2 className="w-3.5 h-3.5" />
 			</button>
 			<div
+				ref={containerRef}
 				className="max-h-120 overflow-auto"
 				{...widgetSnapshotAttribute(widget.instance_id)}
 			>

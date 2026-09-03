@@ -13,6 +13,8 @@ import { StreamingTextEditor } from "./streaming-text-editor";
 import {
 	RICH_REMARK_PLUGINS,
 	TextEditor,
+	peekSettledParse,
+	resolveStaticValue,
 	safeDeserialize,
 } from "./text-editor";
 
@@ -205,9 +207,11 @@ describe("non-prefix content updates", () => {
 const stripGeneratedIds = (html: string) =>
 	html
 		.replace(/DndDescribedBy-\d+/g, "DndDescribedBy-N")
+		.replace(/DndLiveRegion-\d+/g, "DndLiveRegion-N")
 		.replace(/radix-[\w-]+/g, "radix-N")
 		.replace(/«[^»]*»/g, "«N»")
-		.replace(/:r[0-9a-z]+:/g, ":rN:");
+		.replace(/:r[0-9a-z]+:/g, ":rN:")
+		.replace(/_r_[0-9a-z]+_/g, "_rN_");
 
 describe("streaming render matches the settled render", () => {
 	const CONSTRUCTS: ReadonlyArray<readonly [string, string]> = [
@@ -343,5 +347,105 @@ describe("live updates reach the DOM in the same commit", () => {
 
 		expect(container.textContent).toContain("Section 0");
 		expect(container.textContent).toContain("Section 29");
+	});
+});
+
+describe("settling adopts the streaming parse", () => {
+	const SAMPLE = [
+		"# Release notes",
+		"A paragraph with `inline code`, **bold** and a [link](https://example.com/docs).",
+		"## Changes",
+		"- top level\n  - nested one\n  - nested two\n- another top level",
+		"1. first step\n2. second step",
+		"```ts\nexport const answer: number = 42;\n```",
+		"| Feature | Status |\n| --- | --- |\n| Streaming | done |\n| Settling | done |",
+		"> A quoted remark.",
+		"Closing paragraph.",
+	].join("\n\n");
+
+	const requirePublished = (content: string) => {
+		const parse = peekSettledParse(content);
+		if (!parse) throw new Error("streaming editor published nothing");
+		return parse;
+	};
+
+	const resolveRich = (content: string) =>
+		resolveStaticValue(BaseEditorKit, content, true, RICH_REMARK_PLUGINS);
+
+	test("the published parse is complete and adopted by identity", () => {
+		const content = `${SAMPLE}\n\nidentity probe`;
+		renderToStaticMarkup(createElement(StreamingTextEditor, { content }));
+
+		const published = requirePublished(content);
+		expect(published.complete).toBe(true);
+		expect(resolveRich(content)).toBe(published.value);
+	});
+
+	test("a whole-document fallback is published incomplete and re-parsed", () => {
+		const content = "<div>\nhtml block\n</div>\n\nAfter.";
+		renderToStaticMarkup(createElement(StreamingTextEditor, { content }));
+
+		const published = requirePublished(content);
+		expect(published.complete).toBe(false);
+		const value = resolveRich(content);
+		expect(value).not.toBe(published.value);
+		expect(value).toEqual(published.value);
+	});
+
+	test("a stream keeps one entry, replacing its previous content", () => {
+		const first = `${SAMPLE}\n\nstep one`;
+		const second = `${first} and two`;
+		renderToStaticMarkup(
+			createElement(StreamingTextEditor, { content: first }),
+		);
+		expect(peekSettledParse(first)).toBeDefined();
+		renderToStaticMarkup(
+			createElement(StreamingTextEditor, { content: second }),
+		);
+		expect(peekSettledParse(second)).toBeDefined();
+	});
+
+	test("the settled DOM equals a cold parse of the same content", async () => {
+		const { act } = await import("react");
+
+		const cold = await setupDom();
+		await act(async () => {
+			cold.root.render(
+				createElement(TextEditor, {
+					initialContent: SAMPLE,
+					isMarkdown: true,
+					editable: false,
+				}),
+			);
+		});
+		const coldHtml = stripGeneratedIds(cold.container.innerHTML);
+		expect(coldHtml).toContain("Closing paragraph.");
+
+		const live = await setupDom();
+		for (const cut of [40, 200, 500, SAMPLE.length]) {
+			await act(async () => {
+				live.root.render(
+					createElement(StreamingTextEditor, {
+						content: SAMPLE.slice(0, cut),
+					}),
+				);
+			});
+		}
+		const published = requirePublished(SAMPLE);
+		expect(published.complete).toBe(true);
+
+		await act(async () => {
+			live.root.render(
+				createElement(TextEditor, {
+					initialContent: SAMPLE,
+					isMarkdown: true,
+					editable: false,
+				}),
+			);
+		});
+
+		expect(stripGeneratedIds(live.container.innerHTML)).toBe(coldHtml);
+		// The settled mount took the streaming value, not a fresh parse.
+		expect(resolveRich(SAMPLE)).toBe(published.value);
 	});
 });

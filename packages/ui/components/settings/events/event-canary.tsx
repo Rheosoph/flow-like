@@ -165,14 +165,6 @@ async function setupsUnavailable(
 	throw new Error("Per-variant setup health is not supported on this platform");
 }
 
-async function bootstrapUnavailable(
-	_appId: string,
-	_route?: string,
-	_eventId?: string,
-): Promise<IPageBootstrap> {
-	throw new Error("Page bootstrap is not supported on this platform");
-}
-
 /** The `EventSetup` row name for the primary target. */
 const STABLE_SETUP_NAME = "stable";
 
@@ -266,13 +258,11 @@ export function EventCanary({
 	// the sealed page claims, so the viewer's own bootstrap is the only honest
 	// "which variant serves me" probe — the dispatch explain endpoint answers
 	// "primary" for every page event.
-	const bootstrapSupported =
-		typeof backend.pageState.getPageBootstrap === "function";
 	const session = useInvoke<
 		IPageBootstrap,
 		[string, string | undefined, string]
 	>(
-		backend.pageState.getPageBootstrap ?? bootstrapUnavailable,
+		backend.pageState.getPageBootstrap,
 		backend.pageState,
 		[appId, undefined, event.id],
 		Boolean(
@@ -280,7 +270,6 @@ export function EventCanary({
 				event.id &&
 				isPageEvent &&
 				variantsSupported &&
-				bootstrapSupported &&
 				variants.length > 0,
 		),
 	);
@@ -310,13 +299,11 @@ export function EventCanary({
 	const refresh = useCallback(async () => {
 		await invalidate(backend.eventState.getEvents, [appId]);
 		await invalidate(backend.eventState.getEvent, [appId, event.id]);
-		if (backend.pageState.getPageBootstrap) {
-			await invalidate(backend.pageState.getPageBootstrap, [
-				appId,
-				undefined,
-				event.id,
-			]);
-		}
+		await invalidate(backend.pageState.getPageBootstrap, [
+			appId,
+			undefined,
+			event.id,
+		]);
 		onReload?.();
 	}, [
 		appId,
@@ -642,7 +629,7 @@ export function EventCanary({
 							)}
 						</p>
 					)}
-					{isPageEvent && bootstrapSupported && variants.length > 0 && (
+					{isPageEvent && variants.length > 0 && (
 						<PageSessionServing
 							loading={session.isLoading}
 							error={session.isError ? (session.error?.message ?? "") : null}

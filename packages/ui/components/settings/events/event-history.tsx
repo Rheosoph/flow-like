@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	ActivityIcon,
 	AlertTriangleIcon,
 	ArchiveRestoreIcon,
 	BanIcon,
@@ -149,7 +150,7 @@ export function EventHistory({
 	);
 	const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
 
-	// Rail selection filters the run-derived tabs; clicking again clears it.
+	// Selecting a version row focuses the activity below; clicking again clears it.
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
 	const [restoreTarget, setRestoreTarget] =
 		useState<IEventTimelineEntry | null>(null);
@@ -174,6 +175,7 @@ export function EventHistory({
 		(nodeId: string) => nodes?.[nodeId]?.friendly_name ?? nodeId,
 		[nodes],
 	);
+	const clearSelection = useCallback(() => setSelectedKey(null), []);
 
 	if (!timelineSupported) {
 		return (
@@ -189,74 +191,86 @@ export function EventHistory({
 	}
 
 	return (
-		<Card>
-			<CardHeader>
-				<CardTitle className="flex items-center gap-2">
-					<HistoryIcon className="h-5 w-5" />
-					{t("eventHistory", "History")}
-				</CardTitle>
-				<CardDescription>
-					{t(
-						"eventHistoryDescription",
-						"Every saved version of this event, and what its runs did.",
+		<div className="space-y-6">
+			<Card>
+				<CardHeader>
+					<CardTitle className="flex items-center gap-2">
+						<HistoryIcon className="h-5 w-5" />
+						{t("versions", "Versions")}
+					</CardTitle>
+					<CardDescription>
+						{t(
+							"eventVersionsDescription",
+							"Every saved version of this event and how its runs went. Select a version to focus the activity below.",
+						)}
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="space-y-3">
+					{timeline.isLoading && (
+						<div className="flex flex-col items-center justify-center gap-2 py-8">
+							<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
+							<p className="text-sm text-muted-foreground">
+								{t("loadingHistory", "Loading history…")}
+							</p>
+						</div>
 					)}
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				{timeline.isLoading && (
-					<div className="flex flex-col items-center justify-center gap-2 py-8">
-						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-						<p className="text-sm text-muted-foreground">
-							{t("loadingHistory", "Loading history…")}
-						</p>
-					</div>
-				)}
-				{timeline.isError && (
-					<div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
-						<AlertTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-						<p>
-							{t(
-								"failedToLoadEventHistory",
-								"Could not load the version history: {{val}}",
-								{ val: timeline.error?.message ?? "" },
-							)}
-						</p>
-					</div>
-				)}
-				{timelineData && (
-					<div className="grid grid-cols-1 gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-						<VersionRail
+					{timeline.isError && (
+						<div className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+							<AlertTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+							<p>
+								{t(
+									"failedToLoadEventHistory",
+									"Could not load the version history: {{val}}",
+									{ val: timeline.error?.message ?? "" },
+								)}
+							</p>
+						</div>
+					)}
+					{timelineData && (
+						<VersionTable
 							timeline={timelineData}
+							aggregates={versionAggregates}
 							selectedKey={selectedKey}
 							onSelect={(key) =>
 								setSelectedKey((current) => (current === key ? null : key))
 							}
 							onRestore={restoreSupported ? setRestoreTarget : undefined}
+							runsSupported={runsSupported}
+							runsLoading={runsQuery.isLoading}
+							runsFailed={runsQuery.isError}
 						/>
-						<Tabs defaultValue="overview" className="min-w-0">
-							<TabsList>
-								<TabsTrigger value="overview">
-									{t("overview", "Overview")}
-								</TabsTrigger>
+					)}
+				</CardContent>
+			</Card>
+
+			{timelineData && (
+				<Card>
+					<CardHeader>
+						<CardTitle className="flex items-center gap-2">
+							<ActivityIcon className="h-5 w-5" />
+							{t("activity", "Activity")}
+						</CardTitle>
+						<CardDescription>
+							{t(
+								"eventActivityDescription",
+								"Individual runs, per-node health and the differences between two versions.",
+							)}
+						</CardDescription>
+					</CardHeader>
+					<CardContent>
+						<Tabs defaultValue="runs">
+							<TabsList className="w-full sm:w-fit">
 								<TabsTrigger value="runs">{t("runs", "Runs")}</TabsTrigger>
 								<TabsTrigger value="nodes">{t("nodes", "Nodes")}</TabsTrigger>
-								<TabsTrigger value="diff">{t("diff", "Diff")}</TabsTrigger>
+								<TabsTrigger value="compare">
+									{t("compare", "Compare")}
+								</TabsTrigger>
 							</TabsList>
 
-							<TabsContent value="overview">
-								<HistoryOverview
-									entries={entries}
-									aggregates={versionAggregates}
-									selectedKey={selectedKey}
-									runsSupported={runsSupported}
-									runsFailed={runsQuery.isError}
-								/>
-							</TabsContent>
-
-							<TabsContent value="runs" className="space-y-3">
+							<TabsContent value="runs" className="space-y-3 pt-2">
 								<VersionFilterNotice
 									selectedKey={selectedKey}
-									onClear={() => setSelectedKey(null)}
+									onClear={clearSelection}
 								/>
 								<HistoryRuns
 									runs={filteredRuns}
@@ -266,152 +280,359 @@ export function EventHistory({
 								/>
 							</TabsContent>
 
-							<TabsContent value="nodes" className="space-y-3">
+							<TabsContent value="nodes" className="space-y-3 pt-2">
 								<VersionFilterNotice
 									selectedKey={selectedKey}
-									onClear={() => setSelectedKey(null)}
+									onClear={clearSelection}
 								/>
 								<HistoryNodes aggregates={nodeAggregates} nodeName={nodeName} />
 							</TabsContent>
 
-							<TabsContent value="diff">
-								<HistoryDiff entries={entries} />
+							<TabsContent value="compare" className="pt-2">
+								<HistoryDiff entries={entries} selectedKey={selectedKey} />
 							</TabsContent>
 						</Tabs>
-					</div>
-				)}
-				{restoreTarget && (
-					<RestoreDialog
-						appId={appId}
-						eventId={eventId}
-						entry={restoreTarget}
-						onClose={() => setRestoreTarget(null)}
-					/>
-				)}
-			</CardContent>
-		</Card>
+					</CardContent>
+				</Card>
+			)}
+
+			{restoreTarget && (
+				<RestoreDialog
+					appId={appId}
+					eventId={eventId}
+					entry={restoreTarget}
+					onClose={() => setRestoreTarget(null)}
+				/>
+			)}
+		</div>
 	);
 }
 
-function VersionRail({
+type IVersionRow = {
+	key: string | null;
+	entry?: IEventTimelineEntry;
+	aggregate?: IEventVersionRunAggregate;
+};
+
+function VersionTable({
 	timeline,
+	aggregates,
 	selectedKey,
 	onSelect,
 	onRestore,
+	runsSupported,
+	runsLoading,
+	runsFailed,
 }: Readonly<{
 	timeline: IEventTimeline;
+	aggregates: IEventVersionRunAggregate[];
 	selectedKey: string | null;
 	onSelect: (key: string) => void;
 	onRestore?: (entry: IEventTimelineEntry) => void;
+	runsSupported: boolean;
+	runsLoading: boolean;
+	runsFailed: boolean;
 }>) {
 	const { t } = useTranslation("settings");
+	const entries = timeline.entries;
+
+	const rows = useMemo<IVersionRow[]>(() => {
+		const byKey = new Map(
+			aggregates.map((aggregate) => [aggregate.versionKey, aggregate]),
+		);
+		const entryKeys = new Set(entries.map((entry) => entry.version_key));
+		const result: IVersionRow[] = entries.map((entry) => ({
+			key: entry.version_key,
+			entry,
+			aggregate: byKey.get(entry.version_key),
+		}));
+		// Runs whose version no longer has a timeline entry (pruned archives)
+		// and unversioned runs still deserve a row.
+		for (const aggregate of aggregates) {
+			if (aggregate.versionKey === null || !entryKeys.has(aggregate.versionKey))
+				result.push({ key: aggregate.versionKey, aggregate });
+		}
+		return result;
+	}, [entries, aggregates]);
+
+	const placeholder = (
+		<span className="text-muted-foreground">
+			{runsSupported && runsLoading ? "…" : "—"}
+		</span>
+	);
+	const toggleRow = (key: string | null) => {
+		if (key !== null) onSelect(key);
+	};
+
 	return (
-		<div className="min-w-0">
-			<p className="pb-1.5 text-[10px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
-				{t("versions", "Versions")}
-			</p>
-			<div className="flex max-h-105 flex-col gap-1 overflow-y-auto pr-1">
-				{timeline.entries.map((entry) => {
-					const targetMissing = !entry.board_resolves || !entry.node_resolves;
-					const isSelected = selectedKey === entry.version_key;
-					const restorable = onRestore && !entry.is_live;
-					return (
-						<div key={entry.version_key} className="relative">
-							<button
-								type="button"
-								aria-pressed={isSelected}
-								onClick={() => onSelect(entry.version_key)}
-								className={cn(
-									"flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left transition-colors",
-									restorable && "pr-8",
-									isSelected
-										? "border-border bg-card shadow-sm ring-1 ring-border"
-										: "border-transparent bg-muted/40 hover:bg-muted/60",
-								)}
-							>
-								<span className="flex items-center gap-1.5">
-									<span className="font-mono text-xs font-semibold">
-										v{entry.version_key}
-									</span>
-									{entry.is_live && (
-										<Badge className="h-4 px-1.5 text-[9.5px]">
-											{t("live", "Live")}
-										</Badge>
-									)}
-									{!entry.active && (
-										<Badge
-											variant="outline"
-											className="h-4 px-1.5 text-[9.5px]"
-										>
-											{t("inactive", "Inactive")}
-										</Badge>
-									)}
-								</span>
-								<span className="truncate text-xs text-muted-foreground">
-									{formatRelativeTime(entry.updated_at_ms, "narrow")}
-								</span>
-								{targetMissing && (
-									<Badge
-										variant="destructive"
-										className="h-4 w-fit gap-1 px-1.5 text-[9.5px]"
-									>
-										<AlertTriangleIcon className="h-2.5 w-2.5" />
-										{t("targetMissing", "Target missing")}
-									</Badge>
-								)}
-							</button>
-							{restorable && (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										{/* span keeps the tooltip alive on the disabled button */}
-										<span className="absolute right-1 top-1">
-											<Button
-												variant="ghost"
-												size="icon"
-												className="size-6 text-muted-foreground hover:text-foreground"
-												disabled={targetMissing}
-												aria-label={t(
-													"restoreThisVersion",
-													"Restore this version",
-												)}
-												onClick={() => onRestore(entry)}
-											>
-												<ArchiveRestoreIcon className="h-3.5 w-3.5" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="right">
-										{targetMissing
-											? t(
-													"cannotRestoreTargetMissing",
-													"This version's flow or node no longer exists, so it cannot be restored.",
-												)
-											: t("restoreThisVersion", "Restore this version")}
-									</TooltipContent>
-								</Tooltip>
-							)}
-						</div>
-					);
-				})}
-			</div>
-			{timeline.truncated && (
-				<p className="pt-2 text-xs text-muted-foreground">
+		<div className="space-y-2">
+			{!runsSupported && (
+				<p className="text-xs text-muted-foreground">
 					{t(
-						"eventHistoryTruncated",
-						"Older versions exist but are not shown.",
+						"eventRunHistoryNotAvailableHere",
+						"Run history isn't available on this platform yet — showing versions only.",
 					)}
 				</p>
 			)}
-			{timeline.skipped > 0 && (
-				<p className="pt-1 text-xs text-muted-foreground">
+			{runsFailed && (
+				<p className="text-xs text-destructive">
 					{t(
-						"eventHistorySkipped",
-						"{{skipped}} archived versions could not be loaded.",
-						{ skipped: timeline.skipped },
+						"failedToLoadEventRuns",
+						"Run summaries could not be loaded; the version list is still complete.",
 					)}
 				</p>
+			)}
+			<div className="overflow-x-auto rounded-md border">
+				<table className="w-full text-sm">
+					<thead>
+						<tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+							<th className="px-3 py-2 font-medium">
+								{t("version", "Version")}
+							</th>
+							<th className="px-2 py-2 text-right font-medium">
+								{t("runs", "Runs")}
+							</th>
+							<th className="px-2 py-2 font-medium">{t("health", "Health")}</th>
+							<th className="hidden px-2 py-2 text-right font-medium md:table-cell">
+								p50 / p95
+							</th>
+							<th className="hidden px-2 py-2 font-medium md:table-cell">
+								{t("lastRun", "Last run")}
+							</th>
+							{onRestore && <th className="w-10 px-2 py-2" />}
+						</tr>
+					</thead>
+					<tbody>
+						{rows.map((row) => {
+							const entry = row.entry;
+							const aggregate = row.aggregate;
+							const targetMissing =
+								entry && (!entry.board_resolves || !entry.node_resolves);
+							const isSelected = row.key !== null && selectedKey === row.key;
+							const restorable = Boolean(onRestore && entry && !entry.is_live);
+							const selectable = row.key !== null;
+							return (
+								<tr
+									key={row.key ?? "__unversioned__"}
+									aria-selected={selectable ? isSelected : undefined}
+									tabIndex={selectable ? 0 : undefined}
+									onClick={() => toggleRow(row.key)}
+									onKeyDown={(event) => {
+										if (event.key === "Enter" || event.key === " ") {
+											event.preventDefault();
+											toggleRow(row.key);
+										}
+									}}
+									className={cn(
+										"border-b transition-colors last:border-b-0",
+										selectable && "cursor-pointer hover:bg-muted/40",
+										isSelected && "bg-muted/60 hover:bg-muted/60",
+									)}
+								>
+									<td className="px-3 py-2">
+										<div className="flex flex-col gap-0.5">
+											<span className="flex flex-wrap items-center gap-1.5">
+												<span className="font-mono text-xs font-semibold">
+													{row.key === null
+														? t("unversioned", "Unversioned")
+														: `v${row.key}`}
+												</span>
+												{entry?.is_live && (
+													<Badge className="h-4 px-1.5 text-[9.5px]">
+														{t("live", "Live")}
+													</Badge>
+												)}
+												{entry && !entry.active && (
+													<Badge
+														variant="outline"
+														className="h-4 px-1.5 text-[9.5px]"
+													>
+														{t("inactive", "Inactive")}
+													</Badge>
+												)}
+												{!entry && row.key !== null && (
+													<Badge
+														variant="outline"
+														className="h-4 px-1.5 text-[9.5px]"
+													>
+														{t("noLongerArchived", "No longer archived")}
+													</Badge>
+												)}
+												{targetMissing && (
+													<Tooltip>
+														<TooltipTrigger asChild>
+															<span className="inline-flex">
+																<AlertTriangleIcon className="h-3 w-3 text-destructive" />
+															</span>
+														</TooltipTrigger>
+														<TooltipContent>
+															{t(
+																"cannotRestoreTargetMissing",
+																"This version's flow or node no longer exists, so it cannot be restored.",
+															)}
+														</TooltipContent>
+													</Tooltip>
+												)}
+											</span>
+											<span className="text-xs text-muted-foreground">
+												{entry
+													? t("savedRelative", "Saved {{when}}", {
+															when: formatRelativeTime(
+																entry.updated_at_ms,
+																"narrow",
+															),
+														})
+													: row.key === null
+														? t(
+																"unversionedRunsHint",
+																"Runs recorded before version stamping",
+															)
+														: t(
+																"prunedVersionHint",
+																"Runs remain, the snapshot was pruned",
+															)}
+											</span>
+										</div>
+									</td>
+									<td className="px-2 py-2 text-right tabular-nums">
+										{aggregate ? aggregate.total : placeholder}
+									</td>
+									<td className="px-2 py-2">
+										{aggregate ? (
+											<HealthCounts aggregate={aggregate} />
+										) : (
+											placeholder
+										)}
+									</td>
+									<td className="hidden px-2 py-2 text-right text-xs tabular-nums md:table-cell">
+										{aggregate ? (
+											<>
+												{formatDuration(aggregate.p50DurationUs)}
+												<span className="text-muted-foreground"> / </span>
+												{formatDuration(aggregate.p95DurationUs)}
+											</>
+										) : (
+											placeholder
+										)}
+									</td>
+									<td className="hidden px-2 py-2 text-xs text-muted-foreground md:table-cell">
+										{aggregate
+											? formatRelativeTime(
+													microsToMs(aggregate.lastSeen),
+													"narrow",
+												)
+											: placeholder}
+									</td>
+									{onRestore && (
+										<td className="px-2 py-2 text-right">
+											{restorable && entry && (
+												<Tooltip>
+													<TooltipTrigger asChild>
+														{/* span keeps the tooltip alive on the disabled button */}
+														<span className="inline-flex">
+															<Button
+																variant="ghost"
+																size="icon"
+																className="size-7 text-muted-foreground hover:text-foreground"
+																disabled={targetMissing}
+																aria-label={t(
+																	"restoreThisVersion",
+																	"Restore this version",
+																)}
+																onClick={(event) => {
+																	event.stopPropagation();
+																	onRestore(entry);
+																}}
+															>
+																<ArchiveRestoreIcon className="h-3.5 w-3.5" />
+															</Button>
+														</span>
+													</TooltipTrigger>
+													<TooltipContent side="left">
+														{targetMissing
+															? t(
+																	"cannotRestoreTargetMissing",
+																	"This version's flow or node no longer exists, so it cannot be restored.",
+																)
+															: t("restoreThisVersion", "Restore this version")}
+													</TooltipContent>
+												</Tooltip>
+											)}
+										</td>
+									)}
+								</tr>
+							);
+						})}
+					</tbody>
+				</table>
+			</div>
+			{(timeline.truncated || timeline.skipped > 0) && (
+				<div className="space-y-0.5 text-xs text-muted-foreground">
+					{timeline.truncated && (
+						<p>
+							{t(
+								"eventHistoryTruncated",
+								"Older versions exist but are not shown.",
+							)}
+						</p>
+					)}
+					{timeline.skipped > 0 && (
+						<p>
+							{t(
+								"eventHistorySkipped",
+								"{{skipped}} archived versions could not be loaded.",
+								{ skipped: timeline.skipped },
+							)}
+						</p>
+					)}
+				</div>
 			)}
 		</div>
+	);
+}
+
+function HealthCounts({
+	aggregate,
+}: Readonly<{ aggregate: IEventVersionRunAggregate }>) {
+	const { t } = useTranslation("settings");
+	const stat = (
+		count: number,
+		icon: React.ReactNode,
+		label: string,
+		emphasis: string,
+	) => (
+		<span
+			title={label}
+			className={cn(
+				"inline-flex items-center gap-1 tabular-nums",
+				count === 0 ? "text-muted-foreground/70" : emphasis,
+			)}
+		>
+			{icon}
+			{count}
+		</span>
+	);
+	return (
+		<span className="inline-flex items-center gap-2.5 text-xs">
+			{stat(
+				aggregate.ok,
+				<CheckCircle2Icon className="h-3 w-3" />,
+				t("ok", "OK"),
+				"text-green-600 dark:text-green-500",
+			)}
+			{stat(
+				aggregate.warn,
+				<AlertTriangleIcon className="h-3 w-3" />,
+				t("warn", "Warn"),
+				"text-yellow-600 dark:text-yellow-500",
+			)}
+			{stat(
+				aggregate.fail,
+				<CircleXIcon className="h-3 w-3" />,
+				t("failed", "Failed"),
+				"text-destructive",
+			)}
+		</span>
 	);
 }
 
@@ -653,31 +874,14 @@ function RestoreDialog({
 										)}
 									</p>
 								) : (
-									<div className="overflow-x-auto rounded-md border">
-										<table className="w-full text-sm">
-											<tbody>
-												{plan.diff.map((change) => (
-													<tr
-														key={change.field}
-														className="border-b last:border-b-0"
-													>
-														<td className="w-40 px-3 py-2 text-xs font-medium text-muted-foreground">
-															{fieldLabel(change.field)}
-														</td>
-														<td className="px-3 py-2">
-															<span className="break-all text-muted-foreground line-through">
-																{change.from}
-															</span>
-														</td>
-														<td className="w-6 px-1 py-2 text-muted-foreground">
-															<MoveRightIcon className="h-3.5 w-3.5" />
-														</td>
-														<td className="px-3 py-2 break-all">{change.to}</td>
-													</tr>
-												))}
-											</tbody>
-										</table>
-									</div>
+									<FieldChangeTable
+										rows={plan.diff.map((change) => ({
+											key: change.field,
+											label: fieldLabel(change.field),
+											from: change.from,
+											to: change.to,
+										}))}
+									/>
 								)}
 							</div>
 							<div>
@@ -757,6 +961,35 @@ function RestoreDialog({
 	);
 }
 
+/** Field → from → to rows; stacks the values on narrow widths instead of overflowing. */
+function FieldChangeTable({
+	rows,
+}: Readonly<{
+	rows: Array<{ key: string; label: string; from: string; to: string }>;
+}>) {
+	return (
+		<div className="divide-y rounded-md border text-sm">
+			{rows.map((row) => (
+				<div
+					key={row.key}
+					className="grid grid-cols-1 gap-x-3 gap-y-1 px-3 py-2 sm:grid-cols-[9rem_minmax(0,1fr)]"
+				>
+					<span className="text-xs font-medium text-muted-foreground">
+						{row.label}
+					</span>
+					<span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+						<span className="break-all text-muted-foreground line-through">
+							{row.from}
+						</span>
+						<MoveRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+						<span className="break-all">{row.to}</span>
+					</span>
+				</div>
+			))}
+		</div>
+	);
+}
+
 function VersionFilterNotice({
 	selectedKey,
 	onClear,
@@ -775,159 +1008,6 @@ function VersionFilterNotice({
 			>
 				{t("showAllVersions", "Show all versions")}
 			</button>
-		</div>
-	);
-}
-
-function HistoryOverview({
-	entries,
-	aggregates,
-	selectedKey,
-	runsSupported,
-	runsFailed,
-}: Readonly<{
-	entries: IEventTimelineEntry[];
-	aggregates: IEventVersionRunAggregate[];
-	selectedKey: string | null;
-	runsSupported: boolean;
-	runsFailed: boolean;
-}>) {
-	const { t } = useTranslation("settings");
-
-	const rows = useMemo(() => {
-		const byKey = new Map(
-			aggregates.map((aggregate) => [aggregate.versionKey, aggregate]),
-		);
-		const entryKeys = new Set(entries.map((entry) => entry.version_key));
-		const result: Array<{
-			key: string | null;
-			entry?: IEventTimelineEntry;
-			aggregate?: IEventVersionRunAggregate;
-		}> = entries.map((entry) => ({
-			key: entry.version_key,
-			entry,
-			aggregate: byKey.get(entry.version_key),
-		}));
-		// Runs whose version no longer has a timeline entry (pruned archives)
-		// and unversioned runs still deserve a row.
-		for (const aggregate of aggregates) {
-			if (aggregate.versionKey === null || !entryKeys.has(aggregate.versionKey))
-				result.push({ key: aggregate.versionKey, aggregate });
-		}
-		return result;
-	}, [entries, aggregates]);
-
-	return (
-		<div className="space-y-3">
-			{!runsSupported && (
-				<p className="text-xs text-muted-foreground">
-					{t(
-						"eventRunHistoryNotAvailableHere",
-						"Run history isn't available on this platform yet — showing versions only.",
-					)}
-				</p>
-			)}
-			{runsFailed && (
-				<p className="text-xs text-destructive">
-					{t(
-						"failedToLoadEventRuns",
-						"Run summaries could not be loaded; the version list is still complete.",
-					)}
-				</p>
-			)}
-			<div className="overflow-x-auto rounded-md border">
-				<table className="w-full min-w-140 text-sm">
-					<thead>
-						<tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
-							<th className="px-3 py-2 font-medium">
-								{t("version", "Version")}
-							</th>
-							<th className="px-3 py-2 text-right font-medium">
-								{t("runs", "Runs")}
-							</th>
-							<th className="px-3 py-2 text-right font-medium">
-								{t("ok", "OK")}
-							</th>
-							<th className="px-3 py-2 text-right font-medium">
-								{t("warn", "Warn")}
-							</th>
-							<th className="px-3 py-2 text-right font-medium">
-								{t("failed", "Failed")}
-							</th>
-							<th className="px-3 py-2 text-right font-medium">p50</th>
-							<th className="px-3 py-2 text-right font-medium">p95</th>
-							<th className="px-3 py-2 font-medium">
-								{t("lastRun", "Last run")}
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{rows.map((row) => {
-							const aggregate = row.aggregate;
-							const targetMissing =
-								row.entry &&
-								(!row.entry.board_resolves || !row.entry.node_resolves);
-							return (
-								<tr
-									key={row.key ?? "__unversioned__"}
-									className={cn(
-										"border-b last:border-b-0",
-										selectedKey !== null &&
-											selectedKey === row.key &&
-											"bg-muted/50",
-									)}
-								>
-									<td className="px-3 py-2">
-										<span className="flex items-center gap-1.5">
-											<span className="font-mono text-xs">
-												{row.key === null
-													? t("unversioned", "Unversioned")
-													: `v${row.key}`}
-											</span>
-											{row.entry?.is_live && (
-												<Badge className="h-4 px-1.5 text-[9.5px]">
-													{t("live", "Live")}
-												</Badge>
-											)}
-											{targetMissing && (
-												<span title={t("targetMissing", "Target missing")}>
-													<AlertTriangleIcon className="h-3 w-3 text-destructive" />
-												</span>
-											)}
-										</span>
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate?.total ?? 0}
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate?.ok ?? 0}
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate?.warn ?? 0}
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate?.fail ?? 0}
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate ? formatDuration(aggregate.p50DurationUs) : "—"}
-									</td>
-									<td className="px-3 py-2 text-right tabular-nums">
-										{aggregate ? formatDuration(aggregate.p95DurationUs) : "—"}
-									</td>
-									<td className="px-3 py-2 text-xs text-muted-foreground">
-										{aggregate
-											? formatRelativeTime(
-													microsToMs(aggregate.lastSeen),
-													"narrow",
-												)
-											: "—"}
-									</td>
-								</tr>
-							);
-						})}
-					</tbody>
-				</table>
-			</div>
 		</div>
 	);
 }
@@ -988,8 +1068,8 @@ function HistoryRuns({
 					key={run.run_id}
 					className="flex flex-row items-center justify-between gap-2 rounded-md border p-2"
 				>
-					<div className="flex flex-col items-start justify-center gap-2">
-						<div className="flex flex-row items-center gap-2">
+					<div className="flex min-w-0 flex-col items-start justify-center gap-2">
+						<div className="flex min-w-0 flex-row flex-wrap items-center gap-2">
 							{run.is_remote ? (
 								<span title={t("remoteExecution", "Remote execution")}>
 									<CloudIcon className="h-3 w-3 text-blue-500" />
@@ -999,7 +1079,9 @@ function HistoryRuns({
 									<HardDriveIcon className="h-3 w-3 text-muted-foreground" />
 								</span>
 							)}
-							<small className="leading-none">{nodeName(run.node_id)}</small>
+							<small className="truncate leading-none">
+								{nodeName(run.node_id)}
+							</small>
 							<small className="font-mono text-muted-foreground">
 								{run.event_version
 									? `v${run.event_version}`
@@ -1011,7 +1093,7 @@ function HistoryRuns({
 							{formatRelativeTime(microsToMs(run.start), "narrow")}
 						</small>
 					</div>
-					<div className="flex flex-row items-center gap-2">
+					<div className="flex shrink-0 flex-row items-center gap-2">
 						<small className="text-muted-foreground">
 							{formatDuration(Math.abs(run.end - run.start))}
 						</small>
@@ -1089,13 +1171,20 @@ function HistoryNodes({
 
 function HistoryDiff({
 	entries,
-}: Readonly<{ entries: IEventTimelineEntry[] }>) {
+	selectedKey,
+}: Readonly<{ entries: IEventTimelineEntry[]; selectedKey: string | null }>) {
 	const { t } = useTranslation("settings");
 	const [fromKey, setFromKey] = useState<string | undefined>(undefined);
 	const [toKey, setToKey] = useState<string | undefined>(undefined);
 
-	const effectiveFrom = fromKey ?? entries[1]?.version_key;
-	const effectiveTo = toKey ?? entries[0]?.version_key;
+	// A selected non-live version compares against the live head by default.
+	const liveKey = entries.find((entry) => entry.is_live)?.version_key;
+	const defaultFrom =
+		selectedKey && selectedKey !== liveKey
+			? selectedKey
+			: entries[1]?.version_key;
+	const effectiveFrom = fromKey ?? defaultFrom;
+	const effectiveTo = toKey ?? liveKey ?? entries[0]?.version_key;
 	const fromEntry = entries.find((e) => e.version_key === effectiveFrom);
 	const toEntry = entries.find((e) => e.version_key === effectiveTo);
 
@@ -1172,28 +1261,14 @@ function HistoryDiff({
 				</p>
 			)}
 			{diffs.length > 0 && (
-				<div className="overflow-x-auto rounded-md border">
-					<table className="w-full min-w-120 text-sm">
-						<tbody>
-							{diffs.map((diff) => (
-								<tr key={diff.field} className="border-b last:border-b-0">
-									<td className="w-40 px-3 py-2 text-xs font-medium text-muted-foreground">
-										{fieldLabels[diff.field] ?? diff.field}
-									</td>
-									<td className="px-3 py-2">
-										<span className="break-all text-muted-foreground line-through">
-											{diff.from}
-										</span>
-									</td>
-									<td className="w-6 px-1 py-2 text-muted-foreground">
-										<MoveRightIcon className="h-3.5 w-3.5" />
-									</td>
-									<td className="px-3 py-2 break-all">{diff.to}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
+				<FieldChangeTable
+					rows={diffs.map((diff) => ({
+						key: diff.field,
+						label: fieldLabels[diff.field] ?? diff.field,
+						from: diff.from,
+						to: diff.to,
+					}))}
+				/>
 			)}
 			<p className="text-xs text-muted-foreground">
 				{t(
