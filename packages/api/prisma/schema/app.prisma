@@ -668,7 +668,8 @@ model EventRemoteRegistration {
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, kind])
-  @@index([appId, eventId, eventVersion, variant, kind, method, path])
+  // Avoid a 63-character CockroachDB name collision with the index above.
+  @@index([appId, eventId, eventVersion, variant, kind, method, path], map: "EventRemoteRegistration_route_lookup_idx")
 }
 
 /// Vanity slug -> event mapping. Slug is the global URL key; uniqueness

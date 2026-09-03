@@ -1,6 +1,5 @@
 "use client";
 
-import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -13,9 +12,13 @@ import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
 
+interface StoreRouter {
+	push(href: string): void;
+}
+
 export function useStoreData(
 	id: string | undefined,
-	router: AppRouterInstance,
+	router: StoreRouter,
 	eventConfig: IEventMapping,
 ) {
 	const backend = useBackend();
