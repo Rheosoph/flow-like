@@ -195,6 +195,13 @@ pub enum CredentialsAccess {
     /// They include app content read/write for workflow storage and read-only
     /// app metadata so the executor can load the board/event definition.
     ServerExecute,
+    /// Shadow/replay execution credentials: `ServerExecute` with writes to the
+    /// app and user content prefixes dropped (reads/lists kept). Scratch
+    /// (`tmp/*`) stays writable and run logs stay append-only so the shadow
+    /// run itself is still recorded. Providers without per-prefix access
+    /// control mirror `ServerExecute` and rely on the in-process
+    /// `ReadOnlyStore` decorator for enforcement.
+    ShadowExecute,
     ReadLogs,
 }
 
@@ -213,6 +220,7 @@ impl Display for CredentialsAccess {
             CredentialsAccess::InvokeRead => write!(f, "invoke_read"),
             CredentialsAccess::InvokeWrite => write!(f, "invoke_write"),
             CredentialsAccess::ServerExecute => write!(f, "server_execute"),
+            CredentialsAccess::ShadowExecute => write!(f, "shadow_execute"),
             CredentialsAccess::ReadLogs => write!(f, "read_logs"),
         }
     }
@@ -322,7 +330,12 @@ impl RuntimeCredentials {
         let provider = Self::configured_provider_name();
 
         #[cfg(feature = "r2")]
-        if provider.eq_ignore_ascii_case("r2") && matches!(mode, CredentialsAccess::ServerExecute) {
+        if provider.eq_ignore_ascii_case("r2")
+            && matches!(
+                mode,
+                CredentialsAccess::ServerExecute | CredentialsAccess::ShadowExecute
+            )
+        {
             return Ok(RuntimeCredentials::Mixed(
                 R2RuntimeCredentials::from_env()
                     .scoped_server_execute_credentials(sub, app_id)

@@ -66,9 +66,15 @@
 //! Offline apps never reach this module — their cache nodes write to the local
 //! filesystem instead. See `packages/catalog/data/src/data/cache/`.
 
+mod platform;
 mod postgres;
 pub mod sweeper;
 mod types;
+
+pub use platform::{
+    CacheBackendHandle, PLATFORM_APP_ID, PlatformCache, Reservation, is_platform_app_id,
+    require_cache_store,
+};
 
 #[cfg(feature = "redis")]
 mod redis;

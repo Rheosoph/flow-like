@@ -234,6 +234,12 @@ export interface IBoardState {
 		limit?: number,
 		/** Load per-node activity summaries (heatmap only — extra query). */
 		includeNodes?: boolean,
+		/**
+		 * Return only the columns an aggregate needs, leaving `payload` empty and
+		 * `nodes` null. `payload` carries the run's whole serialized input, so a
+		 * listing that only counts and times runs should always set this.
+		 */
+		summaryOnly?: boolean,
 	): Promise<ILogMetadata[]>;
 	queryRun(
 		logMeta: ILogMetadata,

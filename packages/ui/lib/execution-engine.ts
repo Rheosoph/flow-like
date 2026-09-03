@@ -54,6 +54,13 @@ interface IExecuteEventOptions {
 	 * Only used if onIncrementalSave is provided.
 	 */
 	saveIntervalEvents?: number;
+	/**
+	 * Minimum milliseconds between incremental saves. Defaults to 1000.
+	 * Every Dexie write re-materializes the whole liveQuery result, so a fast
+	 * token stream must not save on event count alone. Completion always saves
+	 * regardless.
+	 */
+	saveMinIntervalMs?: number;
 }
 
 export type ExecuteEventFn = (
@@ -203,7 +210,9 @@ export class ExecutionEngineProvider {
 
 		// Track event count for incremental saves
 		const saveInterval = options.saveIntervalEvents ?? 10;
+		const saveMinIntervalMs = options.saveMinIntervalMs ?? 1000;
 		let eventsSinceLastSave = 0;
+		let lastSaveAt = 0;
 
 		const executionPromise = executeEventCall(
 			options.appId,
@@ -244,8 +253,12 @@ export class ExecutionEngineProvider {
 					// Incremental save logic
 					if (options.onIncrementalSave) {
 						eventsSinceLastSave += unique.length;
-						if (eventsSinceLastSave >= saveInterval) {
+						if (
+							eventsSinceLastSave >= saveInterval &&
+							Date.now() - lastSaveAt >= saveMinIntervalMs
+						) {
 							eventsSinceLastSave = 0;
+							lastSaveAt = Date.now();
 							// Fire and forget - don't block event processing
 							Promise.resolve(
 								options.onIncrementalSave(stream!.accumulatedEvents, false),

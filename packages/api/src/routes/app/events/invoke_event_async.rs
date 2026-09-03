@@ -16,14 +16,15 @@ use crate::{
     ensure_fresh_permission, ensure_permission,
     entity::{
         execution_run,
-        sea_orm_active_enums::{RunMode, RunStatus},
+        sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, PageExecutionJwtContext, TokenType,
-        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, rejection,
-        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
+        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, payload_storage,
+        rejection, resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
+        variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -32,7 +33,8 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
+    http::HeaderMap,
 };
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
@@ -141,6 +143,14 @@ async fn mark_async_dispatch_failure(
     }
 }
 
+/// Query parameters for async event invocation
+#[derive(Clone, Debug, Deserialize, Default, ToSchema)]
+pub struct InvokeEventAsyncQuery {
+    /// Pin execution to a named live variant instead of the weighted split
+    #[serde(default, rename = "__variant")]
+    pub variant: Option<String>,
+}
+
 /// Request body for async event invocation
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct InvokeEventAsyncRequest {
@@ -198,7 +208,9 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
     description = "Invoke an event asynchronously via queue.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
-        ("event_id" = String, Path, description = "Event ID")
+        ("event_id" = String, Path, description = "Event ID"),
+        ("__variant" = Option<String>, Query, description = "Pin execution to a named live variant"),
+        ("x-flow-like-variant" = Option<String>, Header, description = "Pin execution to a named live variant")
     ),
     request_body = InvokeEventAsyncRequest,
     responses(
@@ -215,14 +227,17 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/invoke/async",
-    skip(state, user, params)
+    skip(state, user, query, headers, params)
 )]
 pub async fn invoke_event_async(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, event_id)): Path<(String, String)>,
+    Query(query): Query<InvokeEventAsyncQuery>,
+    headers: HeaderMap,
     Json(params): Json<InvokeEventAsyncRequest>,
 ) -> Result<Json<InvokeEventAsyncResponse>, ApiError> {
+    let variant_pin = variant::pin_from_request(&headers, query.variant.clone());
     let permission = if params.page_trigger.is_some() {
         ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
     } else {
@@ -260,6 +275,7 @@ pub async fn invoke_event_async(
                 &app_id,
                 &event,
                 trigger,
+                variant_pin.as_deref(),
             )
             .await?,
         ),
@@ -275,30 +291,69 @@ pub async fn invoke_event_async(
         }
         (None, None) => None,
     };
-    let board_id = resolved_page_trigger
+    let run_id = create_id();
+    // Live-variant split, resolved before the run row and the executor JWT so
+    // both carry the same board as the dispatch payload. A page trigger already
+    // bound its target (the bootstrap-served variant or the primary, WP6b) and
+    // is carried through as-is.
+    let variant_target = match &resolved_page_trigger {
+        Some(resolved) => Some(resolved.target.clone()),
+        None => Some(
+            variant::resolve_invoke_target(
+                &event,
+                variant_pin.as_deref(),
+                params
+                    .version
+                    .as_deref()
+                    .and_then(super::parse_version_tuple),
+                &variant::SplitKeyRequest {
+                    pinned_variant: None,
+                    idempotency_key: None,
+                    parent_run_id: parent_run_id.as_deref(),
+                    trace_id: inherited_correlation
+                        .as_ref()
+                        .and_then(|correlation| correlation.trace_id.as_deref()),
+                    caller_subject: Some(&sub),
+                    run_id: &run_id,
+                },
+            )
+            .map_err(ApiError::bad_request)?,
+        ),
+    };
+    let variant_name = variant_target
         .as_ref()
-        .map(|resolved| resolved.board_id.clone())
-        .unwrap_or_else(|| event.board_id.clone());
-    let board_version = resolved_page_trigger
-        .as_ref()
-        .map(|resolved| resolved.board_version)
-        .unwrap_or(event.board_version);
+        .and_then(|target| target.variant_name.clone());
+    let (board_id, board_version, node_id) = match (&resolved_page_trigger, &variant_target) {
+        (Some(resolved), _) => (
+            resolved.board_id.clone(),
+            resolved.board_version,
+            resolved.node_id.clone(),
+        ),
+        (None, Some(target)) => (
+            target.board_id.clone(),
+            target.board_version,
+            target.node_id.clone(),
+        ),
+        (None, None) => (
+            event.board_id.clone(),
+            event.board_version,
+            event.node_id.clone(),
+        ),
+    };
     let board_etag = resolved_page_trigger
         .as_ref()
         .and_then(|resolved| resolved.board_etag.clone());
-    let node_id = resolved_page_trigger
-        .as_ref()
-        .map(|resolved| resolved.node_id.clone())
-        .unwrap_or_else(|| event.node_id.clone());
     let resolved_version = board_version
-        .map(|(major, minor, patch)| format!("{major}_{minor}_{patch}"))
+        .map(format_run_version)
         .or_else(|| board_etag.as_ref().map(|etag| format!("etag:{etag}")));
 
-    // Async dispatch always runs the event's configured board version. A request
-    // asking for a different version cannot be honored here (there is no
-    // validation against the app's available board versions), so reject it
-    // rather than silently executing a different version than the caller asked
-    // for. A malformed version string is likewise a bad request.
+    // Async dispatch runs the resolved target's configured board version: a
+    // request version naming the primary's (or a live variant's pinned)
+    // version already selected that target above, so anything else cannot be
+    // honored here (there is no validation against the app's available board
+    // versions) and is rejected rather than silently executing a different
+    // version than the caller asked for. A malformed version string is
+    // likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
         let reason = match super::parse_version_tuple(requested) {
             Some(parsed) if board_version == Some(parsed) => None,
@@ -327,8 +382,11 @@ pub async fn invoke_event_async(
         }
     }
 
-    let event_json =
-        serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
+    let event_json = match &variant_target {
+        Some(target) => variant::dispatch_event_json(&event, target),
+        None => serde_json::to_string(&event),
+    }
+    .map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(anyhow!(
@@ -349,7 +407,6 @@ pub async fn invoke_event_async(
         ));
     }
 
-    let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = params
@@ -416,6 +473,12 @@ pub async fn invoke_event_async(
         node_id: Set(Some(node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Queue),
+        run_variant: Set(variant_target
+            .as_ref()
+            .map_or(RunVariant::Primary, |target| target.run_variant())),
+        variant_name: Set(variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(input_payload_key),
         output_payload_len: Set(0),
@@ -462,6 +525,7 @@ pub async fn invoke_event_async(
         callback_url: String::new(),
         token_type: TokenType::User,
         ttl_seconds: Some(poll_token_ttl_seconds(resolved_page_trigger.is_some())),
+        shadow: None,
     })
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign user JWT");
@@ -492,6 +556,7 @@ pub async fn invoke_event_async(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     };
     let executor_jwt = if let Some(resolved) = &resolved_page_trigger {
         sign_execution_jwt_with_page_context(
@@ -549,6 +614,8 @@ pub async fn invoke_event_async(
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,
+        shadow: false,
+        artifact: None,
     };
 
     // No executor can observe this run before dispatch. Insert only after all

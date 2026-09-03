@@ -355,6 +355,30 @@ impl CacheStore for CosmosCacheStore {
         // expiry timestamp because TTL deletion is intentionally asynchronous.
         Ok(0)
     }
+
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        let usage = self
+            .client
+            .container_usage(&self.container)
+            .await
+            .map_err(map_error)?;
+
+        Ok(Some(CacheStoreStats {
+            entries: usage.documents_count,
+            // Container size is data plus indexes, which is what the account is billed
+            // for; the raw document bytes are the smaller of the two.
+            size_bytes: usage.collection_size_bytes.or(usage.documents_size_bytes),
+            note: Some(
+                "Cosmos reports container usage as a near-real-time aggregate that trails \
+                 recent writes and TTL deletions by seconds to minutes. Size covers data \
+                 plus index storage, and the document count includes entries whose TTL has \
+                 lapsed but which Cosmos has not collected yet. This read is a metadata \
+                 operation the account rate-limits, so it is not free to poll."
+                    .to_string(),
+            ),
+            ..CacheStoreStats::default()
+        }))
+    }
 }
 
 #[cfg(test)]

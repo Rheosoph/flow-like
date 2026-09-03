@@ -51,6 +51,18 @@ pub const EXPIRES_AT_FIELD: &str = "expires_at_ts";
 /// is always well defined.
 const DOCUMENT_NAME_FIELD: &str = "__name__";
 
+/// Ceiling on the scan behind [`FirestoreClient::count_documents`].
+///
+/// Firestore keeps no document counter: a count is an aggregation query, billed one
+/// read per 1,000 documents it matches and taking longer the more it matches. The
+/// cap trades an exact number for a bounded one — at most 1,000 reads and a
+/// predictable latency — so a collection that grows without bound cannot turn a
+/// dashboard refresh into the most expensive request the deployment serves. A count
+/// that reaches the cap means "at least this many".
+const MAX_COUNT_DOCUMENTS: i64 = 1_000_000;
+/// Name the COUNT aggregate is returned under; the request chooses it.
+const COUNT_ALIAS: &str = "count";
+
 /// Emulator and endpoint overrides are refused rather than ignored: a workload
 /// that silently talks to an emulator writes production data nowhere, and a
 /// workload that honours an endpoint override sends its access token to whoever
@@ -323,6 +335,18 @@ struct RawDocument {
 struct RunQueryEntry {
     #[serde(default)]
     document: Option<RawDocument>,
+}
+
+#[derive(serde::Deserialize)]
+struct RunAggregationEntry {
+    #[serde(default)]
+    result: Option<AggregationResult>,
+}
+
+#[derive(serde::Deserialize)]
+struct AggregationResult {
+    #[serde(rename = "aggregateFields", default)]
+    aggregate_fields: Map<String, Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -641,6 +665,53 @@ impl FirestoreClient {
         Ok(QueryPage {
             documents,
             continuation,
+        })
+    }
+
+    /// Count the documents in a collection with a server-side `COUNT` aggregation,
+    /// bounded by [`MAX_COUNT_DOCUMENTS`].
+    ///
+    /// Firestore exposes no collection metadata — no document count, and no storage
+    /// size at all — so this is a query, not a free counter: it is billed one read per
+    /// 1,000 documents matched. `Ok(None)` means the service answered without an
+    /// aggregate, which is what an empty result stream looks like.
+    pub async fn count_documents(&self, collection: &str) -> Result<Option<i64>, FirestoreError> {
+        let collection = self.resolve_collection(collection)?;
+        // `upTo` is an Int64Value, whose JSON form is a string.
+        let body = serde_json::to_vec(&json!({
+            "structuredAggregationQuery": {
+                "structuredQuery": {
+                    "from": [{ "collectionId": collection, "allDescendants": false }],
+                },
+                "aggregations": [{
+                    "alias": COUNT_ALIAS,
+                    "count": { "upTo": MAX_COUNT_DOCUMENTS.to_string() },
+                }],
+            }
+        }))
+        .map_err(|error| FirestoreError::Serialization(error.to_string()))?;
+
+        let path = format!("{}:runAggregationQuery", self.documents_root());
+        let response = self.send(Method::POST, &path, &[], Some(body)).await?;
+        if response.status != StatusCode::OK {
+            return Err(service_error(response));
+        }
+
+        // Like `runQuery`, the stream carries bookkeeping entries that hold only a
+        // `readTime`; the aggregate arrives in the first entry that has a result.
+        let entries: Vec<RunAggregationEntry> = deserialize(&response.body)?;
+        let Some(value) = entries
+            .into_iter()
+            .filter_map(|entry| entry.result)
+            .find_map(|result| result.aggregate_fields.get(COUNT_ALIAS).cloned())
+        else {
+            return Ok(None);
+        };
+
+        decode_value(&value)?.as_i64().map(Some).ok_or_else(|| {
+            FirestoreError::Serialization(format!(
+                "Firestore returned a non-integer '{COUNT_ALIAS}' aggregate: {value}"
+            ))
         })
     }
 

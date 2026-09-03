@@ -15,13 +15,13 @@ use crate::{
     ensure_permission,
     entity::{
         execution_run,
-        sea_orm_active_enums::{RunMode, RunStatus},
+        sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType,
-        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, resolve_wasm_packages,
-        sign_execution_jwt,
+        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, payload_storage,
+        resolve_wasm_packages, sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -174,17 +174,21 @@ pub async fn invoke_board_async(
     }
     let correlation_keys = correlation.keys_json();
 
+    let version_label = params.version.map(format_run_version);
+
     // Async always uses queue mode
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id.clone()),
-        version: Set(params
-            .version
-            .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat))),
+        version: Set(version_label.clone()),
         event_id: Set(None),
         node_id: Set(Some(params.node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Queue),
+        run_variant: Set(RunVariant::Primary),
+        variant_name: Set(None),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(input_payload_key),
@@ -211,9 +215,7 @@ pub async fn invoke_board_async(
         board_id: board_id.clone(),
         event_id: None,
         node_id: Some(params.node_id.clone()),
-        version: params
-            .version
-            .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat)),
+        version: version_label,
         board_etag: None,
         mode: RunMode::Queue,
         status: RunStatus::Pending,
@@ -239,6 +241,7 @@ pub async fn invoke_board_async(
         callback_url: String::new(),
         token_type: TokenType::User,
         ttl_seconds: Some(60 * 60),
+        shadow: None,
     })
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign user JWT");
@@ -279,6 +282,7 @@ pub async fn invoke_board_async(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign executor JWT");
@@ -308,6 +312,8 @@ pub async fn invoke_board_async(
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,
+        shadow: false,
+        artifact: None,
     };
 
     let response = state

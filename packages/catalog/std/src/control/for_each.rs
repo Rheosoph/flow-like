@@ -82,8 +82,18 @@ impl NodeLogic for LoopNode {
             .as_array()
             .ok_or(flow_like_types::anyhow!("Array value is not an array"))?;
 
+        let mut cancelled = false;
         context.activate_exec_pin_ref(&exec_item).await?;
         for (i, item) in array_value.iter().enumerate() {
+            if context.is_cancelled() {
+                context.log_message(
+                    &format!("Execution cancelled, stopping loop at iteration {}", i),
+                    LogLevel::Warn,
+                );
+                cancelled = true;
+                break;
+            }
+
             let item = item.to_owned();
             let index_value = flow_like_types::Value::from(i);
             context.override_pin_value_if_active(&value.id, &item);
@@ -107,6 +117,11 @@ impl NodeLogic for LoopNode {
         }
 
         context.deactivate_exec_pin_ref(&exec_item).await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
+
         context.activate_exec_pin_ref(&done).await?;
 
         return Ok(());

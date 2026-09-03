@@ -462,6 +462,11 @@ impl LogMeta {
         Ok(())
     }
 
+    /// Best-effort scalar indexes for the `runs` table, created only at table
+    /// creation. A `runs` table that predates this call (or whose index
+    /// creation failed — every error here is swallowed) never gets indexes
+    /// retrofitted: queries on `event_id`/`node_id`/`log_level`/`start` degrade
+    /// to full scans on such legacy tables rather than erroring.
     #[cfg(feature = "flow-runtime")]
     async fn create_runs_indexes(table: &flow_like_storage::lancedb::Table) {
         let _ = table
@@ -520,6 +525,9 @@ pub struct Run {
     pub stream_state: bool,
     pub log_spill_threshold: usize,
     pub nodes_executed: Arc<AtomicU64>,
+    /// Shadow/replay isolation: app storage, user store and app meta store are
+    /// wrapped read-only for every context built from this run.
+    pub shadow: bool,
 
     pub event_id: Option<String>,
     pub event_version: Option<String>,
@@ -936,6 +944,9 @@ pub struct RunMeta {
     pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
     pub elements: Arc<RwLock<ElementCache>>,
+    /// Shadow/replay isolation: app storage, user store and app meta store are
+    /// wrapped read-only for every context built from this run.
+    pub shadow: bool,
 }
 
 impl RunMeta {
@@ -1222,6 +1233,7 @@ impl InternalRun {
             stream_state,
             log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
             nodes_executed: nodes_executed.clone(),
+            shadow: false,
 
             event_id: event.as_ref().map(|e| e.id.clone()),
             event_version: event.as_ref().map(|e| {
@@ -1412,6 +1424,7 @@ impl InternalRun {
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed,
                 elements,
+                shadow: false,
             },
             board: board.clone(),
         })
@@ -1479,6 +1492,16 @@ impl InternalRun {
             run.sub = sub.clone();
         }
         self.meta.sub = sub;
+    }
+
+    /// Mark the run as a shadow/replay run: every execution context built from
+    /// it wraps app storage, user store and app meta store read-only.
+    pub async fn set_shadow(&mut self, shadow: bool) {
+        {
+            let mut run = self.run.lock().await;
+            run.shadow = shadow;
+        }
+        self.meta.shadow = shadow;
     }
 
     /// Set the user execution context for offline/local execution

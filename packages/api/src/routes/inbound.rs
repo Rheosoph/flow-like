@@ -31,6 +31,7 @@ use axum::{
 };
 use flow_like::flow::{
     board::Board,
+    event::Event as CoreEvent,
     execution::UserExecutionContext,
     node::Node,
     pin::{Pin, PinType, ValueType},
@@ -47,7 +48,8 @@ use crate::{
     correlation::CorrelationContext,
     credentials::validate_path_component,
     entity::{
-        event, event_remote_auth, event_remote_registration, event_sink, execution_run,
+        event, event_remote_auth, event_remote_registration, event_setup, event_sink,
+        execution_run,
         prelude::EventRemoteAuth,
         sea_orm_active_enums::{RunMode, RunStatus},
     },
@@ -56,9 +58,14 @@ use crate::{
         DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
         collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
         resolve_wasm_packages, sign_execution_jwt,
+        variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
     },
     routes::{
-        app::events::db::{db_model_to_event, decrypt_token},
+        app::events::{
+            db::{db_model_to_event, decrypt_token},
+            parse_version_tuple,
+            setup_event::find_event_setup,
+        },
         sink::trigger::{maybe_refresh_oauth_tokens, resolve_sink_pat_user_id},
     },
     state::AppState,
@@ -267,6 +274,204 @@ fn registration_auth_headers(
     std::borrow::Cow::Owned(auth_headers)
 }
 
+/// One variant's serving assignment for an inbound request: the registration
+/// bucket to read (name + event version) and the dispatch target.
+struct ServedVariant {
+    /// [`STABLE_VARIANT`] or a Live variant's name — the bucket's equality
+    /// scope for every registration and auth lookup on this request.
+    name: String,
+    /// The bucket's event version: the variant's `EventSetup` pointer, or the
+    /// legacy `event.last_setup_version` fallback for stable.
+    version: String,
+    target: ResolvedTarget,
+    /// An explicit pin (header, query, or MCP session prefix) chose this
+    /// variant — pinned requests keep their variant's OpenAPI rows (§8.5).
+    pinned: bool,
+}
+
+/// A populated serving pointer is the servability signal: the in-txn persist
+/// only stamps `eventVersion`/`boardId` on success, while a re-setup flips
+/// `setup_status` on the same row to `running`/`error` — health metadata, not
+/// a serving signal.
+fn has_serving_pointer(row: &event_setup::Model) -> bool {
+    !row.event_version.is_empty() && !row.board_id.is_empty()
+}
+
+/// What the stable bucket serves: the registration version plus the dispatch
+/// target its rows were built against.
+struct StableServing {
+    version: String,
+    target: ResolvedTarget,
+}
+
+/// The stable serving assignment: the stable `EventSetup` pointer when
+/// present — its board pointer names what the bucket's registrations point
+/// at, which mid-promote can trail the event row's freshly promoted primary —
+/// else the legacy `last_setup_version` scalar (pre-backfill) serving the
+/// row's primary.
+async fn stable_serving(
+    state: &AppState,
+    event_row: &event::Model,
+    core_event: &CoreEvent,
+) -> Result<Option<StableServing>, ApiError> {
+    let row = find_event_setup(&state.db, &event_row.app_id, &event_row.id, STABLE_VARIANT)
+        .await
+        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .filter(has_serving_pointer);
+    if let Some(row) = row {
+        let mut target = ResolvedTarget::primary(core_event);
+        target.board_id = row.board_id;
+        target.board_version = row.board_version.as_deref().and_then(parse_version_tuple);
+        return Ok(Some(StableServing {
+            version: row.event_version,
+            target,
+        }));
+    }
+    Ok(event_row
+        .last_setup_version
+        .clone()
+        .map(|version| StableServing {
+            version,
+            target: ResolvedTarget::primary(core_event),
+        }))
+}
+
+/// Explicit inbound variant pin: the `x-flow-like-variant` header, else the
+/// `__variant` query parameter. Only the primary's reserved name and the
+/// event's Live variants are valid — cached specs and credentials hang off
+/// the name, so a typo must fail loudly instead of hashing into a share.
+fn inbound_variant_pin(
+    headers: &HeaderMap,
+    raw_query: &str,
+    core_event: &CoreEvent,
+) -> Result<Option<String>, ApiError> {
+    let pin = headers
+        .get(variant::VARIANT_PIN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            parse_query_single(raw_query)
+                .remove("__variant")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    let Some(pin) = pin else {
+        return Ok(None);
+    };
+    if pin == STABLE_VARIANT {
+        return Ok(Some(pin));
+    }
+    match variant::explicit_selection(core_event, Some(&pin), None) {
+        Ok(variant::ExplicitSelection::Variant(name)) => Ok(Some(name)),
+        Ok(_) => Ok(None),
+        Err(error) => Err(ApiError::bad_request(error)),
+    }
+}
+
+/// The stickiest split identity an inbound request offers (D4's inbound
+/// tail): the proxy caller's subject when one exists, else the remote
+/// address, else an honest per-request draw.
+fn inbound_split_key(caller: &ProxyCallerContext, headers: &HeaderMap) -> SplitKey {
+    if let Some(subject) = caller.user_context.as_ref().and_then(|context| {
+        Some(context.sub.as_str())
+            .filter(|sub| !sub.is_empty())
+            .or(context.on_behalf_of.as_deref())
+            .filter(|subject| !subject.is_empty())
+    }) {
+        return SplitKey {
+            source: variant::SPLIT_SOURCE_SUBJECT,
+            value: subject.to_string(),
+        };
+    }
+    let remote_addr = inbound_remote_addr(headers);
+    if !remote_addr.is_empty() {
+        return SplitKey {
+            source: variant::SPLIT_SOURCE_REMOTE_ADDR,
+            value: remote_addr,
+        };
+    }
+    SplitKey {
+        source: variant::SPLIT_SOURCE_RUN_ID,
+        value: flow_like_types::create_id(),
+    }
+}
+
+/// Resolve which variant's bucket serves this request. An explicit pin wins
+/// over the hashed split; a Live variant whose `EventSetup` row has no
+/// serving pointer (no successful setup yet) has no inbound surface and
+/// falls back to stable. `None` means nothing serves — the event has no
+/// completed setup at all.
+async fn resolve_served_variant(
+    state: &AppState,
+    event_row: &event::Model,
+    core_event: &CoreEvent,
+    pin: Option<&str>,
+    split_key: &SplitKey,
+    stable: Option<&StableServing>,
+) -> Result<Option<ServedVariant>, ApiError> {
+    let (target, pinned) = match pin {
+        Some(name) if name == STABLE_VARIANT => (ResolvedTarget::primary(core_event), true),
+        Some(name) => (
+            variant::resolve_live_variant(core_event, &SplitKey::pin(name)),
+            true,
+        ),
+        None => (variant::resolve_live_variant(core_event, split_key), false),
+    };
+    if let Some(name) = target.variant_name.clone() {
+        let setup = find_event_setup(&state.db, &event_row.app_id, &event_row.id, &name)
+            .await
+            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+            .filter(has_serving_pointer);
+        match setup {
+            Some(row) => {
+                return Ok(Some(ServedVariant {
+                    name,
+                    version: row.event_version,
+                    target,
+                    pinned,
+                }));
+            }
+            None => {
+                tracing::debug!(
+                    event_id = %event_row.id,
+                    variant = %name,
+                    "variant has no live surface; serving stable"
+                );
+            }
+        }
+    }
+    Ok(stable.map(|stable| ServedVariant {
+        name: STABLE_VARIANT.to_string(),
+        version: stable.version.clone(),
+        target: stable.target.clone(),
+        pinned,
+    }))
+}
+
+/// The variant name a client-supplied MCP session id pins: its `{variant}~`
+/// prefix, when that names the primary or a still-existing Live variant.
+/// Anything else is not a pin — the caller hashes the full id instead, which
+/// keeps arbitrary legacy `?sessionId=` values deterministic and sticky.
+fn mcp_session_variant_pin(session_id: &str, core_event: &CoreEvent) -> Option<String> {
+    let (name, _) = session_id.split_once('~')?;
+    if name == STABLE_VARIANT {
+        return Some(name.to_string());
+    }
+    match variant::explicit_selection(core_event, Some(name), None) {
+        Ok(variant::ExplicitSelection::Variant(name)) => Some(name),
+        _ => None,
+    }
+}
+
+/// Mint an MCP session id carrying the served variant, so every later
+/// request in the session — including one hitting another replica that has
+/// to recreate the session — re-pins by parsing the prefix.
+fn mint_mcp_session_id(served_variant: &str) -> String {
+    format!("{}~{}", served_variant, uuid::Uuid::new_v4().simple())
+}
+
 async fn dispatch_inbound_rest(
     state: &AppState,
     slug_or_id: &str,
@@ -335,6 +540,11 @@ async fn record_inbound_rejection(
 /// enforce configured per-registration auth. The surface flag only controls
 /// PUBLIC/INTERNAL exposure; `injected_auth` is emitted separately as
 /// `_client.proxy` for caller attribution.
+///
+/// The serving variant is resolved before any registration lookup: an
+/// explicit pin (`x-flow-like-variant` header / `__variant` query) wins, else
+/// the hashed inbound split key assigns the canary share. All registration
+/// and auth lookups are then scoped to that variant's bucket.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_rest_for_event(
     state: &AppState,
@@ -363,7 +573,45 @@ pub(crate) async fn dispatch_rest_for_event(
     };
     let slug_or_id = public_slug;
 
-    let Some(version) = event_row.last_setup_version.clone() else {
+    let core_event = db_model_to_event(event_row.clone()).map_err(ApiError::internal_error)?;
+    let stable = stable_serving(state, event_row, &core_event).await?;
+
+    // Normalize path so `/foo` and `foo` match the same row.
+    let normalized = normalize_inbound_path(path);
+
+    // Auto-handle CORS pre-flight: respond with whatever methods the user
+    // has registered for this path. CORS/Allow is a browser contract and
+    // always describes the stable surface, never a canary share (§8.5).
+    if method == axum::http::Method::OPTIONS {
+        let Some(version) = stable.as_ref().map(|stable| stable.version.as_str()) else {
+            let reason = "event has no completed setup; call POST /setup first";
+            record_inbound_rejection(
+                state,
+                event_row,
+                rejection::RejectionStage::Resolution,
+                reason.to_string(),
+                Some(body),
+            )
+            .await;
+            return Err(ApiError::not_found(reason));
+        };
+        return Ok(build_options_response(state, &resolved, version, &normalized).await);
+    }
+
+    // Resolve the serving variant before any registration lookup: an explicit
+    // pin wins, else the hashed inbound split key assigns the canary share.
+    let pin = inbound_variant_pin(headers, raw_query, &core_event)?;
+    let split_key = inbound_split_key(caller, headers);
+    let served = resolve_served_variant(
+        state,
+        event_row,
+        &core_event,
+        pin.as_deref(),
+        &split_key,
+        stable.as_ref(),
+    )
+    .await?;
+    let Some(served) = served else {
         let reason = "event has no completed setup; call POST /setup first";
         record_inbound_rejection(
             state,
@@ -376,25 +624,50 @@ pub(crate) async fn dispatch_rest_for_event(
         return Err(ApiError::not_found(reason));
     };
 
-    // Normalize path so `/foo` and `foo` match the same row.
-    let normalized = normalize_inbound_path(path);
-
-    // Auto-handle CORS pre-flight: respond with whatever methods the user
-    // has registered for this path.
-    if method == axum::http::Method::OPTIONS {
-        return Ok(build_options_response(state, &resolved, &version, &normalized).await);
-    }
-
     // Look up matching registration. Exact match wins over templated.
     let matched = match_registration(
         state,
         &resolved.app_id,
         &resolved.event_id,
-        &version,
+        &served.version,
+        &served.name,
         method,
         &normalized,
     )
     .await?;
+    // OpenAPI bypass (§8.5): the kind is only known after the match, and an
+    // unpinned request that hash-landed on a canary must still read the
+    // stable spec/UI — a canary's share of `GET /openapi.json` would
+    // otherwise advertise routes the other share does not serve.
+    let mut registration_variant = served.name.clone();
+    let matched = match matched {
+        Some((registration, _))
+            if !served.pinned
+                && served.name != STABLE_VARIANT
+                && matches!(
+                    registration.kind.as_str(),
+                    "rest_openapi" | "rest_openapi_ui"
+                ) =>
+        {
+            registration_variant = STABLE_VARIANT.to_string();
+            match stable.as_ref().map(|stable| stable.version.as_str()) {
+                Some(version) => {
+                    match_registration(
+                        state,
+                        &resolved.app_id,
+                        &resolved.event_id,
+                        version,
+                        STABLE_VARIANT,
+                        method,
+                        &normalized,
+                    )
+                    .await?
+                }
+                None => None,
+            }
+        }
+        other => other,
+    };
     let Some((registration, path_params)) = matched else {
         let reason = format!("no registration matches {} {}", method, normalized);
         record_inbound_rejection(
@@ -410,9 +683,13 @@ pub(crate) async fn dispatch_rest_for_event(
     let registration_headers = registration_auth_headers(headers, is_public_surface);
 
     // A connection role authorizes access to the proxy, but does not replace
-    // auth explicitly configured on the matched event registration.
+    // auth explicitly configured on the matched event registration. The auth
+    // row must come from the same variant bucket as the matched registration —
+    // a caller is never verified against another variant's credential
+    // material.
     let auth_claims = if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
+            .filter(event_remote_auth::Column::Variant.eq(registration_variant.as_str()))
             .one(&state.db)
             .await
             .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
@@ -438,6 +715,7 @@ pub(crate) async fn dispatch_rest_for_event(
             let result = dispatch_rest_fn(
                 state,
                 event_row,
+                &served.target,
                 &registration,
                 &normalized,
                 raw_query,
@@ -533,6 +811,12 @@ async fn dispatch_inbound_mcp(
 /// Serves the MCP surface of an event. Both the public router and authenticated
 /// app-connection proxy enforce configured per-registration auth. The surface
 /// flag only controls PUBLIC/INTERNAL exposure.
+///
+/// The serving variant is resolved before the registration lookup: explicit
+/// pin > a supplied session id's `{variant}~` prefix > the hashed split key
+/// (the session id itself when supplied, else the inbound identity). Minted
+/// session ids carry the served variant as their prefix, so a whole MCP
+/// session stays on one variant across replicas and recreated sessions.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_mcp_for_event(
     state: &AppState,
@@ -557,12 +841,38 @@ pub(crate) async fn dispatch_mcp_for_event(
 
     let slug_or_id = public_slug;
 
-    let version = event_row.last_setup_version.clone().ok_or_else(|| {
-        ApiError::not_found("event has no completed setup; call POST /setup first")
-    })?;
+    let core_event = db_model_to_event(event_row.clone()).map_err(ApiError::internal_error)?;
+    let stable = stable_serving(state, event_row, &core_event).await?;
 
     let normalized = normalize_inbound_path(path);
     let registration_headers = registration_auth_headers(headers, is_public_surface);
+
+    // Resolve the serving variant before the registration lookup. Session
+    // stickiness: a minted session id carries its variant as a `{variant}~`
+    // prefix, so replicas and recreated sessions re-pin by parse; a
+    // client-supplied id without a valid prefix hashes as the split key.
+    let pin = inbound_variant_pin(headers, raw_query, &core_event)?;
+    let supplied_session_id = mcp_session_id(raw_query, &registration_headers);
+    let session_pin = supplied_session_id
+        .as_deref()
+        .and_then(|session_id| mcp_session_variant_pin(session_id, &core_event));
+    let split_key = match supplied_session_id.as_deref() {
+        Some(session_id) => SplitKey {
+            source: variant::SPLIT_SOURCE_SESSION,
+            value: session_id.to_string(),
+        },
+        None => inbound_split_key(caller, headers),
+    };
+    let served = resolve_served_variant(
+        state,
+        event_row,
+        &core_event,
+        pin.as_deref().or(session_pin.as_deref()),
+        &split_key,
+        stable.as_ref(),
+    )
+    .await?
+    .ok_or_else(|| ApiError::not_found("event has no completed setup; call POST /setup first"))?;
 
     if method == axum::http::Method::OPTIONS {
         return Ok(mcp_options_response(&registration_headers));
@@ -571,7 +881,8 @@ pub(crate) async fn dispatch_mcp_for_event(
     let registration = event_remote_registration::Entity::find()
         .filter(event_remote_registration::Column::AppId.eq(&event_row.app_id))
         .filter(event_remote_registration::Column::EventId.eq(&event_row.id))
-        .filter(event_remote_registration::Column::EventVersion.eq(&version))
+        .filter(event_remote_registration::Column::EventVersion.eq(&served.version))
+        .filter(event_remote_registration::Column::Variant.eq(served.name.as_str()))
         .filter(event_remote_registration::Column::Kind.eq("mcp_raw"))
         .one(&state.db)
         .await
@@ -609,8 +920,11 @@ pub(crate) async fn dispatch_mcp_for_event(
             .into_response());
     }
 
+    // The auth row must come from the served variant's bucket — a caller is
+    // never verified against another variant's credential material.
     let auth_claims = if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
+            .filter(event_remote_auth::Column::Variant.eq(served.name.as_str()))
             .one(&state.db)
             .await
             .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
@@ -635,6 +949,7 @@ pub(crate) async fn dispatch_mcp_for_event(
         mcp_handle_post(
             state,
             event_row,
+            &served,
             &config,
             raw_query,
             &registration_headers,
@@ -646,7 +961,14 @@ pub(crate) async fn dispatch_mcp_for_event(
     } else if method == axum::http::Method::DELETE {
         Ok(mcp_handle_delete(raw_query, &registration_headers).await)
     } else if method == axum::http::Method::GET {
-        Ok(mcp_handle_get(event_row, &endpoint_path, raw_query, &registration_headers).await)
+        Ok(mcp_handle_get(
+            event_row,
+            &served.name,
+            &endpoint_path,
+            raw_query,
+            &registration_headers,
+        )
+        .await)
     } else {
         let mut resp = (
             StatusCode::METHOD_NOT_ALLOWED,
@@ -762,6 +1084,8 @@ async fn build_options_response(
         .filter(event_remote_registration::Column::AppId.eq(&resolved.app_id))
         .filter(event_remote_registration::Column::EventId.eq(&resolved.event_id))
         .filter(event_remote_registration::Column::EventVersion.eq(version))
+        // Pre-flights always describe the stable surface (§8.5).
+        .filter(event_remote_registration::Column::Variant.eq(STABLE_VARIANT))
         .all(&state.db)
         .await
     {
@@ -1010,6 +1334,7 @@ async fn match_registration(
     app_id: &str,
     event_id: &str,
     version: &str,
+    variant: &str,
     method: &axum::http::Method,
     normalized_path: &str,
 ) -> Result<Option<(event_remote_registration::Model, HashMap<String, String>)>, ApiError> {
@@ -1017,6 +1342,7 @@ async fn match_registration(
         .filter(event_remote_registration::Column::AppId.eq(app_id))
         .filter(event_remote_registration::Column::EventId.eq(event_id))
         .filter(event_remote_registration::Column::EventVersion.eq(version))
+        .filter(event_remote_registration::Column::Variant.eq(variant))
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
@@ -1684,6 +2010,7 @@ async fn dispatch_rest_file(
 async fn dispatch_rest_fn(
     state: &AppState,
     event_row: &event::Model,
+    target: &ResolvedTarget,
     registration: &event_remote_registration::Model,
     request_path: &str,
     raw_query: &str,
@@ -1777,6 +2104,7 @@ async fn dispatch_rest_fn(
     dispatch_event_collect(
         state,
         event_row,
+        target,
         target_node_id,
         Some(Value::Object(args)),
         caller,
@@ -1784,9 +2112,14 @@ async fn dispatch_rest_fn(
     .await
 }
 
+/// Dispatch an inbound request into the served variant's board and collect
+/// the flow's generic result. `target` carries the variant's board triple and
+/// variables overlay (the primary's for stable); `target_node_id` is the
+/// matched registration's handler node on that board.
 async fn dispatch_event_collect(
     state: &AppState,
     event_row: &event::Model,
+    target: &ResolvedTarget,
     target_node_id: String,
     payload: Option<Value>,
     caller: &ProxyCallerContext,
@@ -1797,8 +2130,17 @@ async fn dispatch_event_collect(
         )));
     }
 
-    let core_event = db_model_to_event(event_row.clone()).map_err(ApiError::internal_error)?;
-    let board_id = core_event.board_id.clone();
+    let mut core_event = db_model_to_event(event_row.clone()).map_err(ApiError::internal_error)?;
+    // The stable bucket's pointer can trail the event row's primary
+    // mid-promote; the dispatched event must carry the bucket's board — the
+    // one its registrations were built against. `dispatch_event_json`
+    // short-circuits for a primary target, so stamp the row copy here.
+    if target.variant_name.is_none() {
+        core_event.board_id = target.board_id.clone();
+        core_event.board_version = target.board_version;
+        core_event.node_id = target.node_id.clone();
+    }
+    let board_id = target.board_id.clone();
     if board_id.is_empty() {
         return Err(ApiError::internal("event has no associated board_id"));
     }
@@ -1889,6 +2231,7 @@ async fn dispatch_event_collect(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
@@ -1900,7 +2243,7 @@ async fn dispatch_event_collect(
                 .unwrap_or(0)
         })
         .unwrap_or(0);
-    let event_json = serde_json::to_string(&core_event)
+    let event_json = dispatch_event_json(&core_event, target)
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
     let wasm_packages = resolve_wasm_packages(state, &event_row.app_id).await;
 
@@ -1908,7 +2251,7 @@ async fn dispatch_event_collect(
         run_id: run_id.clone(),
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
-        board_version: core_event.board_version,
+        board_version: target.board_version,
         board_etag: None,
         node_id: target_node_id,
         event_json: Some(event_json),
@@ -1937,6 +2280,8 @@ async fn dispatch_event_collect(
         channel: None,
         // An external REST/MCP caller, not a Flow-Like client.
         trigger: DispatchTrigger::System,
+        shadow: false,
+        artifact: None,
     };
 
     let now = chrono::Utc::now().naive_utc();
@@ -1948,6 +2293,10 @@ async fn dispatch_event_collect(
         node_id: Set(Some(event_row.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -2081,6 +2430,7 @@ fn is_rest_internal_arg_key(name: &str) -> bool {
             | "body_bytes"
             | "payload"
             | "__inbound_rest"
+            | "__variant"
     )
 }
 
@@ -2405,6 +2755,7 @@ async fn prune_expired_mcp_sessions() {
 async fn mcp_handle_post(
     state: &AppState,
     event_row: &event::Model,
+    served: &ServedVariant,
     config: &Value,
     raw_query: &str,
     headers: &HeaderMap,
@@ -2504,7 +2855,8 @@ async fn mcp_handle_post(
         let method_name = item.get("method").and_then(|v| v.as_str()).unwrap_or("");
         if method_name == "initialize" {
             let (response, session_id) =
-                handle_mcp_initialize(event_row, item, assigned_session_id.clone()).await;
+                handle_mcp_initialize(event_row, &served.name, item, assigned_session_id.clone())
+                    .await;
             assigned_session_id = Some(session_id);
             if let Some(response) = response {
                 responses.push(response);
@@ -2521,8 +2873,16 @@ async fn mcp_handle_post(
             continue;
         }
 
-        if let Some(response) =
-            dispatch_mcp_json_rpc(state, event_row, config, item, &client, caller).await?
+        if let Some(response) = dispatch_mcp_json_rpc(
+            state,
+            event_row,
+            &served.target,
+            config,
+            item,
+            &client,
+            caller,
+        )
+        .await?
         {
             responses.push(response);
         }
@@ -2586,6 +2946,7 @@ async fn mcp_handle_post(
 
 async fn handle_mcp_initialize(
     event_row: &event::Model,
+    served_variant: &str,
     payload: &Value,
     existing_session_id: Option<String>,
 ) -> (Option<Value>, String) {
@@ -2595,8 +2956,7 @@ async fn handle_mcp_initialize(
         .and_then(|p| p.get("protocolVersion"))
         .and_then(|v| v.as_str());
     let protocol_version = negotiate_mcp_protocol_version(requested);
-    let session_id =
-        existing_session_id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let session_id = existing_session_id.unwrap_or_else(|| mint_mcp_session_id(served_variant));
     let mut sessions = MCP_SESSIONS.lock().await;
     let sse_tx = sessions
         .get(&session_id)
@@ -2652,6 +3012,7 @@ async fn mcp_handle_delete(raw_query: &str, headers: &HeaderMap) -> Response {
 
 async fn mcp_handle_get(
     event_row: &event::Model,
+    served_variant: &str,
     endpoint_path: &str,
     raw_query: &str,
     headers: &HeaderMap,
@@ -2698,7 +3059,7 @@ async fn mcp_handle_get(
                 (session_id, rx, None)
             }
         } else {
-            let session_id = uuid::Uuid::new_v4().simple().to_string();
+            let session_id = mint_mcp_session_id(served_variant);
             let (session, rx) = new_mcp_session(
                 &event_row.id,
                 MCP_DEFAULT_PROTOCOL_VERSION.to_string(),
@@ -2767,9 +3128,11 @@ fn mcp_browser_inspector_response(endpoint_path: &str, headers: &HeaderMap) -> R
     resp
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_mcp_json_rpc(
     state: &AppState,
     event_row: &event::Model,
+    target: &ResolvedTarget,
     config: &Value,
     payload: &Value,
     client: &Value,
@@ -2787,7 +3150,7 @@ async fn dispatch_mcp_json_rpc(
         | "notifications/progress" => return Ok(None),
         "ping" => json!({}),
         "tools/list" => {
-            let tools = mcp_tools_for_event(state, event_row, config).await?;
+            let tools = mcp_tools_for_event(state, event_row, config, target).await?;
             json!({
                 "tools": tools.into_iter().map(|tool| {
                     let mut item = serde_json::Map::new();
@@ -2801,8 +3164,10 @@ async fn dispatch_mcp_json_rpc(
             })
         }
         "tools/call" => {
-            return mcp_tool_call_response(state, event_row, config, id, params, client, caller)
-                .await;
+            return mcp_tool_call_response(
+                state, event_row, target, config, id, params, client, caller,
+            )
+            .await;
         }
         "resources/list" => json!({
             "resources": mcp_resources(config).into_iter().map(|resource| {
@@ -2865,9 +3230,11 @@ async fn dispatch_mcp_json_rpc(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mcp_tool_call_response(
     state: &AppState,
     event_row: &event::Model,
+    target: &ResolvedTarget,
     config: &Value,
     id: Option<Value>,
     params: Value,
@@ -2879,7 +3246,7 @@ async fn mcp_tool_call_response(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let tools = mcp_tools_for_event(state, event_row, config).await?;
+    let tools = mcp_tools_for_event(state, event_row, config, target).await?;
     let Some(tool) = tools.into_iter().find(|tool| tool.name == name) else {
         // JSON-RPC reports this inside a 200, so the caller's transport layer
         // shows nothing wrong and the app owner sees no failed run at all.
@@ -2908,6 +3275,7 @@ async fn mcp_tool_call_response(
     match dispatch_event_collect(
         state,
         event_row,
+        target,
         tool.node_id,
         Some(Value::Object(args)),
         caller,
@@ -2937,6 +3305,7 @@ async fn mcp_tools_for_event(
     state: &AppState,
     event_row: &event::Model,
     config: &Value,
+    target: &ResolvedTarget,
 ) -> Result<Vec<McpToolEntry>, ApiError> {
     let function_refs: Vec<String> = config
         .get("function_refs")
@@ -2951,14 +3320,15 @@ async fn mcp_tools_for_event(
         return Ok(Vec::new());
     }
 
-    let core_event = db_model_to_event(event_row.clone()).map_err(ApiError::internal_error)?;
+    // The served variant's board — the registered function node ids and
+    // their schemas live there.
     let board = state
         .master_board(
             "inbound",
             &event_row.app_id,
-            &core_event.board_id,
+            &target.board_id,
             state,
-            core_event.board_version,
+            target.board_version,
         )
         .await
         .map_err(ApiError::internal_error)?;
@@ -3698,7 +4068,7 @@ mod tests {
     #[test]
     fn rest_query_params_fill_named_args_without_overwriting_body_or_internal_args() {
         let query = parse_query_single(
-            "name=from-query&limit=10&payload=ignored&body=ignored&encoded=hello+world",
+            "name=from-query&limit=10&payload=ignored&body=ignored&encoded=hello+world&__variant=canary",
         );
         let body = json!({
             "name": "from-body",
@@ -3713,6 +4083,8 @@ mod tests {
         assert_eq!(args.get("encoded").cloned(), Some(json!("hello world")));
         assert!(!args.contains_key("payload"));
         assert!(!args.contains_key("body"));
+        // The variant pin routes the request; it must never leak into flow args.
+        assert!(!args.contains_key("__variant"));
     }
 
     #[test]

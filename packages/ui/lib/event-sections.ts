@@ -21,6 +21,9 @@ export const SHARED_SECTION_IDS = [
 	"inputs",
 	"variables",
 	"release",
+	"canary",
+	"quality",
+	"history",
 	"identity",
 ] as const;
 
@@ -363,6 +366,27 @@ const SHARED_SECTIONS: IEventSection[] = [
 		blurb: "Versioning and the record of what changed.",
 	},
 	{
+		id: "canary",
+		label: "Canary",
+		icon: "split",
+		blurb:
+			"Send a share of this event's traffic to another flow or version before promoting it.",
+	},
+	{
+		id: "quality",
+		label: "Quality",
+		icon: "flask-conical",
+		blurb:
+			"Replay recorded real inputs against a candidate version and catch regressions before they ship.",
+	},
+	{
+		id: "history",
+		label: "History",
+		icon: "history",
+		blurb:
+			"Every version this event has shipped, and how each one has been running.",
+	},
+	{
 		id: "identity",
 		label: "Identity",
 		icon: "file-text",
@@ -374,8 +398,10 @@ export function getEventSections(event: IEvent): IEventSection[] {
 	// Page-target events have no type-specific config component — there is no
 	// `configInterfaces["page"]` — and their page/version fields live in the
 	// shared Flow & target section. Giving them a trigger section produces a tab
-	// that can never render anything.
-	if (event.default_page_id) return [...SHARED_SECTIONS];
+	// that can never render anything. Quality is dropped too: page payloads are
+	// sealed to their page session, so regression suites exclude page events.
+	if (event.default_page_id)
+		return SHARED_SECTIONS.filter((section) => section.id !== "quality");
 	const split = TRIGGER_SECTIONS[event.event_type];
 	if (split) return [...split, ...SHARED_SECTIONS];
 	const trigger = TRIGGER_LABELS[event.event_type] ?? DEFAULT_TRIGGER;
@@ -744,10 +770,38 @@ const SHARED_GUIDANCE: Record<string, ISectionGuidance> = {
 		mistake:
 			"Shipping a behaviour change with no note, then reconstructing it from run logs later.",
 	},
+	canary: {
+		what: "A weighted split between the live target and one or two candidate targets.",
+		mistake:
+			"Reading a quiet stats table as a healthy canary: at low weights it takes many triggers before errors show, so give it traffic and time before promoting.",
+	},
+	quality: {
+		what: "A regression suite built from recorded real inputs and the board's authored test* events, replayed against a candidate version.",
+		mistake:
+			"Reading a green suite as full coverage: without Assert nodes it only proves the replays didn't error — and replays still execute live side effects like outbound HTTP.",
+	},
+	history: {
+		what: "Past versions of this event, and what their runs actually did.",
+		mistake:
+			"Trusting run counts for old versions: runs recorded before version stamping carry no version key and group separately as unversioned.",
+	},
 	identity: {
 		what: "How this event is named, described and correlated.",
 		mistake:
 			"Skipping case keys, which means runs never group into a business case.",
+	},
+};
+
+/**
+ * Page-target overrides for shared sections. Page canaries resolve once at
+ * bootstrap and the sealed page claims pin the session, so the dispatch-style
+ * "traffic share" mental model misleads here.
+ */
+const PAGE_GUIDANCE: Record<string, ISectionGuidance> = {
+	canary: {
+		what: "A weighted split between the primary page and one or two candidate pages, assigned per viewer when the page bootstraps.",
+		mistake:
+			"Expecting a weight change to move viewers already on the page: a session keeps the variant it bootstrapped into until it reloads, so give new sessions time before reading the stats.",
 	},
 };
 
@@ -924,6 +978,10 @@ export function getSectionGuidance(
 	if (split) return split;
 	if (sectionId === "trigger") {
 		return TRIGGER_GUIDANCE[event.event_type] ?? null;
+	}
+	if (event.default_page_id) {
+		const page = PAGE_GUIDANCE[sectionId];
+		if (page) return page;
 	}
 	return SHARED_GUIDANCE[sectionId] ?? null;
 }

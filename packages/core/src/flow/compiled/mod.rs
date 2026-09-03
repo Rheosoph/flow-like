@@ -38,7 +38,7 @@ pub use prerun::{
     decode_manifest, draft_manifest_path, draft_page_manifest_path, encode_manifest,
     legacy_manifest_path, manifest_path, version_page_manifest_path,
 };
-pub use resolver::{TemplateCache, persist_artifact};
+pub use resolver::{TemplateCache, persist_artifact, template_from_bytes};
 pub use template::CompiledRunTemplate;
 
 use flow_like_storage::Path;

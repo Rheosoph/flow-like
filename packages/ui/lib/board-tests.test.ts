@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
 	assertionText,
 	discoverBoardTests,
 	eventAliasOf,
+	gradeBoardRun,
 	isTestEventAlias,
 	isTestEventNode,
 	runBoardTest,
@@ -180,4 +182,84 @@ describe("runBoardTest", () => {
 		expect(result.verdict).toBe("pass");
 		expect(result.assertOk).toBe(0);
 	});
+});
+
+/**
+ * Shared conformance fixture, twinned with `flow::regression` in
+ * packages/core. A deliberate rule change on either side must update the
+ * fixture — and thereby fail the other side's test.
+ */
+interface IGradingFixtureCase {
+	case: string;
+	metadata: boolean;
+	assertLogs: string[];
+	errorLogs: string[];
+	executionError: string | null;
+	logQueryFailed: boolean;
+	expect: {
+		verdict: string;
+		assertOk: number;
+		assertFail: number;
+		executionError: string | null;
+	};
+}
+
+interface IDiscoveryFixtureCase {
+	case: string;
+	name: string;
+	friendlyName: string | null;
+	start: boolean;
+	expect: { isTest: boolean; alias: string };
+}
+
+const fixture = JSON.parse(
+	readFileSync(
+		new URL(
+			"../../core/tests/fixtures/board-test-grading.json",
+			import.meta.url,
+		),
+		"utf8",
+	),
+) as { grading: IGradingFixtureCase[]; discovery: IDiscoveryFixtureCase[] };
+
+describe("conformance fixture (Rust twin: flow::regression)", () => {
+	test("carries both sections", () => {
+		expect(fixture.grading.length).toBeGreaterThan(0);
+		expect(fixture.discovery.length).toBeGreaterThan(0);
+	});
+
+	for (const c of fixture.grading) {
+		test(`grading: ${c.case}`, () => {
+			const grade = gradeBoardRun({
+				metadata: c.metadata ? META : undefined,
+				assertLogs: c.assertLogs.map((message) => makeLog(message)),
+				errorLogs: c.errorLogs.map((message) => makeLog(message, 3)),
+				executionError: c.executionError ?? undefined,
+				logQueryFailed: c.logQueryFailed,
+			});
+			expect(grade.verdict).toBe(c.expect.verdict as typeof grade.verdict);
+			expect(grade.assertOk).toBe(c.expect.assertOk);
+			expect(grade.assertFail).toBe(c.expect.assertFail);
+			expect(grade.executionError).toBe(c.expect.executionError ?? undefined);
+		});
+	}
+
+	for (const c of fixture.discovery) {
+		test(`discovery: ${c.case}`, () => {
+			const node = makeNode({
+				id: "node-1",
+				name: c.name,
+				friendly_name: c.friendlyName ?? undefined,
+				start: c.start,
+			});
+			expect(eventAliasOf(node)).toBe(c.expect.alias);
+			expect(isTestEventNode(node)).toBe(c.expect.isTest);
+			const discovered = discoverBoardTests({ "node-1": node });
+			if (c.expect.isTest) {
+				expect(discovered).toEqual([{ node, alias: c.expect.alias }]);
+			} else {
+				expect(discovered).toEqual([]);
+			}
+		});
+	}
 });

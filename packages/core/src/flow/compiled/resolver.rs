@@ -1,9 +1,14 @@
-//! Shared template resolution: in-process cache → persisted artifact →
-//! compile-from-source with background write-back.
+//! Shared template resolution.
 //!
-//! Both the cloud executor and the desktop runtime resolve boards through
-//! this type; they differ only in cache instance and extra cache-key salt
-//! (the executor keys on its per-request WASM bundle signature).
+//! Two entry points share one cache type:
+//! - [`TemplateCache::resolve`] — the desktop path: in-process cache →
+//!   persisted artifact → compile-from-source with background write-back.
+//!   It addresses the meta store directly.
+//! - [`template_from_bytes`] + [`TemplateCache::get`]/[`TemplateCache::insert`]
+//!   — the server-executor path. The API compiles every run ahead of dispatch
+//!   and hands the executor a presigned GET for the exact `.flcb`; the
+//!   executor decodes those bytes and never touches the meta store, never
+//!   reads a board proto and never writes an artifact back.
 
 use super::CompiledRunTemplate;
 use crate::flow::board::Board;
@@ -61,7 +66,47 @@ impl TemplateCache {
         }
     }
 
-    /// Resolve a board into a shared run template.
+    /// The cache key for one (board, content identity, registry, salt) tuple.
+    ///
+    /// `version_key` is `M_m_p` for a pinned version, `latest@{etag}` for a
+    /// floating board pinned to a source ETag, or `latest` when only HEAD
+    /// revalidation identifies it. `key_salt` segments the cache beyond
+    /// app/board/version — the executor passes its WASM bundle signature.
+    pub fn cache_key(
+        app_id: &str,
+        board_id: &str,
+        version_key: &str,
+        fingerprint: &[u8; 32],
+        key_salt: &str,
+    ) -> String {
+        let fingerprint_hex = blake3::Hash::from_bytes(*fingerprint).to_hex();
+        format!(
+            "{app_id}:{board_id}:{version_key}:{}:{key_salt}",
+            &fingerprint_hex.as_str()[..16]
+        )
+    }
+
+    /// A cached template by exact key, without revalidation. Callers that key
+    /// on a content identity (source ETag or pinned version) need none.
+    pub fn get(&self, key: &str) -> Option<Arc<CompiledRunTemplate>> {
+        self.inner.get(key).map(|cached| cached.template.clone())
+    }
+
+    /// Cache a template the caller built itself. Entries carry no storage
+    /// identity because only [`Self::resolve`] revalidates by HEAD, and it
+    /// only ever revalidates keys it computed itself.
+    pub fn insert(&self, key: String, template: Arc<CompiledRunTemplate>) {
+        self.inner.insert(
+            key,
+            Arc::new(CachedTemplate {
+                template,
+                e_tag: None,
+                last_modified: chrono::Utc::now(),
+            }),
+        );
+    }
+
+    /// Resolve a board into a shared run template (desktop path).
     ///
     /// Warm path: this cache (HEAD-revalidated for "latest"). Cold path: the
     /// persisted artifact (`compiled/` for versions, app-scoped
@@ -70,8 +115,7 @@ impl TemplateCache {
     /// last resort: load the proto, run `node_updates`, compile, and persist
     /// the artifact in the background.
     ///
-    /// `key_salt` lets callers segment the cache beyond app/board/version —
-    /// the executor passes its WASM bundle signature.
+    /// `key_salt` lets callers segment the cache beyond app/board/version.
     pub async fn resolve(
         &self,
         state: &Arc<FlowLikeState>,
@@ -114,11 +158,7 @@ impl TemplateCache {
             (None, Some(etag)) => format!("latest@{etag}"),
             (None, None) => "latest".to_string(),
         };
-        let fingerprint_hex = blake3::Hash::from_bytes(fingerprint).to_hex();
-        let cache_key = format!(
-            "{app_id}:{board_id}:{version_key}:{}:{key_salt}",
-            &fingerprint_hex.as_str()[..16]
-        );
+        let cache_key = Self::cache_key(app_id, board_id, &version_key, &fingerprint, key_salt);
 
         let mut source_head: Option<ObjectMeta> = None;
         if let Some(cached) = self.inner.get(&cache_key) {
@@ -274,20 +314,44 @@ async fn template_from_artifact(
 ) -> Option<Arc<CompiledRunTemplate>> {
     let result = meta_store.get(artifact_path).await.ok()?;
     let bytes = result.bytes().await.ok()?;
-    let compiled_board = match super::decode_artifact(&bytes, Some(fingerprint)) {
-        Ok(compiled_board) => compiled_board,
+    match template_from_bytes(&bytes, fingerprint, registry, storage_root) {
+        Ok(template) => Some(template),
         Err(e) => {
             tracing::debug!(path = %artifact_path, error = %e, "Compiled artifact rejected");
-            return None;
-        }
-    };
-    match CompiledRunTemplate::from_compiled(&compiled_board, registry, storage_root.clone()) {
-        Ok(template) => Some(Arc::new(template)),
-        Err(e) => {
-            tracing::warn!(path = %artifact_path, error = %e, "Compiled artifact failed template build");
             None
         }
     }
+}
+
+/// Build a run template from the bytes of a persisted `.flcb` artifact.
+///
+/// This is the whole of the server executor's board loading: the API
+/// compiled these bytes against a registry whose fingerprint is in the
+/// header, and the executor accepts them only if that fingerprint is its
+/// own — an artifact compiled against a different node catalog would bake
+/// the wrong defaults and pin layouts. The error names both fingerprints so
+/// a deploy skew between API and executor is diagnosable from the message.
+pub fn template_from_bytes(
+    bytes: &[u8],
+    fingerprint: &[u8; 32],
+    registry: &FlowNodeRegistryInner,
+    storage_root: &Path,
+) -> Result<Arc<CompiledRunTemplate>> {
+    let header = super::peek_header(bytes)?;
+    if &header.registry_fingerprint != fingerprint {
+        let ours = blake3::Hash::from_bytes(*fingerprint).to_hex();
+        let theirs = blake3::Hash::from_bytes(header.registry_fingerprint).to_hex();
+        return Err(anyhow!(
+            "compiled artifact was built against registry {} but this runtime's registry is {}",
+            &theirs.as_str()[..16],
+            &ours.as_str()[..16]
+        ));
+    }
+    let compiled_board = super::decode_artifact(bytes, Some(fingerprint))?;
+    let template =
+        CompiledRunTemplate::from_compiled(&compiled_board, registry, storage_root.clone())
+            .map_err(|e| anyhow!("compiled artifact failed template build: {e}"))?;
+    Ok(Arc::new(template))
 }
 
 /// Persist a compiled artifact in the background. Artifacts are recreatable,

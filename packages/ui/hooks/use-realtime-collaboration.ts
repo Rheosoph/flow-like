@@ -42,6 +42,18 @@ const EMPTY_CURSORS: PeerCursor[] = [];
 /** Rotate the realtime token this long before its `exp` so reconnects never
  *  replay an expired credential. */
 const TOKEN_ROTATE_MARGIN_MS = 5 * 60 * 1000;
+/** Refresh provider-issued TURN credentials before existing connections need
+ * to be rebuilt with an expired credential. */
+const ICE_ROTATE_MARGIN_MS = 2 * 60 * 1000;
+const ACCESS_REFRESH_RETRY_MS = 15 * 1000;
+
+function realtimeIceExpiryMs(access: IRealtimeAccess): number | null {
+	return typeof access.ice_expires_at === "number" &&
+		Number.isFinite(access.ice_expires_at) &&
+		access.ice_expires_at > 0
+		? access.ice_expires_at * 1000
+		: null;
+}
 
 function cursorsEqual(a: PeerCursor[], b: PeerCursor[]): boolean {
 	if (a.length !== b.length) return false;
@@ -102,6 +114,7 @@ export function useRealtimeCollaboration({
 		refreshAccess: (access: IRealtimeAccess) => void;
 	} | null>(null);
 	const tokenExpiresAtRef = useRef<number | null>(null);
+	const iceExpiresAtRef = useRef<number | null>(null);
 	// The room key the live provider was built with; the server rotates it
 	// daily and a session on the old key cannot decrypt anyone who joined after.
 	const keyIdRef = useRef<string | null>(null);
@@ -166,6 +179,7 @@ export function useRealtimeCollaboration({
 		let rotating = false;
 		let rotateTimer: ReturnType<typeof setTimeout> | null = null;
 		let setupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+		let setupRetryDelayMs = 2000;
 
 		// Re-fetch realtime access and swap the registered signaling credential
 		// so the provider's automatic reconnects never replay an expired JWT.
@@ -173,11 +187,16 @@ export function useRealtimeCollaboration({
 		// still-fresh token don't hammer the access endpoint.
 		const refreshRealtimeAccess = async () => {
 			if (disposed || rotating || !sessionRef.current) return;
-			const expiresAt = tokenExpiresAtRef.current;
-			if (
-				expiresAt !== null &&
-				expiresAt - Date.now() > TOKEN_ROTATE_MARGIN_MS
-			) {
+			const now = Date.now();
+			const tokenExpiresAt = tokenExpiresAtRef.current;
+			const iceExpiresAt = iceExpiresAtRef.current;
+			const tokenNeedsRefresh =
+				tokenExpiresAt === null ||
+				tokenExpiresAt - now <= TOKEN_ROTATE_MARGIN_MS;
+			const iceNeedsRefresh =
+				iceExpiresAt !== null && iceExpiresAt - now <= ICE_ROTATE_MARGIN_MS;
+			if (!tokenNeedsRefresh && !iceNeedsRefresh) {
+				scheduleAccessRefresh();
 				return;
 			}
 			rotating = true;
@@ -197,9 +216,17 @@ export function useRealtimeCollaboration({
 				}
 				sessionRef.current.refreshAccess(access);
 				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
-				scheduleTokenRotation();
+				iceExpiresAtRef.current = realtimeIceExpiryMs(access);
+				scheduleAccessRefresh();
 			} catch (e) {
 				console.warn("Realtime access refresh failed:", e);
+				if (!disposed) {
+					if (rotateTimer !== null) clearTimeout(rotateTimer);
+					rotateTimer = setTimeout(() => {
+						rotateTimer = null;
+						void refreshRealtimeAccess();
+					}, ACCESS_REFRESH_RETRY_MS);
+				}
 			} finally {
 				rotating = false;
 			}
@@ -213,21 +240,29 @@ export function useRealtimeCollaboration({
 			sessionInitializedRef.current = null;
 			keyIdRef.current = null;
 			tokenExpiresAtRef.current = null;
+			iceExpiresAtRef.current = null;
 			awarenessRef.current = undefined;
 			commandAwarenessRef.current = undefined;
 			setAwareness(undefined);
 		};
 
-		const scheduleTokenRotation = () => {
+		const scheduleAccessRefresh = () => {
 			if (rotateTimer !== null) clearTimeout(rotateTimer);
-			const expiresAt = tokenExpiresAtRef.current;
-			if (expiresAt === null) return;
+			const refreshTimes: number[] = [];
+			if (tokenExpiresAtRef.current !== null) {
+				refreshTimes.push(tokenExpiresAtRef.current - TOKEN_ROTATE_MARGIN_MS);
+			}
+			if (iceExpiresAtRef.current !== null) {
+				refreshTimes.push(iceExpiresAtRef.current - ICE_ROTATE_MARGIN_MS);
+			}
+			if (refreshTimes.length === 0) return;
+			const refreshAt = Math.min(...refreshTimes);
 			rotateTimer = setTimeout(
 				() => {
 					rotateTimer = null;
 					void refreshRealtimeAccess();
 				},
-				Math.max(expiresAt - Date.now() - TOKEN_ROTATE_MARGIN_MS, 60_000),
+				Math.max(refreshAt - Date.now(), 60_000),
 			);
 		};
 
@@ -272,30 +307,35 @@ export function useRealtimeCollaboration({
 					refreshAccess: session.refreshAccess,
 				};
 				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
+				iceExpiresAtRef.current = realtimeIceExpiryMs(access);
 				keyIdRef.current = access.key_id ?? null;
-				scheduleTokenRotation();
+				scheduleAccessRefresh();
 				awarenessRef.current = session.awareness;
 				commandAwarenessRef.current = session.awareness;
 				sessionInitializedRef.current = sessionKey;
+				setupRetryDelayMs = 2000;
 				setAwareness(session.awareness);
 				// Don't set "connected" here — let the WebrtcProvider's
 				// onStatusChange callback report the actual signaling state
 			} catch (e) {
 				console.warn("Realtime setup failed:", e);
 				setConnectionStatus("disconnected");
-				// Cold start: the hub config (and its signaling servers) may not have
-				// loaded yet. Wait for it instead of falling back to a public host.
-				if (!disposed && !signalingServersRef.current?.length) {
-					setupRetryTimer = setTimeout(retrySetupWhenSignalingArrives, 2000);
+				// Cold start can race hub loading or a transient credential-provider
+				// failure. Retry with a bounded backoff and never fall back to a public
+				// signaling host while a bearer credential is present.
+				if (!disposed && setupRetryTimer === null) {
+					setupRetryTimer = setTimeout(retrySetup, setupRetryDelayMs);
+					setupRetryDelayMs = Math.min(setupRetryDelayMs * 2, 60_000);
 				}
 			}
 		};
 
-		const retrySetupWhenSignalingArrives = () => {
+		const retrySetup = () => {
 			setupRetryTimer = null;
 			if (disposed) return;
 			if (!signalingServersRef.current?.length) {
-				setupRetryTimer = setTimeout(retrySetupWhenSignalingArrives, 2000);
+				setupRetryTimer = setTimeout(retrySetup, setupRetryDelayMs);
+				setupRetryDelayMs = Math.min(setupRetryDelayMs * 2, 60_000);
 				return;
 			}
 			void setup();
@@ -312,6 +352,7 @@ export function useRealtimeCollaboration({
 			} catch {}
 			sessionRef.current = null;
 			tokenExpiresAtRef.current = null;
+			iceExpiresAtRef.current = null;
 			keyIdRef.current = null;
 			awarenessRef.current = undefined;
 			commandAwarenessRef.current = undefined;

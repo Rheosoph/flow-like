@@ -2,6 +2,7 @@ import {
 	type IBit,
 	type IBitModelClassification,
 	type ILlmParameters,
+	IModelApiSurface,
 	type IModelProvider,
 	Input,
 	Select,
@@ -37,6 +38,11 @@ const PROVIDER_OPTIONS = [
 	"hosted:vertex",
 ] as const;
 
+const API_SURFACE_OPTIONS = [
+	{ value: IModelApiSurface.ChatCompletions, label: "Chat Completions" },
+	{ value: IModelApiSurface.Responses, label: "Responses" },
+] as const;
+
 function isHostedProviderName(providerName?: null | string) {
 	const normalized = providerName?.trim().toLowerCase() ?? "";
 	return (
@@ -65,6 +71,11 @@ export function LLMConfiguration({
 	const providerParams = getProviderParams(parameters?.provider);
 	const isHostedProvider = isHostedProviderName(
 		parameters?.provider?.provider_name,
+	);
+	// Local and MLX models run in-process; only remote OpenAI-compatible
+	// endpoints have a choice of API surface.
+	const supportsApiSurface = !["local", "mlx"].includes(
+		parameters?.provider?.provider_name?.trim().toLowerCase() ?? "",
 	);
 
 	const updateParameter = (key: keyof ILlmParameters, value: unknown) => {
@@ -220,6 +231,40 @@ export function LLMConfiguration({
 								placeholder={t("optionalVersion", "Optional version")}
 							/>
 						</div>
+
+						{supportsApiSurface ? (
+							<div className="space-y-2">
+								<Label htmlFor="api-surface">
+									{t("apiSurface", "API Surface")}
+								</Label>
+								<Select
+									value={
+										parameters?.provider?.api_surface ??
+										IModelApiSurface.ChatCompletions
+									}
+									onValueChange={(value) =>
+										updateProvider("api_surface", value)
+									}
+								>
+									<SelectTrigger id="api-surface">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{API_SURFACE_OPTIONS.map((option) => (
+											<SelectItem key={option.value} value={option.value}>
+												{option.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<p className="text-xs text-muted-foreground">
+									{t(
+										"apiSurfaceHint",
+										"Which upstream API the model speaks. Responses is required by newer OpenAI models.",
+									)}
+								</p>
+							</div>
+						) : null}
 					</div>
 
 					{isHostedProvider ? (

@@ -1,0 +1,209 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "EventVariant",
+	"description": "An alternate dispatch target for an event: a canary (`Live`) or shadow\ndeployment of another board/version/node. Read through\n[`Event::variant_set`], which falls back to the legacy `canary` field.",
+	"type": "object",
+	"properties": {
+		"name": {
+			"description": "Unique per event, `[a-z0-9-]`; \"canary\" is the conventional name.",
+			"type": "string"
+		},
+		"board_id": {
+			"type": "string"
+		},
+		"board_version": {
+			"description": "`None` floats on latest (the etag is bound at dispatch); the `u32::MAX`\nsentinel is reserved and refused at upsert.",
+			"type": ["array", "null"],
+			"prefixItems": [
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			],
+			"minItems": 3,
+			"maxItems": 3
+		},
+		"node_id": {
+			"type": "string"
+		},
+		"variables": {
+			"description": "Merged over the event's variables per key, variant wins.",
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Variable"
+			}
+		},
+		"default_page_id": {
+			"description": "Page-event variants only: repoints what a matched route renders.",
+			"type": ["string", "null"]
+		},
+		"mode": {
+			"$ref": "#/$defs/EventVariantMode"
+		},
+		"created_at": {
+			"$ref": "#/$defs/SystemTime"
+		},
+		"updated_at": {
+			"$ref": "#/$defs/SystemTime"
+		}
+	},
+	"required": [
+		"name",
+		"board_id",
+		"node_id",
+		"variables",
+		"mode",
+		"created_at",
+		"updated_at"
+	],
+	"$defs": {
+		"Variable": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"category": {
+					"type": ["string", "null"]
+				},
+				"description": {
+					"type": ["string", "null"]
+				},
+				"default_value": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"data_type": {
+					"$ref": "#/$defs/VariableType"
+				},
+				"value_type": {
+					"$ref": "#/$defs/ValueType"
+				},
+				"exposed": {
+					"type": "boolean"
+				},
+				"secret": {
+					"type": "boolean"
+				},
+				"editable": {
+					"type": "boolean"
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"schema": {
+					"type": ["string", "null"]
+				},
+				"runtime_configured": {
+					"description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
+					"type": "boolean",
+					"default": false
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"data_type",
+				"value_type",
+				"exposed",
+				"secret",
+				"editable"
+			]
+		},
+		"VariableType": {
+			"type": "string",
+			"enum": [
+				"Execution",
+				"String",
+				"Integer",
+				"Float",
+				"Boolean",
+				"Date",
+				"PathBuf",
+				"Generic",
+				"Struct",
+				"Byte"
+			]
+		},
+		"ValueType": {
+			"type": "string",
+			"enum": ["Array", "Normal", "HashMap", "HashSet"]
+		},
+		"EventVariantMode": {
+			"description": "How a variant handles its share of traffic: `Live` replaces the primary\ntarget for `weight` of triggers, `Shadow` additionally runs the variant for\n`sample_rate` of triggers and discards the result.",
+			"oneOf": [
+				{
+					"type": "object",
+					"properties": {
+						"Live": {
+							"type": "object",
+							"properties": {
+								"weight": {
+									"type": "number",
+									"format": "float"
+								}
+							},
+							"required": ["weight"]
+						}
+					},
+					"required": ["Live"],
+					"additionalProperties": false
+				},
+				{
+					"type": "object",
+					"properties": {
+						"Shadow": {
+							"type": "object",
+							"properties": {
+								"sample_rate": {
+									"type": "number",
+									"format": "float"
+								}
+							},
+							"required": ["sample_rate"]
+						}
+					},
+					"required": ["Shadow"],
+					"additionalProperties": false
+				}
+			]
+		},
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		}
+	}
+}

@@ -212,7 +212,7 @@ impl BufferedInterComHandler {
 
         for batch in batches {
             if let Err(err) = (self.callback)(batch).await {
-                println!("Error publishing events: {}", err);
+                tracing::error!(error = %err, "Dropped an intercom batch: publish callback failed");
             }
         }
 
@@ -224,7 +224,17 @@ impl BufferedInterComHandler {
 
 impl Drop for BufferedInterComHandler {
     fn drop(&mut self) {
-        std::mem::drop(self.flush());
+        // `flush()` is async and cannot run here — dropping the future would
+        // be a silent no-op. Callers must flush explicitly; surface a missed
+        // one instead of losing the tail of the stream quietly.
+        if let Ok(buffer) = self.buffer.try_lock()
+            && !buffer.is_empty()
+        {
+            tracing::warn!(
+                pending = buffer.len(),
+                "BufferedInterComHandler dropped with unflushed events — call flush() before dropping"
+            );
+        }
     }
 }
 

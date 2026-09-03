@@ -505,6 +505,12 @@ pub struct FlowLikeState {
     pub package_widget_source:
         Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>>>>,
 
+    /// Host-registered source of an app's declarative widgets (see
+    /// `a2ui::micro_widget::load_app_widgets`). Server executors register a
+    /// hub-API client here so runs never read widgets from the meta store.
+    pub app_widget_source:
+        Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::AppWidgetSource>>>>,
+
     /// Where this state's process runs. Server-side entry points set
     /// [`ExecutionEnvironment::Server`] so process-level services without a
     /// run context (the model factory) can refuse ambient host credentials.
@@ -557,6 +563,7 @@ impl FlowLikeState {
             page_registry: Arc::new(DashMap::new()),
 
             package_widget_source: Arc::new(RwLock::new(None)),
+            app_widget_source: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -594,6 +601,7 @@ impl FlowLikeState {
             page_registry: Arc::new(DashMap::new()),
 
             package_widget_source: Arc::new(RwLock::new(None)),
+            app_widget_source: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -610,6 +618,21 @@ impl FlowLikeState {
         &self,
     ) -> Option<Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>> {
         self.package_widget_source.read().await.clone()
+    }
+
+    /// Register the host implementation supplying an app's declarative widgets.
+    pub async fn register_app_widget_source(
+        &self,
+        source: Arc<dyn crate::a2ui::micro_widget::AppWidgetSource>,
+    ) {
+        let mut guard = self.app_widget_source.write().await;
+        *guard = Some(source);
+    }
+
+    pub async fn app_widget_source(
+        &self,
+    ) -> Option<Arc<dyn crate::a2ui::micro_widget::AppWidgetSource>> {
+        self.app_widget_source.read().await.clone()
     }
 
     #[cfg(feature = "bit")]
@@ -687,6 +710,7 @@ impl FlowLikeState {
             page_registry: Arc::new(DashMap::new()),
 
             package_widget_source: self.package_widget_source.clone(),
+            app_widget_source: self.app_widget_source.clone(),
         }
     }
 

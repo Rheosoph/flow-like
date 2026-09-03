@@ -154,11 +154,12 @@ pub async fn list_process_cases(
                SELECT id AS root_id, id AS run_id, 0 AS depth
                FROM "public"."ExecutionRun"
                WHERE "parentRunId" IS NULL AND "appId" = $1 AND "updatedAt" >= $2
+                 AND "runVariant" = 'PRIMARY'
              UNION ALL
                SELECT t.root_id, r.id, t.depth + 1
                FROM "public"."ExecutionRun" r
                JOIN tree t ON r."parentRunId" = t.run_id
-               WHERE t.depth < $3
+               WHERE t.depth < $3 AND r."runVariant" = 'PRIMARY'
            )
            SELECT
                t.root_id AS case_id,
@@ -167,8 +168,8 @@ pub async fn list_process_cases(
                e."eventType" AS root_event_type,
                root."correlationKeys" AS correlation_keys,
                COUNT(*)::BIGINT AS run_count,
-               COUNT(*) FILTER (WHERE r.status IN ('FAILED', 'CANCELLED', 'TIMEOUT'))::BIGINT AS failed_count,
-               COUNT(*) FILTER (WHERE r.status IN ('PENDING', 'RUNNING'))::BIGINT AS running_count,
+               COUNT(*) FILTER (WHERE r.status IN ('FAILED', 'CANCELLED', 'TIMEOUT') AND r."runVariant" = 'PRIMARY')::BIGINT AS failed_count,
+               COUNT(*) FILTER (WHERE r.status IN ('PENDING', 'RUNNING') AND r."runVariant" = 'PRIMARY')::BIGINT AS running_count,
                ARRAY_AGG(r."appId" ORDER BY t.depth, r."createdAt") AS apps,
                MIN(r."startedAt") AS started_at,
                MAX(GREATEST(r."completedAt", r."updatedAt")) AS last_activity_at,
@@ -312,11 +313,12 @@ pub async fn get_process_case(
                SELECT id, 0 AS depth
                FROM "public"."ExecutionRun"
                WHERE id = $2 AND "appId" = $1 AND "parentRunId" IS NULL
+                 AND "runVariant" = 'PRIMARY'
              UNION ALL
                SELECT r.id, t.depth + 1
                FROM "public"."ExecutionRun" r
                JOIN tree t ON r."parentRunId" = t.id
-               WHERE t.depth < $3
+               WHERE t.depth < $3 AND r."runVariant" = 'PRIMARY'
            )
            SELECT
                r.id AS run_id,

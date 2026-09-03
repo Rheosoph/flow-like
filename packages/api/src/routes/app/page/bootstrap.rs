@@ -3,10 +3,15 @@
 //! A route is an Event selection. When the Event has a custom page, it pins both the board and
 //! optionally a board version that own it. Keeping those reads together prevents a client from
 //! accidentally combining a fresh Event with a page from a different board snapshot.
+//!
+//! A page Event with Live variants is canaried here (WP6b): the served target is resolved once,
+//! before any artifact is derived, and the sealed `page_execution` claims minted from it pin the
+//! viewer's session to that target for every later action.
 
 use crate::{
     ensure_fresh_permission,
     error::ApiError,
+    execution::variant::{self, ResolvedTarget, SplitKey},
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{
@@ -43,6 +48,9 @@ pub struct BootstrapQuery {
     /// Direct Event target for links that do not name a route.
     #[serde(alias = "event_id")]
     pub event_id: Option<String>,
+    /// Pin a page Event to `stable` or a named live variant instead of the weighted split.
+    #[serde(default, rename = "__variant")]
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -64,6 +72,11 @@ pub struct BootstrapResponse {
     /// Revision of the Page execution authority map. Clients return this with
     /// lifecycle and static action invocations.
     pub execution_revision: Option<String>,
+    /// The live variant this bootstrap was served from, or `null` for the primary.
+    /// Informational: the server pins this session's page triggers itself — lifecycle and
+    /// static actions through the `execution_revision` they echo back, dynamic actions
+    /// through the sealed page-execution claims in their capability.
+    pub served_variant: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,10 +159,44 @@ fn resolve_route(events: &[Event], requested_route: &str) -> RouteResolution {
     }
 }
 
+/// Resolve which page target this viewer is served (WP6b). An explicit pin wins; otherwise the
+/// caller subject is the split key so one user keeps seeing the same variant across bootstraps,
+/// with a fresh per-request draw only for principals that have no subject. Non-page Events are
+/// untouched here — their canary is resolved at dispatch.
+fn resolve_served_target(
+    event: &Event,
+    pin: Option<&str>,
+    caller_subject: Option<&str>,
+) -> Result<ResolvedTarget, ApiError> {
+    if event.default_page_id.is_none() {
+        // Chat/form bootstraps never resolve variants, but a supplied pin must
+        // still be a real Live variant (or `stable`) so a stale or garbage pin
+        // fails loudly here exactly as it does on every invoke path.
+        if let Some(pin) = pin.map(str::trim).filter(|pin| !pin.is_empty())
+            && pin != variant::STABLE_VARIANT
+        {
+            variant::explicit_selection(event, Some(pin), None).map_err(ApiError::bad_request)?;
+        }
+        return Ok(ResolvedTarget::primary(event));
+    }
+    let split_key = match caller_subject.filter(|subject| !subject.trim().is_empty()) {
+        Some(subject) => SplitKey {
+            source: variant::SPLIT_SOURCE_SUBJECT,
+            value: subject.to_string(),
+        },
+        None => SplitKey {
+            source: variant::SPLIT_SOURCE_RUN_ID,
+            value: flow_like_types::create_id(),
+        },
+    };
+    variant::resolve_page_target(event, pin, &split_key).map_err(ApiError::bad_request)
+}
+
 fn bootstrap_response(
     event: Event,
     page: Option<Page>,
     execution_revision: Option<String>,
+    served_variant: Option<String>,
     canonical_route: Option<String>,
     route_miss: bool,
     headers: &HeaderMap,
@@ -171,6 +218,7 @@ fn bootstrap_response(
         page,
         revision,
         execution_revision,
+        served_variant,
     })
     .map_err(|error| ApiError::internal_error(anyhow!("failed to encode bootstrap: {error}")))?;
     // The HTTP validator covers the entire sanitized document. A permission-safe Event change,
@@ -206,14 +254,16 @@ fn bootstrap_response(
     path = "/apps/{app_id}/pages/bootstrap",
     tag = "pages",
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = [])),
-    description = "Resolve a /use route or direct Event and return its active, sanitized Event and optional exact bound custom page.",
+    description = "Resolve a /use route or direct Event and return its active, sanitized Event and optional exact bound custom page. A page Event with live variants is served from the variant the caller is assigned to.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
-        BootstrapQuery
+        BootstrapQuery,
+        ("x-flow-like-variant" = Option<String>, Header, description = "Pin a page Event to `stable` or a named live variant")
     ),
     responses(
         (status = 200, description = "Resolved Event bootstrap, with a page when the Event owns one", body = BootstrapResponse),
         (status = 304, description = "The cached bootstrap document is still current"),
+        (status = 400, description = "The requested variant pin is not `stable` or a live variant of the Event"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "No active route or Event was found")
@@ -282,6 +332,13 @@ pub async fn bootstrap(
     };
 
     let canonical_route = canonical_event_route(&event);
+    // Resolve the served variant before any artifact is derived from the Event value: the page,
+    // its execution map and the response projection all describe the same target.
+    let pin = variant::pin_from_request(&headers, params.variant.clone());
+    let caller_subject = permission.effective_user_id().ok();
+    let target = resolve_served_target(&event, pin.as_deref(), caller_subject.as_deref())?;
+    let served_variant = target.variant_name.clone();
+    let event = variant::apply_target(event, &target);
     // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
     // chats, and other runnable surfaces. When it declares a custom page, however, that page is
     // part of the contract and a missing version-bound artifact remains a uniform 404.
@@ -310,6 +367,7 @@ pub async fn bootstrap(
         event,
         page,
         execution_revision,
+        served_variant,
         canonical_route,
         route_miss,
         &headers,
@@ -319,6 +377,7 @@ pub async fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::flow::event::{EventVariant, EventVariantMode};
     use std::collections::HashMap;
 
     fn event(id: &str, route: Option<&str>, is_default: bool) -> Event {
@@ -333,6 +392,7 @@ mod tests {
             config: Vec::new(),
             active: true,
             canary: None,
+            variants: Vec::new(),
             priority: 0,
             event_type: "generic_form".to_string(),
             notes: None,
@@ -408,6 +468,7 @@ mod tests {
             event("event", Some("/"), true),
             Some(page.clone()),
             Some("per1_test".to_string()),
+            None,
             Some("/".to_string()),
             false,
             &headers,
@@ -429,6 +490,7 @@ mod tests {
             event("event", Some("/"), true),
             Some(page.clone()),
             Some("per1_test".to_string()),
+            None,
             Some("/".to_string()),
             false,
             &conditional,
@@ -440,12 +502,96 @@ mod tests {
             event("renamed", Some("/"), true),
             Some(page),
             Some("per1_test".to_string()),
+            None,
             Some("/".to_string()),
             false,
             &conditional,
         )
         .unwrap();
         assert_eq!(not_modified.status(), StatusCode::OK);
+    }
+
+    fn page_variant(name: &str) -> EventVariant {
+        EventVariant {
+            name: name.to_string(),
+            board_id: "board-canary".to_string(),
+            board_version: Some((2, 0, 0)),
+            node_id: "node-canary".to_string(),
+            variables: HashMap::new(),
+            default_page_id: Some("page-canary".to_string()),
+            mode: EventVariantMode::Live { weight: 0.5 },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn variant_pinned_bootstrap_resolves_the_variants_page() {
+        let mut event = event("page-event", Some("/"), true);
+        event.variants = vec![page_variant("canary")];
+
+        let target = resolve_served_target(&event, Some("canary"), Some("user-1")).unwrap();
+        assert_eq!(target.variant_name.as_deref(), Some("canary"));
+        let served = variant::apply_target(event.clone(), &target);
+        assert_eq!(served.default_page_id.as_deref(), Some("page-canary"));
+        assert_eq!(served.board_id, "board-canary");
+        assert_eq!(served.board_version, Some((2, 0, 0)));
+        assert_eq!(served.id, "page-event");
+
+        let stable = resolve_served_target(&event, Some("stable"), Some("user-1")).unwrap();
+        assert_eq!(stable.variant_name, None);
+        let served = variant::apply_target(event.clone(), &stable);
+        assert_eq!(served.default_page_id.as_deref(), Some("page"));
+        assert_eq!(served.board_id, "board");
+
+        // The redaction that follows applies to the substituted value.
+        let redacted = redact_page_event_board_metadata(variant::apply_target(event, &target));
+        assert!(redacted.board_id.is_empty());
+        assert_eq!(redacted.default_page_id.as_deref(), Some("page-canary"));
+    }
+
+    #[test]
+    fn unpinned_bootstrap_is_sticky_per_caller_subject() {
+        let mut event = event("page-event", Some("/"), true);
+        event.variants = vec![page_variant("canary")];
+
+        let first = resolve_served_target(&event, None, Some("user-42")).unwrap();
+        for _ in 0..50 {
+            let again = resolve_served_target(&event, None, Some("user-42")).unwrap();
+            assert_eq!(again.variant_name, first.variant_name);
+        }
+        let mut seen_variant = false;
+        let mut seen_primary = false;
+        for i in 0..200 {
+            let target = resolve_served_target(&event, None, Some(&format!("user-{i}"))).unwrap();
+            seen_variant |= target.variant_name.is_some();
+            seen_primary |= target.variant_name.is_none();
+        }
+        assert!(seen_variant && seen_primary);
+
+        let mut chat = event.clone();
+        chat.default_page_id = None;
+        assert_eq!(
+            resolve_served_target(&chat, None, Some("user-42"))
+                .unwrap()
+                .variant_name,
+            None
+        );
+    }
+
+    #[test]
+    fn unknown_variant_pin_is_a_bad_request() {
+        let mut event = event("page-event", Some("/"), true);
+        event.variants = vec![page_variant("canary")];
+
+        let refused = resolve_served_target(&event, Some("nope"), Some("user-1")).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+        let mut shadow = page_variant("mirror");
+        shadow.mode = EventVariantMode::Shadow { sample_rate: 1.0 };
+        event.variants.push(shadow);
+        let refused = resolve_served_target(&event, Some("mirror"), Some("user-1")).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
@@ -457,10 +603,12 @@ mod tests {
             page: None,
             revision: None,
             execution_revision: None,
+            served_variant: None,
         };
         let value = flow_like_types::json::to_value(response).unwrap();
         assert!(value["event"].is_object());
         assert!(value["page"].is_null());
         assert!(value["revision"].is_null());
+        assert!(value["served_variant"].is_null());
     }
 }

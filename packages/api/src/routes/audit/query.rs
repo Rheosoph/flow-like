@@ -9,8 +9,31 @@ use crate::{
     audit::service::{AuditEntryOutput, AuditFilter, AuditService},
     error::ApiError,
     middleware::jwt::AppUser,
+    permission::{global_permission::GlobalPermission, role_permission::RolePermissions},
     state::AppState,
 };
+
+/// Audit chains carry every administrative change of an app, so reading one is an
+/// Owner-level capability. Chains that are not an app the caller belongs to — the root
+/// chain (`None`) and package chains — are platform-admin territory.
+pub(super) async fn ensure_chain_access(
+    user: &AppUser,
+    state: &AppState,
+    chain_id: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Some(chain_id) = chain_id
+        && let Ok(permission) = user.app_permission(chain_id, state).await
+    {
+        if permission.has_permission(RolePermissions::Owner) {
+            return Ok(());
+        }
+        return Err(ApiError::FORBIDDEN);
+    }
+
+    user.check_global_permission(state, GlobalPermission::Admin)
+        .await
+        .map(|_| ())
+}
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct AuditQueryParams {
@@ -29,7 +52,7 @@ pub struct AuditQueryParams {
     get,
     path = "/audit/entries",
     tag = "audit",
-    description = "Query audit trail entries. Requires Owner permission when filtering by app chain.",
+    description = "Query audit trail entries. App chains require Owner permission on that app; the root chain and package chains require the Admin global permission.",
     params(AuditQueryParams),
     responses(
         (status = 200, description = "Audit entries", body = Vec<AuditEntryOutput>),
@@ -43,16 +66,8 @@ pub async fn query_audit_entries(
     Extension(user): Extension<AppUser>,
     Query(params): Query<AuditQueryParams>,
 ) -> Result<Json<Vec<AuditEntryOutput>>, ApiError> {
-    let _sub = user.sub()?;
-
-    // If querying a specific chain, verify the user has access
-    if let Some(ref chain_id) = params.chain_id {
-        let perm = user.app_permission(chain_id, &state).await;
-        if perm.is_err() {
-            // Could be a package chain — for now require authenticated user
-            // Package chain audit access is open to authenticated users
-        }
-    }
+    user.sub()?;
+    ensure_chain_access(&user, &state, params.chain_id.as_deref()).await?;
 
     let filter = AuditFilter {
         chain_id: params.chain_id,

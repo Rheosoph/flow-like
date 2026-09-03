@@ -2,9 +2,14 @@
 
 import { useTranslation } from "@flow-like/locales";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
+import {
+	registerWidgetSnapshotSource,
+	scheduleWidgetSnapshot,
+	unregisterWidgetSnapshotSource,
+	widgetSnapshotAttribute,
+} from "../../../lib/widget-snapshot";
 import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
 	applyA2UIMessage,
@@ -46,6 +51,45 @@ interface MessageWidgetProps {
  * this widget in place. A maximize control opens the same live surface in a
  * fullscreen dialog.
  */
+function replaySurface(widget: IChatWidget): Surface {
+	let next = buildSurface(widget);
+	for (const update of widget.updates ?? []) {
+		next = applyA2UIMessage(next, normalizeA2UIWireMessage(update));
+	}
+	return next;
+}
+
+function updateSignature(
+	updates: unknown[] | undefined,
+	index: number,
+): string | null {
+	if (!updates || index < 0 || index >= updates.length) return null;
+	return JSON.stringify(updates[index]);
+}
+
+interface ReplayState {
+	instanceId: string;
+	appliedCount: number;
+	lastSig: string | null;
+	/** Unpersisted action-feedback messages applied on top of the replay. */
+	feedbackCount: number;
+}
+
+function replayState(widget: IChatWidget): ReplayState {
+	const updates = widget.updates ?? [];
+	return {
+		instanceId: widget.instance_id,
+		appliedCount: updates.length,
+		lastSig: updateSignature(updates, updates.length - 1),
+		feedbackCount: 0,
+	};
+}
+
+/** Keys the snapshot cache: changes exactly when the rendered state does. */
+function contentSignature(state: ReplayState): string {
+	return `${state.feedbackCount}:${state.appliedCount}:${state.lastSig ?? ""}`;
+}
+
 function MessageWidget({
 	widget,
 	appId,
@@ -53,43 +97,79 @@ function MessageWidget({
 	eventId,
 }: MessageWidgetProps) {
 	const { t } = useTranslation("chat");
-	// Content keys: Dexie liveQuery re-materializes message objects on every
-	// table write, so object identity is NOT stable across renders of unchanged
-	// widgets — string equality is. Reseeding only on real content change keeps
-	// unpersisted action-feedback state (applied via onA2UIMessage) alive.
-	const componentKey = useMemo(
-		() => JSON.stringify(widget.component),
-		[widget.component],
+	// Dexie liveQuery re-materializes message objects on every table write, so
+	// object identity is NOT stable across renders of unchanged widgets. The
+	// replay is applied incrementally: as long as the updates array extends
+	// what was already applied (checked via the last applied entry's content,
+	// not identity), only the new tail is applied onto the CURRENT surface —
+	// full O(n) reseeds per streamed update become O(1), and unpersisted
+	// action-feedback state (applied via onA2UIMessage) survives. The push-time
+	// component snapshot never changes for an instance (re-registrations ride
+	// the updates array), so a shrunk or diverged updates array is the only
+	// full-reseed trigger.
+	const replayRef = useRef<ReplayState>({
+		instanceId: "",
+		appliedCount: 0,
+		lastSig: null,
+		feedbackCount: 0,
+	});
+	const [surface, setSurface] = useState<Surface>(() => {
+		replayRef.current = replayState(widget);
+		return replaySurface(widget);
+	});
+	const [signature, setSignature] = useState(() =>
+		contentSignature(replayRef.current),
 	);
-	const updatesKey = useMemo(
-		() => JSON.stringify(widget.updates ?? []),
-		[widget.updates],
-	);
-
-	// Snapshot + ordered replay of the widget's a2ui updates (attached by the
-	// backend for pre-push updates, appended by the stream reducer for live
-	// ones).
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on serialized content, not object identity
-	const seededSurface = useMemo(() => {
-		let next = buildSurface(widget);
-		for (const update of widget.updates ?? []) {
-			next = applyA2UIMessage(next, normalizeA2UIWireMessage(update));
-		}
-		return next;
-	}, [componentKey, updatesKey, widget.surface_id, widget.instance_id]);
-
-	const [surface, setSurface] = useState<Surface>(seededSurface);
 	const [maximized, setMaximized] = useState(false);
+	const containerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		setSurface(seededSurface);
-	}, [seededSurface]);
+		const updates = widget.updates ?? [];
+		const state = replayRef.current;
+		const extendsApplied =
+			state.instanceId === widget.instance_id &&
+			updates.length >= state.appliedCount &&
+			updateSignature(updates, state.appliedCount - 1) === state.lastSig;
+
+		if (extendsApplied) {
+			if (updates.length === state.appliedCount) return;
+			const tail = updates.slice(state.appliedCount);
+			setSurface((prev) =>
+				tail.reduce<Surface>(
+					(acc, update) =>
+						applyA2UIMessage(acc, normalizeA2UIWireMessage(update)),
+					prev,
+				),
+			);
+			state.appliedCount = updates.length;
+			state.lastSig = updateSignature(updates, updates.length - 1);
+			setSignature(contentSignature(state));
+			return;
+		}
+
+		replayRef.current = replayState(widget);
+		setSurface(replaySurface(widget));
+		setSignature(contentSignature(replayRef.current));
+	}, [widget]);
 
 	const onA2UIMessage = useCallback((message: A2UIServerMessage) => {
 		setSurface((prev) =>
 			applyA2UIMessage(prev, normalizeA2UIWireMessage(message)),
 		);
+		replayRef.current.feedbackCount += 1;
+		setSignature(contentSignature(replayRef.current));
 	}, []);
+
+	// The inline container is the capture source; while maximized it is empty,
+	// so pre-capture pauses and the last inline capture keeps serving.
+	useEffect(() => {
+		const instanceId = widget.instance_id;
+		registerWidgetSnapshotSource(instanceId, signature);
+		if (!maximized) {
+			scheduleWidgetSnapshot(instanceId, signature, () => containerRef.current);
+		}
+		return () => unregisterWidgetSnapshotSource(instanceId);
+	}, [widget.instance_id, signature, maximized]);
 
 	const renderer = (
 		<A2UIRenderer
@@ -114,10 +194,13 @@ function MessageWidget({
 				<Maximize2 className="w-3.5 h-3.5" />
 			</button>
 			<div
+				ref={containerRef}
 				className="max-h-120 overflow-auto"
 				{...widgetSnapshotAttribute(widget.instance_id)}
 			>
-				{renderer}
+				{/* Only one live renderer at a time: two mounted trees for the same
+				    surface duplicate iframes, charts and map instances. */}
+				{!maximized && renderer}
 			</div>
 
 			<Dialog open={maximized} onOpenChange={setMaximized}>

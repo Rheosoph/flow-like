@@ -93,6 +93,18 @@ impl RedisCacheStore {
 /// Members handled per `SSCAN`/`SCAN` page.
 const SCAN_BATCH: usize = 500;
 
+/// Read one numeric field out of an `INFO` payload.
+///
+/// `INFO` is a flat `field:value\r\n` document with `# Section` headers in between, and
+/// the four numbers the dashboard wants are spread across two of those sections — so one
+/// parser over the whole payload is both cheaper and shorter than one call per section.
+fn info_field(info: &str, field: &str) -> Option<i64> {
+    info.lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim() == field)
+        .and_then(|(_, value)| value.trim().parse::<i64>().ok())
+}
+
 /// Atomic "insert if nothing live" honouring the *stored* expiry, not just Redis's.
 ///
 /// TTLs are rounded up to whole seconds on write, so for up to a second an entry can be
@@ -412,6 +424,43 @@ impl CacheStore for RedisCacheStore {
 
         Ok(pruned)
     }
+
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        // Pipelined so the whole probe is one round trip. A bare `INFO` returns the
+        // default sections, which already carry every field read below; asking for
+        // several named sections in one call is a Redis 7 feature this backend does not
+        // require of a deployment.
+        let mut pipe = redis::pipe();
+        pipe.cmd("DBSIZE").cmd("INFO");
+
+        let mut conn = self.conn.lock().await;
+        let (keys, info): (i64, String) = pipe
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        drop(conn);
+
+        Ok(Some(CacheStoreStats {
+            entries: Some(keys),
+            size_bytes: info_field(&info, "used_memory"),
+            // `maxmemory` is 0 when no ceiling is configured. Reporting that as a limit
+            // of zero bytes would paint every healthy instance as permanently full.
+            max_size_bytes: info_field(&info, "maxmemory").filter(|limit| *limit > 0),
+            hits: info_field(&info, "keyspace_hits"),
+            misses: info_field(&info, "keyspace_misses"),
+            evictions: info_field(&info, "evicted_keys"),
+            // Redis expires entries itself, so there is no sweeper backlog to report.
+            note: Some(
+                "DBSIZE counts every key in the selected Redis database — cache entries, \
+                 the per-app index sets this backend maintains, and anything else sharing \
+                 the instance — so it is an upper bound on cache entries, never an exact \
+                 count. Memory, hit, miss and eviction figures are instance-wide for the \
+                 same reason."
+                    .to_string(),
+            ),
+            ..CacheStoreStats::default()
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -449,5 +498,22 @@ mod tests {
         // Already elapsed: still clamp to 1 so Redis drops it promptly.
         assert_eq!(RedisCacheStore::ttl_seconds(Some(0), 5_000), Some(1));
         assert_eq!(RedisCacheStore::ttl_seconds(None, 0), None);
+    }
+
+    #[test]
+    fn info_fields_are_read_across_sections_and_never_by_prefix() {
+        let info = "# Memory\r\nused_memory:1048576\r\nused_memory_peak:2097152\r\n\
+                    maxmemory:0\r\n\r\n# Stats\r\nkeyspace_hits:12\r\nkeyspace_misses:3\r\n\
+                    evicted_keys:0\r\n";
+
+        assert_eq!(info_field(info, "used_memory"), Some(1_048_576));
+        assert_eq!(info_field(info, "maxmemory"), Some(0));
+        assert_eq!(info_field(info, "keyspace_hits"), Some(12));
+        assert_eq!(info_field(info, "evicted_keys"), Some(0));
+        // `used_memory` must not answer for `used_memory_peak`, and a section header
+        // carries no colon at all.
+        assert_eq!(info_field(info, "used_memory_p"), None);
+        assert_eq!(info_field(info, "Memory"), None);
+        assert_eq!(info_field(info, "maxmemory_policy"), None);
     }
 }

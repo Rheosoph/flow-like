@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub use flow_like_types::channel::ChannelGrant;
-pub use flow_like_types::dispatch::{DispatchPayload, WasmPackageRef};
+pub use flow_like_types::dispatch::{CompiledArtifactRef, DispatchPayload, WasmPackageRef};
 
 /// Board version as a tuple (major, minor, patch)
 pub type BoardVersion = (u32, u32, u32);
@@ -69,6 +69,14 @@ pub struct ExecutionRequest {
     /// Channel credentials minted by the API: how this run waits for client replies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelGrant>,
+    /// Shadow/replay isolation: the run must not write app storage. Validated
+    /// against the signed executor JWT claim before execution starts.
+    #[serde(default)]
+    pub shadow: bool,
+    /// The compiled board to run, as a presigned GET the API minted after
+    /// assuring the artifact exists. Required: this runtime has no other way to
+    /// obtain a board, so a payload without it is rejected rather than run.
+    pub artifact: CompiledArtifactRef,
 }
 
 /// Result of an execution
@@ -184,6 +192,11 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
         };
 
         let (board_version, board_etag) = decode_board_selector(p.board_version, p.board_etag)?;
+        let artifact = p.artifact.ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "dispatch payload carries no compiled artifact reference; the API must be upgraded before this executor"
+            )
+        })?;
 
         Ok(Self {
             job_id: p.job_id,
@@ -205,6 +218,8 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             profile: p.profile,
             wasm_packages: p.wasm_packages,
             channel: p.channel,
+            shadow: p.shadow,
+            artifact,
         })
     }
 }
@@ -259,8 +274,29 @@ mod tests {
             },
             "executor_jwt": "jwt",
             "callback_url": "https://api.example",
-            "stream_state": true
+            "stream_state": true,
+            "artifact": {
+                "url": "https://meta.example/tmp/apps/app-1/compiled/drafts/board-1/etag-a_fp.flcb?sig",
+                "path": "tmp/apps/app-1/compiled/drafts/board-1/etag-a_fp.flcb",
+                "source_etag": "etag-a",
+                "registry_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
         })
+    }
+
+    #[test]
+    fn a_payload_without_a_compiled_artifact_is_rejected() {
+        let mut json = etag_latest_wire_json();
+        json.as_object_mut().unwrap().remove("artifact");
+        let payload: DispatchPayload =
+            serde_json::from_value(json).expect("the wire field is optional");
+        let error = ExecutionRequest::try_from(payload)
+            .err()
+            .expect("an executor cannot run without an artifact reference");
+        assert!(
+            error.to_string().contains("compiled artifact reference"),
+            "{error}"
+        );
     }
 
     #[test]

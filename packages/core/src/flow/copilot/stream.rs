@@ -1175,16 +1175,17 @@ pub fn plan_step_frame(
     status: PlanStepStatus,
     tool_name: &str,
 ) -> String {
+    // The description carries the model's raw reasoning — a literal closing
+    // tag in it must not truncate the frame, so route through stream_frame's
+    // sentinel escaping like every other frame.
     let event = StreamEvent::PlanStep(PlanStep {
         id,
         description,
         status,
         tool_name: Some(tool_name.to_string()),
     });
-    format!(
-        "<plan_step>{}</plan_step>",
-        serde_json::to_string(&event).unwrap_or_default()
-    )
+    let payload = serde_json::to_value(&event).unwrap_or_default();
+    stream_frame("plan_step", &payload)
 }
 
 #[cfg(test)]

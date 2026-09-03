@@ -616,6 +616,13 @@ pub async fn compute_offline_fork_bundle(
             });
             event_proto.canary = None;
         }
+        drop_unavailable_variants(
+            &mut event_proto,
+            &src_event_id,
+            &shipped_boards,
+            &maps,
+            &mut skipped,
+        );
 
         // Note pointed-to board versions for step 4.
         if let Some(v) = event_proto.board_version.as_ref() {
@@ -626,6 +633,12 @@ pub async fn compute_offline_fork_bundle(
             && let Some(v) = canary.board_version.as_ref()
         {
             pointed_board_versions.insert((canary.board_id.clone(), (v.major, v.minor, v.patch)));
+        }
+        for variant in &event_proto.variants {
+            if let Some(v) = variant.board_version.as_ref() {
+                pointed_board_versions
+                    .insert((variant.board_id.clone(), (v.major, v.minor, v.patch)));
+            }
         }
 
         if matches!(event_proto.event_type.as_str(), "api" | "http" | "webhook")
@@ -651,6 +664,13 @@ pub async fn compute_offline_fork_bundle(
             && !shipped_pages.contains(default_page)
         {
             event_proto.default_page_id = None;
+        }
+        for variant in event_proto.variants.iter_mut() {
+            if let Some(page) = variant.default_page_id.as_deref()
+                && !shipped_pages.contains(page)
+            {
+                variant.default_page_id = None;
+            }
         }
 
         let new_event_id = maps.translate_event(&src_event_id);
@@ -1123,6 +1143,24 @@ fn guard_reserved_event_versions(
         });
         event.canary = None;
     }
+    event.variants.retain(|variant| {
+        if !variant
+            .board_version
+            .as_ref()
+            .is_some_and(is_reserved_etag_dispatch_version)
+        {
+            return true;
+        }
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Other,
+            source_id: source_event_id.to_string(),
+            reason: format!(
+                "variant '{}' of event {} selected the version reserved for ETag-bound Latest execution and was dropped",
+                variant.name, source_event_id
+            ),
+        });
+        false
+    });
     true
 }
 
@@ -1142,6 +1180,41 @@ fn canary_target_available(
 ) -> bool {
     shipped_boards.contains(&canary.board_id)
         && (canary.node_id.is_empty() || maps.nodes.contains_key(&canary.node_id))
+}
+
+fn variant_target_available(
+    variant: &proto::EventVariant,
+    shipped_boards: &HashSet<String>,
+    maps: &ForkIdMap,
+) -> bool {
+    shipped_boards.contains(&variant.board_id)
+        && (variant.node_id.is_empty() || maps.nodes.contains_key(&variant.node_id))
+}
+
+/// Drop every variant whose board/node did not ship, one `SkippedItem` each.
+/// Weights are NOT redistributed — a dropped variant's share simply falls
+/// back to the primary target.
+fn drop_unavailable_variants(
+    event: &mut proto::Event,
+    source_event_id: &str,
+    shipped_boards: &HashSet<String>,
+    maps: &ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
+) {
+    event.variants.retain(|variant| {
+        if variant_target_available(variant, shipped_boards, maps) {
+            return true;
+        }
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Other,
+            source_id: source_event_id.to_string(),
+            reason: format!(
+                "variant '{}' of event {} pointed at a board/node that was not shipped and was dropped",
+                variant.name, source_event_id
+            ),
+        });
+        false
+    });
 }
 
 /// Encode a proto message in the same format the rest of the
@@ -1768,6 +1841,13 @@ pub async fn fork_app_with_visibility(
             });
             event_proto.canary = None;
         }
+        drop_unavailable_variants(
+            &mut event_proto,
+            &src_event_id,
+            &shipped_boards,
+            &maps,
+            &mut skipped,
+        );
 
         if let Some(v) = event_proto.board_version.as_ref() {
             pointed_board_versions
@@ -1777,6 +1857,12 @@ pub async fn fork_app_with_visibility(
             && let Some(v) = canary.board_version.as_ref()
         {
             pointed_board_versions.insert((canary.board_id.clone(), (v.major, v.minor, v.patch)));
+        }
+        for variant in &event_proto.variants {
+            if let Some(v) = variant.board_version.as_ref() {
+                pointed_board_versions
+                    .insert((variant.board_id.clone(), (v.major, v.minor, v.patch)));
+            }
         }
 
         // Rewrite the HTTP `auth_token` in event.config: HTTP/api/webhook
@@ -1811,6 +1897,13 @@ pub async fn fork_app_with_visibility(
             && !shipped_pages.contains(default_page)
         {
             event_proto.default_page_id = None;
+        }
+        for variant in event_proto.variants.iter_mut() {
+            if let Some(page) = variant.default_page_id.as_deref()
+                && !shipped_pages.contains(page)
+            {
+                variant.default_page_id = None;
+            }
         }
 
         remap_event(&mut event_proto, &maps);
@@ -2997,6 +3090,13 @@ fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
         canary.board_id = maps.translate_board(&canary.board_id);
         canary.node_id = maps.translate_node(&canary.node_id);
     }
+    for variant in event.variants.iter_mut() {
+        variant.board_id = maps.translate_board(&variant.board_id);
+        variant.node_id = maps.translate_node(&variant.node_id);
+        if let Some(page) = variant.default_page_id.as_ref() {
+            variant.default_page_id = Some(maps.translate_page(page));
+        }
+    }
     for input in event.inputs.iter_mut() {
         if let Some(new_pin) = maps.pins.get(&input.id) {
             input.id = new_pin.clone();
@@ -3007,20 +3107,24 @@ fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
 }
 
 /// Clears `default_value` on every secret-marked variable inside an event
-/// proto, including the canary's variables. The event's `config` bytes
-/// are intentionally NOT touched here — token sites (HTTP auth_token,
-/// PAT, OAuth) are replaced in Phase 4 with caller-supplied values.
+/// proto, including the canary's and every variant's variables. The event's
+/// `config` bytes are intentionally NOT touched here — token sites (HTTP
+/// auth_token, PAT, OAuth) are replaced in Phase 4 with caller-supplied
+/// values.
 fn strip_event_secrets(event: &mut proto::Event) {
-    for var in event.variables.values_mut() {
+    strip_secret_values(&mut event.variables);
+    if let Some(canary) = event.canary.as_mut() {
+        strip_secret_values(&mut canary.variables);
+    }
+    for variant in event.variants.iter_mut() {
+        strip_secret_values(&mut variant.variables);
+    }
+}
+
+fn strip_secret_values(variables: &mut HashMap<String, proto::Variable>) {
+    for var in variables.values_mut() {
         if var.secret {
             var.default_value.clear();
-        }
-    }
-    if let Some(canary) = event.canary.as_mut() {
-        for var in canary.variables.values_mut() {
-            if var.secret {
-                var.default_value.clear();
-            }
         }
     }
 }
@@ -4287,6 +4391,86 @@ mod tests {
             &mut skipped
         ));
         assert!(skipped.is_empty());
+    }
+
+    fn proto_variant(name: &str, board_id: &str, node_id: &str) -> proto::EventVariant {
+        proto::EventVariant {
+            name: name.to_string(),
+            board_id: board_id.to_string(),
+            node_id: node_id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reserved_etag_dispatch_version_drops_only_the_offending_variant() {
+        let mut event = proto::Event {
+            board_version: Some(proto_version((1, 2, 3))),
+            variants: vec![
+                proto::EventVariant {
+                    board_version: Some(proto_version(ETAG_BOUND_LATEST_VERSION_SENTINEL)),
+                    ..proto_variant("pinned", "board-1", "node-1")
+                },
+                proto_variant("floating", "board-1", "node-1"),
+            ],
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+        assert!(
+            guard_reserved_event_versions(&mut event, "event-1", &mut skipped),
+            "a reserved variant selector is dropped while the primary event survives"
+        );
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(event.variants.len(), 1);
+        assert_eq!(event.variants[0].name, "floating");
+    }
+
+    #[test]
+    fn unavailable_variants_are_dropped_individually() {
+        let mut maps = ForkIdMap::default();
+        maps.nodes
+            .insert("src_node".to_string(), "dst_node".to_string());
+        let shipped_boards = HashSet::from(["shipped".to_string()]);
+        let mut event = proto::Event {
+            variants: vec![
+                proto_variant("kept", "shipped", "src_node"),
+                proto_variant("unshipped-board", "missing", "src_node"),
+                proto_variant("unshipped-node", "shipped", "missing_node"),
+            ],
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+        drop_unavailable_variants(&mut event, "event-1", &shipped_boards, &maps, &mut skipped);
+        assert_eq!(event.variants.len(), 1);
+        assert_eq!(event.variants[0].name, "kept");
+        assert_eq!(skipped.len(), 2);
+    }
+
+    #[test]
+    fn remap_event_translates_and_strips_variant_targets() {
+        let maps = widget_fork_maps();
+        let mut variant = proto_variant("canary", "src_board", "src_node");
+        variant.default_page_id = Some("src_page".to_string());
+        variant.variables.insert(
+            "v1".to_string(),
+            proto::Variable {
+                secret: true,
+                default_value: b"shh".to_vec(),
+                ..Default::default()
+            },
+        );
+        let mut event = proto::Event {
+            variants: vec![variant],
+            ..Default::default()
+        };
+
+        remap_event(&mut event, &maps);
+
+        let variant = &event.variants[0];
+        assert_eq!(variant.board_id, "dst_board");
+        assert_eq!(variant.node_id, "dst_node");
+        assert_eq!(variant.default_page_id.as_deref(), Some("dst_page"));
+        assert!(variant.variables["v1"].default_value.is_empty());
     }
 
     #[test]

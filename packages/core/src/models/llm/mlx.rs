@@ -932,6 +932,7 @@ mod apple {
             let parameters = crate::bit::LLMParameters {
                 context_length: 16_384,
                 provider: flow_like_model_provider::provider::ModelProvider {
+                    api_surface: None,
                     provider_name: MLX_PROVIDER_NAME.to_string(),
                     model_id: None,
                     version: None,

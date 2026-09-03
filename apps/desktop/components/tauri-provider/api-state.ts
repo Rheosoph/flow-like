@@ -10,6 +10,11 @@ import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 import { ensureProtectedAppRouteAuth, requestSilentRenew } from "../../lib/api";
 import { apiResponseError } from "../../lib/api-error";
+import {
+	DEFAULT_CONNECT_TIMEOUT_MS,
+	STREAM_HEADER_TIMEOUT_MS,
+	withRequestDeadline,
+} from "../../lib/request-deadline";
 
 function constructUrl(profile: IProfile, path: string): string {
 	return getApiUrl(profile, path);
@@ -154,29 +159,39 @@ export class TauriApiState implements IApiState {
 		}
 
 		try {
-			const response = await tauriFetch(url, {
-				...options,
-				headers: {
-					"Content-Type": "application/json",
-					...traceHeaders(),
-					...options?.headers,
-					...authHeader,
+			// The deadline spans the body read as well: `fetch_read_body` stalls on a
+			// half-open socket exactly like `fetch_send` does.
+			return await withRequestDeadline<T>(
+				path,
+				async ({ signal }) => {
+					const response = await tauriFetch(url, {
+						...options,
+						headers: {
+							"Content-Type": "application/json",
+							...traceHeaders(),
+							...options?.headers,
+							...authHeader,
+						},
+						keepalive: true,
+						priority: "high",
+						connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+						signal,
+					});
+
+					if (!response.ok) {
+						if (response.status === 401 && this.auth) {
+							requestSilentRenew(this.auth, "after 401");
+						}
+						const errorText = await response.text();
+						throw apiResponseError(response, errorText, path);
+					}
+
+					if (response.status === 204) return undefined as T;
+
+					return (await response.json()) as T;
 				},
-				keepalive: true,
-				priority: "high",
-			});
-
-			if (!response.ok) {
-				if (response.status === 401 && this.auth) {
-					requestSilentRenew(this.auth, "after 401");
-				}
-				const errorText = await response.text();
-				throw apiResponseError(response, errorText, path);
-			}
-
-			if (response.status === 204) return undefined as T;
-
-			return (await response.json()) as T;
+				{ signal: options?.signal },
+			);
 		} catch (error) {
 			if (error instanceof Error) {
 				if (
@@ -250,17 +265,33 @@ export class TauriApiState implements IApiState {
 		onMessage?: (data: T) => void,
 	): Promise<void> {
 		const abortController = new AbortController();
-		const response = await tauriFetch(url, {
-			method: options?.method ?? "POST",
-			headers: {
-				Accept: "text/event-stream",
-				"Content-Type": "application/json",
-				...((options?.headers as Record<string, string>) ?? {}),
-				...authHeader,
+		// Bounded until headers arrive, then released — the stream itself is
+		// long-lived by design and must not be cut off by a deadline. The reader
+		// below owns `abortController` and terminates the stream through it.
+		const response = await withRequestDeadline(
+			url,
+			async ({ signal, release }) => {
+				const res = await tauriFetch(url, {
+					method: options?.method ?? "POST",
+					headers: {
+						Accept: "text/event-stream",
+						"Content-Type": "application/json",
+						...((options?.headers as Record<string, string>) ?? {}),
+						...authHeader,
+					},
+					body: options?.body,
+					connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+					signal,
+				});
+				release();
+				return res;
 			},
-			body: options?.body,
-			signal: abortController.signal,
-		});
+			{
+				timeoutMs: STREAM_HEADER_TIMEOUT_MS,
+				signal: options?.signal,
+				controller: abortController,
+			},
+		);
 
 		if (!response.ok) {
 			if (response.status === 401 && this.auth) {

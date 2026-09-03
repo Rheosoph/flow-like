@@ -164,7 +164,7 @@ impl EventBusEvent {
                             let first_event = event.first();
 
                             if let Some(first_event) = first_event {
-                                crate::utils::emit_throttled(
+                                crate::utils::emit_event_batch_throttled(
                                     &app_handle,
                                     UiEmitTarget::All,
                                     &first_event.event_type,

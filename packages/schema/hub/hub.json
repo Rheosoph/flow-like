@@ -56,6 +56,13 @@
 				"type": "string"
 			}
 		},
+		"realtime": {
+			"description": "Realtime transport configuration. Signaling remains configured separately.",
+			"$ref": "#/$defs/RealtimeConfig",
+			"default": {
+				"ice": null
+			}
+		},
 		"cdn": {
 			"type": ["string", "null"]
 		},
@@ -382,6 +389,57 @@
 				"unauthorized_read",
 				"admin_interface",
 				"premium"
+			]
+		},
+		"RealtimeConfig": {
+			"type": "object",
+			"properties": {
+				"ice": {
+					"description": "Omit this field to retain the WebRTC library's built-in ICE defaults.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/RealtimeIceConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			}
+		},
+		"RealtimeIceConfig": {
+			"description": "Selects the service that issues short-lived STUN and TURN configuration for\nrealtime clients. Provider secrets are resolved by the API from references\nin the secret store and never belong in the hub JSON itself.",
+			"oneOf": [
+				{
+					"type": "object",
+					"properties": {
+						"provider": {
+							"type": "string",
+							"const": "cloudflare"
+						},
+						"turn_key_id_secret_ref": {
+							"description": "Secret-store reference containing the Cloudflare TURN key identifier.",
+							"type": "string"
+						},
+						"turn_key_api_token_secret_ref": {
+							"description": "Secret-store reference containing the bearer key returned with the TURN key.",
+							"type": "string"
+						},
+						"ttl_seconds": {
+							"description": "Lifetime of each client credential. Cloudflare accepts at most 48 hours.",
+							"type": "integer",
+							"format": "uint32",
+							"maximum": 172800,
+							"minimum": 300,
+							"default": 14400
+						}
+					},
+					"required": [
+						"provider",
+						"turn_key_id_secret_ref",
+						"turn_key_api_token_secret_ref"
+					]
+				}
 			]
 		},
 		"MailConfig": {

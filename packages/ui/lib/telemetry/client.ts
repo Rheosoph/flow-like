@@ -115,7 +115,10 @@ export function createTelemetryClient(
 	const isCrashEnabled = options.isCrashEnabled ?? (() => true);
 
 	let disposed = false;
-	let flushing = false;
+	// Tracked as the in-flight promise rather than a boolean: a boolean cleared in
+	// `finally` latches forever if a transport promise never settles, silently
+	// killing telemetry for the rest of the session.
+	let flushing: Promise<void> | null = null;
 
 	const createQueue = <T>(
 		config: ITelemetryQueueConfig<T>,
@@ -284,28 +287,24 @@ export function createTelemetryClient(
 
 	const queues = [eventQueue, errorQueue, sessionQueue, spanQueue, perfQueue];
 
-	const flush = async () => {
-		if (disposed || flushing) return;
-		flushing = true;
-		try {
-			for (const queue of queues) await queue.flush();
-		} finally {
-			flushing = false;
-		}
-	};
-
-	const flushDue = async () => {
-		if (disposed || flushing) return;
-		flushing = true;
-		try {
+	const runFlush = (skippable: boolean): Promise<void> => {
+		if (disposed) return Promise.resolve();
+		if (flushing) return flushing;
+		const pending = (async () => {
 			for (const queue of queues) {
-				if (queue.consumeSkip()) continue;
+				if (skippable && queue.consumeSkip()) continue;
 				await queue.flush();
 			}
-		} finally {
-			flushing = false;
-		}
+		})().finally(() => {
+			if (flushing === pending) flushing = null;
+		});
+		flushing = pending;
+		return pending;
 	};
+
+	const flush = () => runFlush(false);
+
+	const flushDue = () => runFlush(true);
 
 	const timer = setInterval(() => {
 		void flushDue();

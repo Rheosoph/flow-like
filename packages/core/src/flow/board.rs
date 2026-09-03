@@ -1558,6 +1558,18 @@ impl Board {
         Ok(true)
     }
 
+    /// Layer-aware WASM predicate: whether any node — top-level or inside any
+    /// layer — carries a WASM bundle. Shared by compiled-artifact decisions
+    /// (WASM boards are compiled by the executor, never the API) and the
+    /// regression runner's concurrency cap.
+    pub fn has_wasm_nodes(&self) -> bool {
+        self.nodes.values().any(|node| node.wasm.is_some())
+            || self
+                .layers
+                .values()
+                .any(|layer| layer.nodes.values().any(|node| node.wasm.is_some()))
+    }
+
     /// Recompute the deterministic board hash instead of trusting a possibly
     /// stale serialized `hash` field.
     pub fn content_hash(&self) -> u64 {

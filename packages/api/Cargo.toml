@@ -55,10 +55,12 @@ webp.workspace = true
 ipnetwork = "0.21.1"
 ed25519-dalek = "2.2"
 sourcemap.workspace = true
+fs4 = "0.8"
 
 # ---- AWS dependencies ----
 aws-config = {workspace = true, optional=true}
 aws-sdk-sts = {workspace = true, optional=true}
+aws-sdk-cloudwatch = {workspace = true, optional=true}
 aws-sdk-sesv2 = {workspace = true, optional=true}
 aws-sdk-lambda = {workspace = true, optional=true}
 aws-sdk-sqs = {workspace = true, optional=true}
@@ -118,7 +120,7 @@ default = ["aws", "cognito", "ses", "smtp", "sendgrid"]
 secrets-aws = ["flow-like-secrets/aws"]
 secrets-gcp = ["flow-like-secrets/gcp"]
 secrets-azure = ["flow-like-secrets/azure"]
-aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "flow-like-sinks/aws"]
+aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "aws-sdk-cloudwatch", "flow-like-sinks/aws"]
 azure = [
     "urlencoding",
     "dep:azure_core",

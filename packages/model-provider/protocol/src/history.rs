@@ -164,6 +164,8 @@ impl HistoryMessage {
     pub fn as_str(&self) -> String {
         match &self.content {
             MessageContent::String(s) => s.clone(),
+            // Text parts may be streamed token fragments — concatenate raw,
+            // separators split words.
             MessageContent::Contents(contents) => contents
                 .iter()
                 .filter_map(|content| {
@@ -174,7 +176,7 @@ impl HistoryMessage {
                     }
                 })
                 .collect::<Vec<&str>>()
-                .join("\n"),
+                .join(""),
         }
     }
 }
@@ -244,10 +246,20 @@ impl From<RigMessage> for HistoryMessage {
                 for item in content.iter() {
                     match item {
                         RigAssistantContent::Text(text) => {
-                            contents.push(Content::Text {
-                                content_type: ContentType::Text,
-                                text: text.text.clone(),
-                            });
+                            // Merge adjacent text items — they may be streamed
+                            // token fragments, and one part per token renders
+                            // one block per token downstream.
+                            if let Some(Content::Text {
+                                text: last_text, ..
+                            }) = contents.last_mut()
+                            {
+                                last_text.push_str(&text.text);
+                            } else {
+                                contents.push(Content::Text {
+                                    content_type: ContentType::Text,
+                                    text: text.text.clone(),
+                                });
+                            }
                         }
                         RigAssistantContent::ToolCall(tool_call) => {
                             tool_calls.push(ToolCall {

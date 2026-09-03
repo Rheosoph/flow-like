@@ -67,33 +67,29 @@ impl NodeLogic for PushChunkNode {
             mutable_response.response.push_chunk(chunk.clone());
         }
 
-        // Extract reasoning from chunk delta and update the reasoning plan
-        let plan = if let Some(reasoning) = chunk
+        // Reasoning deltas are contiguous token fragments: append raw (any
+        // separator splits words) and keep only the run-scoped cache up to
+        // date. The frontend accumulates the delta straight from the chunk, so
+        // re-shipping the whole transcript as `plan` on every chunk would grow
+        // each event linearly for no gain.
+        if let Some(reasoning) = chunk
             .choices
             .first()
             .and_then(|c| c.delta.as_ref())
             .and_then(|d| d.reasoning.as_ref())
         {
             let mut mutable_reasoning = cached_response.reasoning.lock().await;
-            // Initialize a default "Thinking" step if no plan exists yet
             if mutable_reasoning.plan.is_empty() {
                 mutable_reasoning.plan.push((0, "Thinking".to_string()));
             }
-            // Append reasoning to current message
-            if !mutable_reasoning.current_message.is_empty() {
-                mutable_reasoning.current_message.push('\n');
-            }
             mutable_reasoning.current_message.push_str(reasoning);
-            Some(mutable_reasoning.clone())
-        } else {
-            None
-        };
+        }
 
         let streaming_response = ChatStreamingResponse {
             actions: vec![],
             attachments: vec![],
             chunk: Some(chunk),
-            plan,
+            plan: None,
             widgets: vec![],
         };
 

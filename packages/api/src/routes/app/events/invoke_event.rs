@@ -20,17 +20,17 @@ use crate::{
     ensure_fresh_permission, ensure_permission,
     entity::{
         execution_run,
-        sea_orm_active_enums::{RunMode, RunStatus},
+        sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
     execution::{
         ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
         ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext, TokenType,
-        completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
-        proxy_sse_response_with_page_actions, rejection, resolve_wasm_packages, sign_execution_jwt,
-        sign_execution_jwt_with_page_context,
+        completed_run_status, fetch_profile_for_dispatch, format_run_version, is_jwt_configured,
+        payload_storage, proxy_sse_response_with_page_actions, rejection, resolve_wasm_packages,
+        sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
-        update_run_on_completion,
+        update_run_on_completion, variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -40,6 +40,7 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use flow_like_types::{anyhow, create_id};
@@ -159,6 +160,9 @@ pub struct InvokeEventQuery {
     /// Use isolated execution (K8s job instead of pool)
     #[serde(default)]
     pub isolated: bool,
+    /// Pin execution to a named live variant instead of the weighted split
+    #[serde(default, rename = "__variant")]
+    pub variant: Option<String>,
 }
 
 /// Request body for event invocation
@@ -223,7 +227,9 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
         ("app_id" = String, Path, description = "Application ID"),
         ("event_id" = String, Path, description = "Event ID"),
         ("local" = bool, Query, description = "Track locally without dispatch"),
-        ("isolated" = bool, Query, description = "Use isolated execution")
+        ("isolated" = bool, Query, description = "Use isolated execution"),
+        ("__variant" = Option<String>, Query, description = "Pin execution to a named live variant"),
+        ("x-flow-like-variant" = Option<String>, Header, description = "Pin execution to a named live variant")
     ),
     request_body = InvokeEventRequest,
     responses(
@@ -240,15 +246,17 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/invoke",
-    skip(state, user, query, params)
+    skip(state, user, query, headers, params)
 )]
 pub async fn invoke_event(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, event_id)): Path<(String, String)>,
-    Query(query): Query<InvokeEventQuery>,
+    Query(mut query): Query<InvokeEventQuery>,
+    headers: HeaderMap,
     Json(params): Json<InvokeEventRequest>,
 ) -> Result<Response, ApiError> {
+    query.variant = variant::pin_from_request(&headers, query.variant.take());
     invoke_event_impl(state, user, app_id, event_id, query, params, None, false).await
 }
 
@@ -336,6 +344,7 @@ async fn invoke_event_impl(
                 &app_id,
                 &event,
                 trigger,
+                query.variant.as_deref(),
             )
             .await?,
         ),
@@ -351,26 +360,69 @@ async fn invoke_event_impl(
         }
         (None, None) => None,
     };
-    let board_id = resolved_page_trigger
+    let run_id = create_id();
+    // Live-variant split, resolved before the run row and the executor JWT so
+    // both carry the same board as the dispatch payload. A page trigger already
+    // bound its target (the bootstrap-served variant or the primary, WP6b) and
+    // is carried through as-is — for a local tracking run too, so the row
+    // attributes the variant the client actually executed. Any other local
+    // tracking run records the primary: nothing dispatches, so nothing splits.
+    let variant_target = match &resolved_page_trigger {
+        Some(resolved) => Some(resolved.target.clone()),
+        None if query.local => None,
+        None => Some(
+            variant::resolve_invoke_target(
+                &event,
+                query.variant.as_deref(),
+                params
+                    .version
+                    .as_deref()
+                    .and_then(super::parse_version_tuple),
+                &variant::SplitKeyRequest {
+                    pinned_variant: None,
+                    idempotency_key: None,
+                    parent_run_id: parent_run_id.as_deref(),
+                    trace_id: inherited_correlation
+                        .as_ref()
+                        .and_then(|correlation| correlation.trace_id.as_deref()),
+                    caller_subject: Some(&sub),
+                    run_id: &run_id,
+                },
+            )
+            .map_err(ApiError::bad_request)?,
+        ),
+    };
+    let variant_name = variant_target
         .as_ref()
-        .map(|resolved| resolved.board_id.clone())
-        .unwrap_or_else(|| event.board_id.clone());
-    let board_version = resolved_page_trigger
-        .as_ref()
-        .map(|resolved| resolved.board_version)
-        .unwrap_or(event.board_version);
+        .and_then(|target| target.variant_name.clone());
+    let (board_id, board_version, node_id) = match (&resolved_page_trigger, &variant_target) {
+        (Some(resolved), _) => (
+            resolved.board_id.clone(),
+            resolved.board_version,
+            resolved.node_id.clone(),
+        ),
+        (None, Some(target)) => (
+            target.board_id.clone(),
+            target.board_version,
+            target.node_id.clone(),
+        ),
+        (None, None) => (
+            event.board_id.clone(),
+            event.board_version,
+            event.node_id.clone(),
+        ),
+    };
     let board_etag = resolved_page_trigger
         .as_ref()
         .and_then(|resolved| resolved.board_etag.clone());
-    let node_id = resolved_page_trigger
-        .as_ref()
-        .map(|resolved| resolved.node_id.clone())
-        .unwrap_or_else(|| event.node_id.clone());
     let resolved_version = board_version
-        .map(|(major, minor, patch)| format!("{major}_{minor}_{patch}"))
+        .map(format_run_version)
         .or_else(|| board_etag.as_ref().map(|etag| format!("etag:{etag}")));
-    let event_json =
-        serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
+    let event_json = match &variant_target {
+        Some(target) => variant::dispatch_event_json(&event, target),
+        None => serde_json::to_string(&event),
+    }
+    .map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
     let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
     let wasm_authority_revision =
@@ -384,7 +436,6 @@ async fn invoke_event_impl(
             "The Page action WASM package set changed; reload the Page action",
         ));
     }
-    let run_id = create_id();
     let page_action_sealing = resolved_page_trigger.as_ref().map(|resolved| {
         std::sync::Arc::new(PageActionSealingContext {
             sub: sub.clone(),
@@ -486,6 +537,12 @@ async fn invoke_event_impl(
         node_id: Set(Some(node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(run_mode.clone()),
+        run_variant: Set(variant_target
+            .as_ref()
+            .map_or(RunVariant::Primary, |target| target.run_variant())),
+        variant_name: Set(variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(input_payload_key),
@@ -540,6 +597,7 @@ async fn invoke_event_impl(
             callback_url: String::new(),
             token_type: TokenType::User,
             ttl_seconds: Some(60 * 60),
+            shadow: None,
         })
         .ok();
 
@@ -552,11 +610,13 @@ async fn invoke_event_impl(
         .into_response());
     }
 
-    // Remote dispatch always runs the event's configured board version. A
-    // request asking for a different version cannot be honored here (there is no
-    // validation against the app's available board versions), so reject it
-    // rather than silently executing a different version than the caller asked
-    // for. A malformed version string is likewise a bad request.
+    // Remote dispatch runs the resolved target's configured board version: a
+    // request version naming the primary's (or a live variant's pinned)
+    // version already selected that target above, so anything else cannot be
+    // honored here (there is no validation against the app's available board
+    // versions) and is rejected rather than silently executing a different
+    // version than the caller asked for. A malformed version string is
+    // likewise a bad request.
     if let Some(requested) = params.version.as_deref() {
         let reason = match super::parse_version_tuple(requested) {
             Some(parsed) if board_version == Some(parsed) => None,
@@ -617,6 +677,7 @@ async fn invoke_event_impl(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     };
     let executor_jwt = if let Some(resolved) = &resolved_page_trigger {
         sign_execution_jwt_with_page_context(
@@ -674,6 +735,8 @@ async fn invoke_event_impl(
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,
+        shadow: false,
+        artifact: None,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async
@@ -909,39 +972,43 @@ struct ParsedSseEvent {
     data: String,
 }
 
-/// Extract a complete SSE event from the buffer, if available
+/// Extract the next complete SSE event carrying data from the buffer, if
+/// available. Data-less frames (comment keep-alives such as `:ping`) are
+/// consumed and skipped rather than ending the caller's drain loop — returning
+/// `None` for them would strand every complete frame still behind them.
 fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
-    // Find the double newline that terminates a complete SSE frame by scanning
-    // raw bytes. Decoding the whole (partial) buffer here would replace the lead
-    // bytes of a multi-byte codepoint straddling a chunk boundary with U+FFFD
-    // and persist that corruption back into the tail.
-    let end_pos = buffer.windows(2).position(|window| window == b"\n\n")?;
+    loop {
+        // Find the double newline that terminates a complete SSE frame by scanning
+        // raw bytes. Decoding the whole (partial) buffer here would replace the lead
+        // bytes of a multi-byte codepoint straddling a chunk boundary with U+FFFD
+        // and persist that corruption back into the tail.
+        let end_pos = buffer.windows(2).position(|window| window == b"\n\n")?;
 
-    // Split the complete frame off the buffer, keeping the raw undecoded tail.
-    let tail = buffer.split_off(end_pos + 2);
-    let frame = std::mem::replace(buffer, tail);
+        // Split the complete frame off the buffer, keeping the raw undecoded tail.
+        let tail = buffer.split_off(end_pos + 2);
+        let frame = std::mem::replace(buffer, tail);
 
-    // Only the complete frame is decoded — it is a whole, valid UTF-8 region.
-    let event_str = String::from_utf8_lossy(&frame[..end_pos]);
+        // Only the complete frame is decoded — it is a whole, valid UTF-8 region.
+        let event_str = String::from_utf8_lossy(&frame[..end_pos]);
 
-    let mut event_type = "message".to_string();
-    let mut data_parts = Vec::new();
+        let mut event_type = "message".to_string();
+        let mut data_parts = Vec::new();
 
-    for line in event_str.lines() {
-        if let Some(value) = line.strip_prefix("event:") {
-            event_type = value.trim().to_string();
-        } else if let Some(value) = line.strip_prefix("data:") {
-            data_parts.push(value.trim_start().to_string());
+        for line in event_str.lines() {
+            if let Some(value) = line.strip_prefix("event:") {
+                event_type = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("data:") {
+                data_parts.push(value.trim_start().to_string());
+            }
+        }
+
+        if !data_parts.is_empty() {
+            return Some(ParsedSseEvent {
+                event_type,
+                data: data_parts.join("\n"),
+            });
         }
     }
-
-    if !data_parts.is_empty() {
-        return Some(ParsedSseEvent {
-            event_type,
-            data: data_parts.join("\n"),
-        });
-    }
-    None
 }
 
 #[cfg(test)]

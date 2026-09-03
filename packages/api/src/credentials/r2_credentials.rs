@@ -231,6 +231,20 @@ impl R2RuntimeCredentials {
                     temporary_global_prefix,
                 ],
             ),
+            // R2 temp credentials carry one permission for every prefix, so a
+            // per-prefix read/write split is not expressible here; shadow runs
+            // mirror ServerExecute and rely on the in-process `ReadOnlyStore`
+            // decorator for app-content write isolation.
+            CredentialsAccess::ShadowExecute => (
+                "object-read-write",
+                vec![
+                    apps_prefix,
+                    user_prefix,
+                    log_prefix,
+                    temporary_user_prefix,
+                    temporary_global_prefix,
+                ],
+            ),
             CredentialsAccess::ReadLogs => ("object-read-only", vec![log_prefix]),
         };
 
@@ -262,19 +276,6 @@ impl R2RuntimeCredentials {
             content_path_prefix,
             user_content_path_prefix,
         })
-    }
-
-    async fn scoped_server_meta_read_credentials(&self, sub: &str, app_id: &str) -> Result<Self> {
-        if sub.is_empty() || app_id.is_empty() {
-            return Err(anyhow!("Sub or App ID cannot be empty"));
-        }
-
-        crate::credentials::validate_path_component(sub, "sub")?;
-        crate::credentials::validate_path_component(app_id, "app_id")?;
-
-        let (permission, prefixes) = server_execute_meta_scope(app_id);
-        self.scoped_bucket_credentials(&self.meta_bucket, permission, prefixes, None, None)
-            .await
     }
 
     async fn scoped_server_content_write_credentials(
@@ -339,15 +340,19 @@ impl R2RuntimeCredentials {
         sub: &str,
         app_id: &str,
     ) -> Result<MixedRuntimeCredentials> {
-        let (meta, content, logs) = flow_like_types::tokio::join!(
-            self.scoped_server_meta_read_credentials(sub, app_id),
+        let (content, logs) = flow_like_types::tokio::join!(
             self.scoped_server_content_write_credentials(sub, app_id),
             self.scoped_server_logs_write_credentials(sub, app_id),
         );
+        let content = content?;
 
         Ok(MixedRuntimeCredentials {
-            meta: Box::new(RuntimeCredentials::R2(meta?)),
-            content: Box::new(RuntimeCredentials::R2(content?)),
+            // The executor opens no meta store: its board arrives as a
+            // presigned compiled artifact and widgets come from the hub. The
+            // mixed shape still wants a credential in the slot, so the content
+            // credential fills it — it cannot reach the meta bucket.
+            meta: Box::new(RuntimeCredentials::R2(content.clone())),
+            content: Box::new(RuntimeCredentials::R2(content)),
             logs: Box::new(RuntimeCredentials::R2(logs?)),
         })
     }
@@ -450,17 +455,6 @@ impl R2RuntimeCredentials {
     }
 }
 
-/// Read-only meta scope for the executor: version artifacts and boards under
-/// `apps/{app_id}/`, plus draft artifacts under `tmp/apps/{app_id}/` — the
-/// drafts are written only by the API (the trust anchor for
-/// `entry_authority_revision`) and reclaimed by lifecycle rules on `tmp/`.
-fn server_execute_meta_scope(app_id: &str) -> (&'static str, Vec<String>) {
-    (
-        "object-read-only",
-        vec![format!("apps/{app_id}/"), format!("tmp/apps/{app_id}/")],
-    )
-}
-
 fn scoped_content_path_prefixes(
     apps_prefix: &str,
     user_prefix: &str,
@@ -477,6 +471,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
 
@@ -488,6 +483,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
 
@@ -499,9 +495,13 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
     fn into_shared_credentials(&self) -> SharedCredentials {
         // R2 uses AWS-compatible S3 API, so we use AwsSharedCredentials
         // All R2 buckets use the same endpoint
+        // R2 has no KMS: encryption is bucket-managed and there is no
+        // per-request key to name.
         let r2_config = Some(BucketConfig {
             endpoint: Some(self.endpoint.clone()),
             express: false,
+            kms_key_arn: None,
+            kms_bucket_key: false,
         });
 
         SharedCredentials::Aws(AwsSharedCredentials {
@@ -641,23 +641,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_r2_server_execute_can_read_app_scoped_draft_artifacts() {
-        let (permission, prefixes) = server_execute_meta_scope("app-1");
-        let draft_artifact =
-            flow_like::flow::compiled::draft_artifact_path("app-1", "board-1", "etag", &[7; 32])
-                .to_string();
-        let other_app_artifact =
-            flow_like::flow::compiled::draft_artifact_path("app-10", "board-1", "etag", &[7; 32])
-                .to_string();
-
-        assert_eq!(permission, "object-read-only");
-        assert_eq!(
-            prefixes,
-            vec!["apps/app-1/".to_string(), "tmp/apps/app-1/".to_string()]
-        );
-        assert!(draft_artifact.starts_with(&prefixes[1]));
-        assert!(!other_app_artifact.starts_with(&prefixes[1]));
-        assert!(!other_app_artifact.starts_with(&prefixes[0]));
-    }
 }

@@ -134,6 +134,7 @@ impl GovernanceCopilot {
                 parameters: serde_json::to_value(LLMParameters {
                     context_length: 128000,
                     provider: ModelProvider {
+                        api_surface: None,
                         provider_name: "openai".to_string(),
                         model_id: None,
                         version: None,

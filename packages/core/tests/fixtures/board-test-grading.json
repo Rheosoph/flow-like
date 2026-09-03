@@ -1,0 +1,441 @@
+{
+	"$comment": "Shared conformance fixture for the board-test grader, discovery and verdict-vs-baseline comparison twins. Loaded by packages/core/src/flow/regression (Rust) and packages/ui/lib/board-tests.test.ts + packages/ui/lib/regression.test.ts (TS). A deliberate rule change on either side must update this file and thereby fail the other side's test.",
+	"grading": [
+		{
+			"case": "all assertions pass",
+			"metadata": true,
+			"assertLogs": ["ASSERT_OK empty_total", "ASSERT_OK item_count"],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "pass",
+				"assertOk": 2,
+				"assertFail": 0,
+				"executionError": null
+			}
+		},
+		{
+			"case": "one ASSERT_FAIL fails the run",
+			"metadata": true,
+			"assertLogs": ["ASSERT_OK empty_total", "ASSERT_FAIL item_count expected 0"],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "fail",
+				"assertOk": 1,
+				"assertFail": 1,
+				"executionError": null
+			}
+		},
+		{
+			"case": "error-level logs fail the run even without assertions",
+			"metadata": true,
+			"assertLogs": [],
+			"errorLogs": ["boom"],
+			"executionError": null,
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "fail",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": null
+			}
+		},
+		{
+			"case": "execution error with recovered metadata grades as fail",
+			"metadata": true,
+			"assertLogs": ["ASSERT_OK total"],
+			"errorLogs": [],
+			"executionError": "stream disconnected",
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "fail",
+				"assertOk": 1,
+				"assertFail": 0,
+				"executionError": "stream disconnected"
+			}
+		},
+		{
+			"case": "no metadata and no error synthesizes the no-metadata error",
+			"metadata": false,
+			"assertLogs": [],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "error",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": "The run returned no metadata, so its logs could not be graded."
+			}
+		},
+		{
+			"case": "a thrown execution keeps its own message",
+			"metadata": false,
+			"assertLogs": [],
+			"errorLogs": [],
+			"executionError": "board not found",
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "error",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": "board not found"
+			}
+		},
+		{
+			"case": "empty evidence with the flag down degrades to pass (interactive behavior)",
+			"metadata": true,
+			"assertLogs": [],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": false,
+			"expect": {
+				"verdict": "pass",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": null
+			}
+		},
+		{
+			"case": "an unreadable log store is an error, never a green light",
+			"metadata": true,
+			"assertLogs": [],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": true,
+			"expect": {
+				"verdict": "error",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": "The run's logs could not be queried, so the run could not be graded."
+			}
+		},
+		{
+			"case": "an unreadable log store outranks visible failures",
+			"metadata": true,
+			"assertLogs": ["ASSERT_FAIL partial expected 0"],
+			"errorLogs": [],
+			"executionError": null,
+			"logQueryFailed": true,
+			"expect": {
+				"verdict": "error",
+				"assertOk": 0,
+				"assertFail": 1,
+				"executionError": "The run's logs could not be queried, so the run could not be graded."
+			}
+		},
+		{
+			"case": "an unreadable log store keeps a thrown execution message",
+			"metadata": true,
+			"assertLogs": [],
+			"errorLogs": [],
+			"executionError": "lance unavailable",
+			"logQueryFailed": true,
+			"expect": {
+				"verdict": "error",
+				"assertOk": 0,
+				"assertFail": 0,
+				"executionError": "lance unavailable"
+			}
+		}
+	],
+	"discovery": [
+		{
+			"case": "display name camelCases to a test alias",
+			"name": "events_simple",
+			"friendlyName": "Test Empty Cart",
+			"start": true,
+			"expect": { "isTest": true, "alias": "testEmptyCart" }
+		},
+		{
+			"case": "already camelCased alias",
+			"name": "events_simple",
+			"friendlyName": "testEmptyCart",
+			"start": true,
+			"expect": { "isTest": true, "alias": "testEmptyCart" }
+		},
+		{
+			"case": "missing display name falls back to the node name",
+			"name": "events_simple",
+			"friendlyName": null,
+			"start": true,
+			"expect": { "isTest": false, "alias": "eventsSimple" }
+		},
+		{
+			"case": "whitespace display name falls back to the node name",
+			"name": "test_empty_cart",
+			"friendlyName": "   ",
+			"start": true,
+			"expect": { "isTest": true, "alias": "testEmptyCart" }
+		},
+		{
+			"case": "testimonial is not a test (word boundary)",
+			"name": "events_simple",
+			"friendlyName": "testimonialFeed",
+			"start": true,
+			"expect": { "isTest": false, "alias": "testimonialFeed" }
+		},
+		{
+			"case": "tester is not a test",
+			"name": "events_simple",
+			"friendlyName": "tester",
+			"start": true,
+			"expect": { "isTest": false, "alias": "tester" }
+		},
+		{
+			"case": "contest is not a test",
+			"name": "events_simple",
+			"friendlyName": "contest",
+			"start": true,
+			"expect": { "isTest": false, "alias": "contest" }
+		},
+		{
+			"case": "bare test is a test (empty boundary)",
+			"name": "events_simple",
+			"friendlyName": "test",
+			"start": true,
+			"expect": { "isTest": true, "alias": "test" }
+		},
+		{
+			"case": "a digit is its own uppercase, so it is a boundary",
+			"name": "events_simple",
+			"friendlyName": "test2Checkout",
+			"start": true,
+			"expect": { "isTest": true, "alias": "test2Checkout" }
+		},
+		{
+			"case": "unicode display names lower like FlowScript",
+			"name": "events_simple",
+			"friendlyName": "Test Größe",
+			"start": true,
+			"expect": { "isTest": true, "alias": "testGröße" }
+		},
+		{
+			"case": "digit-leading names get the underscore guard and are not tests",
+			"name": "events_simple",
+			"friendlyName": "2 Test",
+			"start": true,
+			"expect": { "isTest": false, "alias": "_2Test" }
+		},
+		{
+			"case": "separator-driven uppercasing still satisfies the case-insensitive prefix",
+			"name": "events_simple",
+			"friendlyName": "t e s t x",
+			"start": true,
+			"expect": { "isTest": true, "alias": "tESTX" }
+		},
+		{
+			"case": "only the first character is lowered",
+			"name": "events_simple",
+			"friendlyName": "TESTFoo",
+			"start": true,
+			"expect": { "isTest": true, "alias": "tESTFoo" }
+		},
+		{
+			"case": "a non-start node is never a test",
+			"name": "events_simple",
+			"friendlyName": "testHidden",
+			"start": false,
+			"expect": { "isTest": false, "alias": "testHidden" }
+		},
+		{
+			"case": "a name with no identifier characters lowers to an empty alias",
+			"name": "!!!",
+			"friendlyName": "!!!",
+			"start": true,
+			"expect": { "isTest": false, "alias": "" }
+		}
+	],
+	"compare": [
+		{
+			"case": "passing baseline, passing replay is OK",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": true,
+				"assertLogs": ["ASSERT_OK total"],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "ok",
+				"errorClassChanged": null,
+				"gateFailure": false,
+				"replayErrorClass": null
+			}
+		},
+		{
+			"case": "passing baseline, failed assertion is REGRESSED — the gate signal",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": true,
+				"assertLogs": ["ASSERT_FAIL total expected 0 got 1"],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "regressed",
+				"errorClassChanged": null,
+				"gateFailure": true,
+				"replayErrorClass": "assert_fail"
+			}
+		},
+		{
+			"case": "passing baseline, error-level log is REGRESSED with the error_log class",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": true,
+				"assertLogs": [],
+				"errorLogs": ["boom"],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "regressed",
+				"errorClassChanged": null,
+				"gateFailure": true,
+				"replayErrorClass": "error_log"
+			}
+		},
+		{
+			"case": "a thrown execution outranks failed assertions in the class taxonomy",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": true,
+				"assertLogs": ["ASSERT_FAIL partial expected 0"],
+				"errorLogs": [],
+				"executionError": "boom",
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "regressed",
+				"errorClassChanged": null,
+				"gateFailure": true,
+				"replayErrorClass": "execution_error"
+			}
+		},
+		{
+			"case": "an ungradable replay of a passing baseline is REGRESSED, never a shrug",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": false,
+				"assertLogs": [],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "regressed",
+				"errorClassChanged": null,
+				"gateFailure": true,
+				"replayErrorClass": "no_metadata"
+			}
+		},
+		{
+			"case": "an unreadable log store on a passing baseline is REGRESSED",
+			"baseline": { "verdict": "pass", "errorClass": null },
+			"replay": {
+				"metadata": true,
+				"assertLogs": [],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": true
+			},
+			"expect": {
+				"outcome": "regressed",
+				"errorClassChanged": null,
+				"gateFailure": true,
+				"replayErrorClass": "log_query_failed"
+			}
+		},
+		{
+			"case": "failing baseline, same failure class is STILL_FAILING and unchanged",
+			"baseline": { "verdict": "fail", "errorClass": "assert_fail" },
+			"replay": {
+				"metadata": true,
+				"assertLogs": ["ASSERT_FAIL total expected 0 got 2"],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "still_failing",
+				"errorClassChanged": false,
+				"gateFailure": false,
+				"replayErrorClass": "assert_fail"
+			}
+		},
+		{
+			"case": "failing baseline, different failure class is STILL_FAILING with the change flagged",
+			"baseline": { "verdict": "fail", "errorClass": "assert_fail" },
+			"replay": {
+				"metadata": true,
+				"assertLogs": [],
+				"errorLogs": [],
+				"executionError": "boom",
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "still_failing",
+				"errorClassChanged": true,
+				"gateFailure": false,
+				"replayErrorClass": "execution_error"
+			}
+		},
+		{
+			"case": "failing baseline, passing replay is FIXED",
+			"baseline": { "verdict": "fail", "errorClass": "assert_fail" },
+			"replay": {
+				"metadata": true,
+				"assertLogs": ["ASSERT_OK total"],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "fixed",
+				"errorClassChanged": null,
+				"gateFailure": false,
+				"replayErrorClass": null
+			}
+		},
+		{
+			"case": "an error baseline counts as failing, so a passing replay is FIXED",
+			"baseline": { "verdict": "error", "errorClass": "log_query_failed" },
+			"replay": {
+				"metadata": true,
+				"assertLogs": [],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": false
+			},
+			"expect": {
+				"outcome": "fixed",
+				"errorClassChanged": null,
+				"gateFailure": false,
+				"replayErrorClass": null
+			}
+		},
+		{
+			"case": "an error baseline and an unreadable replay stay STILL_FAILING, class unchanged",
+			"baseline": { "verdict": "error", "errorClass": "log_query_failed" },
+			"replay": {
+				"metadata": true,
+				"assertLogs": [],
+				"errorLogs": [],
+				"executionError": null,
+				"logQueryFailed": true
+			},
+			"expect": {
+				"outcome": "still_failing",
+				"errorClassChanged": false,
+				"gateFailure": false,
+				"replayErrorClass": "log_query_failed"
+			}
+		}
+	]
+}

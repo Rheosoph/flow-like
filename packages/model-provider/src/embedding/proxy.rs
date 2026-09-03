@@ -52,10 +52,10 @@ struct EmbedUsage {
 }
 
 fn normalize_api_base_url(api_base_url: &str) -> String {
-    let trimmed = api_base_url.trim().trim_end_matches('/');
-    trimmed
+    let normalized = super::proxy_config::normalize_base_url(api_base_url).unwrap_or_default();
+    normalized
         .strip_suffix("/api/v1")
-        .unwrap_or(trimmed)
+        .unwrap_or(&normalized)
         .trim_end_matches('/')
         .to_string()
 }
@@ -138,6 +138,10 @@ mod tests {
         assert_eq!(
             normalize_api_base_url("https://api.example.test/api/v1/"),
             "https://api.example.test"
+        );
+        assert_eq!(
+            normalize_api_base_url("api.flow-like.com"),
+            "https://api.flow-like.com"
         );
     }
 }

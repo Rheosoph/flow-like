@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import { finalizePlanSteps } from "./event-processor";
 import type { IHistoryMessage } from "../../../lib";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
@@ -211,6 +212,114 @@ export interface IMessage {
 	 * apology back to the model.
 	 */
 	error?: IChatMessageError;
+	/**
+	 * Write revision, bumped by {@link putChatMessage}. Dexie liveQuery
+	 * re-materializes every row on any table write; an unchanged rev lets the
+	 * message list hand back the previously materialized object so settled
+	 * messages keep a stable identity and memoized rows don't re-render per
+	 * streamed save.
+	 */
+	rev?: number;
+}
+
+/**
+ * Persisted shape of a chat message. The message travels as one JSON string: on the desktop every
+ * stored value crosses the IndexedDB shim's structural encoder, which walks nested objects at
+ * roughly 50-100x the cost of `JSON.stringify`, so a flat row with a string payload is the cheap
+ * representation. The indexed columns stay real so range scans, `sortBy("timestamp")` and
+ * age-based cleanup never touch the payload.
+ */
+export interface IMessageRow {
+	id: string;
+	sessionId: string;
+	timestamp: number;
+	rev?: number;
+	payload: string;
+}
+
+export function encodeMessageRow(message: IMessage): IMessageRow {
+	return {
+		id: message.id,
+		sessionId: message.sessionId,
+		timestamp: message.timestamp,
+		rev: message.rev,
+		payload: JSON.stringify(message),
+	};
+}
+
+/** Rows written before the payload column are the nested message itself; they re-encode on their next write. */
+export function decodeMessageRow(row: IMessageRow | IMessage): IMessage {
+	if (typeof (row as IMessageRow).payload !== "string") return row as IMessage;
+	return JSON.parse((row as IMessageRow).payload) as IMessage;
+}
+
+function bumpRev(message: IMessage): IMessageRow {
+	message.rev = (message.rev ?? 0) + 1;
+	return encodeMessageRow(message);
+}
+
+/** Writes a settled message. Every writer here bumps {@link IMessage.rev} so identity caching stays truthful. */
+export async function putChatMessage(message: IMessage): Promise<void> {
+	await chatDb.messages.put(bumpRev(message));
+}
+
+/**
+ * Checkpoint of a message still streaming. Drafts have their own table so the session's message
+ * query is not re-run by every streaming save; a draft only matters if its stream never completes.
+ */
+export async function putChatDraft(message: IMessage): Promise<void> {
+	await chatDb.drafts.put(bumpRev(message));
+}
+
+/**
+ * Settles a streamed message: it lands in `messages` and every draft of the session goes in the
+ * same transaction. A session runs at most one stream, so any draft left at this point — including
+ * one written under an id a resumed subscriber never learned — is stale.
+ */
+export async function finalizeChatMessage(message: IMessage): Promise<void> {
+	const row = bumpRev(message);
+	await chatDb.transaction("rw", chatDb.messages, chatDb.drafts, async () => {
+		await chatDb.messages.put(row);
+		await chatDb.drafts.where("sessionId").equals(row.sessionId).delete();
+	});
+}
+
+/** The session's in-flight message, if a streaming checkpoint has been written for it. */
+export async function latestChatDraft(
+	sessionId: string,
+): Promise<IMessage | undefined> {
+	const rows = await chatDb.drafts
+		.where("sessionId")
+		.equals(sessionId)
+		.toArray();
+	if (rows.length === 0) return undefined;
+	const newest = rows.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+	return decodeMessageRow(newest);
+}
+
+/**
+ * Promotes drafts left behind by a crash or reload mid-stream into settled messages. Only called
+ * when the execution engine holds no stream for the session, so nothing is still writing them; a
+ * draft whose message was already settled is dropped rather than rolled back over it.
+ */
+export async function promoteChatDrafts(sessionId: string): Promise<number> {
+	const drafts = await chatDb.drafts
+		.where("sessionId")
+		.equals(sessionId)
+		.toArray();
+	if (drafts.length === 0) return 0;
+	await chatDb.transaction("rw", chatDb.messages, chatDb.drafts, async () => {
+		for (const row of drafts) {
+			const settled = await chatDb.messages.where("id").equals(row.id).count();
+			if (settled === 0) {
+				const message = decodeMessageRow(row);
+				finalizePlanSteps(message);
+				await chatDb.messages.put(bumpRev(message));
+			}
+			await chatDb.drafts.delete(row.id);
+		}
+	});
+	return drafts.length;
 }
 
 export interface ISession {
@@ -243,7 +352,8 @@ export interface IGlobalState {
 
 const chatDb = new Dexie("Chat-History") as Dexie & {
 	sessions: EntityTable<ISession, "id">;
-	messages: EntityTable<IMessage, "id">;
+	messages: EntityTable<IMessageRow, "id">;
+	drafts: EntityTable<IMessageRow, "id">;
 	localStage: EntityTable<ILocalChatState, "id">;
 	globalState: EntityTable<IGlobalState, "id">;
 };
@@ -259,6 +369,14 @@ chatDb.version(3).stores({
 chatDb.version(4).stores({
 	sessions: "id, appId, updatedAt, [updatedAt+appId], pinnedAt",
 	messages: "id, sessionId",
+	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
+	globalState: "appId, eventId, [appId+eventId]",
+});
+
+chatDb.version(5).stores({
+	sessions: "id, appId, updatedAt, [updatedAt+appId], pinnedAt",
+	messages: "id, sessionId",
+	drafts: "id, sessionId",
 	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
 	globalState: "appId, eventId, [appId+eventId]",
 });

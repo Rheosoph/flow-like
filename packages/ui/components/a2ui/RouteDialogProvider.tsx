@@ -25,7 +25,6 @@ import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
-import type { IRouteMapping } from "../../state/backend-state/route-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { shouldRevealProgressively } from "../interfaces/progressive-page-reveal";
@@ -305,89 +304,33 @@ function RouteDialogRenderer({
 			setRouteEvent(null);
 			setSurface(null);
 			try {
-				// The web backend can resolve route, Event, exact pinned page, and revision in one
-				// authenticated read. Native backends keep their local route/page path below.
-				if (backend.pageState.getPageBootstrap) {
-					const bootstrap = await backend.pageState.getPageBootstrap(
-						appId,
-						dialog.route,
-					);
-					if (cancelled) return;
-					if (bootstrap.routeMiss) {
-						setError(`Route not found: ${dialog.route}`);
-						return;
-					}
-					if (!bootstrap.page || !bootstrap.event.default_page_id) {
-						setError("Route event does not have a page target");
-						return;
-					}
-					if (!bootstrap.executionRevision) {
-						setError(
-							"This Page could not load its execution authorization. Reload and try again.",
-						);
-						return;
-					}
-
-					setRouteEvent(bootstrap.event);
-					setPage(bootstrap.page);
-					setPageRevision(bootstrap.revision ?? null);
-					setPageExecutionRevision(bootstrap.executionRevision ?? null);
-					setSurface(buildSurfaceFromPage(bootstrap.page, bootstrap.page.id));
-					return;
-				}
-
-				// Get route mapping
-				const mapping: IRouteMapping | null =
-					await backend.routeState.getRouteByPath(appId, dialog.route);
+				// One authenticated read resolves route, Event, the exact served page and its
+				// revisions, so a canary viewer's dialog renders the same variant as the host page.
+				const bootstrap = await backend.pageState.getPageBootstrap(
+					appId,
+					dialog.route,
+				);
 				if (cancelled) return;
-
-				if (!mapping) {
+				if (bootstrap.routeMiss) {
 					setError(`Route not found: ${dialog.route}`);
-					setIsLoading(false);
 					return;
 				}
-
-				// Get the event for this route
-				const events = await backend.eventState.getEvents(appId);
-				if (cancelled) return;
-				const event = events.find((e) => e.id === mapping.eventId);
-
-				if (!event) {
-					setError(`Event not found for route: ${dialog.route}`);
-					setIsLoading(false);
-					return;
-				}
-
-				setRouteEvent(event);
-
-				// Check if event has a page target
-				if (event.default_page_id) {
-					const pageResult = await backend.pageState.getPage(
-						appId,
-						event.default_page_id,
-						event.board_id || undefined,
-						resolveEventBoardVersion(
-							event.board_id,
-							event.board_version,
-							event.board_id,
-						) ?? undefined,
-					);
-					if (cancelled) return;
-
-					if (pageResult) {
-						setPage(pageResult);
-						// Build surface from page
-						const builtSurface = buildSurfaceFromPage(
-							pageResult,
-							pageResult.id,
-						);
-						setSurface(builtSurface);
-					} else {
-						setError(`Page not found: ${event.default_page_id}`);
-					}
-				} else {
+				if (!bootstrap.page || !bootstrap.event.default_page_id) {
 					setError("Route event does not have a page target");
+					return;
 				}
+				if (!bootstrap.executionRevision) {
+					setError(
+						"This Page could not load its execution authorization. Reload and try again.",
+					);
+					return;
+				}
+
+				setRouteEvent(bootstrap.event);
+				setPage(bootstrap.page);
+				setPageRevision(bootstrap.revision ?? null);
+				setPageExecutionRevision(bootstrap.executionRevision);
+				setSurface(buildSurfaceFromPage(bootstrap.page, bootstrap.page.id));
 			} catch (e) {
 				if (cancelled) return;
 				console.error("Failed to load dialog content:", e);
@@ -401,13 +344,7 @@ function RouteDialogRenderer({
 		return () => {
 			cancelled = true;
 		};
-	}, [
-		appId,
-		dialog.route,
-		backend.routeState,
-		backend.pageState,
-		backend.eventState,
-	]);
+	}, [appId, dialog.route, backend.pageState]);
 
 	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
 		console.log("[RouteDialog] Server message:", message);

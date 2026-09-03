@@ -9,7 +9,7 @@ import { ChatHistoryList } from "../../chat-history/chat-history-list";
 import type { IHistoryEntry } from "../../chat-history/chat-history-types";
 import { buildSearchCorpus } from "../../chat-history/use-history-search";
 import type { ISidebarActions } from "../interfaces";
-import { chatDb } from "./chat-db";
+import { chatDb, decodeMessageRow } from "./chat-db";
 
 interface IChatHistory {
 	appId: string;
@@ -48,9 +48,11 @@ export function ChatHistory({
 	// unconditional read would pull the app's entire message history on every mount.
 	const [searching, setSearching] = useState(false);
 	const messages = useLiveQuery(
-		() =>
+		async () =>
 			searching && sessionIds.length > 0
-				? chatDb.messages.where("sessionId").anyOf(sessionIds).toArray()
+				? (
+						await chatDb.messages.where("sessionId").anyOf(sessionIds).toArray()
+					).map(decodeMessageRow)
 				: [],
 		[searching, sessionIdKey],
 	);
@@ -104,6 +106,7 @@ export function ChatHistory({
 	const handleDelete = useCallback(
 		async (idToDelete: string) => {
 			await chatDb.messages.where("sessionId").equals(idToDelete).delete();
+			await chatDb.drafts.where("sessionId").equals(idToDelete).delete();
 			await chatDb.sessions.delete(idToDelete);
 			await chatDb.localStage.where("sessionId").equals(idToDelete).delete();
 			if (idToDelete === sessionId) handleNewChat();

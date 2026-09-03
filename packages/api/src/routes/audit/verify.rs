@@ -26,7 +26,7 @@ pub struct VerifyParams {
     get,
     path = "/audit/verify",
     tag = "audit",
-    description = "Verify the integrity of an audit hash chain. Replays the chain and checks every entry hash.",
+    description = "Verify the integrity of an audit hash chain. Replays the chain and checks every entry hash. Same access rules as querying entries: Owner on an app chain, Admin otherwise.",
     params(VerifyParams),
     responses(
         (status = 200, description = "Chain verification result", body = ChainVerification),
@@ -40,12 +40,8 @@ pub async fn verify_chain(
     Extension(user): Extension<AppUser>,
     Query(params): Query<VerifyParams>,
 ) -> Result<Json<ChainVerification>, ApiError> {
-    let _sub = user.sub()?;
-
-    // If verifying a specific chain, optionally check access
-    if let Some(ref chain_id) = params.chain_id {
-        let _ = user.app_permission(chain_id, &state).await;
-    }
+    user.sub()?;
+    super::query::ensure_chain_access(&user, &state, params.chain_id.as_deref()).await?;
 
     let result = AuditService::verify_chain(
         &state.db,

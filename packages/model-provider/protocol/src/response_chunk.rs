@@ -126,8 +126,22 @@ impl ResponseChunk {
         }
     }
 
-    /// Creates a chunk from a tool call delta
+    /// Creates a chunk from a tool call arguments delta
     pub fn from_tool_call_delta(id: &str, delta: &str, model_name: &str) -> Self {
+        Self::from_tool_call_delta_fields(id, None, Some(delta), model_name)
+    }
+
+    /// Creates a chunk from a tool call name delta
+    pub fn from_tool_call_name_delta(id: &str, name: &str, model_name: &str) -> Self {
+        Self::from_tool_call_delta_fields(id, Some(name), None, model_name)
+    }
+
+    fn from_tool_call_delta_fields(
+        id: &str,
+        name: Option<&str>,
+        arguments: Option<&str>,
+        model_name: &str,
+    ) -> Self {
         Self {
             model: Some(model_name.to_string()),
             choices: vec![ResponseChunkChoice {
@@ -141,8 +155,8 @@ impl ResponseChunk {
                         id: Some(id.to_string()),
                         tool_type: Some("function".to_string()),
                         function: DeltaResponseFunction {
-                            name: None,
-                            arguments: Some(delta.to_string()),
+                            name: name.map(str::to_string),
+                            arguments: arguments.map(str::to_string),
                         },
                     }]),
                     refusal: None,

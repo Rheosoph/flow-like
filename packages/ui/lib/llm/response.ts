@@ -136,7 +136,25 @@ export class ResponseMessage implements IResponseMessage {
 					},
 				];
 			}
-			this.content_parts = [...precedingParts, ...delta.content_parts];
+			// Coalesce adjacent text parts: streamed deltas arrive as token
+			// fragments, and one part per token later renders one block per
+			// token.
+			const merged = [...precedingParts];
+			for (const part of delta.content_parts) {
+				const last = merged.at(-1);
+				if (
+					part.type === IContentType.Text &&
+					last?.type === IContentType.Text
+				) {
+					merged[merged.length - 1] = {
+						...last,
+						text: (last.text ?? "") + (part.text ?? ""),
+					};
+					continue;
+				}
+				merged.push(part);
+			}
+			this.content_parts = merged;
 		}
 		if (delta.reasoning) {
 			this.reasoning = (this.reasoning ?? "") + delta.reasoning;
@@ -145,7 +163,7 @@ export class ResponseMessage implements IResponseMessage {
 			this.refusal = (this.refusal ?? "") + delta.refusal;
 		}
 		if (delta.role && delta.role !== this.role) {
-			this.role += delta.role;
+			this.role = delta.role;
 		}
 
 		return this.applyDeltaToolCalls(delta);

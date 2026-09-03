@@ -7,6 +7,7 @@
 use crate::{
     ensure_fresh_permission, ensure_permission,
     error::ApiError,
+    execution::variant,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::prerun_shared::{
@@ -17,6 +18,7 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::HeaderMap,
 };
 use flow_like::flow::{board::ExecutionMode, event::EventExecutionMode, node::NodePermission};
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,10 @@ use super::page_trigger::PageTrigger;
 pub struct PrerunEventQuery {
     /// Board version as tuple (major, minor, patch) - defaults to latest
     pub version: Option<String>,
+    /// Page prerun only: the served variant (`stable` or a live variant name)
+    /// the bootstrap reported, so the contract is resolved for that target.
+    #[serde(default, rename = "__variant")]
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -192,7 +198,9 @@ pub async fn prerun_event(
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("event_id" = String, Path, description = "Event ID"),
-        ("version" = Option<String>, Query, description = "Configured Page board version in MAJOR_MINOR_PATCH format")
+        ("version" = Option<String>, Query, description = "Configured Page board version in MAJOR_MINOR_PATCH format"),
+        ("__variant" = Option<String>, Query, description = "The served variant reported by bootstrap (`stable` or a live variant name)"),
+        ("x-flow-like-variant" = Option<String>, Header, description = "The served variant reported by bootstrap (`stable` or a live variant name)")
     ),
     request_body = PrerunPageEventRequest,
     responses(
@@ -210,13 +218,14 @@ pub async fn prerun_event(
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/prerun",
-    skip(state, user, query, body)
+    skip(state, user, query, headers, body)
 )]
 pub async fn prerun_page_event(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, event_id)): Path<(String, String)>,
     Query(query): Query<PrerunEventQuery>,
+    headers: HeaderMap,
     Json(body): Json<PrerunPageEventRequest>,
 ) -> Result<Json<PrerunEventResponse>, ApiError> {
     let permission =
@@ -224,24 +233,32 @@ pub async fn prerun_page_event(
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
 
-    if let Some(requested) = query.version.as_deref() {
-        let parsed = super::parse_version_tuple(requested)
-            .ok_or_else(|| ApiError::bad_request("version must use MAJOR_MINOR_PATCH format"))?;
-        if event.board_version != Some(parsed) {
-            return Err(ApiError::bad_request(
-                "A Page prerun always uses the Event's configured board version",
-            ));
-        }
-    }
+    let requested_version = query
+        .version
+        .as_deref()
+        .map(|requested| {
+            super::parse_version_tuple(requested)
+                .ok_or_else(|| ApiError::bad_request("version must use MAJOR_MINOR_PATCH format"))
+        })
+        .transpose()?;
 
+    let variant_pin = variant::pin_from_request(&headers, query.variant.clone());
     let resolved = super::page_trigger::resolve_page_trigger(
         &state,
         &permission,
         &app_id,
         &event,
         &body.page_trigger,
+        variant_pin.as_deref(),
     )
     .await?;
+    // The served target (primary or bootstrap-assigned variant) owns the
+    // version; a request may only restate it.
+    if requested_version.is_some() && resolved.board_version != requested_version {
+        return Err(ApiError::bad_request(
+            "A Page prerun always uses the Event's configured board version",
+        ));
+    }
     let can_execute_locally = permission.has_permission(RolePermissions::ReadBoards)
         && permission.has_permission(RolePermissions::ExecuteBoards)
         && event.execution_mode != EventExecutionMode::Remote

@@ -181,6 +181,7 @@ impl NodeLogic for BuildMiniMaxNode {
             context_length: context_length_for_model(&model_id),
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
+                api_surface: None,
                 provider_name: "custom:openai".into(),
                 model_id: Some(model_id.clone()),
                 version: None,

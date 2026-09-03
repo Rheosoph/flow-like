@@ -82,7 +82,17 @@ impl NodeLogic for WhileLoopNode {
         context.activate_exec_pin_ref(&exec_item).await?;
         let flow = exec_item.get_connected_nodes();
 
+        let mut cancelled = false;
         for i in 0..max_iter {
+            if context.is_cancelled() {
+                context.log_message(
+                    &format!("Execution cancelled, stopping loop at iteration {}", i),
+                    LogLevel::Warn,
+                );
+                cancelled = true;
+                break;
+            }
+
             if !InternalNode::trigger_missing_dependencies(context, &mut None, false).await {
                 context.log_message(
                     "Failed to re-trigger condition dependencies",
@@ -117,6 +127,11 @@ impl NodeLogic for WhileLoopNode {
         }
 
         context.deactivate_exec_pin_ref(&exec_item).await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
+
         context.activate_exec_pin_ref(&done).await?;
         Ok(())
     }

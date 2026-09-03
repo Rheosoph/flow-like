@@ -5,9 +5,11 @@
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::jwt::{verify_jwt_async, ExecutorClaims, ExecutorPageExecutionClaims};
+use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
+use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
-use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache};
+use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
@@ -65,30 +67,97 @@ fn wasm_registry_signature(request: &ExecutionRequest) -> String {
     flow_like_types::dispatch::wasm_package_set_revision(request.wasm_packages.as_ref())
 }
 
-/// Resolve the request's board into a shared run template via the core
-/// resolver: in-process cache → persisted artifact → compile + write-back.
-/// The per-request WASM bundle signature salts the cache key so bundles with
-/// changed package content never share a template.
+/// Resolve the request's board into a shared run template from the compiled
+/// artifact the API presigned into the dispatch payload.
+///
+/// The API compiled and persisted the `.flcb` before dispatch and handed us a
+/// GET for exactly that object, so this runtime never reads a board proto,
+/// never compiles and never writes anything back — it has no storage
+/// credential that could. The cache is keyed on the board's content identity
+/// (pinned version or source ETag), the registry fingerprint and the WASM
+/// bundle signature, so a hit needs no revalidation. Anything short of a
+/// decodable artifact for our own registry fails the run at Resolution.
 pub(crate) async fn resolve_run_template(
     state: &Arc<FlowLikeState>,
     request: &ExecutionRequest,
 ) -> Result<Arc<CompiledRunTemplate>, ExecutorError> {
-    TEMPLATE_CACHE
-        .resolve(
-            state,
-            &request.app_id,
-            &request.board_id,
-            request.board_version,
-            request.board_etag.as_deref(),
-            &wasm_registry_signature(request),
-        )
+    let registry = state.node_registry.read().await.node_registry.clone();
+    let fingerprint = registry.fingerprint();
+    let version_key = artifact_version_key(request)?;
+    let cache_key = TemplateCache::cache_key(
+        &request.app_id,
+        &request.board_id,
+        &version_key,
+        &fingerprint,
+        &wasm_registry_signature(request),
+    );
+    if let Some(template) = TEMPLATE_CACHE.get(&cache_key) {
+        tracing::debug!(cache_key = %cache_key, "Template cache hit");
+        return Ok(template);
+    }
+
+    // The URL is a bearer capability: fetch errors name the object path only.
+    let bytes = fetch_bounded(&request.artifact.url, max_remote_payload_bytes())
         .await
         .map_err(|e| {
             ExecutorError::BoardLoad(format!(
-                "Failed to resolve board {}: {}",
-                request.board_id, e
+                "failed to fetch compiled artifact {} for board {}: {e}",
+                request.artifact.path, request.board_id
             ))
-        })
+        })?;
+    let template = template_from_fetched(&bytes, &fingerprint, registry.as_ref(), request)?;
+    TEMPLATE_CACHE.insert(cache_key, template.clone());
+    Ok(template)
+}
+
+/// The content identity half of the template cache key. Pinned versions are
+/// immutable; a floating board is pinned to the source ETag the API compiled
+/// from — the Page-claim ETag when the run carries one, otherwise the one the
+/// API resolved for an ordinary run and sent with the artifact reference.
+fn artifact_version_key(request: &ExecutionRequest) -> Result<String, ExecutorError> {
+    match (
+        request.board_version,
+        request.board_etag.as_deref(),
+        request.artifact.source_etag.as_deref(),
+    ) {
+        (Some((m, n, p)), _, _) => Ok(format!("{m}_{n}_{p}")),
+        (None, Some(etag), _) | (None, None, Some(etag)) => Ok(format!("latest@{etag}")),
+        (None, None, None) => Err(ExecutorError::BoardLoad(format!(
+            "floating Latest run of board {} carries no source etag in its compiled artifact reference",
+            request.board_id
+        ))),
+    }
+}
+
+/// Decode fetched artifact bytes into a template for this request. Split from
+/// the fetch so it is testable with in-memory bytes.
+pub(crate) fn template_from_fetched(
+    bytes: &[u8],
+    fingerprint: &[u8; 32],
+    registry: &FlowNodeRegistryInner,
+    request: &ExecutionRequest,
+) -> Result<Arc<CompiledRunTemplate>, ExecutorError> {
+    let storage_root = Path::from("apps").child(request.app_id.clone());
+    let template = template_from_bytes(bytes, fingerprint, registry, &storage_root).map_err(|e| {
+        let ours = blake3::Hash::from_bytes(*fingerprint).to_hex();
+        ExecutorError::BoardLoad(format!(
+            "compiled artifact {} rejected: {e} (API compiled against {}, this executor runs {})",
+            request.artifact.path,
+            request
+                .artifact
+                .registry_fingerprint
+                .get(..16)
+                .unwrap_or(&request.artifact.registry_fingerprint),
+            &ours.as_str()[..16]
+        ))
+    })?;
+    if template.board.id != request.board_id {
+        return Err(ExecutorError::BoardLoad(format!(
+            "compiled artifact {} is for board {}, expected {}",
+            request.artifact.path, template.board.id, request.board_id
+        )));
+    }
+    Ok(template)
 }
 
 fn validate_page_request_binding(
@@ -160,6 +229,14 @@ pub(crate) fn validate_executor_request_claims(
         ));
     }
 
+    // The in-process shadow isolation must be driven by the signed claim, not
+    // an unsigned payload byte. Old JWTs without the claim mean a normal run.
+    if request.shadow != claims.shadow.unwrap_or(false) {
+        return Err(ExecutorError::InvalidRequest(
+            "queued shadow flag does not match the executor JWT claims".to_string(),
+        ));
+    }
+
     match &claims.page_execution {
         Some(page) => {
             if claims
@@ -187,18 +264,22 @@ pub(crate) fn validate_executor_request_claims(
 }
 
 /// Build the `FlowLikeState` every execution path shares: stores from the
-/// request credentials, the logs database builder, and the server execution
-/// environment. WASM registry overlays are applied by the caller.
+/// request credentials, the logs database builder, the server execution
+/// environment and — when the run has a hub — the widget source that keeps
+/// `Instantiate Widget` off the meta store. WASM registry overlays are applied
+/// by the caller.
+///
+/// There is deliberately no meta store. Boards arrive as presigned compiled
+/// artifacts and widgets come from the hub, so the run credential carries no
+/// meta grant — and `with_default_store` would otherwise alias the meta slot
+/// to the content bucket, letting any stray meta read land on the wrong data.
+/// Leaving it `None` makes such a read fail loudly instead.
 pub(crate) async fn build_flow_state(
     credentials: &flow_like::credentials::SharedCredentials,
+    hub: Option<HubAccess>,
 ) -> Result<FlowLikeState, ExecutorError> {
     let content_store = credentials
         .to_store_type(StoreType::Content)
-        .await
-        .map_err(|e| ExecutorError::Storage(e.to_string()))?;
-
-    let meta_store = credentials
-        .to_store_type(StoreType::Meta)
         .await
         .map_err(|e| ExecutorError::Storage(e.to_string()))?;
 
@@ -208,7 +289,7 @@ pub(crate) async fn build_flow_state(
         .map_err(|e| ExecutorError::Storage(e.to_string()))?;
 
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
-    flow_config.register_app_meta_store(meta_store);
+    flow_config.stores.app_meta_store = None;
     flow_config.register_log_store(log_store);
 
     // Request-file offloads and `/tmp` uploads live under tmp/*, which the
@@ -238,6 +319,14 @@ pub(crate) async fn build_flow_state(
     let mut state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = ExecutionEnvironment::server_default();
+    if let Some(hub) = hub {
+        state
+            .register_app_widget_source(Arc::new(HubWidgetSource::new(
+                &hub.callback_url,
+                hub.jwt,
+            )))
+            .await;
+    }
     Ok(state)
 }
 
@@ -250,7 +339,7 @@ pub(crate) async fn record_claims_rejection(
     run_id: &str,
     error: &ExecutorError,
 ) {
-    match build_flow_state(&request.credentials).await {
+    match build_flow_state(&request.credentials, None).await {
         Ok(state) => {
             record_executor_rejection(
                 &Arc::new(state),
@@ -467,7 +556,14 @@ pub async fn execute(
     };
 
     // Build FlowLike state from the request credentials
-    let state = build_flow_state(&request.credentials).await?;
+    let state = build_flow_state(
+        &request.credentials,
+        Some(HubAccess {
+            callback_url: claims.callback_url.clone(),
+            jwt: request.executor_jwt.clone(),
+        }),
+    )
+    .await?;
     let execution_environment = state.execution_environment;
 
     // Set up event channel for API callback batching
@@ -741,6 +837,7 @@ pub async fn execute(
         run.set_execution_mode(mode);
     }
 
+    run.set_shadow(request.shadow).await;
     run.set_execution_sub(claims.sub.clone()).await;
 
     // Set user context if provided
@@ -1454,6 +1551,140 @@ mod callback_event_identity_tests {
         let api = api_event_input(&second);
         assert_eq!(api.id.as_deref(), Some(second.id.as_str()));
         assert_eq!(api.sequence, Some(1));
+    }
+}
+
+#[cfg(test)]
+mod shadow_claim_binding_tests {
+    use super::*;
+
+    fn claims(shadow: Option<bool>) -> ExecutorClaims {
+        serde_json::from_value(serde_json::json!({
+            "sub": "user-1",
+            "run_id": "run-1",
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "shadow": shadow,
+            "callback_url": "https://api.example",
+            "typ": "executor",
+            "iss": "flow-like",
+            "aud": "flow-like-executor",
+            "iat": 0,
+            "nbf": 0,
+            "exp": 0,
+            "jti": "jti-1"
+        }))
+        .expect("claims deserialize")
+    }
+
+    fn request(shadow: bool) -> ExecutionRequest {
+        serde_json::from_value(serde_json::json!({
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "node_id": "node-1",
+            "shadow": shadow,
+            "credentials": {
+                "Aws": {
+                    "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                    "secret_access_key": "secret",
+                    "session_token": null,
+                    "meta_bucket": "meta",
+                    "content_bucket": "content",
+                    "logs_bucket": "logs",
+                    "region": "us-east-1",
+                    "expiration": null
+                }
+            },
+            "executor_jwt": "jwt",
+            "artifact": {
+                "url": "https://meta.example/apps/app-1/compiled/board-1/1_0_0.flcb?sig",
+                "path": "apps/app-1/compiled/board-1/1_0_0.flcb",
+                "registry_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
+        }))
+        .expect("request deserializes")
+    }
+
+    /// Bytes the API would have persisted: a board holding one real catalog
+    /// node, compiled and encoded against the prepared registry.
+    fn artifact_bytes_for(board_id: &str, fingerprint: &[u8; 32]) -> Vec<u8> {
+        use flow_like::flow::board::Board;
+        use flow_like::flow::compiled::{compile::compile_board_with_catalog, encode_artifact};
+
+        let registry = PREPARED_REGISTRY.clone();
+        let mut node = registry
+            .get_nodes()
+            .into_iter()
+            .next()
+            .expect("the catalog is not empty");
+        node.id = "n1".into();
+        let mut board = Board::new_detached(
+            Some(board_id.to_string()),
+            Path::from("apps").child("app-1"),
+        );
+        board.nodes.insert(node.id.clone(), node);
+        let compiled = compile_board_with_catalog(&board, registry.as_ref()).expect("compile");
+        encode_artifact(&compiled, fingerprint).expect("encode")
+    }
+
+    #[test]
+    fn fetched_artifact_bytes_become_a_template_for_exactly_the_requested_board() {
+        let registry = PREPARED_REGISTRY.clone();
+        let fingerprint = registry.fingerprint();
+        let request = request(false);
+
+        let template =
+            template_from_fetched(&artifact_bytes_for("board-1", &fingerprint), &fingerprint, registry.as_ref(), &request)
+                .expect("an artifact for this board and registry is accepted");
+        assert_eq!(template.board.id, "board-1");
+
+        let error = template_from_fetched(&artifact_bytes_for("board-9", &fingerprint), &fingerprint, registry.as_ref(), &request)
+            .err()
+            .expect("an artifact for another board is refused");
+        assert!(error.to_string().contains("board-9"), "{error}");
+
+        let error = template_from_fetched(&artifact_bytes_for("board-1", &[9u8; 32]), &fingerprint, registry.as_ref(), &request)
+            .err()
+            .expect("an artifact for another registry is refused");
+        assert!(error.to_string().contains("this executor runs"), "{error}");
+    }
+
+    #[test]
+    fn the_cache_key_pins_a_floating_run_to_the_artifacts_source_etag() {
+        let mut request = request(false);
+        request.artifact.source_etag = Some("etag-a".into());
+        assert_eq!(artifact_version_key(&request).unwrap(), "latest@etag-a");
+
+        request.board_etag = Some("etag-page".into());
+        assert_eq!(
+            artifact_version_key(&request).unwrap(),
+            "latest@etag-page",
+            "a Page run's authorized ETag wins over the resolved one"
+        );
+
+        request.board_etag = None;
+        request.board_version = Some((1, 2, 3));
+        assert_eq!(artifact_version_key(&request).unwrap(), "1_2_3");
+
+        request.board_version = None;
+        request.artifact.source_etag = None;
+        assert!(artifact_version_key(&request).is_err(), "no identity, no key");
+    }
+
+    /// The in-process isolation is driven by the signed claim, never by the
+    /// unsigned payload byte: any disagreement fails closed.
+    #[test]
+    fn shadow_flag_is_load_bearing_from_the_signed_claims() {
+        validate_executor_request_claims(&claims(Some(true)), &request(true))
+            .expect("matching shadow flags are accepted");
+        validate_executor_request_claims(&claims(None), &request(false))
+            .expect("old JWTs without the claim mean a normal run");
+        validate_executor_request_claims(&claims(Some(false)), &request(false))
+            .expect("an explicit non-shadow claim matches a normal payload");
+
+        assert!(validate_executor_request_claims(&claims(None), &request(true)).is_err());
+        assert!(validate_executor_request_claims(&claims(Some(true)), &request(false)).is_err());
+        assert!(validate_executor_request_claims(&claims(Some(false)), &request(true)).is_err());
     }
 }
 

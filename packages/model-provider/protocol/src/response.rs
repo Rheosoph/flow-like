@@ -184,7 +184,19 @@ impl ResponseMessage {
                     }
                 }
             }
-            self.content_parts.extend(content_parts);
+            // Coalesce adjacent text parts: streamed deltas are token
+            // fragments, and one part per token renders one block per token.
+            for part in content_parts {
+                match (&part, self.content_parts.last_mut()) {
+                    (
+                        Content::Text { text, .. },
+                        Some(Content::Text {
+                            text: last_text, ..
+                        }),
+                    ) => last_text.push_str(text),
+                    _ => self.content_parts.push(part),
+                }
+            }
         }
 
         if let Some(refusal) = delta.refusal {
@@ -198,7 +210,7 @@ impl ResponseMessage {
         if let Some(role) = delta.role
             && role != self.role
         {
-            self.role = self.role.to_string() + &role;
+            self.role = role;
         }
 
         if let Some(tool_calls) = delta.tool_calls {
@@ -211,6 +223,24 @@ impl ResponseMessage {
     fn apply_delta_tool_call(&mut self, dcall: DeltaFunctionCall) {
         // Determine index (default to next position if missing)
         let idx = dcall.index;
+
+        // Index-less deltas (rig streams) identify their call by id — without
+        // this match every argument fragment becomes its own bogus call.
+        if idx.is_none()
+            && let Some(id) = dcall.id.as_deref().filter(|id| !id.is_empty())
+            && let Some(existing) = self.tool_calls.iter_mut().find(|c| c.id == id)
+        {
+            if let Some(t) = dcall.tool_type {
+                existing.tool_type = Some(t);
+            }
+            if let Some(name) = dcall.function.name {
+                existing.function.name += &name;
+            }
+            if let Some(args) = dcall.function.arguments {
+                existing.function.arguments += &args;
+            }
+            return;
+        }
 
         // Try to find existing entry by index when provided
         if let Some(i) = idx
@@ -333,14 +363,22 @@ impl TryFrom<RigMessage> for ResponseMessage {
                 for item in content.iter() {
                     match item {
                         RigAssistantContent::Text(text) => {
-                            if !text_content.is_empty() {
-                                text_content.push('\n');
-                            }
+                            // Text items may be streamed token fragments; a
+                            // separator would split words. Adjacent items merge
+                            // into one part so downstream renderers see blocks,
+                            // not tokens.
                             text_content.push_str(&text.text);
-                            content_parts.push(Content::Text {
-                                content_type: ContentType::Text,
-                                text: text.text.clone(),
-                            });
+                            if let Some(Content::Text {
+                                text: last_text, ..
+                            }) = content_parts.last_mut()
+                            {
+                                last_text.push_str(&text.text);
+                            } else {
+                                content_parts.push(Content::Text {
+                                    content_type: ContentType::Text,
+                                    text: text.text.clone(),
+                                });
+                            }
                         }
                         RigAssistantContent::ToolCall(tool_call) => {
                             tool_calls.push(FunctionCall {

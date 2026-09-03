@@ -98,6 +98,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EventAttentionStrip } from "./event-attention-strip";
+import { EventCanary } from "./event-canary";
+import { EventHistory } from "./event-history";
+import { EventQuality } from "./event-quality";
 import { EventSaveBar } from "./event-save-bar";
 import { EventSectionRail } from "./event-section-rail";
 import { EventsOverview } from "./events-overview";
@@ -2458,6 +2461,27 @@ function EventConfiguration({
 											)}
 								</CardContent>
 							</Card>
+						)}
+
+						{activeSection === "canary" && (
+							<EventCanary appId={appId} event={event} onReload={onReload} />
+						)}
+
+						{activeSection === "quality" && (
+							<EventQuality
+								appId={appId}
+								event={event}
+								nodes={board.data?.nodes}
+								onReload={onReload}
+							/>
+						)}
+
+						{activeSection === "history" && (
+							<EventHistory
+								appId={appId}
+								eventId={event.id}
+								nodes={board.data?.nodes}
+							/>
 						)}
 
 						{/* Notes — release notes live with the version they describe */}

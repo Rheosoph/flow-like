@@ -693,6 +693,7 @@ async fn invoke_with_stream<'a>(
     response.model = Some(model_name.to_string());
 
     let mut final_usage: Option<RigUsage> = None;
+    let mut streamed_reasoning = String::new();
 
     while let Some(item) = stream.next().await {
         let content = item.map_err(|e| {
@@ -718,15 +719,22 @@ async fn invoke_with_stream<'a>(
                 content,
                 internal_call_id: _,
             } => {
-                let delta_str = match content {
-                    ToolCallDeltaContent::Name(name) => name,
-                    ToolCallDeltaContent::Delta(delta) => delta,
+                let chunk = match content {
+                    ToolCallDeltaContent::Name(name) => {
+                        ResponseChunk::from_tool_call_name_delta(&id, &name, model_name)
+                    }
+                    ToolCallDeltaContent::Delta(delta) => {
+                        ResponseChunk::from_tool_call_delta(&id, &delta, model_name)
+                    }
                 };
-                let chunk = ResponseChunk::from_tool_call_delta(&id, &delta_str, model_name);
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;
             }
             StreamedAssistantContent::Reasoning(reasoning) => {
+                // Some providers stream ReasoningDelta and then replay the
+                // whole accumulated block as a final Reasoning item, others
+                // send one Reasoning per chunk — emit only what is new, with
+                // no separator (chunks are token fragments).
                 let reasoning_text = reasoning
                     .content
                     .iter()
@@ -736,12 +744,25 @@ async fn invoke_with_stream<'a>(
                         _ => None,
                     })
                     .collect::<Vec<_>>()
-                    .join("\n");
-                let chunk = ResponseChunk::from_reasoning(&reasoning_text, model_name);
-                response.push_chunk(chunk.clone());
-                callback(chunk).await?;
+                    .join("");
+                let new_text = if let Some(suffix) =
+                    reasoning_text.strip_prefix(streamed_reasoning.as_str())
+                {
+                    suffix
+                } else if streamed_reasoning.ends_with(reasoning_text.as_str()) {
+                    ""
+                } else {
+                    reasoning_text.as_str()
+                };
+                if !new_text.is_empty() {
+                    let chunk = ResponseChunk::from_reasoning(new_text, model_name);
+                    response.push_chunk(chunk.clone());
+                    streamed_reasoning.push_str(new_text);
+                    callback(chunk).await?;
+                }
             }
             StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                streamed_reasoning.push_str(&reasoning);
                 let chunk = ResponseChunk::from_reasoning(&reasoning, model_name);
                 response.push_chunk(chunk.clone());
                 callback(chunk).await?;

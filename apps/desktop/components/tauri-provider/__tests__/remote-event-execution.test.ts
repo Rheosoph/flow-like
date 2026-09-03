@@ -1,4 +1,8 @@
-import type { IEvent } from "@flow-like/flow-like-ui";
+import {
+	type IEvent,
+	resetPageContractDrift,
+	subscribeToPageContractDrift,
+} from "@flow-like/flow-like-ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiResponseError } from "../../../lib/api-error";
 
@@ -109,6 +113,7 @@ beforeEach(() => {
 	mocks.fetcher.mockReset();
 	mocks.streamFetcher.mockReset();
 	localStorage.clear();
+	resetPageContractDrift();
 });
 
 describe("event snapshot freshness", () => {
@@ -594,11 +599,14 @@ describe("a registry-backed local Page action", () => {
 });
 
 /**
- * The pre-run revision gate hands a stale local Page contract to the server —
- * but only when the server is actually there to take it. A local-only app with
- * a moved board must fail actionably instead of dying inside a doomed hub call.
+ * The pre-run gate asks whether this device holds a Page contract for the
+ * Event at all — not whether it holds the *exact* revision the rendered Page
+ * carries. That revision hashes the whole Board, so any unrelated edit
+ * supersedes it while the Page keeps rendering; demanding equality here sent a
+ * runnable action to the server, and on a local-only app failed it outright.
+ * The native command re-resolves the trigger against the current contract.
  */
-describe("the pre-run Page contract revision gate", () => {
+describe("the pre-run Page contract gate", () => {
 	const hybridPrerun = () => ({
 		board_id: BOARD,
 		runtime_variables: [],
@@ -627,16 +635,20 @@ describe("the pre-run Page contract revision gate", () => {
 		execution_mode: "Hybrid",
 	});
 
-	test("routes remotely when the local revision does not match", async () => {
+	test("still runs locally when a board edit superseded the rendered revision", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-stale" };
 			}
+			if (command === "execute_event") return undefined;
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		mocks.fetcher.mockResolvedValue(hybridPrerun());
-		mocks.streamFetcher.mockResolvedValue(undefined);
-		const state = new EventState(fakeBackend() as never);
+		const backend = fakeBackend();
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
 
 		await state.executeEvent(
 			APP,
@@ -653,14 +665,11 @@ describe("the pre-run Page contract revision gate", () => {
 			},
 		);
 
-		expect(mocks.streamFetcher).toHaveBeenCalledTimes(1);
-		expect(mocks.streamFetcher.mock.calls[0][1]).toBe(
-			`apps/${APP}/events/${EVENT}/invoke`,
-		);
-		expect(mocks.invoke).not.toHaveBeenCalledWith(
+		expect(mocks.invoke).toHaveBeenCalledWith(
 			"execute_event",
-			expect.anything(),
+			expect.objectContaining({ appId: APP, eventId: EVENT }),
 		);
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
 	});
 
 	test("routes remotely when the trigger carries no revision", async () => {
@@ -692,12 +701,49 @@ describe("the pre-run Page contract revision gate", () => {
 		);
 	});
 
-	test("throws an actionable error instead of a doomed hub call when unreachable", async () => {
+	test("a local-only app with a superseded revision runs instead of failing", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
 			if (command === "get_board") return emptyHybridBoard();
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-stale" };
+			}
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-current",
+			},
+		);
+
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({ appId: APP, eventId: EVENT }),
+		);
+		expect(mocks.streamFetcher).not.toHaveBeenCalled();
+	});
+
+	test("throws an actionable error instead of a doomed hub call when unreachable", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			// No Page contract on this device at all — not merely a superseded one.
+			if (command === "get_local_page_bootstrap") {
+				throw new Error("No active Event was found");
 			}
 			throw new Error(`unexpected invoke: ${command}`);
 		});
@@ -719,10 +765,174 @@ describe("the pre-run Page contract revision gate", () => {
 				},
 			),
 		).rejects.toThrow(
-			"The local Page contract is stale and the server is unreachable; reload the Page",
+			"This device holds no Page contract for this Event and the server is unreachable; reload the Page",
 		);
 		expect(mocks.streamFetcher).not.toHaveBeenCalled();
 		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("re-stamps the native invoke with the device's current revision", async () => {
+		// The rendered Page carries the revision it was built with; any unrelated
+		// Board edit supersedes it. The device just told us the current one, so the
+		// click runs with that rather than being refused or shipped to a hub.
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-device" };
+			}
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-rendered",
+			},
+		);
+
+		const call = mocks.invoke.mock.calls.find(
+			([command]) => command === "execute_event",
+		);
+		expect(call?.[1]?.pageTrigger).toEqual({
+			kind: "action",
+			action_id: "pa1_static",
+			manifest_revision: "per2-device",
+		});
+	});
+
+	test("never re-stamps a local dynamic grant", async () => {
+		// An lda1_ grant is minted against one exact revision and the native gate
+		// still compares it. Substituting would resurrect a revoked capability.
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "lda1_native-grant",
+				manifestRevision: "per2-rendered",
+			},
+		);
+
+		const call = mocks.invoke.mock.calls.find(
+			([command]) => command === "execute_event",
+		);
+		expect(call?.[1]?.pageTrigger).toEqual({
+			kind: "action",
+			action_id: "lda1_native-grant",
+			manifest_revision: "per2-rendered",
+		});
+	});
+
+	test("publishes a drift signal when the native command refuses the contract", async () => {
+		// Tauri rejects with the SERIALIZED error object, so this also proves the
+		// classifier reads `{ error }` rather than only `message`.
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-device" };
+			}
+			if (command === "execute_event") {
+				throw { error: "The Page action is stale or invalid" };
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		const seen: string[] = [];
+		const off = subscribeToPageContractDrift((detail) =>
+			seen.push(detail.reason),
+		);
+
+		await expect(
+			state.executeEvent(
+				APP,
+				EVENT,
+				{ id: EVENT, payload: {} } as never,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{
+					kind: "action",
+					actionId: "pa1_static",
+					manifestRevision: "per2-rendered",
+				},
+			),
+		).rejects.toBeDefined();
+		off();
+
+		expect(seen).toEqual(["stale_action"]);
+	});
+
+	test("a successful run publishes nothing", async () => {
+		// A completed run has already rewritten the surface through its own A2UI
+		// messages. Refetching on top of that would re-run onLoad over live
+		// content and duplicate or discard what the click just produced.
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-device" };
+			}
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		const seen: string[] = [];
+		const off = subscribeToPageContractDrift((detail) =>
+			seen.push(detail.reason),
+		);
+		await state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				kind: "action",
+				actionId: "pa1_static",
+				manifestRevision: "per2-rendered",
+			},
+		);
+		off();
+
+		expect(seen).toEqual([]);
 	});
 
 	test("a local dynamic Page action skips the contract gate", async () => {

@@ -185,7 +185,14 @@ async fn execute_inner(
     ),
     ExecutorError,
 > {
-    let state = crate::execute::build_flow_state(&request.credentials).await?;
+    let state = crate::execute::build_flow_state(
+        &request.credentials,
+        Some(crate::widgets::HubAccess {
+            callback_url: callback_url.to_string(),
+            jwt: request.executor_jwt.clone(),
+        }),
+    )
+    .await?;
     let execution_environment = state.execution_environment;
 
     let mut wasm_nodes = Vec::new();
@@ -389,6 +396,7 @@ async fn execute_inner(
         run.set_execution_mode(mode);
     }
 
+    run.set_shadow(request.shadow).await;
     run.set_execution_sub(executor_subject.to_string()).await;
 
     // Set user context if provided

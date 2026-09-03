@@ -245,6 +245,12 @@ class ModelInfo:
     name: str
     description: str = ""
     provider_name: str | None = None
+    api_surface: str | None = None
+    """Upstream API the model speaks: ``"ChatCompletions"`` or ``"Responses"``.
+
+    ``None`` means the bit does not declare one, which the server reads as chat
+    completions.
+    """
     model_id: str | None = None
     context_length: int | None = None
     vector_length: int | None = None

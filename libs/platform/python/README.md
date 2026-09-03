@@ -153,6 +153,27 @@ usage = client.get_usage()
 print(usage)  # {"llm_price": ..., "embedding_price": ...}
 ```
 
+### Responses API
+
+Model bits whose provider declares the `Responses` API surface are served by
+`/responses` instead of `/chat/completions`.
+
+```python
+result = client.responses(
+    input="Hello!",
+    bit_id="bit-id-for-a-responses-model",
+)
+print(result["output"])
+
+# Streaming
+for event in client.responses(
+    input="Hello!",
+    bit_id="bit-id-for-a-responses-model",
+    stream=True,
+):
+    print(event.data)
+```
+
 ### Embeddings
 
 ```python

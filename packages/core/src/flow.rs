@@ -8,5 +8,6 @@ pub mod execution;
 pub mod node;
 pub mod oauth;
 pub mod pin;
+pub mod regression;
 pub mod utils;
 pub mod variable;

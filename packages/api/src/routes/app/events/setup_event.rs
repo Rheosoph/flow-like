@@ -6,14 +6,21 @@
 //! dispatched directly to the registered nodes.
 //!
 //! Invoked automatically from [`super::upsert_event`] for `rest` / `mcp`
-//! event types, and manually via `POST /apps/{app_id}/events/{event_id}/setup`.
+//! event types (always for the stable variant), and manually via
+//! `POST /apps/{app_id}/events/{event_id}/setup` — which may name a Live
+//! variant to build that variant's own registration bucket.
 //!
 //! Persistence is a delete-then-insert by `(app_id, event_id,
-//! event_version)`. The event row is updated with `setup_status`,
-//! `last_setup_at`, `last_setup_version`, and `last_setup_error` so
-//! operators can see at a glance whether the latest setup succeeded.
+//! event_version, variant)`. Every setup writes the `(event, variant)`
+//! `EventSetup` pointer row; for the stable variant the event row is
+//! additionally updated with `setup_status`, `last_setup_at`,
+//! `last_setup_version`, and `last_setup_error` — the back-compat pointer
+//! inbound falls back to when no stable `EventSetup` row exists yet.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    time::Duration,
+};
 
 use axum::{
     Extension, Json,
@@ -22,27 +29,34 @@ use axum::{
 use eventsource_stream::Eventsource;
 use flow_like::flow::{
     board::Board,
+    event::{EventVariant, EventVariantMode},
     node::Node,
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
 };
 use futures::StreamExt;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-    TransactionTrait,
+    ActiveModelTrait,
+    ActiveValue::Set,
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, TransactionTrait,
+    sea_query::{Expr, OnConflict},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 
 use crate::{
-    ensure_permission,
-    entity::{event, event_remote_auth, event_remote_registration, sea_orm_active_enums::RunMode},
+    audit_branch, ensure_permission,
+    entity::{
+        event, event_remote_auth, event_remote_registration, event_setup,
+        sea_orm_active_enums::RunMode,
+    },
     error::ApiError,
     execution::{
         ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
         ExecutionJwtParams, TokenType, fetch_profile_for_dispatch, is_jwt_configured,
         resolve_wasm_packages, sign_execution_jwt,
+        variant::{ResolvedTarget, STABLE_VARIANT, dispatch_event_json},
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -78,6 +92,12 @@ pub struct SetupEventRequest {
     /// Without this flag a parallel `POST /setup` returns `409 Conflict`.
     #[serde(default)]
     pub force: bool,
+    /// Variant whose inbound surface to (re)build. Defaults to "stable"
+    /// (the primary target). Naming a Live variant runs the setup against
+    /// that variant's board and writes its own registration bucket; shadow
+    /// variants have no inbound surface and are refused.
+    #[serde(default)]
+    pub variant: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -125,9 +145,44 @@ pub async fn setup_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
     let user_context = permission.to_user_context();
+    let variant = body
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string();
+    let force = body.force;
 
-    let response = run_event_setup(state, sub, app_id, event_id, body, user_context).await?;
+    let response = run_event_setup(
+        state.clone(),
+        sub,
+        app_id.clone(),
+        event_id.clone(),
+        body,
+        user_context,
+    )
+    .await?;
     if response.status == "ok" {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "event.setup",
+            "Event",
+            event_id,
+            "Event setup run",
+            json!({
+                "variant": variant,
+                "event_version": response.event_version,
+                "run_id": response.run_id,
+                "setup_status": response.status,
+                "registrations": response.registrations_written,
+                "auths": response.auths_written,
+                "server_configs_received": response.server_configs_received,
+                "force": force,
+            })
+        );
         Ok(Json(response))
     } else {
         Err(ApiError::bad_request(
@@ -227,17 +282,56 @@ pub(crate) async fn run_event_setup(
         ));
     }
 
+    // Resolve the target surface. A non-stable setup dispatches into the
+    // variant's board/version/node and writes that variant's own
+    // registration bucket; the primary ("stable") keeps today's path.
+    let variant_name = body
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string();
+    let target = if variant_name == STABLE_VARIANT {
+        ResolvedTarget::primary(&core_event)
+    } else {
+        let Some(event_variant) = core_event
+            .variant_set()
+            .into_iter()
+            .find(|variant| variant.name == variant_name)
+        else {
+            return Err(ApiError::not_found(format!(
+                "event {event_id} has no variant named '{variant_name}'"
+            )));
+        };
+        if matches!(event_variant.mode, EventVariantMode::Shadow { .. }) {
+            return Err(ApiError::bad_request(format!(
+                "variant '{variant_name}' is a shadow variant; shadow variants have no inbound surface"
+            )));
+        }
+        ResolvedTarget::from_variant(&event_variant)
+    };
+
     // Concurrent-setup guard. Setup writes are delete-then-insert by
-    // `(app, event, version)` so two parallel calls race on the same
-    // version rows. Reject the second unless the caller explicitly forces.
+    // `(app, event, version, variant)` so two parallel calls race on the
+    // same rows. Reject the second unless the caller explicitly forces.
+    // The persist phase additionally serializes on a row lock and derives
+    // the registration prune's protect set inside its transaction.
     if !body.force {
-        let row = event::Entity::find_by_id(&core_event.id)
-            .one(&state.db)
-            .await
-            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-        if let Some(r) = row
-            && r.setup_status.as_deref() == Some("running")
-        {
+        let running = if variant_name == STABLE_VARIANT {
+            event::Entity::find_by_id(&core_event.id)
+                .filter(event::Column::AppId.eq(&app_id))
+                .one(&state.db)
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+                .is_some_and(|row| row.setup_status.as_deref() == Some("running"))
+        } else {
+            find_event_setup(&state.db, &app_id, &core_event.id, &variant_name)
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+                .is_some_and(|row| row.setup_status.as_deref() == Some("running"))
+        };
+        if running {
             return Err(ApiError::conflict(
                 "setup already running for this event; pass `force: true` to override",
             ));
@@ -248,26 +342,48 @@ pub(crate) async fn run_event_setup(
         "{}.{}.{}",
         core_event.event_version.0, core_event.event_version.1, core_event.event_version.2
     );
-    let event_json = serde_json::to_string(&core_event)
+    // The event the executor sees carries the target: for a variant, the
+    // variant's board triple plus its variables merged over the event's.
+    let event_json = dispatch_event_json(&core_event, &target)
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-    let board_id = core_event.board_id.clone();
-    let board_version = core_event.board_version;
+    let board_id = target.board_id.clone();
+    let board_version = target.board_version;
 
     // Mark setup as running before dispatch so the UI can show progress.
-    // Deliberately DO NOT touch `last_setup_version` here — inbound traffic
-    // routes by `last_setup_version` and must keep pointing at the last
-    // successful setup until this one completes.
+    // Deliberately DO NOT touch the serving pointers here —
+    // `last_setup_version` (stable) and `EventSetup.eventVersion` (variants)
+    // must keep pointing at the last successful setup until this completes.
     let now = chrono::Utc::now().naive_utc();
-    let _ = event::ActiveModel {
-        id: Set(core_event.id.clone()),
-        setup_status: Set(Some("running".to_string())),
-        last_setup_at: Set(Some(now)),
-        last_setup_error: Set(None),
-        updated_at: Set(now),
-        ..Default::default()
+    if variant_name == STABLE_VARIANT {
+        let _ = event::ActiveModel {
+            id: Set(core_event.id.clone()),
+            setup_status: Set(Some("running".to_string())),
+            last_setup_at: Set(Some(now)),
+            last_setup_error: Set(None),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await;
+    } else if let Err(error) = write_event_setup_row(
+        &state.db,
+        &app_id,
+        &core_event.id,
+        &variant_name,
+        &event_version,
+        &target,
+        "running",
+        None,
+    )
+    .await
+    {
+        tracing::warn!(
+            event_id = %core_event.id,
+            variant = %variant_name,
+            %error,
+            "failed to mark variant setup as running"
+        );
     }
-    .update(&state.db)
-    .await;
 
     let run_id = flow_like_types::create_id();
     let callback_url =
@@ -284,6 +400,7 @@ pub(crate) async fn run_event_setup(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
@@ -308,9 +425,13 @@ pub(crate) async fn run_event_setup(
         board_id: Set(board_id.clone()),
         version: Set(None),
         event_id: Set(Some(event_id.clone())),
-        node_id: Set(Some(core_event.node_id.clone())),
+        node_id: Set(Some(target.node_id.clone())),
         status: Set(crate::entity::sea_orm_active_enums::RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(0),
         input_payload_key: Set(None),
@@ -342,7 +463,7 @@ pub(crate) async fn run_event_setup(
         board_id,
         board_version,
         board_etag: None,
-        node_id: core_event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: body.payload.clone().or_else(|| Some(serde_json::json!({}))),
         user_id: sub,
@@ -360,6 +481,8 @@ pub(crate) async fn run_event_setup(
         channel: None,
         // A background setup workflow emitting config.
         trigger: DispatchTrigger::System,
+        shadow: false,
+        artifact: None,
     };
 
     let backend = state.dispatcher.backend();
@@ -372,7 +495,16 @@ pub(crate) async fn run_event_setup(
                 }
                 Err(e) => {
                     let msg = format!("dispatch failed: {e}");
-                    record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+                    record_setup_failure(
+                        &state,
+                        &app_id,
+                        &core_event.id,
+                        &event_version,
+                        &variant_name,
+                        &target,
+                        &msg,
+                    )
+                    .await;
                     return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
                 }
             }
@@ -384,7 +516,16 @@ pub(crate) async fn run_event_setup(
             }
             Err(e) => {
                 let msg = format!("dispatch failed: {e}");
-                record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+                record_setup_failure(
+                    &state,
+                    &app_id,
+                    &core_event.id,
+                    &event_version,
+                    &variant_name,
+                    &target,
+                    &msg,
+                )
+                .await;
                 return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
             }
         },
@@ -403,13 +544,31 @@ pub(crate) async fn run_event_setup(
         Ok(pair) => pair,
         Err(_) => {
             let msg = format!("setup timed out after {}s", timeout.as_secs());
-            record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+            record_setup_failure(
+                &state,
+                &app_id,
+                &core_event.id,
+                &event_version,
+                &variant_name,
+                &target,
+                &msg,
+            )
+            .await;
             return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
         }
     };
 
     if let Some(ref err_msg) = error {
-        record_setup_failure(&state, &core_event.id, &event_version, err_msg).await;
+        record_setup_failure(
+            &state,
+            &app_id,
+            &core_event.id,
+            &event_version,
+            &variant_name,
+            &target,
+            err_msg,
+        )
+        .await;
         return Ok(SetupEventResponse {
             run_id,
             event_id: core_event.id,
@@ -447,7 +606,16 @@ pub(crate) async fn run_event_setup(
              add a '{node_label}' node at the start of the flow so the \
              event can register its endpoints"
         );
-        record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
+        record_setup_failure(
+            &state,
+            &app_id,
+            &core_event.id,
+            &event_version,
+            &variant_name,
+            &target,
+            &msg,
+        )
+        .await;
         return Ok(SetupEventResponse {
             run_id,
             event_id: core_event.id,
@@ -460,8 +628,8 @@ pub(crate) async fn run_event_setup(
         });
     }
 
-    // Persist: delete previous (app_id, event_id, event_version) rows, then
-    // insert the freshly collected ones in a single transaction.
+    // Persist: delete previous (app_id, event_id, event_version, variant)
+    // rows, then insert the freshly collected ones in a single transaction.
     let collected_to_persist: Vec<ServerConfigEnvelope> = match expected_kind {
         Some(kind) => collected
             .iter()
@@ -476,9 +644,9 @@ pub(crate) async fn run_event_setup(
             .master_board(
                 "setup",
                 &app_id,
-                &core_event.board_id,
+                &target.board_id,
                 &state,
-                core_event.board_version,
+                target.board_version,
             )
             .await
         {
@@ -496,11 +664,17 @@ pub(crate) async fn run_event_setup(
         None
     };
 
+    // Success marking (the `EventSetup` pointer row, plus `setup_status = "ok"`
+    // and the `last_setup_version` advance for stable) happens inside
+    // persist_registrations' transaction, atomically with the registration
+    // rows the pointer names.
     let (registrations_written, auths_written) = match persist_registrations(
         &state,
         &app_id,
         &core_event.id,
         &event_version,
+        &variant_name,
+        &target,
         &collected_to_persist,
         setup_board.as_ref(),
     )
@@ -508,25 +682,44 @@ pub(crate) async fn run_event_setup(
     {
         Ok(pair) => pair,
         Err(e) => {
-            let msg = format!("persisting registrations failed: {e}");
-            record_setup_failure(&state, &core_event.id, &event_version, &msg).await;
-            return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
+            let (msg, user_fixable) = match &e {
+                PersistError::Parity(reason) => (reason.clone(), true),
+                PersistError::VariantGone(reason) => (reason.clone(), true),
+                PersistError::Other(err) => {
+                    (format!("persisting registrations failed: {err}"), false)
+                }
+            };
+            if !matches!(e, PersistError::VariantGone(_)) {
+                record_setup_failure(
+                    &state,
+                    &app_id,
+                    &core_event.id,
+                    &event_version,
+                    &variant_name,
+                    &target,
+                    &msg,
+                )
+                .await;
+            }
+            // A parity refusal is the caller's board to fix — surface it the
+            // same way as other failed-but-not-broken setups (a 400 at the
+            // route), not as an internal error.
+            return if user_fixable {
+                Ok(SetupEventResponse {
+                    run_id,
+                    event_id: core_event.id,
+                    event_version,
+                    status: "failed".to_string(),
+                    server_configs_received: collected.len(),
+                    registrations_written: 0,
+                    auths_written: 0,
+                    error: Some(msg),
+                })
+            } else {
+                Err(ApiError::internal_error(flow_like_types::anyhow!(msg)))
+            };
         }
     };
-
-    // Mark setup as succeeded.
-    let now = chrono::Utc::now().naive_utc();
-    let _ = event::ActiveModel {
-        id: Set(core_event.id.clone()),
-        setup_status: Set(Some("ok".to_string())),
-        last_setup_at: Set(Some(now)),
-        last_setup_version: Set(Some(event_version.clone())),
-        last_setup_error: Set(None),
-        updated_at: Set(now),
-        ..Default::default()
-    }
-    .update(&state.db)
-    .await;
 
     Ok(SetupEventResponse {
         run_id,
@@ -540,26 +733,167 @@ pub(crate) async fn run_event_setup(
     })
 }
 
-/// Mark the event row as `setup_status = "error"`. Awaited inline so the
-/// status is durably persisted before the API response goes out —
-/// k8s/lambda shutdowns must not be able to leave the row stuck in
-/// `running`. Deliberately does NOT overwrite `last_setup_version` so
-/// inbound traffic keeps routing to the last successful setup.
-async fn record_setup_failure(state: &AppState, event_id: &str, _event_version: &str, msg: &str) {
-    let now = chrono::Utc::now().naive_utc();
-    if let Err(e) = (event::ActiveModel {
-        id: Set(event_id.to_string()),
-        setup_status: Set(Some("error".to_string())),
-        last_setup_at: Set(Some(now)),
-        last_setup_error: Set(Some(msg.to_string())),
-        updated_at: Set(now),
-        ..Default::default()
-    })
-    .update(&state.db)
-    .await
-    {
-        tracing::warn!(error = %e, event_id = %event_id, "failed to record setup failure");
+/// Mark the failed setup's status row as `"error"` — the event row for the
+/// stable variant, the `(event, variant)` `EventSetup` row otherwise. Awaited
+/// inline so the status is durably persisted before the API response goes
+/// out — k8s/lambda shutdowns must not be able to leave the row stuck in
+/// `running`. Deliberately does NOT overwrite the serving pointers
+/// (`last_setup_version` / `EventSetup.eventVersion`) so inbound traffic
+/// keeps routing to the last successful setup.
+#[allow(clippy::too_many_arguments)]
+async fn record_setup_failure(
+    state: &AppState,
+    app_id: &str,
+    event_id: &str,
+    event_version: &str,
+    variant: &str,
+    target: &ResolvedTarget,
+    msg: &str,
+) {
+    let result = if variant == STABLE_VARIANT {
+        let now = chrono::Utc::now().naive_utc();
+        (event::ActiveModel {
+            id: Set(event_id.to_string()),
+            setup_status: Set(Some("error".to_string())),
+            last_setup_at: Set(Some(now)),
+            last_setup_error: Set(Some(msg.to_string())),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .update(&state.db)
+        .await
+        .map(|_| ())
+    } else {
+        write_event_setup_row(
+            &state.db,
+            app_id,
+            event_id,
+            variant,
+            event_version,
+            target,
+            "error",
+            Some(msg),
+        )
+        .await
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, event_id = %event_id, variant = %variant, "failed to record setup failure");
     }
+}
+
+fn format_board_version((major, minor, patch): (u32, u32, u32)) -> String {
+    format!("{major}.{minor}.{patch}")
+}
+
+/// The `(event, variant)` `EventSetup` pointer row, if one exists. Shared by
+/// the inbound routers and the registration read surfaces.
+pub(crate) async fn find_event_setup<C: ConnectionTrait>(
+    conn: &C,
+    app_id: &str,
+    event_id: &str,
+    variant: &str,
+) -> Result<Option<event_setup::Model>, sea_orm::DbErr> {
+    event_setup::Entity::find()
+        .filter(event_setup::Column::AppId.eq(app_id))
+        .filter(event_setup::Column::EventId.eq(event_id))
+        .filter(event_setup::Column::Variant.eq(variant))
+        .one(conn)
+        .await
+}
+
+/// Upsert the `(event, variant)` `EventSetup` row. Only an `"ok"` write may
+/// touch the serving-pointer columns (`eventVersion`, `boardId`,
+/// `boardVersion`); `"running"`/`"error"` marks write just the status fields
+/// — a first-time non-ok insert leaves the pointer columns empty — so a
+/// populated pointer always names the last successful setup. Inbound treats
+/// pointer presence as servability and `setup_status` as health metadata
+/// only.
+#[allow(clippy::too_many_arguments)]
+async fn write_event_setup_row<C: ConnectionTrait>(
+    conn: &C,
+    app_id: &str,
+    event_id: &str,
+    variant: &str,
+    event_version: &str,
+    target: &ResolvedTarget,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), sea_orm::DbErr> {
+    let pointer_columns = [
+        event_setup::Column::EventVersion,
+        event_setup::Column::BoardId,
+        event_setup::Column::BoardVersion,
+    ];
+    let status_columns = [
+        event_setup::Column::SetupStatus,
+        event_setup::Column::LastSetupAt,
+        event_setup::Column::LastSetupError,
+        event_setup::Column::UpdatedAt,
+    ];
+    let mut on_conflict =
+        OnConflict::columns([event_setup::Column::EventId, event_setup::Column::Variant]);
+    if status == "ok" {
+        on_conflict.update_columns(pointer_columns);
+    }
+    on_conflict.update_columns(status_columns);
+
+    let (event_version, board_id, board_version) = if status == "ok" {
+        (
+            event_version.to_string(),
+            target.board_id.clone(),
+            target.board_version.map(format_board_version),
+        )
+    } else {
+        (String::new(), String::new(), None)
+    };
+    let now = chrono::Utc::now().naive_utc();
+    event_setup::Entity::insert(event_setup::ActiveModel {
+        id: Set(flow_like_types::create_id()),
+        app_id: Set(app_id.to_string()),
+        event_id: Set(event_id.to_string()),
+        variant: Set(variant.to_string()),
+        event_version: Set(event_version),
+        board_id: Set(board_id),
+        board_version: Set(board_version),
+        setup_status: Set(Some(status.to_string())),
+        last_setup_at: Set(Some(now)),
+        last_setup_error: Set(error.map(ToString::to_string)),
+        created_at: Set(now),
+        updated_at: Set(now),
+    })
+    .on_conflict(on_conflict)
+    .exec_without_returning(conn)
+    .await?;
+    Ok(())
+}
+
+/// Refresh only the status columns of an existing `(event, variant)`
+/// `EventSetup` row — the stale-setup path, where the serving pointer must
+/// keep naming the newer setup. A no-op when no row exists (stable served by
+/// the legacy scalar only).
+async fn touch_event_setup_status<C: ConnectionTrait>(
+    conn: &C,
+    app_id: &str,
+    event_id: &str,
+    variant: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), sea_orm::DbErr> {
+    let now = chrono::Utc::now().naive_utc();
+    event_setup::Entity::update_many()
+        .col_expr(event_setup::Column::SetupStatus, Expr::value(status))
+        .col_expr(event_setup::Column::LastSetupAt, Expr::value(now))
+        .col_expr(
+            event_setup::Column::LastSetupError,
+            Expr::value(error.map(ToString::to_string)),
+        )
+        .col_expr(event_setup::Column::UpdatedAt, Expr::value(now))
+        .filter(event_setup::Column::AppId.eq(app_id))
+        .filter(event_setup::Column::EventId.eq(event_id))
+        .filter(event_setup::Column::Variant.eq(variant))
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 /// Persist server-config events.
@@ -574,39 +908,98 @@ async fn record_setup_failure(state: &AppState, event_id: &str, _event_version: 
 /// `mcp_raw` registration with the full config in `extras_json` — the
 /// MCP protocol handler will interpret it later. This keeps the inbound
 /// path implementable without locking in MCP-specific schema details.
+///
+/// Rows from superseded event versions of the same variant are pruned in
+/// the same transaction — only the version just written and the variant's
+/// serving pointer (`last_setup_version` for stable, the `EventSetup` row
+/// otherwise) survive. Every registration row is stamped with the variant,
+/// and the `(event, variant)` `EventSetup` pointer row is written
+/// atomically with the rows it names; only the stable variant additionally
+/// advances `event.last_setup_version` + `setup_status`. A non-stable
+/// setup must additionally pass the stable-parity gates (auth types, MCP
+/// tool names) before anything commits.
+#[allow(clippy::too_many_arguments)]
 async fn persist_registrations(
     state: &AppState,
     app_id: &str,
     event_id: &str,
     event_version: &str,
+    variant: &str,
+    target: &ResolvedTarget,
     envelopes: &[ServerConfigEnvelope],
     setup_board: Option<&Board>,
-) -> flow_like_types::Result<(usize, usize)> {
+) -> Result<(usize, usize), PersistError> {
+    use sea_orm::QuerySelect;
+
     let txn = state.db.begin().await?;
 
-    // Wipe previous rows for this version so re-runs don't pile up duplicates.
+    // Lock the event row for the whole persist phase. Two overlapping setups
+    // (force, or the non-atomic running-status guard) serialize here, and the
+    // protect set below is derived from the rows as committed — a snapshot
+    // taken before the txn could name a version whose rows another setup just
+    // pruned, leaving inbound routing at a version with zero registrations.
+    let locked_row = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .lock_exclusive()
+        .one(&txn)
+        .await?;
+    // Re-verify against the locked row that the variant still exists — a
+    // concurrent promote/abort may have removed it (and dropped its bucket)
+    // between this setup's dispatch and its persist; committing would
+    // resurrect the deleted variant's rows.
+    if variant != STABLE_VARIANT {
+        let still_exists = locked_row.as_ref().is_some_and(|row| {
+            row.variants
+                .as_ref()
+                .and_then(|json| serde_json::from_value::<Vec<EventVariant>>(json.clone()).ok())
+                .map(|variants| variants.iter().any(|entry| entry.name == variant))
+                .unwrap_or_else(|| variant == "canary" && row.canary.is_some())
+        });
+        if !still_exists {
+            return Err(PersistError::VariantGone(format!(
+                "variant '{variant}' no longer exists on event {event_id}; a concurrent promote or abort removed it, so this setup run was discarded"
+            )));
+        }
+    }
+    let stable_setup_version = locked_row.and_then(|row| row.last_setup_version);
+    // The version whose rows this variant serves until this txn commits. A
+    // variant row without a serving pointer (no successful setup yet) serves
+    // nothing.
+    let live_setup_version = if variant == STABLE_VARIANT {
+        stable_setup_version.clone()
+    } else {
+        find_event_setup(&txn, app_id, event_id, variant)
+            .await?
+            .map(|row| row.event_version)
+            .filter(|version| !version.is_empty())
+    };
+
+    // Wipe previous rows for this (version, variant) so re-runs don't pile up
+    // duplicates.
     event_remote_registration::Entity::delete_many()
         .filter(event_remote_registration::Column::AppId.eq(app_id))
         .filter(event_remote_registration::Column::EventId.eq(event_id))
         .filter(event_remote_registration::Column::EventVersion.eq(event_version))
+        .filter(event_remote_registration::Column::Variant.eq(variant))
         .exec(&txn)
         .await?;
     event_remote_auth::Entity::delete_many()
         .filter(event_remote_auth::Column::AppId.eq(app_id))
         .filter(event_remote_auth::Column::EventId.eq(event_id))
         .filter(event_remote_auth::Column::EventVersion.eq(event_version))
+        .filter(event_remote_auth::Column::Variant.eq(variant))
         .exec(&txn)
         .await?;
 
     let mut reg_count = 0usize;
     let mut auth_count = 0usize;
     let now = chrono::Utc::now().naive_utc();
-    // Dedup `(kind, method, path)` across all envelopes for this event
-    // version. A misconfigured graph can produce duplicate routes (e.g. two
-    // REST server nodes both registering `POST /webhook`). We keep the
+    // Dedup `(variant, kind, method, path)` across all envelopes for this
+    // event version. A misconfigured graph can produce duplicate routes (e.g.
+    // two REST server nodes both registering `POST /webhook`). We keep the
     // first occurrence and emit a warning for the rest — inbound dispatch
     // would otherwise pick rows in DB-order, which is undefined.
-    let mut seen: std::collections::HashSet<(String, String, String)> =
+    let mut seen: std::collections::HashSet<(String, String, String, String)> =
         std::collections::HashSet::new();
 
     for env in envelopes {
@@ -617,6 +1010,7 @@ async fn persist_registrations(
                     app_id,
                     event_id,
                     event_version,
+                    variant,
                     &env.node_id,
                     &env.config,
                     &mut auth_count,
@@ -634,10 +1028,10 @@ async fn persist_registrations(
                         .unwrap_or_default()
                         .unwrap_or_default();
                     let path_s = reg.path.clone().take().unwrap_or_default();
-                    let key = (kind_s, method_s.to_uppercase(), path_s);
+                    let key = (variant.to_string(), kind_s, method_s.to_uppercase(), path_s);
                     if !seen.insert(key.clone()) {
                         tracing::warn!(
-                            kind = %key.0, method = %key.1, path = %key.2,
+                            kind = %key.1, method = %key.2, path = %key.3,
                             "duplicate inbound route within setup batch; ignoring later occurrence"
                         );
                         continue;
@@ -652,6 +1046,7 @@ async fn persist_registrations(
                     app_id,
                     event_id,
                     event_version,
+                    variant,
                     &env.node_id,
                     "mcp",
                     env.config.get("auth"),
@@ -660,7 +1055,12 @@ async fn persist_registrations(
                     &txn,
                 )
                 .await?;
-                let key = ("mcp_raw".to_string(), String::new(), "/".to_string());
+                let key = (
+                    variant.to_string(),
+                    "mcp_raw".to_string(),
+                    String::new(),
+                    "/".to_string(),
+                );
                 if !seen.insert(key) {
                     tracing::warn!(
                         node_id = %env.node_id,
@@ -682,6 +1082,7 @@ async fn persist_registrations(
                     app_id: Set(app_id.to_string()),
                     event_id: Set(event_id.to_string()),
                     event_version: Set(event_version.to_string()),
+                    variant: Set(variant.to_string()),
                     kind: Set("mcp_raw".to_string()),
                     method: Set(None),
                     path: Set("/".to_string()),
@@ -696,10 +1097,15 @@ async fn persist_registrations(
                 reg_count += 1;
 
                 for tool in mcp_tool_entries(setup_board, &env.config) {
-                    let key = ("mcp_tool".to_string(), String::new(), tool.name.clone());
+                    let key = (
+                        variant.to_string(),
+                        "mcp_tool".to_string(),
+                        String::new(),
+                        tool.name.clone(),
+                    );
                     if !seen.insert(key.clone()) {
                         tracing::warn!(
-                            kind = %key.0, path = %key.2,
+                            kind = %key.1, path = %key.3,
                             "duplicate mcp tool registration within setup batch; ignoring later occurrence"
                         );
                         continue;
@@ -709,6 +1115,7 @@ async fn persist_registrations(
                         app_id: Set(app_id.to_string()),
                         event_id: Set(event_id.to_string()),
                         event_version: Set(event_version.to_string()),
+                        variant: Set(variant.to_string()),
                         kind: Set("mcp_tool".to_string()),
                         method: Set(None),
                         path: Set(tool.name.clone()),
@@ -737,10 +1144,15 @@ async fn persist_registrations(
                             );
                             continue;
                         }
-                        let key = ("mcp_resource".to_string(), String::new(), uri.clone());
+                        let key = (
+                            variant.to_string(),
+                            "mcp_resource".to_string(),
+                            String::new(),
+                            uri.clone(),
+                        );
                         if !seen.insert(key.clone()) {
                             tracing::warn!(
-                                kind = %key.0, path = %key.2,
+                                kind = %key.1, path = %key.3,
                                 "duplicate mcp resource registration within setup batch; ignoring later occurrence"
                             );
                             continue;
@@ -750,6 +1162,7 @@ async fn persist_registrations(
                             app_id: Set(app_id.to_string()),
                             event_id: Set(event_id.to_string()),
                             event_version: Set(event_version.to_string()),
+                            variant: Set(variant.to_string()),
                             kind: Set("mcp_resource".to_string()),
                             method: Set(None),
                             path: Set(uri),
@@ -781,10 +1194,15 @@ async fn persist_registrations(
                             );
                             continue;
                         }
-                        let key = ("mcp_prompt".to_string(), String::new(), name.clone());
+                        let key = (
+                            variant.to_string(),
+                            "mcp_prompt".to_string(),
+                            String::new(),
+                            name.clone(),
+                        );
                         if !seen.insert(key.clone()) {
                             tracing::warn!(
-                                kind = %key.0, path = %key.2,
+                                kind = %key.1, path = %key.3,
                                 "duplicate mcp prompt registration within setup batch; ignoring later occurrence"
                             );
                             continue;
@@ -794,6 +1212,7 @@ async fn persist_registrations(
                             app_id: Set(app_id.to_string()),
                             event_id: Set(event_id.to_string()),
                             event_version: Set(event_version.to_string()),
+                            variant: Set(variant.to_string()),
                             kind: Set("mcp_prompt".to_string()),
                             method: Set(None),
                             path: Set(name),
@@ -815,8 +1234,274 @@ async fn persist_registrations(
         }
     }
 
+    // Fatal parity gates for a non-stable setup, checked against the stable
+    // variant's currently served rows while everything is still uncommitted.
+    if variant != STABLE_VARIANT {
+        enforce_stable_parity(
+            app_id,
+            event_id,
+            event_version,
+            variant,
+            stable_setup_version.as_deref(),
+            &txn,
+        )
+        .await?;
+    }
+
+    // Prune this variant's superseded versions' rows. The previous successful
+    // setup — the set inbound traffic is serving until this txn commits —
+    // stays protected alongside the one just written. Other variants' buckets
+    // are never touched.
+    let protected_versions: Vec<&str> = std::iter::once(event_version)
+        .chain(live_setup_version.as_deref())
+        .collect();
+    let pruned_registrations = event_remote_registration::Entity::delete_many()
+        .filter(event_remote_registration::Column::AppId.eq(app_id))
+        .filter(event_remote_registration::Column::EventId.eq(event_id))
+        .filter(event_remote_registration::Column::Variant.eq(variant))
+        .filter(
+            event_remote_registration::Column::EventVersion
+                .is_not_in(protected_versions.iter().copied()),
+        )
+        .exec(&txn)
+        .await?;
+    let pruned_auths = event_remote_auth::Entity::delete_many()
+        .filter(event_remote_auth::Column::AppId.eq(app_id))
+        .filter(event_remote_auth::Column::EventId.eq(event_id))
+        .filter(event_remote_auth::Column::Variant.eq(variant))
+        .filter(
+            event_remote_auth::Column::EventVersion.is_not_in(protected_versions.iter().copied()),
+        )
+        .exec(&txn)
+        .await?;
+    tracing::debug!(
+        event_id = %event_id,
+        variant = %variant,
+        registrations_pruned = pruned_registrations.rows_affected,
+        auths_pruned = pruned_auths.rows_affected,
+        "pruned remote registrations for superseded event versions"
+    );
+
+    // A stale forced setup can commit after a newer version's setup already
+    // advanced the pointer: keep its rows (protected above) and refresh the
+    // health columns, but never move the serving pointer backward.
+    let stale_pointer = matches!(
+        (
+            super::parse_version_tuple(event_version),
+            live_setup_version
+                .as_deref()
+                .and_then(super::parse_version_tuple),
+        ),
+        (Some(written), Some(served)) if written < served
+    );
+    if stale_pointer {
+        tracing::warn!(
+            event_id = %event_id,
+            variant = %variant,
+            written_version = %event_version,
+            served_version = ?live_setup_version,
+            "setup finished for an older event version than the one currently served; rows written, serving pointer not advanced"
+        );
+        touch_event_setup_status(&txn, app_id, event_id, variant, "ok", None).await?;
+        if variant == STABLE_VARIANT {
+            let now = chrono::Utc::now().naive_utc();
+            event::ActiveModel {
+                id: Set(event_id.to_string()),
+                setup_status: Set(Some("ok".to_string())),
+                last_setup_at: Set(Some(now)),
+                last_setup_error: Set(None),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .update(&txn)
+            .await?;
+        }
+    } else {
+        // Advance the serving pointer atomically with the rows it names.
+        // Outside this txn a failed update could leave the pointer naming a
+        // version whose rows the prune above already removed.
+        write_event_setup_row(
+            &txn,
+            app_id,
+            event_id,
+            variant,
+            event_version,
+            target,
+            "ok",
+            None,
+        )
+        .await?;
+        // Back-compat pointer, stable only: inbound falls back to
+        // `last_setup_version` on deployments whose stable `EventSetup` row
+        // has not been backfilled yet, and three read surfaces still consume
+        // it.
+        if variant == STABLE_VARIANT {
+            let now = chrono::Utc::now().naive_utc();
+            event::ActiveModel {
+                id: Set(event_id.to_string()),
+                setup_status: Set(Some("ok".to_string())),
+                last_setup_at: Set(Some(now)),
+                last_setup_version: Set(Some(event_version.to_string())),
+                last_setup_error: Set(None),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .update(&txn)
+            .await?;
+        }
+    }
+
     txn.commit().await?;
     Ok((reg_count, auth_count))
+}
+
+/// Persist-phase failure split: a stable-parity refusal is the caller's
+/// board to fix and a concurrently deleted variant is a lost race — both
+/// surface as a failed setup (400 at the route) — while everything else
+/// stays an internal error. `VariantGone` additionally skips the failure
+/// marking, which would otherwise re-insert an `EventSetup` row for the
+/// deleted variant.
+enum PersistError {
+    Parity(String),
+    VariantGone(String),
+    Other(flow_like_types::Error),
+}
+
+impl From<sea_orm::DbErr> for PersistError {
+    fn from(error: sea_orm::DbErr) -> Self {
+        PersistError::Other(error.into())
+    }
+}
+
+impl From<flow_like_types::Error> for PersistError {
+    fn from(error: flow_like_types::Error) -> Self {
+        PersistError::Other(error)
+    }
+}
+
+/// One variant's inbound surface as the parity gates compare it: resolved
+/// auth types per route and the MCP tool names clients see.
+struct InboundSurface {
+    /// `(kind, path)` → the set of resolved auth type names for that route
+    /// (`"none"` when a registration links no auth row).
+    auth_types: HashMap<(String, String), BTreeSet<String>>,
+    /// `mcp_tool` registration paths — the `tools/list` name set.
+    mcp_tool_names: BTreeSet<String>,
+}
+
+async fn load_inbound_surface<C: ConnectionTrait>(
+    app_id: &str,
+    event_id: &str,
+    event_version: &str,
+    variant: &str,
+    txn: &C,
+) -> flow_like_types::Result<InboundSurface> {
+    let auth_type_by_id: HashMap<String, String> = event_remote_auth::Entity::find()
+        .filter(event_remote_auth::Column::AppId.eq(app_id))
+        .filter(event_remote_auth::Column::EventId.eq(event_id))
+        .filter(event_remote_auth::Column::EventVersion.eq(event_version))
+        .filter(event_remote_auth::Column::Variant.eq(variant))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|auth| {
+            let auth_type = auth
+                .config_json
+                .get("type")
+                .and_then(|value| value.as_str())
+                .map(canonical_rest_auth_type)
+                .unwrap_or("untyped")
+                .to_string();
+            (auth.id, auth_type)
+        })
+        .collect();
+
+    let mut auth_types: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
+    let mut mcp_tool_names = BTreeSet::new();
+    let registrations = event_remote_registration::Entity::find()
+        .filter(event_remote_registration::Column::AppId.eq(app_id))
+        .filter(event_remote_registration::Column::EventId.eq(event_id))
+        .filter(event_remote_registration::Column::EventVersion.eq(event_version))
+        .filter(event_remote_registration::Column::Variant.eq(variant))
+        .all(txn)
+        .await?;
+    for registration in registrations {
+        let resolved = registration
+            .auth_id
+            .as_deref()
+            .map(|auth_id| {
+                auth_type_by_id
+                    .get(auth_id)
+                    .cloned()
+                    .unwrap_or_else(|| "untyped".to_string())
+            })
+            .unwrap_or_else(|| "none".to_string());
+        if registration.kind == "mcp_tool" {
+            mcp_tool_names.insert(registration.path.clone());
+        }
+        auth_types
+            .entry((registration.kind, registration.path))
+            .or_default()
+            .insert(resolved);
+    }
+    Ok(InboundSurface {
+        auth_types,
+        mcp_tool_names,
+    })
+}
+
+/// The two fatal gates a non-stable setup must pass against the stable
+/// variant's currently served rows, inside the persist transaction: (a) a
+/// `(kind, path)` served by both may not resolve to a different auth type —
+/// a fraction of callers would suddenly need a different credential with no
+/// way to discover it; (b) the MCP tool-name set may not differ — clients
+/// cache `tools/list` and would get `-32602` inside a 200. With no stable
+/// setup on record there is nothing to diverge from and both gates pass.
+async fn enforce_stable_parity<C: ConnectionTrait>(
+    app_id: &str,
+    event_id: &str,
+    event_version: &str,
+    variant: &str,
+    stable_setup_version: Option<&str>,
+    txn: &C,
+) -> Result<(), PersistError> {
+    let Some(stable_version) = stable_setup_version else {
+        return Ok(());
+    };
+    let stable =
+        load_inbound_surface(app_id, event_id, stable_version, STABLE_VARIANT, txn).await?;
+    let candidate = load_inbound_surface(app_id, event_id, event_version, variant, txn).await?;
+
+    for (key, candidate_types) in &candidate.auth_types {
+        let Some(stable_types) = stable.auth_types.get(key) else {
+            continue;
+        };
+        if stable_types != candidate_types {
+            let join =
+                |types: &BTreeSet<String>| types.iter().cloned().collect::<Vec<_>>().join(", ");
+            return Err(PersistError::Parity(format!(
+                "variant '{}' resolves a different auth type than stable for {} {}: stable uses [{}], the variant uses [{}] — a canary share must not require a different credential",
+                variant,
+                key.0,
+                key.1,
+                join(stable_types),
+                join(candidate_types),
+            )));
+        }
+    }
+
+    if candidate.mcp_tool_names != stable.mcp_tool_names {
+        let diff = |a: &BTreeSet<String>, b: &BTreeSet<String>| {
+            a.difference(b).cloned().collect::<Vec<_>>().join(", ")
+        };
+        return Err(PersistError::Parity(format!(
+            "a canary may not add, remove or rename MCP tools; clients cache tools/list (variant '{}' adds [{}] and removes [{}] relative to stable)",
+            variant,
+            diff(&candidate.mcp_tool_names, &stable.mcp_tool_names),
+            diff(&stable.mcp_tool_names, &candidate.mcp_tool_names),
+        )));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -825,6 +1510,7 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
     app_id: &str,
     event_id: &str,
     event_version: &str,
+    variant: &str,
     node_id: &str,
     kind: &str,
     auth: Option<&Value>,
@@ -862,6 +1548,7 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
         app_id: Set(app_id.to_string()),
         event_id: Set(event_id.to_string()),
         event_version: Set(event_version.to_string()),
+        variant: Set(variant.to_string()),
         node_id: Set(node_id.to_string()),
         kind: Set(kind.to_string()),
         config_json: Set(config_json),
@@ -1202,6 +1889,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
     app_id: &str,
     event_id: &str,
     event_version: &str,
+    variant: &str,
     node_id: &str,
     config: &Value,
     auth_count: &mut usize,
@@ -1213,6 +1901,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
         app_id,
         event_id,
         event_version,
+        variant,
         node_id,
         "rest",
         config.get("auth"),
@@ -1262,6 +1951,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
                     app_id: Set(app_id.to_string()),
                     event_id: Set(event_id.to_string()),
                     event_version: Set(event_version.to_string()),
+                    variant: Set(variant.to_string()),
                     kind: Set("rest_fn".to_string()),
                     method: Set(Some(method)),
                     path: Set(path.clone()),
@@ -1286,6 +1976,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
             app_id: Set(app_id.to_string()),
             event_id: Set(event_id.to_string()),
             event_version: Set(event_version.to_string()),
+            variant: Set(variant.to_string()),
             kind: Set("rest_file".to_string()),
             method: Set(Some("GET".to_string())),
             path: Set(path.clone()),
@@ -1325,6 +2016,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
                 app_id: Set(app_id.to_string()),
                 event_id: Set(event_id.to_string()),
                 event_version: Set(event_version.to_string()),
+                variant: Set(variant.to_string()),
                 kind: Set("rest_openapi".to_string()),
                 method: Set(Some("GET".to_string())),
                 path: Set(path.clone()),
@@ -1345,6 +2037,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
                     app_id: Set(app_id.to_string()),
                     event_id: Set(event_id.to_string()),
                     event_version: Set(event_version.to_string()),
+                    variant: Set(variant.to_string()),
                     kind: Set("rest_openapi_ui".to_string()),
                     method: Set(Some("GET".to_string())),
                     path: Set(ui_path.to_string()),

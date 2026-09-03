@@ -1,7 +1,8 @@
 //! `GET /apps/{app_id}/events/{event_id}/registrations`
 //!
 //! List the persisted remote registrations (REST endpoints, MCP tools, …)
-//! for a given event. Optionally filtered to a specific `event_version`.
+//! for a given event. Optionally filtered to a specific `event_version` and
+//! variant bucket (defaults to `stable`, the primary surface).
 //!
 //! Registrations are populated by the remote-setup endpoint
 //! (see [`super::setup_event`]) and consumed by the inbound REST/MCP
@@ -24,16 +25,23 @@ use crate::{
         prelude::{EventRemoteAuth, EventRemoteRegistration},
     },
     error::ApiError,
+    execution::variant::STABLE_VARIANT,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
 };
 
+use super::setup_event::find_event_setup;
+
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 pub struct ListRegistrationsQuery {
-    /// Filter to a specific `event_version`. When omitted, the latest
-    /// `last_setup_version` recorded on the event is used.
+    /// Filter to a specific `event_version`. When omitted, the variant's
+    /// serving pointer is used: its `EventSetup` row, falling back to the
+    /// event's `last_setup_version` for stable.
     pub version: Option<String>,
+    /// Registration bucket to list. Defaults to `stable` (the primary
+    /// surface); a Live variant name lists that variant's bucket.
+    pub variant: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -122,6 +130,8 @@ fn redact_auth_config(config: serde_json::Value) -> serde_json::Value {
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ListRegistrationsResponse {
     pub event_id: String,
+    /// The registration bucket listed: `stable` or a Live variant's name.
+    pub variant: String,
     pub event_version: Option<String>,
     pub registrations: Vec<RegistrationView>,
     pub auths: Vec<AuthView>,
@@ -135,7 +145,8 @@ pub struct ListRegistrationsResponse {
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("event_id" = String, Path, description = "Event ID"),
-        ("version" = Option<String>, Query, description = "Specific event_version to list (defaults to latest setup)"),
+        ("version" = Option<String>, Query, description = "Specific event_version to list (defaults to the variant's latest setup)"),
+        ("variant" = Option<String>, Query, description = "Registration bucket to list (defaults to 'stable', the primary surface)"),
     ),
     responses(
         (status = 200, description = "Registrations", body = ListRegistrationsResponse),
@@ -161,9 +172,10 @@ pub async fn list_registrations(
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
 
-    // Determine version filter: explicit query > event.last_setup_version.
-    // We re-fetch the row to read `last_setup_version` without touching the
-    // CoreEvent serializer surface.
+    // Determine version filter: explicit query > the variant's `EventSetup`
+    // pointer > `event.last_setup_version` (stable only, pre-backfill
+    // fallback). We re-fetch the row to read `last_setup_version` without
+    // touching the CoreEvent serializer surface.
     let event_row = crate::entity::event::Entity::find_by_id(&event.id)
         .filter(crate::entity::event::Column::AppId.eq(&app_id))
         .one(&state.db)
@@ -171,14 +183,33 @@ pub async fn list_registrations(
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
         .ok_or_else(|| ApiError::not_found("event row missing"))?;
 
-    let version_filter = query
-        .version
-        .clone()
-        .or_else(|| event_row.last_setup_version.clone());
+    let variant = query
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string();
+
+    let version_filter = match query.version.clone() {
+        Some(version) => Some(version),
+        None => {
+            let pointer = find_event_setup(&state.db, &app_id, &event.id, &variant)
+                .await
+                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+                .map(|row| row.event_version);
+            if variant == STABLE_VARIANT {
+                pointer.or_else(|| event_row.last_setup_version.clone())
+            } else {
+                pointer
+            }
+        }
+    };
 
     let mut q = EventRemoteRegistration::find()
         .filter(event_remote_registration::Column::AppId.eq(&app_id))
-        .filter(event_remote_registration::Column::EventId.eq(&event.id));
+        .filter(event_remote_registration::Column::EventId.eq(&event.id))
+        .filter(event_remote_registration::Column::Variant.eq(variant.as_str()));
     if let Some(ref v) = version_filter {
         q = q.filter(event_remote_registration::Column::EventVersion.eq(v));
     }
@@ -190,7 +221,8 @@ pub async fn list_registrations(
 
     let mut auth_q = EventRemoteAuth::find()
         .filter(event_remote_auth::Column::AppId.eq(&app_id))
-        .filter(event_remote_auth::Column::EventId.eq(&event.id));
+        .filter(event_remote_auth::Column::EventId.eq(&event.id))
+        .filter(event_remote_auth::Column::Variant.eq(variant.as_str()));
     if let Some(ref v) = version_filter {
         auth_q = auth_q.filter(event_remote_auth::Column::EventVersion.eq(v));
     }
@@ -217,6 +249,7 @@ pub async fn list_registrations(
 
     Ok(Json(ListRegistrationsResponse {
         event_id: event.id,
+        variant,
         event_version: version_filter,
         registrations: rows.into_iter().map(RegistrationView::from).collect(),
         auths: auths.into_iter().map(AuthView::from).collect(),

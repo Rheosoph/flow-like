@@ -127,6 +127,28 @@ interface DiffEntry {
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
+/** How many stale boards may hydrate at once from a summaries listing. */
+const BOARD_HYDRATION_CONCURRENCY = 3;
+
+/** Run `worker` over `items`, keeping at most `limit` in flight. */
+async function mapWithConcurrency<T>(
+	items: readonly T[],
+	limit: number,
+	worker: (item: T) => Promise<void>,
+): Promise<void> {
+	let next = 0;
+	const runners = Array.from(
+		{ length: Math.max(1, Math.min(limit, items.length)) },
+		async () => {
+			while (next < items.length) {
+				const item = items[next++];
+				await worker(item);
+			}
+		},
+	);
+	await Promise.all(runners);
+}
+
 // A burst of queued batches (chunked pushes all failing against the same
 // outage) must surface as a single toast, not one per batch.
 const QUEUED_EDITS_TOAST_DEBOUNCE_MS = 15_000;
@@ -433,6 +455,16 @@ export class BoardState implements IBoardState {
 	 * from `remoteBoardSync` because the two sides hold different revisions of the same board.
 	 */
 	private readonly localBoardSync = new BoardSyncClient();
+	/**
+	 * `appId:boardId` -> the remote `updatedAt` nanos this session already pulled
+	 * through `getBoard`.
+	 *
+	 * A board whose remote copy is content-identical is deliberately not rewritten
+	 * locally (`boardsDifferIgnoringUpdatedAt`), so its local `updatedAt` never
+	 * catches up and it keeps qualifying as stale on every listing. Without this
+	 * the summaries fan-out re-downloads and re-merges the same boards forever.
+	 */
+	private readonly reconciledBoardVersions = new Map<string, number>();
 
 	/** The local board, transferred as a diff against the last one this client assembled. */
 	private fetchLocalBoard(
@@ -882,7 +914,15 @@ export class BoardState implements IBoardState {
 			const remoteNanos = systemTimeToNanos(summary.updatedAt);
 			const localNanos = systemTimeToNanos(localSummary?.updatedAt);
 			if (!localSummary || (remoteNanos > 0 && remoteNanos > localNanos)) {
-				stale.push(summary.id);
+				// Already pulled at this exact remote revision — a content-identical
+				// board never advances its local `updatedAt`, so the comparison above
+				// stays true for it indefinitely.
+				if (
+					this.reconciledBoardVersions.get(`${appId}:${summary.id}`) !==
+					remoteNanos
+				) {
+					stale.push(summary.id);
+				}
 			}
 			// Remote metadata is authoritative for the listing; local wins only when the local
 			// copy is the newer one (queued offline edits).
@@ -894,9 +934,36 @@ export class BoardState implements IBoardState {
 			);
 		}
 		if (stale.length > 0 && this.backend.queryClient) {
+			const remoteNanosById = new Map(
+				remote.map((summary) => [
+					summary.id,
+					systemTimeToNanos(summary.updatedAt),
+				]),
+			);
+			// Each `getBoard` downloads and merges a whole board graph and writes it
+			// back through the bridge. Unbounded, an app with many boards saturates
+			// the IPC channel and the IndexedDB-backed stores the merge writes to.
 			this.backend.backgroundTaskHandler(
-				Promise.allSettled(
-					stale.map((boardId) => this.getBoard(appId, boardId)),
+				mapWithConcurrency(
+					stale,
+					BOARD_HYDRATION_CONCURRENCY,
+					async (boardId) => {
+						try {
+							await this.getBoard(appId, boardId);
+							this.reconciledBoardVersions.set(
+								`${appId}:${boardId}`,
+								remoteNanosById.get(boardId) ?? 0,
+							);
+						} catch (error) {
+							// A board that fails to hydrate stays unrecorded so the next
+							// listing retries it.
+							console.warn(
+								"[BoardState] failed to hydrate stale board:",
+								boardId,
+								error,
+							);
+						}
+					},
 				).then(() => undefined),
 			);
 		}
@@ -1832,6 +1899,7 @@ export class BoardState implements IBoardState {
 		offset?: number,
 		limit?: number,
 		includeNodes?: boolean,
+		summaryOnly?: boolean,
 	): Promise<ILogMetadata[]> {
 		let localRuns: ILogMetadata[] = [];
 		// Fetch local runs
@@ -1846,6 +1914,7 @@ export class BoardState implements IBoardState {
 				limit: limit,
 				offset: offset,
 				lastMeta: lastMeta,
+				summaryOnly: summaryOnly,
 			});
 		} catch (e) {}
 

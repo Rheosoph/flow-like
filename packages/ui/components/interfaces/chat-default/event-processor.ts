@@ -16,6 +16,8 @@ import type {
 	IMessage,
 	IPlanStep,
 } from "./chat-db";
+import { joinContentText } from "./inline-segments";
+import { sanitizeReasoningForDisplay } from "./reasoning-format";
 
 export interface ProcessChatEventsResult {
 	intermediateResponse: Response;
@@ -54,67 +56,6 @@ function hasVisibleReasoning(
 	return Boolean(reasoning && reasoning.trim() !== "");
 }
 
-function hasStructuredReasoning(reasoning: string): boolean {
-	return reasoning
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean)
-		.some(
-			(line) =>
-				line.startsWith("```") ||
-				/^#{1,6}\s/.test(line) ||
-				/^[-*+]\s/.test(line) ||
-				/^\d+\.\s/.test(line) ||
-				/^>\s/.test(line) ||
-				/^\|.*\|$/.test(line),
-		);
-}
-
-function looksLikeTokenizedReasoning(reasoning: string): boolean {
-	const lines = reasoning
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean);
-
-	if (lines.length < 6 || hasStructuredReasoning(reasoning)) {
-		return false;
-	}
-
-	const shortLineCount = lines.filter((line) => {
-		const wordCount = line.split(/\s+/).filter(Boolean).length;
-		return wordCount <= 3 && line.length <= 24;
-	}).length;
-
-	return shortLineCount / lines.length >= 0.7;
-}
-
-function normalizeReasoningWhitespace(reasoning: string): string {
-	let normalized = "";
-	let pendingSpace = false;
-
-	for (const ch of reasoning) {
-		if (/\s/.test(ch)) {
-			pendingSpace = normalized.length > 0;
-			continue;
-		}
-
-		if (pendingSpace && !/[.,;:!?)}\]'\"]/.test(ch)) {
-			normalized += " ";
-		}
-
-		pendingSpace = false;
-		normalized += ch;
-	}
-
-	return normalized;
-}
-
-function sanitizeReasoningForDisplay(reasoning: string): string {
-	return looksLikeTokenizedReasoning(reasoning)
-		? normalizeReasoningWhitespace(reasoning)
-		: reasoning;
-}
-
 /**
  * Messages whose plan is the single synthesized "Thinking" step rather than a real backend plan.
  * Only those may be replaced wholesale with the run-wide accumulated reasoning — backend steps
@@ -127,31 +68,34 @@ function appendFallbackReasoningStep(
 	reasoning: string,
 	replace = false,
 ) {
-	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
-
 	if (
 		(!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) &&
-		!hasVisibleReasoning(sanitizedReasoning)
+		!hasVisibleReasoning(reasoning)
 	) {
 		return;
 	}
 
 	if (!responseMessage.plan_steps || responseMessage.plan_steps.length === 0) {
-		responseMessage.plan_steps = [
-			{
-				id: "step-0",
-				title: "Thinking",
-				status: "progress",
-				reasoning: sanitizedReasoning,
-			},
-		];
+		const step: IPlanStep = {
+			id: "step-0",
+			title: "Thinking",
+			status: "progress",
+			reasoning,
+		};
+		// A live delta marks where the thinking started; a replayed transcript does not.
+		if (!replace) {
+			step.content_offset = joinContentText(
+				responseMessage.inner.content,
+			).length;
+		}
+		responseMessage.plan_steps = [step];
 		responseMessage.current_step_id = "step-0";
 		syntheticReasoningPlans.add(responseMessage);
 		return;
 	}
 
 	// The run-wide reasoning transcript may only overwrite the synthesized step. Real backend
-	// plans carry their own per-step text, which parseBackendPlan already keeps up to date.
+	// plans carry their own per-step text, which applyBackendPlan already keeps up to date.
 	if (replace && !syntheticReasoningPlans.has(responseMessage)) {
 		return;
 	}
@@ -169,17 +113,35 @@ function appendFallbackReasoningStep(
 
 	if (
 		!hasVisibleReasoning(currentStep.reasoning) &&
-		!hasVisibleReasoning(sanitizedReasoning)
+		!hasVisibleReasoning(reasoning)
 	) {
 		return;
 	}
 
 	currentStep.reasoning = replace
-		? sanitizedReasoning
-		: sanitizeReasoningForDisplay(
-				(currentStep.reasoning || "") + sanitizedReasoning,
-			);
+		? reasoning
+		: (currentStep.reasoning || "") + reasoning;
 	responseMessage.current_step_id = currentStep.id;
+}
+
+/**
+ * The tokenized-reasoning repair is a display heuristic for rows persisted before the producers
+ * were fixed. Running it on the whole transcript for every chunk made the processor superlinear
+ * in stream length, so it runs exactly once, on the settled message.
+ */
+export function finalizePlanSteps(responseMessage: IMessage) {
+	for (const step of responseMessage.plan_steps ?? []) {
+		if (step.status === "progress") {
+			step.status = "done";
+			if (!step.endTime) {
+				step.endTime = Date.now();
+			}
+		}
+		if (step.reasoning) {
+			step.reasoning = sanitizeReasoningForDisplay(step.reasoning);
+		}
+	}
+	responseMessage.current_step_id = undefined;
 }
 
 /**
@@ -201,56 +163,161 @@ export function mergeChatWidgets(
 		const prior = byId.get(widget.instance_id);
 		const priorUpdates = prior?.updates ?? [];
 		const incomingUpdates = widget.updates ?? [];
-		byId.set(
-			widget.instance_id,
-			priorUpdates.length > incomingUpdates.length
-				? { ...widget, updates: priorUpdates }
-				: widget,
-		);
+		// Keeping the prior OBJECT (not just its updates) preserves identity for
+		// downstream memoization; the component is the push-time snapshot and
+		// re-registrations ride the updates array, so an equal-or-shorter
+		// incoming widget carries nothing new.
+		if (prior && priorUpdates.length >= incomingUpdates.length) continue;
+		byId.set(widget.instance_id, widget);
 	}
 	return Array.from(byId.values());
 }
 
-function widgetContainsChild(widget: IChatWidget, childId: string): boolean {
-	const inlineDef = (widget.component as Record<string, unknown>)
+function inlineChildIds(component: unknown): string[] {
+	const inlineDef = (component as Record<string, unknown> | undefined)
 		?.inlineWidgetDef as { components?: Array<{ id?: string }> } | undefined;
-	const suffix = `-${childId}`;
 	return (
-		inlineDef?.components?.some(
-			(c) => c?.id === childId || (c?.id?.endsWith(suffix) ?? false),
-		) ?? false
+		inlineDef?.components
+			?.map((c) => c?.id)
+			.filter((id): id is string => typeof id === "string") ?? []
 	);
 }
 
-function a2uiUpdateTargetsWidget(
+function collectBoundPaths(value: unknown, paths: Set<string>) {
+	if (Array.isArray(value)) {
+		for (const item of value) collectBoundPaths(item, paths);
+		return;
+	}
+	if (!value || typeof value !== "object") return;
+	const record = value as Record<string, unknown>;
+	const keys = Object.keys(record);
+	if (
+		typeof record.path === "string" &&
+		keys.every((k) => k === "path" || k === "defaultValue")
+	) {
+		paths.add(record.path);
+	}
+	for (const item of Object.values(record)) collectBoundPaths(item, paths);
+}
+
+function pathsOverlap(updated: string, bound: string): boolean {
+	return (
+		updated === bound ||
+		bound.startsWith(`${updated}/`) ||
+		updated.startsWith(`${bound}/`)
+	);
+}
+
+/**
+ * Ids and binding paths a live a2ui update may legitimately target for one
+ * chat widget. Mirrors the backend `ChatWidget::attach_update_log` fixpoint:
+ * instances pushed into this widget's containers (and their children) belong
+ * to its replay, and data-model updates are matched by bound path because
+ * `Data Update` writes to a board-chosen surface id, never the instance id.
+ */
+function widgetUpdateTargets(widget: IChatWidget): {
+	instanceIds: Set<string>;
+	childIds: Set<string>;
+	boundPaths: Set<string>;
+} {
+	const instanceIds = new Set([widget.instance_id]);
+	const childIds = new Set(inlineChildIds(widget.component));
+	const boundPaths = new Set<string>();
+	collectBoundPaths(widget.component, boundPaths);
+
+	for (const update of widget.updates ?? []) {
+		const record = update as Record<string, unknown>;
+		if (record.type !== "upsertElement") continue;
+		const value = record.value as Record<string, unknown> | undefined;
+		if (!value) continue;
+		if (
+			(value.type === "pushChild" || value.type === "insertChildAt") &&
+			typeof value.childId === "string" &&
+			!childIds.has(value.childId)
+		) {
+			instanceIds.add(value.childId);
+		}
+		if (
+			value.type === "createComponent" &&
+			typeof record.element_id === "string" &&
+			instanceIds.has(record.element_id)
+		) {
+			for (const id of inlineChildIds(value.component)) childIds.add(id);
+			collectBoundPaths(value.component, boundPaths);
+		}
+	}
+
+	return { instanceIds, childIds, boundPaths };
+}
+
+/**
+ * Returns the payload to append to the widget's replay when the update targets
+ * it, or null. Data-model updates are re-addressed to the widget's surface —
+ * the reducer only applies them when the surface ids match.
+ */
+function a2uiUpdateForWidget(
 	widget: IChatWidget,
 	payload: Record<string, unknown>,
-): boolean {
+	targets: ReturnType<typeof widgetUpdateTargets>,
+): Record<string, unknown> | null {
+	const { instanceIds, childIds, boundPaths } = targets;
 	switch (payload.type) {
 		case "upsertElement": {
 			const elementId = payload.element_id as string | undefined;
-			if (!elementId) return false;
+			if (!elementId) return null;
 			if (elementId.includes("/")) {
-				const surfaceId = elementId.split("/", 2)[0];
-				return (
-					surfaceId === widget.surface_id || surfaceId === widget.instance_id
-				);
+				const scope = elementId.split("/", 2)[0];
+				return scope === widget.surface_id || instanceIds.has(scope)
+					? payload
+					: null;
 			}
-			return (
-				elementId === widget.instance_id ||
-				widgetContainsChild(widget, elementId)
-			);
+			if (instanceIds.has(elementId)) return payload;
+			const suffix = `-${elementId}`;
+			for (const child of childIds) {
+				if (child === elementId || child.endsWith(suffix)) return payload;
+			}
+			return null;
 		}
-		case "dataModelUpdate":
 		case "createElement":
 		case "removeElement": {
 			const surfaceId = (payload.surfaceId ?? payload.surface_id) as
 				| string
 				| undefined;
-			return !!surfaceId && surfaceId === widget.surface_id;
+			if (!surfaceId) return null;
+			return surfaceId === widget.surface_id || instanceIds.has(surfaceId)
+				? payload
+				: null;
+		}
+		case "dataModelUpdate": {
+			const surfaceId = (payload.surfaceId ?? payload.surface_id) as
+				| string
+				| undefined;
+			const targeted =
+				!!surfaceId &&
+				(surfaceId === widget.surface_id || instanceIds.has(surfaceId));
+			const path = payload.path as string | undefined;
+			const contents = payload.contents as Array<{ key?: string }> | undefined;
+			const bound =
+				!targeted &&
+				(path
+					? [...boundPaths].some((b) => pathsOverlap(path, b))
+					: (contents?.some((entry) => {
+							const key = entry?.key;
+							return (
+								typeof key === "string" &&
+								[...boundPaths].some((b) => pathsOverlap(key, b))
+							);
+						}) ?? false));
+			if (!targeted && !bound) return null;
+			if (surfaceId === widget.surface_id) return payload;
+			return {
+				...payload,
+				surfaceId: widget.surface_id,
+				surface_id: widget.surface_id,
+			};
 		}
 		default:
-			return false;
+			return null;
 	}
 }
 
@@ -266,10 +333,21 @@ function hasUsageStat(
 	return usageStats.some((existing) => JSON.stringify(existing) === signature);
 }
 
-function parseBackendPlan(reasoning: BackendReasoning): {
-	steps: IPlanStep[];
-	currentStepId: string | undefined;
-} {
+/**
+ * Rebuild the plan from a backend snapshot — Push Step, Push Reasoning, Push Text To Step and
+ * Remove Step all re-send the whole plan. Anchors are frozen at first sight: a step already on the
+ * message keeps whatever `content_offset` it has (none, once Push Response detached it), and only
+ * a step seen for the first time anchors at the current text length, so it renders after the text
+ * that preceded it and before the text that follows.
+ */
+function applyBackendPlan(
+	responseMessage: IMessage,
+	reasoning: BackendReasoning,
+) {
+	const priorSteps = new Map(
+		(responseMessage.plan_steps ?? []).map((step) => [step.id, step]),
+	);
+	const textLength = joinContentText(responseMessage.inner.content).length;
 	const steps: IPlanStep[] = [];
 	let currentStepId: string | undefined;
 
@@ -294,6 +372,7 @@ function parseBackendPlan(reasoning: BackendReasoning): {
 			status = "planned";
 		}
 
+		const prior = priorSteps.get(id);
 		steps.push({
 			id,
 			title,
@@ -302,12 +381,31 @@ function parseBackendPlan(reasoning: BackendReasoning): {
 			reasoning:
 				stepId === reasoning.current_step &&
 				hasVisibleReasoning(reasoning.current_message)
-					? sanitizeReasoningForDisplay(reasoning.current_message)
+					? reasoning.current_message
 					: undefined,
+			content_offset: prior ? prior.content_offset : textLength,
 		});
 	}
 
-	return { steps, currentStepId };
+	responseMessage.plan_steps = steps;
+	responseMessage.current_step_id = currentStepId;
+	syntheticReasoningPlans.delete(responseMessage);
+}
+
+/**
+ * Push Response replaces the whole text, so offsets stamped against the streamed text no longer
+ * point at anything. Detached steps fall back to the block above the text; steps pushed afterwards
+ * anchor against the replaced text again.
+ */
+function detachPlanAnchors(responseMessage: IMessage): boolean {
+	const steps = responseMessage.plan_steps;
+	if (!steps?.some((step) => typeof step.content_offset === "number")) {
+		return false;
+	}
+	responseMessage.plan_steps = steps.map(
+		({ content_offset: _detached, ...step }) => step,
+	);
+	return true;
 }
 
 export function processChatEvents(
@@ -365,9 +463,14 @@ export function processChatEvents(
 		if (!widgets?.length) return false;
 		let changed = false;
 		const next = widgets.map((widget) => {
-			if (!a2uiUpdateTargetsWidget(widget, payload)) return widget;
+			const update = a2uiUpdateForWidget(
+				widget,
+				payload,
+				widgetUpdateTargets(widget),
+			);
+			if (!update) return widget;
 			changed = true;
-			return { ...widget, updates: [...(widget.updates ?? []), payload] };
+			return { ...widget, updates: [...(widget.updates ?? []), update] };
 		});
 		if (changed) {
 			responseMessage.widgets = next;
@@ -421,11 +524,7 @@ export function processChatEvents(
 
 			// Handle plan updates
 			if (ev.payload.plan) {
-				const planData = ev.payload.plan as BackendReasoning;
-				const { steps, currentStepId } = parseBackendPlan(planData);
-				responseMessage.plan_steps = steps;
-				responseMessage.current_step_id = currentStepId;
-				syntheticReasoningPlans.delete(responseMessage);
+				applyBackendPlan(responseMessage, ev.payload.plan as BackendReasoning);
 				shouldUpdate = true;
 			}
 
@@ -460,14 +559,14 @@ export function processChatEvents(
 					}
 					shouldUpdate = true;
 				}
+				// Push Response replaced the text: every anchor stamped so far is void.
+				if (detachPlanAnchors(responseMessage)) {
+					shouldUpdate = true;
+				}
 			}
 			// Handle plan in chat_stream as well
 			if (ev.payload.plan) {
-				const planData = ev.payload.plan as BackendReasoning;
-				const { steps, currentStepId } = parseBackendPlan(planData);
-				responseMessage.plan_steps = steps;
-				responseMessage.current_step_id = currentStepId;
-				syntheticReasoningPlans.delete(responseMessage);
+				applyBackendPlan(responseMessage, ev.payload.plan as BackendReasoning);
 				shouldUpdate = true;
 			}
 			if (ev.payload.widgets) {
@@ -483,11 +582,23 @@ export function processChatEvents(
 				const lastMessage = intermediateResponse.lastMessageOfRole(
 					IRole.Assistant,
 				);
+				const streamedText = joinContentText(responseMessage.inner.content);
 				const finalContent = lastMessage
 					? visibleResponseContent(lastMessage)
 					: responseMessage.inner.content;
 				if (finalContent !== responseMessage.inner.content) {
 					responseMessage.inner.content = finalContent ?? "";
+					shouldUpdate = true;
+				}
+				// The final flush normally re-sends exactly what streamed, so anchors stay
+				// valid. Anything else (a chunk lost to sampling, a rewrite) leaves them
+				// pointing into text that no longer exists.
+				if (
+					!joinContentText(responseMessage.inner.content).startsWith(
+						streamedText,
+					) &&
+					detachPlanAnchors(responseMessage)
+				) {
 					shouldUpdate = true;
 				}
 				if (lastMessage?.reasoning && !ev.payload.plan) {
@@ -510,17 +621,8 @@ export function processChatEvents(
 				shouldUpdate = true;
 			}
 
-			// Finalize plan steps - mark all as done if not already
 			if (responseMessage.plan_steps) {
-				for (const step of responseMessage.plan_steps) {
-					if (step.status === "progress") {
-						step.status = "done";
-						if (!step.endTime) {
-							step.endTime = Date.now();
-						}
-					}
-				}
-				responseMessage.current_step_id = undefined;
+				finalizePlanSteps(responseMessage);
 				shouldUpdate = true;
 			}
 		}

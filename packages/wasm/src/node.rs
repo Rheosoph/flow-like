@@ -537,6 +537,13 @@ impl NodeLogic for WasmNodeLogic {
 
         let mut security = self.security.clone();
         security.execution_environment = context.execution_environment();
+        if context
+            .execution_cache
+            .as_ref()
+            .is_some_and(|cache| cache.shadow)
+        {
+            security.capabilities = strip_shadow_capabilities(security.capabilities);
+        }
         let mut instance = self
             .loaded
             .instantiate(&self.engine, security)
@@ -733,6 +740,19 @@ impl std::fmt::Debug for WasmNodeLogic {
     }
 }
 
+/// The per-run capability mask for a shadow/replay run: every side-effecting
+/// capability is cleared while reads stay available. Writes through a shadow
+/// run fail loudly at the host boundary rather than silently no-oping.
+fn strip_shadow_capabilities(capabilities: WasmCapabilities) -> WasmCapabilities {
+    capabilities
+        & !(WasmCapabilities::STORAGE_WRITE
+            | WasmCapabilities::STORAGE_DELETE
+            | WasmCapabilities::HTTP_WRITE
+            | WasmCapabilities::VARIABLES_WRITE
+            | WasmCapabilities::CACHE_WRITE
+            | WasmCapabilities::OAUTH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,6 +781,28 @@ mod tests {
             enforce_schema,
             enforce_generic_value_type: None,
         }
+    }
+
+    #[test]
+    fn shadow_mask_clears_every_side_effecting_capability_and_keeps_reads() {
+        let stripped = strip_shadow_capabilities(WasmCapabilities::ALL);
+        assert!(!stripped.intersects(
+            WasmCapabilities::STORAGE_WRITE
+                | WasmCapabilities::STORAGE_DELETE
+                | WasmCapabilities::HTTP_WRITE
+                | WasmCapabilities::VARIABLES_WRITE
+                | WasmCapabilities::CACHE_WRITE
+                | WasmCapabilities::OAUTH
+        ));
+        assert!(stripped.contains(WasmCapabilities::STORAGE_READ));
+        assert!(stripped.contains(WasmCapabilities::VARIABLES_READ));
+        assert!(stripped.contains(WasmCapabilities::CACHE_READ));
+        assert!(stripped.contains(WasmCapabilities::HTTP_GET));
+
+        assert_eq!(
+            strip_shadow_capabilities(WasmCapabilities::NONE),
+            WasmCapabilities::NONE
+        );
     }
 
     #[test]

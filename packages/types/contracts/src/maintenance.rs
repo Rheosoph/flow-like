@@ -15,6 +15,7 @@ pub enum MaintenanceJob {
     CacheCleanup,
     RunSweep,
     StateCleanup,
+    RegressionSuites,
 }
 
 impl MaintenanceJob {
@@ -24,6 +25,7 @@ impl MaintenanceJob {
             Self::CacheCleanup => "cache_cleanup",
             Self::RunSweep => "run_sweep",
             Self::StateCleanup => "state_cleanup",
+            Self::RegressionSuites => "regression_suites",
         }
     }
 }
@@ -35,6 +37,7 @@ pub enum MaintenanceRunRequest {
     CacheCleanup,
     RunSweep,
     StateCleanup,
+    RegressionSuites,
 }
 
 impl MaintenanceRunRequest {
@@ -44,6 +47,7 @@ impl MaintenanceRunRequest {
             Self::CacheCleanup => MaintenanceJob::CacheCleanup,
             Self::RunSweep => MaintenanceJob::RunSweep,
             Self::StateCleanup => MaintenanceJob::StateCleanup,
+            Self::RegressionSuites => MaintenanceJob::RegressionSuites,
         }
     }
 }
@@ -55,6 +59,7 @@ impl From<MaintenanceJob> for MaintenanceRunRequest {
             MaintenanceJob::CacheCleanup => Self::CacheCleanup,
             MaintenanceJob::RunSweep => Self::RunSweep,
             MaintenanceJob::StateCleanup => Self::StateCleanup,
+            MaintenanceJob::RegressionSuites => Self::RegressionSuites,
         }
     }
 }
@@ -84,6 +89,19 @@ pub struct StateCleanupMaintenanceResult {
     pub deleted_events: i64,
 }
 
+/// Regression-suite maintenance: scheduled suite runs dispatched this tick,
+/// stuck `running` suite runs flipped to `errored`, and `queued` suite runs
+/// executed inline.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegressionSuitesMaintenanceResult {
+    pub dispatched: u64,
+    pub swept: u64,
+    /// Default tolerates responses from an API without queued-run support.
+    #[serde(default)]
+    pub executed: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "job", content = "result", rename_all = "snake_case")]
 pub enum MaintenanceRunResponse {
@@ -91,6 +109,7 @@ pub enum MaintenanceRunResponse {
     CacheCleanup(CacheCleanupResult),
     RunSweep(RunSweepMaintenanceResult),
     StateCleanup(StateCleanupMaintenanceResult),
+    RegressionSuites(RegressionSuitesMaintenanceResult),
 }
 
 #[cfg(test)]
@@ -190,6 +209,45 @@ mod tests {
                     "deletedEvents": 41,
                 }
             })
+        );
+    }
+
+    #[test]
+    fn regression_suites_round_trips() {
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunRequest::RegressionSuites).unwrap(),
+            json!({ "job": "regression_suites" })
+        );
+        assert_eq!(
+            MaintenanceRunRequest::RegressionSuites.job().as_str(),
+            "regression_suites"
+        );
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunResponse::RegressionSuites(
+                RegressionSuitesMaintenanceResult {
+                    dispatched: 2,
+                    swept: 1,
+                    executed: 3,
+                }
+            ))
+            .unwrap(),
+            json!({
+                "job": "regression_suites",
+                "result": {
+                    "dispatched": 2,
+                    "swept": 1,
+                    "executed": 3,
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<RegressionSuitesMaintenanceResult>(json!({
+                "dispatched": 2,
+                "swept": 1,
+            }))
+            .unwrap()
+            .executed,
+            0
         );
     }
 

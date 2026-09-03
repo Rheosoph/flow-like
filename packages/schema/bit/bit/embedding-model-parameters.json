@@ -50,6 +50,11 @@
 		"provider"
 	],
 	"$defs": {
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions` shape. Newer OpenAI-family models are only reachable through the Responses API (`/responses`), which uses a different request and event schema. A Bit declares the surface so the client builds the matching Rig client and the Flow-Like proxy relays to the matching upstream endpoint.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses"]
+		},
 		"Prefix": {
 			"type": "object",
 			"properties": {
@@ -77,6 +82,10 @@
 				},
 				"version": {
 					"type": ["string", "null"]
+				},
+				"api_surface": {
+					"anyOf": [{ "$ref": "#/$defs/ModelApiSurface" }, { "type": "null" }],
+					"description": "API surface the upstream model speaks. `None` keeps the provider's historical default, which is `chat/completions` for every hosted Bit."
 				},
 				"params": {
 					"type": ["object", "null"],

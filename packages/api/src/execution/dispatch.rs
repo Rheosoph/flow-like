@@ -128,7 +128,9 @@ use flow_like_types::channel::ChannelGrant;
 use flow_like_types::create_id;
 #[cfg(feature = "lambda")]
 use flow_like_types::dispatch::DIRECT_LAMBDA_INVOKE_API_ID;
-use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+use flow_like_types::dispatch::{CompiledArtifactRef, ETAG_BOUND_LATEST_VERSION_SENTINEL};
+
+use super::compiled_artifacts::EnsuredArtifact;
 
 use crate::channel::ChannelIssuer;
 use serde::{Deserialize, Serialize};
@@ -380,6 +382,15 @@ pub struct DispatchRequest {
     /// Who triggered the run. Decides how much the run's channel is worth minting.
     #[serde(default)]
     pub trigger: DispatchTrigger,
+    /// Shadow/replay isolation: the run must not write app storage. Must match
+    /// the `shadow` claim signed into the executor JWT — the executor rejects
+    /// the request otherwise.
+    #[serde(default)]
+    pub shadow: bool,
+    /// The compiled board the executor will fetch. Left `None` by callers; the
+    /// dispatcher fills it after assuring and presigning the artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<CompiledArtifactRef>,
 }
 
 /// Response from dispatch
@@ -417,19 +428,37 @@ pub enum DispatchError {
     Artifact(String),
 }
 
-/// Callback that guarantees the compiled artifact for (app, board, version)
-/// exists before a run is handed to a read-only executor. Installed once at
-/// router construction; see `execution::compiled_artifacts`.
+/// Callback that guarantees the compiled artifact for (app, board,
+/// version|etag, WASM package set) exists before a run is handed to the
+/// executor, and reports which object it is so the dispatcher can presign it.
+/// Installed once at router construction; see `execution::compiled_artifacts`.
 pub type ArtifactEnsurer = Arc<
     dyn Fn(
             String,
             String,
             Option<(u32, u32, u32)>,
             Option<String>,
-        ) -> futures::future::BoxFuture<'static, flow_like_types::Result<()>>
+            Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
+        ) -> futures::future::BoxFuture<'static, flow_like_types::Result<EnsuredArtifact>>
         + Send
         + Sync,
 >;
+
+/// How long the presigned artifact URL stays valid: long enough to outlive the
+/// queue a payload may sit in, exactly like the claim-check URL for the payload
+/// itself. Direct transports run immediately and get an hour.
+fn artifact_url_ttl(backend: &ExecutionBackend) -> std::time::Duration {
+    match backend {
+        #[cfg(feature = "storage-queue")]
+        ExecutionBackend::AzureQueue => crate::storage_queue::CLAIM_CHECK_URL_TTL,
+        #[cfg(feature = "pubsub")]
+        ExecutionBackend::PubSub => pubsub::CLAIM_CHECK_URL_TTL,
+        ExecutionBackend::Sqs | ExecutionBackend::SqsEventBridge => {
+            std::time::Duration::from_secs(86_400)
+        }
+        _ => std::time::Duration::from_secs(3_600),
+    }
+}
 
 /// Unified job dispatcher
 #[derive(Clone)]
@@ -547,6 +576,37 @@ impl Dispatcher {
         let _ = self.artifact_ensurer.set(ensurer);
     }
 
+    /// Presign the assured artifact for the executor. SigV4 signing is local
+    /// computation, so this adds no round trip after `ensure_artifact`.
+    async fn sign_artifact(
+        &self,
+        ensured: &EnsuredArtifact,
+        backend: &ExecutionBackend,
+    ) -> Result<CompiledArtifactRef, DispatchError> {
+        let staging = self.staging_bucket.as_ref().ok_or_else(|| {
+            DispatchError::Configuration(
+                "a staging store is required to sign compiled artifacts for the executor".into(),
+            )
+        })?;
+        let url = staging
+            .sign("GET", &ensured.path, artifact_url_ttl(backend))
+            .await
+            .map_err(|e| {
+                DispatchError::Artifact(format!(
+                    "failed to sign compiled artifact {}: {e}",
+                    ensured.path
+                ))
+            })?;
+        Ok(CompiledArtifactRef {
+            url: url.to_string(),
+            path: ensured.path.to_string(),
+            source_etag: ensured.source_etag.clone(),
+            registry_fingerprint: blake3::Hash::from_bytes(ensured.registry_fingerprint)
+                .to_hex()
+                .to_string(),
+        })
+    }
+
     /// The issuer that mints every dispatched run's channel grant.
     pub fn with_channel_issuer(mut self, issuer: Arc<ChannelIssuer>) -> Self {
         self.channels = Some(issuer);
@@ -599,10 +659,12 @@ impl Dispatcher {
     }
 
     /// Guarantee the compiled artifact exists before handing the run to the
-    /// executor. Ordinary runs retain the historical best-effort fallback.
-    /// An ETag-bound Page run fails closed because compiling a newer draft in
-    /// memory would violate its authorized contract.
-    async fn ensure_artifact(&self, request: &DispatchRequest) -> Result<(), DispatchError> {
+    /// executor, and say which object it is. Every run fails closed here: the
+    /// executor has no board source other than this artifact.
+    async fn ensure_artifact(
+        &self,
+        request: &DispatchRequest,
+    ) -> Result<EnsuredArtifact, DispatchError> {
         if request.board_version == Some(ETAG_BOUND_LATEST_VERSION_SENTINEL) {
             return Err(DispatchError::Artifact(
                 "the requested board version is reserved for ETag-bound Latest dispatch"
@@ -624,33 +686,20 @@ impl Dispatcher {
             ));
         }
         let Some(ensurer) = self.artifact_ensurer.get() else {
-            if request.board_etag.is_some() {
-                return Err(DispatchError::Artifact(
-                    "the dispatcher has no compiled-artifact assurer for an ETag-bound Page run"
-                        .to_string(),
-                ));
-            }
-            return Ok(());
+            return Err(DispatchError::Artifact(
+                "the dispatcher has no compiled-artifact assurer; no run can be dispatched"
+                    .to_string(),
+            ));
         };
-        if let Err(e) = ensurer(
+        ensurer(
             request.app_id.clone(),
             request.board_id.clone(),
             request.board_version,
             request.board_etag.clone(),
+            request.wasm_packages.clone(),
         )
         .await
-        {
-            if request.board_etag.is_some() {
-                return Err(DispatchError::Artifact(e.to_string()));
-            }
-            tracing::warn!(
-                app_id = %request.app_id,
-                board_id = %request.board_id,
-                error = %e,
-                "Pre-dispatch compiled-artifact check failed; executor will compile in memory"
-            );
-        }
-        Ok(())
+        .map_err(|e| DispatchError::Artifact(e.to_string()))
     }
 
     /// Dispatch an execution request to the configured sync/streaming backend (EXECUTION_BACKEND)
@@ -686,7 +735,8 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await?;
+        let ensured = self.ensure_artifact(&request).await?;
+        request.artifact = Some(self.sign_artifact(&ensured, &backend).await?);
         let job_id = create_id();
 
         match backend {
@@ -715,7 +765,8 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await?;
+        let ensured = self.ensure_artifact(&request).await?;
+        request.artifact = Some(self.sign_artifact(&ensured, &self.config.backend).await?);
         let job_id = create_id();
 
         match self.config.backend {
@@ -777,7 +828,11 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
         self.attach_channel(&mut request).await;
-        self.ensure_artifact(&request).await?;
+        let ensured = self.ensure_artifact(&request).await?;
+        request.artifact = Some(
+            self.sign_artifact(&ensured, &ExecutionBackend::Http)
+                .await?,
+        );
         let url =
             self.config.executor_url.as_ref().ok_or_else(|| {
                 DispatchError::Configuration("EXECUTOR_URL not configured".into())
@@ -1532,6 +1587,8 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         profile: request.profile.clone(),
         wasm_packages: request.wasm_packages.clone(),
         channel: request.channel.clone(),
+        shadow: request.shadow,
+        artifact: request.artifact.clone(),
     };
 
     serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
@@ -3267,6 +3324,8 @@ mod tests {
             wasm_packages: None,
             channel: None,
             trigger,
+            shadow: false,
+            artifact: None,
         }
     }
 
@@ -3309,22 +3368,79 @@ mod tests {
         assert_eq!(request.channel.map(|c| c.expires_at), Some(mine.expires_at));
     }
 
+    fn ensured_for_test() -> EnsuredArtifact {
+        EnsuredArtifact {
+            path: StorePath::from("tmp/apps/app-1/compiled/drafts/board-1/etag-1_fp.flcb"),
+            source_etag: Some("etag-1".into()),
+            registry_fingerprint: [7; 32],
+        }
+    }
+
     #[tokio::test]
-    async fn exact_etag_artifact_failure_blocks_only_the_exact_page_run() {
-        let failing_ensurer: ArtifactEnsurer = Arc::new(|_, _, _, _| {
+    async fn the_signed_artifact_travels_in_the_executor_payload() {
+        use flow_like_storage::object_store::{ObjectStore, PutPayload, memory::InMemory};
+
+        let ensured = ensured_for_test();
+        let store = Arc::new(InMemory::new());
+        store
+            .put(&ensured.path, PutPayload::from_static(b"flcb"))
+            .await
+            .expect("staged artifact");
+        let dispatcher = Dispatcher::new(
+            DispatchConfig::default(),
+            Some(Arc::new(FlowLikeStore::Memory(store))),
+        )
+        .await;
+
+        let artifact = dispatcher
+            .sign_artifact(&ensured, &ExecutionBackend::Http)
+            .await
+            .expect("signing needs only the staging store");
+        assert_eq!(artifact.path, ensured.path.to_string());
+        assert_eq!(artifact.source_etag.as_deref(), Some("etag-1"));
+        assert_eq!(
+            artifact.registry_fingerprint,
+            blake3::Hash::from_bytes([7; 32]).to_hex().to_string()
+        );
+        assert!(!artifact.url.is_empty());
+
+        let mut request = dispatch_request(DispatchTrigger::User);
+        request.artifact = Some(artifact.clone());
+        let payload = build_executor_payload("job-1", &request);
+        assert_eq!(payload["artifact"]["path"], artifact.path);
+        assert_eq!(payload["artifact"]["source_etag"], "etag-1");
+
+        let bare = build_executor_payload("job-1", &dispatch_request(DispatchTrigger::User));
+        assert!(
+            bare.get("artifact").is_none(),
+            "an unsigned request serialises without the field, which the executor rejects"
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_failure_blocks_every_run() {
+        let failing_ensurer: ArtifactEnsurer = Arc::new(|_, _, _, _, _| {
             Box::pin(async { Err(flow_like_types::anyhow!("artifact unavailable")) })
         });
 
-        let exact_dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        // No assurer installed: nothing can be dispatched, Page run or not.
+        let bare_dispatcher = Dispatcher::from_config(DispatchConfig::default());
         let mut exact_without_ensurer = dispatch_request(DispatchTrigger::User);
         exact_without_ensurer.board_etag = Some("etag-1".into());
         assert!(matches!(
-            exact_dispatcher
+            bare_dispatcher
                 .ensure_artifact(&exact_without_ensurer)
                 .await,
             Err(DispatchError::Artifact(_))
         ));
+        assert!(matches!(
+            bare_dispatcher
+                .ensure_artifact(&dispatch_request(DispatchTrigger::User))
+                .await,
+            Err(DispatchError::Artifact(_))
+        ));
 
+        let exact_dispatcher = Dispatcher::from_config(DispatchConfig::default());
         exact_dispatcher.set_artifact_ensurer(failing_ensurer.clone());
         let mut exact = dispatch_request(DispatchTrigger::User);
         exact.board_etag = Some("etag-1".into());
@@ -3333,13 +3449,14 @@ mod tests {
             Err(DispatchError::Artifact(_))
         ));
 
+        // Ordinary runs no longer have an executor-side compile to fall back to.
         let ordinary_dispatcher = Dispatcher::from_config(DispatchConfig::default());
         ordinary_dispatcher.set_artifact_ensurer(failing_ensurer);
         let ordinary = dispatch_request(DispatchTrigger::User);
-        ordinary_dispatcher
-            .ensure_artifact(&ordinary)
-            .await
-            .expect("ordinary runs retain their in-memory fallback");
+        assert!(matches!(
+            ordinary_dispatcher.ensure_artifact(&ordinary).await,
+            Err(DispatchError::Artifact(_))
+        ));
 
         let dispatcher = Dispatcher::from_config(DispatchConfig::default());
         let mut reserved = dispatch_request(DispatchTrigger::User);

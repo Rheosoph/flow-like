@@ -4,34 +4,218 @@ import {
 	type AuthenticatedSignaling,
 	prepareAuthenticatedSignaling,
 } from "./authenticated-websocket";
-import type { IRealtimeAccess } from "./types";
+import type { IRealtimeAccess, IRealtimeIceServer } from "./types";
 
 const FALLBACK_SIGNALING_URL = "wss://signaling.flow-like.com";
+
+interface RealtimePeerOptions extends Record<string, unknown> {
+	config?: RealtimePeerConfiguration;
+}
+
+interface RealtimePeerConfiguration extends Record<string, unknown> {
+	iceServers?: IRealtimeIceServer[];
+}
+
+interface IceConfigurableProvider {
+	peerOpts?: RealtimePeerOptions;
+	room?: {
+		webrtcConns?: {
+			values: () => Iterable<{ destroy?: () => void }>;
+		};
+	} | null;
+}
+
+function cloneIceServers(
+	iceServers: IRealtimeIceServer[],
+): IRealtimeIceServer[] {
+	return iceServers.map((server) => ({
+		urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+		...(server.username === undefined ? {} : { username: server.username }),
+		...(server.credential === undefined
+			? {}
+			: { credential: server.credential }),
+	}));
+}
+
+function iceServersEqual(
+	current: IRealtimeIceServer[] | undefined,
+	next: IRealtimeIceServer[] | undefined,
+): boolean {
+	if (current === undefined || next === undefined) return current === next;
+	if (!Array.isArray(current) || current.length !== next.length) return false;
+
+	for (let index = 0; index < current.length; index++) {
+		const currentServer = current[index];
+		const nextServer = next[index];
+		if (
+			currentServer.username !== nextServer.username ||
+			currentServer.credential !== nextServer.credential
+		) {
+			return false;
+		}
+
+		const currentUrls = Array.isArray(currentServer.urls)
+			? currentServer.urls
+			: [currentServer.urls];
+		const nextUrls = Array.isArray(nextServer.urls)
+			? nextServer.urls
+			: [nextServer.urls];
+		if (
+			currentUrls.length !== nextUrls.length ||
+			currentUrls.some((url, urlIndex) => url !== nextUrls[urlIndex])
+		) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/** Build simple-peer options while preserving its built-in ICE defaults when
+ * the API does not provide an override. An explicit empty list remains an
+ * explicit override. */
+export function peerOptsForIceServers(
+	iceServers: IRealtimeIceServer[] | undefined,
+): Record<string, unknown> {
+	return iceServers === undefined
+		? {}
+		: { config: { iceServers: cloneIceServers(iceServers) } };
+}
+
+/** Apply freshly minted ICE credentials to future peer connections. Active
+ * peer connections keep the configuration captured at construction, so they
+ * are recycled when the effective server list changes. */
+export function applyRealtimeIceServers(
+	provider: IceConfigurableProvider,
+	iceServers: IRealtimeIceServer[] | undefined,
+): boolean {
+	const currentIceServers = provider.peerOpts?.config?.iceServers;
+	if (iceServersEqual(currentIceServers, iceServers)) {
+		return false;
+	}
+
+	let nextPeerOpts: RealtimePeerOptions = { ...(provider.peerOpts ?? {}) };
+	if (iceServers === undefined) {
+		const currentConfig = nextPeerOpts.config;
+		nextPeerOpts = Object.fromEntries(
+			Object.entries(nextPeerOpts).filter(([key]) => key !== "config"),
+		);
+		if (currentConfig) {
+			const remainingConfig = Object.fromEntries(
+				Object.entries(currentConfig).filter(([key]) => key !== "iceServers"),
+			);
+			if (Object.keys(remainingConfig).length > 0) {
+				nextPeerOpts.config = remainingConfig;
+			}
+		}
+	} else {
+		nextPeerOpts.config = {
+			...(nextPeerOpts.config ?? {}),
+			iceServers: cloneIceServers(iceServers),
+		};
+	}
+	provider.peerOpts = nextPeerOpts;
+
+	const connections = provider.room?.webrtcConns?.values();
+	if (connections) {
+		for (const connection of Array.from(connections)) {
+			try {
+				connection.destroy?.();
+			} catch (error) {
+				console.error("[WebRTC] Failed to recycle a peer connection:", error);
+			}
+		}
+	}
+
+	return true;
+}
 
 export interface RealtimeSession {
 	doc: Y.Doc;
 	provider: any; // WebrtcProvider, typed as any to avoid direct dependency types here
 	awareness: any;
 	dispose: () => void;
-	onStatusChange?: (
-		status: "connected" | "disconnected" | "reconnecting",
-	) => void;
+	onStatusChange?: RealtimeStatusListener;
 	reconnect: () => Promise<void>;
 	/** Swap the registered signaling credential for a freshly minted one. */
 	refreshAccess: (access: IRealtimeAccess) => void;
 }
 
+type RealtimeStatus = "connected" | "disconnected" | "reconnecting";
+type RealtimeStatusListener = (status: RealtimeStatus) => void;
+
+interface RoomRegistryEntry {
+	doc: Y.Doc;
+	provider: any;
+	keyId: string;
+	refCount: number;
+	disposeAuthentication: () => void;
+	refreshAccess: (access: IRealtimeAccess) => void;
+	reconnect: (sub?: string) => Promise<void>;
+	statusListeners: Set<RealtimeStatusListener>;
+	authFailureListeners: Set<() => void>;
+	statusCheckInterval: ReturnType<typeof setInterval> | null;
+	statusCheckTimeout: ReturnType<typeof setTimeout> | null;
+	lastStatus: Exclude<RealtimeStatus, "reconnecting"> | undefined;
+}
+
 // Global registry to prevent duplicate Y.Doc instances for the same room
-const roomRegistry = new Map<
-	string,
-	{
-		doc: Y.Doc;
-		provider: any;
-		refCount: number;
-		disposeAuthentication: () => void;
-		rotateAuthentication: (token: string) => void;
+const roomRegistry = new Map<string, RoomRegistryEntry>();
+
+function emitStatus(entry: RoomRegistryEntry, status: RealtimeStatus): void {
+	for (const listener of entry.statusListeners) listener(status);
+}
+
+function refreshRegistryEntry(
+	entry: RoomRegistryEntry,
+	access: IRealtimeAccess,
+): void {
+	if (entry.keyId !== access.key_id) {
+		throw new Error(
+			"The shared realtime room uses an older encryption key and must reconnect",
+		);
 	}
->();
+	entry.refreshAccess(access);
+}
+
+function createRoomRelease(
+	room: string,
+	entry: RoomRegistryEntry,
+	onStatusChange?: RealtimeStatusListener,
+	onAuthFailure?: () => void,
+): () => void {
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		if (onStatusChange) entry.statusListeners.delete(onStatusChange);
+		if (onAuthFailure) entry.authFailureListeners.delete(onAuthFailure);
+		if (roomRegistry.get(room) !== entry) return;
+
+		entry.refCount--;
+		if (entry.refCount > 0) return;
+		roomRegistry.delete(room);
+		if (entry.statusCheckInterval !== null) {
+			clearInterval(entry.statusCheckInterval);
+		}
+		if (entry.statusCheckTimeout !== null) {
+			clearTimeout(entry.statusCheckTimeout);
+		}
+
+		try {
+			entry.provider.disconnect();
+			entry.provider.destroy();
+		} catch (error) {
+			console.error("Provider destroy error:", error);
+		}
+		try {
+			entry.doc.destroy();
+		} catch (error) {
+			console.error("Doc destroy error:", error);
+		}
+		entry.disposeAuthentication();
+	};
+}
 
 export async function createRealtimeSession(args: {
 	room: string;
@@ -39,9 +223,7 @@ export async function createRealtimeSession(args: {
 	/** The authenticated user's sub (subject) from the auth token */
 	sub?: string;
 	signalingServers?: string[];
-	onStatusChange?: (
-		status: "connected" | "disconnected" | "reconnecting",
-	) => void;
+	onStatusChange?: RealtimeStatusListener;
 	/** Invoked when a signaling socket is rejected or closed for a stale
 	 *  credential, so the caller can re-fetch access and call refreshAccess. */
 	onAuthFailure?: () => void;
@@ -51,56 +233,38 @@ export async function createRealtimeSession(args: {
 	// Check if a session already exists for this room
 	const existing = roomRegistry.get(room);
 	if (existing) {
+		refreshRegistryEntry(existing, access);
 		existing.refCount++;
+		if (onStatusChange) existing.statusListeners.add(onStatusChange);
+		if (args.onAuthFailure) {
+			existing.authFailureListeners.add(args.onAuthFailure);
+		}
+		if (onStatusChange && existing.lastStatus) {
+			onStatusChange(existing.lastStatus);
+		}
 
 		const awareness = existing.provider.awareness;
 		// Shared with a still-mounted consumer: identity may be (re)asserted,
 		// but its live selection broadcast is not ours to reset.
 		awareness.setLocalStateField("sub", sub);
 
-		const dispose = () => {
-			existing.refCount--;
-			if (existing.refCount <= 0) {
-				try {
-					existing.provider.disconnect();
-					existing.provider.destroy();
-				} catch (e) {
-					console.error("Provider destroy error:", e);
-				}
-				try {
-					existing.doc.destroy();
-				} catch (e) {
-					console.error("Doc destroy error:", e);
-				}
-				existing.disposeAuthentication();
-				roomRegistry.delete(room);
-			}
-		};
-
-		const reconnect = async () => {
-			if (onStatusChange) onStatusChange("reconnecting");
-			try {
-				// y-webrtc's Room.disconnect() removes OUR awareness entry and
-				// connect() never restores it — and setLocalStateField is a no-op
-				// on a null local state. Re-seed it, or nothing publishes again.
-				const snapshot = awareness.getLocalState() ?? {};
-				existing.provider.disconnect();
-				existing.provider.connect();
-				awareness.setLocalState({ ...snapshot, sub });
-			} catch (e) {
-				console.error("[WebRTC] Reconnection failed:", e);
-				if (onStatusChange) onStatusChange("disconnected");
-			}
-		};
+		const dispose = createRoomRelease(
+			room,
+			existing,
+			onStatusChange,
+			args.onAuthFailure,
+		);
 
 		return {
 			doc: existing.doc,
 			provider: existing.provider,
 			awareness,
 			dispose,
-			reconnect,
+			reconnect: () => existing.reconnect(sub),
 			refreshAccess: (nextAccess: IRealtimeAccess) => {
-				existing.rotateAuthentication(nextAccess.jwt);
+				if (roomRegistry.get(room) === existing) {
+					refreshRegistryEntry(existing, nextAccess);
+				}
 			},
 			onStatusChange,
 		};
@@ -110,6 +274,10 @@ export async function createRealtimeSession(args: {
 	const configuredSignaling = args.signalingServers?.length
 		? args.signalingServers
 		: null;
+	const statusListeners = new Set<RealtimeStatusListener>();
+	if (onStatusChange) statusListeners.add(onStatusChange);
+	const authFailureListeners = new Set<() => void>();
+	if (args.onAuthFailure) authFailureListeners.add(args.onAuthFailure);
 	let authenticatedSignaling: AuthenticatedSignaling;
 	if (access?.jwt) {
 		// Authenticated flow: the JWT is a live bearer credential and must only
@@ -124,7 +292,9 @@ export async function createRealtimeSession(args: {
 			configuredSignaling,
 			room,
 			access.jwt,
-			args.onAuthFailure,
+			() => {
+				for (const listener of authFailureListeners) listener();
+			},
 		);
 	} else {
 		// Legacy unauthenticated path: no credential to protect, fallback allowed.
@@ -145,7 +315,7 @@ export async function createRealtimeSession(args: {
 			maxConns: 20 + Math.floor(Math.random() * 15),
 			signaling: authenticatedSignaling.signaling,
 			filterBcConns: true,
-			peerOpts: {},
+			peerOpts: peerOptsForIceServers(access.ice_servers),
 		});
 	} catch (error) {
 		authenticatedSignaling.dispose();
@@ -159,8 +329,7 @@ export async function createRealtimeSession(args: {
 
 	// Monitor connection status
 	let connectedPeers = 0;
-	let lastStatus: "connected" | "disconnected" | undefined;
-	let statusCheckInterval: NodeJS.Timeout | undefined;
+	let registryEntry: RoomRegistryEntry;
 
 	const checkConnectionStatus = () => {
 		const states = awareness.getStates() as Map<number, any>;
@@ -168,9 +337,9 @@ export async function createRealtimeSession(args: {
 
 		if (currentPeers !== connectedPeers) {
 			connectedPeers = currentPeers;
-			if (connectedPeers > 0 && onStatusChange && lastStatus !== "connected") {
-				lastStatus = "connected";
-				onStatusChange("connected");
+			if (connectedPeers > 0 && registryEntry.lastStatus !== "connected") {
+				registryEntry.lastStatus = "connected";
+				emitStatus(registryEntry, "connected");
 			}
 		}
 
@@ -179,36 +348,21 @@ export async function createRealtimeSession(args: {
 			(conn: any) => conn.connected,
 		);
 
-		if (signalingConnected && lastStatus !== "connected") {
+		if (signalingConnected && registryEntry.lastStatus !== "connected") {
 			// Signaling is alive — report connected so users know the session is up
-			lastStatus = "connected";
-			if (onStatusChange) onStatusChange("connected");
+			registryEntry.lastStatus = "connected";
+			emitStatus(registryEntry, "connected");
 		} else if (
 			!signalingConnected &&
-			onStatusChange &&
-			lastStatus !== "disconnected"
+			registryEntry.lastStatus !== "disconnected"
 		) {
-			lastStatus = "disconnected";
-			onStatusChange("disconnected");
+			registryEntry.lastStatus = "disconnected";
+			emitStatus(registryEntry, "disconnected");
 		}
 	};
 
-	// Check status periodically
-	statusCheckInterval = setInterval(checkConnectionStatus, 5000);
-	// Run an initial check after a short delay to set the correct status
-	setTimeout(checkConnectionStatus, 1000);
-
-	// Register in the global registry
-	roomRegistry.set(room, {
-		doc,
-		provider,
-		refCount: 1,
-		disposeAuthentication: authenticatedSignaling.dispose,
-		rotateAuthentication: authenticatedSignaling.rotate,
-	});
-
-	const reconnect = async () => {
-		if (onStatusChange) onStatusChange("reconnecting");
+	const reconnect = async (nextSub?: string) => {
+		emitStatus(registryEntry, "reconnecting");
 		try {
 			// Actually drive the transport: drop the signaling sockets and the
 			// room, then rejoin. y-webrtc's Room.disconnect() removes OUR
@@ -221,45 +375,56 @@ export async function createRealtimeSession(args: {
 			provider.connect();
 			awareness.setLocalState({
 				...snapshot,
-				sub,
+				sub: nextSub ?? sub,
 				reconnected: Date.now(),
 			});
 			// The status is whatever the sockets say once they settle — never
 			// asserted here.
-			lastStatus = undefined;
-			setTimeout(checkConnectionStatus, 1000);
+			registryEntry.lastStatus = undefined;
+			if (registryEntry.statusCheckTimeout !== null) {
+				clearTimeout(registryEntry.statusCheckTimeout);
+			}
+			registryEntry.statusCheckTimeout = setTimeout(() => {
+				registryEntry.statusCheckTimeout = null;
+				if (roomRegistry.get(room) === registryEntry) checkConnectionStatus();
+			}, 1000);
 		} catch (e) {
 			console.error("[WebRTC] Reconnection failed:", e);
-			lastStatus = "disconnected";
-			if (onStatusChange) onStatusChange("disconnected");
+			registryEntry.lastStatus = "disconnected";
+			emitStatus(registryEntry, "disconnected");
 		}
 	};
 
-	const dispose = () => {
-		const entry = roomRegistry.get(room);
-		if (!entry) return;
-
-		if (statusCheckInterval) {
-			clearInterval(statusCheckInterval);
-		}
-
-		entry.refCount--;
-		if (entry.refCount <= 0) {
-			try {
-				provider.disconnect();
-				provider.destroy();
-			} catch (e) {
-				console.error("Provider destroy error:", e);
-			}
-			try {
-				doc.destroy();
-			} catch (e) {
-				console.error("Doc destroy error:", e);
-			}
-			entry.disposeAuthentication();
-			roomRegistry.delete(room);
-		}
+	registryEntry = {
+		doc,
+		provider,
+		keyId: access.key_id,
+		refCount: 1,
+		disposeAuthentication: authenticatedSignaling.dispose,
+		refreshAccess: (nextAccess: IRealtimeAccess) => {
+			authenticatedSignaling.rotate(nextAccess.jwt);
+			applyRealtimeIceServers(provider, nextAccess.ice_servers);
+		},
+		reconnect,
+		statusListeners,
+		authFailureListeners,
+		statusCheckInterval: null,
+		statusCheckTimeout: null,
+		lastStatus: undefined,
 	};
+	roomRegistry.set(room, registryEntry);
+	registryEntry.statusCheckInterval = setInterval(checkConnectionStatus, 5000);
+	registryEntry.statusCheckTimeout = setTimeout(() => {
+		registryEntry.statusCheckTimeout = null;
+		if (roomRegistry.get(room) === registryEntry) checkConnectionStatus();
+	}, 1000);
+
+	const dispose = createRoomRelease(
+		room,
+		registryEntry,
+		onStatusChange,
+		args.onAuthFailure,
+	);
 
 	return {
 		doc,
@@ -268,7 +433,9 @@ export async function createRealtimeSession(args: {
 		dispose,
 		reconnect,
 		refreshAccess: (nextAccess: IRealtimeAccess) => {
-			authenticatedSignaling.rotate(nextAccess.jwt);
+			if (roomRegistry.get(room) === registryEntry) {
+				refreshRegistryEntry(registryEntry, nextAccess);
+			}
 		},
 		onStatusChange,
 	};

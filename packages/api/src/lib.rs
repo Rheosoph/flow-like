@@ -39,8 +39,10 @@ pub mod model_tier;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;
+pub mod realtime_ice;
 pub mod state;
 pub mod storage_config;
+pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
 pub mod telemetry;
@@ -90,13 +92,14 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
-    // Executors are read-only on the meta store; guarantee compiled board
-    // artifacts exist before every dispatch. Installed here because the
+    // Executors hold no meta-store credential and obtain their board only as
+    // the presigned compiled artifact the dispatcher hands them, so the
+    // artifact must exist before every dispatch. Installed here because the
     // dispatcher is built before the state it needs exists.
     {
         let ensurer_state = state.clone();
         state.dispatcher.set_artifact_ensurer(std::sync::Arc::new(
-            move |app_id, board_id, version, board_etag| {
+            move |app_id, board_id, version, board_etag, wasm_packages| {
                 let state = ensurer_state.clone();
                 Box::pin(async move {
                     crate::execution::compiled_artifacts::ensure_compiled_artifact(
@@ -105,6 +108,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                         &board_id,
                         version,
                         board_etag.as_deref(),
+                        wasm_packages.as_ref(),
                     )
                     .await
                 })
@@ -137,6 +141,12 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/auth", routes::auth::routes())
         .nest("/oauth", routes::oauth::routes())
         .nest("/chat", routes::chat::routes())
+        // Root-level: Rig's Responses client posts to `{base_url}/responses`,
+        // and hosted Bits already point their base URL at `{api}/api/v1`.
+        .route(
+            "/responses",
+            post(routes::chat::responses::invoke_responses),
+        )
         .nest("/courses", routes::course::routes())
         .nest("/embeddings", routes::embeddings::routes())
         .nest("/ai", routes::ai::routes())
@@ -215,9 +225,12 @@ fn openapi_routes(cors: CorsLayer) -> Router {
 async fn hub_info(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> Result<Json<Value>, InternalError> {
-    // Serialize hub to JSON value so we can modify it
-    let mut hub_value: Value = serde_json::to_value(&state.platform_config)?;
+    Ok(Json(public_hub_value(serde_json::to_value(
+        &state.platform_config,
+    )?)))
+}
 
+fn public_hub_value(mut hub_value: Value) -> Value {
     // Strip sensitive OAuth fields (client_secret_env and client_secret)
     if let Some(oauth_providers) = hub_value.get_mut("oauth_providers")
         && let Some(providers_obj) = oauth_providers.as_object_mut()
@@ -230,5 +243,45 @@ async fn hub_info(
         }
     }
 
-    Ok(Json(hub_value))
+    // Realtime ICE provider settings name server-side secret-store entries.
+    // Clients receive only the resulting short-lived ICE configuration from
+    // the authenticated board realtime endpoint.
+    if let Some(hub) = hub_value.as_object_mut() {
+        hub.remove("realtime");
+    }
+
+    hub_value
+}
+
+#[cfg(test)]
+mod hub_info_tests {
+    use super::public_hub_value;
+    use serde_json::json;
+
+    #[test]
+    fn public_hub_hides_server_side_credential_references() {
+        let public = public_hub_value(json!({
+            "name": "Test Hub",
+            "oauth_providers": {
+                "example": {
+                    "client_secret_env": "OAUTH_CLIENT_SECRET",
+                    "client_secret": "secret",
+                    "client_id": "public-client-id"
+                }
+            },
+            "realtime": {
+                "ice": {
+                    "provider": "cloudflare",
+                    "turn_key_id_secret_ref": "CLOUDFLARE_TURN_KEY_ID",
+                    "turn_key_api_token_secret_ref": "CLOUDFLARE_TURN_KEY_API_TOKEN"
+                }
+            }
+        }));
+
+        assert!(public.get("realtime").is_none());
+        let provider = &public["oauth_providers"]["example"];
+        assert!(provider.get("client_secret_env").is_none());
+        assert!(provider.get("client_secret").is_none());
+        assert_eq!(provider["client_id"], "public-client-id");
+    }
 }

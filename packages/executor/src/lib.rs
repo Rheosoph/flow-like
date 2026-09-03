@@ -38,6 +38,7 @@ pub mod router;
 pub mod streaming;
 pub mod types;
 pub mod wasm_loader;
+pub mod widgets;
 
 pub use config::ExecutorConfig;
 pub use error::ExecutorError;
