@@ -7,7 +7,9 @@ use flow_like_api::axum;
 use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
 use flow_like_api::channel::{ChannelSweeperConfig, spawn_channel_sweeper};
 use flow_like_api::construct_router;
-use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
+use flow_like_api::execution::{
+    RunSweeperConfig, spawn_regression_suites_worker, spawn_run_sweeper,
+};
 use flow_like_api::telemetry::{
     SpanExportConfig, TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
     spawn_telemetry_alert_evaluator, spawn_telemetry_rollup, spawn_telemetry_sweeper,
@@ -109,6 +111,7 @@ async fn main() {
 
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
     let _channel_sweeper_handle =
         spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
 

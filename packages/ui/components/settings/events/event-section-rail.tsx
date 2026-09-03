@@ -7,10 +7,12 @@ import {
 	CodeIcon,
 	CogIcon,
 	FileTextIcon,
+	FlaskConicalIcon,
 	FormInputIcon,
 	GitBranchIcon,
 	GlobeIcon,
 	HashIcon,
+	HistoryIcon,
 	LayersIcon,
 	LayoutIcon,
 	LinkIcon,
@@ -19,6 +21,7 @@ import {
 	PlugIcon,
 	SendIcon,
 	ServerIcon,
+	SplitIcon,
 	ZapIcon,
 } from "lucide-react";
 import { type ComponentType, useEffect, useRef } from "react";
@@ -48,6 +51,9 @@ const ICONS: Record<string, ComponentType<{ className?: string }>> = {
 	code: CodeIcon,
 	"git-branch": GitBranchIcon,
 	"file-text": FileTextIcon,
+	history: HistoryIcon,
+	split: SplitIcon,
+	"flask-conical": FlaskConicalIcon,
 };
 
 export function EventSectionRail({

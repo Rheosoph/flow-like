@@ -173,6 +173,7 @@ mod tests {
         dotenv().ok();
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some("text-embedding-3-small".to_string()),
             version: None,
             provider_name: "openai".to_string(),
@@ -229,6 +230,7 @@ mod tests {
         dotenv().ok();
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some("text-embedding-3-small".to_string()),
             version: None,
             provider_name: "openai".to_string(),
@@ -269,6 +271,7 @@ mod tests {
         dotenv().ok();
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some("embedding-test".to_string()),
             version: Some("2024-04-01-preview".to_string()),
             provider_name: "azure".to_string(),

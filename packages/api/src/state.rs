@@ -42,6 +42,7 @@ use crate::entity::role;
 use crate::execution::{DispatchConfig, Dispatcher};
 use crate::mail::{DynMailClient, create_mail_client};
 use crate::permission::wasm_package_permission::WasmPackagePermission;
+use crate::realtime_ice::RealtimeIceService;
 use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
@@ -350,6 +351,8 @@ pub struct State {
     pub compilation_dispatcher: Arc<CompilationDispatcher>,
     /// Mints run ⇄ client channel credentials (`CHANNEL_TRANSPORT`).
     pub channels: Arc<ChannelIssuer>,
+    /// Mints short-lived STUN and TURN credentials for realtime board clients.
+    pub realtime_ice: RealtimeIceService,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
@@ -624,6 +627,11 @@ impl State {
             openid_validation_settings_for_hub(&platform_config)
                 .expect("OpenID validation configuration must be complete and exact");
         }
+        let realtime_ice =
+            RealtimeIceService::from_config(&platform_config.realtime, Arc::clone(&secrets))
+                .unwrap_or_else(|error| {
+                    panic!("Realtime ICE provider configuration is invalid: {error}")
+                });
 
         // JWKS used to be downloaded by build.rs, making clean and cross builds depend on a
         // live identity-provider endpoint. Start with a fail-closed empty cache instead; the
@@ -860,6 +868,7 @@ impl State {
             dispatcher: Arc::new(dispatcher),
             compilation_dispatcher,
             channels,
+            realtime_ice,
             permission_cache: moka::sync::Cache::builder()
                 .max_capacity(32 * 1024 * 1024)
                 .time_to_live(Duration::from_secs(120))

@@ -173,6 +173,27 @@ const usage = await client.getUsage();
 console.log(usage.llm_price, usage.embedding_price);
 ```
 
+### Responses API
+
+Model bits whose provider declares the `Responses` API surface (`api_surface` on
+`ModelInfo`) are served by `/responses` instead of `/chat/completions`.
+
+```typescript
+const result = await client.responses(
+  "Hello!",
+  "bit-id-for-a-responses-model",
+);
+console.log(result.output);
+
+// Streaming
+for await (const chunk of client.responsesStream(
+  "Hello!",
+  "bit-id-for-a-responses-model",
+)) {
+  process.stdout.write(chunk.data);
+}
+```
+
 ### Embeddings
 
 ```typescript

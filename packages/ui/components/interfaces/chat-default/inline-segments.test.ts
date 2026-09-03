@@ -1,6 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import type { IPlanStep } from "./chat-db";
-import { buildInlineSegments, safeSplitOffset } from "./inline-segments";
+import {
+	buildInlineSegments,
+	joinContentText,
+	safeSplitOffset,
+} from "./inline-segments";
 
 function step(id: string, content_offset?: number): IPlanStep {
 	return { id, title: `Using ${id}`, status: "done", content_offset };
@@ -112,5 +116,26 @@ describe("safeSplitOffset", () => {
 		const text = "text```\ncode\n```\nend";
 		// Offset 5 sits between the backticks of the opening marker.
 		expect(safeSplitOffset(text, 5)).toBe(4);
+	});
+});
+
+describe("joinContentText", () => {
+	test("returns string content untouched", () => {
+		expect(joinContentText("plain **text**")).toBe("plain **text**");
+	});
+
+	test("concatenates text parts raw and skips media parts", () => {
+		expect(
+			joinContentText([
+				{ type: "image_url", image_url: { url: "https://x/a.png" } },
+				{ type: "text", text: "Hel" },
+				{ type: "text", text: "lo" },
+			] as never),
+		).toBe("Hello");
+	});
+
+	test("treats missing content as empty", () => {
+		expect(joinContentText(undefined)).toBe("");
+		expect(joinContentText(null)).toBe("");
 	});
 });

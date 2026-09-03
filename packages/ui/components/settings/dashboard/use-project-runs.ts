@@ -136,6 +136,10 @@ export function useProjectRuns(
 							undefined,
 							0,
 							RUNS_PER_BOARD,
+							undefined,
+							// `toRuns` keeps seven scalars per run; without this every row
+							// also carries the run's whole serialized input payload.
+							true,
 						);
 					} catch {
 						// A board with no run store yet simply has no runs.

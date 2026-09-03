@@ -15,7 +15,7 @@ use crate::{
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
         collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
-        resolve_wasm_packages, sign_execution_jwt,
+        resolve_wasm_packages, sign_execution_jwt, variant,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -342,8 +342,9 @@ fn flow_path_value(path: &str) -> serde_json::Value {
 }
 
 /// Loads the sink's persisted profile and re-hydrates decrypted custom-bit
-/// secrets (persisted profile JSON never contains them).
-async fn hydrated_sink_profile(
+/// secrets (persisted profile JSON never contains them). Shared with the
+/// regression runner's scheduled replays.
+pub(crate) async fn hydrated_sink_profile(
     state: &AppState,
     sink: &event_sink::Model,
 ) -> Option<serde_json::Value> {
@@ -589,6 +590,10 @@ pub struct TriggerEventInput {
     pub event_id: String,
     /// Optional payload to pass to the event
     pub payload: Option<serde_json::Value>,
+    /// The caller's `Idempotency-Key`, when one was supplied: the per-occurrence
+    /// identity that keeps a retried trigger on the same canary variant.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// Response from trigger operations
@@ -650,6 +655,7 @@ async fn record_trigger_rejection(
 /// let result = trigger_event(&state, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
+///     idempotency_key: None,
 /// }).await?;
 /// ```
 pub async fn trigger_event(
@@ -691,6 +697,11 @@ pub async fn trigger_event(
     let actor_event_id = Some(sink.event_id.clone());
     debug_assert!(actor_user_id.is_some() || actor_event_id.is_some());
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // The idempotency key is the only sticky identity a sink fire can offer;
+    // without one each fire is an independent weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, input.idempotency_key.as_deref(), &run_id);
+
     let input_payload_len = input
         .payload
         .as_ref()
@@ -701,7 +712,7 @@ pub async fn trigger_event(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)?;
+    let event_json = variant::dispatch_event_json(&event, &target)?;
 
     // Get credentials scoped to the PAT owner when the sink was registered with
     // a valid PAT. Without a valid PAT this falls back to the sink actor.
@@ -724,13 +735,14 @@ pub async fn trigger_event(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })?;
 
     // Decrypt OAuth tokens from sink if available
@@ -752,10 +764,10 @@ pub async fn trigger_event(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: input.payload,
         user_id: executor_subject,
@@ -775,17 +787,22 @@ pub async fn trigger_event(
         channel: None,
         // Programmatic trigger: cron workers, Lambda handlers, queue processors.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(actor_event_id),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1006,6 +1023,11 @@ pub async fn trigger_http(
         )));
     }
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = payload
@@ -1017,7 +1039,7 @@ pub async fn trigger_http(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     let shared_credentials = credentials.into_shared_credentials();
@@ -1033,13 +1055,14 @@ pub async fn trigger_http(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1062,10 +1085,10 @@ pub async fn trigger_http(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload,
         user_id: executor_subject,
@@ -1085,17 +1108,22 @@ pub async fn trigger_http(
         channel: None,
         // Inbound webhook.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1394,6 +1422,11 @@ pub async fn trigger_telegram(
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let input_payload_len = payload
         .as_ref()
         .map(|p| {
@@ -1403,7 +1436,7 @@ pub async fn trigger_telegram(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     // Decrypt PAT from sink if available
@@ -1439,13 +1472,14 @@ pub async fn trigger_telegram(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1468,10 +1502,10 @@ pub async fn trigger_telegram(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload,
         user_id: executor_subject,
@@ -1491,17 +1525,22 @@ pub async fn trigger_telegram(
         channel: None,
         // Telegram bot service.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1740,11 +1779,16 @@ pub async fn trigger_discord(
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let input_payload_len = serde_json::to_string(&interaction)
         .map(|s| s.len() as i64)
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     // Decrypt PAT from sink if available
@@ -1780,13 +1824,14 @@ pub async fn trigger_discord(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1809,10 +1854,10 @@ pub async fn trigger_discord(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: Some(interaction.clone()),
         user_id: executor_subject,
@@ -1832,17 +1877,22 @@ pub async fn trigger_discord(
         channel: None,
         // Discord bot service.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -2175,6 +2225,7 @@ pub async fn trigger_service(
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload.clone(),
+            idempotency_key: idempotency_key.clone(),
         },
     )
     .await

@@ -51,21 +51,24 @@ export class EmptyApiState implements IApiState {
 			if (!part.trim()) continue;
 
 			let event: string | undefined;
-			let data = "";
+			const dataLines: string[] = [];
 			let id: string | undefined;
 
 			for (const line of part.split("\n")) {
 				if (line.startsWith("event:")) {
 					event = line.slice(6).trim();
 				} else if (line.startsWith("data:")) {
-					data = line.slice(5).trim();
+					// One data: line per payload newline — accumulate, never
+					// overwrite; strip only the optional single leading space.
+					const value = line.slice(5);
+					dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
 				} else if (line.startsWith("id:")) {
 					id = line.slice(3).trim();
 				}
 			}
 
-			if (data) {
-				events.push({ data, event, id });
+			if (dataLines.length > 0) {
+				events.push({ data: dataLines.join("\n"), event, id });
 			}
 		}
 
@@ -213,15 +216,20 @@ export class EmptyApiState implements IApiState {
 				const { events, remaining } = this.parseSSEBuffer(buffer);
 				buffer = remaining;
 
+				// Deliver the whole decoded batch before acting on a terminal
+				// event — trailing events can share the network chunk with it.
+				let finished = false;
+				let streamError: Error | undefined;
 				for (const event of events) {
 					const result = this.processSSEEvent(event, onMessage);
 					if (result.type === "error") {
-						throw result.error ?? new Error("SSE stream error");
-					}
-					if (result.type === "completed") {
-						return;
+						streamError = result.error ?? new Error("SSE stream error");
+					} else if (result.type === "completed") {
+						finished = true;
 					}
 				}
+				if (streamError) throw streamError;
+				if (finished) return;
 			}
 		} finally {
 			reader.releaseLock();

@@ -12,7 +12,7 @@ use flow_like_model_provider::llm::{
     perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
     voyageai::VoyageAIModel, xai::XAIModel,
 };
-use flow_like_model_provider::provider::is_hosted_provider_name;
+use flow_like_model_provider::provider::{ModelApiSurface, is_hosted_provider_name};
 use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
 use mlx::MlxModel;
@@ -146,13 +146,28 @@ fn insert_usage_headers(
     }
 }
 
+/// Surface for a directly reachable OpenAI-compatible endpoint.
+///
+/// Rig's OpenAI client has always defaulted to the Responses API for `openai`,
+/// `azure` and `custom:openai` Bits, so an undeclared surface keeps that. Only
+/// gateways that cannot serve `/responses` need the explicit declaration.
+fn direct_openai_surface(
+    model_provider: &flow_like_model_provider::provider::ModelProvider,
+) -> ModelApiSurface {
+    model_provider
+        .api_surface
+        .unwrap_or(ModelApiSurface::Responses)
+}
+
 fn ensure_hosted_proxy_endpoint(
     params: &mut HashMap<String, flow_like_types::Value>,
     api_base_url: &str,
 ) {
-    let api_base_url = api_base_url.trim().trim_end_matches('/');
+    let api_base_url =
+        flow_like_model_provider::embedding::proxy_config::normalize_base_url(api_base_url)
+            .unwrap_or_default();
     let endpoint = if api_base_url.ends_with("/api/v1") {
-        api_base_url.to_string()
+        api_base_url
     } else {
         format!("{api_base_url}/api/v1")
     };
@@ -195,9 +210,11 @@ impl ModelFactory {
         }
 
         let model: Arc<dyn ModelLogic> = match provider {
-            "azure" | "openai" => {
-                Arc::new(OpenAIModel::new(model_provider, provider_config).await?)
-            }
+            "azure" | "openai" => Arc::new(
+                OpenAIModel::new(model_provider, provider_config)
+                    .await?
+                    .with_api_surface(direct_openai_surface(model_provider)),
+            ),
             "anthropic" => Arc::new(AnthropicModel::new(model_provider, provider_config).await?),
             "gemini" => Arc::new(GeminiModel::new(model_provider, provider_config).await?),
             "huggingface" => {
@@ -248,7 +265,13 @@ impl ModelFactory {
         }
 
         let model: Arc<dyn ModelLogic> = match provider {
-            "custom:openai" => Arc::new(OpenAIModel::from_provider(model_provider).await?),
+            "custom:openai" => Arc::new(
+                OpenAIModel::from_provider_with_surface(
+                    model_provider,
+                    direct_openai_surface(model_provider),
+                )
+                .await?,
+            ),
             "custom:bedrock" => Arc::new(BedrockModel::from_provider(model_provider).await?),
             "custom:anthropic" => Arc::new(AnthropicModel::from_provider(model_provider).await?),
             "custom:gemini" => Arc::new(GeminiModel::from_provider(model_provider).await?),
@@ -426,7 +449,21 @@ impl ModelFactory {
                 .strip_prefix("hosted:")
                 .unwrap_or("openrouter");
 
+            // The Bit declares which proxy surface it speaks. `/responses` is
+            // only reachable through Rig's OpenAI Responses client, so every
+            // other hosted client rejects the declaration instead of silently
+            // relaying an incompatible request shape.
+            let api_surface = model_provider.api_surface_or_default();
+            let reject_responses = |hosted_type: &str| {
+                flow_like_types::anyhow!(
+                    "hosted:{hosted_type} has no Responses API; set the Bit's api_surface to ChatCompletions or move it to hosted:openai"
+                )
+            };
+
             let model: Arc<dyn ModelLogic> = match hosted_type {
+                "openrouter" if api_surface.is_responses() => {
+                    return Err(reject_responses("openrouter"));
+                }
                 "openrouter" => Arc::new(
                     OpenRouterModel::from_provider(&model_provider)
                         .await
@@ -438,24 +475,28 @@ impl ModelFactory {
                         })?,
                 ),
                 "openai" => Arc::new(
-                    OpenAIModel::from_provider_chat_completions(&model_provider)
+                    OpenAIModel::from_provider_with_surface(&model_provider, api_surface)
                         .await
                         .map_err(|e| {
                             flow_like_types::anyhow!(
-                                "Failed to create hosted:openai proxy model: {}",
+                                "Failed to create hosted:openai proxy model ({}): {}",
+                                api_surface.as_str(),
                                 e
                             )
                         })?,
                 ),
                 "anthropic" => {
                     return Err(flow_like_types::anyhow!(
-                        "hosted:anthropic requires a native Messages API proxy adapter; the Flow-Like API currently exposes only /chat/completions"
+                        "hosted:anthropic requires a native Messages API proxy adapter; the Flow-Like API exposes only /chat/completions and /responses"
                     ));
                 }
                 "azure" => {
                     return Err(flow_like_types::anyhow!(
-                        "hosted:azure requires a native Azure deployment proxy adapter; the Flow-Like API currently exposes only /chat/completions"
+                        "hosted:azure requires a native Azure deployment proxy adapter; the Flow-Like API exposes only /chat/completions and /responses"
                     ));
+                }
+                "bedrock" if api_surface.is_responses() => {
+                    return Err(reject_responses("bedrock"));
                 }
                 "bedrock" => Arc::new(BedrockModel::from_proxy(&model_provider).await.map_err(
                     |e| {
@@ -605,6 +646,14 @@ mod tests {
     }
 
     fn completion_bit(id: &str, provider_name: &str) -> Bit {
+        completion_bit_with_surface(id, provider_name, None)
+    }
+
+    fn completion_bit_with_surface(
+        id: &str,
+        provider_name: &str,
+        api_surface: Option<ModelApiSurface>,
+    ) -> Bit {
         Bit {
             id: id.to_string(),
             bit_type: BitTypes::Llm,
@@ -612,6 +661,7 @@ mod tests {
                 context_length: 20_000,
                 model_classification: BitModelClassification::default(),
                 provider: ModelProvider {
+                    api_surface,
                     provider_name: provider_name.to_string(),
                     model_id: Some(id.to_string()),
                     version: None,
@@ -686,6 +736,10 @@ mod tests {
         let mut versioned = HashMap::new();
         ensure_hosted_proxy_endpoint(&mut versioned, "https://api.example.test/api/v1");
         assert_eq!(versioned["endpoint"], "https://api.example.test/api/v1");
+
+        let mut schemeless = HashMap::new();
+        ensure_hosted_proxy_endpoint(&mut schemeless, "api.flow-like.com");
+        assert_eq!(schemeless["endpoint"], "https://api.flow-like.com/api/v1");
 
         let mut overridden = HashMap::from([(
             "endpoint".to_string(),
@@ -877,6 +931,96 @@ mod tests {
         );
         assert_eq!(model.default_model().await.as_deref(), Some("openai-bit"));
         assert!(!factory.cached_models.contains_key("openai-bit"));
+    }
+
+    #[tokio::test]
+    async fn hosted_openai_streams_to_responses_when_the_bit_declares_it() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock proxy");
+        let proxy_url = format!("http://{}", listener.local_addr().expect("proxy address"));
+        let capture = tokio::spawn(capture_one_http_request(listener));
+
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+        let model = factory
+            .build(
+                &completion_bit_with_surface(
+                    "bit_responses_1",
+                    "hosted:openai",
+                    Some(ModelApiSurface::Responses),
+                ),
+                state,
+                Some("current-jwt".to_string()),
+                Some(ModelUsageContext {
+                    app_id: Some("app-123".to_string()),
+                    run_id: Some("run-456".to_string()),
+                    api_base_url: Some(proxy_url),
+                }),
+            )
+            .await
+            .expect("build hosted OpenAI Responses model");
+
+        // The Responses API reports usage on `response.completed`; asking for it
+        // through `stream_options` would be rejected as an unknown parameter.
+        assert_eq!(model.usage_reporting(), UsageReportingMode::None);
+
+        let mut history = History::new(
+            "ignored-upstream-model".to_string(),
+            vec![HistoryMessage::from_string(Role::User, "hello")],
+        );
+        history.set_stream(true);
+        let callback: LLMCallback = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let result = model.invoke(&history, Some(callback)).await;
+        assert!(result.is_err(), "mock proxy deliberately returns HTTP 400");
+
+        let request = capture.await.expect("capture task");
+        assert_eq!(request.request_line, "POST /api/v1/responses HTTP/1.1");
+        let headers = request.headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer current-jwt\r\n"));
+        assert!(headers.contains("x-flow-like-app-id: app-123\r\n"));
+        assert_eq!(request.body["model"], "bit_responses_1");
+        assert!(request.body.get("stream_options").is_none());
+    }
+
+    #[tokio::test]
+    async fn factory_rejects_responses_on_hosted_providers_without_a_responses_api() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut factory = ModelFactory::new();
+
+        for provider in ["hosted:openrouter", "hosted:bedrock"] {
+            let Err(error) = factory
+                .build(
+                    &completion_bit_with_surface(
+                        provider,
+                        provider,
+                        Some(ModelApiSurface::Responses),
+                    ),
+                    state.clone(),
+                    Some("token".to_string()),
+                    None,
+                )
+                .await
+            else {
+                panic!("{provider} has no Responses API and must not build");
+            };
+            assert!(
+                error.to_string().contains("no Responses API"),
+                "{provider} should explain why Responses is unavailable: {error}"
+            );
+        }
     }
 
     #[tokio::test]

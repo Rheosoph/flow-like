@@ -1,9 +1,9 @@
 //! Plan-tier gating for hosted models.
 //!
-//! The proxy routes (`/chat/completions`, `/embeddings`) enforce this per call and
-//! answer with `PAYMENT_REQUIRED`. Automatic model selection has to apply the same
-//! rule *before* dispatch, or a caller whose plan excludes the flagship models still
-//! gets pointed at one — and only finds out through a mid-stream 402.
+//! The proxy routes (`/chat/completions`, `/responses`, `/embeddings`) enforce this
+//! per call and answer with `PAYMENT_REQUIRED`. Automatic model selection has to apply
+//! the same rule *before* dispatch, or a caller whose plan excludes the flagship models
+//! still gets pointed at one — and only finds out through a mid-stream 402.
 
 use flow_like::{bit::Bit, hub::UserTier};
 use flow_like_types::Value;

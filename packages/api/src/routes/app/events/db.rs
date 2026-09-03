@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use crate::entity::event;
 use flow_like::app::App;
 use flow_like::flow::event::{
-    CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, ReleaseNotes,
+    CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, EventVariant,
+    ReleaseNotes,
 };
-use flow_like::flow::variable::Variable;
 use flow_like_types::anyhow;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -21,63 +21,54 @@ use sea_orm::{
 };
 use serde_json::json;
 
-/// Filter out secret variable values from an event.
-/// Secret variables will have their `default_value` set to `None`.
-/// This should be used when returning events to clients, as secrets
-/// are only used server-side during execution.
-pub fn filter_event_secrets(mut event: CoreEvent) -> CoreEvent {
-    // Filter secret variables in main variables
-    for var in event.variables.values_mut() {
-        if var.secret {
-            var.default_value = None;
+// Shared with the desktop and any future restore/variant path — the
+// implementations moved to core so both crates blank and restore secrets
+// identically. Re-exported so every existing `super::db::` caller keeps
+// compiling.
+pub use flow_like::flow::event::{filter_event_secrets, preserve_event_secrets};
+
+/// Splice the LIVE event's HTTP auth token into a restored config for
+/// api/http/webhook events. `sync_sink` mirrors the sink's `auth_token`
+/// column from the config bytes — clearing the token clears the column — so
+/// replaying an archived config would silently rotate every caller onto the
+/// snapshot's stale key, or resurrect a revoked one. As with
+/// `preserve_event_secrets`, the live value wins in both directions.
+pub fn preserve_event_config_secrets(incoming: &mut CoreEvent, existing: &CoreEvent) {
+    if !matches!(incoming.event_type.as_str(), "api" | "http" | "webhook") {
+        return;
+    }
+    let live_token = extract_http_auth_token(&existing.config);
+    if live_token == extract_http_auth_token(&incoming.config) {
+        return;
+    }
+    let mut config: serde_json::Value = if incoming.config.is_empty() {
+        json!({})
+    } else {
+        // A config that does not parse as JSON carries no auth_token to fix.
+        match serde_json::from_slice(&incoming.config) {
+            Ok(value) => value,
+            Err(_) => return,
+        }
+    };
+    let Some(object) = config.as_object_mut() else {
+        return;
+    };
+    match live_token {
+        Some(token) => {
+            object.insert("auth_token".to_string(), json!(token));
+        }
+        None => {
+            object.remove("auth_token");
         }
     }
-
-    // Filter secret variables in canary if present
-    if let Some(ref mut canary) = event.canary {
-        for var in canary.variables.values_mut() {
-            if var.secret {
-                var.default_value = None;
-            }
-        }
-    }
-
-    event
-}
-
-/// Restore secret variable values the client had no way to send back.
-///
-/// `filter_event_secrets` blanks secret `default_value`s on the way out, so a client
-/// round-tripping an event returns them as `None`. Without this merge every save from
-/// the events UI would erase the stored secret. A secret the client does send is a
-/// deliberate change and wins.
-pub fn preserve_event_secrets(incoming: &mut CoreEvent, existing: &CoreEvent) {
-    restore_secret_values(&mut incoming.variables, &existing.variables);
-
-    if let (Some(canary), Some(existing_canary)) =
-        (incoming.canary.as_mut(), existing.canary.as_ref())
-    {
-        restore_secret_values(&mut canary.variables, &existing_canary.variables);
-    }
-}
-
-fn restore_secret_values(
-    incoming: &mut HashMap<String, Variable>,
-    existing: &HashMap<String, Variable>,
-) {
-    for (variable_id, variable) in incoming.iter_mut() {
-        if !variable.secret || variable.default_value.is_some() {
-            continue;
-        }
-
-        if let Some(stored) = existing.get(variable_id) {
-            variable.default_value = stored.default_value.clone();
-        }
+    if let Ok(bytes) = serde_json::to_vec(&config) {
+        incoming.config = bytes;
     }
 }
 
 pub fn filter_event_list_execution(mut event: CoreEvent) -> CoreEvent {
     event.canary = None;
+    event.variants = Vec::new();
     event.variables = HashMap::new();
     event.notes = None;
     event
@@ -156,6 +147,11 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         .canary
         .as_ref()
         .and_then(|c| serde_json::to_value(c).ok());
+    let variants = if event.variants.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&event.variants).ok()
+    };
 
     event::ActiveModel {
         id: Set(event.id.clone()),
@@ -183,6 +179,7 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         inputs: Set(inputs),
         notes: Set(notes),
         canary: Set(canary),
+        variants: Set(variants),
         correlation_mappings: Set(event
             .correlation_mappings
             .as_ref()
@@ -262,6 +259,11 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
 
     let canary: Option<CanaryEvent> = model.canary.and_then(|v| serde_json::from_value(v).ok());
 
+    let variants: Vec<EventVariant> = model
+        .variants
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
     let created_at = std::time::UNIX_EPOCH
         + std::time::Duration::from_secs(model.created_at.and_utc().timestamp() as u64);
     let updated_at = std::time::UNIX_EPOCH
@@ -278,6 +280,7 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
         config,
         active: model.active,
         canary,
+        variants,
         priority: model.priority as u32,
         event_type: model.event_type,
         notes,
@@ -490,7 +493,7 @@ pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
 }
 
 /// Extract cron expression from event config bytes
-fn extract_cron_expression(config: &[u8]) -> Option<String> {
+pub(super) fn extract_cron_expression(config: &[u8]) -> Option<String> {
     if config.is_empty() {
         return None;
     }
@@ -963,7 +966,7 @@ pub async fn get_default_event_with_fallback(
 mod tests {
     use super::*;
     use flow_like::flow::pin::ValueType;
-    use flow_like::flow::variable::VariableType;
+    use flow_like::flow::variable::{Variable, VariableType};
 
     fn secret(name: &str, value: Option<&str>) -> Variable {
         let mut variable = Variable::new(name, VariableType::String, ValueType::Normal);
@@ -984,6 +987,7 @@ mod tests {
             config: Vec::new(),
             active: true,
             canary: None,
+            variants: Vec::new(),
             priority: 0,
             event_type: "cron".to_string(),
             notes: None,
@@ -1087,6 +1091,140 @@ mod tests {
             .default_value
             .clone();
         assert_eq!(restored, Some(b"stored".to_vec()));
+    }
+
+    #[test]
+    fn variants_round_trip_through_the_db_model_and_an_empty_set_stores_null() {
+        use flow_like::flow::event::{EventVariant, EventVariantMode};
+
+        let mut event = event_with(HashMap::new());
+        let model = event_to_db_model("app-1", &event);
+        assert!(matches!(model.variants, Set(None)));
+
+        event.variants = vec![EventVariant {
+            name: "canary".to_string(),
+            board_id: "board-2".to_string(),
+            board_version: Some((1, 2, 3)),
+            node_id: "node-2".to_string(),
+            variables: HashMap::new(),
+            default_page_id: None,
+            mode: EventVariantMode::Live { weight: 0.25 },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }];
+        let model = event_to_db_model("app-1", &event);
+        let Set(Some(variants_json)) = model.variants else {
+            panic!("a non-empty variant set must be stored as JSON");
+        };
+
+        let row = event::Model {
+            id: "evt-1".to_string(),
+            app_id: "app-1".to_string(),
+            name: "Nightly sync".to_string(),
+            description: None,
+            event_type: "cron".to_string(),
+            active: true,
+            priority: 0,
+            board_id: Some("board-1".to_string()),
+            board_version: None,
+            node_id: Some("node-1".to_string()),
+            page_id: None,
+            route: None,
+            is_default: false,
+            event_version: "1.0.0".to_string(),
+            variables: None,
+            config: None,
+            inputs: None,
+            notes: None,
+            canary: None,
+            variants: Some(variants_json),
+            created_at: Default::default(),
+            updated_at: Default::default(),
+            execution_mode: "Local".to_string(),
+            last_setup_at: None,
+            last_setup_error: None,
+            last_setup_version: None,
+            setup_status: None,
+            correlation_mappings: None,
+            exposure: "PUBLIC".to_string(),
+        };
+        let restored = db_model_to_event(row).unwrap();
+
+        assert_eq!(restored.variants.len(), 1);
+        let variant = &restored.variants[0];
+        assert_eq!(variant.name, "canary");
+        assert_eq!(variant.board_id, "board-2");
+        assert_eq!(variant.board_version, Some((1, 2, 3)));
+        assert_eq!(variant.node_id, "node-2");
+        assert_eq!(variant.mode, EventVariantMode::Live { weight: 0.25 });
+    }
+
+    #[test]
+    fn execution_list_filter_clears_variants_alongside_the_canary() {
+        use flow_like::flow::event::{EventVariant, EventVariantMode};
+
+        let mut event = event_with(HashMap::new());
+        event.variants = vec![EventVariant {
+            name: "canary".to_string(),
+            board_id: "board-2".to_string(),
+            board_version: None,
+            node_id: "node-2".to_string(),
+            variables: HashMap::new(),
+            default_page_id: None,
+            mode: EventVariantMode::Live { weight: 0.25 },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }];
+
+        let filtered = filter_event_list_execution(event);
+
+        assert!(filtered.canary.is_none());
+        assert!(filtered.variants.is_empty());
+    }
+
+    fn http_event(config: &str) -> CoreEvent {
+        let mut event = event_with(HashMap::new());
+        event.event_type = "http".to_string();
+        event.config = config.as_bytes().to_vec();
+        event
+    }
+
+    #[test]
+    fn restored_http_config_keeps_the_live_auth_token() {
+        let live = http_event(r#"{"path":"/hook","auth_token":"rotated"}"#);
+        let mut restored = http_event(r#"{"path":"/hook","auth_token":"stale"}"#);
+
+        preserve_event_config_secrets(&mut restored, &live);
+
+        assert_eq!(
+            extract_http_auth_token(&restored.config),
+            Some("rotated".to_string())
+        );
+        let value: serde_json::Value = serde_json::from_slice(&restored.config).unwrap();
+        assert_eq!(value["path"], "/hook");
+    }
+
+    #[test]
+    fn a_token_cleared_live_stays_cleared_on_restore() {
+        let live = http_event(r#"{"path":"/hook"}"#);
+        let mut restored = http_event(r#"{"path":"/hook","auth_token":"revoked"}"#);
+
+        preserve_event_config_secrets(&mut restored, &live);
+
+        assert_eq!(extract_http_auth_token(&restored.config), None);
+    }
+
+    #[test]
+    fn non_http_event_configs_are_left_alone() {
+        let mut live = event_with(HashMap::new());
+        live.config = br#"{"auth_token":"live"}"#.to_vec();
+        let mut restored = event_with(HashMap::new());
+        restored.config = br#"{"cron":"* * * * *"}"#.to_vec();
+        let before = restored.config.clone();
+
+        preserve_event_config_secrets(&mut restored, &live);
+
+        assert_eq!(restored.config, before);
     }
 
     #[test]

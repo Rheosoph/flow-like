@@ -282,3 +282,14 @@ inherits = "release"
 lto = "thin"
 codegen-units = 8
 strip = "symbols"
+
+# Optimize the AWS Lambda executable for startup and artifact size. ThinLTO
+# keeps link memory practical for the API's large dependency graph while still
+# providing cross-crate optimization. Keep unwind semantics because live API
+# handlers recover panics from blocking workers; aborting would terminate the
+# entire Lambda environment. Symbols remain available in the cached build
+# artifact for cargo-bloat; the Lambda Docker stage strips the shipped binary.
+[profile.lambda]
+inherits = "dist"
+codegen-units = 1
+strip = "none"

@@ -21,6 +21,34 @@ message Version {
   uint32 patch = 3;
 }
 
+message LiveVariantMode {
+  float weight = 1;
+}
+
+message ShadowVariantMode {
+  float sample_rate = 1;
+}
+
+message EventVariant {
+  // Unique per event, [a-z0-9-]; "canary" is the conventional name.
+  string name = 1;
+  string board_id = 2;
+  // None = floating latest (etag bound at dispatch); the u32::MAX sentinel is
+  // reserved and refused at upsert.
+  optional Version board_version = 3;
+  string node_id = 4;
+  // Merged over the event's variables per key, variant wins.
+  map<string, Variable> variables = 5;
+  // Page-event variants only.
+  optional string default_page_id = 6;
+  oneof mode {
+    LiveVariantMode live = 7;
+    ShadowVariantMode shadow = 8;
+  }
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
 message Event {
   string id = 1;
   string name = 2;
@@ -56,6 +84,12 @@ message Event {
   // callable by connected apps via the app-connection proxy). Defaults to
   // PUBLIC when unset for backward compatibility.
   optional string exposure = 23;
+  // Canary/shadow targets. When empty, the legacy `canary` field (tag 11)
+  // is the fallback mirror — see `Event::variant_set()`.
+  repeated EventVariant variants = 24;
+  // Process-mining case-key mappings: business key name -> dot-path into the
+  // invocation payload. An empty map round-trips as "not configured".
+  map<string, string> correlation_mappings = 25;
 }
 
 // Simplified input pin metadata for events

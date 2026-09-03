@@ -2,8 +2,13 @@ export * from "./developer";
 export type { IIntercomEvent } from "./events/intercom-event";
 export type { IRunPayload } from "./flow/run-payload";
 export {
+	LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX,
+	PAGE_ACTION_ID_PREFIX,
+	SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX,
+	isDynamicPageTrigger,
 	pageTriggerFromAction,
 	serializePageTrigger,
+	withCurrentManifestRevision,
 	type PageActionInvocation,
 	type PageSpecialEvent,
 	type PageTrigger,
@@ -23,6 +28,7 @@ export type {
 	IBitModelClassification,
 	IModelProvider,
 } from "./bit/bit/llm-parameters";
+export { IModelApiSurface } from "./bit/bit/llm-parameters";
 export type {
 	ITtsAssetRef,
 	ITtsModelParameters,
@@ -77,6 +83,8 @@ export type {
 	IEvent,
 	IEventInput,
 	ICanaryEvent,
+	IEventVariant,
+	IEventVariantMode,
 	IReleaseNotes,
 } from "./flow/event";
 export { IEventExecutionMode, IEventExposure } from "./flow/event";

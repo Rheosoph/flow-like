@@ -5,16 +5,18 @@ use crate::{
         sea_orm_active_enums::AppConnectionStatus,
     },
     error::ApiError,
+    execution::variant::STABLE_VARIANT,
     middleware::jwt::AppUser,
     permission::role_permission::{RolePermissions, has_role_permission},
+    routes::app::events::setup_event::find_event_setup,
     state::AppState,
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Event types another app can invoke through a connection. Cron/webhook/
@@ -69,6 +71,14 @@ pub struct RemoteMcpResource {
     pub name: Option<String>,
     pub description: Option<String>,
     pub mime_type: Option<String>,
+}
+
+/// Which registration bucket to describe.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct RemoteEventDetailQuery {
+    /// Variant surface to describe. Defaults to `stable` (the primary);
+    /// a Live variant name reads that variant's serving pointer.
+    pub variant: Option<String>,
 }
 
 /// Everything the flow editor needs to build typed pins for a remote event:
@@ -140,7 +150,8 @@ async fn ensure_connection_role(
     params(
         ("app_id" = String, Path, description = "Application ID (the connected/origin app)"),
         ("target_app_id" = String, Path, description = "The app the event belongs to"),
-        ("event_id" = String, Path, description = "Event ID")
+        ("event_id" = String, Path, description = "Event ID"),
+        ("variant" = Option<String>, Query, description = "Variant surface to describe (defaults to 'stable', the primary)")
     ),
     responses(
         (status = 200, description = "Remote event details", body = RemoteEventDetail),
@@ -156,12 +167,13 @@ async fn ensure_connection_role(
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/connections/{target_app_id}/events/{event_id}/detail",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn get_remote_event_detail(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, target_app_id, event_id)): Path<(String, String, String)>,
+    Query(query): Query<RemoteEventDetailQuery>,
 ) -> Result<Json<RemoteEventDetail>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     ensure_connection_role(
@@ -192,7 +204,24 @@ pub async fn get_remote_event_detail(
         mcp_resources: Vec::new(),
     };
 
-    let Some(version) = event_row.last_setup_version.clone() else {
+    // The variant's serving pointer names the bucket to describe; stable
+    // keeps the legacy `last_setup_version` fallback for pre-backfill rows.
+    let variant = query
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string();
+    let pointer = find_event_setup(&state.db, &target_app_id, &event_id, &variant)
+        .await?
+        .map(|row| row.event_version);
+    let version = if variant == STABLE_VARIANT {
+        pointer.or_else(|| event_row.last_setup_version.clone())
+    } else {
+        pointer
+    };
+    let Some(version) = version else {
         return Ok(Json(detail));
     };
 
@@ -200,6 +229,7 @@ pub async fn get_remote_event_detail(
         .filter(event_remote_registration::Column::AppId.eq(&target_app_id))
         .filter(event_remote_registration::Column::EventId.eq(&event_id))
         .filter(event_remote_registration::Column::EventVersion.eq(&version))
+        .filter(event_remote_registration::Column::Variant.eq(variant.as_str()))
         .limit(500)
         .all(&state.db)
         .await?;

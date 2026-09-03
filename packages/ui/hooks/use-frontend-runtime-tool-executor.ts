@@ -7,7 +7,11 @@ import { compactJson, compactLogEvents } from "../components/flowpilot/utils";
 import type { ILog, ILogMetadata, IRunPayload } from "../lib";
 import { ApiResponseError } from "../lib/api-error";
 import { runAppChatMessage } from "../lib/app-chat-run";
-import { eventAliasOf, isTestEventAlias } from "../lib/board-tests";
+import {
+	collectRunEvidence,
+	discoverBoardTests,
+	gradeBoardRun,
+} from "../lib/board-tests";
 import {
 	getPendingDatabaseSchemas,
 	isExplicitSchemaCreateUnavailable,
@@ -866,15 +870,10 @@ export async function runBoardTestsRuntime(
 	const maxTests = clampToolLimit(args.maxTests ?? 20, 20, 20);
 	const prefixFilter = (args.filter ?? "").trim().toLowerCase();
 
-	const testNodes = Object.values(board.nodes ?? {})
-		.filter((node) => node.start === true)
-		.map((node) => ({ node, alias: eventAliasOf(node) }))
-		.filter(({ alias }) => isTestEventAlias(alias))
-		.filter(
-			({ alias }) =>
-				prefixFilter === "" || alias.toLowerCase().includes(prefixFilter),
-		)
-		.sort((a, b) => a.alias.localeCompare(b.alias));
+	const testNodes = discoverBoardTests(board.nodes).filter(
+		({ alias }) =>
+			prefixFilter === "" || alias.toLowerCase().includes(prefixFilter),
+	);
 
 	if (testNodes.length === 0) {
 		return {
@@ -931,42 +930,27 @@ export async function runBoardTestsRuntime(
 				.catch(() => undefined);
 		}
 
-		let assertLogs: ILog[] = [];
-		let errorLogs: ILog[] = [];
-		if (metadata) {
-			assertLogs = await boardState
-				.queryRun(metadata, "message LIKE 'ASSERT_%'", 0, 100)
-				.catch(() => []);
-			errorLogs = await boardState
-				.queryRun(metadata, "log_level >= 3", 0, 10)
-				.catch(() => []);
-		}
-		const assertOk = assertLogs.filter((log) =>
-			log.message?.startsWith("ASSERT_OK"),
-		).length;
-		const assertFail = assertLogs.filter((log) =>
-			log.message?.startsWith("ASSERT_FAIL"),
-		).length;
-		const hasFailures =
-			assertFail > 0 || errorLogs.length > 0 || executionError !== undefined;
-		// A run without metadata cannot be graded — never report it as a pass.
-		if (!metadata && executionError === undefined) {
-			executionError =
-				"The run returned no metadata, so its logs could not be graded.";
-		}
-		const verdict = !metadata ? "error" : hasFailures ? "fail" : "pass";
-		if (verdict === "pass") passed += 1;
+		const evidence = await collectRunEvidence(
+			(meta, query, offset, limit) =>
+				boardState.queryRun(meta, query, offset, limit),
+			metadata,
+			executionError,
+		);
+		// Same pinned degrade-to-pass as runBoardTest: the interactive tool
+		// never escalates an unreadable log store — regression adapters do.
+		const grade = gradeBoardRun({ ...evidence, logQueryFailed: false });
+		if (grade.verdict === "pass") passed += 1;
 		else failed += 1;
 		tests.push({
 			node_id: node.id,
 			event_name: alias,
 			run_id: metadata?.run_id ?? runId,
-			verdict,
-			assert_ok: assertOk,
-			assert_fail: assertFail,
-			assertions: compactExecutionLogs(assertLogs, 25),
-			error_logs: compactExecutionLogs(errorLogs, 10),
-			execution_error: executionError,
+			verdict: grade.verdict,
+			assert_ok: grade.assertOk,
+			assert_fail: grade.assertFail,
+			assertions: compactExecutionLogs(evidence.assertLogs, 25),
+			error_logs: compactExecutionLogs(evidence.errorLogs, 10),
+			execution_error: grade.executionError,
 			duration_ms: Date.now() - startedAt,
 		});
 	}

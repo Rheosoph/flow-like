@@ -94,7 +94,7 @@ pub async fn evaluate_pin_value_reference(pin: Arc<InternalPin>) -> flow_like_ty
 
 pub async fn evaluate_pin_value_weak(
     pin: &Weak<InternalPin>,
-    overrides: &Option<BTreeMap<String, Value>>,
+    overrides: &Option<BTreeMap<String, Arc<Value>>>,
 ) -> flow_like_types::Result<Value> {
     let pin = pin
         .upgrade()
@@ -104,7 +104,7 @@ pub async fn evaluate_pin_value_weak(
 
 pub async fn evaluate_pin_value(
     pin: Arc<InternalPin>,
-    overrides: &Option<BTreeMap<String, Value>>,
+    overrides: &Option<BTreeMap<String, Arc<Value>>>,
 ) -> flow_like_types::Result<Value> {
     let mut current_pin = pin;
     let mut visited_pins = InlineVisitedPins::<16>::new();
@@ -119,7 +119,7 @@ pub async fn evaluate_pin_value(
 
         // Check overrides first — they short-circuit the entire chain
         if let Some(found_override) = overrides.as_ref().and_then(|map| map.get(current_pin.id())) {
-            return Ok(found_override.clone());
+            return Ok(found_override.as_ref().clone());
         }
 
         let deps = current_pin.depends_on();
@@ -244,7 +244,10 @@ mod tests {
             .expect("shared cell resolves without a scope");
         assert_eq!(unscoped, json!("shared"));
 
-        let scope = Some(BTreeMap::from([(source.id.to_string(), json!("scoped"))]));
+        let scope = Some(BTreeMap::from([(
+            source.id.to_string(),
+            Arc::new(json!("scoped")),
+        )]));
         let scoped = evaluate_pin_value(consumer, &scope)
             .await
             .expect("scope resolves through the dependency chain");

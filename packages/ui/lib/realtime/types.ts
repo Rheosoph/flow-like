@@ -1,7 +1,16 @@
+export interface IRealtimeIceServer {
+	urls: string | string[];
+	username?: string;
+	credential?: string;
+}
+
 export interface IRealtimeAccess {
 	jwt: string;
 	encryption_key: string;
 	key_id: string;
+	ice_servers?: IRealtimeIceServer[];
+	/** Unix timestamp in seconds. */
+	ice_expires_at?: number;
 }
 
 export interface IJwk {

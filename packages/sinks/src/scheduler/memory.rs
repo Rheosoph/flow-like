@@ -3,7 +3,9 @@
 //! This is used for Docker Compose and local development where we don't have
 //! access to cloud-native scheduling services.
 
-use super::{ScheduleInfo, SchedulerBackend, SchedulerError, SchedulerResult};
+use super::{
+    ScheduleInfo, SchedulerBackend, SchedulerError, SchedulerResult, normalize_cron_for_crate,
+};
 use crate::CronSinkConfig;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -38,21 +40,6 @@ fn parse_scheduled_local(
     )
     .single()
     .map(|dt| dt.with_timezone(&chrono::Utc))
-}
-
-/// Normalize a Unix-style cron expression (5 or 6 fields) into the 7-field
-/// form the `cron` crate requires (`sec min hour dom mon dow year`).
-///
-/// - 5-field (`min hour dom mon dow`)   -> prepend `0 ` for seconds, append ` *` for year.
-/// - 6-field (`sec min hour dom mon dow`) -> append ` *` for year.
-/// - 7-field is passed through unchanged.
-fn normalize_cron_for_crate(expr: &str) -> String {
-    let parts: Vec<&str> = expr.split_whitespace().collect();
-    match parts.len() {
-        5 => format!("0 {} *", parts.join(" ")),
-        6 => format!("{} *", parts.join(" ")),
-        _ => expr.to_string(),
-    }
 }
 
 /// In-memory scheduler state for a single schedule

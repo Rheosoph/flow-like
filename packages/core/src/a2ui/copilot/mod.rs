@@ -224,7 +224,13 @@ impl A2UICopilot {
                         if let Some(ref callback) = on_token {
                             callback(text.text.clone());
                         }
-                        response_contents.push(AssistantContent::Text(text));
+                        // Deltas are token fragments — extend the running Text
+                        // item instead of accumulating one item per token.
+                        if let Some(AssistantContent::Text(last)) = response_contents.last_mut() {
+                            last.text.push_str(&text.text);
+                        } else {
+                            response_contents.push(AssistantContent::Text(text));
+                        }
                     }
                     StreamedAssistantContent::ToolCall { tool_call, .. } => {
                         // Only ThinkTool calls are expected here
@@ -232,6 +238,11 @@ impl A2UICopilot {
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {}
                     StreamedAssistantContent::Reasoning(reasoning) => {
+                        // Providers differ here: some stream ReasoningDelta and
+                        // then replay the whole block as a final Reasoning item,
+                        // others send one Reasoning per token chunk. Append only
+                        // what is new, with no separator — fragments split words
+                        // and every newline renders as a hard break.
                         let reasoning_text = reasoning
                             .content
                             .iter()
@@ -243,9 +254,20 @@ impl A2UICopilot {
                                 _ => None,
                             })
                             .collect::<Vec<_>>()
-                            .join("\n");
-                        current_reasoning.push_str(&reasoning_text);
-                        current_reasoning.push('\n');
+                            .join("");
+                        let new_text = if let Some(suffix) =
+                            reasoning_text.strip_prefix(current_reasoning.as_str())
+                        {
+                            suffix.to_string()
+                        } else if current_reasoning.ends_with(reasoning_text.as_str()) {
+                            String::new()
+                        } else {
+                            reasoning_text
+                        };
+                        if new_text.is_empty() {
+                            continue;
+                        }
+                        current_reasoning.push_str(&new_text);
 
                         if let Some(ref callback) = on_token {
                             if reasoning_step_id.is_none() {
@@ -487,6 +509,7 @@ impl A2UICopilot {
                 parameters: serde_json::to_value(LLMParameters {
                     context_length: 128000,
                     provider: ModelProvider {
+                        api_surface: None,
                         provider_name: "openai".to_string(),
                         model_id: None,
                         version: None,

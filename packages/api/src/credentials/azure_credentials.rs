@@ -670,6 +670,64 @@ impl AzureRuntimeCredentials {
                     Some(format!("users/{}/apps/{}", sub, app_id)),
                 )
             }
+            CredentialsAccess::ShadowExecute => {
+                // ServerExecute with app/user content writes dropped: a shadow
+                // run reads live content ("rl") but may never mutate it.
+                // Scratch stays read-write and run logs stay append-only so
+                // the shadow run itself is recorded.
+                let (meta_prefix, meta_permissions) = server_execute_meta_scope(app_id);
+                let meta_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.meta_container,
+                    &meta_prefix,
+                    meta_permissions,
+                    &expiry_str,
+                    &issuer,
+                )?;
+                let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(app_id);
+                draft_meta_sas_token = Some(generate_directory_sas(
+                    &self.account_name,
+                    &self.meta_container,
+                    &draft_prefix,
+                    draft_permissions,
+                    &expiry_str,
+                    &issuer,
+                )?);
+                draft_meta_path_prefix = Some(draft_prefix);
+                let app_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}", app_id),
+                    "rl",
+                    &expiry_str,
+                    &issuer,
+                )?;
+                let user_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("users/{}/apps/{}", sub, app_id),
+                    "rl",
+                    &expiry_str,
+                    &issuer,
+                )?;
+                let logs_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.logs_container,
+                    &format!("runs/{}", app_id),
+                    "rwl",
+                    &expiry_str,
+                    &issuer,
+                )?;
+                (
+                    Some(meta_sas),
+                    Some(app_content_sas),
+                    Some(user_content_sas),
+                    Some(logs_sas),
+                    Some(tmp_sas()?),
+                    Some(format!("apps/{}", app_id)),
+                    Some(format!("users/{}/apps/{}", sub, app_id)),
+                )
+            }
             CredentialsAccess::ReadLogs => {
                 // ReadLogs: read access to logs container only
                 let logs_sas = generate_directory_sas(
@@ -1480,6 +1538,55 @@ mod integration_tests {
         assert_eq!(
             scoped.content_path_prefix,
             Some(format!("apps/{}", TEST_APP_ID))
+        );
+    }
+
+    /// A shadow run reads live app/user content but may never mutate it;
+    /// scratch stays read-write and run logs stay append-only.
+    #[tokio::test]
+    async fn test_azure_shadow_execute_drops_content_writes_but_keeps_reads() {
+        let creds = test_azure_runtime_credentials();
+        let scoped = creds
+            .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::ShadowExecute)
+            .await
+            .expect("shadow execute credentials should be generated");
+
+        let content = scoped
+            .content_sas_token
+            .as_deref()
+            .expect("ShadowExecute should include app content read credentials");
+        assert_eq!(sas_permissions(content), Some("rl"));
+        let user_content = scoped
+            .user_content_sas_token
+            .as_deref()
+            .expect("ShadowExecute should include user content read credentials");
+        assert_eq!(sas_permissions(user_content), Some("rl"));
+
+        let meta = scoped
+            .meta_sas_token
+            .as_deref()
+            .expect("ShadowExecute still reads the board/event definition");
+        assert_eq!(sas_permissions(meta), Some("rl"));
+
+        let logs = scoped
+            .logs_sas_token
+            .as_deref()
+            .expect("ShadowExecute still records run logs");
+        let logs_permissions = sas_permissions(logs).expect("logs SAS should carry permissions");
+        assert!(logs_permissions.contains('w'));
+        assert!(
+            !logs_permissions.contains('d'),
+            "ShadowExecute run logs are append-only, got {logs_permissions}"
+        );
+
+        let tmp = scoped
+            .tmp_sas_token
+            .as_deref()
+            .expect("ShadowExecute keeps the caller's scratch directory");
+        assert!(
+            sas_permissions(tmp)
+                .expect("scratch SAS should carry permissions")
+                .contains('w')
         );
     }
 

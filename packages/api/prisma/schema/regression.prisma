@@ -1,0 +1,121 @@
+/// Postgres projection of a regression suite. The bucket
+/// (apps/{appId}/regression/) owns the suite config + fixtures + payloads;
+/// this row exists so the publish hook ("does this board have a
+/// publish-triggered suite?") and the scheduler (nextRunAt <= now) are one
+/// indexed query instead of a prefix LIST. Written by the same PUT that
+/// writes the bucket config.
+model RegressionSuite {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  /// Board the suite replays into.
+  boardId String
+  /// Event the suite is keyed on. NULL = board-keyed suite (FlowBoard tests
+  /// panel); the compound unique below only constrains non-NULL values
+  /// (NULLS DISTINCT), which is exactly the intended "one suite per event"
+  /// rule while board-keyed suites stay unconstrained.
+  eventId String?
+  /// Default start node for authored-test discovery and event-keyed replay.
+  nodeId  String
+
+  /// Run the suite automatically when a new board version is published.
+  triggerOnPublish Boolean @default(false)
+  /// Cron expression for scheduled runs. NULL = not scheduled.
+  schedule         String?
+  /// Publish/promote gate behavior: "Off", "Warn", "Block".
+  gateMode         String  @default("Off")
+  /// The owner acknowledged that replays execute live side effects
+  /// (outbound HTTP from native nodes is not suppressible). Runs are
+  /// refused while false.
+  allowLiveSideEffects Boolean @default(false)
+
+  /// Next scheduled run, maintained by the RegressionSuites maintenance job.
+  nextRunAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, eventId])
+  @@index([appId, boardId])
+  @@index([nextRunAt])
+}
+
+/// One execution of a regression suite against a candidate board version.
+/// On cloud this table (plus RegressionCaseResult) is THE run store — no
+/// bucket archive is written; desktop archives runs as JSON instead and
+/// never writes these rows.
+model RegressionSuiteRun {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  /// RegressionSuite.id. Deliberately not a foreign key: the projection row
+  /// is rewritten by suite PUTs and run history must survive that.
+  suiteId String
+
+  boardId      String
+  /// Candidate board version as "major.minor.patch".
+  boardVersion String
+
+  /// What started the run: "manual", "publish", "schedule".
+  trigger String
+  /// "queued", "running", "completed", "errored". QUEUED rows (deployments
+  /// with DETACHED_TASKS_UNRELIABLE=1) are executed by the maintenance job;
+  /// RUNNING rows whose startedAt is older than the wall clock plus grace
+  /// are flipped to errored by it.
+  status  String
+
+  regressed    Int @default(0)
+  fixed        Int @default(0)
+  stillFailing Int @default(0)
+  ok           Int @default(0)
+  skipped      Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  /// Suite-level failure message when status = "errored".
+  error       String?
+
+  caseResults RegressionCaseResult[]
+
+  createdAt DateTime @default(now())
+
+  @@index([appId, boardId, boardVersion, createdAt])
+  @@index([suiteId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Per-case verdict of a suite run: recorded-fixture replay or authored
+/// board test, graded verdict-vs-baseline (never output-vs-output).
+model RegressionCaseResult {
+  id String @id @default(cuid())
+
+  suiteRun   RegressionSuiteRun @relation(fields: [suiteRunId], references: [id], onDelete: Cascade)
+  suiteRunId String
+
+  /// "recorded_fixture" or "authored_test".
+  caseKind String
+  /// Fixture id (recorded) or start node id (authored).
+  caseRef  String
+  /// ExecutionRun.id of the replay dispatch. NULL when the case was skipped
+  /// before dispatch (e.g. start node absent from the candidate version).
+  replayRunId String?
+
+  /// Case outcome vs baseline: "ok", "regressed", "still_failing", "fixed",
+  /// "skipped".
+  outcome      String
+  /// Raw grader verdict for the replay run (pass|fail + error class,
+  /// grading_blind stamp).
+  gradeVerdict String
+  /// Diagnostics: error class change, skip reason, grader notes.
+  detail       Json?
+
+  durationMs Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([suiteRunId])
+}

@@ -15,7 +15,9 @@ import { useEffect, useState } from "react";
 
 export default function Page() {
 	const backend = useBackend();
-	const parentRegister = useFlowBoardParentState();
+	const addBoardParents = useFlowBoardParentState(
+		(state) => state.addBoardParents,
+	);
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
 	const app = useInvoke(
@@ -34,13 +36,11 @@ export default function Page() {
 	useEffect(() => {
 		if (!app.data) return;
 		if (!boards.data) return;
-		boards.data?.forEach((board) => {
-			parentRegister?.addBoardParent(
-				board.id,
-				`/library/config/flows?id=${id}`,
-			);
-		});
-	}, [boards.data, id]);
+		const parentLink = `/library/config/flows?id=${id}`;
+		addBoardParents(
+			Object.fromEntries(boards.data.map((board) => [board.id, parentLink])),
+		);
+	}, [app.data, boards.data, id, addBoardParents]);
 
 	const router = useRouter();
 	const [boardCreation, setBoardCreation] =

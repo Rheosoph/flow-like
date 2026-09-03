@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { Response } from "../../../lib/llm/response";
 import type { IMessage } from "./chat-db";
 import { processChatEvents } from "./event-processor";
+import { joinContentText } from "./inline-segments";
 
 const baseMessage = (): IMessage => ({
 	id: "m1",
@@ -262,5 +263,158 @@ describe("processChatEvents", () => {
 		);
 
 		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(1);
+	});
+});
+
+/** ChatStreamingResponse as push_chunk.rs emits it: one delta per chunk, no plan. */
+const chunkEvent = (delta: Record<string, unknown>) => ({
+	event_type: "chat_stream_partial",
+	payload: {
+		chunk: {
+			id: "chunk",
+			choices: [{ index: 0, delta: { role: "assistant", ...delta } }],
+		},
+		actions: [],
+		attachments: [],
+		plan: null,
+		widgets: [],
+	},
+});
+
+/** ChatStreamingResponse as push_step.rs / push_reasoning.rs emit it: the whole plan, every time. */
+const planEvent = (
+	plan: [number, string][],
+	currentStep: number,
+	currentMessage = "",
+) => ({
+	event_type: "chat_stream_partial",
+	payload: {
+		chunk: null,
+		actions: [],
+		attachments: [],
+		plan: { plan, current_step: currentStep, current_message: currentMessage },
+		widgets: [],
+	},
+});
+
+const chatOutEvent = (content: string) => ({
+	...chatStreamEvent(content),
+	event_type: "chat_out",
+});
+
+describe("processChatEvents step anchors", () => {
+	const stepsOf = (message: IMessage) => message.plan_steps ?? [];
+
+	test("Push Step anchors at the text streamed so far; later snapshots keep it", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({ content: "Looking that up. " }),
+				planEvent([[1, "Search: web"]], 1),
+				chunkEvent({ content: "Found it." }),
+				planEvent([[1, "Search: web"]], 1, "query sent"),
+				planEvent(
+					[
+						[1, "Search: web"],
+						[2, "Summarize: results"],
+					],
+					2,
+				),
+			],
+			baseState(baseMessage()),
+		);
+
+		const steps = stepsOf(result.responseMessage);
+		expect(steps.map((step) => step.content_offset)).toEqual([
+			"Looking that up. ".length,
+			"Looking that up. Found it.".length,
+		]);
+		expect(steps.map((step) => step.status)).toEqual(["done", "progress"]);
+		expect(result.responseMessage.current_step_id).toBe("step-2");
+	});
+
+	test("Push Response detaches every anchor; later steps anchor against the replaced text", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({ content: "draft" }),
+				planEvent([[1, "Search: web"]], 1),
+				chatStreamEvent("The final answer"),
+				planEvent(
+					[
+						[1, "Search: web"],
+						[2, "Verify: sources"],
+					],
+					2,
+				),
+			],
+			baseState(baseMessage()),
+		);
+
+		const [first, second] = stepsOf(result.responseMessage);
+		expect(first?.content_offset).toBeUndefined();
+		expect(second?.content_offset).toBe("The final answer".length);
+	});
+
+	test("the final flush keeps anchors when it extends the streamed text, drops them otherwise", () => {
+		const streamed = () => [
+			chunkEvent({ content: "Hello" }),
+			planEvent([[1, "Search: web"]], 1),
+		];
+
+		const kept = processChatEvents(
+			[...streamed(), chatOutEvent("Hello world")],
+			baseState(baseMessage()),
+		);
+		expect(stepsOf(kept.responseMessage)[0]?.content_offset).toBe(5);
+		expect(stepsOf(kept.responseMessage)[0]?.status).toBe("done");
+
+		const rewritten = processChatEvents(
+			[...streamed(), chatOutEvent("Something else")],
+			baseState(baseMessage()),
+		);
+		expect(
+			stepsOf(rewritten.responseMessage)[0]?.content_offset,
+		).toBeUndefined();
+	});
+
+	test("anchors index the joined text when content arrives as parts", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({
+					content_parts: [
+						{
+							type: "image_url",
+							image_url: { url: "https://example.com/a.png" },
+						},
+					],
+				}),
+				chunkEvent({ content: "caption" }),
+				planEvent([[1, "Search: web"]], 1),
+			],
+			baseState(baseMessage()),
+		);
+
+		const content = result.responseMessage.inner.content;
+		expect(Array.isArray(content)).toBe(true);
+		expect(joinContentText(content)).toBe("caption");
+		expect(stepsOf(result.responseMessage)[0]?.content_offset).toBe(
+			"caption".length,
+		);
+	});
+
+	test("the synthesized Thinking step anchors where the reasoning started", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({ content: "Intro " }),
+				chunkEvent({ reasoning: "hmm" }),
+				chunkEvent({ content: "more" }),
+			],
+			baseState(baseMessage()),
+		);
+
+		expect(stepsOf(result.responseMessage)[0]).toMatchObject({
+			id: "step-0",
+			title: "Thinking",
+			content_offset: "Intro ".length,
+		});
 	});
 });

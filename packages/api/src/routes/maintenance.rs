@@ -7,8 +7,8 @@ use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
-        MaintenanceRunRequest, MaintenanceRunResponse, RunSweepMaintenanceResult,
-        StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
+        MaintenanceRunRequest, MaintenanceRunResponse, RegressionSuitesMaintenanceResult,
+        RunSweepMaintenanceResult, StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
 
@@ -164,6 +164,29 @@ async fn run_maintenance_job(
                 StateCleanupMaintenanceResult {
                     deleted_runs,
                     deleted_events,
+                },
+            )))
+        }
+        MaintenanceRunRequest::RegressionSuites => {
+            let outcome = crate::execution::regression::maintenance_tick(&state)
+                .await
+                .map_err(|error| {
+                    tracing::error!(error = %error, "Scheduled regression-suite maintenance failed");
+                    error
+                })?;
+
+            tracing::info!(
+                dispatched = outcome.dispatched,
+                swept = outcome.swept,
+                executed = outcome.executed,
+                "Maintenance regression-suite pass completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::RegressionSuites(
+                RegressionSuitesMaintenanceResult {
+                    dispatched: outcome.dispatched,
+                    swept: outcome.swept,
+                    executed: outcome.executed,
                 },
             )))
         }

@@ -1,7 +1,14 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { CloudIcon, MonitorIcon, ShuffleIcon } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+	CloudIcon,
+	MonitorIcon,
+	ShieldAlertIcon,
+	ShieldCheckIcon,
+	ShuffleIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -252,6 +259,66 @@ export const BoardRuntimeForm = memo(function BoardRuntimeForm({
 	);
 });
 
+interface IBoardGateVerdict {
+	verdict: "pass" | "fail";
+	/** Dotted board version the suite run graded. */
+	boardVersion: string;
+	regressed: number;
+	completedAt?: string | null;
+}
+
+/**
+ * The newest completed regression-suite run touching this board, folded into
+ * a pass/fail verdict — the read-only gate display. Derived client-side from
+ * the event-keyed runs listing (there is no board-keyed gate route); draft
+ * runs never carry a gate verdict and are skipped.
+ */
+function useBoardGateVerdict(appId: string, boardId: string) {
+	const backend = useBackend();
+	const supported = typeof backend.eventState.listRegressionRuns === "function";
+	return useQuery<IBoardGateVerdict | null>({
+		queryKey: ["boardGateVerdict", appId, boardId],
+		enabled: Boolean(appId && boardId && supported),
+		staleTime: 30_000,
+		queryFn: async () => {
+			const listRegressionRuns = backend.eventState.listRegressionRuns;
+			if (!listRegressionRuns) return null;
+			const events = await backend.eventState.getEvents(appId);
+			const candidates = events.filter(
+				(event) => event.board_id === boardId && !event.default_page_id,
+			);
+			const lists = await Promise.all(
+				candidates.map(async (event) => {
+					try {
+						return await listRegressionRuns.call(
+							backend.eventState,
+							appId,
+							event.id,
+						);
+					} catch {
+						// 404 — the event has no regression suite.
+						return [];
+					}
+				}),
+			);
+			const completed = lists
+				.flat()
+				.filter(
+					(run) => run.status === "completed" && run.board_version !== "draft",
+				)
+				.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+			const newest = completed[0];
+			if (!newest) return null;
+			return {
+				verdict: newest.regressed > 0 ? "fail" : "pass",
+				boardVersion: newest.board_version,
+				regressed: newest.regressed,
+				completedAt: newest.completed_at ?? newest.created_at,
+			};
+		},
+	});
+}
+
 /** Which version is open, which stage it ships at, and cutting a new one. */
 export const BoardReleaseForm = memo(function BoardReleaseForm({
 	appId,
@@ -310,6 +377,7 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 		typeof version !== "undefined",
 	);
 	const latest = version ? draft.data?.version : board.version;
+	const gate = useBoardGateVerdict(appId, boardId);
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -344,6 +412,37 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 						))}
 					</SelectContent>
 				</Select>
+				{gate.data && (
+					<p
+						className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+						title={t(
+							"regressionGateChipTitle",
+							"Newest completed regression-suite run touching this flow. Configure suites on the event's Quality section.",
+						)}
+					>
+						{gate.data.verdict === "pass" ? (
+							<ShieldCheckIcon className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+						) : (
+							<ShieldAlertIcon className="h-3.5 w-3.5 shrink-0 text-destructive" />
+						)}
+						{gate.data.verdict === "pass"
+							? t(
+									"regressionGatePass",
+									"Regression gate: pass (v{{version}})",
+									{
+										version: gate.data.boardVersion,
+									},
+								)
+							: t(
+									"regressionGateFail",
+									"Regression gate: {{count}} regressed (v{{version}})",
+									{
+										count: gate.data.regressed,
+										version: gate.data.boardVersion,
+									},
+								)}
+					</p>
+				)}
 			</Field>
 
 			<Field

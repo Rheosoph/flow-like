@@ -6,6 +6,8 @@ use axum::{
 use crate::state::AppState;
 
 pub mod completions;
+mod relay;
+pub mod responses;
 pub mod usage;
 
 pub fn routes() -> Router<AppState> {

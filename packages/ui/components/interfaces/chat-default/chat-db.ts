@@ -211,6 +211,20 @@ export interface IMessage {
 	 * apology back to the model.
 	 */
 	error?: IChatMessageError;
+	/**
+	 * Write revision, bumped by {@link putChatMessage}. Dexie liveQuery
+	 * re-materializes every row on any table write; an unchanged rev lets the
+	 * message list hand back the previously materialized object so settled
+	 * messages keep a stable identity and memoized rows don't re-render per
+	 * streamed save.
+	 */
+	rev?: number;
+}
+
+/** The only way to write a chat message — bumps {@link IMessage.rev} so identity caching stays truthful. */
+export async function putChatMessage(message: IMessage): Promise<void> {
+	message.rev = (message.rev ?? 0) + 1;
+	await chatDb.messages.put(message);
 }
 
 export interface ISession {

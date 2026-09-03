@@ -194,6 +194,34 @@ fn default_secure() -> bool {
     true
 }
 
+fn default_cloudflare_ice_ttl_seconds() -> u32 {
+    4 * 60 * 60
+}
+
+/// Selects the service that issues short-lived STUN and TURN configuration for
+/// realtime clients. Provider secrets are resolved by the API from references
+/// in the secret store and never belong in the hub JSON itself.
+#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum RealtimeIceConfig {
+    Cloudflare {
+        /// Secret-store reference containing the Cloudflare TURN key identifier.
+        turn_key_id_secret_ref: String,
+        /// Secret-store reference containing the bearer key returned with the TURN key.
+        turn_key_api_token_secret_ref: String,
+        /// Lifetime of each client credential. Cloudflare accepts at most 48 hours.
+        #[serde(default = "default_cloudflare_ice_ttl_seconds")]
+        #[schemars(range(min = 300, max = 172800))]
+        ttl_seconds: u32,
+    },
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
+pub struct RealtimeConfig {
+    /// Omit this field to retain the WebRTC library's built-in ICE defaults.
+    pub ice: Option<RealtimeIceConfig>,
+}
+
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
 pub struct Hub {
     pub name: String,
@@ -210,6 +238,9 @@ pub struct Hub {
     pub region: Option<String>,
     pub terms_of_service: String,
     pub signaling: Option<Vec<String>>,
+    /// Realtime transport configuration. Signaling remains configured separately.
+    #[serde(default)]
+    pub realtime: RealtimeConfig,
     pub cdn: Option<String>,
     pub app: Option<String>,
     pub web: Option<String>,
@@ -689,6 +720,25 @@ impl BitSearchQuery {
     }
 }
 
+/// Turn a hub reference into a scheme-qualified origin.
+///
+/// Hubs are persisted as bare domains (`api.flow-like.com`) with the scheme
+/// carried separately in `secure`, so every consumer that builds a URL from a
+/// hub has to re-attach it. Returns `None` for blank input.
+pub fn hub_origin(hub: &str, secure: bool) -> Option<String> {
+    let hub = hub.trim().trim_end_matches('/');
+    if hub.is_empty() {
+        return None;
+    }
+
+    if hub.contains("://") {
+        return Some(hub.to_string());
+    }
+
+    let scheme = if secure { "https" } else { "http" };
+    Some(format!("{scheme}://{hub}"))
+}
+
 impl Hub {
     fn http_client(&self) -> Arc<HTTPClient> {
         self.http_client.clone().unwrap()
@@ -936,5 +986,27 @@ impl Hub {
             hubs.push(hub);
         }
         Ok(hubs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hub_origin;
+
+    #[test]
+    fn hub_origin_attaches_the_scheme_the_profile_selected() {
+        assert_eq!(
+            hub_origin("api.flow-like.com", true).as_deref(),
+            Some("https://api.flow-like.com")
+        );
+        assert_eq!(
+            hub_origin("localhost:8080", false).as_deref(),
+            Some("http://localhost:8080")
+        );
+        assert_eq!(
+            hub_origin("http://localhost:8080/", true).as_deref(),
+            Some("http://localhost:8080")
+        );
+        assert_eq!(hub_origin("  ", true), None);
     }
 }

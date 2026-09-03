@@ -67,6 +67,10 @@ pub struct ExecutorClaims {
     /// Signed Page selector and entry authority for governed Page runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_execution: Option<ExecutorPageExecutionClaims>,
+    /// Signed shadow/replay isolation flag. `None` (old issuers) means a
+    /// normal run; the queued payload's `shadow` byte must match this claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<bool>,
     /// Callback URL for progress reporting
     pub callback_url: String,
     /// Token type

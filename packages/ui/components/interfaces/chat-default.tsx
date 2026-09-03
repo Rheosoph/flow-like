@@ -62,6 +62,7 @@ import {
 	type IAttachment,
 	type IMessage,
 	chatDb,
+	putChatMessage,
 } from "./chat-default/chat-db";
 import {
 	ChatWidgetExecutionProvider,
@@ -484,7 +485,7 @@ async function handleStreamCompletion(
 
 		// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
 		// This prevents the message from briefly disappearing
-		await chatDb.messages.put(result.responseMessage);
+		await putChatMessage(result.responseMessage);
 
 		// Clear the streaming message AFTER writing to Dexie
 		// The useLiveQuery will pick up the new message from DB
@@ -518,7 +519,7 @@ function createChatIncrementalSaver(
 ): (events: any[], isFinal: boolean) => Promise<void> {
 	return async (_events: any[], isFinal: boolean) => {
 		// Save the message in its current state (already updated by subscriber)
-		await chatDb.messages.put(responseMessage);
+		await putChatMessage(responseMessage);
 
 		// Save local/global state if present
 		if (localStateRef.current) {
@@ -765,13 +766,38 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		};
 	}, [sessionIdParameter, executionEngine]);
 
+	// liveQuery re-materializes every row on any table write. Handing back the
+	// previously materialized object while a message's rev is unchanged keeps
+	// settled rows identity-stable, so the memoized MessageComponent (and the
+	// widget content-key stringifies below it) skip untouched messages during
+	// streaming saves. Every writer bumps rev via putChatMessage.
+	const materializedMessages = useRef(new Map<string, IMessage>());
 	const messagesQuery = useLiveQuery(async () => {
 		if (!sessionIdParameter) return [];
 		const rawMessages = await chatDb.messages
 			.where("sessionId")
 			.equals(sessionIdParameter)
 			.sortBy("timestamp");
-		return deduplicateConsecutiveMessages(rawMessages);
+		const cache = materializedMessages.current;
+		const stable = deduplicateConsecutiveMessages(rawMessages).map((row) => {
+			const cached = cache.get(row.id);
+			if (
+				cached &&
+				(cached.rev ?? 0) === (row.rev ?? 0) &&
+				cached.timestamp === row.timestamp
+			) {
+				return cached;
+			}
+			cache.set(row.id, row);
+			return row;
+		});
+		if (cache.size > stable.length * 2 + 32) {
+			const live = new Set(stable.map((m) => m.id));
+			for (const id of cache.keys()) {
+				if (!live.has(id)) cache.delete(id);
+			}
+		}
+		return stable;
 	}, [sessionIdParameter]);
 
 	const messagesLoaded = messagesQuery !== undefined;
@@ -1584,7 +1610,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				delete nextMessage.ratingSettings;
 			}
 
-			await chatDb.messages.put(nextMessage);
+			await putChatMessage(nextMessage);
 
 			if (
 				updates.rating !== undefined ||
@@ -1754,7 +1780,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// Only persist a new assistant message when the action produced chat
 			// content; a pure in-place widget update leaves no residue.
 			if (hasContent) {
-				await chatDb.messages.put(responseMessage);
+				await putChatMessage(responseMessage);
 			}
 			chatRef.current?.clearCurrentMessageUpdate();
 			if (hasContent) {

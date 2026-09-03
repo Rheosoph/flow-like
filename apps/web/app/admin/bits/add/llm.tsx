@@ -2,6 +2,7 @@ import {
 	type IBit,
 	type IBitModelClassification,
 	type ILlmParameters,
+	IModelApiSurface,
 	type IModelProvider,
 	Input,
 	Select,
@@ -22,6 +23,11 @@ import {
 import { Label } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import type { Dispatch, SetStateAction } from "react";
+
+const API_SURFACE_OPTIONS = [
+	{ value: IModelApiSurface.ChatCompletions, label: "Chat Completions" },
+	{ value: IModelApiSurface.Responses, label: "Responses" },
+] as const;
 
 export function LLMConfiguration({
 	bit,
@@ -56,6 +62,12 @@ export function LLMConfiguration({
 			[key]: value,
 		});
 	};
+
+	// Local and MLX models run in-process; only remote OpenAI-compatible
+	// endpoints have a choice of API surface.
+	const supportsApiSurface = !["local", "mlx"].includes(
+		parameters?.provider?.provider_name?.trim().toLowerCase() ?? "",
+	);
 
 	return (
 		<div className="space-y-6 w-full max-w-screen-lg">
@@ -170,6 +182,40 @@ export function LLMConfiguration({
 								placeholder={t("optionalVersion", "Optional version")}
 							/>
 						</div>
+
+						{supportsApiSurface ? (
+							<div className="space-y-2">
+								<Label htmlFor="api-surface">
+									{t("apiSurface", "API Surface")}
+								</Label>
+								<Select
+									value={
+										parameters?.provider?.api_surface ??
+										IModelApiSurface.ChatCompletions
+									}
+									onValueChange={(value) =>
+										updateProvider("api_surface", value)
+									}
+								>
+									<SelectTrigger id="api-surface">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{API_SURFACE_OPTIONS.map((option) => (
+											<SelectItem key={option.value} value={option.value}>
+												{option.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<p className="text-xs text-muted-foreground">
+									{t(
+										"apiSurfaceHint",
+										"Which upstream API the model speaks. Responses is required by newer OpenAI models.",
+									)}
+								</p>
+							</div>
+						) : null}
 					</div>
 				</CardContent>
 			</Card>

@@ -14,6 +14,8 @@ pub struct Model {
     pub event_id: String,
     #[sea_orm(column_name = "eventVersion", column_type = "Text")]
     pub event_version: String,
+    #[sea_orm(column_type = "Text")]
+    pub variant: String,
     #[sea_orm(column_name = "nodeId", column_type = "Text")]
     pub node_id: String,
     #[sea_orm(column_type = "Text")]

@@ -22,6 +22,7 @@ import {
 	resolveEventBoardVersion,
 	withBoardVersion,
 } from "../../lib/schema/flow/board-version";
+import { classifyPageContractError } from "../../lib/page-contract-drift";
 import type { ILogMetadata } from "../../lib/schema/flow/log-metadata";
 import {
 	mayDispatchRawPageBoardAction,
@@ -1628,6 +1629,13 @@ export function useExecuteAction() {
 								});
 							} catch (error) {
 								console.error("Failed to execute workflow event:", error);
+								// A Page whose Board moved under it fails for a reason the
+								// user can do nothing about and did not cause. The transports
+								// have already asked the Page to refetch itself, so say that
+								// rather than blaming the workflow.
+								const contractFailure = pageAction
+									? classifyPageContractError(error)
+									: null;
 								notifyLivePageRun(surfaceId, {
 									status: "error",
 									componentId: triggeringComponentId ?? undefined,
@@ -1638,21 +1646,33 @@ export function useExecuteAction() {
 										error instanceof Error ? error.message : String(error),
 									endedAtMs: Date.now(),
 								});
-								toast.error(
-									i18next.t(
-										"workflowExecutionFailed",
-										"Workflow execution failed",
-									),
-									{
-										description:
-											error instanceof Error
-												? error.message
-												: i18next.t(
-														"theWorkflowCouldNotBeStarted",
-														"The workflow could not be started.",
-													),
-									},
-								);
+								if (contractFailure) {
+									toast.info(
+										i18next.t("thisPageChanged", "This Page changed"),
+										{
+											description: i18next.t(
+												"refreshingThisPageTryThatAgainInAMoment",
+												"Refreshing it now — try that again in a moment.",
+											),
+										},
+									);
+								} else {
+									toast.error(
+										i18next.t(
+											"workflowExecutionFailed",
+											"Workflow execution failed",
+										),
+										{
+											description:
+												error instanceof Error
+													? error.message
+													: i18next.t(
+															"theWorkflowCouldNotBeStarted",
+															"The workflow could not be started.",
+														),
+										},
+									);
+								}
 							}
 						} else {
 							console.warn("Missing required context for workflow_event:", {

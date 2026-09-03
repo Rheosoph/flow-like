@@ -16,6 +16,7 @@ use std::{
 use urlencoding::{decode, encode};
 mod helper;
 pub mod local_store;
+pub mod read_only_store;
 #[cfg(feature = "smb")]
 pub mod smb_store;
 
@@ -228,6 +229,17 @@ impl Cacheable for FlowLikeStore {
 }
 
 impl FlowLikeStore {
+    /// Wrap this store in a [`read_only_store::ReadOnlyStore`] decorator: every
+    /// mutating operation fails with a clear "shadow runs cannot write app
+    /// storage" error while reads delegate unchanged. Signing is deliberately
+    /// unavailable on the wrapped store (`Other` stores cannot sign), which
+    /// fails closed rather than minting a writable URL for a shadow run.
+    pub fn read_only(&self) -> FlowLikeStore {
+        FlowLikeStore::Other(Arc::new(read_only_store::ReadOnlyStore::new(
+            self.as_generic(),
+        )))
+    }
+
     pub fn as_generic(&self) -> Arc<dyn ObjectStore> {
         match self {
             FlowLikeStore::Local(store) => store.clone() as Arc<dyn ObjectStore>,

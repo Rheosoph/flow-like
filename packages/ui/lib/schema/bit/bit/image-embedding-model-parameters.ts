@@ -14,6 +14,7 @@ export enum IPooling {
 }
 
 export interface IModelProvider {
+	api_surface?: null | IModelApiSurface;
 	model_id?: null | string;
 	params?: { [key: string]: any } | null;
 	provider_name: string;
@@ -31,4 +32,9 @@ export interface IRemoteExecutionConfig {
 
 export enum IRemoteEmbeddingProvider {
 	Internal = "Internal",
+}
+
+export enum IModelApiSurface {
+	ChatCompletions = "ChatCompletions",
+	Responses = "Responses",
 }

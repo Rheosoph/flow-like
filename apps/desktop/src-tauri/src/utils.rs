@@ -128,6 +128,125 @@ where
     emit_throttled(app, UiEmitTarget::Main, event, payload, min_interval);
 }
 
+struct PendingEventBatch {
+    events: Vec<flow_like_types::intercom::InterComEvent>,
+    target: UiEmitTarget,
+    event_name: String,
+    last_emit: Option<Instant>,
+    trailing_scheduled: bool,
+}
+
+static PENDING_BATCHES: OnceLock<Mutex<HashMap<String, PendingEventBatch>>> = OnceLock::new();
+
+fn pending_batches() -> &'static Mutex<HashMap<String, PendingEventBatch>> {
+    PENDING_BATCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Throttled emitter for intercom event batches. Unlike [`emit_throttled`],
+/// which is for latest-state-wins payloads and DISCARDS anything arriving
+/// inside the throttle window, this never drops content: a throttled batch is
+/// appended to a pending buffer and delivered by a trailing flush once the
+/// window elapses. Event streams rebuilt by accumulating deltas (chat tokens)
+/// must go through this.
+pub fn emit_event_batch_throttled(
+    app: &AppHandle,
+    target: UiEmitTarget,
+    event: &str,
+    events: Vec<flow_like_types::intercom::InterComEvent>,
+    min_interval: Duration,
+) {
+    if events.is_empty() {
+        return;
+    }
+    let key = match &target {
+        UiEmitTarget::Main => format!("{event}::main"),
+        UiEmitTarget::Label(label) => format!("{event}::label::{label}"),
+        UiEmitTarget::All => format!("{event}::all"),
+    };
+
+    let emit_now = {
+        let mut map = pending_batches()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = map.entry(key.clone()).or_insert_with(|| PendingEventBatch {
+            events: Vec::new(),
+            target: target.clone(),
+            event_name: event.to_string(),
+            last_emit: None,
+            trailing_scheduled: false,
+        });
+        entry.events.extend(events);
+        entry.target = target;
+        if entry.trailing_scheduled {
+            // The already-scheduled flush will carry these events.
+            false
+        } else if entry
+            .last_emit
+            .is_none_or(|last| last.elapsed() >= min_interval)
+        {
+            true
+        } else {
+            entry.trailing_scheduled = true;
+            let delay = min_interval
+                .saturating_sub(entry.last_emit.map(|last| last.elapsed()).unwrap_or_default());
+            let app = app.clone();
+            let trailing_key = key.clone();
+            tauri::async_runtime::spawn(async move {
+                flow_like_types::tokio::time::sleep(delay).await;
+                flush_pending_event_batch(&app, &trailing_key);
+            });
+            false
+        }
+    };
+
+    if emit_now {
+        flush_pending_event_batch(app, &key);
+    }
+}
+
+fn flush_pending_event_batch(app: &AppHandle, key: &str) {
+    let flushed = {
+        let mut map = pending_batches()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.get_mut(key).and_then(|entry| {
+            entry.trailing_scheduled = false;
+            if entry.events.is_empty() {
+                return None;
+            }
+            entry.last_emit = Some(Instant::now());
+            Some((
+                entry.target.clone(),
+                entry.event_name.clone(),
+                std::mem::take(&mut entry.events),
+            ))
+        })
+    };
+    let Some((target, event_name, events)) = flushed else {
+        return;
+    };
+
+    emit_on_main_thread(app, &event_name.clone(), move |app| match target {
+        UiEmitTarget::Main => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.emit(&event_name, events);
+            } else {
+                let _ = app.emit_to("main", &event_name, events);
+            }
+        }
+        UiEmitTarget::Label(label) => {
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.emit(&event_name, events);
+            }
+        }
+        UiEmitTarget::All => {
+            for (_, window) in app.webview_windows() {
+                let _ = window.emit(&event_name, &events);
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

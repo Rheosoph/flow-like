@@ -13,9 +13,10 @@
 //! best-effort by construction: a failure to record a rejection must never
 //! change the response the caller already earned.
 
+use super::{format_run_version, normalize_run_version_label};
 use crate::credentials::CredentialsAccess;
 use crate::entity::execution_run;
-use crate::entity::sea_orm_active_enums::{RunMode, RunStatus};
+use crate::entity::sea_orm_active_enums::{RunMode, RunStatus, RunVariant};
 use crate::state::AppState;
 use flow_like::flow::execution::rejection::{RejectedRun, record_rejection};
 
@@ -107,7 +108,9 @@ impl RejectedRunContext {
     pub fn with_board(mut self, board_id: impl Into<String>, version: Option<String>) -> Self {
         let board_id = board_id.into();
         self.board_id = (!board_id.is_empty()).then_some(board_id);
-        self.version = version;
+        // Event rows carry the dotted board version; the run row's label is
+        // canonically `v{major}-{minor}-{patch}`.
+        self.version = version.as_deref().map(normalize_run_version_label);
         self
     }
 
@@ -130,9 +133,7 @@ impl RejectedRunContext {
         self.node_id = Some(event.node_id.clone());
         self.event_id = Some(event.id.clone());
         self.event_version = Some(format!("{}.{}.{}", major, minor, patch));
-        self.version = event
-            .board_version
-            .map(|(major, minor, patch)| format!("v{}-{}-{}", major, minor, patch));
+        self.version = event.board_version.map(format_run_version);
         self
     }
 
@@ -339,6 +340,10 @@ async fn record_run_row(
         node_id: Set(context.node_id.clone()),
         status: Set(RunStatus::Failed),
         mode: Set(context.mode.clone()),
+        run_variant: Set(RunVariant::Primary),
+        variant_name: Set(None),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(FATAL_LOG_LEVEL),
         input_payload_len: Set(context.payload_len()),
         input_payload_key: Set(None),

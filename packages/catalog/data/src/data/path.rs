@@ -398,6 +398,13 @@ impl FlowPath {
             context.set_cache(&cache_layer_hash, cacheable_store).await;
 
             let credentials_store = credentials.to_store(false).await?;
+            // The credential store bypasses the execution cache's wrapped
+            // stores, so a shadow run must wrap it read-only here too.
+            let credentials_store = if exec_context.shadow {
+                credentials_store.read_only()
+            } else {
+                credentials_store
+            };
             let cacheable_credentials_store: Arc<dyn Cacheable> = Arc::new(credentials_store);
             context
                 .set_cache(&store_hash, cacheable_credentials_store)

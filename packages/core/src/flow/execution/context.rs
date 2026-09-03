@@ -96,6 +96,21 @@ pub struct ExecutionContextCache {
     pub board_id: String,
     pub node_id: Arc<str>,
     pub sub: String,
+    /// Shadow/replay isolation: `stores` already carries read-only wrappers for
+    /// app storage, user store and app meta store; consumers that resolve their
+    /// own store (credential bypasses) must check this flag and wrap too.
+    pub shadow: bool,
+}
+
+/// The stores a shadow run may not write. A write through any of them fails
+/// loudly instead of silently no-oping — a fabricated success would make a
+/// shadow-run diff a lie. The temporary store stays writable (scratch) and the
+/// log store keeps recording the run itself.
+fn shadow_isolated_stores(mut stores: FlowLikeStores) -> FlowLikeStores {
+    stores.app_storage_store = stores.app_storage_store.map(|store| store.read_only());
+    stores.user_store = stores.user_store.map(|store| store.read_only());
+    stores.app_meta_store = stores.app_meta_store.map(|store| store.read_only());
+    stores
 }
 
 impl ExecutionContextCache {
@@ -104,7 +119,7 @@ impl ExecutionContextCache {
         state: &Arc<FlowLikeState>,
         node_id: Arc<str>,
     ) -> Option<Self> {
-        let (app_id, model_usage_app_id, board_dir, board_id, sub) = match run.upgrade() {
+        let (app_id, model_usage_app_id, board_dir, board_id, sub, shadow) = match run.upgrade() {
             Some(run) => {
                 let run = run.lock().await;
                 let app_id = run.app_id.clone();
@@ -117,12 +132,16 @@ impl ExecutionContextCache {
                     board.board_dir.clone(),
                     board.id.clone(),
                     sub,
+                    run.shadow,
                 )
             }
             None => return None,
         };
 
-        let stores = state.config.read().await.stores.clone();
+        let mut stores = state.config.read().await.stores.clone();
+        if shadow {
+            stores = shadow_isolated_stores(stores);
+        }
 
         Some(ExecutionContextCache {
             stores,
@@ -132,6 +151,7 @@ impl ExecutionContextCache {
             board_id,
             node_id,
             sub,
+            shadow,
         })
     }
 
@@ -141,7 +161,10 @@ impl ExecutionContextCache {
         state: &Arc<FlowLikeState>,
         node_id: Arc<str>,
     ) -> Self {
-        let stores = state.config.read().await.stores.clone();
+        let mut stores = state.config.read().await.stores.clone();
+        if meta.shadow {
+            stores = shadow_isolated_stores(stores);
+        }
 
         ExecutionContextCache {
             stores,
@@ -151,6 +174,7 @@ impl ExecutionContextCache {
             board_id: meta.board_id.clone(),
             node_id,
             sub: meta.sub.clone(),
+            shadow: meta.shadow,
         }
     }
 
@@ -249,7 +273,11 @@ pub struct ExecutionContext {
     pub credentials: Option<Arc<SharedCredentials>>,
     pub delegated: bool,
     pub context_state: BTreeMap<String, Value>,
-    pub context_pin_overrides: Option<BTreeMap<String, Value>>,
+    /// Values are shared, not owned: `create_sub_context` clones this map once per node
+    /// execution and `push_sub_context` drops a colliding entry per merged key. Holding
+    /// the JSON behind an `Arc` makes both costs proportional to the key count instead of
+    /// the bytes of JSON in scope, which is what a loop-heavy function scope accumulates.
+    pub context_pin_overrides: Option<BTreeMap<String, Arc<Value>>>,
     pub result: Option<Value>,
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     /// Reply conduit to the run's client; `None` only for contexts built without a run.
@@ -391,7 +419,7 @@ impl ExecutionContext {
         Some(ModelUsageContext {
             app_id: cache.model_usage_app_id.clone(),
             run_id: Some(self.run_id.clone()),
-            api_base_url: (!self.profile.hub.trim().is_empty()).then(|| self.profile.hub.clone()),
+            api_base_url: crate::hub::hub_origin(&self.profile.hub, self.profile.secure),
         })
     }
 
@@ -487,13 +515,13 @@ impl ExecutionContext {
     }
 
     pub fn override_pin_value(&mut self, pin_id: &str, value: Value) {
-        if self.context_pin_overrides.is_none() {
-            self.context_pin_overrides = Some(BTreeMap::new());
-        }
+        self.override_pin_value_shared(pin_id, Arc::new(value));
+    }
 
-        if let Some(overrides) = &mut self.context_pin_overrides {
-            overrides.insert(pin_id.to_string(), value);
-        }
+    pub fn override_pin_value_shared(&mut self, pin_id: &str, value: Arc<Value>) {
+        self.context_pin_overrides
+            .get_or_insert_with(BTreeMap::new)
+            .insert(pin_id.to_string(), value);
     }
 
     /// Mirror a pin value into an already active isolation scope.
@@ -505,7 +533,7 @@ impl ExecutionContext {
     /// already expects shared-pin semantics.
     pub fn override_pin_value_if_active(&mut self, pin_id: &str, value: &Value) {
         if let Some(overrides) = &mut self.context_pin_overrides {
-            overrides.insert(pin_id.to_string(), value.clone());
+            overrides.insert(pin_id.to_string(), Arc::new(value.clone()));
         }
     }
 
@@ -1064,7 +1092,10 @@ impl ExecutionContext {
         // The shared pin write keeps bridge pin chains, get_raw_value() checks,
         // and other non-override-aware code paths working.
         if self.context_pin_overrides.is_some() {
-            self.override_pin_value(pin_id, value.clone());
+            let shared = Arc::new(value);
+            self.override_pin_value_shared(pin_id, shared.clone());
+            pin.set_value(shared.as_ref().clone()).await;
+            return Ok(());
         }
 
         pin.set_value(value).await;

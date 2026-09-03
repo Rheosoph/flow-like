@@ -64,7 +64,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-log = "2.8.0"
 tauri-plugin-notification = "2.3.3"
-tauri-plugin-dialog = "2.6.0"
+tauri-plugin-dialog = "2.7.2"
 tauri-plugin-deep-link = "2.4.6"
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-http = "2.5.6"

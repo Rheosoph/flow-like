@@ -662,6 +662,32 @@ describe("UpdateProvider", () => {
 		expect(update.downloadAndInstall).not.toHaveBeenCalled();
 	});
 
+	test("keeps checking after a failed prompt instead of latching the pending update", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		let intervalCallback: (() => void) | undefined;
+		vi.spyOn(browserWindow, "setInterval").mockImplementation((handler) => {
+			intervalCallback = () => handler();
+			return {} as ReturnType<typeof browserWindow.setInterval>;
+		});
+		const update = fakeUpdate("0.1.8");
+		mocks.check.mockResolvedValue(update);
+		mocks.confirm.mockRejectedValue(new Error("dialog unavailable"));
+
+		await mountProvider();
+
+		await vi.waitFor(() => {
+			expect(mocks.check).toHaveBeenCalledTimes(1);
+			expect(intervalCallback).toBeDefined();
+		});
+		// The failed prompt must release the native resource, otherwise
+		// `checkForUpdate` short-circuits on `pendingUpdate` for the whole session.
+		await vi.waitFor(() => expect(update.close).toHaveBeenCalledTimes(1));
+
+		intervalCallback?.();
+
+		await vi.waitFor(() => expect(mocks.check).toHaveBeenCalledTimes(2));
+	});
+
 	test("reports a repeated automatic check failure only once per failure streak", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);

@@ -4,6 +4,11 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 import { ApiResponseError, apiResponseError } from "./api-error";
+import {
+	DEFAULT_CONNECT_TIMEOUT_MS,
+	STREAM_HEADER_TIMEOUT_MS,
+	withRequestDeadline,
+} from "./request-deadline";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"analytics",
@@ -134,14 +139,19 @@ function parseSSEBuffer(buffer: string): {
 		if (!part.trim()) continue;
 
 		let event: string | undefined;
-		let data = "";
+		const dataLines: string[] = [];
 		let id: string | undefined;
 
 		for (const line of part.split("\n")) {
 			if (line.startsWith("event:")) {
 				event = line.slice(6).trim();
 			} else if (line.startsWith("data:")) {
-				data = line.slice(5).trim();
+				// A payload containing newlines arrives as one data: line per
+				// newline — accumulate, never overwrite. Only the optional
+				// single leading space is stripped; trimming would destroy
+				// whitespace-only tokens.
+				const value = line.slice(5);
+				dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
 			} else if (line.startsWith("id:")) {
 				id = line.slice(3).trim();
 			} else if (line.startsWith(":")) {
@@ -150,8 +160,8 @@ function parseSSEBuffer(buffer: string): {
 			}
 		}
 
-		if (data) {
-			events.push({ event, data, id, raw: part });
+		if (dataLines.length > 0) {
+			events.push({ event, data: dataLines.join("\n"), id, raw: part });
 		}
 	}
 
@@ -201,17 +211,32 @@ async function streamFetcherRaw<T>(
 	onMessage?: (data: T) => void,
 ): Promise<void> {
 	const abortController = new AbortController();
-	const response = await tauriFetch(url, {
-		method: options?.method ?? "POST",
-		headers: {
-			Accept: "text/event-stream",
-			"Content-Type": "application/json",
-			...((options?.headers as Record<string, string>) ?? {}),
-			...authHeader,
+	// Bounded until headers arrive, then released — the reader below owns
+	// `abortController` and terminates the long-lived stream through it.
+	const response = await withRequestDeadline(
+		url,
+		async ({ signal, release }) => {
+			const res = await tauriFetch(url, {
+				method: options?.method ?? "POST",
+				headers: {
+					Accept: "text/event-stream",
+					"Content-Type": "application/json",
+					...((options?.headers as Record<string, string>) ?? {}),
+					...authHeader,
+				},
+				body: options?.body,
+				connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+				signal,
+			});
+			release();
+			return res;
 		},
-		body: options?.body,
-		signal: abortController.signal,
-	});
+		{
+			timeoutMs: STREAM_HEADER_TIMEOUT_MS,
+			signal: options?.signal,
+			controller: abortController,
+		},
+	);
 
 	if (!response.ok) {
 		const errorText = await response.text();
@@ -248,14 +273,21 @@ async function streamFetcherRaw<T>(
 			const { events, remaining } = parseSSEBuffer(buffer);
 			buffer = remaining;
 
+			// Deliver the whole decoded batch before acting on a terminal
+			// event — the executor coalesces trailing chat_out/usage events
+			// into the same network chunk as `completed`.
+			let terminal = false;
 			for (const event of events) {
 				const result = processSSEEvent(event, onMessage);
 				if (result === "completed" || result === "error") {
 					console.log("[SSE Debug] Received terminal event:", result);
-					// Use AbortController to cleanly terminate the stream
-					abortController.abort();
-					return;
+					terminal = true;
 				}
+			}
+			if (terminal) {
+				// Use AbortController to cleanly terminate the stream
+				abortController.abort();
+				return;
 			}
 		}
 	} finally {

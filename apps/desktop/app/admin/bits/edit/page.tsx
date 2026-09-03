@@ -13,6 +13,7 @@ import {
 	IBitTypes,
 	type ILlmParameters,
 	type IMetadata,
+	IModelApiSurface,
 	type IModelProvider,
 	type IVlmParameters,
 	Input,
@@ -115,6 +116,20 @@ function isMlxProviderName(providerName?: null | string) {
 	return providerName?.trim().toLowerCase() === "mlx";
 }
 
+const API_SURFACE_OPTIONS = [
+	{ value: IModelApiSurface.ChatCompletions, label: "Chat Completions" },
+	{ value: IModelApiSurface.Responses, label: "Responses" },
+] as const;
+
+// Keeps an unset surface unset — the Rust side reads `null` as "the provider's
+// historical default", which is not the same as an explicit ChatCompletions.
+function parseApiSurface(value: unknown): IModelApiSurface | null {
+	if (value === IModelApiSurface.Responses) return IModelApiSurface.Responses;
+	if (value === IModelApiSurface.ChatCompletions)
+		return IModelApiSurface.ChatCompletions;
+	return null;
+}
+
 function getProviderParams(
 	provider: IModelProvider | Record<string, unknown> | undefined,
 ) {
@@ -153,6 +168,7 @@ function normalizeModelParameters(
 			model_id:
 				typeof provider.model_id === "string" ? provider.model_id : null,
 			version: typeof provider.version === "string" ? provider.version : null,
+			api_surface: parseApiSurface(provider.api_surface),
 			params: isHostedProviderName(providerName)
 				? getHostedProviderParams(provider)
 				: getProviderParams(provider),
@@ -1071,6 +1087,49 @@ export default function EditBitsPage() {
 															}
 														/>
 													</div>
+													{draftIsMlx ? null : (
+														<div className="space-y-2">
+															<Label htmlFor="bit-api-surface">
+																{t("apiSurface", "API Surface")}
+															</Label>
+															<Select
+																value={
+																	parseApiSurface(
+																		modelParameters.provider.api_surface,
+																	) ?? IModelApiSurface.ChatCompletions
+																}
+																onValueChange={(value) =>
+																	updateStructuredParameters((current) => ({
+																		...current,
+																		provider: {
+																			...current.provider,
+																			api_surface: parseApiSurface(value),
+																		},
+																	}))
+																}
+															>
+																<SelectTrigger id="bit-api-surface">
+																	<SelectValue />
+																</SelectTrigger>
+																<SelectContent>
+																	{API_SURFACE_OPTIONS.map((option) => (
+																		<SelectItem
+																			key={option.value}
+																			value={option.value}
+																		>
+																			{option.label}
+																		</SelectItem>
+																	))}
+																</SelectContent>
+															</Select>
+															<p className="text-xs text-muted-foreground">
+																{t(
+																	"apiSurfaceHint",
+																	"Which upstream API the model speaks. Responses is required by newer OpenAI models.",
+																)}
+															</p>
+														</div>
+													)}
 													{draftIsHosted ? (
 														<div className="space-y-2 md:col-span-2">
 															<Label htmlFor="bit-provider-tier">

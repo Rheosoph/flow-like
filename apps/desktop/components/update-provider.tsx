@@ -539,7 +539,10 @@ export function UpdateProvider() {
 					{ currentVersion, targetVersion },
 				),
 			);
-			await setTrayAvailability(false);
+			// Fire-and-forget: `tray_update_state` hops to the macOS main thread with
+			// no timeout, and the process is about to restart anyway. Awaiting it would
+			// put a native round trip on the critical path of a completed install.
+			void setTrayAvailability(false);
 			await closeUpdate(update);
 
 			if (active) {
@@ -641,6 +644,12 @@ export function UpdateProvider() {
 					},
 				);
 			} catch (error) {
+				// A failed prompt must not retain `pendingUpdate`: `checkForUpdate`
+				// short-circuits on it, so keeping it would disable every later check
+				// for the rest of the session and leak the native handle. Retry runs a
+				// fresh check rather than reusing the closed resource.
+				pendingUpdate = null;
+				await closeUpdate(update);
 				if (!active) return;
 				showError(
 					t(
@@ -650,7 +659,7 @@ export function UpdateProvider() {
 					"prompt",
 					error,
 					() => {
-						void promptForUpdate(update, "retry");
+						void checkForUpdate("retry");
 					},
 					{
 						...updaterVersionContext(update),

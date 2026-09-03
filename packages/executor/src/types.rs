@@ -69,6 +69,10 @@ pub struct ExecutionRequest {
     /// Channel credentials minted by the API: how this run waits for client replies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelGrant>,
+    /// Shadow/replay isolation: the run must not write app storage. Validated
+    /// against the signed executor JWT claim before execution starts.
+    #[serde(default)]
+    pub shadow: bool,
 }
 
 /// Result of an execution
@@ -205,6 +209,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             profile: p.profile,
             wasm_packages: p.wasm_packages,
             channel: p.channel,
+            shadow: p.shadow,
         })
     }
 }

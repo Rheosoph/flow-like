@@ -105,6 +105,8 @@ pub enum Relation {
     EventRemoteAuth,
     #[sea_orm(has_many = "super::event_remote_registration::Entity")]
     EventRemoteRegistration,
+    #[sea_orm(has_many = "super::event_setup::Entity")]
+    EventSetup,
     #[sea_orm(has_many = "super::event_sink::Entity")]
     EventSink,
     #[sea_orm(has_many = "super::execution_run::Entity")]
@@ -131,6 +133,10 @@ pub enum Relation {
     Page,
     #[sea_orm(has_many = "super::publication_request::Entity")]
     PublicationRequest,
+    #[sea_orm(has_many = "super::regression_suite::Entity")]
+    RegressionSuite,
+    #[sea_orm(has_many = "super::regression_suite_run::Entity")]
+    RegressionSuiteRun,
     #[sea_orm(
         belongs_to = "super::role::Entity",
         from = "Column::DefaultRoleId",
@@ -281,6 +287,12 @@ impl Related<super::event_remote_registration::Entity> for Entity {
     }
 }
 
+impl Related<super::event_setup::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventSetup.def()
+    }
+}
+
 impl Related<super::event_sink::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::EventSink.def()
@@ -356,6 +368,18 @@ impl Related<super::page::Entity> for Entity {
 impl Related<super::publication_request::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::PublicationRequest.def()
+    }
+}
+
+impl Related<super::regression_suite::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::RegressionSuite.def()
+    }
+}
+
+impl Related<super::regression_suite_run::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::RegressionSuiteRun.def()
     }
 }
 

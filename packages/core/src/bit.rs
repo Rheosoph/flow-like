@@ -880,6 +880,7 @@ impl Default for TtsModelParameters {
         Self {
             model_type: TtsModelType::default(),
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: "local:any-tts".to_string(),
                 model_id: None,
                 version: None,
@@ -966,6 +967,7 @@ impl Default for SttModelParameters {
         Self {
             model_type: SttModelType::default(),
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: STT_LOCAL_PROVIDER.to_string(),
                 model_id: None,
                 version: None,
@@ -1731,6 +1733,7 @@ mod tests {
         let parameters = VLMParameters {
             context_length: 8192,
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: "Local".to_string(),
                 model_id: None,
                 version: None,
@@ -1797,6 +1800,7 @@ mod tests {
         include_processor: bool,
     ) -> Bit {
         let provider = ModelProvider {
+            api_surface: None,
             provider_name: MLX_PROVIDER_NAME.to_string(),
             model_id: Some(repo_id.to_string()),
             version: Some(revision.to_string()),
@@ -2353,6 +2357,7 @@ mod tests {
         let parameters = LLMParameters {
             context_length: 4096,
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: "mlx".to_string(),
                 model_id: Some("mlx-community/test".to_string()),
                 version: None,

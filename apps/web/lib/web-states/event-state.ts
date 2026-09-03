@@ -2,26 +2,52 @@ import {
 	type IBoard,
 	type IEvent,
 	type IEventState,
+	type IEventVariant,
 	type IHub,
 	type IIntercomEvent,
 	type ILogMetadata,
 	type IOAuthProvider,
 	type IOAuthToken,
-	type PageTrigger,
 	type IRunPayload,
 	type IVersionType,
+	type PageTrigger,
 	type ProgressToastData,
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
+	classifyPageContractError,
 	finishAllProgressToasts,
 	getCurrentPageContext,
+	notifyPageContractRejected,
 	serializePageTrigger,
 	showProgressToast,
+	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
+import {
+	apiResponseError,
+	isMissingResourceError,
+} from "@flow-like/flow-like-ui/lib/api-error";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type {
+	ICanaryExplainResult,
+	ICanaryPromoteResult,
 	IEventAlias,
+	IEventCorpusResult,
+	IEventRunsResult,
+	IEventSetupInfo,
+	IEventTimeline,
+	IEventTimelineRun,
+	IEventVariantSharePatch,
+	IEventVariantStatsResult,
+	IEventVariantStatsWindow,
 	IListRegistrationsResponse,
+	IPutRegressionSuiteRequest,
+	IRegressionCorpusPayload,
+	IRegressionFixtureSummary,
+	IRegressionRunAccepted,
+	IRegressionSuiteResult,
+	IRegressionSuiteRunDetail,
+	IRegressionSuiteRunSummary,
+	IRestorePlanResult,
 	ISetupEventResponse,
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
@@ -32,6 +58,7 @@ import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
+	apiPatch,
 	apiPost,
 	apiPut,
 	getApiBaseUrl,
@@ -112,6 +139,29 @@ function handleProgressEvent(event: IIntercomEvent): void {
 	const payload = event.payload as ProgressToastData;
 	if (!payload?.id) return;
 	showProgressToast(payload);
+}
+
+/**
+ * Tell any mounted Page that the authority refused this trigger for a reason a
+ * refreshed contract can cure. Only classified contract failures publish — a
+ * routing or permission refusal is not something a refetch fixes, and treating
+ * it as one is how a refetch loop starts. Never called on success.
+ */
+function reportPageContractRejection(
+	appId: string,
+	eventId: string,
+	trigger: PageTrigger | undefined,
+	error: unknown,
+): void {
+	if (!trigger) return;
+	const failure = classifyPageContractError(error);
+	if (!failure) return;
+	notifyPageContractRejected({
+		appId,
+		eventId,
+		renderedRevision: trigger.manifestRevision,
+		reason: failure,
+	});
 }
 
 export class WebEventState implements IEventState {
@@ -343,10 +393,34 @@ export class WebEventState implements IEventState {
 		const oauthOptions = {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
 		};
-		const oauthResult = pageTrigger
+		// The prerun resolves the trigger server-side, so it both answers with the
+		// revision the server currently holds AND is where a removed action is
+		// refused — before the invoke is ever built. Substitute the fresh revision
+		// so the click runs with current authority; on a refusal, tell the mounted
+		// Page to refetch instead of letting the reason die here.
+		let activeTrigger = pageTrigger;
+		let pagePrerun: IPrerunEventResponse | undefined;
+		if (pageTrigger) {
+			try {
+				pagePrerun = await this.prerunEvent(
+					appId,
+					eventId,
+					undefined,
+					pageTrigger,
+				);
+			} catch (error) {
+				reportPageContractRejection(appId, eventId, pageTrigger, error);
+				throw error;
+			}
+			activeTrigger = withCurrentManifestRevision(
+				pageTrigger,
+				pagePrerun.manifest_revision,
+			);
+		}
+
+		const oauthResult = pagePrerun
 			? await checkOAuthTokensFromPrerun(
-					(await this.prerunEvent(appId, eventId, undefined, pageTrigger))
-						.oauth_requirements,
+					pagePrerun.oauth_requirements,
 					oauthTokenStore,
 					hub,
 					oauthOptions,
@@ -444,14 +518,19 @@ export class WebEventState implements IEventState {
 					oauth_tokens: oauthTokens,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
-					page_trigger: pageTrigger
-						? serializePageTrigger(pageTrigger)
+					page_trigger: activeTrigger
+						? serializePageTrigger(activeTrigger)
 						: undefined,
 				}),
 			});
 
 			if (!response.ok) {
-				throw new Error(`Event execution failed: ${response.status}`);
+				// The status alone destroys the server's reason, which is the only
+				// thing that tells a Page contract failure apart from any other 400.
+				const body = await response.text().catch(() => "");
+				const error = apiResponseError(response, body, url);
+				reportPageContractRejection(appId, eventId, activeTrigger, error);
+				throw error;
 			}
 
 			// Always consume the SSE stream - the API always returns one
@@ -482,7 +561,10 @@ export class WebEventState implements IEventState {
 							if (line.startsWith("event:")) {
 								eventName = line.slice(6).trim();
 							} else if (line.startsWith("data:")) {
-								dataLines.push(line.slice(5).trim());
+								// Strip only the optional single leading space —
+								// trimming destroys whitespace-only tokens.
+								const value = line.slice(5);
+								dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
 							} else if (line.startsWith(":")) {
 								continue;
 							}
@@ -490,7 +572,7 @@ export class WebEventState implements IEventState {
 
 						const eventData = dataLines.join("\n");
 
-						if (!eventData || eventData === "keep-alive") continue;
+						if (!eventData.trim() || eventData === "keep-alive") continue;
 
 						try {
 							const event = JSON.parse(eventData) as IIntercomEvent;
@@ -523,7 +605,9 @@ export class WebEventState implements IEventState {
 								cb([event]);
 							}
 
-							// Check for terminal events
+							// Note the terminal event but keep delivering the rest of
+							// the decoded batch — the executor coalesces trailing
+							// chat_out/usage events into the same network chunk.
 							if (
 								eventName === "done" ||
 								eventName === "completed" ||
@@ -531,17 +615,19 @@ export class WebEventState implements IEventState {
 							) {
 								executionFinished = true;
 								finishAllProgressToasts(true);
-								break;
-							}
-							if (event.event_type === "error") {
+							} else if (event.event_type === "error") {
 								executionFinished = true;
 								finishAllProgressToasts(false);
-								break;
 							}
-						} catch {
-							// Ignore parse errors
+						} catch (error) {
+							console.warn(
+								"[SSE] Dropping unparseable event frame:",
+								error,
+								eventData.slice(0, 200),
+							);
 						}
 					}
+					if (executionFinished) break;
 				}
 			}
 
@@ -577,8 +663,12 @@ export class WebEventState implements IEventState {
 		appId: string,
 		eventId: string,
 		version?: string,
+		variant?: string,
 	): Promise<IListRegistrationsResponse> {
-		const qs = version ? `?version=${encodeURIComponent(version)}` : "";
+		const params = new URLSearchParams();
+		if (version) params.set("version", version);
+		if (variant) params.set("variant", variant);
+		const qs = params.size > 0 ? `?${params.toString()}` : "";
 		return apiGet<IListRegistrationsResponse>(
 			`apps/${appId}/events/${eventId}/registrations${qs}`,
 			this.backend.auth,
@@ -599,10 +689,11 @@ export class WebEventState implements IEventState {
 		appId: string,
 		eventId: string,
 		force = false,
+		variant?: string,
 	): Promise<ISetupEventResponse> {
 		return apiPost<ISetupEventResponse>(
 			`apps/${appId}/events/${eventId}/setup`,
-			{ force },
+			{ force, variant },
 			this.backend.auth,
 		);
 	}
@@ -626,6 +717,282 @@ export class WebEventState implements IEventState {
 	): Promise<void> {
 		await apiDelete<void>(
 			`apps/${appId}/events/${eventId}/alias/${encodeURIComponent(slug)}`,
+			this.backend.auth,
+		);
+	}
+
+	async getEventTimeline(
+		appId: string,
+		eventId: string,
+	): Promise<IEventTimeline> {
+		return apiGet<IEventTimeline>(
+			`apps/${appId}/events/${eventId}/timeline`,
+			this.backend.auth,
+		);
+	}
+
+	async listEventRuns(
+		appId: string,
+		eventId: string,
+		boardIds: string[],
+		options?: { limit?: number; offset?: number },
+	): Promise<IEventTimelineRun[]> {
+		const params = new URLSearchParams();
+		for (const boardId of boardIds) {
+			params.append("board_id", boardId);
+		}
+		if (options?.limit !== undefined) {
+			params.set("limit", String(options.limit));
+		}
+		if (options?.offset !== undefined) {
+			params.set("offset", String(options.offset));
+		}
+		const query = params.toString();
+		const result = await apiGet<IEventRunsResult>(
+			`apps/${appId}/events/${eventId}/runs${query ? `?${query}` : ""}`,
+			this.backend.auth,
+		);
+		return result.runs;
+	}
+
+	async restoreEvent(
+		appId: string,
+		eventId: string,
+		version: [number, number, number],
+		options?: {
+			dryRun?: boolean;
+			versionType?: string;
+			restoreRoute?: boolean;
+			dropCanary?: boolean;
+			acceptBlankSecrets?: boolean;
+		},
+	): Promise<IRestorePlanResult> {
+		return apiPost<IRestorePlanResult>(
+			`apps/${appId}/events/${eventId}/restore`,
+			{
+				version,
+				version_type: options?.versionType,
+				dry_run: options?.dryRun ?? true,
+				restore_route: options?.restoreRoute ?? false,
+				drop_canary: options?.dropCanary ?? false,
+				accept_blank_secrets: options?.acceptBlankSecrets ?? false,
+			},
+			this.backend.auth,
+		);
+	}
+
+	async getCanaryStats(
+		appId: string,
+		eventId: string,
+		window: IEventVariantStatsWindow = "24h",
+	): Promise<IEventVariantStatsResult> {
+		return apiGet<IEventVariantStatsResult>(
+			`apps/${appId}/events/${eventId}/canary/stats?window=${window}`,
+			this.backend.auth,
+		);
+	}
+
+	// Share edits go through the dedicated PATCH so they never cut an event
+	// version and never re-run the REST/MCP setup (slider path).
+	async patchCanary(
+		appId: string,
+		eventId: string,
+		patch: IEventVariantSharePatch,
+	): Promise<IEvent> {
+		return apiPatch<IEvent>(
+			`apps/${appId}/events/${eventId}/canary`,
+			patch,
+			this.backend.auth,
+		);
+	}
+
+	async putEventVariants(
+		appId: string,
+		eventId: string,
+		variants: IEventVariant[],
+	): Promise<IEvent> {
+		return apiPut<IEvent>(
+			`apps/${appId}/events/${eventId}/variants`,
+			{ variants },
+			this.backend.auth,
+		);
+	}
+
+	// Both stores are written server-side in the review-verified order; the
+	// response carries the promoted event plus the non-fatal setup outcome.
+	async promoteCanary(
+		appId: string,
+		eventId: string,
+		variant: string,
+		versionType?: IVersionType,
+	): Promise<ICanaryPromoteResult> {
+		return apiPost<ICanaryPromoteResult>(
+			`apps/${appId}/events/${eventId}/canary/promote`,
+			{ variant, version_type: versionType },
+			this.backend.auth,
+		);
+	}
+
+	async abortCanary(
+		appId: string,
+		eventId: string,
+		variant: string,
+	): Promise<IEvent> {
+		const result = await apiPost<{ event: IEvent }>(
+			`apps/${appId}/events/${eventId}/canary/abort`,
+			{ variant },
+			this.backend.auth,
+		);
+		return result.event;
+	}
+
+	async listEventSetups(
+		appId: string,
+		eventId: string,
+	): Promise<IEventSetupInfo[]> {
+		return apiGet<IEventSetupInfo[]>(
+			`apps/${appId}/events/${eventId}/setups`,
+			this.backend.auth,
+		);
+	}
+
+	async explainCanary(
+		appId: string,
+		eventId: string,
+		key: string,
+		source?: string,
+	): Promise<ICanaryExplainResult> {
+		const params = new URLSearchParams({ key });
+		if (source) params.set("source", source);
+		return apiGet<ICanaryExplainResult>(
+			`apps/${appId}/events/${eventId}/canary/explain?${params.toString()}`,
+			this.backend.auth,
+		);
+	}
+
+	async getEventCorpus(
+		appId: string,
+		eventId: string,
+		limit?: number,
+	): Promise<IEventCorpusResult> {
+		const qs = limit !== undefined ? `?limit=${limit}` : "";
+		return apiGet<IEventCorpusResult>(
+			`apps/${appId}/events/${eventId}/corpus${qs}`,
+			this.backend.auth,
+		);
+	}
+
+	async getCorpusPayload(
+		appId: string,
+		eventId: string,
+		runId: string,
+	): Promise<IRegressionCorpusPayload> {
+		return apiGet<IRegressionCorpusPayload>(
+			`apps/${appId}/events/${eventId}/corpus/${runId}/payload`,
+			this.backend.auth,
+		);
+	}
+
+	async promoteRegressionFixture(
+		appId: string,
+		eventId: string,
+		runId: string,
+		options?: {
+			expectation?: "pass" | "fail";
+			acknowledgeRejected?: boolean;
+		},
+	): Promise<IRegressionFixtureSummary> {
+		return apiPost<IRegressionFixtureSummary>(
+			`apps/${appId}/events/${eventId}/regression/fixtures`,
+			{
+				run_id: runId,
+				expectation: options?.expectation,
+				acknowledge_rejected: options?.acknowledgeRejected ?? false,
+			},
+			this.backend.auth,
+		);
+	}
+
+	async deleteRegressionFixture(
+		appId: string,
+		eventId: string,
+		fixtureId: string,
+	): Promise<void> {
+		await apiDelete<void>(
+			`apps/${appId}/events/${eventId}/regression/fixtures/${fixtureId}`,
+			this.backend.auth,
+		);
+	}
+
+	// A 404 means "no suite saved yet", which the Quality section treats as an
+	// empty state rather than an error.
+	async getRegressionSuite(
+		appId: string,
+		eventId: string,
+	): Promise<IRegressionSuiteResult | null> {
+		try {
+			return await apiGet<IRegressionSuiteResult>(
+				`apps/${appId}/events/${eventId}/regression/suite`,
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isMissingResourceError(error)) return null;
+			throw error;
+		}
+	}
+
+	async putRegressionSuite(
+		appId: string,
+		eventId: string,
+		config: IPutRegressionSuiteRequest,
+	): Promise<IRegressionSuiteResult> {
+		return apiPut<IRegressionSuiteResult>(
+			`apps/${appId}/events/${eventId}/regression/suite`,
+			{
+				trigger_on_publish: config.trigger_on_publish,
+				schedule: config.schedule ?? null,
+				gate_mode: config.gate_mode,
+				allow_live_side_effects: config.allow_live_side_effects,
+			},
+			this.backend.auth,
+		);
+	}
+
+	async runRegressionSuite(
+		appId: string,
+		eventId: string,
+		options?: {
+			boardVersion?: [number, number, number];
+			allowDraft?: boolean;
+		},
+	): Promise<IRegressionRunAccepted> {
+		return apiPost<IRegressionRunAccepted>(
+			`apps/${appId}/events/${eventId}/regression/run`,
+			{
+				board_version: options?.boardVersion,
+				allow_draft: options?.allowDraft ?? false,
+			},
+			this.backend.auth,
+		);
+	}
+
+	async listRegressionRuns(
+		appId: string,
+		eventId: string,
+	): Promise<IRegressionSuiteRunSummary[]> {
+		return apiGet<IRegressionSuiteRunSummary[]>(
+			`apps/${appId}/events/${eventId}/regression/runs`,
+			this.backend.auth,
+		);
+	}
+
+	async getRegressionRun(
+		appId: string,
+		eventId: string,
+		suiteRunId: string,
+	): Promise<IRegressionSuiteRunDetail> {
+		return apiGet<IRegressionSuiteRunDetail>(
+			`apps/${appId}/events/${eventId}/regression/runs/${suiteRunId}`,
 			this.backend.auth,
 		);
 	}

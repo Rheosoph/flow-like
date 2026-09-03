@@ -11,9 +11,10 @@ use crate::{
     ensure_permission,
     entity::{
         execution_run, execution_usage_tracking,
-        sea_orm_active_enums::{ExecutionStatus, RunMode, RunStatus},
+        sea_orm_active_enums::{ExecutionStatus, RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
+    execution::normalize_run_version_label,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
@@ -186,13 +187,14 @@ pub async fn report_run(
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
     } else {
+        let version_label = body.version.as_deref().map(normalize_run_version_label);
         let execution_audit = crate::audit::ExecutionAudit {
             run_id: body.run_id.clone(),
             app_id: app_id.clone(),
             board_id: board_id.clone(),
             event_id: body.event_id.clone(),
             node_id: Some(body.node_id.clone()),
-            version: body.version.clone(),
+            version: version_label.clone(),
             board_etag: None,
             mode: RunMode::Local,
             status: run_status.clone(),
@@ -202,11 +204,15 @@ pub async fn report_run(
         let run = execution_run::ActiveModel {
             id: Set(body.run_id.clone()),
             board_id: Set(board_id.clone()),
-            version: Set(body.version.clone()),
+            version: Set(version_label),
             event_id: Set(body.event_id.clone()),
             node_id: Set(Some(body.node_id.clone())),
             status: Set(run_status),
             mode: Set(RunMode::Local),
+            run_variant: Set(RunVariant::Primary),
+            variant_name: Set(None),
+            shadow_of_run_id: Set(None),
+            regression_run_id: Set(None),
             log_level: Set(body.log_level as i32),
             input_payload_len: Set(0),
             input_payload_key: Set(None),

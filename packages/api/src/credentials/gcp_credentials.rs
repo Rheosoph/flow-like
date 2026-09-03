@@ -315,6 +315,18 @@ impl GcpRuntimeCredentials {
                 ],
                 true,
             ),
+            // Shadow/replay: same reachable prefixes as ServerExecute; the
+            // access-boundary rules below drop writes on app/user content.
+            CredentialsAccess::ShadowExecute => (
+                vec![
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
             CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
         };
 
@@ -337,6 +349,36 @@ impl GcpRuntimeCredentials {
                     // Run logs are append-only: the executor creates and
                     // appends Lance tables but never deletes; Lance's own
                     // auto-cleanup is best-effort and logs on denial.
+                    GcpAccessRule::with_access(
+                        self.logs_bucket.clone(),
+                        vec![log_prefix.clone()],
+                        GcpAccess::Append,
+                    ),
+                    server_execute_meta_rule(&self.meta_bucket, &apps_prefix),
+                ],
+            )
+            .await?
+        } else if matches!(mode, CredentialsAccess::ShadowExecute) {
+            downscope_token_for_rules(
+                &base_token,
+                &[
+                    // A shadow run reads live app/user content but may never
+                    // mutate it; scratch stays read-write for request-file
+                    // offloads and cache paths.
+                    GcpAccessRule::with_access(
+                        self.content_bucket.clone(),
+                        vec![apps_prefix.clone(), user_prefix.clone()],
+                        GcpAccess::Read,
+                    ),
+                    GcpAccessRule::new(
+                        self.content_bucket.clone(),
+                        vec![
+                            temporary_user_prefix.clone(),
+                            temporary_global_prefix.clone(),
+                        ],
+                        true,
+                    ),
+                    // Run logs stay append-only so the shadow run is recorded.
                     GcpAccessRule::with_access(
                         self.logs_bucket.clone(),
                         vec![log_prefix.clone()],
@@ -469,6 +511,18 @@ impl GcpRuntimeCredentials {
                 ],
                 true,
             ),
+            // Shadow/replay: same reachable prefixes as ServerExecute; the
+            // access-boundary rules below drop writes on app/user content.
+            CredentialsAccess::ShadowExecute => (
+                vec![
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
             CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
         };
 
@@ -491,6 +545,36 @@ impl GcpRuntimeCredentials {
                     // Run logs are append-only: the executor creates and
                     // appends Lance tables but never deletes; Lance's own
                     // auto-cleanup is best-effort and logs on denial.
+                    GcpAccessRule::with_access(
+                        self.logs_bucket.clone(),
+                        vec![log_prefix.clone()],
+                        GcpAccess::Append,
+                    ),
+                    server_execute_meta_rule(&self.meta_bucket, &apps_prefix),
+                ],
+            )
+            .await?
+        } else if matches!(mode, CredentialsAccess::ShadowExecute) {
+            downscope_token_for_rules(
+                &base_token,
+                &[
+                    // A shadow run reads live app/user content but may never
+                    // mutate it; scratch stays read-write for request-file
+                    // offloads and cache paths.
+                    GcpAccessRule::with_access(
+                        self.content_bucket.clone(),
+                        vec![apps_prefix.clone(), user_prefix.clone()],
+                        GcpAccess::Read,
+                    ),
+                    GcpAccessRule::new(
+                        self.content_bucket.clone(),
+                        vec![
+                            temporary_user_prefix.clone(),
+                            temporary_global_prefix.clone(),
+                        ],
+                        true,
+                    ),
+                    // Run logs stay append-only so the shadow run is recorded.
                     GcpAccessRule::with_access(
                         self.logs_bucket.clone(),
                         vec![log_prefix.clone()],
@@ -555,6 +639,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
 
@@ -566,6 +651,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
 

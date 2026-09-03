@@ -232,6 +232,15 @@ impl AwsRuntimeCredentials {
                 &temporary_global_prefix,
                 meta_bucket_express_zone(),
             ),
+            CredentialsAccess::ShadowExecute => shadow_execute_policy(
+                self,
+                &apps_prefix,
+                &user_prefix,
+                &runs_prefix,
+                &temporary_user_prefix,
+                &temporary_global_prefix,
+                meta_bucket_express_zone(),
+            ),
             CredentialsAccess::ReadLogs => read_logs_policy(self, &runs_prefix),
         };
 
@@ -287,6 +296,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
 
@@ -298,6 +308,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
 
@@ -652,6 +663,65 @@ fn server_execute_policy(
         "Version": "2012-10-17",
         "Statement": statements,
     })
+}
+
+/// `server_execute_policy` for a shadow/replay run: identical list, log and
+/// meta statements, but `s3:PutObject`/`s3:DeleteObject` are dropped on the
+/// app and user content prefixes — a shadow run reads live content and may
+/// never mutate it. Scratch (`tmp/*`) keeps read/write so request-file
+/// offloads and cache paths still work, and run logs stay append-only so the
+/// shadow run itself is recorded.
+fn shadow_execute_policy(
+    credentials: &AwsRuntimeCredentials,
+    apps_prefix: &str,
+    user_prefix: &str,
+    runs_prefix: &str,
+    temporary_user_prefix: &str,
+    temporary_global_prefix: &str,
+    meta_express: bool,
+) -> flow_like_types::Value {
+    let mut policy = server_execute_policy(
+        credentials,
+        apps_prefix,
+        user_prefix,
+        runs_prefix,
+        temporary_user_prefix,
+        temporary_global_prefix,
+        meta_express,
+    );
+
+    // Statement 1 is the content-bucket object statement (see
+    // `server_execute_policy`); split it into read-only app/user content plus
+    // read-write scratch. Rebuilding it here instead of duplicating the whole
+    // policy keeps the two modes from drifting, and the split stays within the
+    // STS packed-policy budget the ServerExecute tests pin.
+    policy["Statement"][1] = json!({
+      "Effect": "Allow",
+      "Action": [
+          "s3:GetObject"
+      ],
+      "Resource": [
+          format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
+          format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
+      ],
+    });
+    policy["Statement"]
+        .as_array_mut()
+        .expect("server_execute_policy statements are an array")
+        .push(json!({
+          "Effect": "Allow",
+          "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject"
+          ],
+          "Resource": [
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
+              format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
+          ],
+        }));
+
+    policy
 }
 
 fn invoke_read_policy(
@@ -1383,6 +1453,82 @@ mod tests {
             !meta_actions.contains("DeleteObject"),
             "ServerExecute must not grant meta deletes"
         );
+    }
+
+    /// A shadow run reads live app/user content but may never mutate it;
+    /// scratch stays writable and run logs stay append-only.
+    #[test]
+    fn test_aws_shadow_execute_drops_content_writes_but_keeps_reads() {
+        let creds = test_aws_runtime_credentials();
+        let apps_prefix = "apps/app-1";
+        let user_prefix = "users/user-1/apps/app-1";
+        let policy = shadow_execute_policy(
+            &creds,
+            apps_prefix,
+            user_prefix,
+            "runs/app-1",
+            "tmp/user/user-1/apps/app-1",
+            "tmp/global/apps/app-1",
+            false,
+        );
+        let statements = policy["Statement"]
+            .as_array()
+            .expect("policy statements should be an array");
+
+        for statement in statements {
+            let actions = statement["Action"].to_string();
+            let resources = statement["Resource"].to_string();
+            if !actions.contains("PutObject") && !actions.contains("DeleteObject") {
+                continue;
+            }
+            assert!(
+                !resources.contains(&format!("content-data/{apps_prefix}/"))
+                    && !resources.contains(&format!("content-data/{user_prefix}/")),
+                "ShadowExecute must not write app or user content: {statement}"
+            );
+        }
+
+        let json = to_string(&policy).expect("policy should serialize");
+        assert!(
+            json.contains("content-data/apps/app-1/*"),
+            "app content stays readable: {json}"
+        );
+        assert!(
+            json.contains("content-data/tmp/user/user-1/apps/app-1/*"),
+            "scratch stays reachable: {json}"
+        );
+        let logs_actions = statements
+            .iter()
+            .find(|statement| statement["Resource"].to_string().contains("logs/runs"))
+            .expect("shadow execute still records run logs")["Action"]
+            .to_string();
+        assert!(logs_actions.contains("PutObject"));
+        assert!(!logs_actions.contains("DeleteObject"));
+    }
+
+    /// The shadow variant adds one statement to `server_execute_policy`; both
+    /// flavors must keep headroom under the 2048-char STS plaintext cap with
+    /// realistic id lengths.
+    #[test]
+    fn test_aws_shadow_execute_stays_within_policy_budget() {
+        let creds = test_aws_runtime_credentials();
+        let app = "apps/v8f5p73w00itor03zlrai22w";
+        let user = "users/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
+        let runs = "runs/v8f5p73w00itor03zlrai22w";
+        let tmp_user = "tmp/user/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
+        let tmp_global = "tmp/global/apps/v8f5p73w00itor03zlrai22w";
+
+        for express in [true, false] {
+            let policy =
+                shadow_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, express);
+            let json = to_string(&policy).expect("policy should serialize");
+            assert!(
+                json.len() < 2000,
+                "{} ShadowExecute policy grew to {} chars",
+                if express { "express" } else { "standard" },
+                json.len()
+            );
+        }
     }
 
     /// On an express meta bucket the CreateSession token authorizes every

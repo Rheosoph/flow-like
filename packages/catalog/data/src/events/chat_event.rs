@@ -698,7 +698,11 @@ impl ChatWidget {
     }
 
     fn inline_child_ids(&self) -> Vec<String> {
-        self.component
+        Self::component_inline_child_ids(&self.component)
+    }
+
+    fn component_inline_child_ids(component: &Value) -> Vec<String> {
+        component
             .get("inlineWidgetDef")
             .and_then(|def| def.get("components"))
             .and_then(|c| c.as_array())
@@ -711,37 +715,148 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    /// Collects the run's a2ui updates that target this widget (its instance,
-    /// a `{instance}/{child}` qualified element, one of its inline children by
-    /// bare id, or its surface's data model) so the frontend can replay them
-    /// over the pushed snapshot. All matching entries are kept — including full
-    /// re-registrations of the instance — because the replay must end at
-    /// exactly the state the emission order produces.
+    /// Walks a component tree for `{path, defaultValue?}` binding objects and
+    /// collects their data-model paths.
+    fn collect_bound_paths(value: &Value, paths: &mut std::collections::BTreeSet<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(path) = map.get("path").and_then(|p| p.as_str())
+                    && map.keys().all(|k| k == "path" || k == "defaultValue")
+                {
+                    paths.insert(path.to_string());
+                }
+                for v in map.values() {
+                    Self::collect_bound_paths(v, paths);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    Self::collect_bound_paths(v, paths);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Segment-aware match: a data update touching `updated` is relevant to a
+    /// binding on `bound` when either path is the other or one of its parents.
+    fn paths_overlap(updated: &str, bound: &str) -> bool {
+        updated == bound
+            || bound
+                .strip_prefix(updated)
+                .is_some_and(|rest| rest.starts_with('/'))
+            || updated
+                .strip_prefix(bound)
+                .is_some_and(|rest| rest.starts_with('/'))
+    }
+
+    /// Collects the run's a2ui updates that target this widget so the frontend
+    /// can replay them over the pushed snapshot. All matching entries are kept
+    /// — including full re-registrations of the instance — because the replay
+    /// must end at exactly the state the emission order produces.
+    ///
+    /// Relevance is a fixpoint, not a single instance check: pushing another
+    /// widget instance into a container inside this one makes that instance
+    /// (and its own children and pushes) part of this widget's replay, so
+    /// `pushChild`/`insertChildAt` references pull the referenced instances
+    /// into the kept set transitively. Data-model updates are matched by path
+    /// against the widget's surviving bindings — `Data Update` targets a
+    /// board-chosen surface id that never equals the chat instance id — and
+    /// are rewritten to this widget's surface id so the frontend reducer
+    /// applies them to the chat surface.
     pub fn attach_update_log(&mut self, log: &[flow_like::a2ui::A2UIServerMessage]) {
         use flow_like::a2ui::A2UIServerMessage as Msg;
+        use std::collections::BTreeSet;
 
-        let child_ids = self.inline_child_ids();
-        let qualified_prefix = format!("{}/", self.instance_id);
+        let mut instance_ids: BTreeSet<String> = BTreeSet::new();
+        instance_ids.insert(self.instance_id.clone());
+        let mut child_ids: BTreeSet<String> = self.inline_child_ids().into_iter().collect();
+        let mut bound_paths = BTreeSet::new();
+        Self::collect_bound_paths(&self.component, &mut bound_paths);
 
-        for message in log {
-            let relevant = match message {
-                Msg::UpsertElement { element_id, .. } => {
-                    element_id == &self.instance_id
-                        || element_id.starts_with(&qualified_prefix)
-                        || (!element_id.contains('/') && {
-                            let suffix = format!("-{element_id}");
-                            child_ids
-                                .iter()
-                                .any(|c| c == element_id || c.ends_with(&suffix))
-                        })
+        let element_matches =
+            |element_id: &str, instance_ids: &BTreeSet<String>, child_ids: &BTreeSet<String>| {
+                if let Some((scope, _)) = element_id.split_once('/') {
+                    return instance_ids.contains(scope);
                 }
-                Msg::DataModelUpdate { surface_id, .. }
-                | Msg::CreateElement { surface_id, .. }
-                | Msg::RemoveElement { surface_id, .. } => surface_id == &self.surface_id,
-                _ => false,
+                instance_ids.contains(element_id) || {
+                    let suffix = format!("-{element_id}");
+                    child_ids
+                        .iter()
+                        .any(|c| c == element_id || c.ends_with(&suffix))
+                }
             };
 
-            if relevant && let Ok(value) = flow_like_types::json::to_value(message) {
+        loop {
+            let mut changed = false;
+            for message in log {
+                let Msg::UpsertElement { element_id, value } = message else {
+                    continue;
+                };
+                if !element_matches(element_id, &instance_ids, &child_ids) {
+                    continue;
+                }
+                match value.get("type").and_then(|t| t.as_str()) {
+                    Some("pushChild") | Some("insertChildAt") => {
+                        if let Some(child) = value.get("childId").and_then(|c| c.as_str())
+                            && !child_ids.contains(child)
+                        {
+                            changed |= instance_ids.insert(child.to_string());
+                        }
+                    }
+                    Some("createComponent") if instance_ids.contains(element_id) => {
+                        if let Some(component) = value.get("component") {
+                            for id in Self::component_inline_child_ids(component) {
+                                changed |= child_ids.insert(id);
+                            }
+                            Self::collect_bound_paths(component, &mut bound_paths);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for message in log {
+            let kept = match message {
+                Msg::UpsertElement { element_id, .. } => {
+                    element_matches(element_id, &instance_ids, &child_ids).then(|| message.clone())
+                }
+                Msg::CreateElement { surface_id, .. } | Msg::RemoveElement { surface_id, .. } => {
+                    (surface_id == &self.surface_id || instance_ids.contains(surface_id))
+                        .then(|| message.clone())
+                }
+                Msg::DataModelUpdate {
+                    surface_id,
+                    path,
+                    contents,
+                } => {
+                    let targeted =
+                        surface_id == &self.surface_id || instance_ids.contains(surface_id);
+                    let bound = !targeted
+                        && (path.as_deref().is_some_and(|p| {
+                            bound_paths.iter().any(|b| Self::paths_overlap(p, b))
+                        }) || (path.is_none()
+                            && contents.iter().any(|entry| {
+                                bound_paths
+                                    .iter()
+                                    .any(|b| Self::paths_overlap(&entry.key, b))
+                            })));
+                    (targeted || bound).then(|| Msg::DataModelUpdate {
+                        surface_id: self.surface_id.clone(),
+                        path: path.clone(),
+                        contents: contents.clone(),
+                    })
+                }
+                _ => None,
+            };
+
+            if let Some(message) = kept
+                && let Ok(value) = flow_like_types::json::to_value(&message)
+            {
                 self.updates.push(value);
             }
         }
@@ -1310,5 +1425,87 @@ mod tests {
 
         assert!(is_blake3_hash(all_zeros));
         assert!(is_blake3_hash(all_fs));
+    }
+
+    #[test]
+    fn attach_update_log_follows_nested_widgets_and_bound_paths() {
+        use flow_like::a2ui::A2UIServerMessage as Msg;
+
+        let mut widget = ChatWidget {
+            instance_id: "a".to_string(),
+            widget_id: "w1".to_string(),
+            surface_id: "a".to_string(),
+            component: flow_like_types::json::json!({
+                "type": "widgetInstance",
+                "inlineWidgetDef": {
+                    "components": [
+                        { "id": "container" },
+                        { "id": "label", "component": { "text": { "path": "sales", "defaultValue": "0" } } }
+                    ]
+                }
+            }),
+            updates: vec![],
+        };
+
+        let nested_component = flow_like_types::json::json!({
+            "type": "widgetInstance",
+            "inlineWidgetDef": { "components": [{ "id": "badge" }] }
+        });
+        let log = vec![
+            Msg::UpsertElement {
+                element_id: "a".to_string(),
+                value: flow_like_types::json::json!({ "type": "createComponent", "component": widget.component.clone() }),
+            },
+            Msg::UpsertElement {
+                element_id: "b".to_string(),
+                value: flow_like_types::json::json!({ "type": "createComponent", "component": nested_component }),
+            },
+            Msg::UpsertElement {
+                element_id: "a/container".to_string(),
+                value: flow_like_types::json::json!({ "type": "pushChild", "childId": "b" }),
+            },
+            Msg::DataModelUpdate {
+                surface_id: "main".to_string(),
+                path: Some("sales".to_string()),
+                contents: vec![],
+            },
+            Msg::DataModelUpdate {
+                surface_id: "main".to_string(),
+                path: Some("unrelated".to_string()),
+                contents: vec![],
+            },
+            Msg::UpsertElement {
+                element_id: "other-widget".to_string(),
+                value: flow_like_types::json::json!({ "type": "createComponent", "component": {} }),
+            },
+        ];
+
+        widget.attach_update_log(&log);
+
+        let kept: Vec<(&str, &str)> = widget
+            .updates
+            .iter()
+            .map(|value| {
+                let kind = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let target = value
+                    .get("element_id")
+                    .or_else(|| value.get("surface_id"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                (kind, target)
+            })
+            .collect();
+
+        assert_eq!(
+            kept,
+            vec![
+                ("upsertElement", "a"),
+                // Pushed nested instance travels with the widget (fixpoint over pushChild refs).
+                ("upsertElement", "b"),
+                ("upsertElement", "a/container"),
+                // Bound-path data update is kept and re-addressed to the widget surface.
+                ("dataModelUpdate", "a"),
+            ]
+        );
     }
 }

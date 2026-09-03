@@ -31,6 +31,47 @@ well as the web and API ports. Use host firewall rules or a Compose override to
 bind or remove ports that must not be reachable from an untrusted network.
 :::
 
+## Realtime connectivity
+
+The `signaling` service continues to exchange y-webrtc offers, answers, and ICE
+candidates. An optional ICE provider adds managed STUN discovery and TURN relay
+credentials without replacing that signaling path.
+
+The Docker Compose hub template leaves `realtime.ice` set to `null`. In that
+mode, the browser keeps simple-peer's built-in public STUN servers and has no
+TURN relay. To use Cloudflare Realtime TURN, create a TURN key in Cloudflare,
+set its key ID and API token in `.env`, and replace the hub setting with the
+[Cloudflare credential issuer](https://developers.cloudflare.com/realtime/turn/generate-credentials/):
+
+```json
+"signaling": ["wss://signal.example.com"],
+"realtime": {
+  "ice": {
+    "provider": "cloudflare",
+    "turn_key_id_secret_ref": "CLOUDFLARE_TURN_KEY_ID",
+    "turn_key_api_token_secret_ref": "CLOUDFLARE_TURN_KEY_API_TOKEN",
+    "ttl_seconds": 14400
+  }
+}
+```
+
+`ttl_seconds` accepts 300 through 172800 seconds. The four-hour default exceeds
+the realtime JWT's three-hour lifetime. The client refreshes against whichever
+credential expires first and rebuilds only its peer connections when the ICE
+configuration changes.
+
+Docker exposes these values to the API's environment-backed `SecretStore`
+provider. The Cloudflare implementation resolves them through `SecretStore` on
+its first request, then retains them in process memory while it issues
+short-lived browser configuration. It never sends the TURN key API token to the
+browser. Restart the API after changing the hub configuration or rotating the
+long-lived TURN key.
+
+| Variable | Required when enabled | Purpose |
+| --- | --- | --- |
+| `CLOUDFLARE_TURN_KEY_ID` | Yes | Cloudflare TURN key identifier |
+| `CLOUDFLARE_TURN_KEY_API_TOKEN` | Yes | Server-side token paired with the TURN key |
+
 ## Database and Redis
 
 | Variable | Template default | Notes |

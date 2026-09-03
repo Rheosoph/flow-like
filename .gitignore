@@ -94,3 +94,4 @@ apps/desktop/src-tauri/apple/FlowLikeMLX/.build/
 .tmp-nextrepro
 tools/i18n/__pycache__/translate-local.cpython-311.pyc
 apps/book/INTERVIEWS.md
+reports

@@ -135,6 +135,11 @@ impl NodeLogic for ParLoopNode {
         }
 
         context.deactivate_exec_pin_ref(&exec_item).await?;
+
+        if context.is_cancelled() {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
+
         context.activate_exec_pin_ref(&done).await?;
 
         return Ok(());
@@ -171,6 +176,10 @@ impl ParLoopNode {
         let mut results = Vec::new();
 
         for (i, item) in array_value.iter().enumerate() {
+            if context.is_cancelled() {
+                break;
+            }
+
             let item = item.to_owned();
 
             for node in connected.iter() {
@@ -214,6 +223,10 @@ impl ParLoopNode {
         let mut parallel_tasks = Vec::with_capacity(array_value.len() * connected.len());
 
         for (i, item) in array_value.iter().enumerate() {
+            if context.is_cancelled() {
+                break;
+            }
+
             let item = item.to_owned();
 
             for node in connected.iter() {

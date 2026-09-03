@@ -3,7 +3,10 @@ use std::time::SystemTime;
 use flow_like_types::{FromProto, Timestamp, ToProto};
 
 use crate::flow::{
-    event::{CanaryEvent, Event, EventExecutionMode, EventExposure, EventInput, ReleaseNotes},
+    event::{
+        CanaryEvent, Event, EventExecutionMode, EventExposure, EventInput, EventVariant,
+        EventVariantMode, ReleaseNotes,
+    },
     variable::Variable,
 };
 
@@ -51,6 +54,8 @@ impl ToProto<flow_like_types::proto::Event> for Event {
             is_default: self.is_default,
             execution_mode: Some(self.execution_mode.as_str().to_string()),
             exposure: Some(self.exposure.as_str().to_string()),
+            correlation_mappings: self.correlation_mappings.clone().unwrap_or_default(),
+            variants: self.variants.iter().map(|v| v.to_proto()).collect(),
         }
     }
 }
@@ -109,6 +114,83 @@ impl ToProto<flow_like_types::proto::Canary> for CanaryEvent {
     }
 }
 
+impl ToProto<flow_like_types::proto::EventVariant> for EventVariant {
+    fn to_proto(&self) -> flow_like_types::proto::EventVariant {
+        flow_like_types::proto::EventVariant {
+            name: self.name.clone(),
+            board_id: self.board_id.clone(),
+            board_version: self.board_version.map(|v| flow_like_types::proto::Version {
+                major: v.0,
+                minor: v.1,
+                patch: v.2,
+            }),
+            node_id: self.node_id.clone(),
+            variables: self
+                .variables
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_proto()))
+                .collect(),
+            default_page_id: self.default_page_id.clone(),
+            mode: Some(match &self.mode {
+                EventVariantMode::Live { weight } => {
+                    flow_like_types::proto::event_variant::Mode::Live(
+                        flow_like_types::proto::LiveVariantMode { weight: *weight },
+                    )
+                }
+                EventVariantMode::Shadow { sample_rate } => {
+                    flow_like_types::proto::event_variant::Mode::Shadow(
+                        flow_like_types::proto::ShadowVariantMode {
+                            sample_rate: *sample_rate,
+                        },
+                    )
+                }
+            }),
+            created_at: Some(Timestamp::from(self.created_at)),
+            updated_at: Some(Timestamp::from(self.updated_at)),
+        }
+    }
+}
+
+impl FromProto<flow_like_types::proto::EventVariant> for EventVariant {
+    fn from_proto(proto: flow_like_types::proto::EventVariant) -> Self {
+        EventVariant {
+            name: proto.name,
+            board_id: proto.board_id,
+            board_version: proto.board_version.map(|v| (v.major, v.minor, v.patch)),
+            node_id: proto.node_id,
+            variables: proto
+                .variables
+                .into_iter()
+                .map(|(k, v)| (k, Variable::from_proto(v)))
+                .collect(),
+            default_page_id: proto.default_page_id,
+            mode: match proto.mode {
+                Some(flow_like_types::proto::event_variant::Mode::Live(live)) => {
+                    EventVariantMode::Live {
+                        weight: live.weight,
+                    }
+                }
+                Some(flow_like_types::proto::event_variant::Mode::Shadow(shadow)) => {
+                    EventVariantMode::Shadow {
+                        sample_rate: shadow.sample_rate,
+                    }
+                }
+                // A wire variant without a mode is malformed; a zero-weight
+                // Live variant is inert.
+                None => EventVariantMode::Live { weight: 0.0 },
+            },
+            created_at: proto
+                .created_at
+                .map(|t| SystemTime::try_from(t).unwrap_or(SystemTime::UNIX_EPOCH))
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            updated_at: proto
+                .updated_at
+                .map(|t| SystemTime::try_from(t).unwrap_or(SystemTime::UNIX_EPOCH))
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+        }
+    }
+}
+
 impl FromProto<flow_like_types::proto::Event> for Event {
     fn from_proto(proto: flow_like_types::proto::Event) -> Self {
         Event {
@@ -130,11 +212,10 @@ impl FromProto<flow_like_types::proto::Event> for Event {
                 flow_like_types::proto::event::Notes::ReleaseNotes(s) => ReleaseNotes::NOTES(s),
                 flow_like_types::proto::event::Notes::ReleaseNotesUrl(s) => ReleaseNotes::URL(s),
             }),
-            event_version: (
-                proto.event_version.unwrap().major,
-                proto.event_version.unwrap().minor,
-                proto.event_version.unwrap().patch,
-            ),
+            event_version: {
+                let version = proto.event_version.unwrap_or_default();
+                (version.major, version.minor, version.patch)
+            },
             priority: proto.priority,
             created_at: proto
                 .created_at
@@ -163,9 +244,16 @@ impl FromProto<flow_like_types::proto::Event> for Event {
                 .as_deref()
                 .map(EventExposure::parse)
                 .unwrap_or_default(),
-            // Not part of the proto schema yet; correlation mappings are
-            // persisted server-side (Postgres event row), not in local proto.
-            correlation_mappings: None,
+            correlation_mappings: if proto.correlation_mappings.is_empty() {
+                None
+            } else {
+                Some(proto.correlation_mappings)
+            },
+            variants: proto
+                .variants
+                .into_iter()
+                .map(EventVariant::from_proto)
+                .collect(),
         }
     }
 }

@@ -13,7 +13,7 @@ use flow_like::flow::execution::{
 };
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
+use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase, Select};
 use flow_like::flow_like_storage::{Path, serde_arrow};
 use flow_like::hub::Hub;
 use flow_like::state::{FlowLikeState, RunData};
@@ -89,6 +89,35 @@ fn require_page_execution_revision(
     Ok(())
 }
 
+/// Revision gate for targets compiled out of the Page itself.
+///
+/// The revision hashes the whole Board, so every unrelated Board edit
+/// supersedes it while the mounted Page keeps rendering. For a compiled target
+/// that is not an authorization signal: the action id and the lifecycle hook
+/// are both resolved against the *current* contract, and the entry-node check
+/// gates what may actually run. So a superseded revision is tolerated — the
+/// caller still has to prove it came through a real bootstrap by sending one.
+///
+/// Dynamic actions keep [`require_page_execution_revision`]: their grants are
+/// minted against one exact revision and must die with it.
+fn require_compiled_page_manifest(
+    requested: Option<&str>,
+    current: &str,
+) -> flow_like_types::Result<()> {
+    let requested = requested
+        .map(str::trim)
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| flow_like_types::anyhow!("The Page manifest revision is required"))?;
+    if requested != current {
+        tracing::debug!(
+            requested,
+            current,
+            "Page manifest was superseded; resolving the compiled target against the current contract"
+        );
+    }
+    Ok(())
+}
+
 fn resolve_compiled_page_trigger(
     execution: &PrerunPageExecution,
     current_revision: &str,
@@ -100,7 +129,7 @@ fn resolve_compiled_page_trigger(
             capability_jwt,
             manifest_revision,
         } => {
-            require_page_execution_revision(manifest_revision.as_deref(), current_revision)?;
+            require_compiled_page_manifest(manifest_revision.as_deref(), current_revision)?;
 
             if action_id.starts_with(SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX)
                 || capability_jwt.is_some()
@@ -124,7 +153,7 @@ fn resolve_compiled_page_trigger(
             special_event,
             manifest_revision,
         } => {
-            require_page_execution_revision(Some(manifest_revision), current_revision)?;
+            require_compiled_page_manifest(Some(manifest_revision), current_revision)?;
             let node_id = match special_event {
                 PageSpecialEvent::Load => execution
                     .special_events
@@ -685,12 +714,14 @@ async fn execute_prepared(
     let app_handle_for_report = app_handle.clone();
     let token_for_report = token.clone();
     let app_visibility_for_report = app.visibility.clone();
+    let channel_dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
         Arc::new(move |mut event| {
             let events_cb = events.as_ref().cloned();
             let app_handle = app_handle.clone();
             let page_action_sealing_context = page_action_sealing_context.clone();
+            let channel_dead = channel_dead.clone();
             Box::pin({
                 async move {
                     if let Some(context) = page_action_sealing_context {
@@ -710,16 +741,25 @@ async fn execute_prepared(
                     // Update last_node_update for run events
                     touch_run_last_update(&app_handle, &event);
 
+                    // A failed Channel send consumes an IPC message index anyway,
+                    // and the JS side delivers strictly in index order — one gap
+                    // wedges onmessage forever. Stop using the channel after the
+                    // first failure; the throttled broadcast below still delivers.
                     if let Some(events_cb) = events_cb
+                        && !channel_dead.load(std::sync::atomic::Ordering::Relaxed)
                         && let Err(err) = events_cb.send(event.clone())
                     {
-                        println!("Error sending event to execution channel: {}", err);
+                        channel_dead.store(true, std::sync::atomic::Ordering::Relaxed);
+                        tracing::error!(
+                            error = %err,
+                            "Execution channel send failed; falling back to broadcast emission for this run"
+                        );
                     }
 
                     let first_event = event.first();
 
                     if let Some(first_event) = first_event {
-                        crate::utils::emit_throttled(
+                        crate::utils::emit_event_batch_throttled(
                             &app_handle,
                             UiEmitTarget::All,
                             &first_event.event_type,
@@ -1115,6 +1155,93 @@ pub async fn cancel_execution(
     Ok(())
 }
 
+/// Open a board's local LanceDB log-store connection. Shared by the board run
+/// listing and the event timeline's run telemetry.
+pub(crate) async fn open_runs_db(
+    state: &Arc<FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Connection> {
+    let db = {
+        let guard = state.config.read().await;
+        guard.callbacks.build_logs_database.clone()
+    };
+    let db_fn = db
+        .as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
+    let base_path = Path::from("runs").child(app_id).child(board_id);
+    db_fn(base_path.clone())
+        .execute()
+        .await
+        .map_err(|_| flow_like_types::anyhow!("Failed to open database: {}", base_path))
+}
+
+/// Open a board's LanceDB `runs` summary table from the local log store.
+pub(crate) async fn open_runs_table(
+    state: &Arc<FlowLikeState>,
+    app_id: &str,
+    board_id: &str,
+) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Table> {
+    let db = open_runs_db(state, app_id, board_id).await?;
+    db.open_table("runs")
+        .execute()
+        .await
+        .map_err(|_| flow_like_types::anyhow!("Failed to open table: runs"))
+}
+
+/// Columns backing [`StoredRunSummary`] — everything a run listing needs except
+/// the two heavy ones (`payload`, `nodes`). Must stay in sync with the struct.
+const RUN_SUMMARY_COLUMNS: [&str; 11] = [
+    "app_id",
+    "run_id",
+    "board_id",
+    "start",
+    "end",
+    "log_level",
+    "version",
+    "logs",
+    "node_id",
+    "event_version",
+    "event_id",
+];
+
+/// A run row without `payload`/`nodes`, for callers that only aggregate.
+#[derive(Deserialize)]
+struct StoredRunSummary {
+    app_id: String,
+    run_id: String,
+    board_id: String,
+    start: u64,
+    end: u64,
+    log_level: u8,
+    version: String,
+    logs: Option<u64>,
+    node_id: String,
+    event_version: Option<String>,
+    event_id: String,
+}
+
+impl From<StoredRunSummary> for LogMeta {
+    fn from(stored: StoredRunSummary) -> Self {
+        LogMeta {
+            app_id: stored.app_id,
+            run_id: stored.run_id,
+            board_id: stored.board_id,
+            start: stored.start,
+            end: stored.end,
+            log_level: stored.log_level,
+            version: stored.version,
+            nodes: None,
+            logs: stored.logs,
+            node_id: stored.node_id,
+            event_version: stored.event_version,
+            event_id: stored.event_id,
+            payload: Vec::new(),
+            is_remote: false,
+        }
+    }
+}
+
 #[tauri::command(async)]
 pub async fn list_runs(
     app_handle: AppHandle,
@@ -1127,29 +1254,13 @@ pub async fn list_runs(
     limit: Option<usize>,
     offset: Option<usize>,
     _last_meta: Option<LogMeta>,
+    summary_only: Option<bool>,
 ) -> Result<Vec<LogMeta>, TauriFunctionError> {
+    let summary_only = summary_only.unwrap_or(false);
     let limit = limit.unwrap_or(100);
     let offset = offset.unwrap_or(0);
     let state = TauriFlowLikeState::construct(&app_handle).await?;
-    let db = {
-        let guard = state.config.read().await;
-
-        guard.callbacks.build_logs_database.clone()
-    };
-    let db_fn = db
-        .as_ref()
-        .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-    let base_path = Path::from("runs").child(app_id).child(board_id);
-    let db = db_fn(base_path.clone())
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open database: {}", base_path))?;
-
-    let db = db
-        .open_table("runs")
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open table: runs"))?;
+    let db = open_runs_table(&state, &app_id, &board_id).await?;
 
     let mut query_string = String::from("");
 
@@ -1190,6 +1301,15 @@ pub async fn list_runs(
         query = query.only_if(&query_string);
     }
 
+    // `payload` carries the run's whole serialized input and `nodes` its per-node
+    // visit trace. Aggregation callers read neither, so projecting them away keeps
+    // megabytes per listing out of the IPC boundary and the JS heap.
+    if summary_only {
+        query = query.select(Select::Columns(
+            RUN_SUMMARY_COLUMNS.iter().map(|c| c.to_string()).collect(),
+        ));
+    }
+
     let runs = query
         .limit(limit)
         .offset(offset)
@@ -1202,9 +1322,15 @@ pub async fn list_runs(
         .map_err(|_| flow_like_types::anyhow!("Failed to collect results"))?;
     let mut log_meta = Vec::with_capacity(results.len() * 10);
     for result in results {
-        let stored: Vec<flow_like::flow::execution::StoredLogMeta> =
-            serde_arrow::from_record_batch(&result).unwrap_or_default();
-        log_meta.extend(stored.into_iter().map(LogMeta::from));
+        if summary_only {
+            let stored: Vec<StoredRunSummary> =
+                serde_arrow::from_record_batch(&result).unwrap_or_default();
+            log_meta.extend(stored.into_iter().map(LogMeta::from));
+        } else {
+            let stored: Vec<flow_like::flow::execution::StoredLogMeta> =
+                serde_arrow::from_record_batch(&result).unwrap_or_default();
+            log_meta.extend(stored.into_iter().map(LogMeta::from));
+        }
     }
     Ok(log_meta)
 
@@ -1311,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn static_page_action_resolves_only_at_the_current_revision() {
+    fn static_page_action_resolves_against_the_current_contract() {
         let trigger = PageTrigger::Action {
             action_id: "pa1_action".to_string(),
             capability_jwt: None,
@@ -1322,12 +1448,39 @@ mod tests {
             "node-action"
         );
 
-        let stale = PageTrigger::Action {
+        // A Board edit supersedes every rendered Page's revision. The action is
+        // still in the current contract, so it resolves — otherwise a mounted
+        // Page would break on every unrelated edit until it is reloaded.
+        let superseded = PageTrigger::Action {
             action_id: "pa1_action".to_string(),
             capability_jwt: None,
             manifest_revision: Some("per1_stale".to_string()),
         };
-        assert!(resolve_compiled_page_trigger(&page_execution(), "per1_current", &stale).is_err());
+        assert_eq!(
+            resolve_compiled_page_trigger(&page_execution(), "per1_current", &superseded).unwrap(),
+            "node-action"
+        );
+
+        // Tolerating drift must not tolerate an absent revision: the caller
+        // still has to have gone through a real bootstrap.
+        let unbootstrapped = PageTrigger::Action {
+            action_id: "pa1_action".to_string(),
+            capability_jwt: None,
+            manifest_revision: None,
+        };
+        assert!(
+            resolve_compiled_page_trigger(&page_execution(), "per1_current", &unbootstrapped)
+                .is_err()
+        );
+
+        // An action the current contract no longer compiles stays refused, at
+        // any revision.
+        let removed = PageTrigger::Action {
+            action_id: "pa1_removed".to_string(),
+            capability_jwt: None,
+            manifest_revision: Some("per1_current".to_string()),
+        };
+        assert!(resolve_compiled_page_trigger(&page_execution(), "per1_current", &removed).is_err());
     }
 
     #[test]
@@ -1340,6 +1493,36 @@ mod tests {
         assert!(
             resolve_compiled_page_trigger(&page_execution(), "per1_current", &trigger).is_err()
         );
+    }
+
+    /// The frontend classifies a refused Page trigger by matching these exact
+    /// strings (packages/ui/lib/page-contract-drift.ts) to decide whether a
+    /// bootstrap refetch can cure it. Rewording one there is invisible: the run
+    /// still fails, the Page just never heals. Pin them here so it is not.
+    #[test]
+    fn page_contract_failure_strings_match_the_frontend_classifier() {
+        let missing = require_compiled_page_manifest(None, "per1_current")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(missing, "The Page manifest revision is required");
+
+        let stale = require_page_execution_revision(Some("per1_stale"), "per1_current")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(stale, "The Page manifest is stale; reload the Page");
+
+        let removed = resolve_compiled_page_trigger(
+            &page_execution(),
+            "per1_current",
+            &PageTrigger::Action {
+                action_id: "pa1_removed".to_string(),
+                capability_jwt: None,
+                manifest_revision: Some("per1_current".to_string()),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(removed, "The Page action is stale or invalid");
     }
 
     #[test]

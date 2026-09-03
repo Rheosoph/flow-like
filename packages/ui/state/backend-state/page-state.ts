@@ -142,6 +142,11 @@ export interface IPageBootstrap {
 	readonly executionRevision?: string | null;
 	readonly canonicalRoute?: string | null;
 	readonly routeMiss?: boolean;
+	/**
+	 * Live variant this bootstrap was served from (`null` for the primary).
+	 * Forward it as the `x-flow-like-variant` pin on this session's page triggers.
+	 */
+	readonly servedVariant?: string | null;
 }
 
 export interface IPageState {

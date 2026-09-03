@@ -486,6 +486,18 @@ pub enum RunStatus {
     Timeout,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "RunVariant")]
+pub enum RunVariant {
+    #[sea_orm(string_value = "PRIMARY")]
+    Primary,
+    #[sea_orm(string_value = "CANARY")]
+    Canary,
+    #[sea_orm(string_value = "SHADOW")]
+    Shadow,
+    #[sea_orm(string_value = "REGRESSION")]
+    Regression,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",

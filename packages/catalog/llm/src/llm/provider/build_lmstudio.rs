@@ -114,6 +114,7 @@ impl NodeLogic for BuildLMStudioNode {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
+                api_surface: None,
                 provider_name: "custom:lmstudio".into(),
                 model_id: if model_id.is_empty() {
                     None

@@ -42,8 +42,10 @@ function getInteractionCreatedAt(interaction: IInteractionRequest): number {
 function getMessageTextContent(message: IMessage): string {
 	const content = message.inner.content;
 	if (typeof content === "string") return content;
-	const textContent = content.find((c) => c.type === "text");
-	return textContent?.text ?? "";
+	return content
+		.filter((c) => c.type === "text" && typeof c.text === "string")
+		.map((c) => c.text)
+		.join("");
 }
 
 function sameStringArray(

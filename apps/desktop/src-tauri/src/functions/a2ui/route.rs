@@ -3,6 +3,25 @@ use flow_like::app::App;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
+/// Persist a route/is_default change on an event without cutting a version.
+/// A plain `Event::save` alone is not enough: `updated_at` must move or the
+/// hybrid local-vs-remote staleness comparison treats the event as unchanged
+/// and can sync the old route back over it, and the route resolvers iterate
+/// `app.events`, so an artifact missing from the manifest would take the
+/// route but never resolve — self-heal membership like `App::upsert_event`.
+async fn save_route_change(
+    app: &mut App,
+    mut event: flow_like::flow::event::Event,
+) -> flow_like_types::Result<()> {
+    event.updated_at = std::time::SystemTime::now();
+    event.save(app, None).await?;
+    if !app.events.contains(&event.id) {
+        app.events.push(event.id.clone());
+        app.save().await?;
+    }
+    Ok(())
+}
+
 /// Simple route mapping entry for frontend consumption
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -172,7 +191,7 @@ pub async fn set_app_route(
         .map_err(|e| TauriFunctionError::new(&format!("Event not found: {}", e)))?;
 
     event.route = Some(path.clone());
-    app.upsert_event(event, None, None)
+    save_route_change(&mut app, event)
         .await
         .map_err(|e| TauriFunctionError::new(&format!("Failed to save event: {}", e)))?;
 
@@ -197,7 +216,7 @@ pub async fn delete_app_route_by_path(
             && event.route.as_deref() == Some(&path)
         {
             event.route = None;
-            app.upsert_event(event, None, None)
+            save_route_change(&mut app, event)
                 .await
                 .map_err(|e| TauriFunctionError::new(&format!("Failed to save event: {}", e)))?;
             return Ok(());
@@ -226,7 +245,7 @@ pub async fn delete_app_route_by_event(
 
     if event.route.is_some() {
         event.route = None;
-        app.upsert_event(event, None, None)
+        save_route_change(&mut app, event)
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to save event: {}", e)))?;
     }
@@ -252,7 +271,7 @@ pub async fn set_app_routes(
             && event.route.is_some()
         {
             event.route = None;
-            app.upsert_event(event, None, None).await.ok();
+            save_route_change(&mut app, event).await.ok();
         }
     }
 
@@ -261,7 +280,7 @@ pub async fn set_app_routes(
     for mapping in routes {
         if let Ok(mut event) = app.get_event(&mapping.event_id, None).await {
             event.route = Some(mapping.path.clone());
-            if app.upsert_event(event, None, None).await.is_ok() {
+            if save_route_change(&mut app, event).await.is_ok() {
                 result.push(mapping);
             }
         }

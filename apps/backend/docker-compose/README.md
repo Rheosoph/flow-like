@@ -53,7 +53,7 @@ Full step-by-step documentation: **[docs.flow-like.com/self-hosting/docker-compo
 - Normal web executions call `/api/v1/apps/{app_id}/board/{board_id}/invoke`, then the API streams to a runtime replica over HTTP at `http://runtime:9000`.
 - Async executions and sink-triggered executions enqueue through Redis on `REDIS_EXECUTION_QUEUE`; runtime replicas poll that queue.
 - Cron sinks are handled by the singleton `sink-services` process. It syncs active cron schedules from `/api/v1/sink/schedules` and triggers them through `/api/v1/sink/trigger/async`.
-- Realtime collaboration uses the API only for JWT/room-key issuance; browser peers use the `signaling` service from the hub config (`ws://localhost:4444` in the template). The compose signaling image builds the Redis-backed implementation in `apps/backend/signaling`.
+- Realtime collaboration uses the API for JWT, room-key, and optional short-lived ICE issuance. Browser peers still use the `signaling` service from the hub config (`ws://localhost:4444` in the template). The compose signaling image builds the Redis-backed implementation in `apps/backend/signaling`.
 
 ### Hosted model proxy
 

@@ -44,6 +44,14 @@ async fn main() -> ExitCode {
         }
     };
 
+    // Injected by the scheduler via the downward API: the Job name, shared by
+    // every retry pod of one occurrence — the per-occurrence identity the API
+    // uses for idempotency and canary stickiness.
+    let occurrence_id = env::var("SINK_OCCURRENCE_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
     let url = format!(
         "{}/api/v1/sink/trigger/async",
         api_base_url.trim_end_matches('/')
@@ -56,13 +64,14 @@ async fn main() -> ExitCode {
     tracing::info!(event_id = %event_id, url = %url, "Triggering sink event");
 
     let client = reqwest::Client::new();
-    let result = client
+    let mut request = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", jwt))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await;
+        .header("Content-Type", "application/json");
+    if let Some(ref occurrence) = occurrence_id {
+        request = request.header("Idempotency-Key", format!("k8s-job:{}", occurrence));
+    }
+    let result = request.json(&body).send().await;
 
     match result {
         Ok(response) => {

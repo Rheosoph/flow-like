@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use crate::entity::{
     execution_event, execution_run,
-    sea_orm_active_enums::{RunMode as EntityRunMode, RunStatus as EntityRunStatus},
+    sea_orm_active_enums::{
+        RunMode as EntityRunMode, RunStatus as EntityRunStatus, RunVariant as EntityRunVariant,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -187,6 +189,24 @@ fn type_run_mode_to_entity(m: RunMode) -> EntityRunMode {
     }
 }
 
+fn entity_run_variant_to_type(v: EntityRunVariant) -> RunVariant {
+    match v {
+        EntityRunVariant::Primary => RunVariant::Primary,
+        EntityRunVariant::Canary => RunVariant::Canary,
+        EntityRunVariant::Shadow => RunVariant::Shadow,
+        EntityRunVariant::Regression => RunVariant::Regression,
+    }
+}
+
+fn type_run_variant_to_entity(v: RunVariant) -> EntityRunVariant {
+    match v {
+        RunVariant::Primary => EntityRunVariant::Primary,
+        RunVariant::Canary => EntityRunVariant::Canary,
+        RunVariant::Shadow => EntityRunVariant::Shadow,
+        RunVariant::Regression => EntityRunVariant::Regression,
+    }
+}
+
 fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTime {
     Utc.timestamp_millis_opt(ts).unwrap().naive_utc()
 }
@@ -207,6 +227,10 @@ fn run_model_to_record(m: execution_run::Model) -> ExecutionRunRecord {
         event_id: m.event_id,
         status: entity_run_status_to_type(m.status),
         mode: entity_run_mode_to_type(m.mode),
+        run_variant: entity_run_variant_to_type(m.run_variant),
+        variant_name: m.variant_name,
+        shadow_of_run_id: m.shadow_of_run_id,
+        regression_run_id: m.regression_run_id,
         input_payload_len: m.input_payload_len,
         output_payload_len: m.output_payload_len,
         error_message: m.error_message,
@@ -255,6 +279,10 @@ impl ExecutionStateStore for PostgresStateStore {
             node_id: Set(None),
             status: Set(EntityRunStatus::Pending),
             mode: Set(type_run_mode_to_entity(input.mode)),
+            run_variant: Set(type_run_variant_to_entity(input.run_variant)),
+            variant_name: Set(input.variant_name),
+            shadow_of_run_id: Set(input.shadow_of_run_id),
+            regression_run_id: Set(input.regression_run_id),
             input_payload_len: Set(input.input_payload_len),
             input_payload_key: Set(None),
             output_payload_len: Set(0),
@@ -539,6 +567,10 @@ mod terminal_mirror_tests {
             event_id: Some("event-1".into()),
             status: RunStatus::Completed,
             mode: RunMode::Queue,
+            run_variant: RunVariant::Primary,
+            variant_name: None,
+            shadow_of_run_id: None,
+            regression_run_id: None,
             input_payload_len: 12,
             output_payload_len: 34,
             error_message: Some("accepted error field".into()),

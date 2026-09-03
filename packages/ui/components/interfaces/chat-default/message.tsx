@@ -45,9 +45,11 @@ import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { ChatMessageError } from "./chat-message-error";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
-import { buildInlineSegments } from "./inline-segments";
+import { buildInlineSegments, joinContentText } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
+import { extractThinkBlocks } from "./reasoning-format";
+import { ReasoningViewer } from "./reasoning-viewer";
 import { UsageStats } from "./usage-stats";
 
 /** Lines of a sent message shown before it collapses behind "Show more". */
@@ -452,21 +454,23 @@ export const MessageComponent = memo(
 		);
 
 		const messageContent = useMemo(() => {
+			// Some providers inline reasoning into the answer as <think> blocks;
+			// rendered verbatim it splices thinking mid-paragraph into the reply.
+			const splitThinking = (raw: string) =>
+				isUser ? { text: raw, thinking: "" } : extractThinkBlocks(raw);
+
 			if (typeof message.inner.content === "string") {
 				return {
-					text: message.inner.content,
+					...splitThinking(message.inner.content),
 					attachments: message.files ?? [],
 				};
 			}
 
-			let text = "";
+			const text = joinContentText(message.inner.content);
 			const attachments: IAttachment[] = [];
 
 			for (const part of message.inner.content) {
-				if (part.text) {
-					text += `${part.text}\n`;
-					continue;
-				}
+				if (part.text) continue;
 				if (part.image_url?.url)
 					attachments.push({
 						url: part.image_url.url,
@@ -499,8 +503,11 @@ export const MessageComponent = memo(
 				}
 			}
 
-			return { text, attachments: [...uniqueAttachments.values()] };
-		}, [message.inner.content, message.files]);
+			return {
+				...splitThinking(text),
+				attachments: [...uniqueAttachments.values()],
+			};
+		}, [message.inner.content, message.files, isUser]);
 
 		const processedAttachments = useProcessedAttachments(
 			messageContent.attachments,
@@ -659,14 +666,15 @@ export const MessageComponent = memo(
 				? message.current_step_id
 				: undefined;
 
-		// Anchors index into the RAW content string — only trust them when content is that string
-		// (array-form content is re-joined for display, which shifts offsets).
+		// Anchors index into the joined text (`joinContentText`), the same derivation the event
+		// processor stamps them against. Extracting <think> blocks shifts offsets, so anchors are
+		// only trusted when nothing was pulled out of the text.
 		const inlineSegments = useMemo(
 			() =>
-				isUser || typeof message.inner.content !== "string"
+				isUser || messageContent.thinking
 					? null
 					: buildInlineSegments(messageContent.text, planSteps),
-			[isUser, message.inner.content, messageContent.text, planSteps],
+			[isUser, messageContent.text, messageContent.thinking, planSteps],
 		);
 
 		// Which segments are still moving while the turn streams: the growing text tail (not
@@ -752,6 +760,12 @@ export const MessageComponent = memo(
 								steps={planSteps}
 								currentStepId={currentPlanStepId}
 								loading={loading}
+							/>
+						)}
+						{!isUser && messageContent.thinking && (
+							<ReasoningViewer
+								reasoning={messageContent.thinking}
+								defaultExpanded={loading}
 							/>
 						)}
 						<div

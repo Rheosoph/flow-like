@@ -1,4 +1,23 @@
+import type { IContent } from "../../../lib/schema/llm/history";
 import type { IPlanStep } from "./chat-db";
+
+/**
+ * The text an assistant message renders, as one string. Step anchors index into THIS string, so
+ * the stamping side (event-processor) and the rendering side (message.tsx) must derive it the
+ * same way. Text parts are streamed token fragments: concatenate raw, any injected separator
+ * splits words and remark-breaks renders every newline as a hard break.
+ */
+export function joinContentText(
+	content: string | IContent[] | null | undefined,
+): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	let text = "";
+	for (const part of content) {
+		if (part.text) text += part.text;
+	}
+	return text;
+}
 
 /**
  * One entry of an assistant reply rendered in stream order: either a slice of the streamed text

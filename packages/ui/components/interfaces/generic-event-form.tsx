@@ -1149,7 +1149,7 @@ export function GenericEventFormInterface({
 									? responseMessage.content_parts
 											.filter((part: IContent) => typeof part.text === "string")
 											.map((part: IContent) => part.text)
-											.join("\n")
+											.join("")
 									: "";
 								// Replace entire content since this is the full response
 								if (typeof fullContent === "string") {

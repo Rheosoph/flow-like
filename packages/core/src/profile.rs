@@ -645,6 +645,7 @@ mod tests {
                 context_length: 20_000,
                 model_classification: BitModelClassification::default(),
                 provider: ModelProvider {
+                    api_surface: None,
                     provider_name: provider_name.to_string(),
                     model_id: Some(id.to_string()),
                     version: None,
@@ -929,6 +930,7 @@ mod tests {
                     context_length: 20000,
                     model_classification: BitModelClassification::default(),
                     provider: ModelProvider {
+                        api_surface: None,
                         provider_name: provider_name.to_string(),
                         model_id: Some("local-model".to_string()),
                         version: None,

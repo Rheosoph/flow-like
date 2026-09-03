@@ -1774,6 +1774,7 @@ pub async fn execute_agent_streaming(
 
         let mut response_contents: Vec<AssistantContent> = Vec::new();
         let mut final_usage: Option<RigUsage> = None;
+        let mut streamed_reasoning = String::new();
         let mut response_obj = Response::new();
         response_obj.model = Some(model_display_name.clone());
 
@@ -1792,7 +1793,14 @@ pub async fn execute_agent_streaming(
                     let chunk = ResponseChunk::from_text(&text.text, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
-                    response_contents.push(AssistantContent::Text(text));
+                    // Deltas are token fragments — extend the running Text item
+                    // instead of accumulating one item per token, which would
+                    // later render one block per token.
+                    if let Some(AssistantContent::Text(last)) = response_contents.last_mut() {
+                        last.text.push_str(&text.text);
+                    } else {
+                        response_contents.push(AssistantContent::Text(text));
+                    }
                 }
                 StreamedAssistantContent::ToolCall { tool_call, .. } => {
                     let chunk = ResponseChunk::from_tool_call(&tool_call, &model_display_name);
@@ -1806,28 +1814,42 @@ pub async fn execute_agent_streaming(
                     let entry = tool_call_deltas
                         .entry(id.clone())
                         .or_insert((String::new(), String::new()));
-                    let delta_str = match &content {
+                    let chunk = match &content {
                         rig::streaming::ToolCallDeltaContent::Name(name) => {
                             entry.0.push_str(name);
-                            name.clone()
+                            ResponseChunk::from_tool_call_name_delta(&id, name, &model_display_name)
                         }
                         rig::streaming::ToolCallDeltaContent::Delta(delta) => {
                             entry.1.push_str(delta);
-                            delta.clone()
+                            ResponseChunk::from_tool_call_delta(&id, delta, &model_display_name)
                         }
                     };
-                    let chunk =
-                        ResponseChunk::from_tool_call_delta(&id, &delta_str, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
                 }
                 StreamedAssistantContent::Reasoning(reasoning) => {
+                    // Some providers stream ReasoningDelta and then replay the
+                    // whole accumulated block as a final Reasoning item (others
+                    // send one Reasoning per chunk) — emit only what is new.
                     let reasoning_text = flatten_reasoning(&reasoning);
-                    let chunk = ResponseChunk::from_reasoning(&reasoning_text, &model_display_name);
-                    response_obj.push_chunk(chunk.clone());
-                    stream_state.emit_chunk(context, &chunk).await?;
+                    let new_text = if let Some(suffix) =
+                        reasoning_text.strip_prefix(streamed_reasoning.as_str())
+                    {
+                        suffix
+                    } else if streamed_reasoning.ends_with(reasoning_text.as_str()) {
+                        ""
+                    } else {
+                        reasoning_text.as_str()
+                    };
+                    if !new_text.is_empty() {
+                        let chunk = ResponseChunk::from_reasoning(new_text, &model_display_name);
+                        response_obj.push_chunk(chunk.clone());
+                        stream_state.emit_chunk(context, &chunk).await?;
+                        streamed_reasoning.push_str(new_text);
+                    }
                 }
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                    streamed_reasoning.push_str(&reasoning);
                     let chunk = ResponseChunk::from_reasoning(&reasoning, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
