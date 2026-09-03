@@ -218,6 +218,31 @@ pub trait PackageWidgetSource: Send + Sync {
     ) -> flow_like_types::Result<Vec<PackageWidgetRef>>;
 }
 
+/// Host-registered supplier of an app's declarative widgets.
+///
+/// Server executors implement this over the hub API so a run never needs a
+/// meta-store credential to instantiate a widget; the desktop leaves it
+/// unregistered and [`load_app_widgets`] falls back to the local store.
+/// Implementations cache per instance, so after the first call every further
+/// instantiation in the same run costs no I/O.
+#[async_trait]
+pub trait AppWidgetSource: Send + Sync {
+    async fn list_app_widgets(&self, app_id: &str) -> flow_like_types::Result<Arc<Vec<Widget>>>;
+}
+
+/// An app's declarative widgets, through the registered [`AppWidgetSource`]
+/// when there is one and from the meta store otherwise.
+pub async fn load_app_widgets(
+    app_id: &str,
+    state: Arc<FlowLikeState>,
+) -> flow_like_types::Result<Arc<Vec<Widget>>> {
+    if let Some(source) = state.app_widget_source().await {
+        return source.list_app_widgets(app_id).await;
+    }
+    let app = App::load(app_id.to_string(), state).await?;
+    Ok(Arc::new(app.get_widgets().await?))
+}
+
 /// A widget resolved through the unified provider.
 pub enum ResolvedWidget<'a> {
     Declarative(&'a Widget),
@@ -248,11 +273,20 @@ impl WidgetProvider {
     /// tolerated (empty list, matching existing behavior); package source
     /// errors propagate so callers can surface them.
     pub async fn load(app_id: &str, state: Arc<FlowLikeState>) -> flow_like_types::Result<Self> {
-        let app = App::load(app_id.to_string(), state.clone()).await?;
-        let declarative = app.get_widgets().await.unwrap_or_default();
+        let declarative = load_app_widgets(app_id, state.clone())
+            .await
+            .map(|widgets| widgets.as_ref().clone())
+            .unwrap_or_default();
         let package_widgets = match state.package_widget_source().await {
-            Some(source) if !app.packages.is_empty() => source.list_widgets(&app.packages).await?,
-            _ => Vec::new(),
+            Some(source) => {
+                let app = App::load(app_id.to_string(), state.clone()).await?;
+                if app.packages.is_empty() {
+                    Vec::new()
+                } else {
+                    source.list_widgets(&app.packages).await?
+                }
+            }
+            None => Vec::new(),
         };
         Ok(Self {
             declarative,
@@ -437,5 +471,63 @@ mod tests {
         ));
         assert!(provider.resolve("pkg:unknown/none").is_none());
         assert!(provider.resolve("missing").is_none());
+    }
+}
+
+#[cfg(test)]
+mod app_widget_source_tests {
+    use super::*;
+    use crate::state::FlowLikeConfig;
+    use flow_like_storage::files::store::FlowLikeStore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingSource {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AppWidgetSource for CountingSource {
+        async fn list_app_widgets(
+            &self,
+            _app_id: &str,
+        ) -> flow_like_types::Result<Arc<Vec<Widget>>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(Vec::new()))
+        }
+    }
+
+    fn state() -> Arc<FlowLikeState> {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_registered_source_replaces_the_store_read() {
+        let state = state();
+        let source = Arc::new(CountingSource {
+            calls: AtomicUsize::new(0),
+        });
+        state.register_app_widget_source(source.clone()).await;
+
+        load_app_widgets("app-1", state.clone()).await.expect("served by the source");
+        load_app_widgets("app-1", state.clone()).await.expect("served by the source");
+        assert_eq!(
+            source.calls.load(Ordering::SeqCst),
+            2,
+            "the shared helper delegates every call; per-run caching is the source's job"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_source_the_store_is_consulted() {
+        // Nothing registered and an empty store: the fallback path runs and fails
+        // on the missing manifest instead of pretending the app has no widgets.
+        let state = state();
+        assert!(load_app_widgets("app-1", state).await.is_err());
     }
 }

@@ -2281,6 +2281,7 @@ async fn dispatch_event_collect(
         // An external REST/MCP caller, not a Flow-Like client.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     let now = chrono::Utc::now().naive_utc();

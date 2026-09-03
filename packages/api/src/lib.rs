@@ -92,13 +92,14 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
-    // Executors are read-only on the meta store; guarantee compiled board
-    // artifacts exist before every dispatch. Installed here because the
+    // Executors hold no meta-store credential and obtain their board only as
+    // the presigned compiled artifact the dispatcher hands them, so the
+    // artifact must exist before every dispatch. Installed here because the
     // dispatcher is built before the state it needs exists.
     {
         let ensurer_state = state.clone();
         state.dispatcher.set_artifact_ensurer(std::sync::Arc::new(
-            move |app_id, board_id, version, board_etag| {
+            move |app_id, board_id, version, board_etag, wasm_packages| {
                 let state = ensurer_state.clone();
                 Box::pin(async move {
                     crate::execution::compiled_artifacts::ensure_compiled_artifact(
@@ -107,6 +108,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                         &board_id,
                         version,
                         board_etag.as_deref(),
+                        wasm_packages.as_ref(),
                     )
                     .await
                 })

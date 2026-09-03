@@ -369,6 +369,7 @@ pub async fn invoke_board(
         channel: None,
         trigger: DispatchTrigger::User,
         shadow: false,
+        artifact: None,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async

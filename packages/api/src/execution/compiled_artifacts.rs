@@ -1,8 +1,10 @@
 //! Pre-dispatch compiled-artifact assurance.
 //!
-//! Executors are read-only on the meta store (AWS scopes them to GetObject),
-//! so the API guarantees the compiled artifact exists before handing a run to
-//! them. The check is designed to be near-free on the hot path:
+//! The executor holds no meta-store credential and has no board source other
+//! than the compiled artifact the dispatcher presigns for it, so the API
+//! guarantees that artifact exists — for every run — before dispatch, and the
+//! dispatcher refuses the run otherwise. The check is designed to be
+//! near-free on the hot path:
 //!
 //! 1. In-memory positive cache keyed by (app, board, version|etag, registry
 //!    fingerprint). ETag-bound Page runs still revalidate object existence
@@ -15,17 +17,32 @@
 //!    its ETag. Governed Page runs already carry the ETag they authorized.
 //! 3. On miss: compile from the API's prepared-board cache and persist.
 //!
-//! Ordinary runs treat this as a warm-up optimization because the executor can
-//! compile the current source in memory. An ETag-bound Page run fails dispatch
-//! if its exact artifact cannot be assured; substituting a newer source would
-//! violate the action contract.
+//! The registry compiled against is the one the executor will run with: the
+//! built-in catalog extended with the run's WASM node definitions (see
+//! [`crate::state::State::artifact_registry`]), so boards with WASM nodes
+//! compile here too — without the API ever loading a module.
 
 use crate::state::AppState;
 use flow_like::flow::board::Board;
 use flow_like::flow::compiled;
+use flow_like::state::{FlowNodeRegistry, FlowNodeRegistryInner};
+use flow_like_storage::object_store::ObjectStore;
 use flow_like_storage::{Path, object_store::Error as StoreError};
 use flow_like_types::anyhow;
-use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+use flow_like_types::dispatch::{ETAG_BOUND_LATEST_VERSION_SENTINEL, WasmPackageRef};
+use flow_like_types::tokio::sync::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// What the assurance established: the artifact's object key on the meta
+/// store, the source ETag it was compiled from (floating Latest runs; `None`
+/// for pinned versions) and the registry fingerprint in its header.
+#[derive(Clone, Debug)]
+pub struct EnsuredArtifact {
+    pub path: Path,
+    pub source_etag: Option<String>,
+    pub registry_fingerprint: [u8; 32],
+}
 
 fn require_selected_draft_etag(
     board_id: &str,
@@ -41,15 +58,17 @@ fn require_selected_draft_etag(
 }
 
 /// Ensure the compiled artifact for (board, version|latest) exists on the
-/// meta store and matches the API's registry fingerprint.
+/// meta store and matches the fingerprint of the registry the run will use.
 pub async fn ensure_compiled_artifact(
     state: &AppState,
     app_id: &str,
     board_id: &str,
     version: Option<(u32, u32, u32)>,
     expected_etag: Option<&str>,
-) -> flow_like_types::Result<()> {
-    let fingerprint = state.registry.fingerprint();
+    wasm_packages: Option<&HashMap<String, WasmPackageRef>>,
+) -> flow_like_types::Result<EnsuredArtifact> {
+    let registry = state.artifact_registry(wasm_packages).await?;
+    let fingerprint = registry.fingerprint();
     let fingerprint_hex = blake3::Hash::from_bytes(fingerprint).to_hex();
     let storage_root = Path::from("apps").child(app_id.to_string());
     let meta_store = state.meta_bucket.as_generic();
@@ -133,8 +152,14 @@ pub async fn ensure_compiled_artifact(
         }
     };
 
+    let ensured = EnsuredArtifact {
+        path: artifact_path.clone(),
+        source_etag: selected_draft_etag.clone(),
+        registry_fingerprint: fingerprint,
+    };
+
     if expected_etag.is_none() && state.compiled_artifact_cache.get(&cache_key).is_some() {
-        return Ok(());
+        return Ok(ensured);
     }
 
     // Lookup 2: a ranged GET of the envelope answers existence + format
@@ -144,7 +169,7 @@ pub async fn ensure_compiled_artifact(
         && header.registry_fingerprint == fingerprint
     {
         state.compiled_artifact_cache.insert(cache_key, ());
-        return Ok(());
+        return Ok(ensured);
     }
 
     // Miss: compile from the API's prepared-board cache and persist.
@@ -177,17 +202,29 @@ pub async fn ensure_compiled_artifact(
         cached.board.clone()
     };
 
-    // Boards with WASM nodes are compiled by the executor: only its registry
-    // carries the bundle's `on_update` behavior, so an API-built artifact
-    // would be rejected there anyway. Cache the decision — it is keyed by
-    // board content + fingerprint and flips on the next edit.
-    let has_wasm = board.has_wasm_nodes();
-    if has_wasm {
-        state.compiled_artifact_cache.insert(cache_key, ());
-        return Ok(());
-    }
+    // The prepared board was hydrated against the built-in registry, where
+    // `sync_board_node_schemas` skips nodes it cannot find — so a WASM node
+    // still carries whatever metadata, pin schemas and permissions were saved,
+    // not the package's current ones. Re-hydrate against the overlay registry
+    // so the artifact is what the executor's own registry would have produced.
+    let board = if board.has_wasm_nodes() && !Arc::ptr_eq(&registry, &state.registry) {
+        rehydrate_with_registry(
+            state,
+            meta_store.clone(),
+            app_id,
+            board_id,
+            &storage_root,
+            version,
+            expected_etag,
+            selected_draft_etag.as_deref(),
+            registry.clone(),
+        )
+        .await?
+    } else {
+        board
+    };
 
-    let compiled_board = compiled::compile::compile_board_with_catalog(&board, &state.registry)?;
+    let compiled_board = compiled::compile::compile_board_with_catalog(&board, &registry)?;
     let bytes = compiled::encode_artifact(&compiled_board, &fingerprint)?;
     compiled::persist_artifact(&meta_store, &artifact_path, purge_prefix, bytes).await?;
     state.compiled_artifact_cache.insert(cache_key, ());
@@ -197,7 +234,60 @@ pub async fn ensure_compiled_artifact(
         path = %artifact_path,
         "Compiled artifact ensured before dispatch"
     );
-    Ok(())
+    Ok(ensured)
+}
+
+/// Load the board's source again and hydrate it against `registry`, for boards
+/// whose prepared form was hydrated against a registry without their WASM
+/// nodes. The hydration state borrows the master state's stores and clients
+/// but gets its own registry handle, so the shared master state is never
+/// mutated. A floating source that moved since the HEAD that keyed the
+/// artifact is refused rather than compiled under the older ETag's path.
+#[allow(clippy::too_many_arguments)]
+async fn rehydrate_with_registry(
+    state: &AppState,
+    meta_store: Arc<dyn ObjectStore>,
+    app_id: &str,
+    board_id: &str,
+    storage_root: &Path,
+    version: Option<(u32, u32, u32)>,
+    expected_etag: Option<&str>,
+    selected_etag: Option<&str>,
+    registry: Arc<FlowNodeRegistryInner>,
+) -> flow_like_types::Result<Arc<Board>> {
+    let proto = if let Some(expected_etag) = expected_etag {
+        let source_path = compiled::draft_source_path(app_id, board_id, expected_etag);
+        flow_like::utils::compression::from_compressed(meta_store, source_path.clone())
+            .await
+            .map_err(|error| {
+                anyhow!(
+                    "exact source snapshot for Latest board {board_id} is unavailable at {source_path}: {error}"
+                )
+            })?
+    } else {
+        let (proto, meta) =
+            Board::load_proto_with_meta(meta_store, storage_root, board_id, version).await?;
+        let loaded_etag = meta
+            .e_tag
+            .ok_or_else(|| anyhow!("meta store returned no etag for board {board_id}"))?;
+        require_selected_draft_etag(board_id, selected_etag, &loaded_etag)?;
+        proto
+    };
+
+    let master = state.master_state(state).await?;
+    let mut hydration_state = master.for_execution_run();
+    hydration_state.node_registry = Arc::new(RwLock::new(FlowNodeRegistry {
+        node_registry: registry,
+        parent: None,
+    }));
+    let board = Board::from_loaded_proto(proto, storage_root.clone(), Arc::new(hydration_state)).await;
+    if board.id != board_id {
+        return Err(anyhow!(
+            "source for board {board_id} contains board {}",
+            board.id
+        ));
+    }
+    Ok(Arc::new(board))
 }
 
 #[cfg(test)]

@@ -313,6 +313,7 @@ pub async fn invoke_board_async(
         channel: None,
         trigger: DispatchTrigger::User,
         shadow: false,
+        artifact: None,
     };
 
     let response = state

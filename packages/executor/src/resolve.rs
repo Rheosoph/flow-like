@@ -50,15 +50,29 @@ pub async fn resolve_payload(
 /// GET a presigned URL with connect/total timeouts, redirects refused, and the
 /// response body capped at `max_bytes`.
 pub async fn fetch_bounded(url: &str, max_bytes: u64) -> Result<Vec<u8>, ResolveError> {
+    fetch_bounded_with(url, None, max_bytes).await
+}
+
+/// [`fetch_bounded`] with an optional bearer token, for hub endpoints that
+/// authenticate the executor by its JWT rather than by a presigned URL.
+pub async fn fetch_bounded_with(
+    url: &str,
+    bearer: Option<&str>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, ResolveError> {
     let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(FETCH_CONNECT_TIMEOUT)
         .timeout(FETCH_TIMEOUT)
         .build()
         .map_err(|e| ResolveError::Fetch(e.to_string()))?;
 
-    let mut response = client
-        .get(url)
+    let mut request = client.get(url);
+    if let Some(token) = bearer {
+        request = request.bearer_auth(token);
+    }
+    let mut response = request
         .send()
         .await
         .map_err(|e| ResolveError::Fetch(e.to_string()))?;

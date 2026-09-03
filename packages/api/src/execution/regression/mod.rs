@@ -979,6 +979,7 @@ async fn dispatch_case(
         channel: None,
         trigger: DispatchTrigger::System,
         shadow: true,
+        artifact: None,
     };
 
     let db_arc = Arc::new(state.db.clone());

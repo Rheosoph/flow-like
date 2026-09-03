@@ -14,7 +14,8 @@ use flow_like_secrets::{
     EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
 };
 use flow_like_types::bail;
-use flow_like_types::{Result, Value};
+use flow_like_types::dispatch::WasmPackageRef;
+use flow_like_types::{Result, Value, anyhow};
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
     rt::TokioExecutor,
@@ -401,6 +402,11 @@ pub struct State {
     /// content-addressed. ETag-bound dispatches revalidate object existence
     /// because lifecycle cleanup can remove an artifact before this entry.
     pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
+    /// Registries compiled artifacts are fingerprinted against, one per
+    /// resolved WASM package set (`wasm_package_set_revision`): the built-in
+    /// catalog extended with the packages' manifest `Node`s. See
+    /// [`State::artifact_registry`].
+    pub artifact_registries: moka::sync::Cache<String, Arc<FlowNodeRegistryInner>>,
     /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
     /// like `compiled_artifact_cache`, so entries never go stale.
     pub prerun_manifest_cache:
@@ -442,6 +448,47 @@ pub struct State {
 }
 
 impl State {
+    /// The registry a compiled artifact is fingerprinted against.
+    ///
+    /// The built-in catalog alone when the run brings no WASM packages;
+    /// otherwise the catalog extended with the `Node` definitions of exactly
+    /// the resolved packages — the same set the executor overlays from the
+    /// loaded modules, so both sides compute one fingerprint and the artifact
+    /// the API writes is the one the executor accepts. Built from the node
+    /// definitions the compiler workload reported at upload time
+    /// (`wasm_package_version.nodes`): no module bytes are read here, and the
+    /// stand-in logic refuses to run, so user WASM never executes in this
+    /// process.
+    pub async fn artifact_registry(
+        &self,
+        wasm_packages: Option<&HashMap<String, WasmPackageRef>>,
+    ) -> Result<Arc<FlowNodeRegistryInner>> {
+        let Some(packages) = wasm_packages.filter(|packages| !packages.is_empty()) else {
+            return Ok(self.registry.clone());
+        };
+        let key = flow_like_types::dispatch::wasm_package_set_revision(Some(packages));
+        if let Some(registry) = self.artifact_registries.get(&key) {
+            return Ok(registry);
+        }
+
+        let pins: Vec<(String, String)> = packages
+            .iter()
+            .map(|(package_id, package)| (package_id.clone(), package.version.clone()))
+            .collect();
+        let nodes = crate::routes::app::wasm_catalog::wasm_nodes_for_pins(&self.db, &pins)
+            .await
+            .map_err(|e| anyhow!("failed to load WASM node manifests for compilation: {e}"))?;
+
+        let mut overlay = (*self.registry).clone();
+        for node in nodes {
+            let logic = crate::execution::wasm_node_stubs::WasmNodeStub::new(node.clone());
+            overlay.insert(node, Arc::new(logic));
+        }
+        let overlay = Arc::new(overlay);
+        self.artifact_registries.insert(key, overlay.clone());
+        Ok(overlay)
+    }
+
     fn board_mutation_lock(
         &self,
         app_id: &str,
@@ -882,6 +929,10 @@ impl State {
             compiled_artifact_cache: moka::sync::Cache::builder()
                 .max_capacity(16_384)
                 .time_to_idle(Duration::from_secs(12 * 60 * 60))
+                .build(),
+            artifact_registries: moka::sync::Cache::builder()
+                .max_capacity(256)
+                .time_to_idle(Duration::from_secs(60 * 60))
                 .build(),
             prerun_manifest_cache: moka::sync::Cache::builder()
                 .max_capacity(4_096)

@@ -10,7 +10,7 @@ use flow_like::flow::{
     node::{Node, NodeWasm},
 };
 use flow_like_wasm_schema::manifest::PackageNodeEntry;
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
 /// An app's WASM node catalog together with a token that changes whenever the catalog does.
@@ -105,36 +105,53 @@ async fn wasm_nodes_for_packages(
     state: &AppState,
     packages: &[app_package::Model],
 ) -> Result<Vec<Node>, ApiError> {
-    if packages.is_empty() {
+    let pins: Vec<(String, String)> = packages
+        .iter()
+        .map(|pkg| (pkg.package_id.clone(), pkg.version.clone()))
+        .collect();
+    wasm_nodes_for_pins(&state.db, &pins).await
+}
+
+/// The `Node` definitions of exactly these `(package_id, version)` pins, from
+/// the `nodes` column the compilation callback stored when the compiler
+/// workload ran the module's `get_nodes`. This is the API's only view of a WASM
+/// node: it never loads the module, and the definitions it rebuilds are
+/// fingerprint-identical to the ones the executor derives from the running
+/// module (see `both_node_builders_agree_on_every_fingerprint_input`), which is
+/// what lets the API compile boards the executor will accept.
+pub async fn wasm_nodes_for_pins(
+    db: &DatabaseConnection,
+    pins: &[(String, String)],
+) -> Result<Vec<Node>, ApiError> {
+    if pins.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut pinned = Condition::any();
-    for pkg in packages {
+    for (package_id, version) in pins {
         pinned = pinned.add(
             Condition::all()
-                .add(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
-                .add(wasm_package_version::Column::Version.eq(&pkg.version)),
+                .add(wasm_package_version::Column::PackageId.eq(package_id))
+                .add(wasm_package_version::Column::Version.eq(version)),
         );
     }
 
     let mut nodes_by_pin: HashMap<(String, String), serde_json::Value> =
         wasm_package_version::Entity::find()
             .filter(pinned)
-            .all(&state.db)
+            .all(db)
             .await?
             .into_iter()
             .map(|record| ((record.package_id, record.version), record.nodes))
             .collect();
 
-    let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
+    let mut wasm_nodes: Vec<Node> = Vec::with_capacity(pins.len() * 5);
 
-    for pkg in packages {
-        let key = (pkg.package_id.clone(), pkg.version.clone());
-        let Some(nodes_value) = nodes_by_pin.remove(&key) else {
+    for (package_id, version) in pins {
+        let Some(nodes_value) = nodes_by_pin.remove(&(package_id.clone(), version.clone())) else {
             tracing::warn!(
-                package_id = %pkg.package_id,
-                version = %pkg.version,
+                package_id = %package_id,
+                version = %version,
                 "app catalog: pinned WASM package version not found; skipping its nodes"
             );
             continue;
@@ -144,7 +161,7 @@ async fn wasm_nodes_for_packages(
             serde_json::from_value(nodes_value).unwrap_or_default();
 
         for entry in &entries {
-            wasm_nodes.push(package_node_to_node(entry, &pkg.package_id));
+            wasm_nodes.push(package_node_to_node(entry, package_id));
         }
     }
 
