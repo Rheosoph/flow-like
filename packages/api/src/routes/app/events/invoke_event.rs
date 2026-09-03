@@ -736,6 +736,7 @@ async fn invoke_event_impl(
         channel: None,
         trigger: DispatchTrigger::User,
         shadow: false,
+        artifact: None,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async

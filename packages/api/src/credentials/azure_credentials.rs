@@ -324,10 +324,11 @@ impl AzureRuntimeCredentials {
             )
         };
 
-        // Only ServerExecute reads draft artifacts, mirroring the AWS/GCP/R2
-        // executor policies; every other mode leaves both slots empty.
-        let mut draft_meta_sas_token = None;
-        let mut draft_meta_path_prefix = None;
+        // No mode reads draft artifacts from storage any more — the executor
+        // receives its compiled board as a presigned artifact — so both slots
+        // stay empty. Kept on the struct so older executors deserialise.
+        let draft_meta_sas_token = None;
+        let draft_meta_path_prefix = None;
 
         // Determine which containers and paths need SAS tokens based on access mode
         let (
@@ -610,30 +611,9 @@ impl AzureRuntimeCredentials {
                 )
             }
             CredentialsAccess::ServerExecute => {
-                let (meta_prefix, meta_permissions) = server_execute_meta_scope(app_id);
-                let meta_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.meta_container,
-                    &meta_prefix,
-                    meta_permissions,
-                    &expiry_str,
-                    &issuer,
-                )?;
-                // Draft artifacts (compiled boards, exact `.board` snapshots,
-                // prerun manifests) live under `tmp/apps/{app_id}` on the meta
-                // container. A directory SAS signs exactly one directory, so
-                // unlike the AWS/GCP prefix lists this needs a second,
-                // read-only token beside the `apps/{app_id}` meta SAS.
-                let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(app_id);
-                draft_meta_sas_token = Some(generate_directory_sas(
-                    &self.account_name,
-                    &self.meta_container,
-                    &draft_prefix,
-                    draft_permissions,
-                    &expiry_str,
-                    &issuer,
-                )?);
-                draft_meta_path_prefix = Some(draft_prefix);
+                // No meta SAS: the executor's board arrives as a presigned
+                // compiled artifact and its widgets come from the hub, so the
+                // run credential never addresses the meta container.
                 let app_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -661,7 +641,7 @@ impl AzureRuntimeCredentials {
                     &issuer,
                 )?;
                 (
-                    Some(meta_sas),
+                    None,
                     Some(app_content_sas),
                     Some(user_content_sas),
                     Some(logs_sas),
@@ -674,26 +654,8 @@ impl AzureRuntimeCredentials {
                 // ServerExecute with app/user content writes dropped: a shadow
                 // run reads live content ("rl") but may never mutate it.
                 // Scratch stays read-write and run logs stay append-only so
-                // the shadow run itself is recorded.
-                let (meta_prefix, meta_permissions) = server_execute_meta_scope(app_id);
-                let meta_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.meta_container,
-                    &meta_prefix,
-                    meta_permissions,
-                    &expiry_str,
-                    &issuer,
-                )?;
-                let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(app_id);
-                draft_meta_sas_token = Some(generate_directory_sas(
-                    &self.account_name,
-                    &self.meta_container,
-                    &draft_prefix,
-                    draft_permissions,
-                    &expiry_str,
-                    &issuer,
-                )?);
-                draft_meta_path_prefix = Some(draft_prefix);
+                // the shadow run itself is recorded. Like ServerExecute, no
+                // meta SAS.
                 let app_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -719,7 +681,7 @@ impl AzureRuntimeCredentials {
                     &issuer,
                 )?;
                 (
-                    Some(meta_sas),
+                    None,
                     Some(app_content_sas),
                     Some(user_content_sas),
                     Some(logs_sas),
@@ -972,26 +934,6 @@ impl AzureUserDelegationSasIssuer {
 /// Read-only meta scope for the executor: version artifacts and boards under
 /// `apps/{app_id}`.
 ///
-/// Draft artifacts live under `tmp/apps/{app_id}` and are covered by the
-/// separate SAS from [`server_execute_draft_meta_scope`] — an Azure directory
-/// SAS signs exactly one directory, and widening this one to the container
-/// root would expose every app's metadata.
-#[cfg(feature = "azure")]
-fn server_execute_meta_scope(app_id: &str) -> (String, &'static str) {
-    (format!("apps/{app_id}"), "rl")
-}
-
-/// Read-only draft-artifact scope for the executor: compiled drafts, exact
-/// `.board` snapshots and prerun manifests under `tmp/apps/{app_id}`
-/// (see `flow_like::flow::compiled::draft_artifact_dir`), lifecycle-reclaimed
-/// via the `tmp/` prefix. Read+list only — only the API writes drafts, which
-/// anchors `entry_authority_revision`. The executor routes meta reads under
-/// this directory through the token (`AzureSharedCredentials::to_store_type`).
-#[cfg(feature = "azure")]
-fn server_execute_draft_meta_scope(app_id: &str) -> (String, &'static str) {
-    (format!("tmp/apps/{app_id}"), "rl")
-}
-
 /// Generates an HTTPS-only directory SAS for an HNS/ADLS Gen2 path.
 /// The secure Azure API reaches this through a Microsoft Entra user delegation
 /// key; shared-key signing remains only for backward-compatible callers that
@@ -1441,80 +1383,25 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_azure_server_execute_has_meta_read_and_content_write() {
+    /// The executor's board arrives as a presigned compiled artifact and its
+    /// widgets come from the hub, so ServerExecute carries no meta SAS at all —
+    /// neither for `apps/{app_id}` nor for the draft directory.
+    async fn test_azure_server_execute_has_no_meta_sas_and_content_write() {
         let creds = test_azure_runtime_credentials();
         let scoped = creds
             .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::ServerExecute)
             .await
             .expect("server execute credentials should be generated");
 
-        let meta = scoped
-            .meta_sas_token
-            .as_deref()
-            .expect("ServerExecute should include meta read credentials");
-        assert_eq!(sas_permissions(meta), Some("rl"));
-        assert_eq!(sas_directory_depth(meta), Some(2));
-        let (meta_prefix, meta_permissions) = server_execute_meta_scope(TEST_APP_ID);
-        assert_eq!(meta_prefix, format!("apps/{TEST_APP_ID}"));
-        assert_eq!(meta_permissions, "rl");
-
-        // Draft artifacts live under tmp/apps/{app_id}, which a directory SAS
-        // for apps/{app_id} cannot cover — ServerExecute therefore carries a
-        // second meta SAS scoped to exactly that directory, read+list only:
-        // only the API writes drafts (the trust anchor for
-        // `entry_authority_revision`).
-        let draft_meta = scoped
-            .draft_meta_sas_token
-            .as_deref()
-            .expect("ServerExecute should include draft-artifact read credentials");
-        let (draft_prefix, draft_permissions) = server_execute_draft_meta_scope(TEST_APP_ID);
-        assert_eq!(draft_prefix, format!("tmp/apps/{TEST_APP_ID}"));
-        assert_eq!(draft_permissions, "rl");
-        assert_eq!(sas_permissions(draft_meta), Some("rl"));
-        let draft_meta_permissions =
-            sas_permissions(draft_meta).expect("draft SAS should carry permissions");
         assert!(
-            !draft_meta_permissions.contains('w')
-                && !draft_meta_permissions.contains('d')
-                && !draft_meta_permissions.contains('a')
-                && !draft_meta_permissions.contains('c'),
-            "the draft SAS must never grant a write, got {draft_meta_permissions}"
+            scoped.meta_sas_token.is_none(),
+            "ServerExecute must not carry a meta SAS"
         );
-        // tmp/apps/{app_id}
-        assert_eq!(sas_directory_depth(draft_meta), Some(3));
-        assert_eq!(
-            scoped.draft_meta_path_prefix.as_deref(),
-            Some(draft_prefix.as_str()),
-            "the executor routes meta reads by this prefix"
+        assert!(
+            scoped.draft_meta_sas_token.is_none(),
+            "ServerExecute must not carry a draft-artifact SAS"
         );
-
-        let draft_artifact = flow_like::flow::compiled::draft_artifact_path(
-            TEST_APP_ID,
-            "board-1",
-            "etag",
-            &[7; 32],
-        )
-        .to_string();
-        let draft_source =
-            flow_like::flow::compiled::draft_source_path(TEST_APP_ID, "board-1", "etag")
-                .to_string();
-        let draft_manifest =
-            flow_like::flow::compiled::draft_manifest_path(TEST_APP_ID, "board-1", "etag")
-                .to_string();
-        let other_app_artifact = flow_like::flow::compiled::draft_artifact_path(
-            &format!("{TEST_APP_ID}-other"),
-            "board-1",
-            "etag",
-            &[7; 32],
-        )
-        .to_string();
-        for path in [&draft_artifact, &draft_source, &draft_manifest] {
-            assert!(
-                path.starts_with(&format!("{draft_prefix}/")),
-                "{path} must be inside the ServerExecute draft meta scope {draft_prefix}"
-            );
-        }
-        assert!(!other_app_artifact.starts_with(&format!("{draft_prefix}/")));
+        assert!(scoped.draft_meta_path_prefix.is_none());
 
         let content = scoped
             .content_sas_token
@@ -1562,11 +1449,11 @@ mod integration_tests {
             .expect("ShadowExecute should include user content read credentials");
         assert_eq!(sas_permissions(user_content), Some("rl"));
 
-        let meta = scoped
-            .meta_sas_token
-            .as_deref()
-            .expect("ShadowExecute still reads the board/event definition");
-        assert_eq!(sas_permissions(meta), Some("rl"));
+        assert!(
+            scoped.meta_sas_token.is_none(),
+            "ShadowExecute receives its board as a presigned artifact, not a meta SAS"
+        );
+        assert!(scoped.draft_meta_sas_token.is_none());
 
         let logs = scoped
             .logs_sas_token

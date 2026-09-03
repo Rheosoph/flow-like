@@ -191,6 +191,25 @@ pub enum CompilationStatus {
     Failed,
 }
 
+/// The compiled board an executor runs, delivered as a presigned GET so the
+/// executor needs no storage credential to obtain it. Produced by the API's
+/// pre-dispatch artifact assurance; consumed verbatim by the executor.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompiledArtifactRef {
+    /// Presigned GET for the `.flcb` object.
+    pub url: String,
+    /// Object key on the API's meta store. Diagnostics only — the executor never addresses storage.
+    pub path: String,
+    /// ETag of the source `.board` the artifact was compiled from, for floating Latest runs
+    /// (`None` for versioned runs, whose identity is the version). The executor keys its
+    /// template cache on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_etag: Option<String>,
+    /// Hex blake3 fingerprint of the registry the API compiled against. The executor validates the
+    /// artifact header against its own registry; this value only makes a mismatch diagnosable.
+    pub registry_fingerprint: String,
+}
+
 /// Payload produced by the API dispatcher and consumed by every executor runtime
 /// (HTTP, Lambda, SQS, Redis, Kafka, Kubernetes).
 ///
@@ -243,6 +262,11 @@ pub struct DispatchPayload {
     /// request when the two disagree.
     #[serde(default)]
     pub shadow: bool,
+    /// Compiled `.flcb` the executor runs, as a presigned GET. Optional on the
+    /// wire so an executor that predates it ignores the field; current executors
+    /// require it and fail closed when it is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<CompiledArtifactRef>,
 }
 
 /// Reference to a dispatch payload that may be either embedded inline or

@@ -6,7 +6,6 @@ use flow_like::a2ui::micro_widget::{
     self, MICRO_WIDGET_COMPONENT_TYPE, ResolvedWidget, WidgetProvider,
 };
 use flow_like::a2ui::widget::{CustomizationType, ExposedPropType, Widget};
-use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -660,8 +659,10 @@ impl NodeLogic for InstantiateWidget {
                 .await;
         }
 
-        let app = App::load(app_id.clone(), context.app_state.clone()).await?;
-        let widgets = app.get_widgets().await.unwrap_or_default();
+        // Through the host's widget source — on a server executor that is the
+        // hub API, cached for the run, so a board that instantiates the same
+        // widget N times still costs one fetch and never touches the meta store.
+        let widgets = micro_widget::load_app_widgets(&app_id, context.app_state.clone()).await?;
         let widget = find_widget_by_selector(&widgets, &widget_selector)
             .ok_or_else(|| flow_like_types::anyhow!("Widget '{}' not found", widget_selector))?;
         let widget_id = widget.id.clone();

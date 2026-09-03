@@ -935,7 +935,7 @@ fn page_event_message_id(event: &ExecutionEventInput, batch_index: usize) -> Str
         .unwrap_or_else(|| format!("batch-index:{batch_index}"))
 }
 
-fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
+pub(super) fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     crate::middleware::jwt::viewer_authorization(headers)
         .ok_or_else(|| ApiError::bad_request("Missing Authorization header".to_string()))?
         .strip_prefix("Bearer ")

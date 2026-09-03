@@ -615,6 +615,7 @@ pub async fn invoke_event_async(
         channel: None,
         trigger: DispatchTrigger::User,
         shadow: false,
+        artifact: None,
     };
 
     // No executor can observe this run before dispatch. Insert only after all

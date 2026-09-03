@@ -232,7 +232,6 @@ impl AwsRuntimeCredentials {
                 &runs_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
-                meta_express,
             ),
             CredentialsAccess::ShadowExecute => shadow_execute_policy(
                 self,
@@ -241,7 +240,6 @@ impl AwsRuntimeCredentials {
                 &runs_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
-                meta_express,
             ),
             CredentialsAccess::ReadLogs => read_logs_policy(self, &runs_prefix),
         };
@@ -488,12 +486,11 @@ struct KmsScope {
 impl KmsScope {
     fn of(mode: &CredentialsAccess) -> Self {
         Self {
+            // The executor modes never open the meta bucket: boards arrive as
+            // presigned artifacts, widgets via the hub.
             meta: matches!(
                 mode,
-                CredentialsAccess::EditApp
-                    | CredentialsAccess::ReadApp
-                    | CredentialsAccess::ServerExecute
-                    | CredentialsAccess::ShadowExecute
+                CredentialsAccess::EditApp | CredentialsAccess::ReadApp
             ),
             // Every mode but `ReadLogs` works on app or user content.
             content: !matches!(mode, CredentialsAccess::ReadLogs),
@@ -833,6 +830,12 @@ fn invoke_read_write_policy(
     policy
 }
 
+/// The executor's own grant: app and user content, scratch, and append-only
+/// run logs. Nothing on the meta bucket — the board reaches the executor as a
+/// presigned compiled artifact and widgets come from the hub, so this
+/// credential never needs to address meta at all. On a directory bucket that
+/// distinction is the whole game: `CreateSession` cannot be scoped below the
+/// bucket, so the only meta grant that is not bucket-wide is none.
 fn server_execute_policy(
     credentials: &AwsRuntimeCredentials,
     apps_prefix: &str,
@@ -840,15 +843,8 @@ fn server_execute_policy(
     runs_prefix: &str,
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
-    meta_express: bool,
 ) -> flow_like_types::Value {
-    // Draft artifacts (compiled boards, exact `.board` snapshots, prerun
-    // manifests) live under `tmp/apps/{app_id}/` on the meta bucket so
-    // lifecycle rules on `tmp/` reclaim them. The executor gets the same
-    // read-only grant there as on `apps/{app_id}` — only the API writes
-    // drafts, which anchors `entry_authority_revision`.
-    let draft_meta_prefix = format!("tmp/{apps_prefix}");
-    let mut statements = vec![
+    let statements = vec![
         json!({
           "Effect": "Allow",
           "Action": [
@@ -914,55 +910,6 @@ fn server_execute_policy(
           ],
         }),
     ];
-    if meta_express {
-        // On a directory bucket the session token — not per-object IAM —
-        // authorizes every zonal request, so the `s3:*` meta statements would
-        // never be evaluated; emitting them anyway blew the AssumeRole packed
-        // policy budget. Pin the session to ReadOnly so this mode cannot
-        // write the meta bucket.
-        statements.push(json!({
-          "Effect": "Allow",
-          "Action": [
-              "s3express:CreateSession",
-          ],
-          "Resource": [
-              "*"
-          ],
-          "Condition": {
-              "StringEquals": {
-                  "s3express:SessionMode": "ReadOnly"
-              }
-          }
-        }));
-    } else {
-        statements.push(json!({
-          "Effect": "Allow",
-          "Action": [
-              "s3:ListBucket"
-          ],
-          "Resource": [
-              format!("arn:aws:s3:::{}", credentials.meta_bucket)
-          ],
-          "Condition": {
-              "StringLike": {
-                  "s3:prefix": [
-                      format!("{}/*", apps_prefix),
-                      format!("{}/*", draft_meta_prefix)
-                  ]
-              }
-          }
-        }));
-        statements.push(json!({
-          "Effect": "Allow",
-          "Action": [
-              "s3:GetObject"
-          ],
-          "Resource": [
-              format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, apps_prefix),
-              format!("arn:aws:s3:::{}/{}/*", credentials.meta_bucket, draft_meta_prefix),
-          ],
-        }));
-    }
     json!({
         "Version": "2012-10-17",
         "Statement": statements,
@@ -982,7 +929,6 @@ fn shadow_execute_policy(
     runs_prefix: &str,
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
-    meta_express: bool,
 ) -> flow_like_types::Value {
     let mut policy = server_execute_policy(
         credentials,
@@ -991,7 +937,6 @@ fn shadow_execute_policy(
         runs_prefix,
         temporary_user_prefix,
         temporary_global_prefix,
-        meta_express,
     );
 
     // Statement 1 is the content-bucket object statement (see
@@ -1670,78 +1615,37 @@ mod tests {
     }
 
     #[test]
-    fn test_aws_server_execute_grants_meta_read_only() {
+    /// The executor's board arrives as a presigned compiled artifact and its
+    /// widgets come from the hub, so its credential must not be able to
+    /// address the meta bucket at all — on a directory bucket any
+    /// `CreateSession` grant is bucket-wide, so "none" is the only scope.
+    #[test]
+    fn test_aws_server_execute_grants_no_meta_access() {
         let creds = test_aws_runtime_credentials();
-        let app_prefix = "apps/app-1";
         let policy = server_execute_policy(
             &creds,
-            app_prefix,
+            "apps/app-1",
             "users/user-1/apps/app-1",
             "runs/app-1",
             "tmp/user/user-1/apps/app-1",
             "tmp/global/apps/app-1",
-            false,
         );
         let statements = policy["Statement"]
             .as_array()
             .expect("policy statements should be an array");
-        let meta_object_statement = statements
-            .iter()
-            .find(|statement| {
-                statement["Resource"]
-                    .to_string()
-                    .contains("meta-secret/apps")
-            })
-            .expect("server execute should include meta object access");
-        let meta_list_statement = statements
-            .iter()
-            .find(|statement| {
-                statement["Resource"]
-                    .to_string()
-                    .contains("arn:aws:s3:::meta-secret")
-                    && statement["Condition"].to_string().contains(app_prefix)
-            })
-            .expect("server execute should include app-scoped meta listing");
-        let meta_actions = meta_object_statement["Action"].to_string();
-        let meta_resources = meta_object_statement["Resource"].to_string();
-        let meta_list_actions = meta_list_statement["Action"].to_string();
-        let meta_list_prefixes = meta_list_statement["Condition"].to_string();
         for statement in statements {
-            let actions = statement["Action"].to_string();
-            if statement["Resource"].to_string().contains("meta-secret") {
-                assert!(
-                    !actions.contains("PutObject") && !actions.contains("DeleteObject"),
-                    "no ServerExecute statement may write the meta bucket: {statement}"
-                );
-            }
+            assert!(
+                !statement["Resource"].to_string().contains("meta-secret"),
+                "ServerExecute must not name the meta bucket: {statement}"
+            );
         }
-        let policy = to_string(&policy).expect("policy should serialize");
-        let draft_artifact =
-            flow_like::flow::compiled::draft_artifact_path("app-1", "board-1", "etag", &[7; 32])
-                .to_string();
-        let other_app_artifact =
-            flow_like::flow::compiled::draft_artifact_path("app-10", "board-1", "etag", &[7; 32])
-                .to_string();
-
-        assert!(policy.contains("meta-secret/apps/app-1/*"));
-        assert!(meta_actions.contains("GetObject"));
-        assert!(meta_list_actions.contains("ListBucket"));
-        assert!(draft_artifact.starts_with("tmp/apps/app-1/"));
-        assert!(!other_app_artifact.starts_with("tmp/apps/app-1/"));
+        let json = to_string(&policy).expect("policy should serialize");
         assert!(
-            meta_resources.contains("meta-secret/tmp/apps/app-1/*"),
-            "draft artifacts under tmp/apps must stay readable: {meta_resources}"
+            !json.contains("s3express"),
+            "ServerExecute must not be able to open an express session: {json}"
         );
-        assert!(
-            meta_list_prefixes.contains("tmp/apps/app-1/*"),
-            "draft artifacts under tmp/apps must stay listable: {meta_list_prefixes}"
-        );
-        assert!(
-            !policy.to_string().contains("s3express"),
-            "a standard meta bucket needs no express statements"
-        );
-        assert!(policy.contains("content-data/apps/app-1/*"));
-        assert!(policy.contains("logs/runs/app-1/*"));
+        assert!(json.contains("content-data/apps/app-1/*"));
+        assert!(json.contains("logs/runs/app-1/*"));
         let logs_actions = statements
             .iter()
             .find(|statement| statement["Resource"].to_string().contains("logs/runs"))
@@ -1751,14 +1655,6 @@ mod tests {
         assert!(
             !logs_actions.contains("DeleteObject"),
             "ServerExecute run logs are append-only"
-        );
-        assert!(
-            !meta_actions.contains("PutObject"),
-            "ServerExecute must not grant meta writes"
-        );
-        assert!(
-            !meta_actions.contains("DeleteObject"),
-            "ServerExecute must not grant meta deletes"
         );
     }
 
@@ -1776,7 +1672,6 @@ mod tests {
             "runs/app-1",
             "tmp/user/user-1/apps/app-1",
             "tmp/global/apps/app-1",
-            false,
         );
         let statements = policy["Statement"]
             .as_array()
@@ -1825,25 +1720,21 @@ mod tests {
         let tmp_user = "tmp/user/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
         let tmp_global = "tmp/global/apps/v8f5p73w00itor03zlrai22w";
 
-        for express in [true, false] {
-            let policy =
-                shadow_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, express);
-            let json = to_string(&policy).expect("policy should serialize");
-            assert!(
-                json.len() < 2000,
-                "{} ShadowExecute policy grew to {} chars",
-                if express { "express" } else { "standard" },
-                json.len()
-            );
-        }
+        let policy = shadow_execute_policy(&creds, app, user, runs, tmp_user, tmp_global);
+        let json = to_string(&policy).expect("policy should serialize");
+        assert!(
+            json.len() < 2000,
+            "ShadowExecute policy grew to {} chars",
+            json.len()
+        );
     }
 
-    /// On an express meta bucket the CreateSession token authorizes every
-    /// zonal request, so the per-object meta statements are dead weight — and
-    /// carrying both flavors once pushed AssumeRole past its packed-policy
-    /// budget in production (PackedPolicyTooLargeException at dispatch).
+    /// Carrying meta statements once pushed AssumeRole past its packed-policy
+    /// budget in production (PackedPolicyTooLargeException at dispatch). With
+    /// the meta grant gone entirely the policy is smaller than either old
+    /// flavor; keep it that way.
     #[test]
-    fn test_aws_server_execute_express_variant_stays_within_policy_budget() {
+    fn test_aws_server_execute_stays_within_policy_budget() {
         let creds = test_aws_runtime_credentials();
         // Realistic id lengths: generated app ids and IdP subjects are long,
         // and every prefix repeats them several times.
@@ -1853,29 +1744,16 @@ mod tests {
         let tmp_user = "tmp/user/auth0|64c9f0aa11bb22cc33dd44ee/apps/v8f5p73w00itor03zlrai22w";
         let tmp_global = "tmp/global/apps/v8f5p73w00itor03zlrai22w";
 
-        let express = server_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, true);
-        let express_json = to_string(&express).expect("policy should serialize");
-        assert!(
-            !express_json.contains("arn:aws:s3:::meta-secret"),
-            "express meta access flows through CreateSession, not per-object IAM"
-        );
-        assert!(express_json.contains("s3express:CreateSession"));
-        assert!(express_json.contains("ReadOnly"));
-
-        let standard = server_execute_policy(&creds, app, user, runs, tmp_user, tmp_global, false);
-        let standard_json = to_string(&standard).expect("policy should serialize");
-
+        let policy = server_execute_policy(&creds, app, user, runs, tmp_user, tmp_global);
+        let json = to_string(&policy).expect("policy should serialize");
+        assert!(!json.contains("meta-secret"));
+        assert!(!json.contains("s3express"));
         // STS caps the plaintext at 2048 characters and packs it into a
-        // shared binary quota; both variants must keep real headroom.
+        // shared binary quota; keep real headroom.
         assert!(
-            express_json.len() < 1600,
-            "express ServerExecute policy grew to {} chars",
-            express_json.len()
-        );
-        assert!(
-            standard_json.len() < 1900,
-            "standard ServerExecute policy grew to {} chars",
-            standard_json.len()
+            json.len() < 1600,
+            "ServerExecute policy grew to {} chars",
+            json.len()
         );
     }
 
@@ -1909,11 +1787,9 @@ mod tests {
                 "runs/app-1",
                 "tmp/user/user-1/apps/app-1",
                 "tmp/global/apps/app-1",
-                true,
-            ))
-            .as_deref(),
-            Some("\"ReadOnly\""),
-            "ServerExecute only reads the meta bucket and must not obtain a ReadWrite session"
+            )),
+            None,
+            "ServerExecute must not be able to open any express session"
         );
         assert_eq!(
             create_session_mode(edit_app_policy(&creds, apps_prefix)).as_deref(),

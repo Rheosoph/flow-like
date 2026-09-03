@@ -788,6 +788,7 @@ pub async fn trigger_event(
         // Programmatic trigger: cron workers, Lambda handlers, queue processors.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     // Create run record
@@ -1109,6 +1110,7 @@ pub async fn trigger_http(
         // Inbound webhook.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     // Create run record
@@ -1526,6 +1528,7 @@ pub async fn trigger_telegram(
         // Telegram bot service.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     // Create run record
@@ -1878,6 +1881,7 @@ pub async fn trigger_discord(
         // Discord bot service.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     // Create run record

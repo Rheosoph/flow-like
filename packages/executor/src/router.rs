@@ -194,7 +194,13 @@ mod tests {
             },
             "executor_jwt": "jwt",
             "callback_url": "https://api.example",
-            "stream_state": true
+            "stream_state": true,
+            "artifact": {
+                "url": "https://meta.example/tmp/apps/app-1/compiled/drafts/board-1/etag-a_fp.flcb?sig",
+                "path": "tmp/apps/app-1/compiled/drafts/board-1/etag-a_fp.flcb",
+                "source_etag": "etag-a",
+                "registry_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
         }))
         .expect("wire payload deserializes as DispatchPayload")
     }

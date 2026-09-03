@@ -441,3 +441,36 @@ fn reconstructed_view_preserves_execution_fields() {
 
     let _ = NONE_IDX;
 }
+
+/// The executor builds its template from fetched bytes and nothing else, so
+/// every way those bytes can be wrong has to surface as an error it can act
+/// on — never as a silent recompile, which it no longer has.
+#[test]
+fn template_from_bytes_rejects_foreign_or_broken_artifacts() {
+    use flow_like::flow::compiled::template_from_bytes;
+    use flow_like::state::FlowNodeRegistryInner;
+
+    let mut board = empty_board();
+    board
+        .nodes
+        .insert("n".into(), node_with_pins("n", "lonely", vec![]));
+    let compiled = compile_board(&board).expect("compile");
+    let registry = FlowNodeRegistryInner::new(0);
+    let root = Path::from("apps").child("test");
+
+    let compiled_with = [1u8; 32];
+    let bytes = encode_artifact(&compiled, &compiled_with).expect("encode");
+    let error = template_from_bytes(&bytes, &[2u8; 32], &registry, &root)
+        .err()
+        .expect("a foreign fingerprint is rejected before decoding");
+    let message = error.to_string();
+    let theirs = blake3::Hash::from_bytes(compiled_with).to_hex();
+    let ours = blake3::Hash::from_bytes([2u8; 32]).to_hex();
+    assert!(message.contains(&theirs.as_str()[..16]), "{message}");
+    assert!(message.contains(&ours.as_str()[..16]), "{message}");
+
+    assert!(
+        template_from_bytes(b"not an artifact", &compiled_with, &registry, &root).is_err(),
+        "garbage bytes are an error, not a template"
+    );
+}

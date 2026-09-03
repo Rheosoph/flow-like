@@ -6,6 +6,7 @@
 mod channel_jwt;
 pub mod compiled_artifacts;
 mod dispatch;
+pub mod wasm_node_stubs;
 mod jwt;
 mod page_action_jwt;
 mod page_action_sealer;

@@ -106,7 +106,7 @@ pub async fn version_board(
             );
         }
     }
-    spawn_compiled_artifact_warmup(&board, published);
+    spawn_compiled_artifact_warmup(&state, &app_id, &board, published);
     // Publish-triggered regression suites: one indexed projection lookup plus
     // the dispatches, all on a detached task — the publish PATCH is never
     // blocked or failed by them.
@@ -179,21 +179,28 @@ async fn published_page_prerun_manifests(
 }
 
 /// Eagerly compile the just-published immutable snapshot so the executor's
-/// first run of this version can start from an artifact instead of the proto.
+/// first run of this version finds its artifact already there.
 ///
 /// Board and Page prerun manifests are persisted synchronously before this
 /// best-effort task starts because a Lambda may freeze as soon as the response
-/// is returned. Boards containing WASM nodes skip the compile: their
-/// `on_update` runs against a per-request bundle registry only the executor
-/// has, so its lazy compile is authoritative there.
-fn spawn_compiled_artifact_warmup(board: &Board, published: (u32, u32, u32)) {
+/// is returned. The pre-dispatch assurance recompiles on a miss or a registry
+/// mismatch, so this is warmth, never correctness. It compiles against the
+/// registry the dispatch would use — the built-in catalog extended with the
+/// app's WASM node definitions — so the fingerprint matches on first run.
+fn spawn_compiled_artifact_warmup(
+    state: &AppState,
+    app_id: &str,
+    board: &Board,
+    published: (u32, u32, u32),
+) {
     let Some(app_state) = board.app_state.clone() else {
         return;
     };
     let board_dir = board.board_dir.clone();
     let board_id = board.id.clone();
+    let state = state.clone();
+    let app_id = app_id.to_string();
 
-    let has_wasm = board.has_wasm_nodes();
     let mut snapshot = board.clone();
     snapshot.version = published;
 
@@ -206,11 +213,16 @@ fn spawn_compiled_artifact_warmup(board: &Board, published: (u32, u32, u32)) {
             return;
         };
         let store = store.as_generic();
-        if has_wasm {
-            return;
-        }
 
-        let registry = app_state.node_registry.read().await.node_registry.clone();
+        let wasm_packages =
+            crate::execution::wasm_resolve::resolve_wasm_packages(&state, &app_id).await;
+        let registry = match state.artifact_registry(wasm_packages.as_ref()).await {
+            Ok(registry) => registry,
+            Err(e) => {
+                tracing::warn!(board_id = %board_id, error = %e, "Compiled-board warm-up: registry unavailable");
+                return;
+            }
+        };
         let fingerprint = registry.fingerprint();
         let compiled = match flow_like::flow::compiled::compile::compile_board_with_catalog(
             &snapshot,

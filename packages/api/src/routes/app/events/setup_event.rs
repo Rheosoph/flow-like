@@ -482,6 +482,7 @@ pub(crate) async fn run_event_setup(
         // A background setup workflow emitting config.
         trigger: DispatchTrigger::System,
         shadow: false,
+        artifact: None,
     };
 
     let backend = state.dispatcher.backend();
