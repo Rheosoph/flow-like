@@ -15,6 +15,7 @@ import {
 	Download,
 	GitBranch,
 	GraduationCap,
+	HardDrive,
 	Key,
 	Lightbulb,
 	Lock,
@@ -87,6 +88,7 @@ import {
 	UserProfileLink,
 } from "../../ui";
 import { DashboardChainWidget, DashboardErrorWidget } from "./logs";
+import { DashboardResourcesWidget } from "./resources/resources-dashboard-widget";
 import { DashboardTelemetryAlertsWidget } from "./telemetry/alerts-dashboard-widget";
 import { DashboardTelemetryWidget } from "./telemetry/dashboard-telemetry-widget";
 import { DashboardTelemetryIssuesWidget } from "./telemetry/issues-dashboard-widget";
@@ -326,6 +328,16 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Open Process Graph",
 		color: "text-teal-500",
+	},
+	{
+		title: "Resources",
+		description:
+			"Database, cache, and object storage health, capacity, and throughput.",
+		icon: HardDrive,
+		href: "/admin/resources",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open",
+		color: "text-fuchsia-500",
 	},
 	{
 		title: "Logs & Observability",
@@ -2845,6 +2857,12 @@ export function AdminDashboardPage({
 							loading={statsLoading}
 						/>
 					</div>
+
+					{hasAdminAccess && (
+						<div className="grid gap-4">
+							<DashboardResourcesWidget profile={profile.data} />
+						</div>
+					)}
 
 					{hasAdminAccess && features?.telemetry === true && (
 						<div className="grid gap-4">

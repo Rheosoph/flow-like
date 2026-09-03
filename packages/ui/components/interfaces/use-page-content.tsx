@@ -19,6 +19,10 @@ import {
 	boardReadinessKey,
 	trackBoardReadiness,
 } from "../../lib/board-readiness";
+import {
+	isPageContractDriftFor,
+	subscribeToPageContractDrift,
+} from "../../lib/page-contract-drift";
 import { normalizeRoutePath, routePathsEqual } from "../../lib/route-path";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
@@ -57,6 +61,13 @@ import { PageInterface } from "./page-interface";
  * for it. Retrying beats stranding a usable interface behind a dead end.
  */
 const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
+
+/**
+ * Floor between bootstrap revalidations. A Page whose contract is genuinely
+ * broken raises a drift signal per rejected click; without a floor a user
+ * clicking a dead button would refetch on every press.
+ */
+const BOOTSTRAP_REVALIDATE_MIN_MS = 3_000;
 
 const unsupportedPageBootstrap = async (): Promise<IPageBootstrap> => {
 	throw new Error("Page bootstrap is not supported by this backend");
@@ -396,10 +407,33 @@ export function UsePageContent({
 	);
 	// Persisted query data is useful only after this mount has validated it against the endpoint.
 	// `Cache-Control: no-cache` lets the browser turn an unchanged body into a cheap ETag round trip.
+	//
+	// A contract already validated on this mount survives a later REFETCH failure.
+	// TanStack flips `isError` on a failed refetch while retaining `data`, and both
+	// hosts run `networkMode: "always"`, so an offline revalidation genuinely runs
+	// and fails — dropping to `undefined` there would take `pageExecutionRevision`
+	// with it and swap a live, working Page for the "could not load its execution
+	// authorization" card. Only a mount that never validated anything may be empty.
+	//
+	// Retained per target, so navigating to another route or Event never falls
+	// back to the previous target's contract while its own fetch is in flight.
+	const bootstrapTargetKey = `${appId ?? ""}|${bootstrapTarget.route ?? ""}|${bootstrapTarget.eventId ?? ""}`;
+	const lastValidatedBootstrapRef = useRef<{
+		key: string;
+		data: IPageBootstrap;
+	} | null>(null);
+	if (bootstrap.isFetchedAfterMount && !bootstrap.isError && bootstrap.data) {
+		lastValidatedBootstrapRef.current = {
+			key: bootstrapTargetKey,
+			data: bootstrap.data,
+		};
+	}
 	const validatedBootstrap =
 		bootstrap.isFetchedAfterMount && !bootstrap.isError
 			? bootstrap.data
-			: undefined;
+			: lastValidatedBootstrapRef.current?.key === bootstrapTargetKey
+				? lastValidatedBootstrapRef.current.data
+				: undefined;
 	const bootstrapPending = Boolean(
 		bootstrapEnabled && !bootstrap.isFetchedAfterMount && !bootstrap.isError,
 	);
@@ -1082,6 +1116,47 @@ export function UsePageContent({
 		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
 		if (!catalogEvents) retryCatalog();
 	}, [isOnline, pageKey, pageError, catalogEvents, retryCatalog]);
+
+	// A governed Page's action contract is derived from the whole Board, so an
+	// edit made anywhere — the flow editor in another window, a collaborator, a
+	// sync — supersedes what this mount is rendering, and its surface keeps
+	// showing the pre-edit Page. The global query defaults disable focus
+	// refetching, so nothing brings it forward on its own.
+	const bootstrapRevalidatedAtRef = useRef(0);
+	const revalidateBootstrap = useCallback(() => {
+		if (!bootstrapEnabled) return;
+		const now = Date.now();
+		if (now - bootstrapRevalidatedAtRef.current < BOOTSTRAP_REVALIDATE_MIN_MS)
+			return;
+		bootstrapRevalidatedAtRef.current = now;
+		void bootstrap.refetch();
+	}, [bootstrapEnabled, bootstrap.refetch]);
+
+	// Two triggers, one cleanup. Coming back to the foreground is the ordinary
+	// case (edit the flow, switch back). The drift signal is the failure case: a
+	// transport was refused for a reason only a fresh contract can cure — a
+	// renamed action, a dead dynamic grant — so the surface it was dispatched
+	// from is provably out of date. A successful run never signals: it has
+	// already rewritten this surface through its own A2UI messages, and
+	// refetching on top of that would re-run onLoad over live content.
+	useEffect(() => {
+		if (!bootstrapEnabled || typeof window === "undefined") return;
+		const revalidate = () => {
+			if (document.visibilityState === "hidden") return;
+			revalidateBootstrap();
+		};
+		window.addEventListener("focus", revalidate);
+		document.addEventListener("visibilitychange", revalidate);
+		const unsubscribe = subscribeToPageContractDrift((detail) => {
+			if (!isPageContractDriftFor(detail, appId, pageEventId)) return;
+			revalidateBootstrap();
+		});
+		return () => {
+			window.removeEventListener("focus", revalidate);
+			document.removeEventListener("visibilitychange", revalidate);
+			unsubscribe();
+		};
+	}, [bootstrapEnabled, appId, pageEventId, revalidateBootstrap]);
 
 	// A restored event catalog can render a page before the session is: the query cache is
 	// persisted, so a cold start replays the events while sign-in is still in flight, and every

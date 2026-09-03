@@ -60,10 +60,10 @@ impl NodeLogic for PushReasoningNode {
 
         let cached_response = CachedChatResponse::load(context).await?;
         {
+            // Raw append: callers stream token fragments through this node, so
+            // an injected separator breaks words. Discrete entries must bring
+            // their own newlines.
             let mut mutable_reasoning = cached_response.reasoning.lock().await;
-            if !mutable_reasoning.current_message.is_empty() {
-                mutable_reasoning.current_message.push('\n');
-            }
             mutable_reasoning.current_message.push_str(&reasoning);
         }
 

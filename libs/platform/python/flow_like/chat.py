@@ -103,6 +103,57 @@ class ChatMixin(HTTPClient):
             raw=data,
         )
 
+    def responses(
+        self,
+        input: Any,
+        bit_id: str,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any] | Iterator[SSEEvent]:
+        """Send a request to the OpenAI Responses API.
+
+        Only model bits whose provider declares the ``Responses`` API surface are
+        accepted; bits speaking chat completions are rejected by the server.
+
+        Args:
+            input: Responses API input — a string or a list of input items.
+            bit_id: Identifier of the model bit to use.
+            stream: If ``True``, return an iterator of server-sent events.
+            **kwargs: Additional payload fields forwarded to the API.
+
+        Returns:
+            The raw response body when *stream* is ``False``, or an
+            ``Iterator[SSEEvent]`` when *stream* is ``True``.
+        """
+        payload: dict[str, Any] = {
+            "input": input,
+            "model": bit_id,
+            "stream": stream,
+            **kwargs,
+        }
+        if stream:
+            return self._stream_sse("POST", "/responses", json=payload)
+        return self._request("POST", "/responses", json=payload).json()
+
+    async def aresponses(
+        self,
+        input: Any,
+        bit_id: str,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any] | AsyncIterator[SSEEvent]:
+        """Async version of ``responses``."""
+        payload: dict[str, Any] = {
+            "input": input,
+            "model": bit_id,
+            "stream": stream,
+            **kwargs,
+        }
+        if stream:
+            return self._astream_sse("POST", "/responses", json=payload)
+        resp = await self._arequest("POST", "/responses", json=payload)
+        return resp.json()
+
     def get_usage(self) -> dict[str, Any]:
         """Retrieve aggregated chat usage statistics.
 

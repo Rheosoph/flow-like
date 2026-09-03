@@ -51,6 +51,7 @@ async function listNoEventRegistrations(
 	return {
 		event_id: eventId,
 		event_version: null,
+		variant: "stable",
 		registrations: [],
 		auths: [],
 	};

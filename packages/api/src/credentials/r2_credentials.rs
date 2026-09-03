@@ -231,6 +231,20 @@ impl R2RuntimeCredentials {
                     temporary_global_prefix,
                 ],
             ),
+            // R2 temp credentials carry one permission for every prefix, so a
+            // per-prefix read/write split is not expressible here; shadow runs
+            // mirror ServerExecute and rely on the in-process `ReadOnlyStore`
+            // decorator for app-content write isolation.
+            CredentialsAccess::ShadowExecute => (
+                "object-read-write",
+                vec![
+                    apps_prefix,
+                    user_prefix,
+                    log_prefix,
+                    temporary_user_prefix,
+                    temporary_global_prefix,
+                ],
+            ),
             CredentialsAccess::ReadLogs => ("object-read-only", vec![log_prefix]),
         };
 
@@ -477,6 +491,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
 
@@ -488,6 +503,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
 
@@ -499,9 +515,13 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
     fn into_shared_credentials(&self) -> SharedCredentials {
         // R2 uses AWS-compatible S3 API, so we use AwsSharedCredentials
         // All R2 buckets use the same endpoint
+        // R2 has no KMS: encryption is bucket-managed and there is no
+        // per-request key to name.
         let r2_config = Some(BucketConfig {
             endpoint: Some(self.endpoint.clone()),
             express: false,
+            kms_key_arn: None,
+            kms_bucket_key: false,
         });
 
         SharedCredentials::Aws(AwsSharedCredentials {

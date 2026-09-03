@@ -42,6 +42,8 @@ pub struct Model {
     pub notes: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub canary: Option<Json>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub variants: Option<Json>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
@@ -82,6 +84,8 @@ pub enum Relation {
     EventRemoteAuth,
     #[sea_orm(has_many = "super::event_remote_registration::Entity")]
     EventRemoteRegistration,
+    #[sea_orm(has_many = "super::event_setup::Entity")]
+    EventSetup,
     #[sea_orm(has_one = "super::event_sink::Entity")]
     EventSink,
 }
@@ -107,6 +111,12 @@ impl Related<super::event_remote_auth::Entity> for Entity {
 impl Related<super::event_remote_registration::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::EventRemoteRegistration.def()
+    }
+}
+
+impl Related<super::event_setup::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventSetup.def()
     }
 }
 

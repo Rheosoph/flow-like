@@ -88,17 +88,7 @@ impl Cacheable for CachedRemoteOntologyAuthorization {
 }
 
 pub(crate) fn api_base_url(hub: &str, secure: bool) -> Option<String> {
-    let hub = hub.trim().trim_end_matches('/');
-    if hub.is_empty() {
-        return None;
-    }
-
-    let origin = if hub.starts_with("http://") || hub.starts_with("https://") {
-        hub.to_string()
-    } else {
-        let protocol = if secure { "https" } else { "http" };
-        format!("{protocol}://{hub}")
-    };
+    let origin = flow_like::hub::hub_origin(hub, secure)?;
 
     if origin.ends_with("/api/v1") {
         return Some(origin);

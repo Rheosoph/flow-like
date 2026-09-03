@@ -630,11 +630,24 @@ export async function driveGlobalChatStream({
 		});
 
 		if (!resumeMissed) {
+			// A backend that returned final text without streaming any (older
+			// Claude CLI without partial messages, a lagged event bus) must not
+			// settle as an empty bubble — repair from the invoke result.
+			const returnedMessage =
+				typeof invokeResult === "object" &&
+				invokeResult !== null &&
+				typeof (invokeResult as { message?: unknown }).message === "string"
+					? (invokeResult as { message: string }).message
+					: "";
+			const settledContent =
+				acc.content.trim() === "" && returnedMessage.trim() !== ""
+					? returnedMessage
+					: acc.content;
 			// Settle this run's own steps, push them through the store so the sub-agent buffers fold
 			// in one last time, then read the folded bubble back as the message to commit.
 			responseMessage.inner = {
 				...responseMessage.inner,
-				content: acc.content,
+				content: settledContent,
 			};
 			responseMessage.plan_steps = orderedSteps(acc);
 			responseMessage.current_step_id = undefined;

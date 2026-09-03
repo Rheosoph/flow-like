@@ -2,6 +2,7 @@
 
 use super::sea_orm_active_enums::RunMode;
 use super::sea_orm_active_enums::RunStatus;
+use super::sea_orm_active_enums::RunVariant;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +58,14 @@ pub struct Model {
     pub parent_run_id: Option<String>,
     #[sea_orm(column_name = "traceId", column_type = "Text", nullable)]
     pub trace_id: Option<String>,
+    #[sea_orm(column_name = "runVariant")]
+    pub run_variant: RunVariant,
+    #[sea_orm(column_name = "variantName", column_type = "Text", nullable)]
+    pub variant_name: Option<String>,
+    #[sea_orm(column_name = "shadowOfRunId", column_type = "Text", nullable)]
+    pub shadow_of_run_id: Option<String>,
+    #[sea_orm(column_name = "regressionRunId", column_type = "Text", nullable)]
+    pub regression_run_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

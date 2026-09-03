@@ -124,6 +124,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_generation_defaults_but_filters_transport_fields() {
         let provider = ModelProvider {
+            api_surface: None,
             provider_name: "MLX".to_string(),
             model_id: Some("test-model".to_string()),
             version: None,
@@ -144,6 +145,7 @@ mod tests {
     #[tokio::test]
     async fn returned_client_keeps_runtime_lease_alive() {
         let provider = ModelProvider {
+            api_surface: None,
             provider_name: "MLX".to_string(),
             model_id: Some("test-model".to_string()),
             version: None,

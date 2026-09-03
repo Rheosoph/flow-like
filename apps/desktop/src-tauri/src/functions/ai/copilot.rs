@@ -5445,6 +5445,7 @@ async fn external_code_agent_chat_internal(
     let mut final_workflow_snapshot = None;
     let mut last_successful_mutation = None;
     let mut continuation = 0u8;
+    let mut phases_run = 0u32;
     let mut zero_activity_restarts = 0u8;
     let mut previous_exhausted_budget: Option<String> = None;
     let mut previous_exhausted_progress: Option<WorkflowProgressMark> = None;
@@ -5496,7 +5497,7 @@ async fn external_code_agent_chat_internal(
             Err(error) => break Err(error),
         };
         let mcp_url = mcp_bridge.url.clone();
-        let invocation = match ExternalAgentInvocation::new(
+        let mut invocation = match ExternalAgentInvocation::new(
             backend,
             cli.clone(),
             model_id,
@@ -5514,6 +5515,7 @@ async fn external_code_agent_chat_internal(
                 break Err(error);
             }
         };
+        invocation.continues_streamed_text = phases_run > 0;
         send_external_progress_event(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
@@ -5670,6 +5672,7 @@ async fn external_code_agent_chat_internal(
             invocation_cancellation,
         )
         .await;
+        phases_run = phases_run.saturating_add(1);
         if let Ok(output) = run_result.as_ref()
             && let Some(session) = output.session_id.as_deref()
         {
@@ -7434,10 +7437,9 @@ fn send_correlated_stream_json_event(
     parent_request_id: Option<&str>,
 ) {
     let payload = correlated_stream_payload(payload, parent_request_id);
-    let event = format!(
-        "<{tag}>{}</{tag}>",
-        serde_json::to_string(&payload).unwrap_or_default()
-    );
+    // stream_frame escapes a literal closing tag inside the payload — tool
+    // results carry untrusted text that must not truncate the frame.
+    let event = flow_like::flow::copilot::stream::stream_frame(tag, &payload);
     let _ = channel.send(event);
 }
 
@@ -13719,6 +13721,11 @@ struct ExternalAgentInvocation {
     final_output_path: Option<std::path::PathBuf>,
     envs: Vec<(String, String)>,
     env_removals: Vec<String>,
+    /// True for continuation/repair phases of a run whose earlier phase already
+    /// streamed answer text. Seeds the stream state so the next phase's first
+    /// token starts a new paragraph instead of splicing mid-sentence onto the
+    /// previous phase's output.
+    continues_streamed_text: bool,
 }
 
 /// Normalize the optional UI override. An omitted/blank value, or the explicit
@@ -13859,6 +13866,7 @@ impl ExternalAgentInvocation {
             final_output_path: None,
             envs: Vec::new(),
             env_removals: Vec::new(),
+            continues_streamed_text: false,
         })
     }
 
@@ -14034,6 +14042,7 @@ impl ExternalAgentInvocation {
                 Default::default()
             },
             final_output_path: Some(mcp_config_path),
+            continues_streamed_text: false,
         })
     }
 }
@@ -14598,6 +14607,13 @@ async fn run_external_agent_invocation(
     let mut streamed_text = String::new();
     let mut fatal_error: Option<String> = None;
     let mut stream_state = ExternalAgentStreamState::default();
+    if invocation.continues_streamed_text {
+        // An earlier phase already streamed answer text into the same bubble;
+        // treat the phase boundary as a message boundary so the first token of
+        // this phase opens a new paragraph instead of splicing mid-sentence.
+        stream_state.has_streamed_assistant_text = true;
+        stream_state.last_agent_message_id = Some("__phase_boundary__".to_string());
+    }
     let stream_result = {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         let drain_stdout = async {
@@ -14683,6 +14699,13 @@ async fn run_external_agent_invocation(
                                 correlate_stream_frame(&event, parent_request_id.as_deref());
                             let _ = channel.send(event);
                         }
+                    }
+
+                    if let Some(frame) =
+                        external_agent_reasoning_frame(invocation.backend, &value, &mut stream_state)
+                    {
+                        let frame = correlate_stream_frame(&frame, parent_request_id.as_deref());
+                        let _ = channel.send(frame);
                     }
 
                     if let Some(delta) =
@@ -14822,6 +14845,8 @@ struct ExternalAgentStreamState {
     // Claude reports a tool's name only on the `tool_use` block; the matching
     // `tool_result` carries just the id, so remember id -> display name here.
     claude_tool_names: HashMap<String, String>,
+    // Accumulated extended-thinking text; re-framed as one upserted plan step.
+    claude_thinking: String,
     // Claude streams tool JSON by content-block index before it emits the complete assistant
     // message. Keep that transient index -> call-id mapping so FlowScript can appear while the
     // model is still writing the `source` JSON string.
@@ -15251,6 +15276,45 @@ fn external_agent_stream_delta(
     }
 }
 
+/// Surfaces Claude Code extended thinking as an upserted `<plan_step>` frame so
+/// the reasoning box streams live instead of being dropped. Text deltas keep
+/// riding `external_agent_stream_delta`; this only handles `thinking_delta`.
+fn external_agent_reasoning_frame(
+    backend: FlowPilotAgentBackendKind,
+    value: &serde_json::Value,
+    state: &mut ExternalAgentStreamState,
+) -> Option<String> {
+    if backend != FlowPilotAgentBackendKind::ClaudeCode {
+        return None;
+    }
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("stream_event") {
+        return None;
+    }
+    let event = value.get("event")?;
+    if event.get("type").and_then(serde_json::Value::as_str) != Some("content_block_delta") {
+        return None;
+    }
+    let delta = event.get("delta")?;
+    if delta.get("type").and_then(serde_json::Value::as_str) != Some("thinking_delta") {
+        return None;
+    }
+    let thinking = delta.get("thinking").and_then(serde_json::Value::as_str)?;
+    if thinking.is_empty() {
+        return None;
+    }
+    append_bounded_text(
+        &mut state.claude_thinking,
+        thinking,
+        EXTERNAL_AGENT_TEXT_MAX_BYTES,
+    );
+    Some(flow_like::flow::copilot::stream::plan_step_frame(
+        "claude-thinking".to_string(),
+        state.claude_thinking.trim().to_string(),
+        flow_like::flow::copilot::PlanStepStatus::InProgress,
+        "think",
+    ))
+}
+
 fn codex_agent_message_delta(
     value: &serde_json::Value,
     state: &mut ExternalAgentStreamState,
@@ -15276,6 +15340,21 @@ fn codex_agent_message_delta(
             .or_else(|| value.pointer("/item/delta"))
             .or_else(|| value.get("text"))
             .and_then(serde_json::Value::as_str)?;
+        // Record what was streamed so the terminal item.completed (which
+        // carries the full text) diffs against it instead of re-emitting the
+        // whole message a second time.
+        if state.agent_message_text_by_id.len() >= EXTERNAL_AGENT_MESSAGE_STATE_MAX_ENTRIES
+            && !state.agent_message_text_by_id.contains_key(item_id)
+        {
+            state.agent_message_text_by_id.clear();
+        }
+        {
+            let previous = state
+                .agent_message_text_by_id
+                .entry(item_id.to_string())
+                .or_default();
+            append_bounded_text(previous, delta, EXTERNAL_AGENT_TEXT_MAX_BYTES);
+        }
         return Some(state.decorate_agent_delta(item_id, delta));
     }
 
@@ -15617,10 +15696,9 @@ fn send_external_progress_event(
 }
 
 fn flowpilot_stream_tag(tag: &str, value: &serde_json::Value) -> String {
-    format!(
-        "<{tag}>{}</{tag}>",
-        serde_json::to_string(value).unwrap_or_default()
-    )
+    // stream_frame escapes a literal closing tag inside the payload — tool
+    // results carry untrusted text that must not truncate the frame.
+    flow_like::flow::copilot::stream::stream_frame(tag, value)
 }
 
 fn external_agent_progress_label(value: &serde_json::Value) -> Option<String> {

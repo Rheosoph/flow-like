@@ -10,6 +10,7 @@ use flow_like::{
         variable::VariableType,
     },
 };
+use flow_like_model_provider::provider::ModelApiSurface;
 use flow_like_storage::blake3;
 use flow_like_types::{
     Value, async_trait,
@@ -37,7 +38,7 @@ impl NodeLogic for BuildOpenAiNode {
         );
         node.set_flowscript_name("ai.provider", "openai");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -86,6 +87,19 @@ impl NodeLogic for BuildOpenAiNode {
         .set_default_value(Some(json!("")))
         .set_options(PinOptions::new().set_sensitive(true).build());
 
+        node.add_input_pin(
+            "api_surface",
+            "API Surface",
+            "Which OpenAI API the endpoint serves. Responses is the default; pick Chat Completions for gateways that only expose /chat/completions",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["Responses".into(), "ChatCompletions".into()])
+                .build(),
+        )
+        .set_default_value(Some(json!("Responses")));
+
         node.add_output_pin(
             "exec_out",
             "Output",
@@ -128,6 +142,21 @@ impl NodeLogic for BuildOpenAiNode {
             hasher.update(b"azure");
         }
 
+        let api_surface = match context
+            .evaluate_pin::<String>("api_surface")
+            .await
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "chatcompletions" | "chat_completions" | "completions" => {
+                ModelApiSurface::ChatCompletions
+            }
+            _ => ModelApiSurface::Responses,
+        };
+        hasher.update(api_surface.as_str().as_bytes());
+
         if let Ok(model_id) = context.evaluate_pin::<String>("model_id").await
             && !model_id.is_empty()
         {
@@ -158,6 +187,7 @@ impl NodeLogic for BuildOpenAiNode {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
+                api_surface: Some(api_surface),
                 provider_name: "custom:openai".into(),
                 model_id,
                 version: {

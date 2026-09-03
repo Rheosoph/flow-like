@@ -131,6 +131,14 @@ function BindingRow({
 		: (row.pages.find((page) => page.pageId === event.default_page_id)?.name ??
 			t("aPage", "a page"));
 
+	// Mirrors the core variant_set() fallback: stored variants win, an empty
+	// list still counts the legacy canary as one live variant.
+	const liveVariantCount = event.variants?.length
+		? event.variants.filter((variant) => "Live" in variant.mode).length
+		: event.canary
+			? 1
+			: 0;
+
 	return (
 		<li
 			className={cn(
@@ -164,8 +172,14 @@ function BindingRow({
 					) : (
 						<BindingPill tone="latest">{t("latest", "Latest")}</BindingPill>
 					)}
-					{event.canary ? (
-						<BindingPill tone="canary">{t("canary", "Canary")}</BindingPill>
+					{liveVariantCount > 0 ? (
+						<BindingPill tone="canary">
+							{liveVariantCount > 1
+								? t("canaryCount", "Canary ×{{count}}", {
+										count: liveVariantCount,
+									})
+								: t("canary", "Canary")}
+						</BindingPill>
 					) : null}
 					{event.exposure === "PUBLIC" ? (
 						<BindingPill tone="public">{t("public", "Public")}</BindingPill>

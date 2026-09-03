@@ -65,9 +65,11 @@ export function useInvoke<T, Args extends any[]>(
 			}
 		},
 		enabled,
-		staleTime,
-		// Use defaults from QueryClient, but allow individual overrides if needed
-		// This ensures consistency with global cache settings
+		// Use defaults from QueryClient, but allow individual overrides if needed.
+		// Spread conditionally: a present `staleTime: undefined` key overwrites the
+		// client's default during option merging, which silently makes every query
+		// stale on arrival and refetches it on each new observer.
+		...(staleTime !== undefined && { staleTime }),
 	});
 
 	return query;

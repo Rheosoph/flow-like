@@ -13,7 +13,7 @@ static API_BASE_URL_OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
 /// ignored so a misconfigured profile cannot clear a working endpoint. A URL
 /// without a scheme is assumed to be `https`.
 pub fn set_api_base_url(url: &str) {
-    let Some(normalized) = normalize(url) else {
+    let Some(normalized) = normalize_base_url(url) else {
         return;
     };
 
@@ -38,10 +38,13 @@ pub fn api_base_url() -> String {
 fn resolve_environment(get: impl Fn(&str) -> Option<String>) -> Option<String> {
     ["API_BASE_URL", "API_URL"]
         .into_iter()
-        .find_map(|name| get(name).and_then(|url| normalize(&url)))
+        .find_map(|name| get(name).and_then(|url| normalize_base_url(&url)))
 }
 
-fn normalize(url: &str) -> Option<String> {
+/// Strip a trailing slash and attach `https` when the URL carries no scheme.
+/// Returns `None` for blank input so a misconfigured value cannot replace a
+/// working endpoint with an unusable one.
+pub fn normalize_base_url(url: &str) -> Option<String> {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return None;
@@ -61,19 +64,19 @@ mod tests {
     #[test]
     fn normalize_adds_scheme_and_strips_trailing_slash() {
         assert_eq!(
-            normalize("api.flow-like.com/"),
+            normalize_base_url("api.flow-like.com/"),
             Some("https://api.flow-like.com".to_string())
         );
         assert_eq!(
-            normalize(" http://localhost:8080 "),
+            normalize_base_url(" http://localhost:8080 "),
             Some("http://localhost:8080".to_string())
         );
     }
 
     #[test]
     fn normalize_rejects_blank_urls() {
-        assert_eq!(normalize("   "), None);
-        assert_eq!(normalize("/"), None);
+        assert_eq!(normalize_base_url("   "), None);
+        assert_eq!(normalize_base_url("/"), None);
     }
 
     #[test]

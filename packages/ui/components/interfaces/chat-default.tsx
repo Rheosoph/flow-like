@@ -30,7 +30,9 @@ import {
 	IRole,
 	Response,
 } from "../../lib";
+import type { ExecutionEngineProvider } from "../../lib/execution-engine";
 import { getCurrentPageContext } from "../../lib/page-context";
+import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
@@ -60,8 +62,16 @@ import { fileToAttachment } from "./chat-default/attachment";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
+	type IGlobalState,
+	type ILocalChatState,
 	type IMessage,
 	chatDb,
+	decodeMessageRow,
+	finalizeChatMessage,
+	latestChatDraft,
+	promoteChatDrafts,
+	putChatDraft,
+	putChatMessage,
 } from "./chat-default/chat-db";
 import {
 	ChatWidgetExecutionProvider,
@@ -413,9 +423,11 @@ function createResponseMessage(
 	};
 }
 
-function cloneResponseMessageForCompletion(
-	responseMessage: IMessage,
-): IMessage {
+/**
+ * A bare copy that keeps the message's identity and slot but none of its streamed state, so a
+ * replay of the stream's events rebuilds it from scratch.
+ */
+function cloneResponseMessageForReplay(responseMessage: IMessage): IMessage {
 	const clonedMessage =
 		typeof structuredClone === "function"
 			? structuredClone(responseMessage)
@@ -434,23 +446,43 @@ function cloneResponseMessageForCompletion(
 	return clonedMessage;
 }
 
-async function handleStreamCompletion(
-	responseMessage: IMessage,
-	chatRef: RefObject<IChatRef | null>,
-	executionEngine: any,
-	streamId: string,
-	subscriberId: string,
-	processedCompletedStreams: MutableRefObject<Set<string>>,
-	events: any[],
-	intermediateResponse: Response,
-	attachments: Map<string, IAttachment>,
-	appId: string,
-	eventId: string,
-	sessionId: string,
-	initialLocalState?: any,
-	initialGlobalState?: any,
-	onInteractions?: (interactions: IInteractionRequest[]) => void,
-) {
+/** What a live subscriber folded so far; complete once it consumed every accumulated event. */
+interface IStreamLiveState {
+	tmpLocalState: ILocalChatState | null | undefined;
+	tmpGlobalState: IGlobalState | null | undefined;
+	processedEvents: number;
+}
+
+interface IStreamCompletionOptions {
+	responseMessage: IMessage;
+	chatRef: RefObject<IChatRef | null>;
+	executionEngine: ExecutionEngineProvider;
+	streamId: string;
+	subscriberId: string;
+	processedCompletedStreams: MutableRefObject<Set<string>>;
+	events: IIntercomEvent[];
+	appId: string;
+	eventId: string;
+	sessionId: string;
+	/** Absent when nobody was listening while the stream ran. */
+	live?: IStreamLiveState;
+	onInteractions?: (interactions: IInteractionRequest[]) => void;
+}
+
+async function handleStreamCompletion({
+	responseMessage,
+	chatRef,
+	executionEngine,
+	streamId,
+	subscriberId,
+	processedCompletedStreams,
+	events,
+	appId,
+	eventId,
+	sessionId,
+	live,
+	onInteractions,
+}: IStreamCompletionOptions) {
 	if (processedCompletedStreams.current.has(streamId)) {
 		return;
 	}
@@ -458,38 +490,45 @@ async function handleStreamCompletion(
 	processedCompletedStreams.current.add(streamId);
 
 	try {
-		const result = processChatEvents(events, {
-			intermediateResponse: Response.default(),
-			responseMessage: cloneResponseMessageForCompletion(responseMessage),
-			attachments: new Map(),
-			tmpLocalState: initialLocalState ?? null,
-			tmpGlobalState: initialGlobalState ?? null,
-			done: false,
-			appId,
-			eventId,
-			sessionId,
-		});
+		let message = responseMessage;
+		let tmpLocalState = live?.tmpLocalState ?? null;
+		let tmpGlobalState = live?.tmpGlobalState ?? null;
 
-		if (result.interactions?.length && onInteractions) {
-			onInteractions(result.interactions);
+		// A subscriber that folded every event already holds the final message: chat_out closed it
+		// and its interactions were delivered as they arrived. Only a gap — no listener, or a batch
+		// it never processed — justifies rebuilding the turn from all events.
+		if (!live || live.processedEvents !== events.length) {
+			const result = processChatEvents(events, {
+				intermediateResponse: Response.default(),
+				responseMessage: cloneResponseMessageForReplay(responseMessage),
+				attachments: new Map(),
+				tmpLocalState,
+				tmpGlobalState,
+				done: false,
+				appId,
+				eventId,
+				sessionId,
+			});
+			message = result.responseMessage;
+			tmpLocalState = result.tmpLocalState;
+			tmpGlobalState = result.tmpGlobalState;
+			if (result.interactions?.length && onInteractions) {
+				onInteractions(result.interactions);
+			}
 		}
 
-		if (result.tmpLocalState) {
-			await chatDb.localStage.put(result.tmpLocalState);
+		if (tmpLocalState) {
+			await chatDb.localStage.put(tmpLocalState);
 		}
 
-		if (result.tmpGlobalState) {
-			await chatDb.globalState.put(result.tmpGlobalState);
+		if (tmpGlobalState) {
+			await chatDb.globalState.put(tmpGlobalState);
 		}
 
-		// Write to Dexie FIRST to ensure the message is persisted before clearing streaming state
-		// This prevents the message from briefly disappearing
-		await chatDb.messages.put(result.responseMessage);
+		// Persist before clearing the streaming bubble so the message never blinks out in between.
+		await finalizeChatMessage(message);
 
-		// Clear the streaming message AFTER writing to Dexie
-		// The useLiveQuery will pick up the new message from DB
 		chatRef.current?.clearCurrentMessageUpdate();
-
 		chatRef.current?.scrollToBottom();
 
 		executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
@@ -500,38 +539,23 @@ async function handleStreamCompletion(
 }
 
 /**
- * Creates an incremental save function for chat message streaming.
- * This function saves the current message state to Dexie periodically.
- * The message object is expected to be updated by the subscriber before this is called.
- *
- * Note: The final completion is handled by handleStreamCompletion, so this function
- * only saves intermediate state. The isFinal flag is used only for logging.
- *
- * @param responseMessage - The message object (modified by subscriber)
- * @param localStateRef - Reference to current local state (updated by subscriber)
- * @param globalStateRef - Reference to current global state (updated by subscriber)
+ * Periodic checkpoint of the streaming message, written to `drafts` so the session's message query
+ * stays quiet until the turn settles. Recovery only: the live bubble renders from React state, and
+ * completion moves the final message into `messages`.
  */
 function createChatIncrementalSaver(
 	responseMessage: IMessage,
 	localStateRef: { current: any },
 	globalStateRef: { current: any },
 ): (events: any[], isFinal: boolean) => Promise<void> {
-	return async (_events: any[], isFinal: boolean) => {
-		// Save the message in its current state (already updated by subscriber)
-		await chatDb.messages.put(responseMessage);
+	return async () => {
+		await putChatDraft(responseMessage);
 
-		// Save local/global state if present
 		if (localStateRef.current) {
 			await chatDb.localStage.put(localStateRef.current);
 		}
 		if (globalStateRef.current) {
 			await chatDb.globalState.put(globalStateRef.current);
-		}
-
-		// Note: We don't clear streaming state here - that's handled by handleStreamCompletion
-		// which also does proper cleanup (unsubscribe, etc.)
-		if (isFinal) {
-			console.log("[Chat] Incremental save completed (final)");
 		}
 	};
 }
@@ -765,13 +789,40 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		};
 	}, [sessionIdParameter, executionEngine]);
 
+	// liveQuery re-materializes every row on any table write. Handing back the
+	// previously materialized object while a message's rev is unchanged keeps
+	// settled rows identity-stable and skips decoding them, so the memoized
+	// MessageComponent (and the widget content-key stringifies below it) skip
+	// untouched messages. Every writer in chat-db bumps rev.
+	const materializedMessages = useRef(new Map<string, IMessage>());
 	const messagesQuery = useLiveQuery(async () => {
 		if (!sessionIdParameter) return [];
-		const rawMessages = await chatDb.messages
+		const rows = await chatDb.messages
 			.where("sessionId")
 			.equals(sessionIdParameter)
 			.sortBy("timestamp");
-		return deduplicateConsecutiveMessages(rawMessages);
+		const cache = materializedMessages.current;
+		const materialized = rows.map((row) => {
+			const cached = cache.get(row.id);
+			if (
+				cached &&
+				(cached.rev ?? 0) === (row.rev ?? 0) &&
+				cached.timestamp === row.timestamp
+			) {
+				return cached;
+			}
+			const message = decodeMessageRow(row);
+			cache.set(row.id, message);
+			return message;
+		});
+		const stable = deduplicateConsecutiveMessages(materialized);
+		if (cache.size > stable.length * 2 + 32) {
+			const live = new Set(stable.map((m) => m.id));
+			for (const id of cache.keys()) {
+				if (!live.has(id)) cache.delete(id);
+			}
+		}
+		return stable;
 	}, [sessionIdParameter]);
 
 	const messagesLoaded = messagesQuery !== undefined;
@@ -1009,8 +1060,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 		const streamId = sessionIdParameter;
 
-		// Check if there's a stream (active or completed) for this session
-		if (!executionEngine.hasStream(streamId)) return;
+		// No stream in memory means nothing is writing drafts any more: whatever is left is a turn
+		// cut off by a reload or crash, and its partial message is the only record of it.
+		if (!executionEngine.hasStream(streamId)) {
+			promoteChatDrafts(streamId).catch((error) => {
+				console.error("[Chat] Failed to promote drafts:", error);
+				Sentry.captureException(error, {
+					tags: { component: "chat", action: "promote_drafts" },
+					extra: { appId, sessionId: streamId },
+				});
+			});
+			return;
+		}
 
 		// Prevent processing the same completed stream multiple times
 		if (
@@ -1034,30 +1095,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			return;
 		}
 
-		// Reuse the last assistant message from Dexie if it exists (e.g. from incremental save)
-		// to avoid creating a duplicate when reconnecting to an active stream
-		const currentMessages = messagesRef.current;
-		const lastMsg = currentMessages[currentMessages.length - 1];
-		const responseMessage: IMessage =
-			lastMsg?.inner.role === IRole.Assistant
-				? { ...lastMsg }
-				: {
-						id: createId(),
-						sessionId: sessionIdParameter,
-						appId,
-						files: [],
-						inner: {
-							role: IRole.Assistant,
-							content: "",
-						},
-						explicit_name: event.name,
-						timestamp: Date.now(),
-						tools: [],
-						actions: [],
-					};
-
-		let intermediateResponse = Response.default();
-		const attachments: Map<string, IAttachment> = new Map();
+		// The stream checkpoints under the id its sender chose. Resuming under that id lets completion
+		// replace the draft; a fresh id would settle a second copy beside it.
+		const resumeResponseMessage = async (): Promise<IMessage> => {
+			const draft = await latestChatDraft(sessionIdParameter);
+			return draft
+				? cloneResponseMessageForReplay(draft)
+				: createResponseMessage(sessionIdParameter, appId, event.name);
+		};
 
 		// If stream is already complete, save to IndexedDB directly
 		// (chatRef may not be mounted yet since Chat only renders when messages exist)
@@ -1065,23 +1110,25 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			const accumulatedEvents = executionEngine.getAccumulatedEvents(streamId);
 			if (accumulatedEvents.length > 0) {
 				handleNavigationEvents(accumulatedEvents);
-				void handleStreamCompletion(
-					responseMessage,
-					chatRef,
-					executionEngine,
-					streamId,
-					subscriberId,
-					processedCompletedStreams,
-					accumulatedEvents,
-					intermediateResponse,
-					attachments,
-					appId,
-					event.id,
-					sessionIdParameter,
-					null,
-					null,
-					addInteractions,
-				);
+				resumeResponseMessage()
+					.then((responseMessage) =>
+						handleStreamCompletion({
+							responseMessage,
+							chatRef,
+							executionEngine,
+							streamId,
+							subscriberId,
+							processedCompletedStreams,
+							events: accumulatedEvents,
+							appId,
+							eventId: event.id,
+							sessionId: sessionIdParameter,
+							onInteractions: addInteractions,
+						}),
+					)
+					.catch((error) => {
+						console.error("[Chat] Failed to settle completed stream:", error);
+					});
 			}
 			return;
 		}
@@ -1092,64 +1139,82 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 		// Mark this subscriber as active before subscribing
 		reconnectSubscribed.current.add(subscriberId);
+		let cancelled = false;
 
-		// For active streams, subscribe to receive events
-		executionEngine.subscribeToEventStream(
-			streamId,
-			subscriberId,
-			(events) => {
-				handleNavigationEvents(events);
+		resumeResponseMessage()
+			.then((responseMessage) => {
+				if (cancelled) return;
 
-				const result = processChatEvents(events, {
-					intermediateResponse,
-					responseMessage,
-					attachments,
-					tmpLocalState: null,
-					tmpGlobalState: null,
-					done: false,
-					appId,
-					eventId: event.id,
-					sessionId: sessionIdParameter,
-				});
+				let intermediateResponse = Response.default();
+				const attachments: Map<string, IAttachment> = new Map();
+				let tmpLocalState: ILocalChatState | null = null;
+				let tmpGlobalState: IGlobalState | null = null;
+				let done = false;
+				let processedEvents = 0;
 
-				intermediateResponse = result.intermediateResponse;
-
-				if (result.interactions?.length) {
-					addInteractions(result.interactions);
-				}
-
-				if (result.shouldUpdate) {
-					chatRef.current?.pushCurrentMessageUpdate({
-						...responseMessage,
-					});
-					chatRef.current?.scrollToBottom();
-				}
-			},
-			async (events) => {
-				handleNavigationEvents(events);
-				await handleStreamCompletion(
-					responseMessage,
-					chatRef,
-					executionEngine,
+				executionEngine.subscribeToEventStream(
 					streamId,
 					subscriberId,
-					processedCompletedStreams,
-					events,
-					intermediateResponse,
-					attachments,
-					appId,
-					event.id,
-					sessionIdParameter,
-					null,
-					null,
-					addInteractions,
+					(events) => {
+						handleNavigationEvents(events);
+
+						const result = processChatEvents(events, {
+							intermediateResponse,
+							responseMessage,
+							attachments,
+							tmpLocalState,
+							tmpGlobalState,
+							done,
+							appId,
+							eventId: event.id,
+							sessionId: sessionIdParameter,
+						});
+						processedEvents += events.length;
+
+						intermediateResponse = result.intermediateResponse;
+						tmpLocalState = result.tmpLocalState;
+						tmpGlobalState = result.tmpGlobalState;
+						done = result.done;
+
+						if (result.interactions?.length) {
+							addInteractions(result.interactions);
+						}
+
+						if (result.shouldUpdate) {
+							chatRef.current?.pushCurrentMessageUpdate({
+								...responseMessage,
+							});
+							chatRef.current?.scrollToBottom();
+						}
+					},
+					async (events) => {
+						handleNavigationEvents(events);
+						await handleStreamCompletion({
+							responseMessage,
+							chatRef,
+							executionEngine,
+							streamId,
+							subscriberId,
+							processedCompletedStreams,
+							events,
+							appId,
+							eventId: event.id,
+							sessionId: sessionIdParameter,
+							live: { tmpLocalState, tmpGlobalState, processedEvents },
+							onInteractions: addInteractions,
+						});
+						// Clean up the reconnect subscriber tracking after completion
+						reconnectSubscribed.current.delete(subscriberId);
+					},
 				);
-				// Clean up the reconnect subscriber tracking after completion
+			})
+			.catch((error) => {
+				console.error("[Chat] Failed to resume stream:", error);
 				reconnectSubscribed.current.delete(subscriberId);
-			},
-		);
+			});
 
 		return () => {
+			cancelled = true;
 			executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
 			reconnectSubscribed.current.delete(subscriberId);
 		};
@@ -1257,7 +1322,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 
 				await updateSession(sessionIdParameter, appId, content);
-				await chatDb.messages.add(userMessage);
+				await putChatMessage(userMessage);
 
 				const lastMessages =
 					messagesRef.current?.slice(-history_elements) ?? [];
@@ -1320,6 +1385,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				let tmpLocalState = localState;
 				let tmpGlobalState = globalState;
 				let done = false;
+				let processedEvents = 0;
 				const attachments: Map<string, IAttachment> = new Map();
 
 				// Refs for incremental save to access current state
@@ -1379,6 +1445,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							sessionId: sessionIdParameter,
 						});
 
+						processedEvents += events.length;
+
 						intermediateResponse = result.intermediateResponse;
 						tmpLocalState = result.tmpLocalState;
 						tmpGlobalState = result.tmpGlobalState;
@@ -1406,7 +1474,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						handleNavigationEvents(events);
 
 						try {
-							await handleStreamCompletion(
+							await handleStreamCompletion({
 								responseMessage,
 								chatRef,
 								executionEngine,
@@ -1414,15 +1482,12 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								subscriberId,
 								processedCompletedStreams,
 								events,
-								intermediateResponse,
-								attachments,
 								appId,
-								event.id,
-								sessionIdParameter,
-								tmpLocalState,
-								tmpGlobalState,
-								addInteractions,
-							);
+								eventId: event.id,
+								sessionId: sessionIdParameter,
+								live: { tmpLocalState, tmpGlobalState, processedEvents },
+								onInteractions: addInteractions,
+							});
 						} finally {
 							activeSubscriptions.current = activeSubscriptions.current.filter(
 								(id) => id !== subscriberId,
@@ -1564,9 +1629,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	const onMessageUpdate = useCallback(
 		async (messageId: string, updates: Partial<IMessage>) => {
-			const existingMessage =
-				(await chatDb.messages.get(messageId)) ??
-				messagesRef.current.find((message) => message.id === messageId);
+			const stored = await chatDb.messages.get(messageId);
+			const existingMessage = stored
+				? decodeMessageRow(stored)
+				: messagesRef.current.find((message) => message.id === messageId);
 
 			if (!existingMessage) {
 				throw new Error(`Message ${messageId} not found`);
@@ -1584,7 +1650,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				delete nextMessage.ratingSettings;
 			}
 
-			await chatDb.messages.put(nextMessage);
+			await putChatMessage(nextMessage);
 
 			if (
 				updates.rating !== undefined ||
@@ -1621,7 +1687,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 										.where("sessionId")
 										.equals(nextMessage.sessionId)
 										.toArray()
-								).map((m) => m.inner)
+								).map((row) => decodeMessageRow(row).inner)
 							: undefined,
 					},
 				);
@@ -1754,7 +1820,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// Only persist a new assistant message when the action produced chat
 			// content; a pure in-place widget update leaves no residue.
 			if (hasContent) {
-				await chatDb.messages.put(responseMessage);
+				await putChatMessage(responseMessage);
 			}
 			chatRef.current?.clearCurrentMessageUpdate();
 			if (hasContent) {

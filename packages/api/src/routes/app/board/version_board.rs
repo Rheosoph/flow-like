@@ -107,6 +107,12 @@ pub async fn version_board(
         }
     }
     spawn_compiled_artifact_warmup(&board, published);
+    // Publish-triggered regression suites: one indexed projection lookup plus
+    // the dispatches, all on a detached task — the publish PATCH is never
+    // blocked or failed by them.
+    crate::execution::regression::spawn_publish_triggered_suites(
+        &state, &sub, &app_id, &board_id, published,
+    );
 
     audit_branch!(
         state,
@@ -187,11 +193,7 @@ fn spawn_compiled_artifact_warmup(board: &Board, published: (u32, u32, u32)) {
     let board_dir = board.board_dir.clone();
     let board_id = board.id.clone();
 
-    let has_wasm = board.nodes.values().any(|n| n.wasm.is_some())
-        || board
-            .layers
-            .values()
-            .any(|l| l.nodes.values().any(|n| n.wasm.is_some()));
+    let has_wasm = board.has_wasm_nodes();
     let mut snapshot = board.clone();
     snapshot.version = published;
 

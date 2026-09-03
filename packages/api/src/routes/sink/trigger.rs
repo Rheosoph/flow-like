@@ -15,7 +15,7 @@ use crate::{
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams, TokenType,
         collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
-        resolve_wasm_packages, sign_execution_jwt,
+        resolve_wasm_packages, sign_execution_jwt, variant,
     },
     routes::app::events::db::get_event_from_db,
     state::AppState,
@@ -342,8 +342,9 @@ fn flow_path_value(path: &str) -> serde_json::Value {
 }
 
 /// Loads the sink's persisted profile and re-hydrates decrypted custom-bit
-/// secrets (persisted profile JSON never contains them).
-async fn hydrated_sink_profile(
+/// secrets (persisted profile JSON never contains them). Shared with the
+/// regression runner's scheduled replays.
+pub(crate) async fn hydrated_sink_profile(
     state: &AppState,
     sink: &event_sink::Model,
 ) -> Option<serde_json::Value> {
@@ -589,6 +590,10 @@ pub struct TriggerEventInput {
     pub event_id: String,
     /// Optional payload to pass to the event
     pub payload: Option<serde_json::Value>,
+    /// The caller's `Idempotency-Key`, when one was supplied: the per-occurrence
+    /// identity that keeps a retried trigger on the same canary variant.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// Response from trigger operations
@@ -650,6 +655,7 @@ async fn record_trigger_rejection(
 /// let result = trigger_event(&state, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
+///     idempotency_key: None,
 /// }).await?;
 /// ```
 pub async fn trigger_event(
@@ -691,6 +697,11 @@ pub async fn trigger_event(
     let actor_event_id = Some(sink.event_id.clone());
     debug_assert!(actor_user_id.is_some() || actor_event_id.is_some());
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // The idempotency key is the only sticky identity a sink fire can offer;
+    // without one each fire is an independent weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, input.idempotency_key.as_deref(), &run_id);
+
     let input_payload_len = input
         .payload
         .as_ref()
@@ -701,7 +712,7 @@ pub async fn trigger_event(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)?;
+    let event_json = variant::dispatch_event_json(&event, &target)?;
 
     // Get credentials scoped to the PAT owner when the sink was registered with
     // a valid PAT. Without a valid PAT this falls back to the sink actor.
@@ -724,13 +735,14 @@ pub async fn trigger_event(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })?;
 
     // Decrypt OAuth tokens from sink if available
@@ -752,10 +764,10 @@ pub async fn trigger_event(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: input.payload,
         user_id: executor_subject,
@@ -775,17 +787,22 @@ pub async fn trigger_event(
         channel: None,
         // Programmatic trigger: cron workers, Lambda handlers, queue processors.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(actor_event_id),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1006,6 +1023,11 @@ pub async fn trigger_http(
         )));
     }
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
     let input_payload_len = payload
@@ -1017,7 +1039,7 @@ pub async fn trigger_http(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     let shared_credentials = credentials.into_shared_credentials();
@@ -1033,13 +1055,14 @@ pub async fn trigger_http(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1062,10 +1085,10 @@ pub async fn trigger_http(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload,
         user_id: executor_subject,
@@ -1085,17 +1108,22 @@ pub async fn trigger_http(
         channel: None,
         // Inbound webhook.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1394,6 +1422,11 @@ pub async fn trigger_telegram(
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let input_payload_len = payload
         .as_ref()
         .map(|p| {
@@ -1403,7 +1436,7 @@ pub async fn trigger_telegram(
         })
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     // Decrypt PAT from sink if available
@@ -1439,13 +1472,14 @@ pub async fn trigger_telegram(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1468,10 +1502,10 @@ pub async fn trigger_telegram(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload,
         user_id: executor_subject,
@@ -1491,17 +1525,22 @@ pub async fn trigger_telegram(
         channel: None,
         // Telegram bot service.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1740,11 +1779,16 @@ pub async fn trigger_discord(
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
 
+    // Live-variant split, resolved before the run row and the executor JWT.
+    // Webhook fires carry no occurrence identity, so each is an independent
+    // weighted draw on the run id.
+    let target = variant::resolve_sink_target(&event, None, &run_id);
+
     let input_payload_len = serde_json::to_string(&interaction)
         .map(|s| s.len() as i64)
         .unwrap_or(0);
 
-    let event_json = serde_json::to_string(&event)
+    let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
     // Decrypt PAT from sink if available
@@ -1780,13 +1824,14 @@ pub async fn trigger_discord(
         technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
+        board_id: target.board_id.clone(),
         event_id: Some(sink.event_id.clone()),
         app_chain: None,
         correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| ApiError::internal_error(anyhow!("Failed to sign JWT: {}", e)))?;
 
@@ -1809,10 +1854,10 @@ pub async fn trigger_discord(
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
-        board_id: event.board_id.clone(),
-        board_version: event.board_version,
+        board_id: target.board_id.clone(),
+        board_version: target.board_version,
         board_etag: None,
-        node_id: event.node_id.clone(),
+        node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: Some(interaction.clone()),
         user_id: executor_subject,
@@ -1832,17 +1877,22 @@ pub async fn trigger_discord(
         channel: None,
         // Discord bot service.
         trigger: DispatchTrigger::System,
+        shadow: false,
     };
 
     // Create run record
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
-        board_id: Set(event.board_id.clone()),
+        board_id: Set(target.board_id.clone()),
         version: Set(None),
         event_id: Set(Some(sink.event_id.clone())),
         node_id: Set(Some(event.id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
+        run_variant: Set(target.run_variant()),
+        variant_name: Set(target.variant_name.clone()),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(None),
@@ -1927,12 +1977,180 @@ pub struct ServiceTriggerRequest {
 }
 
 /// Response from service trigger
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ServiceTriggerResponse {
     pub success: bool,
     pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// `true` when this request carried an `Idempotency-Key` that another replica was
+    /// still dispatching; the trigger was accepted exactly once, but its `run_id` is
+    /// unknown to this replica.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
+}
+
+impl ServiceTriggerResponse {
+    fn duplicate_in_flight() -> Self {
+        Self {
+            success: true,
+            run_id: None,
+            error: None,
+            duplicate: true,
+        }
+    }
+}
+
+/// Platform-cache namespace holding one record per `Idempotency-Key`.
+const TRIGGER_IDEMPOTENCY_NAMESPACE: &str = "sink-trigger-idempotency";
+/// How long a finished trigger's response is replayed to retries.
+const TRIGGER_IDEMPOTENCY_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// How long an in-flight reservation blocks duplicates. Bounded so a replica that dies
+/// mid-dispatch does not swallow the trigger for the whole replay window.
+const TRIGGER_IN_FLIGHT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long a duplicate waits for the original to publish its response.
+const TRIGGER_DUPLICATE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+const TRIGGER_DUPLICATE_POLL: std::time::Duration = std::time::Duration::from_millis(150);
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum TriggerIdempotencyRecord {
+    InFlight { since_ms: i64 },
+    Done { response: ServiceTriggerResponse },
+}
+
+impl TriggerIdempotencyRecord {
+    fn in_flight() -> Self {
+        Self::InFlight {
+            since_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+}
+
+/// Cross-replica claim on an `Idempotency-Key`.
+enum IdempotencyClaim {
+    /// No key, or no platform cache: dispatch as usual, guarded only per replica.
+    Unreserved,
+    /// This request owns the key and must publish its response.
+    Owned(crate::cache::PlatformCache),
+    /// Another request already produced (or is producing) the response.
+    Replay(ServiceTriggerResponse),
+}
+
+async fn reserve_trigger(
+    cache: &crate::cache::PlatformCache,
+    key: &str,
+) -> Result<crate::cache::Reservation<TriggerIdempotencyRecord>, crate::cache::CacheStoreError> {
+    cache
+        .try_insert(
+            TRIGGER_IDEMPOTENCY_NAMESPACE,
+            key,
+            &TriggerIdempotencyRecord::in_flight(),
+            TRIGGER_IN_FLIGHT_TTL,
+        )
+        .await
+}
+
+/// Claim `key` across replicas. Runs after every validation step, so a request that is
+/// about to be rejected never blocks a later, valid retry.
+async fn claim_trigger_idempotency(
+    state: &AppState,
+    key: &str,
+    event_id: &str,
+) -> IdempotencyClaim {
+    use crate::cache::Reservation;
+
+    let cache = match state.cache.platform().await {
+        Ok(cache) => cache,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                idempotency_key = %key,
+                "Platform cache unavailable; trigger idempotency is per replica for this request"
+            );
+            return IdempotencyClaim::Unreserved;
+        }
+    };
+
+    let unreserved = |error: crate::cache::CacheStoreError| {
+        tracing::warn!(
+            error = %error,
+            idempotency_key = %key,
+            "Idempotency reservation failed; dispatching without a cross-replica claim"
+        );
+        IdempotencyClaim::Unreserved
+    };
+
+    match reserve_trigger(&cache, key).await {
+        Ok(Reservation::Acquired) => return IdempotencyClaim::Owned(cache),
+        Ok(Reservation::Held(TriggerIdempotencyRecord::Done { response })) => {
+            tracing::info!(
+                idempotency_key = %key,
+                event_id = %event_id,
+                "Replaying idempotent trigger response from another replica"
+            );
+            return IdempotencyClaim::Replay(response);
+        }
+        Ok(Reservation::Held(TriggerIdempotencyRecord::InFlight { .. })) => {}
+        Err(error) => return unreserved(error),
+    }
+
+    // The original is still dispatching somewhere. Give it a moment to publish so the
+    // retry gets the real run id; if it lapses without a result, the key is free again.
+    let deadline = tokio::time::Instant::now() + TRIGGER_DUPLICATE_WAIT;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(TRIGGER_DUPLICATE_POLL).await;
+        match cache
+            .get::<TriggerIdempotencyRecord>(TRIGGER_IDEMPOTENCY_NAMESPACE, key)
+            .await
+        {
+            Ok(Some(TriggerIdempotencyRecord::Done { response })) => {
+                return IdempotencyClaim::Replay(response);
+            }
+            Ok(Some(TriggerIdempotencyRecord::InFlight { .. })) => {}
+            Ok(None) => match reserve_trigger(&cache, key).await {
+                Ok(Reservation::Acquired) => return IdempotencyClaim::Owned(cache),
+                Ok(Reservation::Held(TriggerIdempotencyRecord::Done { response })) => {
+                    return IdempotencyClaim::Replay(response);
+                }
+                Ok(Reservation::Held(TriggerIdempotencyRecord::InFlight { .. })) => {}
+                Err(error) => return unreserved(error),
+            },
+            Err(error) => return unreserved(error),
+        }
+    }
+
+    tracing::info!(
+        idempotency_key = %key,
+        event_id = %event_id,
+        "Collapsed duplicate trigger onto an in-flight request on another replica"
+    );
+    IdempotencyClaim::Replay(ServiceTriggerResponse::duplicate_in_flight())
+}
+
+async fn publish_trigger_result(
+    cache: &crate::cache::PlatformCache,
+    key: &str,
+    response: &ServiceTriggerResponse,
+) {
+    let record = TriggerIdempotencyRecord::Done {
+        response: response.clone(),
+    };
+    if let Err(error) = cache
+        .set(
+            TRIGGER_IDEMPOTENCY_NAMESPACE,
+            key,
+            &record,
+            TRIGGER_IDEMPOTENCY_TTL,
+        )
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            idempotency_key = %key,
+            "Failed to publish idempotent trigger response; retries on other replicas may re-dispatch after the reservation lapses"
+        );
+    }
 }
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
@@ -2006,15 +2224,21 @@ async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result
 /// If a service is compromised, it can only trigger events of its own type.
 /// Tokens can be individually revoked via /admin/sinks/{jti}.
 ///
-/// Idempotency: callers may include an `Idempotency-Key` header. If the same
-/// key is seen within a short TTL (~15 minutes) the cached response is
-/// returned instead of re-dispatching. This shields downstream flows from
-/// EventBridge Scheduler's and Lambda's automatic retries on transient errors.
+/// Idempotency: callers may include an `Idempotency-Key` header. The key is
+/// reserved in the platform cache before dispatch, so a retry landing on any
+/// replica within ~15 minutes gets the original response instead of a second
+/// run. A retry that arrives while the original is still dispatching waits
+/// briefly and then answers `success: true, duplicate: true` without a run id.
+/// This shields downstream flows from EventBridge Scheduler's and Lambda's
+/// automatic retries on transient errors.
 #[utoipa::path(
     post,
     path = "/sink/trigger/async",
     tag = "sink",
     request_body = ServiceTriggerRequest,
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "Invocation-unique key; repeats within ~15 minutes replay the first response instead of dispatching again")
+    ),
     responses(
         (status = 200, description = "Service trigger response", body = ServiceTriggerResponse),
         (status = 401, description = "Unauthorized"),
@@ -2053,8 +2277,8 @@ pub async fn trigger_service(
         return Err(ApiError::unauthorized("Token has been revoked"));
     }
 
-    // Look up (or reserve) an idempotency key if provided. The cache stores
-    // the previously-produced ServiceTriggerResponse and short-circuits repeats.
+    // Same-replica repeats are answered from the in-process cache; the cross-replica
+    // reservation happens after validation, right before dispatch.
     let idempotency_key = headers
         .get("idempotency-key")
         .and_then(|h| h.to_str().ok())
@@ -2162,6 +2386,17 @@ pub async fn trigger_service(
     };
     let merged_payload = merge_payloads(event_payload, request.payload);
 
+    let claim = match idempotency_key.as_deref() {
+        Some(key) => claim_trigger_idempotency(&state, key, &request.event_id).await,
+        None => IdempotencyClaim::Unreserved,
+    };
+    if let IdempotencyClaim::Replay(response) = claim {
+        if let Some(key) = idempotency_key {
+            state.trigger_idempotency.insert(key, response.clone());
+        }
+        return Ok(Json(response));
+    }
+
     tracing::info!(
         event_id = %request.event_id,
         sink_type = %request.sink_type,
@@ -2175,6 +2410,7 @@ pub async fn trigger_service(
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload.clone(),
+            idempotency_key: idempotency_key.clone(),
         },
     )
     .await
@@ -2183,6 +2419,7 @@ pub async fn trigger_service(
             success: true,
             run_id: result.run_id,
             error: None,
+            duplicate: false,
         },
         // The run row already exists but was never dispatched; finalize it with
         // the reason instead of leaving it Pending until the sweeper times it
@@ -2203,6 +2440,7 @@ pub async fn trigger_service(
                 success: false,
                 run_id: result.run_id,
                 error: Some(result.message),
+                duplicate: false,
             }
         }
         Err(e) => {
@@ -2222,12 +2460,18 @@ pub async fn trigger_service(
                 success: false,
                 run_id,
                 error: Some(reason),
+                duplicate: false,
             }
         }
     };
 
     if let Some(key) = idempotency_key {
-        state.trigger_idempotency.insert(key, response.clone());
+        state
+            .trigger_idempotency
+            .insert(key.clone(), response.clone());
+        if let IdempotencyClaim::Owned(cache) = claim {
+            publish_trigger_result(&cache, &key, &response).await;
+        }
     }
 
     Ok(Json(response))

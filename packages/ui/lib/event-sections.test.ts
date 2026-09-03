@@ -36,6 +36,9 @@ describe("getEventSections", () => {
 			"inputs",
 			"variables",
 			"release",
+			"canary",
+			"quality",
+			"history",
 			"identity",
 		]);
 	});
@@ -52,7 +55,7 @@ describe("getEventSections", () => {
 	test("falls back for unknown event types rather than rendering nothing", () => {
 		const sections = getEventSections(baseEvent({ event_type: "brand_new" }));
 		expect(sections[0].label).toBe("Configuration");
-		expect(sections).toHaveLength(6);
+		expect(sections).toHaveLength(9);
 	});
 
 	test("page-target events lead with Flow & target, where the page lives", () => {
@@ -79,6 +82,9 @@ describe("getEventSections", () => {
 			"inputs",
 			"variables",
 			"release",
+			"canary",
+			"quality",
+			"history",
 			"identity",
 		]);
 		expect(
@@ -99,6 +105,8 @@ describe("getEventSections", () => {
 			"inputs",
 			"variables",
 			"release",
+			"canary",
+			"history",
 			"identity",
 		]);
 	});
@@ -140,7 +148,16 @@ describe("getEventSections", () => {
 
 describe("isTriggerSection", () => {
 	test("shared sections are not trigger sections", () => {
-		for (const id of ["flow", "inputs", "variables", "release", "identity"]) {
+		for (const id of [
+			"flow",
+			"inputs",
+			"variables",
+			"release",
+			"canary",
+			"quality",
+			"history",
+			"identity",
+		]) {
 			expect(isTriggerSection(id)).toBe(false);
 		}
 	});
@@ -255,6 +272,15 @@ describe("getSectionGuidance", () => {
 			"MessageContent",
 		);
 		expect(getSectionGuidance(event, "channels")?.mistake).toContain("empty");
+	});
+
+	test("page events get bootstrap-aware canary guidance, other sections shared", () => {
+		const page = baseEvent({ event_type: "page", default_page_id: "page-1" });
+		expect(getSectionGuidance(page, "canary")?.mistake).toContain("reload");
+		expect(getSectionGuidance(page, "variables")?.mistake).toContain("exposed");
+		for (const section of getEventSections(page)) {
+			expect(getSectionGuidance(page, section.id)).not.toBeNull();
+		}
 	});
 });
 

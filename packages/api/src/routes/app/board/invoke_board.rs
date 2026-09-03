@@ -19,14 +19,14 @@ use crate::{
     ensure_permission,
     entity::{
         execution_run,
-        sea_orm_active_enums::{RunMode, RunStatus},
+        sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, completed_run_status, fetch_profile_for_dispatch, is_jwt_configured,
-        payload_storage, proxy_sse_response, resolve_wasm_packages, sign_execution_jwt,
-        update_run_on_completion,
+        TokenType, completed_run_status, fetch_profile_for_dispatch, format_run_version,
+        is_jwt_configured, payload_storage, proxy_sse_response, resolve_wasm_packages,
+        sign_execution_jwt, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -213,17 +213,21 @@ pub async fn invoke_board(
     }
     let correlation_keys = correlation.keys_json();
 
+    let version_label = params.version.map(format_run_version);
+
     // Build run record (insert happens later - sync for local, parallel for HTTP)
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id.clone()),
-        version: Set(params
-            .version
-            .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat))),
+        version: Set(version_label.clone()),
         event_id: Set(None),
         node_id: Set(Some(params.node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(run_mode.clone()),
+        run_variant: Set(RunVariant::Primary),
+        variant_name: Set(None),
+        shadow_of_run_id: Set(None),
+        regression_run_id: Set(None),
         log_level: Set(0),
         input_payload_len: Set(input_payload_len),
         input_payload_key: Set(input_payload_key),
@@ -250,9 +254,7 @@ pub async fn invoke_board(
         board_id: board_id.clone(),
         event_id: None,
         node_id: Some(params.node_id.clone()),
-        version: params
-            .version
-            .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat)),
+        version: version_label,
         board_etag: None,
         mode: run_mode.clone(),
         status: RunStatus::Pending,
@@ -281,6 +283,7 @@ pub async fn invoke_board(
             callback_url: String::new(),
             token_type: TokenType::User,
             ttl_seconds: Some(60 * 60),
+            shadow: None,
         })
         .ok();
 
@@ -335,6 +338,7 @@ pub async fn invoke_board(
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
+        shadow: None,
     })
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to sign executor JWT");
@@ -364,6 +368,7 @@ pub async fn invoke_board(
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,
+        shadow: false,
     };
 
     // For isolated K8s jobs, insert run record and dispatch async
@@ -528,13 +533,24 @@ struct ParsedSseEvent {
     data: String,
 }
 
-/// Extract a complete SSE event from the buffer, if available
+/// Extract the next complete SSE event carrying data from the buffer, if
+/// available. Data-less frames (comment keep-alives such as `:ping`) are
+/// consumed and skipped rather than ending the caller's drain loop — returning
+/// `None` for them would strand every complete frame still behind them.
 fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
-    // Look for double newline which marks end of SSE event
-    let s = String::from_utf8_lossy(buffer);
-    if let Some(end_pos) = s.find("\n\n") {
-        let event_str = &s[..end_pos];
-        let remainder = &s[end_pos + 2..];
+    loop {
+        // Find the double newline that terminates a complete SSE frame by scanning
+        // raw bytes. Decoding the whole (partial) buffer here would replace the lead
+        // bytes of a multi-byte codepoint straddling a chunk boundary with U+FFFD
+        // and persist that corruption back into the tail.
+        let end_pos = buffer.windows(2).position(|window| window == b"\n\n")?;
+
+        // Split the complete frame off the buffer, keeping the raw undecoded tail.
+        let tail = buffer.split_off(end_pos + 2);
+        let frame = std::mem::replace(buffer, tail);
+
+        // Only the complete frame is decoded — it is a whole, valid UTF-8 region.
+        let event_str = String::from_utf8_lossy(&frame[..end_pos]);
 
         let mut event_type = "message".to_string();
         let mut data_parts = Vec::new();
@@ -547,9 +563,6 @@ fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
             }
         }
 
-        // Update buffer with remainder
-        *buffer = remainder.as_bytes().to_vec();
-
         if !data_parts.is_empty() {
             return Some(ParsedSseEvent {
                 event_type,
@@ -557,5 +570,4 @@ fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
             });
         }
     }
-    None
 }

@@ -10,23 +10,38 @@ import {
 	type INode,
 	type IOAuthProvider,
 	type IOAuthToken,
-	type PageTrigger,
 	type IPrerunEventResponse,
 	type IRunPayload,
 	type IVersionType,
+	type PageTrigger,
 	type ProgressToastData,
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
+	classifyPageContractError,
 	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
 	getCurrentPageContext,
 	injectDataFunction,
+	notifyPageContractRejected,
 	serializePageTrigger,
 	showProgressToast,
+	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
 import type {
 	IEventAlias,
+	IEventCorpusResult,
+	IEventRunsResult,
+	IEventTimeline,
+	IEventTimelineRun,
 	IListRegistrationsResponse,
+	IPutRegressionSuiteRequest,
+	IRegressionCorpusPayload,
+	IRegressionFixtureSummary,
+	IRegressionRunAccepted,
+	IRegressionSuiteResult,
+	IRegressionSuiteRunDetail,
+	IRegressionSuiteRunSummary,
+	IRestorePlanResult,
 	ISetupEventResponse,
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -45,6 +60,7 @@ import {
 } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
+import { startRegressionSuiteRun } from "./regression-runner";
 
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
@@ -592,6 +608,72 @@ export class EventState implements IEventState {
 		this.backend.backgroundTaskHandler(promise);
 		return versions;
 	}
+
+	/**
+	 * Timeline and run telemetry are assembled from the device's own event
+	 * archive and Lance run tables — local-only by design: the local and cloud
+	 * version counters diverge once edits happen on both sides, so no
+	 * remote-first merge is attempted here.
+	 */
+	async getEventTimeline(
+		appId: string,
+		eventId: string,
+	): Promise<IEventTimeline> {
+		return await invoke<IEventTimeline>("get_event_timeline", {
+			appId,
+			eventId,
+		});
+	}
+
+	async listEventRuns(
+		appId: string,
+		eventId: string,
+		boardIds: string[],
+		options?: { limit?: number; offset?: number },
+	): Promise<IEventTimelineRun[]> {
+		const result = await invoke<IEventRunsResult>("list_event_runs", {
+			appId,
+			eventId,
+			boardIds,
+			limit: options?.limit,
+			offset: options?.offset,
+		});
+		return result.runs;
+	}
+
+	/**
+	 * Restore is local-only like the timeline it addresses into: version
+	 * tuples are not comparable across transports, so the plan and the write
+	 * both target the device's own archive and live event. The command refuses
+	 * a non-dry run on Blocking issues — on synced apps local secrets are
+	 * already server-filtered, so `SecretUnrecoverable` fires often and needs
+	 * `acceptBlankSecrets` to proceed.
+	 */
+	async restoreEvent(
+		appId: string,
+		eventId: string,
+		version: [number, number, number],
+		options?: {
+			dryRun?: boolean;
+			versionType?: string;
+			restoreRoute?: boolean;
+			dropCanary?: boolean;
+			acceptBlankSecrets?: boolean;
+		},
+	): Promise<IRestorePlanResult> {
+		return await invoke<IRestorePlanResult>("restore_event", {
+			appId,
+			eventId,
+			version,
+			versionType: options?.versionType,
+			dryRun: options?.dryRun,
+			restoreRoute: options?.restoreRoute,
+			dropCanary: options?.dropCanary,
+			acceptBlankSecrets: options?.acceptBlankSecrets,
+			offline: await this.backend.isOffline(appId),
+		});
+	}
+
 	async upsertEvent(
 		appId: string,
 		event: IEvent,
@@ -812,6 +894,13 @@ export class EventState implements IEventState {
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
 	): Promise<ILogMetadata | undefined> {
+		// Substitution is per dispatch path, never shared: the native command
+		// re-derives the revision from the LOCAL board, while the server answers
+		// for its own contract, and on a hosted app both are live at once.
+		// Stamping one path with the other's revision would only move the drift.
+		let localTrigger = pageTrigger;
+		let remoteTrigger = pageTrigger;
+
 		const runRemotely = () =>
 			this.executeEventRemote(
 				appId,
@@ -820,7 +909,7 @@ export class EventState implements IEventState {
 				streamState,
 				onEventId,
 				cb,
-				pageTrigger,
+				remoteTrigger,
 			);
 		const localDynamicPageAction = isLocalDynamicPageTrigger(pageTrigger);
 
@@ -829,12 +918,26 @@ export class EventState implements IEventState {
 				return runRemotely();
 			}
 
-			const prerun = await this.prerunEvent(
-				appId,
-				eventId,
-				undefined,
+			let prerun: IPrerunEventResponse;
+			try {
+				prerun = await this.prerunEvent(appId, eventId, undefined, pageTrigger);
+			} catch (error) {
+				// The server prerun resolves the trigger, so a removed action is
+				// refused HERE and the run is never built. Publishing before the
+				// rethrow is the only chance the mounted Page gets to heal.
+				this.reportPageContractRejection(appId, eventId, pageTrigger, error);
+				throw error;
+			}
+
+			// The judging authority just told us the revision it holds. Send that
+			// rather than the one the surface was rendered with — a compiled
+			// action keeps its identity across a Board edit, so the click the user
+			// just made can run with current authority instead of being refused.
+			remoteTrigger = withCurrentManifestRevision(
 				pageTrigger,
+				prerun.manifest_revision,
 			);
+
 			if (!prerun.can_execute_locally) {
 				if (localDynamicPageAction) {
 					throw new Error(
@@ -844,12 +947,17 @@ export class EventState implements IEventState {
 				return runRemotely();
 			}
 
-			// The server can establish permission and mode, but only the
-			// device can prove that it holds the exact Board and Page contract.
-			// Keep local execution preferred when revisions match; otherwise
-			// use the already-authorized remote path before a local run starts.
+			// The server can establish permission and mode, but only the device
+			// can prove it holds a Page contract for this Event at all. It must
+			// not be an *exact* revision match: the revision hashes the whole
+			// Board, so every unrelated edit supersedes what an already-rendered
+			// Page carries, and demanding equality here sent a perfectly runnable
+			// action to the server — or, offline, failed it outright. The native
+			// command re-resolves the trigger against the current local contract
+			// and re-checks the entry node, so a superseded revision is safe.
 			if (!localDynamicPageAction) {
-				let holdsExactContract = false;
+				let holdsLocalContract = false;
+				let deviceRevision: string | undefined;
 				try {
 					const localBootstrap = await invoke<{
 						executionRevision?: string;
@@ -857,23 +965,34 @@ export class EventState implements IEventState {
 						appId,
 						eventId,
 					});
-					holdsExactContract =
-						Boolean(pageTrigger.manifestRevision) &&
-						localBootstrap.executionRevision === pageTrigger.manifestRevision;
+					deviceRevision = localBootstrap.executionRevision ?? undefined;
+					holdsLocalContract = Boolean(
+						pageTrigger.manifestRevision && deviceRevision,
+					);
 				} catch (error) {
 					console.warn(
-						"[executeEvent] Exact Page contract is unavailable locally:",
+						"[executeEvent] No local Page contract for this Event:",
 						error,
 					);
 				}
-				if (!holdsExactContract) {
+				if (!holdsLocalContract) {
 					if (!(await this.canReachServer(appId))) {
+						notifyPageContractRejected({
+							appId,
+							eventId,
+							renderedRevision: pageTrigger.manifestRevision,
+							reason: "missing_contract",
+						});
 						throw new Error(
-							"The local Page contract is stale and the server is unreachable; reload the Page",
+							"This device holds no Page contract for this Event and the server is unreachable; reload the Page",
 						);
 					}
 					return runRemotely();
 				}
+				// The native command judges against the device's own board, so the
+				// device revision — not the server's — is the current one for the
+				// invoke below.
+				localTrigger = withCurrentManifestRevision(pageTrigger, deviceRevision);
 			}
 		}
 
@@ -1018,21 +1137,54 @@ export class EventState implements IEventState {
 
 		const token = this.backend.auth?.user?.access_token;
 
-		const metadata: ILogMetadata | undefined = await invoke("execute_event", {
-			appId: appId,
-			eventId: eventId,
-			payload: payload,
-			events: channel,
-			streamState: streamState,
-			credentials,
-			token,
-			oauthTokens,
-			pageTrigger: pageTrigger ? serializePageTrigger(pageTrigger) : undefined,
-		});
+		let metadata: ILogMetadata | undefined;
+		try {
+			metadata = await invoke("execute_event", {
+				appId: appId,
+				eventId: eventId,
+				payload: payload,
+				events: channel,
+				streamState: streamState,
+				credentials,
+				token,
+				oauthTokens,
+				pageTrigger: localTrigger
+					? serializePageTrigger(localTrigger)
+					: undefined,
+			});
+		} catch (error) {
+			this.reportPageContractRejection(appId, eventId, localTrigger, error);
+			throw error;
+		}
 
 		closed = true;
 
 		return metadata;
+	}
+
+	/**
+	 * Tell any mounted Page that the authority refused this trigger for a reason
+	 * a refreshed contract can cure, so it can refetch itself. Only classified
+	 * contract failures publish — a routing or permission refusal is not
+	 * something a refetch fixes, and treating it as one is how a refetch loop
+	 * starts. Never called on success: a run that completed has already rewritten
+	 * the surface through its A2UI messages.
+	 */
+	private reportPageContractRejection(
+		appId: string,
+		eventId: string,
+		trigger: PageTrigger | undefined,
+		error: unknown,
+	): void {
+		if (!trigger) return;
+		const failure = classifyPageContractError(error);
+		if (!failure) return;
+		notifyPageContractRejected({
+			appId,
+			eventId,
+			renderedRevision: trigger.manifestRevision,
+			reason: failure,
+		});
 	}
 
 	async executeEventRemote(
@@ -1056,74 +1208,83 @@ export class EventState implements IEventState {
 		let closed = false;
 		let foundRunId = false;
 
-		await streamFetcher<IIntercomEvent>(
-			this.backend.profile,
-			`apps/${appId}/events/${eventId}/invoke`,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					payload: payload.payload,
-					token: this.backend.auth.user?.access_token,
-					stream_state: streamState ?? false,
-					oauth_tokens: undefined,
-					runtime_variables: payload.runtime_variables,
-					profile_id: this.backend.profile?.id,
-					page_trigger: pageTrigger
-						? serializePageTrigger(pageTrigger)
-						: undefined,
-				}),
-			},
-			this.backend.auth,
-			(event: IIntercomEvent) => {
-				if (closed) return;
+		try {
+			await streamFetcher<IIntercomEvent>(
+				this.backend.profile,
+				`apps/${appId}/events/${eventId}/invoke`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						payload: payload.payload,
+						token: this.backend.auth.user?.access_token,
+						stream_state: streamState ?? false,
+						oauth_tokens: undefined,
+						runtime_variables: payload.runtime_variables,
+						profile_id: this.backend.profile?.id,
+						page_trigger: pageTrigger
+							? serializePageTrigger(pageTrigger)
+							: undefined,
+					}),
+				},
+				this.backend.auth,
+				(event: IIntercomEvent) => {
+					if (closed) return;
 
-				if (!foundRunId && onEventId && event.event_type === "run_initiated") {
-					const runId = (event.payload as { run_id?: string })?.run_id;
-					if (runId) {
-						onEventId(runId);
-						foundRunId = true;
-					}
-				}
-
-				if (event.event_type === "toast") {
-					const payload = event.payload as {
-						message: string;
-						level: "success" | "error" | "info" | "warning";
-					};
-					if (payload?.message) {
-						switch (payload.level) {
-							case "success":
-								toast.success(payload.message);
-								break;
-							case "error":
-								toast.error(payload.message);
-								break;
-							case "warning":
-								toast.warning(payload.message);
-								break;
-							default:
-								toast.info(payload.message);
+					if (
+						!foundRunId &&
+						onEventId &&
+						event.event_type === "run_initiated"
+					) {
+						const runId = (event.payload as { run_id?: string })?.run_id;
+						if (runId) {
+							onEventId(runId);
+							foundRunId = true;
 						}
 					}
-				}
 
-				if (event.event_type === "progress") {
-					showProgressToast(event.payload as ProgressToastData);
-				}
+					if (event.event_type === "toast") {
+						const payload = event.payload as {
+							message: string;
+							level: "success" | "error" | "info" | "warning";
+						};
+						if (payload?.message) {
+							switch (payload.level) {
+								case "success":
+									toast.success(payload.message);
+									break;
+								case "error":
+									toast.error(payload.message);
+									break;
+								case "warning":
+									toast.warning(payload.message);
+									break;
+								default:
+									toast.info(payload.message);
+							}
+						}
+					}
 
-				if (event.event_type === "flow_notification") {
-					dispatchFlowNotificationEvent(event, appId);
-				}
+					if (event.event_type === "progress") {
+						showProgressToast(event.payload as ProgressToastData);
+					}
 
-				if (event.event_type === "completed") {
-					finishAllProgressToasts(true);
-				} else if (event.event_type === "error") {
-					finishAllProgressToasts(false);
-				}
+					if (event.event_type === "flow_notification") {
+						dispatchFlowNotificationEvent(event, appId);
+					}
 
-				if (cb) cb([event]);
-			},
-		);
+					if (event.event_type === "completed") {
+						finishAllProgressToasts(true);
+					} else if (event.event_type === "error") {
+						finishAllProgressToasts(false);
+					}
+
+					if (cb) cb([event]);
+				},
+			);
+		} catch (error) {
+			this.reportPageContractRejection(appId, eventId, pageTrigger, error);
+			throw error;
+		}
 
 		closed = true;
 		finishAllProgressToasts(true);
@@ -1146,11 +1307,20 @@ export class EventState implements IEventState {
 		appId: string,
 		eventId: string,
 		version?: string,
+		variant?: string,
 	): Promise<IListRegistrationsResponse> {
 		if (!this.backend.profile || !this.backend.auth) {
-			return { event_id: eventId, event_version: null, registrations: [] };
+			return {
+				event_id: eventId,
+				event_version: null,
+				variant: variant ?? "stable",
+				registrations: [],
+			};
 		}
-		const qs = version ? `?version=${encodeURIComponent(version)}` : "";
+		const params = new URLSearchParams();
+		if (version) params.set("version", version);
+		if (variant) params.set("variant", variant);
+		const qs = params.size > 0 ? `?${params.toString()}` : "";
 		return await fetcher<IListRegistrationsResponse>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/registrations${qs}`,
@@ -1178,6 +1348,7 @@ export class EventState implements IEventState {
 		appId: string,
 		eventId: string,
 		force = false,
+		variant?: string,
 	): Promise<ISetupEventResponse> {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Remote setup requires an online profile");
@@ -1185,7 +1356,7 @@ export class EventState implements IEventState {
 		return await fetcher<ISetupEventResponse>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/setup`,
-			{ method: "POST", body: JSON.stringify({ force }) },
+			{ method: "POST", body: JSON.stringify({ force, variant }) },
 			this.backend.auth,
 		);
 	}
@@ -1508,6 +1679,135 @@ export class EventState implements IEventState {
 			label: "prerunEvent",
 			buildLocal: buildLocalPrerun,
 			fetchRemote: fetchRemotePrerun,
+		});
+	}
+
+	/* -------------------------------------------- regression suites (Track D) */
+	// Local-only by design, like the timeline: corpus, fixtures, suite config
+	// and run archives all live on this device (the same core bucket layout as
+	// cloud, over the local meta store). Desktop suites have no schedule and no
+	// publish gate; the runner is client-side (regression-runner.ts) and its
+	// replays are fully LIVE runs — no shadow isolation exists locally.
+
+	async getEventCorpus(
+		appId: string,
+		eventId: string,
+		limit?: number,
+	): Promise<IEventCorpusResult> {
+		return await invoke<IEventCorpusResult>("list_regression_corpus", {
+			appId,
+			eventId,
+			limit,
+		});
+	}
+
+	async getCorpusPayload(
+		appId: string,
+		eventId: string,
+		runId: string,
+	): Promise<IRegressionCorpusPayload> {
+		return await invoke<IRegressionCorpusPayload>(
+			"get_regression_corpus_payload",
+			{ appId, eventId, runId },
+		);
+	}
+
+	async promoteRegressionFixture(
+		appId: string,
+		eventId: string,
+		runId: string,
+		options?: {
+			expectation?: "pass" | "fail";
+			acknowledgeRejected?: boolean;
+		},
+	): Promise<IRegressionFixtureSummary> {
+		return await invoke<IRegressionFixtureSummary>(
+			"promote_regression_fixture",
+			{
+				appId,
+				eventId,
+				runId,
+				expectation: options?.expectation,
+				acknowledgeRejected: options?.acknowledgeRejected ?? false,
+			},
+		);
+	}
+
+	async deleteRegressionFixture(
+		appId: string,
+		eventId: string,
+		fixtureId: string,
+	): Promise<void> {
+		await invoke("delete_regression_fixture", { appId, eventId, fixtureId });
+	}
+
+	async getRegressionSuite(
+		appId: string,
+		eventId: string,
+	): Promise<IRegressionSuiteResult | null> {
+		return await invoke<IRegressionSuiteResult | null>("get_regression_suite", {
+			appId,
+			eventId,
+		});
+	}
+
+	async putRegressionSuite(
+		appId: string,
+		eventId: string,
+		config: IPutRegressionSuiteRequest,
+	): Promise<IRegressionSuiteResult> {
+		return await invoke<IRegressionSuiteResult>("upsert_regression_suite", {
+			appId,
+			eventId,
+			triggerOnPublish: config.trigger_on_publish,
+			schedule: config.schedule ?? null,
+			gateMode: config.gate_mode,
+			allowLiveSideEffects: config.allow_live_side_effects,
+		});
+	}
+
+	async runRegressionSuite(
+		appId: string,
+		eventId: string,
+		options?: {
+			boardVersion?: [number, number, number];
+			allowDraft?: boolean;
+		},
+	): Promise<IRegressionRunAccepted> {
+		const suiteResult = await this.getRegressionSuite(appId, eventId);
+		if (!suiteResult) {
+			throw new Error(
+				"No regression suite is configured for this event — save one first from the event's Quality section",
+			);
+		}
+		return startRegressionSuiteRun(
+			this.backend,
+			appId,
+			eventId,
+			suiteResult.suite,
+			options,
+		);
+	}
+
+	async listRegressionRuns(
+		appId: string,
+		eventId: string,
+	): Promise<IRegressionSuiteRunSummary[]> {
+		return await invoke<IRegressionSuiteRunSummary[]>(
+			"list_regression_suite_runs",
+			{ appId, eventId },
+		);
+	}
+
+	async getRegressionRun(
+		appId: string,
+		eventId: string,
+		suiteRunId: string,
+	): Promise<IRegressionSuiteRunDetail> {
+		return await invoke<IRegressionSuiteRunDetail>("get_regression_suite_run", {
+			appId,
+			eventId,
+			suiteRunId,
 		});
 	}
 

@@ -19,6 +19,7 @@ export * from "./page-context";
 export * from "./runtime-vars-utils";
 export * from "./board-metrics";
 export * from "./board-tests";
+export * from "./regression";
 export * from "./observe-resize";
 export * from "./storage-file";
 
@@ -42,6 +43,7 @@ export * from "./set-query-params";
 export * from "./theme";
 export * from "./sync-db";
 export * from "./board-sync-events";
+export * from "./page-contract-drift";
 export * from "./realtime/types";
 export * from "./realtime/webrtc";
 export * from "./oauth";

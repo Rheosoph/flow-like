@@ -1305,6 +1305,11 @@ impl Copilot {
                         }
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
+                        // Providers differ here: some stream ReasoningDelta and
+                        // then replay the whole block as a final Reasoning item,
+                        // others send one Reasoning per token chunk. Append only
+                        // what is new, with no separator — fragments split words
+                        // and every newline renders as a hard break.
                         let reasoning_text = reasoning
                             .content
                             .iter()
@@ -1316,24 +1321,34 @@ impl Copilot {
                                 _ => None,
                             })
                             .collect::<Vec<_>>()
-                            .join("\n");
-                        current_reasoning.push_str(&reasoning_text);
-                        current_reasoning.push('\n');
+                            .join("");
+                        let new_text = if let Some(suffix) =
+                            reasoning_text.strip_prefix(current_reasoning.as_str())
+                        {
+                            suffix
+                        } else if current_reasoning.ends_with(reasoning_text.as_str()) {
+                            ""
+                        } else {
+                            reasoning_text.as_str()
+                        };
+                        if !new_text.is_empty() {
+                            current_reasoning.push_str(new_text);
 
-                        // Send reasoning as a plan step (streaming update)
-                        if let Some(ref callback) = on_token {
-                            // Create or update the reasoning step
-                            if reasoning_step_id.is_none() {
-                                plan_step_counter += 1;
-                                reasoning_step_id =
-                                    Some(format!("reasoning_{}", plan_step_counter));
+                            // Send reasoning as a plan step (streaming update)
+                            if let Some(ref callback) = on_token {
+                                // Create or update the reasoning step
+                                if reasoning_step_id.is_none() {
+                                    plan_step_counter += 1;
+                                    reasoning_step_id =
+                                        Some(format!("reasoning_{}", plan_step_counter));
+                                }
+                                callback(stream::plan_step_frame(
+                                    reasoning_step_id.clone().unwrap(),
+                                    current_reasoning.trim().to_string(),
+                                    PlanStepStatus::InProgress,
+                                    "think",
+                                ));
                             }
-                            callback(stream::plan_step_frame(
-                                reasoning_step_id.clone().unwrap(),
-                                current_reasoning.trim().to_string(),
-                                PlanStepStatus::InProgress,
-                                "think",
-                            ));
                         }
                     }
                     StreamedAssistantContent::Final(_) => {
@@ -2815,6 +2830,7 @@ impl Copilot {
                 parameters: serde_json::to_value(LLMParameters {
                     context_length: 128000,
                     provider: ModelProvider {
+                        api_surface: None,
                         provider_name: "openai".to_string(),
                         model_id: None,
                         version: None,

@@ -144,6 +144,7 @@ impl NodeLogic for BuildBedrockNode {
             context_length: 20000,
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
+                api_surface: None,
                 provider_name: "custom:bedrock".into(),
                 model_id: if model_id.is_empty() {
                     None

@@ -32,7 +32,7 @@ use crate::{
         },
         event::{
             ApiEventParameters, CanaryEvent, ChatEventParameters, EmailEventParameters, Event,
-            EventPayload,
+            EventPayload, EventVariant,
         },
         execution::{LogMeta, RunPayload, log::LogMessage},
         node::Node,
@@ -108,6 +108,7 @@ pub fn generate_schema(base_path: PathBuf) -> flow_like_types::Result<()> {
     generate_and_save_schema::<ApiEventParameters>(&base_path, "flow/event-payload-api.json")?;
     generate_and_save_schema::<VersionType>(&base_path, "flow/version-type.json")?;
     generate_and_save_schema::<CanaryEvent>(&base_path, "flow/canary.json")?;
+    generate_and_save_schema::<EventVariant>(&base_path, "flow/variant.json")?;
     generate_and_save_schema::<GenericCommand>(
         &base_path,
         "flow/board/commands/generic-command.json",

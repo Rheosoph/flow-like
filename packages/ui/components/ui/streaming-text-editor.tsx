@@ -6,32 +6,18 @@ import { BaseEditorKit } from "../editor/editor-base-kit";
 import { indexEditorPaths } from "./lazy-plate-static";
 import {
 	EMPTY_STREAMING_STATE,
+	isCompleteParse,
 	parseStreamingMarkdown,
 } from "./streaming-markdown-blocks";
 import {
 	PROSE_WRAPPER_CLASSNAME,
 	STATIC_EDITOR_CLASSNAME,
 	createStaticProseHandlers,
+	getStaticParseWorker,
+	publishSettledParse,
 } from "./text-editor";
 
 const EMPTY_VALUE: Value = [{ type: "p", children: [{ text: "" }] }];
-
-/**
- * The deserializer needs an editor for its plugin context but never mutates it,
- * and every use is synchronous within a render, so one module-level instance is
- * shared by all mounted streaming editors.
- */
-let parseWorker: ReturnType<typeof createSlateEditor> | null = null;
-function getParseWorker() {
-	if (!parseWorker) {
-		parseWorker = createSlateEditor({
-			plugins: BaseEditorKit,
-			value: EMPTY_VALUE,
-			nodeId: false,
-		});
-	}
-	return parseWorker;
-}
 
 function StreamingTextEditorInner({
 	content,
@@ -61,14 +47,23 @@ function StreamingTextEditorInner({
 	// `editor.children` here is safe because parseStreamingMarkdown is
 	// idempotent — re-running it for the same content returns the same objects.
 	useMemo(() => {
+		const previous = stateRef.current;
 		const next = parseStreamingMarkdown(
-			getParseWorker(),
+			getStaticParseWorker(BaseEditorKit),
 			content,
-			stateRef.current,
+			previous,
 		);
 		stateRef.current = next;
 		editor.children = next.blocks;
 		indexEditorPaths(editor, next.firstChangedBlock);
+		// Published on every parse, not on unmount: the settled editor for this
+		// content renders in the same pass that drops the streaming one, before
+		// any cleanup would run.
+		publishSettledParse(
+			content,
+			{ value: next.blocks, complete: isCompleteParse(next) },
+			previous.source,
+		);
 	}, [content, editor]);
 
 	return (

@@ -139,6 +139,10 @@ model App {
   eventRemoteAuths         EventRemoteAuth[]
   eventRemoteRegistrations EventRemoteRegistration[]
   eventAliases             EventAlias[]
+  eventSetups              EventSetup[]
+
+  regressionSuites    RegressionSuite[]
+  regressionSuiteRuns RegressionSuiteRun[]
 
   packages   AppPackage[]
   purchases  AppPurchase[]
@@ -149,7 +153,6 @@ model App {
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
 
-  cacheEntries AppCacheEntry[]
 
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -193,11 +196,14 @@ enum CacheScope {
   USER
 }
 
-/// Key/value cache entries written by flows. This is the fallback backend; when
-/// CACHE_BACKEND selects redis or dynamodb the entries live there instead and this
-/// table stays empty.
+/// Key/value cache entries written by flows, plus the API's own coordination state
+/// under the reserved `__platform__` partition. This is the fallback backend; when
+/// CACHE_BACKEND selects redis, dynamodb, cosmos or firestore the entries live there
+/// instead and this table stays empty.
+///
+/// `appId` is deliberately not a foreign key: the platform partition has no App row.
+/// App deletion removes its rows explicitly in the same transaction.
 model AppCacheEntry {
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
   scope CacheScope
@@ -489,6 +495,10 @@ model Event {
   /// Canary configuration for A/B testing
   canary Json?
 
+  /// Canary/shadow variant targets (JSON array of EventVariant). Empty set is
+  /// stored as NULL; the legacy `canary` column is the fallback mirror.
+  variants Json?
+
   /// Process-mining case-key mappings: business key name → dot-path into the
   /// invocation payload (e.g. {"order_id": "order.id"}). Extracted
   /// automatically on every run so cases group by business object without
@@ -507,6 +517,8 @@ model Event {
 
   /// Event version that was active during the last successful setup. Used to
   /// match `EventRemoteRegistration` rows when serving inbound requests.
+  /// Remains the stable variant's serving pointer; the stable `EventSetup`
+  /// row mirrors it.
   lastSetupVersion String?
 
   /// Last setup error message (truncated), populated only when setupStatus = "error".
@@ -515,6 +527,7 @@ model Event {
   remoteAuths         EventRemoteAuth[]
   remoteRegistrations EventRemoteRegistration[]
   aliases             EventAlias[]
+  setups              EventSetup[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -526,6 +539,46 @@ model Event {
   @@index([appId, isDefault])
   @@index([boardId])
   @@index([pageId])
+}
+
+/// Per-variant serving pointer for the inbound REST/MCP surface: which event
+/// version (and board) a variant's traffic dispatches into. One row per
+/// (event, variant); the "stable" row mirrors the legacy
+/// Event.lastSetupVersion scalar, which keeps being written for back-compat.
+model EventSetup {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  /// Variant name this row serves ("stable" or an EventVariant.name).
+  variant String
+
+  /// Event version whose registration rows serve this variant's traffic.
+  eventVersion String
+
+  /// Board the variant's setup run dispatched into.
+  boardId      String
+  /// Board version as semver string "major.minor.patch". NULL = floating latest.
+  boardVersion String?
+
+  /// Status of the most recent setup run for this variant: "running", "ok", "error".
+  setupStatus String?
+
+  /// Timestamp of the last setup run completion.
+  lastSetupAt DateTime?
+
+  /// Last setup error message (truncated), populated only when setupStatus = "error".
+  lastSetupError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, variant])
+  @@index([appId, eventId])
 }
 
 /// Auth configuration captured per remote server node during setup.
@@ -542,6 +595,9 @@ model EventRemoteAuth {
   /// Event version this auth config belongs to. Replaced atomically per setup.
   eventVersion String
 
+  /// Variant this auth config serves ("stable" or an EventVariant.name).
+  variant String @default("stable")
+
   /// node_id of the server node that emitted this config.
   nodeId String
 
@@ -557,8 +613,8 @@ model EventRemoteAuth {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([appId, eventId, eventVersion])
-  @@index([appId, eventId, eventVersion, nodeId, kind])
+  @@index([appId, eventId, eventVersion, variant])
+  @@index([appId, eventId, eventVersion, variant, nodeId, kind])
 }
 
 /// Registration row written by the setup-collector for every route, file,
@@ -573,8 +629,14 @@ model EventRemoteRegistration {
   eventId String
 
   /// Event version this registration belongs to. The inbound dispatcher
-  /// always reads the rows matching event.lastSetupVersion.
+  /// reads the rows matching the served variant's EventSetup.eventVersion
+  /// (falling back to event.lastSetupVersion for stable).
   eventVersion String
+
+  /// Variant this registration serves ("stable" or an EventVariant.name).
+  /// Inbound dispatch resolves the serving variant first and only ever
+  /// matches rows within one variant's bucket.
+  variant String @default("stable")
 
   /// One of: "rest_fn", "rest_file", "rest_openapi", "rest_openapi_ui",
   /// "mcp_raw", "mcp_tool", "mcp_resource", "mcp_prompt".
@@ -604,9 +666,9 @@ model EventRemoteRegistration {
 
   createdAt DateTime @default(now())
 
-  @@index([appId, eventId, eventVersion])
-  @@index([appId, eventId, eventVersion, kind])
-  @@index([appId, eventId, eventVersion, kind, method, path])
+  @@index([appId, eventId, eventVersion, variant])
+  @@index([appId, eventId, eventVersion, variant, kind])
+  @@index([appId, eventId, eventVersion, variant, kind, method, path])
 }
 
 /// Vanity slug -> event mapping. Slug is the global URL key; uniqueness

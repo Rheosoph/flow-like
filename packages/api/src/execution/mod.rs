@@ -11,10 +11,12 @@ mod page_action_jwt;
 mod page_action_sealer;
 pub mod payload_storage;
 pub mod queue;
+pub mod regression;
 pub mod rejection;
 pub mod run_sweeper;
 mod sse_proxy;
 pub mod state;
+pub mod variant;
 pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;
@@ -44,6 +46,7 @@ pub use page_action_sealer::{
 #[cfg(feature = "redis")]
 pub use queue::QueueWorker;
 pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
+pub use regression::spawn_regression_suites_worker;
 pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
 pub(crate) use sse_proxy::completed_run_status;
 pub use sse_proxy::{
@@ -52,7 +55,60 @@ pub use sse_proxy::{
 };
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,
-    ExecutionStateStore, RunMode, RunStatus, StateBackend, StateStoreConfig, StateStoreError,
-    UpdateRunInput, create_state_store,
+    ExecutionStateStore, RunMode, RunStatus, RunVariant, StateBackend, StateStoreConfig,
+    StateStoreError, UpdateRunInput, create_state_store,
 };
 pub use wasm_resolve::resolve_wasm_packages;
+
+/// Canonical `ExecutionRun.version` label for a board version tuple —
+/// `v{major}-{minor}-{patch}`, the same key the LanceDB run store uses for
+/// board versions. Every writer that has the tuple must go through this;
+/// `etag:{...}` labels are the one other allowed format.
+pub fn format_run_version((major, minor, patch): (u32, u32, u32)) -> String {
+    format!("v{major}-{minor}-{patch}")
+}
+
+/// Normalize a version label from an external writer (`1.2.3`, `1_2_3`,
+/// `v1-2-3`) to the canonical [`format_run_version`] form. Labels that do not
+/// parse as a version tuple — `etag:{...}` included — pass through verbatim so
+/// readers keep their existing tolerance.
+pub fn normalize_run_version_label(label: &str) -> String {
+    fn tuple<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<(u32, u32, u32)> {
+        let version = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        parts.next().is_none().then_some(version)
+    }
+
+    let trimmed = label.trim();
+    let parsed = match trimmed.strip_prefix('v') {
+        Some(rest) => tuple(rest.split('-')),
+        None => tuple(trimmed.split(['.', '_'])),
+    };
+    parsed
+        .map(format_run_version)
+        .unwrap_or_else(|| label.to_string())
+}
+
+#[cfg(test)]
+mod version_label_tests {
+    use super::{format_run_version, normalize_run_version_label};
+
+    #[test]
+    fn run_version_label_is_the_lance_board_version_format() {
+        assert_eq!(format_run_version((1, 0, 3)), "v1-0-3");
+        assert_eq!(normalize_run_version_label("1.0.3"), "v1-0-3");
+        assert_eq!(normalize_run_version_label("1_0_3"), "v1-0-3");
+        assert_eq!(normalize_run_version_label("v1-0-3"), "v1-0-3");
+    }
+
+    #[test]
+    fn non_tuple_labels_pass_through_verbatim() {
+        assert_eq!(normalize_run_version_label("etag:abc123"), "etag:abc123");
+        assert_eq!(normalize_run_version_label("latest"), "latest");
+        assert_eq!(normalize_run_version_label("1.2"), "1.2");
+        assert_eq!(normalize_run_version_label("1.2.3.4"), "1.2.3.4");
+    }
+}

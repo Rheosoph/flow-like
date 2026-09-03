@@ -18,7 +18,10 @@ use super::db::{
 /// The event artifact lookup reports a plain missing object as an internal
 /// error. After membership and permission checks passed, an absent event must
 /// be a precise 404 — the desktop client keys local-tombstone behavior on it.
-fn map_missing_event_artifact(event_id: &str, error: flow_like_types::Error) -> ApiError {
+pub(super) fn map_missing_event_artifact(
+    event_id: &str,
+    error: flow_like_types::Error,
+) -> ApiError {
     if matches!(
         error.downcast_ref::<flow_like_storage::object_store::Error>(),
         Some(flow_like_storage::object_store::Error::NotFound { .. })

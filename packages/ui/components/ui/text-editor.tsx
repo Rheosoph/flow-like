@@ -358,6 +358,158 @@ export const safeDeserialize = (
 	}
 };
 
+type StaticKit = typeof BaseEditorKit;
+
+const isMinimalStaticPlugin = (plugin: StaticKit[number]) => {
+	const { key, name } = plugin as unknown as PluginWithIdentity;
+	const pluginId = key || name || "";
+	return (
+		MINIMAL_STATIC_PLUGIN_IDS.has(pluginId) ||
+		pluginId.includes("paragraph") ||
+		pluginId.includes("heading") ||
+		pluginId === "h1" ||
+		pluginId === "h2" ||
+		pluginId === "h3" ||
+		pluginId === "h4" ||
+		pluginId === "h5" ||
+		pluginId === "h6" ||
+		pluginId.includes("code") ||
+		pluginId.includes("list") ||
+		pluginId.includes("link") ||
+		pluginId.includes("bold") ||
+		pluginId.includes("italic") ||
+		pluginId.includes("blockquote") ||
+		pluginId.includes("markdown")
+	);
+};
+
+// Built on first use, not at module load: the editor kit's plugin modules
+// import from this file, so `BaseEditorKit` is still in its TDZ while this
+// module evaluates. One shared instance keeps the kit's identity stable for
+// the parse caches below.
+let minimalStaticKit: StaticKit | undefined;
+function getMinimalStaticKit(): StaticKit {
+	minimalStaticKit ??= BaseEditorKit.filter(isMinimalStaticPlugin);
+	return minimalStaticKit;
+}
+
+/**
+ * The deserializer needs an editor for its plugin context but never mutates
+ * it, so one worker per kit serves every parse instead of building a fresh
+ * editor (~1 ms) per mount.
+ */
+const parseWorkers = new WeakMap<
+	StaticKit,
+	ReturnType<typeof createSlateEditor>
+>();
+
+export function getStaticParseWorker(plugins: StaticKit) {
+	let worker = parseWorkers.get(plugins);
+	if (!worker) {
+		worker = createSlateEditor({ plugins, nodeId: false });
+		parseWorkers.set(plugins, worker);
+	}
+	return worker;
+}
+
+function evictOldest(cache: Map<string, unknown>, capacity: number): void {
+	while (cache.size > capacity) {
+		const oldest = cache.keys().next().value;
+		if (oldest === undefined) return;
+		cache.delete(oldest);
+	}
+}
+
+export type SettledParse = {
+	readonly value: Value;
+	/** Every block came from the per-block parser; no whole-document fallback stood in. */
+	readonly complete: boolean;
+};
+
+const SETTLED_PARSE_CAPACITY = 8;
+const settledParses = new Map<string, SettledParse>();
+
+/**
+ * The streaming editor publishes its latest parse here so the settled editor
+ * that replaces it adopts the value instead of re-parsing the whole reply.
+ * `supersedes` is what the same stream published before; dropping it keeps one
+ * entry per live stream rather than one per token, so concurrent streams
+ * cannot evict each other's final parse before it is picked up.
+ */
+export function publishSettledParse(
+	content: string,
+	parse: SettledParse,
+	supersedes?: string,
+): void {
+	if (supersedes !== undefined && supersedes !== content)
+		settledParses.delete(supersedes);
+	settledParses.delete(content);
+	settledParses.set(content, parse);
+	evictOldest(settledParses, SETTLED_PARSE_CAPACITY);
+}
+
+export function peekSettledParse(content: string): SettledParse | undefined {
+	return settledParses.get(content);
+}
+
+const STATIC_PARSE_CAPACITY = 32;
+const staticParses = new Map<string, Value>();
+const kitIds = new WeakMap<StaticKit, number>();
+let nextKitId = 0;
+
+/** The kit implies the remark set (`minimal` selects both), so it need not be keyed. */
+function staticParseKey(
+	plugins: StaticKit,
+	isMarkdown: boolean,
+	content: string,
+): string {
+	let kitId = kitIds.get(plugins);
+	if (kitId === undefined) {
+		kitId = nextKitId++;
+		kitIds.set(plugins, kitId);
+	}
+	return `${kitId}:${isMarkdown ? "md" : "raw"}:${content}`;
+}
+
+/**
+ * Parses `content` for a read-only editor, reusing an earlier parse when one
+ * exists: the streaming parse the same reply just settled from, or a previous
+ * mount of the same message (list re-orders, tab switches, liveQuery
+ * re-materialisation).
+ *
+ * Handing one value to several editors is sound because `createSlateEditor`
+ * adopts the array by reference and, with `nodeId: false`, neither initial
+ * normalisation nor static rendering writes to a node — text-editor.test.tsx
+ * guards that. Should a plugin ever start mutating, clone on the way out.
+ */
+export function resolveStaticValue(
+	plugins: StaticKit,
+	content: string,
+	isMarkdown: boolean,
+	remarkPlugins: ReadonlyArray<unknown>,
+): Value {
+	const settled =
+		isMarkdown &&
+		plugins === BaseEditorKit &&
+		remarkPlugins === RICH_REMARK_PLUGINS
+			? settledParses.get(content)
+			: undefined;
+	const key = staticParseKey(plugins, isMarkdown, content);
+	const cached = settled?.complete ? settled.value : staticParses.get(key);
+	const value =
+		cached ??
+		safeDeserialize(
+			getStaticParseWorker(plugins),
+			content,
+			isMarkdown,
+			remarkPlugins,
+		);
+	staticParses.delete(key);
+	staticParses.set(key, value);
+	evictOldest(staticParses, STATIC_PARSE_CAPACITY);
+	return value;
+}
+
 function TextEditorStatic({
 	initialContent,
 	isMarkdown,
@@ -371,51 +523,19 @@ function TextEditorStatic({
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 }>) {
+	const plugins = minimal ? getMinimalStaticKit() : BaseEditorKit;
 	const remarkPlugins = minimal ? MINIMAL_REMARK_PLUGINS : RICH_REMARK_PLUGINS;
 
-	// Use minimal plugin set for better performance in read-only contexts
-	const plugins = useMemo(
+	const value = useMemo(
 		() =>
-			minimal
-				? [
-						...BaseEditorKit.filter((plugin) => {
-							// Only include essential plugins for markdown rendering
-							const { key, name } = plugin as unknown as PluginWithIdentity;
-							const pluginId = key || name || "";
-							return (
-								MINIMAL_STATIC_PLUGIN_IDS.has(pluginId) ||
-								pluginId.includes("paragraph") ||
-								pluginId.includes("heading") ||
-								pluginId === "h1" ||
-								pluginId === "h2" ||
-								pluginId === "h3" ||
-								pluginId === "h4" ||
-								pluginId === "h5" ||
-								pluginId === "h6" ||
-								pluginId.includes("code") ||
-								pluginId.includes("list") ||
-								pluginId.includes("link") ||
-								pluginId.includes("bold") ||
-								pluginId.includes("italic") ||
-								pluginId.includes("blockquote") ||
-								pluginId.includes("markdown")
-							);
-						}),
-					]
-				: BaseEditorKit,
-		[minimal],
+			resolveStaticValue(
+				plugins,
+				initialContent,
+				isMarkdown ?? false,
+				remarkPlugins,
+			),
+		[initialContent, isMarkdown, remarkPlugins, plugins],
 	);
-
-	// The value is memoized to avoid re-creating the editor on every render.
-	const value = useMemo(() => {
-		const tempEditor = createSlateEditor({ plugins });
-		return safeDeserialize(
-			tempEditor,
-			initialContent,
-			isMarkdown ?? false,
-			remarkPlugins,
-		);
-	}, [initialContent, isMarkdown, remarkPlugins, plugins]);
 
 	const editor = useMemo(() => {
 		const staticEditor = createSlateEditor({

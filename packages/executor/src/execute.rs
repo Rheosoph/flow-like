@@ -160,6 +160,14 @@ pub(crate) fn validate_executor_request_claims(
         ));
     }
 
+    // The in-process shadow isolation must be driven by the signed claim, not
+    // an unsigned payload byte. Old JWTs without the claim mean a normal run.
+    if request.shadow != claims.shadow.unwrap_or(false) {
+        return Err(ExecutorError::InvalidRequest(
+            "queued shadow flag does not match the executor JWT claims".to_string(),
+        ));
+    }
+
     match &claims.page_execution {
         Some(page) => {
             if claims
@@ -741,6 +749,7 @@ pub async fn execute(
         run.set_execution_mode(mode);
     }
 
+    run.set_shadow(request.shadow).await;
     run.set_execution_sub(claims.sub.clone()).await;
 
     // Set user context if provided
@@ -1454,6 +1463,69 @@ mod callback_event_identity_tests {
         let api = api_event_input(&second);
         assert_eq!(api.id.as_deref(), Some(second.id.as_str()));
         assert_eq!(api.sequence, Some(1));
+    }
+}
+
+#[cfg(test)]
+mod shadow_claim_binding_tests {
+    use super::*;
+
+    fn claims(shadow: Option<bool>) -> ExecutorClaims {
+        serde_json::from_value(serde_json::json!({
+            "sub": "user-1",
+            "run_id": "run-1",
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "shadow": shadow,
+            "callback_url": "https://api.example",
+            "typ": "executor",
+            "iss": "flow-like",
+            "aud": "flow-like-executor",
+            "iat": 0,
+            "nbf": 0,
+            "exp": 0,
+            "jti": "jti-1"
+        }))
+        .expect("claims deserialize")
+    }
+
+    fn request(shadow: bool) -> ExecutionRequest {
+        serde_json::from_value(serde_json::json!({
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "node_id": "node-1",
+            "shadow": shadow,
+            "credentials": {
+                "Aws": {
+                    "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                    "secret_access_key": "secret",
+                    "session_token": null,
+                    "meta_bucket": "meta",
+                    "content_bucket": "content",
+                    "logs_bucket": "logs",
+                    "region": "us-east-1",
+                    "expiration": null
+                }
+            },
+            "executor_jwt": "jwt"
+        }))
+        .expect("request deserializes")
+    }
+
+    /// The in-process isolation is driven by the signed claim, never by the
+    /// unsigned payload byte: any disagreement fails closed.
+    #[test]
+    fn shadow_flag_is_load_bearing_from_the_signed_claims() {
+        validate_executor_request_claims(&claims(Some(true)), &request(true))
+            .expect("matching shadow flags are accepted");
+        validate_executor_request_claims(&claims(None), &request(false))
+            .expect("old JWTs without the claim mean a normal run");
+        validate_executor_request_claims(&claims(Some(false)), &request(false))
+            .expect("an explicit non-shadow claim matches a normal payload");
+
+        assert!(validate_executor_request_claims(&claims(None), &request(true)).is_err());
+        assert!(validate_executor_request_claims(&claims(Some(true)), &request(false)).is_err());
+        assert!(validate_executor_request_claims(&claims(Some(false)), &request(true)).is_err());
     }
 }
 

@@ -44,6 +44,8 @@ export class FlowLikeClient {
 	readonly triggerHttpSink;
 	readonly chatCompletions;
 	readonly chatCompletionsStream;
+	readonly responses;
+	readonly responsesStream;
 	readonly getUsage;
 	readonly embed;
 	readonly listApps;
@@ -113,6 +115,8 @@ export class FlowLikeClient {
 		const chat = createChatMethods(this.http);
 		this.chatCompletions = chat.chatCompletions;
 		this.chatCompletionsStream = chat.chatCompletionsStream;
+		this.responses = chat.responses;
+		this.responsesStream = chat.responsesStream;
 		this.getUsage = chat.getUsage;
 
 		const embeddings = createEmbeddingMethods(this.http);

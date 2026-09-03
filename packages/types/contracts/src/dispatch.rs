@@ -238,6 +238,11 @@ pub struct DispatchPayload {
     /// client handle it forwards inside every request. Absent for runs with no attached client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<crate::channel::ChannelGrant>,
+    /// Shadow/replay isolation: the run must not write app storage. This byte
+    /// only mirrors the signed executor JWT claim — the executor rejects the
+    /// request when the two disagree.
+    #[serde(default)]
+    pub shadow: bool,
 }
 
 /// Reference to a dispatch payload that may be either embedded inline or

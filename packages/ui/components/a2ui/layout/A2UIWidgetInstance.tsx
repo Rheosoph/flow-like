@@ -317,6 +317,7 @@ export function A2UIWidgetInstance({
 	appId: rendererAppId,
 	boardId,
 	onAction,
+	renderChild: renderSurfaceChild,
 }: ComponentProps) {
 	const { t } = useTranslation("common");
 	const props = component as unknown as WidgetInstanceComponentProps;
@@ -385,6 +386,16 @@ export function A2UIWidgetInstance({
 				(c) => c.id === childId,
 			);
 			if (!childComponent?.component) {
+				// A child pushed in at runtime — another widget instance, or any
+				// element created on the page — lives on the surface, not in this
+				// widget's definition. Push Child stored its surface id in the
+				// container's explicitList, so resolve it through the page renderer.
+				// The self-reference guard keeps a container pushed into itself from
+				// recursing forever.
+				if (childId !== instanceId && childId !== componentId) {
+					const external = renderSurfaceChild?.(childId);
+					if (external) return external;
+				}
 				console.warn(
 					`Widget "${currentWidgetDef.name}" component "${childId}" not found. Available components:`,
 					currentWidgetDef.components.map((c) => c.id),
@@ -420,7 +431,15 @@ export function A2UIWidgetInstance({
 				/>
 			);
 		},
-		[instanceId, effectiveAppId, boardId, onAction, resolve],
+		[
+			instanceId,
+			componentId,
+			effectiveAppId,
+			boardId,
+			onAction,
+			resolve,
+			renderSurfaceChild,
+		],
 	);
 
 	if (!renderedWidgetDef) {

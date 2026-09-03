@@ -113,7 +113,17 @@ impl NodeLogic for ForEachWithBreakNode {
 
         context.activate_exec_pin_ref(&exec_item).await?;
 
+        let mut cancelled = false;
         'outer: for (i, item) in array.iter().enumerate() {
+            if context.is_cancelled() {
+                context.log_message(
+                    &format!("Execution cancelled, stopping loop at iteration {}", i),
+                    LogLevel::Warn,
+                );
+                cancelled = true;
+                break;
+            }
+
             // Publish per-iteration values
             let item = item.to_owned();
             let index_value = Value::from(i);
@@ -164,6 +174,11 @@ impl NodeLogic for ForEachWithBreakNode {
         }
 
         context.deactivate_exec_pin_ref(&exec_item).await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
+
         context.activate_exec_pin_ref(&done).await?;
         Ok(())
     }

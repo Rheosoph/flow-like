@@ -74,7 +74,7 @@ impl CallFunctionNode {
         &self,
         context: &mut ExecutionContext,
         layer: &Layer,
-        overrides: &BTreeMap<String, Value>,
+        overrides: &BTreeMap<String, Arc<Value>>,
     ) {
         let overrides_opt = if overrides.is_empty() {
             None
@@ -329,7 +329,7 @@ impl CallFunctionNode {
 
         // Find all inner nodes that directly feed outputs
         let mut triggered: HashSet<String> = HashSet::new();
-        let mut all_overrides: BTreeMap<String, Value> = BTreeMap::new();
+        let mut all_overrides: BTreeMap<String, Arc<Value>> = BTreeMap::new();
 
         for layer_pin in &output_layer_pins {
             for dep_pin_id in &layer_pin.depends_on {

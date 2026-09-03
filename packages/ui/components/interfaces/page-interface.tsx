@@ -1,8 +1,6 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Settings } from "lucide-react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
 	useCallback,
@@ -24,12 +22,10 @@ import {
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
 import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
-import type { IEvent } from "../../lib/schema/flow/event";
 import type { PageSpecialEvent } from "../../lib/schema/flow/page-trigger";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
-import type { IRouteMapping } from "../../state/backend-state/route-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 // By module path, not through the a2ui barrel: the barrel re-exports every component in the
 // registry, which would pull the 3D scene and the mapping stack into every page load.
@@ -64,10 +60,10 @@ function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
 }
 
-export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
-	event?: IUseInterfaceProps["event"];
+export interface PageInterfaceProps extends IUseInterfaceProps {
 	route?: string;
-	page?: IPage;
+	/** Exact page payload returned by bootstrap for the served (primary or variant) target. */
+	page: IPage;
 	/** Exact page payload revision returned by a freshness-validating bootstrap read. */
 	pageRevision?: string;
 	/** Exact Page execution authority revision returned by bootstrap. */
@@ -129,7 +125,7 @@ function PageInterfaceInner({
 	event,
 	config,
 	route,
-	page: providedPage,
+	page,
 	pageRevision,
 	pageExecutionRevision,
 	queryParams: providedQueryParams,
@@ -164,12 +160,6 @@ function PageInterfaceInner({
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
-	// The parent already resolved the page for the normal `/use` path. Seed local state from
-	// that value so the first render can build its surface without an effect handoff.
-	const [page, setPage] = useState<IPage | null>(() => providedPage ?? null);
-	const [routeMapping, setRouteMapping] = useState<IRouteMapping | null>(null);
-	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
-	const [isLoading, setIsLoading] = useState(() => !providedPage);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
 	const [loadEventPhase, setLoadEventPhase] = useState<
@@ -178,7 +168,6 @@ function PageInterfaceInner({
 	const [completedLoadEventKey, setCompletedLoadEventKey] = useState<
 		string | null
 	>(null);
-	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
 	const [cachedSurfaceResult, setCachedSurfaceResult] = useState<{
 		readonly identityKey: string;
@@ -186,22 +175,20 @@ function PageInterfaceInner({
 	} | null>(null);
 
 	const pageRoute = route || (config?.route as string);
-	const cacheSource = providedPage ?? page;
-	const activePageEvent = event ?? routeEvent;
-	const isGovernedPage = Boolean(activePageEvent?.default_page_id);
-	const cacheEnabled = cacheSource?.cache === true;
+	const isGovernedPage = Boolean(event.default_page_id);
+	const cacheEnabled = page.cache === true;
 
 	// A cached surface may only be replayed for the same parameters and the same account that
 	// produced it: the onLoad workflow receives both, and its output is built from them.
 	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
 		const revision = pageSurfaceRevision(
-			pageRevision ?? cacheSource?.updatedAt,
+			pageRevision ?? page.updatedAt,
 			pageExecutionRevision,
 		);
-		if (!appId || !cacheSource?.id || !revision) return null;
+		if (!appId || !page.id || !revision) return null;
 		return {
 			appId,
-			pageId: cacheSource.id,
+			pageId: page.id,
 			pageUpdatedAt: revision,
 			routeKey: pageSurfaceRouteKey(pageRoute),
 			queryKey: pageSurfaceQueryKey(search),
@@ -209,8 +196,8 @@ function PageInterfaceInner({
 		};
 	}, [
 		appId,
-		cacheSource?.id,
-		cacheSource?.updatedAt,
+		page.id,
+		page.updatedAt,
 		pageRevision,
 		pageExecutionRevision,
 		currentUserKey,
@@ -221,7 +208,7 @@ function PageInterfaceInner({
 		? pageSurfaceCacheKey(surfaceIdentity)
 		: null;
 	const shouldReadCachedSurface = Boolean(
-		cacheEnabled && surfaceIdentityKey && cacheSource?.onLoadEventId,
+		cacheEnabled && surfaceIdentityKey && page.onLoadEventId,
 	);
 	const isCacheLoading = Boolean(
 		shouldReadCachedSurface &&
@@ -231,30 +218,26 @@ function PageInterfaceInner({
 		cacheEnabled && cachedSurfaceResult?.identityKey === surfaceIdentityKey
 			? cachedSurfaceResult.surface
 			: null;
-	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
+	const pageExecutionBoardId = event.board_id || page.boardId;
 	const pageExecutionTargetIdentity = pageExecutionIdentity(
 		pageExecutionBoardId,
-		isGovernedPage ? activePageEvent?.id : undefined,
+		isGovernedPage ? event.id : undefined,
 	);
 	const pageExecutionVersion = useMemo(
 		() =>
 			resolveEventBoardVersion(
-				activePageEvent?.board_id,
-				activePageEvent?.board_version,
+				event.board_id,
+				event.board_version,
 				pageExecutionBoardId,
 			),
-		[
-			activePageEvent?.board_id,
-			activePageEvent?.board_version,
-			pageExecutionBoardId,
-		],
+		[event.board_id, event.board_version, pageExecutionBoardId],
 	);
 	const loadEventExecutionKey = useMemo(() => {
-		if (!page?.onLoadEventId || !pageExecutionTargetIdentity) return null;
+		if (!page.onLoadEventId || !pageExecutionTargetIdentity) return null;
 		return `${surfaceIdentityKey ?? page.id}:${page.onLoadEventId}:${pageExecutionTargetIdentity}:${pageExecutionVersion?.join(".") ?? "latest"}:${pageExecutionRevision ?? "unresolved"}`;
 	}, [
-		page?.id,
-		page?.onLoadEventId,
+		page.id,
+		page.onLoadEventId,
 		pageExecutionTargetIdentity,
 		pageExecutionVersion,
 		pageExecutionRevision,
@@ -262,88 +245,6 @@ function PageInterfaceInner({
 	]);
 	const loadEventExecutionKeyRef = useRef(loadEventExecutionKey);
 	loadEventExecutionKeyRef.current = loadEventExecutionKey;
-
-	useEffect(() => {
-		let cancelled = false;
-
-		if (providedPage) {
-			setPage(providedPage);
-			setIsLoading(false);
-			return () => {
-				cancelled = true;
-			};
-		}
-
-		const loadPageFromRoute = async () => {
-			setIsLoading(true);
-			setError(null);
-			try {
-				// Get route mapping (path -> eventId)
-				let mapping: IRouteMapping | null = null;
-
-				if (pageRoute) {
-					mapping = await backend.routeState.getRouteByPath(appId, pageRoute);
-				} else {
-					mapping = await backend.routeState.getDefaultRoute(appId);
-				}
-				if (cancelled) return;
-
-				if (!mapping) {
-					setRouteMapping(null);
-					setRouteEvent(null);
-					setPage(null);
-					setIsLoading(false);
-					return;
-				}
-
-				setRouteMapping(mapping);
-
-				// Get the event to determine what to display
-				const eventData = await backend.eventState.getEvent(
-					appId,
-					mapping.eventId,
-				);
-				if (cancelled) return;
-				setRouteEvent(eventData);
-
-				// If event has default_page_id, it's a page-target event
-				if (eventData.default_page_id) {
-					const pageResult = await backend.pageState.getPage(
-						appId,
-						eventData.default_page_id,
-						eventData.board_id || undefined,
-					);
-					if (cancelled) return;
-					if (pageResult) {
-						setPage(pageResult);
-					} else {
-						setError(`Page not found: ${eventData.default_page_id}`);
-					}
-				} else {
-					// Board-target event - no page to display
-					setPage(null);
-				}
-			} catch (e) {
-				if (cancelled) return;
-				console.error("Failed to load page:", e);
-				setError("Failed to load page");
-			} finally {
-				if (!cancelled) setIsLoading(false);
-			}
-		};
-
-		void loadPageFromRoute();
-		return () => {
-			cancelled = true;
-		};
-	}, [
-		appId,
-		pageRoute,
-		providedPage,
-		backend.routeState,
-		backend.pageState,
-		backend.eventState,
-	]);
 
 	// Only pages that explicitly opt in keep a last rendered surface. Pages without the opt-in
 	// always render their fresh page payload while the onLoad workflow updates it.
@@ -354,7 +255,7 @@ function PageInterfaceInner({
 			!cacheEnabled ||
 			!surfaceIdentity ||
 			!surfaceIdentityKey ||
-			!cacheSource?.onLoadEventId
+			!page.onLoadEventId
 		) {
 			return;
 		}
@@ -367,16 +268,10 @@ function PageInterfaceInner({
 		return () => {
 			cancelled = true;
 		};
-	}, [
-		cacheEnabled,
-		surfaceIdentity,
-		surfaceIdentityKey,
-		cacheSource?.onLoadEventId,
-	]);
+	}, [cacheEnabled, surfaceIdentity, surfaceIdentityKey, page.onLoadEventId]);
 
 	const initialSurface = useMemo(() => {
 		if (cachedSurface) return cachedSurface;
-		if (!page) return null;
 		return buildSurfaceFromPage(page, page.id);
 	}, [page, cachedSurface]);
 
@@ -403,7 +298,7 @@ function PageInterfaceInner({
 	// half-built surface is never what the next visit replays.
 	useEffect(() => {
 		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!cacheEnabled || !cacheSource?.onLoadEventId) return;
+		if (!cacheEnabled || !page.onLoadEventId) return;
 		if (
 			!loadEventExecutionKey ||
 			completedLoadEventKey !== loadEventExecutionKey
@@ -413,7 +308,7 @@ function PageInterfaceInner({
 	}, [
 		surfaceIdentity,
 		cacheEnabled,
-		cacheSource?.onLoadEventId,
+		page.onLoadEventId,
 		surface,
 		isLoadEventRunning,
 		loadEventExecutionKey,
@@ -568,8 +463,7 @@ function PageInterfaceInner({
 			onRunStarted?: (runId: string) => void,
 			isCurrent?: () => boolean,
 		) => {
-			if (!page) return;
-			if (!activePageEvent?.id || !pageExecutionRevision) {
+			if (!pageExecutionRevision) {
 				console.warn(
 					`[PageInterface] Missing governed Page context for ${eventName} event`,
 				);
@@ -609,7 +503,7 @@ function PageInterfaceInner({
 					executionService?.executeEvent ?? backend.eventState.executeEvent;
 				await execFn(
 					appId,
-					activePageEvent.id,
+					event.id,
 					payload,
 					false,
 					onRunStarted,
@@ -638,7 +532,7 @@ function PageInterfaceInner({
 		[
 			appId,
 			page,
-			activePageEvent?.id,
+			event.id,
 			pageExecutionRevision,
 			pageRoute,
 			backend,
@@ -650,7 +544,7 @@ function PageInterfaceInner({
 	// Execute onLoad event if configured (from page settings)
 	useEffect(() => {
 		const executeOnLoadEvent = async () => {
-			if (!page?.onLoadEventId || !loadEventExecutionKey) {
+			if (!page.onLoadEventId || !loadEventExecutionKey) {
 				loadEventExecutedRef.current = null;
 				setCompletedLoadEventKey(null);
 				setLoadEventPhase("idle");
@@ -699,7 +593,7 @@ function PageInterfaceInner({
 
 	// Execute onUnload event when page unmounts or user navigates away
 	useEffect(() => {
-		if (!page?.onUnloadEventId) return;
+		if (!page.onUnloadEventId) return;
 
 		const handleBeforeUnload = () => {
 			// Fire and forget - can't await in beforeunload
@@ -713,14 +607,14 @@ function PageInterfaceInner({
 			// Also fire on component unmount (navigation within SPA)
 			executePageEvent("unload", "onUnload");
 		};
-	}, [page?.onUnloadEventId, executePageEvent]);
+	}, [page.onUnloadEventId, executePageEvent]);
 
 	// Execute onInterval event at configured time intervals
 	const lastIntervalTickRef = useRef(0);
 	useEffect(() => {
 		if (
-			!page?.onIntervalEventId ||
-			!page?.onIntervalSeconds ||
+			!page.onIntervalEventId ||
+			!page.onIntervalSeconds ||
 			page.onIntervalSeconds <= 0
 		)
 			return;
@@ -745,8 +639,8 @@ function PageInterfaceInner({
 		const intervalId = setInterval(tick, intervalMs);
 		return () => clearInterval(intervalId);
 	}, [
-		page?.onIntervalEventId,
-		page?.onIntervalSeconds,
+		page.onIntervalEventId,
+		page.onIntervalSeconds,
 		executePageEvent,
 		active,
 	]);
@@ -764,7 +658,7 @@ function PageInterfaceInner({
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
 	const runtimeCanvasSettings =
-		activeSurface?.canvasSettings ?? page?.canvasSettings;
+		activeSurface?.canvasSettings ?? page.canvasSettings;
 	// The background is the one asset with no component of its own to resolve it.
 	const { src: backgroundImage } = useAssetSource(
 		appId,
@@ -776,7 +670,6 @@ function PageInterfaceInner({
 	const shouldHoldForCachedState = isCacheLoading;
 	const canRenderFromCache = Boolean(cachedSurface);
 	const shouldShowLoading =
-		(isLoading && !canRenderFromCache) ||
 		shouldHoldForCachedState ||
 		(isLoadEventRunning && !canRenderFromCache && !isScreenRevealed);
 	const loadingTitle = isLoadEventRunning
@@ -786,47 +679,6 @@ function PageInterfaceInner({
 		: "Loading page";
 	if (shouldShowLoading) {
 		return <PageLoadingSkeleton title={loadingTitle} />;
-	}
-
-	if (error) {
-		return (
-			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>{error}</p>
-			</div>
-		);
-	}
-
-	if (!routeMapping && !providedPage) {
-		return (
-			<div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
-				<p>
-					{t(
-						"noRouteConfiguredForThisPath",
-						"No route configured for this path",
-					)}
-				</p>
-				<Link
-					href={`/library/config/pages?appId=${appId}`}
-					className="flex items-center gap-2 text-sm hover:text-foreground transition-colors"
-				>
-					<Settings className="h-4 w-4" />
-					{t("configureRoutes", "Configure routes")}
-				</Link>
-			</div>
-		);
-	}
-
-	if (routeEvent && !routeEvent.default_page_id) {
-		return (
-			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>
-					{t(
-						"eventDoesNotHaveAPageTarget",
-						"Event does not have a page target",
-					)}
-				</p>
-			</div>
-		);
 	}
 
 	if (isGovernedPage && !pageExecutionRevision) {
@@ -875,7 +727,7 @@ function PageInterfaceInner({
 			<div
 				ref={pageContainerRef}
 				data-page-id={pageContainerId}
-				data-flowpilot-page-event-id={activePageEvent?.id ?? ""}
+				data-flowpilot-page-event-id={event.id}
 				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
 				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
@@ -883,12 +735,12 @@ function PageInterfaceInner({
 				<DataProvider initialData={[]}>
 					<A2UIRenderer
 						surface={activeSurfaceForRenderer}
-						widgetRefs={page?.widgetRefs}
+						widgetRefs={page.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
 						boardId={pageExecutionBoardId}
 						boardVersion={pageExecutionVersion}
-						eventId={activePageEvent?.id}
+						eventId={event.id}
 						governedPage={isGovernedPage}
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
@@ -900,7 +752,7 @@ function PageInterfaceInner({
 								<LivePageAgentBridge
 									appId={appId}
 									pageId={activeSurface.id}
-									eventId={activePageEvent?.id}
+									eventId={event.id}
 									getSurface={() => surfaceRef.current}
 									getContainer={() => pageContainerRef.current}
 									applyServerMessage={handleA2UIMessage}
@@ -921,8 +773,4 @@ export function PageInterface(props: PageInterfaceProps) {
 			<PageInterfaceInner {...props} />
 		</RouteDialogProvider>
 	);
-}
-
-export function usePageInterface(props: PageInterfaceProps) {
-	return <PageInterface {...props} />;
 }

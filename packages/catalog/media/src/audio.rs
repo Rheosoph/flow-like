@@ -1195,6 +1195,7 @@ async fn tts_together(
     tts_openai_like(
         client,
         &ModelProvider {
+            api_surface: None,
             provider_name: provider.provider_name.clone(),
             model_id: {
                 let model = get_provider_model(provider, "canopylabs/orpheus-3b-0.1-ft");

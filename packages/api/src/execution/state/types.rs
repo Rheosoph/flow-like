@@ -38,6 +38,18 @@ pub enum RunMode {
     Queue,
 }
 
+/// Run variant enum (matches Prisma schema). Records serialized before this
+/// field existed deserialize as `Primary` via the `Default` impl.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RunVariant {
+    #[default]
+    Primary,
+    Canary,
+    Shadow,
+    Regression,
+}
+
 /// Execution run record
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionRunRecord {
@@ -47,6 +59,11 @@ pub struct ExecutionRunRecord {
     pub event_id: Option<String>,
     pub status: RunStatus,
     pub mode: RunMode,
+    #[serde(default)]
+    pub run_variant: RunVariant,
+    pub variant_name: Option<String>,
+    pub shadow_of_run_id: Option<String>,
+    pub regression_run_id: Option<String>,
     pub input_payload_len: i64,
     pub output_payload_len: i64,
     pub error_message: Option<String>,
@@ -70,6 +87,10 @@ pub struct CreateRunInput {
     pub version: Option<String>,
     pub event_id: Option<String>,
     pub mode: RunMode,
+    pub run_variant: RunVariant,
+    pub variant_name: Option<String>,
+    pub shadow_of_run_id: Option<String>,
+    pub regression_run_id: Option<String>,
     pub input_payload_len: i64,
     pub user_id: Option<String>,
     pub technical_user_id: Option<String>,

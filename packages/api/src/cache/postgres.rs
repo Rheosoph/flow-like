@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use flow_like_types::cache::CacheScope;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryResult, Set, Statement, TransactionTrait,
     sea_query::{Expr, OnConflict},
 };
 use std::sync::Arc;
@@ -89,6 +90,86 @@ fn active_model(
         created_at: Set(now),
         updated_at: Set(now),
     }
+}
+
+/// Ceiling on the expired-row probe, and therefore on what it may scan.
+///
+/// A `LIMIT` inside a subquery is an optimization fence Postgres never pulls up, so the
+/// count stops here instead of walking a cache table that could hold millions of rows.
+/// Reaching the cap means "more than `EXPIRED_SCAN_CAP - 1`", which is what
+/// [`CacheStoreStats::expired_pending_capped`] tells the dashboard to render.
+const EXPIRED_SCAN_CAP: i64 = 10_001;
+
+/// Timeouts applied to every statistics probe.
+///
+/// `set_config(..., true)` is `SET LOCAL`, so the values die with the surrounding
+/// transaction rather than leaking into the next request that borrows this pooled
+/// connection. The lock timeout is the one that earns its keep: `pg_total_relation_size`
+/// opens the relation with an `AccessShareLock`, so a migration holding
+/// `AccessExclusiveLock` would otherwise hang the admin dashboard indefinitely.
+const PROBE_TIMEOUTS_SQL: &str =
+    "SELECT set_config('statement_timeout', '3s', true), set_config('lock_timeout', '1s', true)";
+
+/// Planner estimates for the cache table, resolved through `search_path` exactly as the
+/// ORM's own statements are. `to_regclass` yields NULL rather than raising when the table
+/// is absent, so a fresh database degrades to "no numbers" instead of an error.
+const TABLE_ESTIMATE_SQL: &str = r#"SELECT
+        COALESCE(stats.n_live_tup, 0)::bigint AS live_rows,
+        EXTRACT(EPOCH FROM GREATEST(stats.last_analyze, stats.last_autoanalyze))::bigint
+            AS analyzed_at
+    FROM pg_stat_all_tables stats
+    WHERE stats.relid = to_regclass('"AppCacheEntry"')"#;
+
+/// Heap plus indexes plus TOAST. The size functions carry no privilege check at all, but
+/// they do return NULL for a relation dropped between the catalog scan and the call.
+const TABLE_SIZE_SQL: &str = r#"SELECT pg_total_relation_size(cls.oid)::bigint AS total_bytes
+    FROM pg_class cls
+    WHERE cls.oid = to_regclass('"AppCacheEntry"')"#;
+
+/// `ORDER BY` is load-bearing, not cosmetic: without it the planner may pick a sequential
+/// scan, which still honours the `LIMIT` but reads the whole table first whenever few
+/// rows actually match — the exact shape of a healthy, well-swept cache. The ordering
+/// makes the index on `expiresAt` the cheaper plan.
+///
+/// The cutoff is bound as a naive timestamp because `expiresAt` is
+/// `timestamp without time zone`; comparing it against `now()` would silently shift the
+/// boundary by the session's UTC offset.
+const EXPIRED_PENDING_SQL: &str = r#"SELECT count(*)::bigint AS expired
+    FROM (
+        SELECT 1
+        FROM "AppCacheEntry"
+        WHERE "expiresAt" <= $1
+        ORDER BY "expiresAt"
+        LIMIT $2
+    ) capped"#;
+
+/// Run one statistics probe under its own transaction and timeouts.
+///
+/// Each probe gets a transaction of its own because one failed statement poisons the rest
+/// of a Postgres transaction: sharing one would let a lock timeout on the size function
+/// erase the row estimate that had already succeeded.
+async fn probe(
+    db: &DatabaseConnection,
+    statement: Statement,
+) -> Result<Option<QueryResult>, DbErr> {
+    let timeouts = Statement::from_string(DatabaseBackend::Postgres, PROBE_TIMEOUTS_SQL);
+    let txn = db.begin().await?;
+    txn.execute(timeouts).await?;
+    let row = txn.query_one(statement).await?;
+    txn.commit().await?;
+    Ok(row)
+}
+
+fn probed_column<T: sea_orm::TryGetable>(
+    result: &Result<Option<QueryResult>, DbErr>,
+    column: &str,
+) -> Option<T> {
+    result
+        .as_ref()
+        .ok()?
+        .as_ref()?
+        .try_get::<T>("", column)
+        .ok()
 }
 
 #[async_trait]
@@ -275,5 +356,61 @@ impl CacheStore for PostgresCacheStore {
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 
         Ok(result.rows_affected as i64)
+    }
+
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        let db = self.db.as_ref();
+        if db.get_database_backend() != DatabaseBackend::Postgres {
+            // Every probe below reads a Postgres catalog view. There is no portable
+            // equivalent, and guessing at one would be worse than reporting nothing.
+            return Ok(None);
+        }
+
+        let estimates = probe(
+            db,
+            Statement::from_string(DatabaseBackend::Postgres, TABLE_ESTIMATE_SQL),
+        )
+        .await;
+        let size = probe(
+            db,
+            Statement::from_string(DatabaseBackend::Postgres, TABLE_SIZE_SQL),
+        )
+        .await;
+        let expired = probe(
+            db,
+            Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                EXPIRED_PENDING_SQL,
+                [Utc::now().naive_utc().into(), EXPIRED_SCAN_CAP.into()],
+            ),
+        )
+        .await;
+
+        // A role missing one privilege, or a lock held over one relation, must cost only
+        // the field it touches. All three failing together points at the connection
+        // instead — reporting a healthy cache with no numbers would hide that entirely.
+        if let (Err(error), Err(_), Err(_)) = (&estimates, &size, &expired) {
+            return Err(CacheStoreError::Database(error.to_string()));
+        }
+
+        let expired_pending = probed_column::<i64>(&expired, "expired");
+
+        Ok(Some(CacheStoreStats {
+            entries: probed_column::<i64>(&estimates, "live_rows"),
+            size_bytes: probed_column::<Option<i64>>(&size, "total_bytes").flatten(),
+            expired_pending,
+            expired_pending_capped: expired_pending == Some(EXPIRED_SCAN_CAP),
+            observed_at: probed_column::<Option<i64>>(&estimates, "analyzed_at")
+                .flatten()
+                .and_then(|seconds| Utc.timestamp_opt(seconds, 0).single()),
+            note: Some(
+                "Entry count is the planner's `n_live_tup` estimate, not a COUNT(*): it \
+                 drifts between autovacuum runs and includes rows whose TTL has lapsed but \
+                 which the sweeper has not reclaimed yet. Size covers the heap, its indexes \
+                 and TOAST."
+                    .to_string(),
+            ),
+            ..CacheStoreStats::default()
+        }))
     }
 }

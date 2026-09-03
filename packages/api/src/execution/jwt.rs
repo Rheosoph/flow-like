@@ -74,6 +74,11 @@ pub struct ExecutionClaims {
     /// Present only for a run resolved through a governed Page trigger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_execution: Option<PageExecutionJwtContext>,
+    /// Signed shadow/replay isolation flag. The executor derives the effective
+    /// flag from this claim and rejects a payload whose `shadow` byte differs;
+    /// `None` (old tokens) means a normal run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<bool>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -111,6 +116,8 @@ pub struct ExecutionJwtParams {
     pub token_type: TokenType,
     /// TTL in seconds (defaults based on token type)
     pub ttl_seconds: Option<i64>,
+    /// Shadow/replay isolation, signed into the claims. `None` for normal runs.
+    pub shadow: Option<bool>,
 }
 
 /// Check if execution JWT signing is available
@@ -148,6 +155,7 @@ fn sign_inner(
         app_chain: params.app_chain,
         correlation: params.correlation,
         page_execution,
+        shadow: params.shadow,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -216,6 +224,7 @@ mod tests {
             callback_url: "http://localhost:8080".to_string(),
             token_type: TokenType::Executor,
             ttl_seconds: Some(3600),
+            shadow: None,
         };
 
         let token = sign(params.clone()).expect("Failed to sign JWT");
@@ -228,6 +237,38 @@ mod tests {
         assert_eq!(claims.event_id, params.event_id);
         assert_eq!(claims.callback_url, params.callback_url);
         assert!(claims.page_execution.is_none());
+        assert!(claims.shadow.is_none());
+    }
+
+    #[test]
+    fn shadow_flag_roundtrips_only_when_requested() {
+        if !is_configured() {
+            return;
+        }
+
+        let mut params = ExecutionJwtParams {
+            user_id: "user123".to_string(),
+            technical_user_id: None,
+            run_id: "run456".to_string(),
+            app_id: "app789".to_string(),
+            board_id: "board012".to_string(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: "http://localhost:8080".to_string(),
+            token_type: TokenType::Executor,
+            ttl_seconds: Some(3600),
+            shadow: Some(true),
+        };
+
+        let token = sign(params.clone()).expect("Failed to sign JWT");
+        let claims = verify(&token).expect("Failed to verify JWT");
+        assert_eq!(claims.shadow, Some(true));
+
+        params.shadow = None;
+        let token = sign(params).expect("Failed to sign JWT");
+        let claims = verify(&token).expect("Failed to verify JWT");
+        assert!(claims.shadow.is_none());
     }
 
     #[test]
@@ -248,6 +289,7 @@ mod tests {
             callback_url: "http://localhost:8080".to_string(),
             token_type: TokenType::Executor,
             ttl_seconds: Some(3600),
+            shadow: None,
         };
         let page_execution = PageExecutionJwtContext {
             page_id: "page-1".to_string(),

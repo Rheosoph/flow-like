@@ -11,6 +11,16 @@ interface IFlowBoardParentState {
 		[boardId: string]: string;
 	};
 	addBoardParent: (boardId: string, parentId: string) => void;
+	/**
+	 * Register many boards under one parent in a single write.
+	 *
+	 * `persist` writes the whole state after *every* `set`, so calling
+	 * `addBoardParent` in a loop opens one IndexedDB transaction per board. On
+	 * desktop those land on the SQLite-backed shim, where a burst of concurrent
+	 * write transactions contends for the database lock. No-ops when every entry
+	 * already points at the same parent, so a re-render cannot cause a write.
+	 */
+	addBoardParents: (parents: Readonly<Record<string, string>>) => void;
 	removeBoardParent: (boardId: string) => void;
 }
 
@@ -38,6 +48,19 @@ export const useFlowBoardParentState = create(
 							[boardId]: parentLink,
 						},
 					};
+				});
+			},
+			addBoardParents: (parents) => {
+				const current = get().boardParents;
+				const changed = Object.entries(parents).filter(
+					([boardId, parentLink]) => current[boardId] !== parentLink,
+				);
+				if (changed.length === 0) return;
+				set({
+					boardParents: {
+						...current,
+						...Object.fromEntries(changed),
+					},
 				});
 			},
 			removeBoardParent: (boardId) => {

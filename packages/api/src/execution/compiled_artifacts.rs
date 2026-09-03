@@ -181,11 +181,7 @@ pub async fn ensure_compiled_artifact(
     // carries the bundle's `on_update` behavior, so an API-built artifact
     // would be rejected there anyway. Cache the decision — it is keyed by
     // board content + fingerprint and flips on the next edit.
-    let has_wasm = board.nodes.values().any(|n| n.wasm.is_some())
-        || board
-            .layers
-            .values()
-            .any(|l| l.nodes.values().any(|n| n.wasm.is_some()));
+    let has_wasm = board.has_wasm_nodes();
     if has_wasm {
         state.compiled_artifact_cache.insert(cache_key, ());
         return Ok(());

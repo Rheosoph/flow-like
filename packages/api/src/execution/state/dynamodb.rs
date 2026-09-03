@@ -528,6 +528,10 @@ fn run_to_item(r: &ExecutionRunRecord) -> HashMap<String, AttributeValue> {
         AttributeValue::S(format!("{:?}", r.mode).to_uppercase()),
     );
     item.insert(
+        "runVariant".into(),
+        AttributeValue::S(format!("{:?}", r.run_variant).to_uppercase()),
+    );
+    item.insert(
         "inputPayloadLen".into(),
         AttributeValue::N(r.input_payload_len.to_string()),
     );
@@ -551,6 +555,15 @@ fn run_to_item(r: &ExecutionRunRecord) -> HashMap<String, AttributeValue> {
     }
     if let Some(e) = &r.event_id {
         item.insert("eventId".into(), AttributeValue::S(e.clone()));
+    }
+    if let Some(v) = &r.variant_name {
+        item.insert("variantName".into(), AttributeValue::S(v.clone()));
+    }
+    if let Some(s) = &r.shadow_of_run_id {
+        item.insert("shadowOfRunId".into(), AttributeValue::S(s.clone()));
+    }
+    if let Some(s) = &r.regression_run_id {
+        item.insert("regressionRunId".into(), AttributeValue::S(s.clone()));
     }
     if let Some(e) = &r.error_message {
         item.insert("errorMessage".into(), AttributeValue::S(e.clone()));
@@ -742,6 +755,20 @@ fn item_to_run(
         }
     };
 
+    // Items written before the variant column existed have no attribute;
+    // they are PRIMARY, matching the serde default of the JSON backends.
+    let run_variant = match get_opt_s("runVariant").as_deref() {
+        None | Some("PRIMARY") => RunVariant::Primary,
+        Some("CANARY") => RunVariant::Canary,
+        Some("SHADOW") => RunVariant::Shadow,
+        Some("REGRESSION") => RunVariant::Regression,
+        Some(other) => {
+            return Err(StateStoreError::Serialization(format!(
+                "Invalid runVariant: {other}"
+            )));
+        }
+    };
+
     Ok(ExecutionRunRecord {
         id: get_s("id")?,
         board_id: get_s("boardId")?,
@@ -749,6 +776,10 @@ fn item_to_run(
         event_id: get_opt_s("eventId"),
         status,
         mode,
+        run_variant,
+        variant_name: get_opt_s("variantName"),
+        shadow_of_run_id: get_opt_s("shadowOfRunId"),
+        regression_run_id: get_opt_s("regressionRunId"),
         input_payload_len: get_n("inputPayloadLen")?,
         output_payload_len: get_n("outputPayloadLen")?,
         error_message: get_opt_s("errorMessage"),
@@ -871,6 +902,10 @@ impl ExecutionStateStore for DynamoDbStateStore {
             event_id: input.event_id,
             status: RunStatus::Pending,
             mode: input.mode,
+            run_variant: input.run_variant,
+            variant_name: input.variant_name,
+            shadow_of_run_id: input.shadow_of_run_id,
+            regression_run_id: input.regression_run_id,
             input_payload_len: input.input_payload_len,
             output_payload_len: 0,
             error_message: None,
@@ -1458,6 +1493,10 @@ mod tests {
             event_id: Some("event-1".into()),
             status: RunStatus::Pending,
             mode: RunMode::Queue,
+            run_variant: RunVariant::Primary,
+            variant_name: None,
+            shadow_of_run_id: None,
+            regression_run_id: None,
             input_payload_len: 17,
             output_payload_len: 0,
             error_message: None,
@@ -1489,6 +1528,16 @@ mod tests {
         assert_eq!(actual.expires_at, expected.expires_at);
         assert_eq!(actual.user_id, expected.user_id);
         assert_eq!(actual.technical_user_id, expected.technical_user_id);
+        assert_eq!(actual.run_variant, RunVariant::Primary);
+    }
+
+    #[test]
+    fn pre_variant_items_without_the_attribute_decode_as_primary() {
+        let mut item = run_to_item(&canonical_queue_run());
+        item.remove("runVariant");
+        let decoded = item_to_run(&item).expect("legacy item should decode");
+        assert_eq!(decoded.run_variant, RunVariant::Primary);
+        assert_eq!(decoded.variant_name, None);
     }
 
     #[test]

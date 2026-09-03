@@ -7,6 +7,8 @@ import { runtimeVarsDB } from "./runtime-vars-db";
 
 let initialized = false;
 
+const CHAT_ROW_BLOB_THRESHOLD = 64 * 1024;
+
 /**
  * Apply the Tauri blob offload middleware to Dexie databases that store
  * potentially large values (base64 images, binary data, large strings).
@@ -26,8 +28,10 @@ export function initBlobOffload(threshold = 200) {
 	// FlowPilot: images[].data is raw base64
 	flowpilotDB.use(middleware);
 
-	// Chat: inner has embedded images, files has attachments
-	chatDb.use(middleware);
+	// Chat rows are one JSON string each, so the default threshold would send
+	// every message through the blob store and cost one IPC per row on every
+	// session read. Keep messages inline and offload only image-sized payloads.
+	chatDb.use(dexieTauriBlobOffload(CHAT_ROW_BLOB_THRESHOLD));
 
 	// Runtime vars: value is number[] which can be large byte arrays
 	runtimeVarsDB.use(middleware);

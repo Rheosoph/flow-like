@@ -10,8 +10,11 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    cache::sweeper::sweep_once, error::ApiError, middleware::jwt::AppUser,
-    permission::global_permission::GlobalPermission, state::AppState,
+    cache::{require_cache_store, sweeper::sweep_once},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::global_permission::GlobalPermission,
+    state::AppState,
 };
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -43,11 +46,7 @@ pub async fn sweep_cache(
     user.check_global_permission(&state, GlobalPermission::Admin)
         .await?;
 
-    let store = state.cache_store.clone().ok_or_else(|| {
-        ApiError::service_unavailable(
-            "Cache backend is not configured or failed to initialize on this deployment",
-        )
-    })?;
+    let store = require_cache_store(&state.cache).await?;
 
     let deleted = sweep_once(store.as_ref()).await.map_err(|e| {
         tracing::error!(error = %e, "Admin cache sweep failed");

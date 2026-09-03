@@ -153,6 +153,7 @@ fn managed_event_binding_is_current(
         && event.route.is_none()
         && event.variables.is_empty()
         && event.canary.is_none()
+        && event.variants.is_empty()
         && event.priority == 0
         && event.default_page_id.is_none()
         && !event.is_default
@@ -575,6 +576,7 @@ async fn materialize_action_events_with_mode(
             .unwrap_or_default(),
             active: action.enabled,
             canary: None,
+            variants: Vec::new(),
             priority: 0,
             event_type: "ontology_action".to_string(),
             notes: None,

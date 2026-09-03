@@ -15,7 +15,10 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::{
-    cache::{CacheKey, CacheLimits, CacheStore, CacheStoreError, SetCacheEntry},
+    cache::{
+        CacheKey, CacheLimits, CacheStore, CacheStoreError, SetCacheEntry, is_platform_app_id,
+        require_cache_store,
+    },
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
@@ -145,7 +148,7 @@ pub async fn read_cache_entry(
 ) -> Result<Json<ReadCacheResponse>, ApiError> {
     let permission = authorize(&user, &app_id, &state).await?;
     let limits = CacheLimits::from_env();
-    let store = cache_store(&state)?;
+    let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
@@ -202,7 +205,7 @@ pub async fn cache_entry_exists(
 ) -> Result<Json<ExistsCacheResponse>, ApiError> {
     let permission = authorize(&user, &app_id, &state).await?;
     let limits = CacheLimits::from_env();
-    let store = cache_store(&state)?;
+    let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
@@ -241,7 +244,7 @@ pub async fn write_cache_entry(
 ) -> Result<Json<WriteCacheResponse>, ApiError> {
     let permission = authorize(&user, &app_id, &state).await?;
     let limits = CacheLimits::from_env();
-    let store = cache_store(&state)?;
+    let store = cache_store(&state).await?;
 
     let key = limits.validate_key(&body.key).map_err(to_api_error)?;
     let namespace = validate_namespace(&limits, body.namespace.as_deref())?;
@@ -301,7 +304,7 @@ pub async fn delete_cache_entry(
 ) -> Result<Json<DeleteCacheResponse>, ApiError> {
     let permission = authorize(&user, &app_id, &state).await?;
     let limits = CacheLimits::from_env();
-    let store = cache_store(&state)?;
+    let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
@@ -364,7 +367,7 @@ pub async fn delete_cache_namespace(
 ) -> Result<Json<DeleteNamespaceResponse>, ApiError> {
     let permission = authorize(&user, &app_id, &state).await?;
     let limits = CacheLimits::from_env();
-    let store = cache_store(&state)?;
+    let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     // Namespaces obey the same shape rules as keys (non-empty, bounded), so reuse the
@@ -402,6 +405,12 @@ async fn authorize(
     app_id: &str,
     state: &AppState,
 ) -> Result<AppPermissionResponse, ApiError> {
+    // The platform partition has no App row, so no permission could ever be granted on
+    // it; refusing the id outright keeps that true even if permission lookups change.
+    if is_platform_app_id(app_id) {
+        return Err(ApiError::FORBIDDEN);
+    }
+
     let permission = user.execution_app_permission(app_id, state).await?;
 
     if !permission.has_permission(RolePermissions::ExecuteBoards)
@@ -413,12 +422,8 @@ async fn authorize(
     Ok(permission)
 }
 
-fn cache_store(state: &AppState) -> Result<Arc<dyn CacheStore>, ApiError> {
-    state.cache_store.clone().ok_or_else(|| {
-        ApiError::service_unavailable(
-            "Cache backend is not configured or failed to initialize on this deployment",
-        )
-    })
+async fn cache_store(state: &AppState) -> Result<Arc<dyn CacheStore>, ApiError> {
+    require_cache_store(&state.cache).await
 }
 
 fn parse_scope(raw: Option<&str>) -> Result<CacheScope, ApiError> {

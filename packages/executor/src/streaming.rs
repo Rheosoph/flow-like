@@ -389,6 +389,7 @@ async fn execute_inner(
         run.set_execution_mode(mode);
     }
 
+    run.set_shadow(request.shadow).await;
     run.set_execution_sub(executor_subject.to_string()).await;
 
     // Set user context if provided

@@ -19,6 +19,34 @@ pub use kubernetes::{KubernetesConfig, KubernetesScheduler};
 pub use memory::InMemoryScheduler;
 pub use traits::{ScheduleInfo, SchedulerBackend, SchedulerError, SchedulerResult};
 
+/// Normalize a Unix-style cron expression (5 or 6 fields) into the 7-field
+/// form the `cron` crate requires (`sec min hour dom mon dow year`).
+///
+/// - 5-field (`min hour dom mon dow`)   -> prepend `0 ` for seconds, append ` *` for year.
+/// - 6-field (`sec min hour dom mon dow`) -> append ` *` for year.
+/// - 7-field is passed through unchanged.
+pub fn normalize_cron_for_crate(expr: &str) -> String {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    match parts.len() {
+        5 => format!("0 {} *", parts.join(" ")),
+        6 => format!("{} *", parts.join(" ")),
+        _ => expr.to_string(),
+    }
+}
+
+/// Validate a recurring cron expression and compute its next occurrence in
+/// UTC. Shared by schedule validation and any store that projects a
+/// "next run at" column from a cron expression.
+pub fn next_cron_occurrence_utc(expr: &str) -> SchedulerResult<chrono::DateTime<chrono::Utc>> {
+    use std::str::FromStr;
+
+    let schedule = cron::Schedule::from_str(&normalize_cron_for_crate(expr))
+        .map_err(|e| SchedulerError::InvalidCronExpression(e.to_string()))?;
+    schedule.upcoming(chrono::Utc).next().ok_or_else(|| {
+        SchedulerError::InvalidCronExpression(format!("cron expression '{expr}' never fires again"))
+    })
+}
+
 /// Scheduler provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerProvider {

@@ -33,10 +33,12 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 			String,
 		),
 	);
-	const old = await chatDb.messages
-		.filter((m) => m.timestamp < cutoff && !pinnedSessionIds.has(m.sessionId))
-		.primaryKeys();
+	const isStale = (row: { timestamp: number; sessionId: string }) =>
+		row.timestamp < cutoff && !pinnedSessionIds.has(row.sessionId);
+	const old = await chatDb.messages.filter(isStale).primaryKeys();
 	if (old.length > 0) await chatDb.messages.bulkDelete(old);
+	const oldDrafts = await chatDb.drafts.filter(isStale).primaryKeys();
+	if (oldDrafts.length > 0) await chatDb.drafts.bulkDelete(oldDrafts);
 
 	// Clean up sessions that have no remaining messages
 	const allSessions = await chatDb.sessions.toArray();
@@ -51,7 +53,7 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	}
 	if (orphanIds.length > 0) await chatDb.sessions.bulkDelete(orphanIds);
 
-	return old.length + orphanIds.length;
+	return old.length + oldDrafts.length + orphanIds.length;
 }
 
 async function pruneOldFlowpilotHistory(maxAgeDays: number): Promise<number> {

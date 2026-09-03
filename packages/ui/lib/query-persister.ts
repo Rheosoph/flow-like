@@ -29,12 +29,21 @@ const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * (sizes per prefix): ai-act 5.7MB, getRoles 1.7MB,
  * getRoutes 1.7MB (routes are already persisted via routeStorage), plus
  * admin dashboards which must always be live.
+ *
+ * The size cap is a backstop, not a substitute for this list: it is applied to
+ * the *finished* string, so an oversized query still pays a full JSON.stringify
+ * on the main thread before being thrown away — on every fetch, not just once.
+ * Anything known to be large belongs here so that cost is never paid at all.
+ * `project-runs` refetches every 60s carrying each run's whole input payload,
+ * and `getBoardSummaries` with metrics/node_types has always exceeded the cap.
  */
 const DENY_KEY_PREFIXES: ReadonlySet<string> = new Set([
 	"admin",
 	"ai-act",
 	"getRoles",
 	"getRoutes",
+	"project-runs",
+	"getBoardSummaries",
 ]);
 
 interface PersistableQuery {

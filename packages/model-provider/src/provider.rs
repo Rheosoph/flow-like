@@ -8,12 +8,56 @@ use flow_like_types::{
 };
 use schemars::JsonSchema;
 
+/// Which HTTP API surface a model speaks.
+///
+/// Providers historically expose the OpenAI-compatible `chat/completions`
+/// shape. Newer OpenAI-family models are only reachable through the Responses
+/// API (`/responses`), which uses a different request and event schema. A Bit
+/// declares the surface so the client builds the matching Rig client and the
+/// Flow-Like proxy relays to the matching upstream endpoint.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ModelApiSurface {
+    #[default]
+    #[serde(
+        alias = "chat_completions",
+        alias = "completions",
+        alias = "Completions"
+    )]
+    ChatCompletions,
+    #[serde(alias = "responses")]
+    Responses,
+}
+
+impl ModelApiSurface {
+    pub fn is_responses(&self) -> bool {
+        matches!(self, Self::Responses)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct ModelProvider {
     pub provider_name: String,
     pub model_id: Option<String>,
     pub version: Option<String>,
+    /// API surface the upstream model speaks. `None` keeps the provider's
+    /// historical default, which is `chat/completions` for every hosted Bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_surface: Option<ModelApiSurface>,
     pub params: Option<HashMap<String, Value>>,
+}
+
+impl ModelProvider {
+    /// Surface to use when the Bit does not declare one.
+    pub fn api_surface_or_default(&self) -> ModelApiSurface {
+        self.api_surface.unwrap_or_default()
+    }
 }
 
 /// Remote embedding provider implementation
@@ -324,6 +368,7 @@ mod tests {
             },
             pooling: Pooling::Mean,
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: "Local".to_string(),
                 model_id: Some("embedding-model".to_string()),
                 version: None,
@@ -345,6 +390,7 @@ mod tests {
             vector_length: 512,
             pooling: Pooling::Mean,
             provider: ModelProvider {
+                api_surface: None,
                 provider_name: "Local".to_string(),
                 model_id: Some("clip".to_string()),
                 version: None,

@@ -9,6 +9,7 @@ import {
 	CornerRightUpIcon,
 	EllipsisVerticalIcon,
 	FlameIcon,
+	FlaskConicalIcon,
 	HardDriveIcon,
 	Loader2Icon,
 	LogsIcon,
@@ -270,6 +271,66 @@ const FlowRunsComponent = ({
 			setCurrentMetadata,
 			version,
 		],
+	);
+
+	// Cloud only — the promote route grades the recorded run server-side. Runs
+	// with no event id (test starts, direct board invokes) have no suite to
+	// join, so the item is hidden for them.
+	const promoteSupported =
+		typeof backend.eventState.promoteRegressionFixture === "function";
+	const handleAddToRegressionSet = useCallback(
+		async (run: ILogMetadata) => {
+			const promoteRegressionFixture =
+				backend.eventState.promoteRegressionFixture;
+			if (!promoteRegressionFixture || !run.event_id) return;
+			try {
+				await promoteRegressionFixture.call(
+					backend.eventState,
+					appId,
+					run.event_id,
+					run.run_id,
+				);
+				toast.success(
+					t("addedToRegressionSet", "Run added to the regression set"),
+				);
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : String(error));
+			}
+		},
+		[appId, backend.eventState, t],
+	);
+
+	// Remote run rows never carry the recorded payload (and a canary run's row
+	// may name another variant's node), so Re-Run resolves both through the
+	// corpus payload endpoint; local rows replay their own recorded fields.
+	const handleReRun = useCallback(
+		async (run: ILogMetadata) => {
+			let nodeId = run.node_id;
+			let payload: object | undefined = parseUint8ArrayToJson(run.payload);
+			const getCorpusPayload = backend.eventState.getCorpusPayload;
+			if (run.is_remote && run.event_id && getCorpusPayload) {
+				try {
+					const entry = await getCorpusPayload.call(
+						backend.eventState,
+						appId,
+						run.event_id,
+						run.run_id,
+					);
+					nodeId = entry.node_id;
+					payload = entry.payload as object;
+				} catch (error) {
+					toast.error(error instanceof Error ? error.message : String(error));
+					return;
+				}
+			}
+			const node = nodes[nodeId];
+			if (!node) {
+				toast.error(t("nodeNotFound", "Node not found"));
+				return;
+			}
+			await executeBoard(node, payload);
+		},
+		[appId, backend.eventState, executeBoard, nodes, t],
 	);
 
 	const panel = variant === "panel";
@@ -553,18 +614,24 @@ const FlowRunsComponent = ({
 									</DropdownMenuItem>
 									<DropdownMenuItem
 										onClick={() => {
-											const node = nodes[run.node_id];
-											if (!node) {
-												toast.error("Node not found");
-												return;
-											}
-											executeBoard(node, parseUint8ArrayToJson(run.payload));
+											void handleReRun(run);
 										}}
 										className="flex flex-row gap-2 items-center"
 									>
 										<RefreshCcwIcon className="w-4 h-4" />
 										{t("rerun", "Re-Run")}
 									</DropdownMenuItem>
+									{promoteSupported && run.event_id && (
+										<DropdownMenuItem
+											onClick={() => {
+												void handleAddToRegressionSet(run);
+											}}
+											className="flex flex-row gap-2 items-center"
+										>
+											<FlaskConicalIcon className="w-4 h-4" />
+											{t("addToRegressionSet", "Add to regression set")}
+										</DropdownMenuItem>
+									)}
 								</DropdownMenuContent>
 							</DropdownMenu>
 						</div>

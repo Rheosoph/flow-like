@@ -98,8 +98,8 @@ impl KubernetesScheduler {
     ) -> k8s_openapi::api::batch::v1::CronJob {
         use k8s_openapi::api::batch::v1::{CronJob, CronJobSpec, JobSpec, JobTemplateSpec};
         use k8s_openapi::api::core::v1::{
-            ConfigMapKeySelector, Container, EnvVar, EnvVarSource, PodSpec, PodTemplateSpec,
-            ResourceRequirements, SecretKeySelector, SecurityContext,
+            ConfigMapKeySelector, Container, EnvVar, EnvVarSource, ObjectFieldSelector, PodSpec,
+            PodTemplateSpec, ResourceRequirements, SecretKeySelector, SecurityContext,
         };
         use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
         use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -176,6 +176,21 @@ impl KubernetesScheduler {
                             name: self.config.secret_name.clone(),
                             key: "trigger-jwt".to_string(),
                             optional: Some(false),
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                // Per-occurrence identity for the trigger's `Idempotency-Key`
+                // header (D4): the Job name (cronjob name + scheduled-time
+                // suffix) is shared by every retry pod of one occurrence,
+                // unlike the pod name — retries land on the same variant.
+                EnvVar {
+                    name: "SINK_OCCURRENCE_ID".to_string(),
+                    value_from: Some(EnvVarSource {
+                        field_ref: Some(ObjectFieldSelector {
+                            field_path: "metadata.labels['job-name']".to_string(),
+                            ..Default::default()
                         }),
                         ..Default::default()
                     }),

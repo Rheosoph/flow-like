@@ -155,6 +155,7 @@ bitflags = "2.9.4"
 blake3 = "1.8.2"
 lambda_runtime = "0.14.2"
 aws-config = "1.11.0"
+aws-sdk-cloudwatch = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1.120", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "1.93.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a", "http-1x"] }
@@ -282,3 +283,14 @@ inherits = "release"
 lto = "thin"
 codegen-units = 8
 strip = "symbols"
+
+# Optimize the AWS Lambda executable for startup and artifact size. ThinLTO
+# keeps link memory practical for the API's large dependency graph while still
+# providing cross-crate optimization. Keep unwind semantics because live API
+# handlers recover panics from blocking workers; aborting would terminate the
+# entire Lambda environment. Symbols remain available in the cached build
+# artifact for cargo-bloat; the Lambda Docker stage strips the shipped binary.
+[profile.lambda]
+inherits = "dist"
+codegen-units = 1
+strip = "none"

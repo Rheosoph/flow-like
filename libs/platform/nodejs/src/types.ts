@@ -223,6 +223,22 @@ export interface ChatCompletionResult {
 	[key: string]: unknown;
 }
 
+/** Which upstream API a model Bit speaks. Unset means Chat Completions. */
+export type ModelApiSurface = "ChatCompletions" | "Responses";
+
+export interface ResponsesOptions {
+	instructions?: string;
+	temperature?: number;
+	max_output_tokens?: number;
+	top_p?: number;
+	tools?: unknown[];
+	signal?: AbortSignal;
+}
+
+export interface ResponsesResult {
+	[key: string]: unknown;
+}
+
 export interface ChatUsage {
 	promptTokens: number;
 	completionTokens: number;
@@ -284,6 +300,7 @@ export interface ModelInfo {
 	name: string;
 	description: string;
 	provider_name?: string;
+	api_surface?: ModelApiSurface;
 	model_id?: string;
 	context_length?: number;
 	vector_length?: number;

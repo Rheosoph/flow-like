@@ -167,6 +167,9 @@ pub async fn upsert_event(
                 profile_id: params.profile_id.clone(),
                 timeout_seconds: None,
                 force: false,
+                // Auto-setup always (re)builds the stable surface; a variant
+                // setup is only ever an explicit POST /setup.
+                variant: None,
             },
             user_context,
         )
@@ -200,7 +203,93 @@ pub async fn upsert_event(
         }
     }
 
+    prune_versions_after_save(&state, &app_id, &app, saved_event.as_ref(), &event).await;
+
     Ok(Json(event))
+}
+
+/// Retention gate shared with the restore endpoint: only a save that actually
+/// cut an archive can push the count over the cap, so identical re-saves and
+/// metadata edits skip the LIST entirely.
+pub(super) async fn prune_versions_after_save(
+    state: &AppState,
+    app_id: &str,
+    app: &flow_like::app::App,
+    event_before_save: Option<&Event>,
+    event: &Event,
+) {
+    let version_was_cut =
+        event_before_save.is_some_and(|before| before.event_version != event.event_version);
+    if version_was_cut {
+        prune_archived_versions(state, app_id, app, event).await;
+    }
+}
+
+/// Retention cap for archived event versions, applied per save on the cloud
+/// path only — desktop-local history lives on the user's disk and is never
+/// pruned.
+const MAX_EVENT_VERSIONS: usize = 200;
+
+/// Best-effort: a failed prune must never fail the save that triggered it.
+/// The version `last_setup_version` names is always protected — inbound
+/// REST/MCP may still be serving its registration set.
+pub(super) async fn prune_archived_versions(
+    state: &AppState,
+    app_id: &str,
+    app: &flow_like::app::App,
+    event: &flow_like::flow::event::Event,
+) {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let last_setup_version = match crate::entity::event::Entity::find_by_id(&event.id)
+        .filter(crate::entity::event::Column::AppId.eq(app_id))
+        .one(&state.db)
+        .await
+    {
+        Ok(row) => row.and_then(|row| row.last_setup_version),
+        Err(error) => {
+            tracing::warn!(
+                event_id = %event.id,
+                %error,
+                "skipping version prune: could not read last_setup_version"
+            );
+            return;
+        }
+    };
+    let protect = match last_setup_version.as_deref() {
+        None => Vec::new(),
+        Some(raw) => match super::parse_version_tuple(raw) {
+            Some(version) => vec![version],
+            // A value we cannot parse must skip the prune, not run it with an
+            // empty protect set — that would delete the very version the row
+            // still advertises as the last successful setup.
+            None => {
+                tracing::warn!(
+                    event_id = %event.id,
+                    last_setup_version = %raw,
+                    "skipping version prune: unparseable last_setup_version"
+                );
+                return;
+            }
+        },
+    };
+
+    match event
+        .prune_versions(app, MAX_EVENT_VERSIONS, &protect)
+        .await
+    {
+        Ok(0) => {}
+        Ok(deleted) => tracing::debug!(
+            event_id = %event.id,
+            deleted,
+            "pruned archived event versions beyond the retention cap"
+        ),
+        Err(error) => tracing::warn!(
+            event_id = %event.id,
+            %error,
+            "failed to prune archived event versions"
+        ),
+    }
 }
 
 /// Best-effort rollback when remote setup fails for a fresh rest/mcp

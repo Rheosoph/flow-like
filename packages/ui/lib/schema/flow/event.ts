@@ -3,6 +3,11 @@ export interface IEvent {
 	board_id: string;
 	board_version?: number[] | null;
 	canary?: null | ICanaryEvent;
+	/**
+	 * Canary/shadow targets. Read through the core `variant_set()`: when this is
+	 * empty a legacy `canary` still counts as a single Live variant.
+	 */
+	variants?: IEventVariant[];
 	config: number[];
 	created_at: ISystemTime;
 	description: string;
@@ -75,6 +80,41 @@ export interface ICanaryEvent {
 	variables: { [key: string]: IVariable };
 	weight: number;
 	[property: string]: any;
+}
+
+/**
+ * How a variant handles its share of traffic: `Live` replaces the primary
+ * target for `weight` of triggers, `Shadow` additionally runs the variant for
+ * `sample_rate` of triggers and discards the result.
+ *
+ * Serde externally-tagged enum: exactly one of `Live` / `Shadow` is set.
+ */
+export type IEventVariantMode =
+	| { Live: { weight: number } }
+	| { Shadow: { sample_rate: number } };
+
+/**
+ * An alternate dispatch target for an event: a canary (`Live`) or shadow
+ * deployment of another board/version/node. Read through the core
+ * `variant_set()`, which falls back to the legacy `canary` field.
+ */
+export interface IEventVariant {
+	/** Unique per event, `[a-z0-9-]`; "canary" is the conventional name. */
+	name: string;
+	board_id: string;
+	/**
+	 * `null` floats on latest (the etag is bound at dispatch); the u32::MAX
+	 * sentinel is reserved and refused at upsert.
+	 */
+	board_version?: number[] | null;
+	node_id: string;
+	/** Merged over the event's variables per key, variant wins. */
+	variables: { [key: string]: IVariable };
+	/** Page-event variants only: repoints what a matched route renders. */
+	default_page_id?: string | null;
+	mode: IEventVariantMode;
+	created_at: ISystemTime;
+	updated_at: ISystemTime;
 }
 
 export interface ISystemTime {

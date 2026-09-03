@@ -126,6 +126,13 @@ export type {
 export type { SinkType } from "./backend-state/sink-state";
 
 export type {
+	IEventRunsResult,
+	IEventTimeline,
+	IEventTimelineEntry,
+	IEventTimelineRun,
+} from "./backend-state/event-state";
+
+export type {
 	IGetPageOptions,
 	IPageBootstrap,
 	IPage,

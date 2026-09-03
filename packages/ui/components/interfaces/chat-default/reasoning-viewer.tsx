@@ -6,6 +6,10 @@ import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import { Suspense, lazy, useMemo, useState } from "react";
 import { cn } from "../../../lib/utils";
+import {
+	looksLikeTokenizedReasoning,
+	sanitizeReasoningForDisplay,
+} from "./reasoning-format";
 
 const TextEditor = lazy(() =>
 	import("../../ui/text-editor").then((m) => ({ default: m.TextEditor })),
@@ -15,71 +19,6 @@ interface ReasoningViewerProps {
 	reasoning: string;
 	defaultExpanded?: boolean;
 	compact?: boolean;
-}
-
-function hasStructuredMarkdown(reasoning: string): boolean {
-	return reasoning
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean)
-		.some(
-			(line) =>
-				line.startsWith("```") ||
-				/^#{1,6}\s/.test(line) ||
-				/^[-*+]\s/.test(line) ||
-				/^\d+\.\s/.test(line) ||
-				/^>\s/.test(line) ||
-				/^\|.*\|$/.test(line),
-		);
-}
-
-function looksLikeTokenizedReasoning(reasoning: string): boolean {
-	const lines = reasoning
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean);
-
-	if (lines.length < 6 || hasStructuredMarkdown(reasoning)) {
-		return false;
-	}
-
-	const shortLineCount = lines.filter((line) => {
-		const wordCount = line.split(/\s+/).filter(Boolean).length;
-		return wordCount <= 3 && line.length <= 24;
-	}).length;
-
-	return shortLineCount / lines.length >= 0.7;
-}
-
-function normalizeReasoningWhitespace(reasoning: string): string {
-	let normalized = "";
-	let pendingSpace = false;
-
-	for (const ch of reasoning) {
-		if (/\s/.test(ch)) {
-			pendingSpace = normalized.length > 0;
-			continue;
-		}
-
-		if (pendingSpace && !/[.,;:!?)}\]'\"]/.test(ch)) {
-			normalized += " ";
-		}
-
-		pendingSpace = false;
-		normalized += ch;
-	}
-
-	return normalized;
-}
-
-function prepareReasoningForDisplay(reasoning: string): string {
-	return looksLikeTokenizedReasoning(reasoning)
-		? normalizeReasoningWhitespace(reasoning)
-		: reasoning;
-}
-
-function shouldRenderAsPlainText(reasoning: string): boolean {
-	return looksLikeTokenizedReasoning(reasoning);
 }
 
 export function ReasoningViewer({
@@ -92,11 +31,11 @@ export function ReasoningViewer({
 	const [shouldRender, setShouldRender] = useState(defaultExpanded);
 
 	const displayReasoning = useMemo(
-		() => prepareReasoningForDisplay(reasoning),
+		() => sanitizeReasoningForDisplay(reasoning),
 		[reasoning],
 	);
 	const renderPlainText = useMemo(
-		() => shouldRenderAsPlainText(reasoning),
+		() => looksLikeTokenizedReasoning(reasoning),
 		[reasoning],
 	);
 
@@ -136,22 +75,21 @@ export function ReasoningViewer({
 			{isExpanded && shouldRender && (
 				<div
 					className={cn(
-						"overflow-y-auto scroll-smooth border-l pl-3",
-						compact ? "mt-1 ml-1 max-h-50" : "mt-1.5 ml-1 max-h-75",
+						"overflow-y-auto scroll-smooth rounded-lg border border-border/50 bg-muted/25",
+						compact ? "mt-1.5 max-h-50 px-3 py-2" : "mt-2 max-h-75 px-3.5 py-2.5",
 					)}
 					style={{
-						borderColor: "var(--fl-chat-rule, var(--border))",
 						containIntrinsicSize: compact ? "200px" : "300px",
 						contentVisibility: "auto",
 						maxWidth: "var(--fl-chat-measure, 38rem)",
 					}}
 				>
 					<div
-						className="py-0.5 text-muted-foreground italic"
+						className="text-muted-foreground/90"
 						style={{
 							fontFamily: "var(--fl-chat-prose-font)",
-							fontSize: compact ? "0.8125rem" : "0.875rem",
-							lineHeight: 1.65,
+							fontSize: compact ? "0.8125rem" : "0.85rem",
+							lineHeight: 1.7,
 						}}
 					>
 						<Suspense

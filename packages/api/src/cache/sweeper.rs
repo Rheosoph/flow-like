@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use flow_like_types::tokio::{self, task::JoinHandle};
 
+use super::platform::CacheBackendHandle;
 use super::types::{CacheStore, CacheStoreError};
 
 const DEFAULT_INTERVAL_SECS: u64 = 900;
@@ -86,6 +87,24 @@ pub fn spawn_cache_sweeper(
     });
 
     Some(handle)
+}
+
+/// Initialize the lazily built backend and spawn the sweeper on it. Long-running
+/// deployments call this at boot; a backend that fails to come up is logged, not fatal.
+pub async fn spawn_cache_sweeper_for(
+    cache: &CacheBackendHandle,
+    config: CacheSweeperConfig,
+) -> Option<JoinHandle<()>> {
+    match cache.store().await {
+        Ok(store) => spawn_cache_sweeper(store, config),
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                "Cache backend failed to initialize; not spawning the cache sweeper"
+            );
+            None
+        }
+    }
 }
 
 /// Run one sweep. Returns the number of entries removed.

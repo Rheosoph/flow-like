@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{event_alias, prelude::EventAlias},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -253,6 +253,17 @@ pub async fn upsert_alias(
         }
     };
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.alias.upsert",
+        "Event",
+        event_id,
+        "Event alias created or updated",
+        serde_json::json!({ "slug": slug })
+    );
+
     Ok(Json(model.into()))
 }
 
@@ -298,5 +309,17 @@ pub async fn delete_alias(
         .exec(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.alias.delete",
+        "Event",
+        event_id,
+        "Event alias deleted",
+        serde_json::json!({ "slug": slug })
+    );
+
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

@@ -380,6 +380,11 @@ pub struct DispatchRequest {
     /// Who triggered the run. Decides how much the run's channel is worth minting.
     #[serde(default)]
     pub trigger: DispatchTrigger,
+    /// Shadow/replay isolation: the run must not write app storage. Must match
+    /// the `shadow` claim signed into the executor JWT — the executor rejects
+    /// the request otherwise.
+    #[serde(default)]
+    pub shadow: bool,
 }
 
 /// Response from dispatch
@@ -1532,6 +1537,7 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         profile: request.profile.clone(),
         wasm_packages: request.wasm_packages.clone(),
         channel: request.channel.clone(),
+        shadow: request.shadow,
     };
 
     serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
@@ -3267,6 +3273,7 @@ mod tests {
             wasm_packages: None,
             channel: None,
             trigger,
+            shadow: false,
         }
     }
 

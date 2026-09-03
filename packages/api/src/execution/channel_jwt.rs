@@ -109,6 +109,7 @@ mod tests {
             callback_url: "https://api.test".into(),
             token_type: TokenType::Executor,
             ttl_seconds: Some(60),
+            shadow: None,
         })
         .unwrap();
         assert!(verify_channel_responder(&executor).is_err());

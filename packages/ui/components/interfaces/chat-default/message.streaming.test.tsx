@@ -152,4 +152,34 @@ describe("assistant streaming with inline step anchors", () => {
 		});
 		expect(container.textContent).toContain("Alpha bravo charlie");
 	});
+
+	test("anchored steps render inline when content arrives as parts", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = {
+			id: "a3",
+			timestamp: 0,
+			inner: {
+				role: IRole.Assistant,
+				content: [
+					{ type: "text", text: "Hello " },
+					{ type: "text", text: "world" },
+				],
+			},
+			plan_steps: [
+				{ id: "step-1", title: "Searching", status: "done", content_offset: 6 },
+			],
+		} as unknown as IMessage;
+
+		await act(async () => {
+			root.render(<MessageComponent message={message} />);
+		});
+
+		const order = Array.from(
+			container.querySelectorAll("[data-fl-chat-prose], [data-fl-plan-group]"),
+		).map((el) =>
+			el.hasAttribute("data-fl-plan-group") ? "steps" : el.textContent?.trim(),
+		);
+		expect(order).toEqual(["Hello", "steps", "world"]);
+	});
 });

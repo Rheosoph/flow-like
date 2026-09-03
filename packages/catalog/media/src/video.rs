@@ -1434,6 +1434,7 @@ fn build_provider_bit(
     }
 
     let provider = ModelProvider {
+        api_surface: None,
         provider_name: provider_name.to_string(),
         model_id,
         version,

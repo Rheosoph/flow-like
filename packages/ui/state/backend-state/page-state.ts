@@ -37,11 +37,11 @@ export interface PageMeta {
 export interface WidgetInstance {
 	widgetId: string;
 	instanceId: string;
-	position?: any;
+	position?: unknown;
 	customizationValues: Record<string, Uint8Array>;
 	/** Values for exposed props (key is the exposed prop id) */
 	exposedPropValues?: Record<string, Uint8Array>;
-	styleOverride?: any;
+	styleOverride?: unknown;
 }
 
 export type PageContent =
@@ -142,11 +142,18 @@ export interface IPageBootstrap {
 	readonly executionRevision?: string | null;
 	readonly canonicalRoute?: string | null;
 	readonly routeMiss?: boolean;
+	/**
+	 * Live variant this bootstrap was served from (`null` for the primary). Informational only:
+	 * the server pins this session's page triggers to that target itself — lifecycle hooks and
+	 * static actions through the `executionRevision` they echo back, dynamic actions through the
+	 * sealed page-execution claims in their capability — so no variant header is sent.
+	 */
+	readonly servedVariant?: string | null;
 }
 
 export interface IPageState {
 	getPages(appId: string, boardId?: string): Promise<PageListItem[]>;
-	getPageBootstrap?(
+	getPageBootstrap(
 		appId: string,
 		route?: string,
 		eventId?: string,

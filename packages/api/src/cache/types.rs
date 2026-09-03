@@ -228,6 +228,44 @@ pub trait CacheStore: Send + Sync + Debug {
     /// Backends with native TTL may return `Ok(0)` — the sweeper treats this as "nothing
     /// to do", not as a failure.
     async fn delete_expired(&self) -> Result<i64, CacheStoreError>;
+
+    /// Cheap, backend-native statistics for the admin resource dashboard, or `None`
+    /// when the backend exposes none.
+    ///
+    /// Implementations must be O(1) or explicitly bounded. This is called from a page
+    /// an operator refreshes, so a full scan here would make the admin dashboard the
+    /// most expensive request the deployment serves — and it would get slower exactly
+    /// when the cache is largest, which is when the operator most needs to look.
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        Ok(None)
+    }
+}
+
+/// What a backend can cheaply say about itself.
+///
+/// Every field is optional because no two backends expose the same set, and a missing
+/// number must never render as zero — "Redis does not report entry sizes" and "the cache
+/// is empty" are opposite conclusions.
+#[derive(Clone, Debug, Default)]
+pub struct CacheStoreStats {
+    /// Live entries, however this backend counts them.
+    pub entries: Option<i64>,
+    /// Bytes the backend attributes to the cache's own storage.
+    pub size_bytes: Option<i64>,
+    /// Entries whose lifetime has lapsed but which have not been reclaimed yet.
+    /// This is the sweeper's backlog, and only backends that sweep lazily report it.
+    pub expired_pending: Option<i64>,
+    /// True when `expired_pending` stopped at its scan cap, making the value a floor.
+    pub expired_pending_capped: bool,
+    /// Memory ceiling, where the backend has one.
+    pub max_size_bytes: Option<i64>,
+    pub hits: Option<i64>,
+    pub misses: Option<i64>,
+    pub evictions: Option<i64>,
+    /// When the backend last recomputed these numbers, for statistics that lag writes.
+    pub observed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Caveat to surface beside the numbers, e.g. that a count covers more than the cache.
+    pub note: Option<String>,
 }
 
 /// Ceilings applied before an entry reaches a backend.

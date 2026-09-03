@@ -68,6 +68,14 @@
 				}
 			]
 		},
+		"variants": {
+			"description": "Canary/shadow targets. Read through [`Event::variant_set`]: when this\nis empty a legacy `canary` still counts as a single Live variant.",
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/EventVariant"
+			},
+			"default": []
+		},
 		"priority": {
 			"type": "integer",
 			"format": "uint32",
@@ -323,6 +331,113 @@
 				}
 			},
 			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		},
+		"EventVariant": {
+			"description": "An alternate dispatch target for an event: a canary (`Live`) or shadow\ndeployment of another board/version/node. Read through\n[`Event::variant_set`], which falls back to the legacy `canary` field.",
+			"type": "object",
+			"properties": {
+				"name": {
+					"description": "Unique per event, `[a-z0-9-]`; \"canary\" is the conventional name.",
+					"type": "string"
+				},
+				"board_id": {
+					"type": "string"
+				},
+				"board_version": {
+					"description": "`None` floats on latest (the etag is bound at dispatch); the `u32::MAX`\nsentinel is reserved and refused at upsert.",
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "integer",
+							"format": "uint32",
+							"minimum": 0
+						},
+						{
+							"type": "integer",
+							"format": "uint32",
+							"minimum": 0
+						},
+						{
+							"type": "integer",
+							"format": "uint32",
+							"minimum": 0
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"node_id": {
+					"type": "string"
+				},
+				"variables": {
+					"description": "Merged over the event's variables per key, variant wins.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Variable"
+					}
+				},
+				"default_page_id": {
+					"description": "Page-event variants only: repoints what a matched route renders.",
+					"type": ["string", "null"]
+				},
+				"mode": {
+					"$ref": "#/$defs/EventVariantMode"
+				},
+				"created_at": {
+					"$ref": "#/$defs/SystemTime"
+				},
+				"updated_at": {
+					"$ref": "#/$defs/SystemTime"
+				}
+			},
+			"required": [
+				"name",
+				"board_id",
+				"node_id",
+				"variables",
+				"mode",
+				"created_at",
+				"updated_at"
+			]
+		},
+		"EventVariantMode": {
+			"description": "How a variant handles its share of traffic: `Live` replaces the primary\ntarget for `weight` of triggers, `Shadow` additionally runs the variant for\n`sample_rate` of triggers and discards the result.",
+			"oneOf": [
+				{
+					"type": "object",
+					"properties": {
+						"Live": {
+							"type": "object",
+							"properties": {
+								"weight": {
+									"type": "number",
+									"format": "float"
+								}
+							},
+							"required": ["weight"]
+						}
+					},
+					"required": ["Live"],
+					"additionalProperties": false
+				},
+				{
+					"type": "object",
+					"properties": {
+						"Shadow": {
+							"type": "object",
+							"properties": {
+								"sample_rate": {
+									"type": "number",
+									"format": "float"
+								}
+							},
+							"required": ["sample_rate"]
+						}
+					},
+					"required": ["Shadow"],
+					"additionalProperties": false
+				}
+			]
 		},
 		"ReleaseNotes": {
 			"oneOf": [

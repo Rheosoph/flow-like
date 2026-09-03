@@ -1,6 +1,10 @@
 use crate::{
-    audit_branch, ensure_permission, entity::app, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    audit_branch, ensure_permission,
+    entity::{app, app_cache_entry},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -8,7 +12,7 @@ use axum::{
 };
 use flow_like_types::anyhow;
 use futures_util::{StreamExt, TryStreamExt};
-use sea_orm::{ModelTrait, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, TransactionTrait};
 
 #[utoipa::path(
     delete,
@@ -44,6 +48,13 @@ pub async fn delete_app(
 
     app.delete(&txn).await?;
 
+    // `AppCacheEntry.appId` is deliberately not a foreign key (the platform partition
+    // has no App row), so the Postgres backend's rows go with the app here, atomically.
+    app_cache_entry::Entity::delete_many()
+        .filter(app_cache_entry::Column::AppId.eq(app_id.as_str()))
+        .exec(&txn)
+        .await?;
+
     let scoped_permissions = state
         .scoped_credentials(
             &sub_id,
@@ -75,12 +86,11 @@ pub async fn delete_app(
 
     txn.commit().await?;
 
-    // Cache entries live outside the relational database on the redis and dynamodb
-    // backends, so the FK cascade cannot reclaim them. Best-effort: a failure here
-    // must not resurrect an already-deleted app, and orphaned TTL'd entries expire on
-    // their own anyway.
-    if let Some(cache_store) = state.cache_store.clone() {
-        match cache_store.delete_app(&app_id).await {
+    // On the redis, dynamodb, cosmos and firestore backends the entries live outside
+    // the relational database. Best-effort: a failure here must not resurrect an
+    // already-deleted app, and orphaned TTL'd entries expire on their own anyway.
+    match state.cache.store().await {
+        Ok(cache_store) => match cache_store.delete_app(&app_id).await {
             Ok(deleted) if deleted > 0 => {
                 tracing::info!(deleted, app_id = %app_id, "Removed cache entries of deleted app");
             }
@@ -88,6 +98,9 @@ pub async fn delete_app(
             Err(error) => {
                 tracing::warn!(error = %error, app_id = %app_id, "Failed to remove cache entries of deleted app");
             }
+        },
+        Err(error) => {
+            tracing::warn!(error = %error, app_id = %app_id, "Cache backend unavailable; cache entries of deleted app were not removed");
         }
     }
 

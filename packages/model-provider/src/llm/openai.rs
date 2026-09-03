@@ -6,7 +6,7 @@ use crate::provider::random_provider;
 use crate::{
     history::History,
     llm::ModelConstructor,
-    provider::{ModelProvider, ModelProviderConfiguration},
+    provider::{ModelApiSurface, ModelProvider, ModelProviderConfiguration},
 };
 use flow_like_types::{Cacheable, Result, async_trait, json::json};
 
@@ -152,21 +152,49 @@ impl OpenAIModel {
     pub async fn from_provider_chat_completions(
         provider: &ModelProvider,
     ) -> flow_like_types::Result<Self> {
+        Ok(Self::from_provider(provider)
+            .await?
+            .with_api_surface(ModelApiSurface::ChatCompletions))
+    }
+
+    /// Build the client for an explicit API surface.
+    ///
+    /// [`ModelApiSurface::Responses`] keeps Rig's default OpenAI client, which
+    /// posts to `{base_url}/responses`; [`ModelApiSurface::ChatCompletions`]
+    /// swaps in the completions client, which posts to
+    /// `{base_url}/chat/completions`.
+    pub async fn from_provider_with_surface(
+        provider: &ModelProvider,
+        surface: ModelApiSurface,
+    ) -> flow_like_types::Result<Self> {
+        Ok(Self::from_provider(provider)
+            .await?
+            .with_api_surface(surface))
+    }
+
+    /// Re-target an already built client at `surface`.
+    ///
+    /// Azure clients are left untouched — Rig models Azure as a single
+    /// deployment client that has no Responses counterpart.
+    pub fn with_api_surface(self, surface: ModelApiSurface) -> Self {
         let Self {
             client,
             default_model,
-        } = Self::from_provider(provider).await?;
-        let client = match client {
-            OpenAIClientType::OpenAI(client) => {
+        } = self;
+        let client = match (client, surface) {
+            (OpenAIClientType::OpenAI(client), ModelApiSurface::ChatCompletions) => {
                 OpenAIClientType::OpenAIChatCompletions(client.completions_api())
             }
-            other => other,
+            (OpenAIClientType::OpenAIChatCompletions(client), ModelApiSurface::Responses) => {
+                OpenAIClientType::OpenAI(client.responses_api())
+            }
+            (other, _) => other,
         };
 
-        Ok(Self {
+        Self {
             client,
             default_model,
-        })
+        }
     }
 }
 
@@ -194,7 +222,15 @@ impl ModelLogic for OpenAIModel {
     }
 
     fn usage_reporting(&self) -> UsageReportingMode {
-        UsageReportingMode::OpenAIStreamOptions
+        // The Responses API rejects `stream_options` and always emits usage on
+        // the terminal `response.completed` event, so only the Chat Completions
+        // and Azure clients need the opt-in.
+        match self.client {
+            OpenAIClientType::OpenAI(_) => UsageReportingMode::None,
+            OpenAIClientType::OpenAIChatCompletions(_) | OpenAIClientType::Azure(_) => {
+                UsageReportingMode::OpenAIStreamOptions
+            }
+        }
     }
 
     fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
@@ -236,6 +272,7 @@ mod tests {
 
     fn proxy_provider() -> ModelProvider {
         ModelProvider {
+            api_surface: None,
             provider_name: "hosted:openai".to_string(),
             model_id: Some("upstream-model".to_string()),
             version: None,
@@ -324,6 +361,7 @@ mod tests {
         };
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some(deployment_name.clone()),
             version: Some("2024-02-15-preview".to_string()),
             provider_name: "azure".to_string(),
@@ -372,6 +410,7 @@ mod tests {
         dotenv().ok();
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some("@preset/testing".to_string()),
             version: None,
             provider_name: "openai".to_string(),
@@ -446,6 +485,7 @@ mod tests {
         };
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some(deployment_name.clone()),
             version: Some("2024-02-15-preview".to_string()),
             provider_name: "azure".to_string(),
@@ -515,6 +555,7 @@ mod tests {
         let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT").ok()?;
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some(deployment_name),
             version: Some("2024-02-15-preview".to_string()),
             provider_name: "azure".to_string(),
@@ -908,6 +949,7 @@ mod tests {
         };
 
         let provider = ModelProvider {
+            api_surface: None,
             model_id: Some(model_id),
             version: None,
             provider_name: "openai".to_string(),

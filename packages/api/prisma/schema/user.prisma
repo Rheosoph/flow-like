@@ -388,6 +388,13 @@ enum RunMode {
   QUEUE /// Queue-based dispatch (Redis, SQS, Kafka)
 }
 
+enum RunVariant {
+  PRIMARY /// Regular production run
+  CANARY /// Run routed to a live event variant
+  SHADOW /// Mirrored run alongside a PRIMARY run; excluded from cases/stats
+  REGRESSION /// Replay run scheduled by a regression suite
+}
+
 /// Streaming events from execution environments
 /// These are batch-pushed by executors and fetched via long polling
 model ExecutionEvent {
@@ -483,6 +490,16 @@ model ExecutionRun {
   parentRunId     String?
   correlationKeys Json?
 
+  /// Which release lane produced this run. Non-PRIMARY runs are excluded
+  /// from business cases and per-event stats.
+  runVariant      RunVariant @default(PRIMARY)
+  /// The EventVariant.name that produced this run (non-PRIMARY only)
+  variantName     String?
+  /// SHADOW runs only: the PRIMARY run being mirrored
+  shadowOfRunId   String?
+  /// REGRESSION runs only: the suite run that scheduled this replay
+  regressionRunId String?
+
   /// Streaming events for this run
   events ExecutionEvent[]
 
@@ -496,4 +513,5 @@ model ExecutionRun {
   @@index([callerAppChain], type: Gin)
   @@index([parentRunId])
   @@index([traceId])
+  @@index([eventId, runVariant, createdAt])
 }

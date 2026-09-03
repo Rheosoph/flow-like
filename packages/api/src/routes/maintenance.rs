@@ -7,13 +7,13 @@ use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
-        MaintenanceRunRequest, MaintenanceRunResponse, RunSweepMaintenanceResult,
-        StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
+        MaintenanceRunRequest, MaintenanceRunResponse, RegressionSuitesMaintenanceResult,
+        RunSweepMaintenanceResult, StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
 
 use crate::{
-    cache::sweeper::sweep_once as sweep_cache_once,
+    cache::{require_cache_store, sweeper::sweep_once as sweep_cache_once},
     channel::sweep_expired as sweep_channels_once,
     error::ApiError,
     execution::run_sweeper::{RunSweeperConfig, sweep_once as sweep_runs_once},
@@ -81,11 +81,7 @@ async fn run_maintenance_job(
                 }
             }
 
-            let store = state.cache_store.clone().ok_or_else(|| {
-                ApiError::service_unavailable(
-                    "Cache backend is not configured or failed to initialize on this deployment",
-                )
-            })?;
+            let store = require_cache_store(&state.cache).await?;
 
             let deleted = sweep_cache_once(store.as_ref()).await.map_err(|error| {
                 tracing::error!(error = %error, "Scheduled cache cleanup failed");
@@ -164,6 +160,29 @@ async fn run_maintenance_job(
                 StateCleanupMaintenanceResult {
                     deleted_runs,
                     deleted_events,
+                },
+            )))
+        }
+        MaintenanceRunRequest::RegressionSuites => {
+            let outcome = crate::execution::regression::maintenance_tick(&state)
+                .await
+                .map_err(|error| {
+                    tracing::error!(error = %error, "Scheduled regression-suite maintenance failed");
+                    error
+                })?;
+
+            tracing::info!(
+                dispatched = outcome.dispatched,
+                swept = outcome.swept,
+                executed = outcome.executed,
+                "Maintenance regression-suite pass completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::RegressionSuites(
+                RegressionSuitesMaintenanceResult {
+                    dispatched: outcome.dispatched,
+                    swept: outcome.swept,
+                    executed: outcome.executed,
                 },
             )))
         }

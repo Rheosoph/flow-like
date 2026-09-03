@@ -20,6 +20,7 @@ def _extract_model_info(bit: dict[str, Any], lang: str = "en") -> ModelInfo:
         name=localized.get("name", bit.get("id", "")),
         description=localized.get("description", ""),
         provider_name=provider.get("provider_name") if isinstance(provider, dict) else None,
+        api_surface=provider.get("api_surface") if isinstance(provider, dict) else None,
         model_id=provider.get("model_id") if isinstance(provider, dict) else None,
         context_length=params.get("context_length"),
         vector_length=params.get("vector_length"),

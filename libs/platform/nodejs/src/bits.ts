@@ -1,5 +1,10 @@
 import type { HttpClient } from "./client.js";
-import type { Bit, BitSearchQuery, ModelInfo } from "./types.js";
+import type {
+	Bit,
+	BitSearchQuery,
+	ModelApiSurface,
+	ModelInfo,
+} from "./types.js";
 
 function extractModelInfo(bit: Bit, lang = "en"): ModelInfo {
 	const meta = bit.meta?.[lang] ?? Object.values(bit.meta ?? {})[0];
@@ -13,6 +18,7 @@ function extractModelInfo(bit: Bit, lang = "en"): ModelInfo {
 		name: meta?.name ?? bit.id,
 		description: meta?.description ?? "",
 		provider_name: provider?.provider_name as string | undefined,
+		api_surface: provider?.api_surface as ModelApiSurface | undefined,
 		model_id: provider?.model_id as string | undefined,
 		context_length: params?.context_length as number | undefined,
 		vector_length: params?.vector_length as number | undefined,

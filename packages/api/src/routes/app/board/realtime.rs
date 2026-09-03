@@ -5,11 +5,13 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    realtime_ice::RealtimeIceServer,
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
+    http::header,
 };
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::STANDARD;
@@ -50,6 +52,12 @@ pub struct RealtimeParams {
     encryption_key: String,
     /// Key identifier (ISO date, e.g. "2025-10-23")
     key_id: String,
+    /// Provider-issued browser ICE configuration. Omitted when no provider is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ice_servers: Option<Vec<RealtimeIceServer>>,
+    /// Expiry of the ICE credentials as a Unix timestamp in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ice_expires_at: Option<i64>,
 }
 
 fn generate_encryption_key() -> String {
@@ -108,7 +116,7 @@ pub async fn jwks(
     post,
     path = "/apps/{app_id}/board/{board_id}/realtime",
     tag = "boards",
-    description = "Get realtime access token and room key.",
+    description = "Get realtime access token, room key, and short-lived ICE configuration.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("board_id" = String, Path, description = "Board ID")
@@ -116,7 +124,8 @@ pub async fn jwks(
     responses(
         (status = 200, description = "Realtime access", body = RealtimeParams),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 502, description = "Configured ICE provider unavailable")
     ),
     security(
         ("bearer_auth" = []),
@@ -132,7 +141,7 @@ pub async fn access(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
-) -> Result<Json<RealtimeParams>, ApiError> {
+) -> Result<impl axum::response::IntoResponse, ApiError> {
     // Realtime collaboration mints a room encryption key + session JWT; a
     // machine principal acting through a connection has no use for it, and it
     // would be another arbitrary-board entry point.
@@ -144,6 +153,16 @@ pub async fn access(
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+
+    let jti = create_id();
+    let issued_ice = state.realtime_ice.issue(&jti).await.map_err(|error| {
+        tracing::error!(error = %error, "Failed to issue realtime ICE credentials");
+        ApiError::bad_gateway("Realtime ICE credentials are temporarily unavailable")
+    })?;
+    let (ice_servers, ice_expires_at) = match issued_ice {
+        Some(issued) => (Some(issued.ice_servers), Some(issued.expires_at)),
+        None => (None, None),
+    };
 
     let (encryption_key, key_id) = get_or_rotate_room_key(&state, &app_id, &board_id).await?;
 
@@ -161,17 +180,22 @@ pub async fn access(
         iat: time.iat,
         nbf: time.nbf,
         exp: time.exp,
-        jti: create_id(),
+        jti,
     };
 
     let jwt = backend_jwt::sign(&claims)
         .map_err(|e| ApiError::internal_error(anyhow!("Realtime not configured: {}", e)))?;
 
-    Ok(Json(RealtimeParams {
-        jwt,
-        encryption_key,
-        key_id,
-    }))
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(RealtimeParams {
+            jwt,
+            encryption_key,
+            key_id,
+            ice_servers,
+            ice_expires_at,
+        }),
+    ))
 }
 
 // ----------------------------------------------------------------------------
