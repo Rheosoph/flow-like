@@ -13,7 +13,7 @@ use flow_like_types::{
 };
 
 use crate::{
-    cache::sweeper::sweep_once as sweep_cache_once,
+    cache::{require_cache_store, sweeper::sweep_once as sweep_cache_once},
     channel::sweep_expired as sweep_channels_once,
     error::ApiError,
     execution::run_sweeper::{RunSweeperConfig, sweep_once as sweep_runs_once},
@@ -81,11 +81,7 @@ async fn run_maintenance_job(
                 }
             }
 
-            let store = state.cache_store.clone().ok_or_else(|| {
-                ApiError::service_unavailable(
-                    "Cache backend is not configured or failed to initialize on this deployment",
-                )
-            })?;
+            let store = require_cache_store(&state.cache).await?;
 
             let deleted = sweep_cache_once(store.as_ref()).await.map_err(|error| {
                 tracing::error!(error = %error, "Scheduled cache cleanup failed");

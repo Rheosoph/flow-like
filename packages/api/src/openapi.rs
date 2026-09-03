@@ -593,6 +593,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
         crate::routes::admin::runs::sweep_runs,
         crate::routes::admin::cache::sweep_cache,
+        crate::routes::admin::resources::get_resources,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,
@@ -659,6 +660,19 @@ impl Modify for SecurityAddon {
         crate::routes::app::cache::DeleteCacheResponse,
         crate::routes::app::cache::DeleteNamespaceResponse,
         crate::routes::admin::cache::SweepCacheResponse,
+        // Backing service status schemas
+        crate::routes::admin::resources::AdminResourcesResponse,
+        crate::routes::admin::resources::ResourceStatus,
+        crate::routes::admin::resources::ResourceMetric,
+        crate::routes::admin::resources::ResourceKind,
+        crate::routes::admin::resources::ResourceHealth,
+        crate::routes::admin::resources::MetricUnit,
+        crate::routes::admin::resources::MetricFreshness,
+        crate::routes::admin::resources::DatabaseDetail,
+        crate::routes::admin::resources::TableUsage,
+        crate::routes::admin::resources::ConnectionStateCount,
+        crate::routes::admin::resources::DatabaseCounters,
+        crate::routes::admin::resources::DatabaseRates,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,

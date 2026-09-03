@@ -405,6 +405,30 @@ impl CacheStore for FirestoreCacheStore {
         // within 24 hours of the timestamp.
         Ok(0)
     }
+
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        let entries = self
+            .client
+            .count_documents(&self.collection)
+            .await
+            .map_err(map_error)?;
+
+        Ok(Some(CacheStoreStats {
+            entries,
+            // Firestore publishes no storage-size metric on any surface this client can
+            // reach; reporting a fabricated one would be worse than reporting none.
+            size_bytes: None,
+            note: Some(
+                "Firestore exposes no storage size. The entry count is a server-side COUNT \
+                 aggregation — a billed query, not a free counter — capped so a very large \
+                 collection cannot make a dashboard refresh expensive, and it includes \
+                 entries whose TTL has lapsed but which the 24-hour TTL sweep has not \
+                 collected."
+                    .to_string(),
+            ),
+            ..CacheStoreStats::default()
+        }))
+    }
 }
 
 #[cfg(test)]

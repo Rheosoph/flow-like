@@ -72,8 +72,10 @@ pub struct BootstrapResponse {
     /// Revision of the Page execution authority map. Clients return this with
     /// lifecycle and static action invocations.
     pub execution_revision: Option<String>,
-    /// The live variant this bootstrap was served from, or `null` for the primary. Clients
-    /// forward it as the variant pin on every page-trigger invocation of this session.
+    /// The live variant this bootstrap was served from, or `null` for the primary.
+    /// Informational: the server pins this session's page triggers itself — lifecycle and
+    /// static actions through the `execution_revision` they echo back, dynamic actions
+    /// through the sealed page-execution claims in their capability.
     pub served_variant: Option<String>,
 }
 

@@ -19,6 +19,7 @@ pub mod models;
 pub mod packages;
 pub mod profiles;
 pub mod publication;
+pub mod resources;
 pub mod runs;
 pub mod sinks;
 pub mod solutions;
@@ -153,6 +154,8 @@ pub fn routes() -> Router<AppState> {
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
         .route("/cache/sweep", post(cache::sweep_cache))
+        // Backing service status
+        .route("/resources", get(resources::get_resources))
         // Fork orphan janitor
         .route("/forks/orphans", get(forks::list_orphan_forks))
         .route(

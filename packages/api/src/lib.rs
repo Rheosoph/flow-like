@@ -42,6 +42,7 @@ pub mod push_notifications;
 pub mod realtime_ice;
 pub mod state;
 pub mod storage_config;
+pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
 pub mod telemetry;

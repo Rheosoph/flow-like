@@ -16,7 +16,7 @@ use reqwest::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 
 const COSMOS_SCOPE: &str = "https://cosmos.azure.com/.default";
 const REST_API_VERSION: &str = "2018-12-31";
@@ -27,6 +27,15 @@ const MAX_ERROR_BODY_BYTES: usize = 4_096;
 
 const PARTITION_KEY_HEADER: &str = "x-ms-documentdb-partitionkey";
 const CONTINUATION_HEADER: &str = "x-ms-continuation";
+
+/// Asks a collection read to report storage quota and usage in its response headers.
+/// Without it the response carries a reduced key set that omits `documentsCount`.
+const POPULATE_QUOTA_HEADER: &str = "x-ms-documentdb-populatequotainfo";
+const RESOURCE_USAGE_HEADER: &str = "x-ms-resource-usage";
+
+/// Cosmos reports `documentsSize` and `collectionSize` in kilobytes; every other key in
+/// the usage header is a plain count.
+const RESOURCE_USAGE_UNIT_BYTES: i64 = 1_024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CosmosError {
@@ -98,6 +107,52 @@ struct RawResponse {
     status: StatusCode,
     headers: HeaderMap,
     body: bytes::Bytes,
+}
+
+/// Current storage usage of one container, in bytes and documents.
+///
+/// Every field is optional because the key set of the usage header varies by resource
+/// type and API version — a key Cosmos stops sending must read as "unknown", never as
+/// zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContainerUsage {
+    pub documents_count: Option<i64>,
+    pub documents_size_bytes: Option<i64>,
+    /// Data plus index storage, so this is at least `documents_size_bytes`.
+    pub collection_size_bytes: Option<i64>,
+}
+
+impl ContainerUsage {
+    /// Parse an `x-ms-resource-usage` header: a `key=value` list separated — and
+    /// terminated — by `;`.
+    ///
+    /// Deliberately total: the trailing separator leaves an empty segment, the service
+    /// has been observed emitting lower-cased keys, and the key order is not contractual.
+    /// Anything that does not parse as an integer is dropped rather than surfaced.
+    fn from_header(header: &str) -> Self {
+        let usage: HashMap<String, i64> = header
+            .split(';')
+            .filter_map(|segment| segment.split_once('='))
+            .filter_map(|(key, value)| {
+                value
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+                    .map(|value| (key.trim().to_ascii_lowercase(), value))
+            })
+            .collect();
+
+        // A negative number is Cosmos' "unlimited" sentinel on the quota side; it is not
+        // a usage any dashboard can render.
+        let count = |key: &str| usage.get(key).copied().filter(|value| *value >= 0);
+        Self {
+            documents_count: count("documentscount"),
+            documents_size_bytes: count("documentssize")
+                .map(|size| size.saturating_mul(RESOURCE_USAGE_UNIT_BYTES)),
+            collection_size_bytes: count("collectionsize")
+                .map(|size| size.saturating_mul(RESOURCE_USAGE_UNIT_BYTES)),
+        }
+    }
 }
 
 /// A cloneable REST client shared by the cache and execution-state stores.
@@ -429,6 +484,38 @@ impl CosmosClient {
         })
     }
 
+    /// Current storage usage of one container.
+    ///
+    /// A collection read with `x-ms-documentdb-populatequotainfo` is the only data-plane
+    /// call that reports a container's document count and size; Cosmos keeps no counter a
+    /// query could read for free. It is a *metadata* operation, charged against the
+    /// account's system-reserved throughput rather than the container's RU/s and capped
+    /// at 500 database/container reads per five minutes for the whole account — so
+    /// callers must cache the result instead of polling it per request.
+    ///
+    /// The figures are near-real-time server-side aggregates: they trail bulk writes and
+    /// TTL deletions by seconds to minutes, and are not a substitute for `COUNT(1)` when
+    /// an exact instantaneous count is needed.
+    pub async fn container_usage(&self, container: &str) -> Result<ContainerUsage, CosmosError> {
+        let path = self.container_path(container)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(POPULATE_QUOTA_HEADER),
+            HeaderValue::from_static("True"),
+        );
+
+        // No partition key: this reads the container resource itself, not an item inside
+        // it, and Cosmos rejects the partition-key header on a collection read.
+        let response = self.send(Method::GET, path, None, None, headers).await?;
+        if response.status != StatusCode::OK {
+            return Err(service_error(response));
+        }
+
+        Ok(header_string(&response.headers, RESOURCE_USAGE_HEADER)
+            .map(|header| ContainerUsage::from_header(&header))
+            .unwrap_or_default())
+    }
+
     async fn send(
         &self,
         method: Method,
@@ -532,6 +619,16 @@ impl CosmosClient {
         }
 
         unreachable!("retry loop always returns on its final attempt")
+    }
+
+    /// The container resource itself, one path segment above `document_path`'s `/docs`.
+    fn container_path(&self, container: &str) -> Result<String, CosmosError> {
+        validate_resource_id("Cosmos container", container)?;
+        Ok(format!(
+            "/dbs/{}/colls/{}",
+            urlencoding::encode(&self.database),
+            urlencoding::encode(container)
+        ))
     }
 
     fn document_path(&self, container: &str, id: Option<&str>) -> Result<String, CosmosError> {
@@ -711,5 +808,32 @@ mod tests {
             assert!(validate_document_id(id).is_err());
         }
         assert!(validate_document_id("safe-0123_ABC").is_ok());
+    }
+
+    #[test]
+    fn resource_usage_sizes_are_kilobytes_and_counts_are_plain() {
+        let usage = ContainerUsage::from_header(
+            "documentSize=1;documentsSize=1537;documentsCount=4889177;collectionSize=1600;\
+             storedProcedures=0;triggers=0;functions=0;",
+        );
+
+        assert_eq!(usage.documents_count, Some(4_889_177));
+        assert_eq!(usage.documents_size_bytes, Some(1_537 * 1_024));
+        assert_eq!(usage.collection_size_bytes, Some(1_600 * 1_024));
+    }
+
+    #[test]
+    fn resource_usage_degrades_instead_of_guessing() {
+        // The trailing separator, a key the service emits in another casing, a value that
+        // is not a number, the `:`-separated form seen in the wild, and an unlimited
+        // sentinel must all read as "unknown" rather than as zero.
+        let usage = ContainerUsage::from_header(
+            "collectionsize=307;documentssize=;documentsize:0;documentsCount=-1;garbage;",
+        );
+
+        assert_eq!(usage.collection_size_bytes, Some(307 * 1_024));
+        assert_eq!(usage.documents_size_bytes, None);
+        assert_eq!(usage.documents_count, None);
+        assert_eq!(ContainerUsage::from_header(""), ContainerUsage::default());
     }
 }

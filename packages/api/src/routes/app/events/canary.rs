@@ -7,7 +7,7 @@
 //! health read.
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     execution::variant::{self, SplitKey},
     middleware::jwt::AppUser,
@@ -18,10 +18,33 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like::flow::event::{EventVariant, EventVariantMode};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::db::get_event_from_db;
+
+fn variant_mode_label(mode: &EventVariantMode) -> &'static str {
+    match mode {
+        EventVariantMode::Live { .. } => "live",
+        EventVariantMode::Shadow { .. } => "shadow",
+    }
+}
+
+fn variant_audit_entry(variant: &EventVariant) -> serde_json::Value {
+    let share_field = match variant.mode {
+        EventVariantMode::Live { .. } => "weight",
+        EventVariantMode::Shadow { .. } => "sample_rate",
+    };
+    serde_json::json!({
+        "name": variant.name,
+        "mode": variant_mode_label(&variant.mode),
+        "board_id": variant.board_id,
+        "board_version": variant.board_version.map(super::dotted_version_key),
+        "default_page_id": variant.default_page_id,
+        share_field: variant.mode.share(),
+    })
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CanaryExplainQuery {
@@ -299,7 +322,7 @@ pub async fn patch_canary(
     Path((app_id, event_id)): Path<(String, String)>,
     Json(patch): Json<CanarySharePatch>,
 ) -> Result<Json<flow_like::flow::event::Event>, ApiError> {
-    use flow_like::flow::event::{EventVariantMode, filter_event_secrets};
+    use flow_like::flow::event::filter_event_secrets;
 
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
@@ -321,12 +344,12 @@ pub async fn patch_canary(
         .await?;
     let mut event = freshest_event(&app, db_event).await;
 
-    let mut found = false;
-    if let Some(variant) = event
+    let share_change = if let Some(variant) = event
         .variants
         .iter_mut()
         .find(|variant| variant.name == patch.name)
     {
+        let previous = variant.mode.share();
         match &mut variant.mode {
             EventVariantMode::Live { weight } => {
                 *weight = validated_share(patch.weight, "weight")?;
@@ -336,21 +359,24 @@ pub async fn patch_canary(
             }
         }
         variant.updated_at = std::time::SystemTime::now();
-        found = true;
+        Some((previous, variant.mode.share()))
     } else if event.variants.is_empty()
         && patch.name == "canary"
         && let Some(canary) = event.canary.as_mut()
     {
+        let previous = canary.weight;
         canary.weight = validated_share(patch.weight, "weight")?;
         canary.updated_at = std::time::SystemTime::now();
-        found = true;
-    }
-    if !found {
+        Some((previous, canary.weight))
+    } else {
+        None
+    };
+    let Some((share_before, share_after)) = share_change else {
         return Err(ApiError::not_found(format!(
             "no variant named '{}' on this event",
             patch.name
         )));
-    }
+    };
 
     // Share-only change: content_equal ignores it, so no version is cut.
     let event = app
@@ -362,6 +388,21 @@ pub async fn patch_canary(
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
     super::db::sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None)
         .await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.canary.share",
+        "Event",
+        event_id,
+        "Canary share changed",
+        serde_json::json!({
+            "variant": patch.name,
+            "from": share_before,
+            "to": share_after,
+        })
+    );
 
     Ok(Json(filter_event_secrets(event)))
 }
@@ -448,7 +489,8 @@ pub async fn put_event_variants(
     // points at — drop those buckets; a retargeted variant serves again after
     // an explicit re-setup.
     let after = event.variant_set();
-    for old in stored.variant_set() {
+    let before = stored.variant_set();
+    for old in &before {
         let invalidated = match after.iter().find(|new| new.name == old.name) {
             None => true,
             Some(new) => {
@@ -471,6 +513,20 @@ pub async fn put_event_variants(
             );
         }
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.canary.variants",
+        "Event",
+        event_id,
+        "Canary variants replaced",
+        serde_json::json!({
+            "variants": after.iter().map(variant_audit_entry).collect::<Vec<_>>(),
+            "previous": before.iter().map(variant_audit_entry).collect::<Vec<_>>(),
+        })
+    );
 
     Ok(Json(filter_event_secrets(event)))
 }
@@ -831,6 +887,32 @@ pub async fn promote_canary(
     super::upsert_event::prune_versions_after_save(&state, &app_id, &app, Some(&stored), &event)
         .await;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.canary.promote",
+        "Event",
+        event_id,
+        "Canary variant promoted to primary",
+        serde_json::json!({
+            "variant": body.variant,
+            "from": {
+                "board_id": stored.board_id,
+                "board_version": stored.board_version.map(super::dotted_version_key),
+                "default_page_id": stored.default_page_id,
+                "event_version": super::dotted_version_key(stored.event_version),
+            },
+            "to": {
+                "board_id": event.board_id,
+                "board_version": event.board_version.map(super::dotted_version_key),
+                "default_page_id": event.default_page_id,
+                "event_version": super::dotted_version_key(event.event_version),
+            },
+            "gate": gate.as_ref().map(promotion_gate_summary),
+        })
+    );
+
     Ok(Json(CanaryPromoteResponse {
         event: filter_event_secrets(event),
         setup_status,
@@ -899,6 +981,11 @@ pub async fn abort_canary(
         ));
     }
 
+    let aborted_mode = stored
+        .variant_set()
+        .iter()
+        .find(|variant| variant.name == body.variant)
+        .map(|variant| variant_mode_label(&variant.mode));
     let mut updated = stored.clone();
     take_variant(&mut updated, &body.variant)?;
     preserve_event_secrets(&mut updated, &stored);
@@ -934,6 +1021,20 @@ pub async fn abort_canary(
             "failed to drop the aborted variant's setup/registration rows"
         );
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.canary.abort",
+        "Event",
+        event_id,
+        "Canary variant removed",
+        serde_json::json!({
+            "variant": body.variant,
+            "mode": aborted_mode,
+        })
+    );
 
     Ok(Json(CanaryAbortResponse {
         event: filter_event_secrets(event),

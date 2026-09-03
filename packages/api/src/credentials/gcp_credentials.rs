@@ -43,6 +43,15 @@ const METADATA_TOKEN_MIN_LIFETIME_SECONDS: i64 = 5 * 60;
 /// every scoped-credential request into a metadata round trip.
 #[cfg(feature = "gcp")]
 const METADATA_TOKEN_CACHE_TTL_SECONDS: u64 = 10 * 60;
+/// Scope every storage credential is minted with. Passed explicitly at each call
+/// site rather than baked into the assertion, because the same signing path also
+/// mints the read-only monitoring token the admin resource dashboard needs, and a
+/// token carrying only `devstorage.read_write` cannot read Cloud Monitoring.
+#[cfg(feature = "gcp")]
+pub(crate) const STORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_write";
+/// Least-privilege scope for `timeSeries.list`.
+#[cfg(feature = "gcp")]
+pub(crate) const MONITORING_READ_SCOPE: &str = "https://www.googleapis.com/auth/monitoring.read";
 #[cfg(feature = "gcp")]
 const METADATA_CONNECT_TIMEOUT_SECONDS: u64 = 3;
 #[cfg(feature = "gcp")]
@@ -527,7 +536,8 @@ impl GcpRuntimeCredentials {
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
-        let base_token = generate_access_token_standalone(&service_account_key).await?;
+        let base_token =
+            generate_access_token_standalone(&service_account_key, STORAGE_SCOPE).await?;
         let access_token = if matches!(mode, CredentialsAccess::ServerExecute) {
             downscope_token_for_rules(
                 &base_token,
@@ -695,7 +705,7 @@ impl GcpBaseTokenSource {
 /// indistinguishable downstream, where the difference decides whether the
 /// process runs on the configured principal or the ambient one.
 #[cfg(feature = "gcp")]
-fn service_account_key_from_env() -> Option<String> {
+pub(crate) fn service_account_key_from_env() -> Option<String> {
     std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON")
         .ok()
         .filter(|key| !key.trim().is_empty())
@@ -746,7 +756,7 @@ fn metadata_authorities() -> [String; 2] {
 /// that matters is expressed by the boundary itself, which GCP enforces
 /// server-side on every object operation.
 #[cfg(feature = "gcp")]
-async fn fetch_metadata_token() -> Result<String> {
+pub(crate) async fn fetch_metadata_token() -> Result<String> {
     let [host, ip] = metadata_authorities();
 
     let cache = METADATA_TOKENS.get_or_init(|| {
@@ -896,13 +906,16 @@ async fn fetch_metadata_token() -> Result<String> {
 #[cfg(feature = "gcp")]
 async fn generate_access_token(service_account_key: &str, _state: &State) -> Result<String> {
     // Use reqwest directly since State's hyper client is lower-level
-    generate_access_token_standalone(service_account_key).await
+    generate_access_token_standalone(service_account_key, STORAGE_SCOPE).await
 }
 
 /// Standalone version for tests without State
 #[cfg(feature = "gcp")]
-async fn generate_access_token_standalone(service_account_key: &str) -> Result<String> {
-    let jwt = create_jwt_assertion(service_account_key)?;
+pub(crate) async fn generate_access_token_standalone(
+    service_account_key: &str,
+    scope: &str,
+) -> Result<String> {
+    let jwt = create_jwt_assertion(service_account_key, scope)?;
     let token_uri = get_token_uri(service_account_key)?;
 
     let client = reqwest::Client::new();
@@ -935,7 +948,7 @@ fn get_token_uri(service_account_key: &str) -> Result<String> {
 }
 
 #[cfg(feature = "gcp")]
-fn create_jwt_assertion(service_account_key: &str) -> Result<String> {
+fn create_jwt_assertion(service_account_key: &str, scope: &str) -> Result<String> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
     #[derive(Deserialize)]
@@ -966,7 +979,7 @@ fn create_jwt_assertion(service_account_key: &str) -> Result<String> {
         "aud": token_uri,
         "iat": now,
         "exp": exp,
-        "scope": "https://www.googleapis.com/auth/devstorage.read_write"
+        "scope": scope
     });
 
     let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());

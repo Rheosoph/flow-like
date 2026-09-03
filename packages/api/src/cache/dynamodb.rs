@@ -31,7 +31,8 @@
 //! plain `Query`.
 //!
 //! Required IAM actions on the table ARN: `GetItem`, `PutItem`, `DeleteItem`, `Query`,
-//! `BatchGetItem`, `BatchWriteItem`.
+//! `BatchGetItem`, `BatchWriteItem`, and `DescribeTable` for the admin resource
+//! dashboard's statistics probe.
 //!
 //! Forgetting the TTL specification is the failure mode to watch for — entries still read
 //! as expired (the stored expiry is checked on read), but nothing is ever reclaimed, so
@@ -1101,6 +1102,46 @@ impl CacheStore for DynamoDbCacheStore {
         // scan would cost far more than it reclaims, and reads already filter lapsed
         // entries.
         Ok(0)
+    }
+
+    async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
+        // `DescribeTable` is the only O(1) source of these numbers; a `Scan` would cost
+        // read capacity proportional to the table and get slower as the cache grows.
+        let description = self
+            .client
+            .describe_table()
+            .table_name(&self.table)
+            .send()
+            .await
+            .map_err(database_error)?
+            .table
+            .ok_or_else(|| {
+                CacheStoreError::Database(format!(
+                    "DescribeTable returned no description for table '{}'",
+                    self.table
+                ))
+            })?;
+
+        let status = description
+            .table_status()
+            .map(|status| status.as_str().to_string());
+        let mut note = String::from(
+            "DynamoDB refreshes item count and table size approximately every six hours, so \
+             both lag recent writes and TTL deletions. The item count exceeds the number of \
+             cache entries whenever a value was large enough to be stored as chunk items.",
+        );
+        if let Some(status) = status.as_deref().filter(|status| *status != "ACTIVE") {
+            note.push_str(&format!(" Table status is {status}, not ACTIVE."));
+        }
+
+        Ok(Some(CacheStoreStats {
+            entries: description.item_count(),
+            size_bytes: description.table_size_bytes(),
+            // DescribeTable carries no timestamp for when the counts were last rolled up,
+            // so the caveat has to travel in the note instead of an `observed_at`.
+            note: Some(note),
+            ..CacheStoreStats::default()
+        }))
     }
 }
 

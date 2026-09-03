@@ -1759,6 +1759,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cloudwatch"
+version = "1.127.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac606233394937c6014a46fc776214f5eed0b6bde3bdd38c8fa1aa28e0f3ad09"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-cbor",
+ "aws-smithy-compression",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "fastrand 2.4.1",
+ "flate2",
+ "http 0.2.12",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-cognitoidentityprovider"
 version = "1.131.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2176,6 +2206,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-smithy-cbor"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f069169abdc367533ea89b869b7dfaadd4134a9bc287c13dbe5ff364ff13228"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "minicbor",
+ "num-bigint",
+]
+
+[[package]]
 name = "aws-smithy-checksums"
 version = "0.65.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2193,6 +2236,24 @@ dependencies = [
  "pin-project-lite",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "tracing",
+]
+
+[[package]]
+name = "aws-smithy-compression"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016ef334a13c53bd75184bb8f89b0fb2aa4d56cb3cfc478ab3f05f13654b60a1"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "bytes",
+ "flate2",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "pin-project-lite",
  "tracing",
 ]
 
@@ -3251,7 +3312,7 @@ version = "3.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.23.0",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -4215,7 +4276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4224,7 +4285,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7915,6 +7976,7 @@ dependencies = [
  "async-stripe",
  "async-trait",
  "aws-config",
+ "aws-sdk-cloudwatch",
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
  "aws-sdk-iotdataplane",
@@ -7950,6 +8012,7 @@ dependencies = [
  "flow-like-types",
  "flow-like-wasm",
  "flow-like-wasm-schema",
+ "fs4",
  "futures 0.3.32",
  "futures-util",
  "getrandom 0.4.2",
@@ -11603,13 +11666,13 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-layer",
  "tower-service",
  "tracing",
- "windows-registry 0.5.3",
+ "windows-registry 0.6.1",
 ]
 
 [[package]]
@@ -15348,6 +15411,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "minicbor"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c12b4033ffaa92fbf9df03df38d19324f52bad130dd223f811734a8006dd2d69"
+dependencies = [
+ "half",
+]
+
+[[package]]
 name = "minijinja"
 version = "2.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17381,7 +17453,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -18902,7 +18974,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.38",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -18941,7 +19013,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -26984,7 +27056,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

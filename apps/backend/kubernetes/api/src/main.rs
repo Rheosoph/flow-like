@@ -2,7 +2,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use axum::Router;
-use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
+use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper_for};
 use flow_like_api::channel::{ChannelSweeperConfig, spawn_channel_sweeper};
 use flow_like_api::execution::{
     RunSweeperConfig, spawn_regression_suites_worker, spawn_run_sweeper,
@@ -54,10 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
 
     // Only spawns for backends without native expiry; the others no-op and log why.
-    let _cache_sweeper_handle = state
-        .cache_store
-        .clone()
-        .and_then(|store| spawn_cache_sweeper(store, CacheSweeperConfig::from_env()));
+    let _cache_sweeper_handle =
+        spawn_cache_sweeper_for(&state.cache, CacheSweeperConfig::from_env()).await;
 
     // Spawned before the sweeper so the aggregates lead the deletions. The
     // ordering guarantee itself lives in the sweeper, which clamps every raw

@@ -393,6 +393,9 @@ pub struct State {
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
+    /// Which concrete bucket, region and account each of the three stores above points
+    /// at. The stores themselves cannot answer that, and every provider metrics API asks.
+    pub storage_identity: crate::storage_identity::StorageIdentity,
     /// Positive cache for the pre-dispatch compiled-artifact check, keyed by
     /// (app, board, version|etag, registry fingerprint). Entries are
     /// content-addressed. ETag-bound dispatches revalidate object existence
@@ -412,12 +415,14 @@ pub struct State {
     pub wasm_registry: Option<Arc<ServerRegistry>>,
     /// Sink scheduler for cron events (AWS EventBridge, K8s CronJobs, or in-memory)
     pub sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>>,
-    /// Key/value cache backend used by flows (`CACHE_BACKEND`).
+    /// Key/value cache backend (`CACHE_BACKEND`) behind the app-facing cache routes and
+    /// the platform partition (`cache.platform()`) the API uses for cross-replica
+    /// coordination such as trigger idempotency.
     ///
-    /// Built once at startup rather than per request: cache reads are far more frequent
-    /// than execution-state reads, and rebuilding a Redis connection on every call would
-    /// dominate the latency the cache exists to avoid.
-    pub cache_store: Option<Arc<dyn crate::cache::CacheStore>>,
+    /// Initialized on first use and then held for the life of the process: cache reads
+    /// are far more frequent than execution-state reads, and rebuilding a Redis
+    /// connection on every call would dominate the latency the cache exists to avoid.
+    pub cache: crate::cache::CacheBackendHandle,
     /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
@@ -429,9 +434,9 @@ pub struct State {
     /// This is intentionally separate from user auth, sink auth, and
     /// `BACKEND_KEY`, so a maintenance runner cannot mint broader credentials.
     pub maintenance_token: Option<String>,
-    /// Idempotency cache for sink trigger requests. Keyed by the
-    /// `Idempotency-Key` header; callers (Lambda, cron worker) use the
-    /// invocation-unique key to collapse automatic retries into a single run.
+    /// Per-replica fast path for sink trigger idempotency, keyed by the
+    /// `Idempotency-Key` header. The cross-replica reservation lives in the platform
+    /// cache; this only spares a repeat on the same replica the round trip.
     pub trigger_idempotency:
         moka::sync::Cache<String, crate::routes::sink::trigger::ServiceTriggerResponse>,
 }
@@ -655,6 +660,7 @@ impl State {
                 .await
                 .expect("Failed to create meta store from master credentials"),
         );
+        let storage_identity = crate::storage_identity::from_credentials(&master_creds);
 
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
@@ -833,24 +839,11 @@ impl State {
             }
         };
 
-        // A cache the flows cannot reach is better surfaced as an explicit 503 from the
-        // cache endpoints than as a failed boot for every other feature.
-        let cache_store = {
-            let config = crate::cache::CacheStoreConfig::default().with_db(Arc::new(db.clone()));
-            match crate::cache::create_cache_store(config).await {
-                Ok(store) => {
-                    tracing::info!(backend = store.backend_name(), "Initialized cache backend");
-                    Some(store)
-                }
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        "Failed to initialize the cache backend; cache endpoints will return 503"
-                    );
-                    None
-                }
-            }
-        };
+        // A cache that cannot come up is surfaced as a 503 from the cache endpoints at
+        // first use rather than as a failed boot for every other feature.
+        let cache_backend = crate::cache::CacheBackendHandle::new(Arc::new(db.clone()));
+        #[cfg(feature = "aws")]
+        let cache_backend = cache_backend.with_aws_config(aws_client.clone());
 
         Self {
             platform_config,
@@ -926,6 +919,7 @@ impl State {
             content_bucket,
             cdn_bucket,
             meta_bucket,
+            storage_identity,
             response_cache,
             wasm_permission_cache: moka::sync::Cache::builder()
                 .max_capacity(10_000)
@@ -939,7 +933,7 @@ impl State {
                 .build(),
             wasm_registry,
             sink_scheduler,
-            cache_store,
+            cache: cache_backend,
             secrets,
             encryption_key,
             sink_secret,

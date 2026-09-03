@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{
         event_sink, execution_run, regression_case_result, regression_suite, regression_suite_run,
     },
@@ -826,6 +826,25 @@ pub async fn promote_regression_fixture(
         .await
         .map_err(ApiError::internal_error)?;
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.regression.fixture.promote",
+        "Event",
+        event_id,
+        "Regression fixture promoted",
+        serde_json::json!({
+            "suite_id": suite.id,
+            "fixture_id": fixture.id,
+            "run_id": body.run_id,
+            "board_id": fixture.source_board_id,
+            "node_id": fixture.source_node_id,
+            "verdict": fixture.baseline.verdict,
+            "fixtures": fixtures.len() + 1,
+        })
+    );
+
     Ok(Json(fixture_summary(&fixture)))
 }
 
@@ -883,6 +902,20 @@ pub async fn delete_regression_fixture(
         .map_err(|error| {
             ApiError::internal_error(anyhow!("Failed to delete fixture {fixture_id}: {error}"))
         })?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.regression.fixture.delete",
+        "Event",
+        event_id,
+        "Regression fixture deleted",
+        serde_json::json!({
+            "suite_id": suite.id,
+            "fixture_id": fixture_id,
+        })
+    );
 
     Ok(Json(
         flow_like_types::json::json!({ "deleted": fixture_id }),
@@ -1095,6 +1128,7 @@ pub async fn put_regression_suite(
     suite.save(&app).await.map_err(ApiError::internal_error)?;
 
     let now_naive = chrono::Utc::now().naive_utc();
+    let created = existing.is_none();
     match existing {
         Some(row) => {
             let mut active: regression_suite::ActiveModel = row.into();
@@ -1130,6 +1164,26 @@ pub async fn put_regression_suite(
             })?;
         }
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.regression.suite.update",
+        "Event",
+        event_id,
+        "Regression suite configured",
+        serde_json::json!({
+            "suite_id": suite.id,
+            "board_id": suite.board_id,
+            "created": created,
+            "gate_mode": gate_mode_as_str(gate_mode),
+            "trigger_on_publish": suite.trigger_on_publish,
+            "scheduled": suite.schedule.is_some(),
+            "allow_live_side_effects": suite.allow_live_side_effects,
+            "fixtures": fixtures.len(),
+        })
+    );
 
     Ok(Json(RegressionSuiteResponse {
         suite,
@@ -1302,9 +1356,14 @@ pub async fn run_regression_suite(
         None => CandidateVersion::LatestPublished,
     };
 
+    let candidate_label = match &candidate {
+        CandidateVersion::Pinned(_) => "pinned",
+        CandidateVersion::LatestPublished => "latest_published",
+        CandidateVersion::Draft => "draft",
+    };
     let (suite_run_id, status) = spawn_suite_run(
-        state,
-        app_id,
+        state.clone(),
+        app_id.clone(),
         suite,
         candidate,
         SuiteRunTrigger::Manual,
@@ -1314,6 +1373,23 @@ pub async fn run_regression_suite(
         },
     )
     .await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "event.regression.run",
+        "Event",
+        event_id,
+        "Regression suite run started",
+        serde_json::json!({
+            "suite_run_id": suite_run_id,
+            "suite_id": suite_row.id,
+            "candidate": candidate_label,
+            "board_version": body.board_version.map(super::dotted_version_key),
+            "status": status,
+        })
+    );
 
     Ok((
         StatusCode::ACCEPTED,

@@ -153,7 +153,6 @@ model App {
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
 
-  cacheEntries AppCacheEntry[]
 
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -197,11 +196,14 @@ enum CacheScope {
   USER
 }
 
-/// Key/value cache entries written by flows. This is the fallback backend; when
-/// CACHE_BACKEND selects redis or dynamodb the entries live there instead and this
-/// table stays empty.
+/// Key/value cache entries written by flows, plus the API's own coordination state
+/// under the reserved `__platform__` partition. This is the fallback backend; when
+/// CACHE_BACKEND selects redis, dynamodb, cosmos or firestore the entries live there
+/// instead and this table stays empty.
+///
+/// `appId` is deliberately not a foreign key: the platform partition has no App row.
+/// App deletion removes its rows explicitly in the same transaction.
 model AppCacheEntry {
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
   scope CacheScope

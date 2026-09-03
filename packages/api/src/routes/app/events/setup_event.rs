@@ -46,7 +46,7 @@ use serde_json::{Value, json};
 use utoipa::ToSchema;
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{
         event, event_remote_auth, event_remote_registration, event_setup,
         sea_orm_active_enums::RunMode,
@@ -145,9 +145,44 @@ pub async fn setup_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
     let user_context = permission.to_user_context();
+    let variant = body
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string();
+    let force = body.force;
 
-    let response = run_event_setup(state, sub, app_id, event_id, body, user_context).await?;
+    let response = run_event_setup(
+        state.clone(),
+        sub,
+        app_id.clone(),
+        event_id.clone(),
+        body,
+        user_context,
+    )
+    .await?;
     if response.status == "ok" {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "event.setup",
+            "Event",
+            event_id,
+            "Event setup run",
+            json!({
+                "variant": variant,
+                "event_version": response.event_version,
+                "run_id": response.run_id,
+                "setup_status": response.status,
+                "registrations": response.registrations_written,
+                "auths": response.auths_written,
+                "server_configs_received": response.server_configs_received,
+                "force": force,
+            })
+        );
         Ok(Json(response))
     } else {
         Err(ApiError::bad_request(
