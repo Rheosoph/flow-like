@@ -13,6 +13,7 @@ use axum::{
     extract::{Query, State},
 };
 use flow_like::{app::AppCategory, bit::Metadata};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };

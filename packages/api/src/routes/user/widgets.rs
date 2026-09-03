@@ -91,6 +91,7 @@ async fn get_widgets_with_metadata(
     language: &str,
     state: &AppState,
 ) -> Result<UserWidgetListing, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     if app_ids.is_empty() {
         return Ok(Vec::new());
     }

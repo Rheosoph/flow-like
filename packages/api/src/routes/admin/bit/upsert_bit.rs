@@ -89,7 +89,7 @@ fn standalone_dependency_tree_hash(bit: &bit::Model) -> String {
     artifact_dependency_tree_hash(
         content_hash,
         bit.file_name.as_deref(),
-        &bit.r#type.to_value(),
+        &bit.r#type.to_value().value,
     )
 }
 
@@ -640,7 +640,7 @@ async fn download_and_hash(
     bit.dependency_tree_hash = Some(artifact_dependency_tree_hash(
         &file_hash,
         bit.file_name.as_deref(),
-        &bit.r#type.to_value(),
+        &bit.r#type.to_value().value,
     ));
 
     bit.size = Some(total_downloaded as i64);
@@ -753,7 +753,7 @@ async fn build_dependency_hash(
         .as_ref()
         .map(|_| standalone_dependency_tree_hash(bit));
     let dependency_hash = resolved_dependency_tree_hash(
-        &bit.r#type.to_value(),
+        &bit.r#type.to_value().value,
         bit.file_name.as_deref(),
         own_artifact_identity.as_deref(),
         &resolved_dependencies,

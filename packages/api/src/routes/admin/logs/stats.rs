@@ -67,6 +67,8 @@ async fn group_count<C: ConnectionTrait>(
     cutoff: chrono::NaiveDateTime,
     limit: u64,
 ) -> Result<Vec<CountRow>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut q = SeaQuery::select();
     q.from(error_report::Entity)
         .expr_as(Expr::col(column), Alias::new("key"))
@@ -90,6 +92,8 @@ async fn distinct_count<C: ConnectionTrait>(
     cutoff: chrono::NaiveDateTime,
     only_non_null: bool,
 ) -> Result<i64, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut q = SeaQuery::select();
     q.from(error_report::Entity)
         .expr_as(Expr::col(column).count_distinct(), Alias::new("cnt"))

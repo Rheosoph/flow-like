@@ -1,3 +1,4 @@
+use sea_orm::sea_query::ExprTrait;
 use std::collections::HashMap;
 
 use crate::{

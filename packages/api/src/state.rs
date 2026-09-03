@@ -162,7 +162,7 @@ async fn ensure_mutation_lock<C: ConnectionTrait>(
     lock_id: i64,
 ) -> std::result::Result<(), sea_orm::DbErr> {
     connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             ENSURE_MUTATION_LOCK_SQL,
             [lock_id.into()],
@@ -176,7 +176,7 @@ async fn acquire_mutation_lock<C: ConnectionTrait>(
     lock_id: i64,
 ) -> std::result::Result<(), sea_orm::DbErr> {
     let result = connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             ACQUIRE_MUTATION_LOCK_SQL,
             [lock_id.into()],

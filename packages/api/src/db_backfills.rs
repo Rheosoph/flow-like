@@ -55,7 +55,7 @@ WHERE "permission" IS NULL
         }
     };
 
-    db.execute(Statement::from_string(backend, sql.to_string()))
+    db.execute_raw(Statement::from_string(backend, sql.to_string()))
         .await?;
     Ok(())
 }
@@ -102,6 +102,6 @@ WHERE "creatorUserId" IS NULL
   )"#
     );
 
-    db.execute(Statement::from_string(backend, sql)).await?;
+    db.execute_raw(Statement::from_string(backend, sql)).await?;
     Ok(())
 }

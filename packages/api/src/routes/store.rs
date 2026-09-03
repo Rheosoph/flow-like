@@ -37,6 +37,7 @@ async fn filter_public_members(
     members: Vec<crate::entity::app_group_member::Model>,
 ) -> Result<Vec<crate::entity::app_group_member::Model>, ApiError> {
     use crate::entity::{app, sea_orm_active_enums::Visibility};
+    use sea_orm::sea_query::ExprTrait;
     if members.is_empty() {
         return Ok(members);
     }
@@ -78,8 +79,9 @@ pub async fn list_public_groups(
         app_group, app_group_member,
         sea_orm_active_enums::{AppGroupMemberStatus, Status, Visibility},
     };
+    use sea_orm::sea_query::ExprTrait;
 
-    let limit = query.limit.unwrap_or(24).min(100);
+    let limit = Ord::min(query.limit.unwrap_or(24), 100);
     let offset = query.offset.unwrap_or(0);
 
     let groups = app_group::Entity::find()
@@ -129,6 +131,7 @@ pub async fn get_public_group(
         app_group, app_group_member,
         sea_orm_active_enums::{AppGroupMemberStatus, Status, Visibility},
     };
+    use sea_orm::sea_query::ExprTrait;
 
     let group = app_group::Entity::find_by_id(&group_id)
         .filter(

@@ -114,6 +114,8 @@ pub async fn list_solutions(
     if let Some(search) = &query.search
         && !search.trim().is_empty()
     {
+        use sea_orm::sea_query::ExprTrait;
+
         let search_pattern = format!("%{}%", search.trim().to_lowercase());
         select = select.filter(
             solution_request::Column::Name

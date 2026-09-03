@@ -15,6 +15,7 @@ use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,

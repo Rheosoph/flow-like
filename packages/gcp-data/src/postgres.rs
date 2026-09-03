@@ -1,6 +1,6 @@
 //! Passwordless Cloud SQL for PostgreSQL connectivity.
 //!
-//! SQLx 0.8 stores one password in `PgConnectOptions`; it does not expose an
+//! SQLx 0.9 stores one password in `PgConnectOptions`; it does not expose an
 //! asynchronous credential callback when the pool opens a new connection.
 //! A Cloud SQL IAM access token therefore cannot be refreshed safely inside an
 //! existing SeaORM pool. This module obtains a metadata-server token at startup

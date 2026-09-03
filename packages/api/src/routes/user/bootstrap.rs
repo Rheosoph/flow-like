@@ -9,6 +9,7 @@ use axum::{
     extract::{Query, State},
 };
 use flow_like::{app::App, bit::Metadata};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     RelationTrait,
@@ -102,7 +103,7 @@ pub async fn bootstrap(
 
     // 3. Apps (paginated)
     let language = params.language.clone().unwrap_or_else(|| "en".to_string());
-    let apps_limit = params.apps_limit.unwrap_or(50).min(100);
+    let apps_limit = std::cmp::Ord::min(params.apps_limit.unwrap_or(50), 100);
     let apps_offset = params.apps_offset.unwrap_or(0);
 
     let apps_total = app::Entity::find()
@@ -149,7 +150,7 @@ pub async fn bootstrap(
     }
 
     // 4. Pending invites (paginated)
-    let invites_limit_val = params.invites_limit.unwrap_or(20).min(100);
+    let invites_limit_val = std::cmp::Ord::min(params.invites_limit.unwrap_or(20), 100);
     let invites_offset_val = params.invites_offset.unwrap_or(0);
 
     let invites_total = invitation::Entity::find()

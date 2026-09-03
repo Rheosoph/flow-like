@@ -7,6 +7,7 @@ use axum::{
     Router,
     routing::{get, patch, post},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub mod internal;

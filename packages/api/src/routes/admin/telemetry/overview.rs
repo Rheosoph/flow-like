@@ -16,6 +16,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{Duration, NaiveDateTime, NaiveTime, Utc};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Alias, Expr, Func, Order as SeaOrder, Query as SeaQuery, SimpleExpr};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter,
@@ -87,9 +88,11 @@ pub(super) fn sum_i64<C: ColumnTrait>(column: C) -> SimpleExpr {
 }
 
 pub(super) fn parse_retention_days(raw: Option<&str>, default_days: i64) -> i64 {
-    raw.and_then(|value| value.trim().parse::<i64>().ok())
-        .unwrap_or(default_days)
-        .max(1)
+    std::cmp::Ord::max(
+        raw.and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(default_days),
+        1,
+    )
 }
 
 /// How many days the sweeper still keeps raw rows for. Mirrors the sweeper's

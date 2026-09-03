@@ -10,6 +10,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::bit::{Bit, Metadata};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::routes::bit::get_bit::temporary_bit;

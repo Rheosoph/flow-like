@@ -12,6 +12,7 @@ use super::types::*;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use flow_like_types::cache::CacheScope;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr,
     EntityTrait, PaginatorTrait, QueryFilter, QueryResult, Set, Statement, TransactionTrait,
@@ -154,8 +155,8 @@ async fn probe(
 ) -> Result<Option<QueryResult>, DbErr> {
     let timeouts = Statement::from_string(DatabaseBackend::Postgres, PROBE_TIMEOUTS_SQL);
     let txn = db.begin().await?;
-    txn.execute(timeouts).await?;
-    let row = txn.query_one(statement).await?;
+    txn.execute_raw(timeouts).await?;
+    let row = txn.query_one_raw(statement).await?;
     txn.commit().await?;
     Ok(row)
 }

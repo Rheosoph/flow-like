@@ -3,6 +3,7 @@ use crate::{
     routes::profile::sign_profile_image, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use utoipa::ToSchema;

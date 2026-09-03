@@ -1542,7 +1542,7 @@ mod tests {
 
     #[test]
     fn stateless_lambda_constructor_retains_source_store_for_cold_import() {
-        let source_db = Arc::new(DatabaseConnection::Disconnected);
+        let source_db = Arc::new(DatabaseConnection::default());
         assert!(postgres_source(Some(source_db)).is_some());
         assert!(postgres_source(None).is_none());
     }

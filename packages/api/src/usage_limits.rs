@@ -6,8 +6,8 @@ use crate::{
 use chrono::{Duration, NaiveDateTime, Utc};
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
-    DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, QueryFilter, Statement,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DbBackend,
+    EntityTrait, FromQueryResult, QueryFilter, Statement,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

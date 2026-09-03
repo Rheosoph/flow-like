@@ -36,7 +36,7 @@ pub async fn delete_bit(
         .exec_with_returning(&state.db)
         .await?;
 
-    let mut bits = Vec::with_capacity(deleted_bits.len());
+    let mut bits = Vec::new();
     for bit in deleted_bits {
         let bit: Bit = bit.into();
         if !bit.hash.is_empty() {

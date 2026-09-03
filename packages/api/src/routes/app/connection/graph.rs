@@ -27,6 +27,7 @@ use axum::{
 };
 use flow_like::bit::Metadata;
 use flow_like_storage::Path as FlowPath;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Statement, sea_query::Expr,
@@ -271,7 +272,7 @@ pub(crate) async fn observed_flows_for_app(
         ],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     rows.iter().map(flow_from_row).collect()
 }
 
@@ -294,7 +295,7 @@ pub(crate) async fn observed_flows_global(
         [since.into(), (MAX_FLOWS as i64).into()],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     rows.iter().map(flow_from_row).collect()
 }
 

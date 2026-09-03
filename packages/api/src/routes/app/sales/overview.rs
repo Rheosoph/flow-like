@@ -14,9 +14,9 @@ use axum::{
 };
 use chrono::{Duration, NaiveDate, Utc};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

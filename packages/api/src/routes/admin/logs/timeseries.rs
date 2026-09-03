@@ -7,7 +7,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, Utc};
-use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement};
+use sea_orm::{DbBackend, FromQueryResult, Statement};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 

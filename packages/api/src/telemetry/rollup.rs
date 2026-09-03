@@ -17,6 +17,7 @@
 //! row can therefore never be swept before the day it was rolled into, and a
 //! late-arriving row always lands inside the backfill window.
 
+use sea_orm::sea_query::ExprTrait;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -268,8 +269,8 @@ pub(crate) fn rollup_days(now: NaiveDateTime, backfill_days: i64) -> Vec<NaiveDa
 pub(crate) fn parse_interval(raw: Option<&str>) -> Duration {
     let secs = raw
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_INTERVAL_SECS)
-        .max(MIN_INTERVAL_SECS);
+        .unwrap_or(DEFAULT_INTERVAL_SECS);
+    let secs = std::cmp::Ord::max(secs, MIN_INTERVAL_SECS);
     Duration::from_secs(secs)
 }
 
@@ -395,11 +396,15 @@ fn counter_value(props: Option<&serde_json::Value>, key: &str) -> i64 {
     let Some(value) = props.and_then(|p| p.get(key)) else {
         return 0;
     };
-    value
+    let count = value
         .as_i64()
-        .or_else(|| value.as_u64().map(|v| v.min(i64::MAX as u64) as i64))
-        .unwrap_or(0)
-        .max(0)
+        .or_else(|| {
+            value
+                .as_u64()
+                .map(|v| std::cmp::Ord::min(v, i64::MAX as u64) as i64)
+        })
+        .unwrap_or(0);
+    std::cmp::Ord::max(count, 0)
 }
 
 macro_rules! flowpilot_counters {
@@ -547,11 +552,7 @@ fn event_count_expr() -> SimpleExpr {
 /// `COALESCE(<column>, 'unknown')` — used identically in the projection, the
 /// `GROUP BY` and the long-tail `NOT IN`, so all three agree on the key.
 fn coalesced_key(column: impl sea_orm::sea_query::IntoColumnRef) -> SimpleExpr {
-    Func::coalesce([
-        Expr::col(column).into(),
-        Expr::val(UNKNOWN_VALUE.to_string()).into(),
-    ])
-    .into()
+    Func::coalesce([Expr::col(column), Expr::val(UNKNOWN_VALUE.to_string())]).into()
 }
 
 fn dimension_column(dimension: &str) -> Option<telemetry_event::Column> {
@@ -586,8 +587,8 @@ fn session_status_count(
 /// for `SUM` over an integer column, which would not deserialize into `i64`.
 fn sum_bigint(column: telemetry_llm_call::Column) -> SimpleExpr {
     Expr::expr(Func::coalesce([
-        Func::sum(Expr::col(column)).into(),
-        Expr::val(0i64).into(),
+        Expr::from(Func::sum(Expr::col(column))),
+        Expr::val(0i64),
     ]))
     .cast_as(Alias::new("BIGINT"))
 }
@@ -1134,8 +1135,8 @@ async fn llm_counts<C: ConnectionTrait>(
         )
         .expr_as(
             Expr::expr(Func::coalesce([
-                Func::max(Expr::col(telemetry_llm_call::Column::DurationMs)).into(),
-                Expr::val(0i64).into(),
+                Expr::from(Func::max(Expr::col(telemetry_llm_call::Column::DurationMs))),
+                Expr::val(0i64),
             ]))
             .cast_as(Alias::new("BIGINT")),
             Alias::new("duration_max_ms"),
@@ -1174,10 +1175,10 @@ async fn rollup_llm(
             source: Set(row.source),
             calls: Set(to_i32(row.calls)),
             errors: Set(to_i32(row.errors)),
-            prompt_tokens: Set(row.prompt_tokens.max(0)),
-            completion_tokens: Set(row.completion_tokens.max(0)),
-            total_tokens: Set(row.total_tokens.max(0)),
-            duration_sum_ms: Set(row.duration_sum_ms.max(0)),
+            prompt_tokens: Set(std::cmp::Ord::max(row.prompt_tokens, 0)),
+            completion_tokens: Set(std::cmp::Ord::max(row.completion_tokens, 0)),
+            total_tokens: Set(std::cmp::Ord::max(row.total_tokens, 0)),
+            duration_sum_ms: Set(std::cmp::Ord::max(row.duration_sum_ms, 0)),
             duration_max_ms: Set(to_i32(row.duration_max_ms)),
             created_at: Set(now),
             updated_at: Set(now),

@@ -136,7 +136,7 @@ icalendar = "0.17.4"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 iana-time-zone = "0.1.64"
 axum = {version="0.8.4", features=["http2", "multipart"]}
-sea-orm = { version = "1.1.17", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json", "seaography" ] }
+sea-orm = { version = "2.0.2", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json"] }
 tower = "0.5.2"
 tracing-subscriber = "0.3.22"
 dotenv = "0.15.0"

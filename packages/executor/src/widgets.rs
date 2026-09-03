@@ -95,9 +95,18 @@ mod tests {
         // Port 9 (discard) refuses connections, so any fetch would fail loudly.
         let source = HubWidgetSource::new("http://127.0.0.1:9", "jwt".into());
         source.prime("app-1", Vec::new()).await;
-        let first = source.list_app_widgets("app-1").await.expect("served from cache");
-        let second = source.list_app_widgets("app-1").await.expect("served from cache");
-        assert!(Arc::ptr_eq(&first, &second), "one entry, shared across calls");
+        let first = source
+            .list_app_widgets("app-1")
+            .await
+            .expect("served from cache");
+        let second = source
+            .list_app_widgets("app-1")
+            .await
+            .expect("served from cache");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "one entry, shared across calls"
+        );
     }
 
     #[tokio::test]

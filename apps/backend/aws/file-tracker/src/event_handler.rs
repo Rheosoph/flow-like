@@ -7,6 +7,7 @@ use aws_sdk_dynamodb::Client as DynamoClient;
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use sea_orm::prelude::*;
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait};
 
 fn decode(key: &str) -> Result<String, Error> {

@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder,

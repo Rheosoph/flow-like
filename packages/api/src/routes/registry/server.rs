@@ -23,6 +23,7 @@ use flow_like_wasm_schema::manifest::{
     PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
 };
 use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
@@ -2103,7 +2104,7 @@ impl ServerRegistry {
     /// Increment download count for a package (fire and forget)
     pub async fn increment_downloads(&self, package_id: &str) -> flow_like_types::Result<()> {
         // Use raw SQL for atomic increment
-        sea_orm::ConnectionTrait::execute(
+        sea_orm::ConnectionTrait::execute_raw(
             &self.db,
             sea_orm::Statement::from_sql_and_values(
                 sea_orm::DatabaseBackend::Postgres,

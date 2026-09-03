@@ -1993,7 +1993,7 @@ mod tests {
                     } else {
                         shadow_execute_policy
                     };
-                    let mut policy = build(&creds, app, user, runs, tmp_user, tmp_global, express);
+                    let mut policy = build(&creds, app, user, runs, tmp_user, tmp_global);
                     policy["Statement"]
                         .as_array_mut()
                         .expect("statements")

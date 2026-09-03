@@ -97,6 +97,8 @@ impl AuditService {
         db: &DatabaseConnection,
         input: AuditEntryInput,
     ) -> flow_like_types::Result<audit_entry::Model> {
+        use sea_orm::sea_query::ExprTrait;
+
         let now = Utc::now().naive_utc();
 
         let txn = db.begin().await?;
@@ -106,7 +108,7 @@ impl AuditService {
         // we always read the latest committed entry before inserting.
         let last_entry = audit_entry::Entity::find()
             .filter(if let Some(ref cid) = input.chain_id {
-                Expr::col(audit_entry::Column::ChainId).eq(cid.clone())
+                Expr::col(audit_entry::Column::ChainId).eq(Expr::value(cid.clone()))
             } else {
                 Expr::col(audit_entry::Column::ChainId).is_null()
             })

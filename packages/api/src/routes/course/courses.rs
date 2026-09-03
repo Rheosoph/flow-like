@@ -224,8 +224,9 @@ pub async fn list_courses(
     Extension(user): Extension<AppUser>,
     Query(q): Query<ListCoursesQuery>,
 ) -> Result<Json<Vec<CourseListItem>>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
-    let limit = q.limit.unwrap_or(100).min(100);
+    let limit = Ord::min(q.limit.unwrap_or(100), 100);
 
     let mut query = course::Entity::find()
         .order_by_asc(course::Column::Position)
@@ -352,6 +353,7 @@ pub async fn get_course(
     Path(course_id): Path<String>,
     Query(q): Query<LanguageParams>,
 ) -> Result<Json<CourseDetail>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
     let (c, metas) = course::Entity::find_by_id(&course_id)
@@ -591,6 +593,7 @@ pub async fn get_course_structure(
     Path(course_id): Path<String>,
     Query(q): Query<LanguageParams>,
 ) -> Result<Json<CourseStructure>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
     let (c, metas) = course::Entity::find_by_id(&course_id)

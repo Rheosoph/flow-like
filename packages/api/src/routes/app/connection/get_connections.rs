@@ -14,6 +14,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::Serialize;
 use utoipa::ToSchema;

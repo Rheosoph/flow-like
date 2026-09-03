@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"db:push:sync": "bun run db:push && bun run db:sync",
-		"db:sync": "docker compose up postgres tools && cd ../.. && cargo fmt --all",
+		"db:sync": "docker compose up --build postgres tools && cd ../.. && cargo fmt --all",
 		"db:push": "tsx prisma/db-push.ts",
 		"db:migration:create": "bunx prisma migrate dev --name",
 		"db:migration:deploy": "bunx prisma migrate deploy",

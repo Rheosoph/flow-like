@@ -640,5 +640,4 @@ mod tests {
             assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
         }
     }
-
 }

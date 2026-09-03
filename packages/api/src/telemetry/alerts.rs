@@ -454,6 +454,8 @@ where
     S: IntoColumnRef,
     I: IntoColumnRef,
 {
+    use sea_orm::sea_query::ExprTrait;
+
     let case = Expr::case(Expr::col(status_column).eq(status), Expr::col(id_column))
         .finally(sea_orm::Value::String(None));
     Expr::expr(case).count()
@@ -495,6 +497,8 @@ async fn session_pair<C: ConnectionTrait>(
     from: NaiveDateTime,
     to: NaiveDateTime,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_session::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_session::Column::Id).count(), "total")
@@ -524,6 +528,8 @@ async fn span_pair<C: ConnectionTrait>(
     from: NaiveDateTime,
     to: NaiveDateTime,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_span::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_span::Column::Id).count(), "total")
@@ -553,6 +559,8 @@ async fn llm_pair<C: ConnectionTrait>(
     from: NaiveDateTime,
     to: NaiveDateTime,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_llm_call::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_llm_call::Column::Id).count(), "total")

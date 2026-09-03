@@ -200,10 +200,12 @@ fn stored_col(column: telemetry_session::Column) -> SimpleExpr {
 }
 
 fn status_rank_expr(column: SimpleExpr) -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
     SESSION_STATUS_PRECEDENCE
         .iter()
         .fold(CaseStatement::new(), |case, (status, rank)| {
-            case.case(column.clone().eq(*status), *rank)
+            case.case(column.clone().eq(Expr::value(*status)), *rank)
         })
         .finally(0)
         .into()
@@ -214,6 +216,8 @@ fn status_rank_expr(column: SimpleExpr) -> SimpleExpr {
 /// by the same install. `GREATEST` ignores NULL operands on Postgres and
 /// CockroachDB, so a session without a duration keeps the stored one.
 fn session_on_conflict() -> OnConflict {
+    use sea_orm::sea_query::ExprTrait;
+
     let incoming = status_rank_expr(excluded_col(telemetry_session::Column::Status));
     let stored = status_rank_expr(stored_col(telemetry_session::Column::Status));
     let status: SimpleExpr = Expr::case(

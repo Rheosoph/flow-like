@@ -90,7 +90,10 @@ mod tests {
         let first = build();
         let second = build();
 
-        assert_ne!(first, base_fingerprint, "a WASM node must be part of the identity");
+        assert_ne!(
+            first, base_fingerprint,
+            "a WASM node must be part of the identity"
+        );
         assert_eq!(first, second, "the same node set must always hash the same");
     }
 

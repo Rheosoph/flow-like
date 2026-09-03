@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbBackend, QueryResult, Statement, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseConnectionType, DbBackend, QueryResult, Statement,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -162,6 +163,7 @@ fn backend_name(backend: DbBackend) -> &'static str {
         DbBackend::Postgres => "postgres",
         DbBackend::MySql => "mysql",
         DbBackend::Sqlite => "sqlite",
+        _ => "unknown",
     }
 }
 
@@ -184,7 +186,7 @@ fn written_tuples(counters: &DatabaseCounters) -> i64 {
 }
 
 async fn one_row(db: &DatabaseConnection, probe: &'static str, sql: &str) -> Option<QueryResult> {
-    match db.query_one(statement(sql)).await {
+    match db.query_one_raw(statement(sql)).await {
         Ok(row) => row,
         Err(error) => {
             tracing::debug!(probe, error = %error, "Database resource probe query failed");
@@ -198,7 +200,7 @@ async fn all_rows(
     probe: &'static str,
     sql: &str,
 ) -> Option<Vec<QueryResult>> {
-    match db.query_all(statement(sql)).await {
+    match db.query_all_raw(statement(sql)).await {
         Ok(rows) => Some(rows),
         Err(error) => {
             tracing::debug!(probe, error = %error, "Database resource probe query failed");
@@ -224,11 +226,11 @@ async fn guarded_rows(
         }
     };
 
-    if let Err(error) = txn.execute(statement(TIMEOUT_GUARD_SQL)).await {
+    if let Err(error) = txn.execute_raw(statement(TIMEOUT_GUARD_SQL)).await {
         tracing::debug!(probe, error = %error, "Could not apply the probe statement timeouts");
     }
 
-    let rows = txn.query_all(statement(sql)).await;
+    let rows = txn.query_all_raw(statement(sql)).await;
 
     if let Err(error) = txn.commit().await {
         tracing::debug!(probe, error = %error, "Could not close the guarded probe transaction");
@@ -336,7 +338,10 @@ async fn largest_tables(db: &DatabaseConnection) -> Option<Vec<TableUsage>> {
 /// is matched rather than inferred from the backend — this probe must never be the reason
 /// the dashboard goes down.
 fn pool_metrics(db: &DatabaseConnection) -> Vec<ResourceMetric> {
-    if !matches!(db, DatabaseConnection::SqlxPostgresPoolConnection(_)) {
+    if !matches!(
+        db.inner,
+        DatabaseConnectionType::SqlxPostgresPoolConnection(_)
+    ) {
         return Vec::new();
     }
 

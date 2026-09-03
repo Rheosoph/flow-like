@@ -20,7 +20,7 @@ use flow_like::hub::Lookup;
 use flow_like_types::Value;
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
-    sea_query::{Expr, LikeExpr, extension::postgres::PgExpr},
+    sea_query::{Expr, LikeExpr},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -290,10 +290,12 @@ pub struct UserSearchQuery {
 
 /// `ILIKE` with no wildcards is exactly case-insensitive equality.
 fn ilike_eq(column: user::Column, value: &str) -> sea_orm::sea_query::SimpleExpr {
+    use sea_orm::sea_query::extension::postgres::PgExpr;
     Expr::col(column).ilike(LikeExpr::new(escape_like_pattern(value)).escape('\\'))
 }
 
 fn ilike_contains(column: user::Column, pattern: &str) -> sea_orm::sea_query::SimpleExpr {
+    use sea_orm::sea_query::extension::postgres::PgExpr;
     Expr::col(column).ilike(LikeExpr::new(pattern).escape('\\'))
 }
 

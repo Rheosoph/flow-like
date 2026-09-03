@@ -420,7 +420,7 @@ async fn apply_usage_delta(
     })?;
 
     let app_rows = txn
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
             [delta.into(), app_id.into()],
@@ -437,7 +437,7 @@ async fn apply_usage_delta(
 
     if let Some(user_id) = user_id {
         let user_rows = txn
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 r#"UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
                 [delta.into(), user_id.into()],

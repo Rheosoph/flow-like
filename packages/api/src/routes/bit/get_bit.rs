@@ -1,3 +1,4 @@
+use sea_orm::sea_query::ExprTrait;
 use std::{sync::Arc, time::Duration};
 
 use crate::{

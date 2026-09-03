@@ -188,6 +188,8 @@ async fn load_inventory_items(
     state: &AppState,
     query: &InventoryQuery,
 ) -> Result<Vec<InventoryItem>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     let assessment_rows = ai_act_assessment::Entity::find()
         .order_by_desc(ai_act_assessment::Column::Version)
         .all(&state.db)
@@ -249,7 +251,7 @@ async fn load_inventory_items(
             entry.drift_count += 1;
         }
         entry.updated_at = Some(match entry.updated_at {
-            Some(current) => current.max(obs.last_seen_at),
+            Some(current) => std::cmp::Ord::max(current, obs.last_seen_at),
             None => obs.last_seen_at,
         });
     }
@@ -1004,6 +1006,8 @@ pub async fn list_models(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<Vec<RegistryItem>>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     ensure_feature(&state)?;
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
@@ -1084,7 +1088,7 @@ pub async fn list_models(
         let key = registry_key(Some(&record.provider), &record.model_id);
         let observed_count = observed_by_key
             .get(&key)
-            .map(|m| m.observed_count.max(1))
+            .map(|m| std::cmp::Ord::max(m.observed_count, 1))
             .unwrap_or(0);
         let observed = observed_count > 0;
         registered_keys.insert(key);

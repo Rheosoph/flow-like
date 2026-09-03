@@ -1,3 +1,4 @@
+use sea_orm::sea_query::ExprTrait;
 use std::time::Duration;
 
 use crate::{entity::profile as profile_entity, error::ApiError, state::AppState};

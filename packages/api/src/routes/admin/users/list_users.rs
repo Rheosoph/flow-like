@@ -99,6 +99,8 @@ pub async fn list_users(
     if let Some(q) = &query.query
         && !q.is_empty()
     {
+        use sea_orm::sea_query::ExprTrait;
+
         let pattern = format!("%{}%", q);
         select = select.filter(
             user::Column::Email

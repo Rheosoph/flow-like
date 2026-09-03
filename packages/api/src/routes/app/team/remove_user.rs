@@ -11,6 +11,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::hub::MemberLeavePolicy;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
 };

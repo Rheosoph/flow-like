@@ -15,6 +15,7 @@ use flow_like::{
     app::{App, AppSearchQuery, AppSearchSort},
     bit::Metadata,
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 /// Search hits paired with their localized metadata, when any exists.

@@ -10,6 +10,7 @@ use axum::{
     extract::{Query, State},
 };
 use flow_like::{app::App, bit::Metadata};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
@@ -39,7 +40,7 @@ pub async fn get_apps(
 ) -> Result<Json<AppsWithMetadata>, ApiError> {
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());
 
-    let limit = query.limit.unwrap_or(100).min(100);
+    let limit = std::cmp::Ord::min(query.limit.unwrap_or(100), 100);
 
     let sub = user.sub()?;
 
@@ -53,7 +54,7 @@ pub async fn get_apps(
                 .or(meta::Column::Lang.eq("en")),
         )
         .filter(membership::Column::UserId.eq(sub))
-        .limit(Some(limit.min(100)))
+        .limit(Some(std::cmp::Ord::min(limit, 100)))
         .offset(query.offset)
         .all(&state.db)
         .await?;

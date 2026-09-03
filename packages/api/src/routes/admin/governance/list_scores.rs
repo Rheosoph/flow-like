@@ -7,6 +7,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -103,7 +104,7 @@ pub async fn list_scores(
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
 
-    let page = query.page.unwrap_or(1).max(1);
+    let page = std::cmp::Ord::max(query.page.unwrap_or(1), 1);
     let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
     // Aggregate per-app scores in SQL (MIN per category, MIN worst, counts).

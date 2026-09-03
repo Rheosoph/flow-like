@@ -14,6 +14,7 @@ use flow_like_types::create_id;
 use flow_like_types::tokio::sync::RwLock;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::StatusCode;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
 };

@@ -115,11 +115,12 @@ pub async fn list_errors(
     Extension(user): Extension<AppUser>,
     Query(q): Query<ListErrorsQuery>,
 ) -> Result<Json<ListErrorsResponse>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     user.check_global_permission(&state, GlobalPermission::ReadLogs)
         .await?;
 
     let offset = q.offset.unwrap_or(0);
-    let limit = q.limit.unwrap_or(50).min(200);
+    let limit = Ord::min(q.limit.unwrap_or(50), 200);
 
     let mut select = error_report::Entity::find();
 

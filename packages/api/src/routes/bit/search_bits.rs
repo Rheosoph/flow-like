@@ -11,6 +11,7 @@ use axum::{
 };
 use flow_like::{bit::Bit, hub::BitSearchQuery};
 use sea_orm::QueryTrait;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
 use super::{get_bit::temporary_bit, llm_model_to_evaluation};

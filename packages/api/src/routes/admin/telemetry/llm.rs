@@ -910,6 +910,7 @@ fn llm_samples_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity>
 
 /// `COUNT(CASE WHEN status = 'error' THEN id END)`, portable across backends.
 fn error_count() -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
     Expr::expr(
         Expr::case(
             Expr::col(telemetry_llm_call::Column::Status).eq(LLM_STATUS_ERROR),
@@ -938,6 +939,7 @@ fn apply_llm_filters(
 }
 
 fn operation_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity> {
+    use sea_orm::sea_query::ExprTrait;
     apply_llm_filters(
         telemetry_llm_call::Entity::find()
             .select_only()
@@ -952,6 +954,7 @@ fn operation_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Ent
 }
 
 fn error_kind_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity> {
+    use sea_orm::sea_query::ExprTrait;
     apply_llm_filters(
         telemetry_llm_call::Entity::find()
             .select_only()

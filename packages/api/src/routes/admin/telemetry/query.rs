@@ -17,7 +17,7 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use sea_orm::{ConnectionTrait, FromQueryResult, Statement, Value};
+use sea_orm::{FromQueryResult, Statement, Value};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -1108,7 +1108,7 @@ mod tests {
         values
             .iter()
             .filter_map(|value| match value {
-                Value::String(Some(text)) => Some(text.as_ref().clone()),
+                Value::String(Some(text)) => Some(text.clone()),
                 _ => None,
             })
             .collect()
@@ -1406,7 +1406,7 @@ mod tests {
         assert!(
             built.values.iter().any(|value| matches!(
                 value,
-                Value::ChronoDateTime(Some(ts)) if ts.as_ref() == &expected
+                Value::ChronoDateTime(Some(ts)) if ts == &expected
             )),
             "{:?}",
             built.values

@@ -85,6 +85,8 @@ async fn get_templates_with_metadata(
     app_ids: &[String],
     language: &str,
 ) -> Result<UserTemplateListing, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     let templates = template::Entity::find()
         .find_with_related(meta::Entity)
         .filter(template::Column::AppId.is_in(app_ids))

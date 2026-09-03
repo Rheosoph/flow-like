@@ -11,6 +11,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -108,7 +109,7 @@ pub async fn get_requests(
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
 
-    let page = query.page.unwrap_or(1).max(1);
+    let page = std::cmp::Ord::max(query.page.unwrap_or(1), 1);
     let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
     // Suites are reviewed in their own, lighter queue — see
@@ -182,7 +183,7 @@ pub async fn get_requests(
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .map(|r| (r.app_id, std::cmp::Ord::max(r.cnt, 0) as u64))
         .collect();
 
     // Package counts per app (aggregated in SQL)
@@ -196,7 +197,7 @@ pub async fn get_requests(
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .map(|r| (r.app_id, std::cmp::Ord::max(r.cnt, 0) as u64))
         .collect();
 
     // Publication logs

@@ -16,8 +16,8 @@ use axum::{
 use chrono::{Duration, NaiveDate, Utc};
 use sea_orm::sea_query::{Expr, SelectStatement};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, QueryTrait, Select,
+    ColumnTrait, Condition, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    QueryTrait, Select,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -598,6 +598,8 @@ async fn count_unique_users(
     end_date_exclusive: Option<NaiveDate>,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<i64, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
     let row = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
         .select_only()
         .expr_as(
@@ -624,6 +626,7 @@ async fn count_unique_users_by_bucket(
     event_filter: Option<&AnalyticsEventFilter>,
     period: StatsPeriod,
 ) -> Result<std::collections::HashMap<NaiveDate, i64>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     use std::collections::HashMap;
 
     let bucket_expr = period.bucket_expr(state.db.get_database_backend(), "createdAt");

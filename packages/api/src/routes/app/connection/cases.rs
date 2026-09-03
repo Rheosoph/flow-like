@@ -189,7 +189,7 @@ pub async fn list_process_cases(
         ],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     let mut raw_cases = Vec::with_capacity(rows.len());
     let mut all_app_ids: HashSet<String> = HashSet::new();
     for row in &rows {
@@ -340,7 +340,7 @@ pub async fn get_process_case(
         [app_id.clone().into(), case_id.into(), MAX_CASE_DEPTH.into()],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     if rows.is_empty() {
         return Err(ApiError::not_found("Case not found"));
     }

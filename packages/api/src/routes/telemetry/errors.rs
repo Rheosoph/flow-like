@@ -7,6 +7,7 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use flow_like_types::Value;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
     sea_query::{Expr, OnConflict},
