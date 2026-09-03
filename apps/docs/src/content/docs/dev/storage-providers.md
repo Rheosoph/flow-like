@@ -76,8 +76,56 @@ AWS_ENDPOINT=http://localhost:9000
 AWS_USE_PATH_STYLE=true
 ```
 
-Flow-Like reads the standard `AWS_*` variables for S3-compatible storage. It
-does not read `MINIO_*` variables.
+### Buckets encrypted with a customer-managed KMS key
+
+S3-managed encryption (SSE-S3) and the AWS-managed `aws/s3` key need no
+configuration. A **customer-managed** key does: S3 refuses every read without
+`kms:Decrypt` on the key and every write without `kms:GenerateDataKey`.
+
+Grant both to the runtime role behind `RUNTIME_ROLE_ARN`, and to the API's own
+identity — the API signs presigned URLs and writes dispatch staging payloads
+directly. Restrict them there with `kms:ViaService` and the S3 encryption
+context; that role policy is the security boundary.
+
+Flow-Like adds the matching KMS statement to every scoped credential it mints,
+with no configuration required. This is not optional plumbing: scoped
+credentials are STS session policies, which *intersect* with the runtime role
+rather than inherit from it, so a session policy naming only `s3:*` actions
+strips the role's KMS grant and every request against such a bucket fails —
+including requests made through a presigned URL, where it surfaces as an opaque
+`AccessDenied` long after the credential was handed out.
+
+The statement uses `Resource: "*"`, which cannot widen anything the role does
+not already allow, and keeps the 2048-character STS policy budget free. Its
+actions track what the credential can do with S3: `kms:Decrypt` for read
+scopes, plus `kms:GenerateDataKey` for write scopes.
+
+To narrow it further rather than rely on the role policy alone, name the keys:
+
+```dotenv
+# One key for every bucket
+S3_KMS_KEY_ARN=arn:aws:kms:eu-central-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab
+
+# Or per bucket, overriding the shared value
+META_BUCKET_KMS_KEY_ARN=arn:aws:kms:...
+CONTENT_BUCKET_KMS_KEY_ARN=arn:aws:kms:...
+LOG_BUCKET_KMS_KEY_ARN=arn:aws:kms:...
+```
+
+The session statement then names those ARNs — only the keys of the buckets a
+given scope can reach — and adds its own `kms:ViaService` fence. Use full key
+ARNs; a bare key id or an alias cannot be a policy resource. A bucket left
+unset contributes no resource, which is correct when it is not on a
+customer-managed key and wrong if it is, so prefer `S3_KMS_KEY_ARN` whenever
+the buckets share a key.
+
+Setting these variables has a second effect: the configured key is sent as an
+explicit SSE-KMS header on every write. That is what a bucket policy denying
+writes without `x-amz-server-side-encryption` needs, and it is unnecessary
+otherwise, since a bucket's default encryption applies the key on its own. Add
+`S3_KMS_BUCKET_KEY=true` to request an S3 Bucket Key and collapse the
+per-object KMS calls. S3 Express One Zone buckets take their key from the
+bucket and reject these headers, so they are left alone.
 
 ## Azure Blob Storage
 

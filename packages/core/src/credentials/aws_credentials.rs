@@ -8,7 +8,7 @@ use flow_like_storage::lancedb;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store;
-use flow_like_storage::object_store::aws::AmazonS3Builder;
+use flow_like_storage::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -22,6 +22,80 @@ pub struct BucketConfig {
     /// Whether this is an S3 Express One Zone bucket
     #[serde(default)]
     pub express: bool,
+    /// SSE-KMS customer-managed key (ARN, key id or alias) to send with every
+    /// write to this bucket.
+    ///
+    /// A bucket whose *default* encryption already names the key needs none of
+    /// this — S3 applies the key server-side and only the IAM grant matters
+    /// (see the KMS statements the API attaches to scoped credentials). Set it
+    /// when the bucket policy denies writes that arrive without an explicit
+    /// `x-amz-server-side-encryption` header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kms_key_arn: Option<String>,
+    /// Request an S3 Bucket Key, which collapses the per-object KMS call into
+    /// one call per bucket-key lifetime. Only meaningful alongside
+    /// `kms_key_arn`.
+    #[serde(default)]
+    pub kms_bucket_key: bool,
+}
+
+impl BucketConfig {
+    /// The SSE-KMS key to send headers for, if any.
+    ///
+    /// Directory (S3 Express One Zone) buckets take their key from the bucket
+    /// itself and reject per-request encryption headers, so they always
+    /// resolve to `None`.
+    fn sse_kms_key(&self) -> Option<&str> {
+        if self.express {
+            return None;
+        }
+        self.kms_key_arn.as_deref()
+    }
+}
+
+/// Apply the bucket's SSE-KMS configuration to an object-store builder.
+fn apply_sse_kms(
+    mut builder: AmazonS3Builder,
+    config: Option<&BucketConfig>,
+) -> Result<AmazonS3Builder> {
+    let Some(config) = config else {
+        return Ok(builder);
+    };
+    let Some(key) = config.sse_kms_key() else {
+        return Ok(builder);
+    };
+
+    builder = builder.with_sse_kms_encryption(key);
+    if config.kms_bucket_key {
+        let bucket_key: AmazonS3ConfigKey = "aws_sse_bucket_key_enabled"
+            .parse()
+            .map_err(|e| anyhow!("aws_sse_bucket_key_enabled is not a known S3 option: {e}"))?;
+        builder = builder.with_config(bucket_key, "true");
+    }
+    Ok(builder)
+}
+
+/// Lance talks to S3 through `storage_option` strings rather than a builder, so
+/// the SSE-KMS settings have to be spelled out again here.
+pub fn sse_kms_storage_options(config: Option<&BucketConfig>) -> Vec<(String, String)> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+    let Some(key) = config.sse_kms_key() else {
+        return Vec::new();
+    };
+
+    let mut options = vec![
+        (
+            "aws_server_side_encryption".to_string(),
+            "aws:kms".to_string(),
+        ),
+        ("aws_sse_kms_key_id".to_string(), key.to_string()),
+    ];
+    if config.kms_bucket_key {
+        options.push(("aws_sse_bucket_key_enabled".to_string(), "true".to_string()));
+    }
+    options
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -137,7 +211,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
                     builder = builder.with_s3_express(true);
                 }
             }
-            builder
+            apply_sse_kms(builder, bucket_config)?
         };
 
         let store = tokio::task::spawn_blocking(move || builder.build())
@@ -156,9 +230,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         let path = db_path_from_base(&base_path);
         let connection = make_s3_builder(
             &self.content_bucket,
-            self.content_config
-                .as_ref()
-                .and_then(|c| c.endpoint.clone()),
+            self.content_config.as_ref(),
             self.access_key_id
                 .clone()
                 .ok_or(anyhow!("AWS_ACCESS_KEY_ID is not set"))?,
@@ -177,9 +249,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         let path = db_path_from_base(&base_path);
         let connection = make_s3_builder(
             &self.content_bucket,
-            self.content_config
-                .as_ref()
-                .and_then(|c| c.endpoint.clone()),
+            self.content_config.as_ref(),
             self.access_key_id
                 .clone()
                 .ok_or(anyhow!("AWS_ACCESS_KEY_ID is not set"))?,
@@ -208,7 +278,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         );
         let builder = make_s3_builder(
             &self.logs_bucket,
-            self.logs_config.as_ref().and_then(|c| c.endpoint.clone()),
+            self.logs_config.as_ref(),
             self.access_key_id
                 .clone()
                 .ok_or(anyhow!("AWS_ACCESS_KEY_ID is not set"))?,
@@ -224,12 +294,14 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
 #[cfg(feature = "flow-runtime")]
 fn make_s3_builder(
     bucket: &str,
-    endpoint: Option<String>,
+    config: Option<&BucketConfig>,
     access_key: String,
     secret_key: String,
     session_token: Option<String>,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
     let bucket = bucket.to_string();
+    let endpoint = config.and_then(|c| c.endpoint.clone());
+    let sse_options = sse_kms_storage_options(config);
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
         let mut builder = lancedb::connect(&url)
@@ -242,6 +314,10 @@ fn make_s3_builder(
 
         if let Some(ref ep) = endpoint {
             builder = builder.storage_option("aws_endpoint".to_string(), ep.clone());
+        }
+
+        for (key, value) in &sse_options {
+            builder = builder.storage_option(key.clone(), value.clone());
         }
         builder
     }
@@ -263,6 +339,8 @@ mod tests {
             meta_config: Some(BucketConfig {
                 endpoint: None,
                 express: true,
+                kms_key_arn: None,
+                kms_bucket_key: false,
             }),
             content_config: None,
             logs_config: None,
@@ -271,6 +349,62 @@ mod tests {
             content_path_prefix: None,
             user_content_path_prefix: None,
         }
+    }
+
+    fn kms_bucket(express: bool) -> BucketConfig {
+        BucketConfig {
+            endpoint: None,
+            express,
+            kms_key_arn: Some(
+                "arn:aws:kms:us-west-2:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+                    .to_string(),
+            ),
+            kms_bucket_key: true,
+        }
+    }
+
+    /// Lance reaches S3 through option strings, so the names have to match
+    /// object_store's exactly — a typo is silently ignored and the write goes
+    /// out unencrypted.
+    #[test]
+    fn test_sse_kms_storage_options_use_object_store_names() {
+        let config = kms_bucket(false);
+        let options = sse_kms_storage_options(Some(&config));
+
+        assert_eq!(
+            options
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "aws_server_side_encryption",
+                "aws_sse_kms_key_id",
+                "aws_sse_bucket_key_enabled",
+            ]
+        );
+        assert_eq!(options[0].1, "aws:kms");
+        assert_eq!(options[1].1, config.kms_key_arn.unwrap());
+    }
+
+    /// Directory buckets take their key from the bucket and reject per-request
+    /// encryption headers.
+    #[test]
+    fn test_sse_kms_is_skipped_for_express_buckets() {
+        assert!(sse_kms_storage_options(Some(&kms_bucket(true))).is_empty());
+        assert!(sse_kms_storage_options(None).is_empty());
+        assert!(
+            sse_kms_storage_options(Some(&BucketConfig::default())).is_empty(),
+            "a bucket without a key configures nothing"
+        );
+    }
+
+    /// Credentials written before SSE-KMS existed must still deserialize.
+    #[test]
+    fn test_bucket_config_kms_fields_default_when_absent() {
+        let config: BucketConfig =
+            from_str(r#"{"endpoint":null,"express":false}"#).expect("Failed to deserialize");
+        assert_eq!(config.kms_key_arn, None);
+        assert!(!config.kms_bucket_key);
     }
 
     #[test]

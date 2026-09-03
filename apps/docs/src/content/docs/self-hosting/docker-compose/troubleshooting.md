@@ -128,6 +128,8 @@ Common causes include:
 - a bucket/container that does not exist;
 - master credentials without list/read/write/delete permissions;
 - missing `RUNTIME_ROLE_ARN` or temporary-credential permissions;
+- buckets on a customer-managed KMS key that the runtime role may not
+  `kms:Decrypt` / `kms:GenerateDataKey`;
 - an Azure account without the required SAS behavior;
 - a GCP service account that cannot exchange/downscope tokens;
 - an R2 API token that cannot create temporary credentials.

@@ -515,9 +515,13 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
     fn into_shared_credentials(&self) -> SharedCredentials {
         // R2 uses AWS-compatible S3 API, so we use AwsSharedCredentials
         // All R2 buckets use the same endpoint
+        // R2 has no KMS: encryption is bucket-managed and there is no
+        // per-request key to name.
         let r2_config = Some(BucketConfig {
             endpoint: Some(self.endpoint.clone()),
             express: false,
+            kms_key_arn: None,
+            kms_bucket_key: false,
         });
 
         SharedCredentials::Aws(AwsSharedCredentials {

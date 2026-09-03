@@ -135,6 +135,14 @@ services:
       META_BUCKET_EXPRESS_ZONE: ${META_BUCKET_EXPRESS_ZONE:-false}
       CONTENT_BUCKET_EXPRESS_ZONE: ${CONTENT_BUCKET_EXPRESS_ZONE:-false}
       LOGS_BUCKET_EXPRESS_ZONE: ${LOGS_BUCKET_EXPRESS_ZONE:-false}
+      # Customer-managed KMS keys guarding the buckets. Scoped credentials
+      # carry the KMS grant without these; naming a key narrows that grant and
+      # sends explicit SSE-KMS headers on writes.
+      S3_KMS_KEY_ARN: ${S3_KMS_KEY_ARN:-}
+      META_BUCKET_KMS_KEY_ARN: ${META_BUCKET_KMS_KEY_ARN:-}
+      CONTENT_BUCKET_KMS_KEY_ARN: ${CONTENT_BUCKET_KMS_KEY_ARN:-}
+      LOG_BUCKET_KMS_KEY_ARN: ${LOG_BUCKET_KMS_KEY_ARN:-}
+      S3_KMS_BUCKET_KEY: ${S3_KMS_BUCKET_KEY:-false}
       # Role ARN for scoped credentials (per-user/per-app isolation)
       RUNTIME_ROLE_ARN: ${RUNTIME_ROLE_ARN:-}
 

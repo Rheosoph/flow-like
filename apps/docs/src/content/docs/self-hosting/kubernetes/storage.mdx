@@ -173,6 +173,13 @@ storage requires:
 - `RUNTIME_ROLE_ARN`, whose role can be assumed by the API identity
 - An IAM policy on that runtime role that permits the object operations Flow-Like
   narrows with per-request session policies
+- On buckets encrypted with a customer-managed KMS key: `kms:Decrypt` and
+  `kms:GenerateDataKey` on that key, for both the runtime role and the API
+  identity. Flow-Like mints the matching session grant without configuration;
+  `storage.aws.kmsKeyArn` (or the per-bucket `META_BUCKET_KMS_KEY_ARN`,
+  `CONTENT_BUCKET_KMS_KEY_ARN` and `LOG_BUCKET_KMS_KEY_ARN`) narrows it to named
+  keys. See
+  [Storage Providers](/dev/storage-providers/#buckets-encrypted-with-a-customer-managed-kms-key).
 
 For EKS workload identity, use an existing Secret that omits
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` entirely:

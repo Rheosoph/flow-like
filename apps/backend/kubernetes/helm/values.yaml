@@ -265,6 +265,12 @@ storage:
     usePathStyle: false
     # Role ARN for generating scoped STS credentials (optional but recommended)
     runtimeRoleArn: ""
+    # Customer-managed KMS key encrypting the buckets. Scoped credentials carry
+    # the KMS grant without this; naming the key narrows that grant to it and
+    # sends explicit SSE-KMS headers on writes. The runtime role must allow
+    # kms:Decrypt and kms:GenerateDataKey on the key either way.
+    kmsKeyArn: ""
+    kmsBucketKey: false
     existingSecret: ""
 
   # Cloudflare R2 Configuration (when provider=r2)
