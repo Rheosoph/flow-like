@@ -1,5 +1,8 @@
 use crate::{
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{
+        self, AcceptedDeletion, Deleted, DeletionRoot,
+        job::{self, not_pending_deletion},
+    },
     entity::{
         course, course_module, lesson, meta,
         sea_orm_active_enums::{CourseCategory, CourseDifficulty},
@@ -7,10 +10,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::{
-        LanguageParams,
-        app::internal::delete_app::{cancel_pending_deletion, not_pending_deletion},
-    },
+    routes::LanguageParams,
     state::AppState,
 };
 use axum::{
@@ -21,7 +21,7 @@ use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect,
+    QueryOrder, QuerySelect, Select,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -191,6 +191,15 @@ async fn resolve_course_media_url(
     }
 }
 
+/// Courses whose deletion job has not finished yet are already losing their
+/// modules, lessons and media, so every listing reads through this.
+fn courses_not_deleting() -> Select<course::Entity> {
+    course::Entity::find().filter(not_pending_deletion(
+        DeletionRoot::Course,
+        (course::Entity, course::Column::Id),
+    ))
+}
+
 async fn check_course_read_access(
     state: &AppState,
     user: &AppUser,
@@ -232,11 +241,7 @@ pub async fn list_courses(
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
     let limit = Ord::min(q.limit.unwrap_or(100), 100);
 
-    let mut query = course::Entity::find()
-        .filter(not_pending_deletion(
-            DeletionRoot::Course,
-            (course::Entity, course::Column::Id),
-        ))
+    let mut query = courses_not_deleting()
         .order_by_asc(course::Column::Position)
         .order_by_desc(course::Column::UpdatedAt);
 
@@ -456,29 +461,34 @@ pub async fn upsert_course(
         .map(parse_category)
         .unwrap_or(CourseCategory::General);
 
-    let saved = if let Some(existing) = existing {
-        let mut active = existing.into_active_model();
-        active.language = Set(body.language.clone());
-        active.slug = Set(body.slug.clone());
-        active.difficulty = Set(difficulty);
-        active.category = Set(category);
-        active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
-        active.is_published = Set(body.is_published.unwrap_or(false));
-        active.tags = Set(body.tags.clone().map(Into::into));
-        active.position = Set(body.position);
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
-    } else {
-        state
-            .transaction(|txn| {
-                let course_id = course_id.clone();
-                let body = body.clone();
-                let sub = sub.clone();
-                let difficulty = difficulty.clone();
-                let category = category.clone();
-                Box::pin(async move {
-                    cancel_pending_deletion(txn, DeletionRoot::Course, &course_id).await?;
-                    let saved = course::ActiveModel {
+    let saved = state
+        .transaction(|txn| {
+            let course_id = course_id.clone();
+            let body = body.clone();
+            let sub = sub.clone();
+            let difficulty = difficulty.clone();
+            let category = category.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // A `202` only tombstones the root; the row stays until the
+                // drain reaches `DeleteRoot`, so re-authoring a course under
+                // its old id lands in the update branch. Both branches cancel,
+                // in the transaction that writes the row.
+                job::cancel(txn, DeletionRoot::Course, &course_id).await?;
+                let saved = if let Some(existing) = existing {
+                    let mut active = existing.into_active_model();
+                    active.language = Set(body.language);
+                    active.slug = Set(body.slug);
+                    active.difficulty = Set(difficulty);
+                    active.category = Set(category);
+                    active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
+                    active.is_published = Set(body.is_published.unwrap_or(false));
+                    active.tags = Set(body.tags.map(Into::into));
+                    active.position = Set(body.position);
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    course::ActiveModel {
                         id: Set(course_id),
                         language: Set(body.language),
                         slug: Set(body.slug),
@@ -495,12 +505,12 @@ pub async fn upsert_course(
                         updated_at: Set(now),
                     }
                     .insert(txn)
-                    .await?;
-                    Ok::<_, ApiError>(saved)
-                })
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
             })
-            .await?
-    };
+        })
+        .await?;
 
     let existing_meta = meta::Entity::find()
         .filter(meta::Column::CourseId.eq(&course_id))
@@ -618,11 +628,8 @@ pub async fn get_course_structure(
     use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
-    let (c, metas) = course::Entity::find_by_id(&course_id)
-        .filter(not_pending_deletion(
-            DeletionRoot::Course,
-            (course::Entity, course::Column::Id),
-        ))
+    let (c, metas) = courses_not_deleting()
+        .filter(course::Column::Id.eq(&course_id))
         .find_with_related(meta::Entity)
         .filter(
             meta::Column::Lang
@@ -676,6 +683,10 @@ pub async fn get_course_structure(
     };
 
     let modules = course_module::Entity::find()
+        .filter(not_pending_deletion(
+            DeletionRoot::CourseModule,
+            (course_module::Entity, course_module::Column::Id),
+        ))
         .filter(course_module::Column::CourseId.eq(&course_id))
         .order_by_asc(course_module::Column::Position)
         .all(&state.db)
@@ -686,6 +697,10 @@ pub async fn get_course_structure(
         Vec::new()
     } else {
         lesson::Entity::find()
+            .filter(not_pending_deletion(
+                DeletionRoot::Lesson,
+                (lesson::Entity, lesson::Column::Id),
+            ))
             .filter(lesson::Column::ModuleId.is_in(module_ids))
             .order_by_asc(lesson::Column::Position)
             .all(&state.db)
@@ -889,4 +904,28 @@ pub async fn delete_course(
         (),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::QueryTrait;
+    use sea_orm::sea_query::PostgresQueryBuilder;
+
+    #[test]
+    fn course_reads_skip_roots_with_an_unfinished_deletion_job() {
+        let sql = courses_not_deleting()
+            .into_query()
+            .to_string(PostgresQueryBuilder);
+
+        assert!(
+            sql.contains("NOT EXISTS(SELECT 1 FROM \"DeletionJob\""),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(r#""DeletionJob"."rootId" = "Course"."id""#),
+            "{sql}"
+        );
+        assert!(sql.contains(r#""DeletionJob"."status" <> 'DONE'"#), "{sql}");
+    }
 }

@@ -150,6 +150,29 @@ async fn run_maintenance_job(
                 ))
             })?;
 
+            // Staged event payloads are written to the content store before the
+            // row that references them, so a write that fails — or a
+            // multi-chunk insert that only partly applies — leaves an object no
+            // row will ever name. Age is the only property such an object still
+            // carries, and this is the only pass that looks at it. It rides the
+            // state-cleanup schedule rather than a second trigger, the way the
+            // channel sweep rides the cache job, and a failure here must not
+            // discard the row cleanup that already succeeded.
+            let min_age_secs = crate::execution::state::staged_payload_min_age_secs();
+            match store.sweep_staged_payloads(min_age_secs).await {
+                Ok(sweep) => tracing::info!(
+                    scanned = sweep.scanned,
+                    deleted = sweep.deleted,
+                    stopped_early = sweep.stopped_early,
+                    min_age_secs,
+                    backend = store.backend_name(),
+                    "Maintenance staged-payload sweep completed"
+                ),
+                Err(error) => {
+                    tracing::error!(error = %error, "Scheduled staged-payload sweep failed")
+                }
+            }
+
             tracing::info!(
                 deleted_runs,
                 deleted_events,

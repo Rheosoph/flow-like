@@ -17,7 +17,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, QuerySelect,
+    QueryFilter, QueryOrder, QuerySelect, Select,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,6 +26,16 @@ use utoipa::ToSchema;
 /// invitations and created API keys along, so this stays well under the
 /// per-transaction row budget.
 const MEMBERSHIP_PURGE_CHUNK: usize = 500;
+
+/// One page of membership ids to detach and delete, smallest id first.
+fn membership_page(condition: &Condition) -> Select<membership::Entity> {
+    membership::Entity::find()
+        .filter(condition.clone())
+        .select_only()
+        .column(membership::Column::Id)
+        .order_by_asc(membership::Column::Id)
+        .limit(MEMBERSHIP_PURGE_CHUNK as u64)
+}
 
 /// Delete every membership matching `condition`, page by page.
 ///
@@ -36,12 +46,7 @@ const MEMBERSHIP_PURGE_CHUNK: usize = 500;
 /// the delete transaction has to do.
 async fn purge_memberships(state: &AppState, condition: &Condition) -> Result<(), ApiError> {
     loop {
-        let ids: Vec<String> = membership::Entity::find()
-            .filter(condition.clone())
-            .select_only()
-            .column(membership::Column::Id)
-            .order_by_asc(membership::Column::Id)
-            .limit(MEMBERSHIP_PURGE_CHUNK as u64)
+        let ids: Vec<String> = membership_page(condition)
             .into_tuple()
             .all(&state.db)
             .await?;
@@ -237,4 +242,25 @@ pub async fn change_visibility(
     };
     audit_branch!(state, user, app_id, action, "App", app_id, summary);
     Ok(Json(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::QueryTrait;
+    use sea_orm::sea_query::PostgresQueryBuilder;
+
+    #[test]
+    fn membership_purge_reads_bounded_pages() {
+        let sql = membership_page(&Condition::all().add(membership::Column::AppId.eq("app_1")))
+            .into_query()
+            .to_string(PostgresQueryBuilder);
+
+        assert!(
+            sql.contains(&format!("LIMIT {MEMBERSHIP_PURGE_CHUNK}")),
+            "{sql}"
+        );
+        assert!(sql.contains(r#"ORDER BY "Membership"."id" ASC"#), "{sql}");
+        assert!(sql.contains(r#""Membership"."appId" = 'app_1'"#), "{sql}");
+    }
 }

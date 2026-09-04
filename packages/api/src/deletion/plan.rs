@@ -491,7 +491,8 @@ fn build_plan(
 /// compares unrelated values and silently matches nothing.
 fn ensure_rooted(graph: &FkGraph, root: &RootKey, steps: &[Step]) -> Result<(), PlanError> {
     for step in steps {
-        let (Step::Drain { table, predicates } | Step::NullOut {
+        let (Step::Drain { table, predicates }
+        | Step::NullOut {
             table, predicates, ..
         }) = step
         else {
@@ -637,7 +638,8 @@ mod tests {
                 .name
                 .clone();
             for step in &plan.steps {
-                let (Step::Drain { table, predicates } | Step::NullOut {
+                let (Step::Drain { table, predicates }
+                | Step::NullOut {
                     table, predicates, ..
                 }) = step
                 else {
@@ -652,7 +654,9 @@ mod tests {
                         .edges()
                         .iter()
                         .find(|edge| edge.child == owner && edge.column == column)
-                        .unwrap_or_else(|| panic!("{root:?}: {owner}.{column} is not a foreign key"));
+                        .unwrap_or_else(|| {
+                            panic!("{root:?}: {owner}.{column} is not a foreign key")
+                        });
                     assert_eq!(edge.parent, root_table, "{root:?}: {}", edge.describe());
                     assert_eq!(edge.parent_column, root_pk, "{root:?}: {}", edge.describe());
                 }
@@ -676,7 +680,12 @@ mod tests {
         let Step::Drain { predicates, .. } = &plan.steps[drain_index(&plan, "BitTreeCache")] else {
             unreachable!()
         };
-        assert_eq!(predicates, &[through_root.clone()], "{}", render(&plan));
+        assert_eq!(
+            predicates,
+            std::slice::from_ref(&through_root),
+            "{}",
+            render(&plan)
+        );
         assert_eq!(
             through_root.to_string(),
             r#""dependencyTreeHash" IN (SELECT "dependencyTreeHash" FROM "Bit" WHERE "id" = $root)"#
@@ -732,7 +741,14 @@ mod tests {
             column: "id".into(),
         };
         assert!(ensure_rooted(fk_graph(), &app_root, &app_plan().steps).is_ok());
-        assert!(ensure_rooted(fk_graph(), &root, &plan_for(DeletionRoot::Bit).unwrap().steps).is_ok());
+        assert!(
+            ensure_rooted(
+                fk_graph(),
+                &root,
+                &plan_for(DeletionRoot::Bit).unwrap().steps
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -846,6 +862,13 @@ mod tests {
             .unwrap();
         assert_eq!(schedules, 1);
         assert!(schedules < drain_index(&plan, "EventSink"));
+        // `payloadRef` is the only pointer to a staged event payload, and both
+        // the event drain and the run drain that cascades onto it take it away.
+        let payloads = plan
+            .position(&Step::External(ExternalStep::ExecutionEventPayloads))
+            .unwrap();
+        assert!(payloads < drain_index(&plan, "ExecutionEvent"));
+        assert!(payloads < drain_index(&plan, "ExecutionRun"));
         let storage = plan
             .position(&Step::External(ExternalStep::AppStoragePrefixes))
             .unwrap();
@@ -965,6 +988,40 @@ mod tests {
                     column: "templateId".into()
                 }]
             );
+        }
+    }
+
+    /// The template's board, versions and page payloads must outlive every
+    /// row that still points a reader at them: a `202` leaves the `Template`
+    /// row visible, so storage removed up front yields a live-looking,
+    /// unopenable template.
+    #[test]
+    fn template_storage_is_swept_after_the_last_drain_and_before_the_row() {
+        let plan = plan_for(DeletionRoot::Template).unwrap();
+        let storage = plan
+            .position(&Step::External(ExternalStep::TemplateStorage))
+            .unwrap_or_else(|| panic!("{}", render(&plan)));
+        let last_drain = plan
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        assert!(last_drain < storage, "{}", render(&plan));
+        assert_eq!(storage + 1, plan.steps.len() - 1, "{}", render(&plan));
+        assert_eq!(plan.steps.last(), Some(&Step::DeleteRoot));
+    }
+
+    /// A step nobody declares never runs. `TemplateStorage` existed as dead
+    /// code for exactly as long as the template's board was removed by its
+    /// route instead of by the plan.
+    #[test]
+    fn every_external_step_is_declared_by_some_root() {
+        for step in ExternalStep::ALL {
+            let claimed = DeletionRoot::ALL.into_iter().any(|root| {
+                let overrides = overrides_for(root);
+                overrides.before_drain.contains(&step) || overrides.after_drain.contains(&step)
+            });
+            assert!(claimed, "{step:?} is never declared by overrides_for()");
         }
     }
 

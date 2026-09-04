@@ -7,6 +7,7 @@ use super::types::{
     MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
     RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
+use crate::deletion::{DeletionRoot, job};
 use crate::entity::sea_orm_active_enums::{
     WasmCompilationStatus, WasmPackageCategory, WasmPackageVisibility,
 };
@@ -26,7 +27,8 @@ use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
+    sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1854,7 +1856,14 @@ impl ServerRegistry {
             .map(|p| p.visibility == WasmPackageVisibility::Private)
             .unwrap_or(true);
 
-        if let Some(_existing) = existing_package {
+        // `DELETE /admin/packages/{id}` answers `202` with this row still
+        // present and only disabled, so a re-publish under the same manifest
+        // id reaches either branch below while the drain is still pending.
+        // Cancelling in the transaction that writes the row is what stops the
+        // worker from later deleting the package that was just republished.
+        let package_write = self.db.begin().await?;
+        job::cancel(&package_write, DeletionRoot::WasmPackage, &manifest.id).await?;
+        if existing_package.is_some() {
             // Existing package: only bump updated_at.
             // Version-specific fields (version, wasm_path, wasm_hash, nodes, etc.)
             // are NOT updated on the parent package until this version is approved.
@@ -1863,7 +1872,7 @@ impl ServerRegistry {
                 updated_at: Set(now),
                 ..Default::default()
             };
-            update_model.update(&self.db).await?;
+            update_model.update(&package_write).await?;
         } else {
             let package_model = wasm_package::ActiveModel {
                 id: Set(manifest.id.clone()),
@@ -1900,7 +1909,7 @@ impl ServerRegistry {
                 rating_count: Set(0),
                 avg_rating: Set(None),
             };
-            package_model.insert(&self.db).await?;
+            package_model.insert(&package_write).await?;
 
             let user_model = wasm_package_user::ActiveModel {
                 id: Set(create_id()),
@@ -1912,7 +1921,7 @@ impl ServerRegistry {
                 granted_by: Set(None),
                 granted_at: Set(now),
             };
-            user_model.insert(&self.db).await?;
+            user_model.insert(&package_write).await?;
 
             // Auto-create default English meta from manifest
             let meta_model = meta::ActiveModel {
@@ -1946,8 +1955,9 @@ impl ServerRegistry {
                 created_at: Set(now),
                 updated_at: Set(now),
             };
-            meta_model.insert(&self.db).await?;
+            meta_model.insert(&package_write).await?;
         }
+        package_write.commit().await?;
 
         let version_id = create_id();
         let compile_hash = hash.clone();

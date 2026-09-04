@@ -372,6 +372,10 @@ model ExecutionEvent {
 
   createdAt DateTime @default(now())
 
+  /// Object-store reference ("store://<path>") when the payload was too large
+  /// to keep in the row; `payload` then holds a marked placeholder
+  payloadRef String?
+
   @@index([runId, delivered, sequence])
   @@index([expiresAt])
 }

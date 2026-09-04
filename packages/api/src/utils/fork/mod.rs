@@ -5413,9 +5413,12 @@ mod tests {
         }
     }
 
-    async fn listed(store: &Arc<dyn flow_like_storage::object_store::ObjectStore>) -> Vec<String> {
+    async fn listed(
+        store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+        prefix: Option<&Path>,
+    ) -> Vec<String> {
         let mut keys: Vec<String> = store
-            .list(None)
+            .list(prefix)
             .map_ok(|meta| meta.location.as_ref().to_string())
             .try_collect()
             .await
@@ -5456,14 +5459,15 @@ mod tests {
     /// exactly once and nothing outside the prefix may follow along.
     #[tokio::test]
     async fn a_prefix_larger_than_one_page_is_copied_page_by_page() {
+        // Same-deployment forks read and write through one store, which is
+        // also what makes `copy_one` take its native-copy path.
         let src_store = memory_store();
-        let dst_store = memory_store();
+        let dst_store = src_store.clone();
         let count = COPY_PAGE * 2 + 7;
         let mut keys: Vec<String> = (0..count)
             .map(|i| format!("apps/src/storage/{i:06}.bin"))
             .collect();
         keys.push("apps/src/db/skipped.lance".to_string());
-        keys.push("apps/srcother/storage/nope.bin".to_string());
         seed(&src_store, &keys).await;
 
         let skip: &(dyn Fn(&str) -> bool + Send + Sync) = &|rel: &str| rel.starts_with("db/");
@@ -5480,7 +5484,7 @@ mod tests {
         .expect("copy");
 
         assert_eq!(tally.objects, count as u64);
-        let copied = listed(&dst_store).await;
+        let copied = listed(&dst_store, Some(&Path::from("apps/dst"))).await;
         assert_eq!(copied.len(), count);
         assert_eq!(copied[0], "apps/dst/storage/000000.bin");
         assert_eq!(
@@ -5506,7 +5510,7 @@ mod tests {
             .expect("delete");
 
         assert_eq!(
-            listed(&store).await,
+            listed(&store, None).await,
             vec![
                 "apps/doomedtwin/storage/0.bin".to_string(),
                 "apps/keep/storage/0.bin".to_string(),
@@ -5521,6 +5525,6 @@ mod tests {
         delete_object_prefix(&store, &Path::from("apps/gone"), "test")
             .await
             .expect("delete");
-        assert_eq!(listed(&store).await, vec!["apps/keep/x".to_string()]);
+        assert_eq!(listed(&store, None).await, vec!["apps/keep/x".to_string()]);
     }
 }

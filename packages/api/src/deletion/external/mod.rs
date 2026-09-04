@@ -7,6 +7,7 @@
 pub mod app;
 pub mod bit;
 pub mod course;
+pub mod template;
 pub mod wasm_package;
 
 use std::sync::Arc;
@@ -41,9 +42,26 @@ pub enum ExternalStep {
     CourseMedia,
     /// The bit's CDN object, looked up from the `Bit` row.
     BitCdnArtifact,
+    /// The template's board file, version archive and page payloads under the
+    /// owning app's prefix.
+    TemplateStorage,
+    /// Staged `ExecutionEvent` payloads of the app's runs, looked up from the
+    /// `payloadRef` those rows carry.
+    ExecutionEventPayloads,
 }
 
 impl ExternalStep {
+    pub const ALL: [Self; 8] = [
+        Self::AppSinkSchedules,
+        Self::AppStoragePrefixes,
+        Self::AppCacheBackend,
+        Self::WasmPackageArtifacts,
+        Self::CourseMedia,
+        Self::BitCdnArtifact,
+        Self::TemplateStorage,
+        Self::ExecutionEventPayloads,
+    ];
+
     pub fn describe(self) -> &'static str {
         match self {
             Self::AppSinkSchedules => "delete the app's sink cron schedules",
@@ -52,6 +70,10 @@ impl ExternalStep {
             Self::WasmPackageArtifacts => "delete the package's stored artifacts",
             Self::CourseMedia => "delete the course's media prefix",
             Self::BitCdnArtifact => "delete the bit's CDN object",
+            Self::TemplateStorage => "delete the template's board, versions and page payloads",
+            Self::ExecutionEventPayloads => {
+                "delete the staged payload objects of the app's execution events"
+            }
         }
     }
 }
@@ -88,6 +110,10 @@ pub async fn run(
             wasm_package::delete_artifacts(state, &root_id, pass).await
         }
         ExternalStep::CourseMedia => course::delete_media(state, &root_id, pass).await,
+        ExternalStep::TemplateStorage => template::delete_storage(state, &root_id, pass).await,
+        ExternalStep::ExecutionEventPayloads => {
+            app::delete_execution_event_payloads(state, &root_id, pass).await
+        }
     }
 }
 

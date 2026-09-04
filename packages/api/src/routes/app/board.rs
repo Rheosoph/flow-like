@@ -172,7 +172,8 @@ mod tests {
                 (path, body)
             })
             .filter(|(_, body)| {
-                body.contains("state.board_mutation_guard(") || body.contains("page_id_mutation_guard(")
+                body.contains("state.board_mutation_guard(")
+                    || body.contains("page_id_mutation_guard(")
             })
             .collect::<Vec<_>>();
         sources.retain(|(path, _)| !path.ends_with("page.rs"));
@@ -193,7 +194,9 @@ mod tests {
             let lines = body.lines().collect::<Vec<_>>();
             let mut current_fn_is_unguarded = false;
             for (index, line) in lines.iter().enumerate() {
-                if line.starts_with("async fn ") || line.starts_with("pub") || line.starts_with("fn ")
+                if line.starts_with("async fn ")
+                    || line.starts_with("pub")
+                    || line.starts_with("fn ")
                 {
                     current_fn_is_unguarded =
                         UNGUARDED_WRITERS.iter().any(|marker| line.contains(marker));

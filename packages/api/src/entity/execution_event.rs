@@ -21,6 +21,8 @@ pub struct Model {
     pub expires_at: DateTime,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
+    #[sea_orm(column_name = "payloadRef", column_type = "Text", nullable)]
+    pub payload_ref: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "run_id",

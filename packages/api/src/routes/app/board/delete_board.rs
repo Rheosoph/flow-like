@@ -19,8 +19,8 @@ use axum::{
         (status = 200, description = "Board deleted"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
-        (status = 404, description = "Board not found")
+        (status = 404, description = "Board not found"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(name = "DELETE /apps/{app_id}/board/{board_id}", skip(state, user))]

@@ -1,12 +1,11 @@
 use crate::{
     audit_branch,
-    deletion::DeletionRoot,
+    deletion::{DeletionRoot, job},
     ensure_permission,
     entity::{meta, template},
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
-    routes::app::internal::delete_app::cancel_pending_deletion,
     state::AppState,
 };
 use axum::{
@@ -81,7 +80,7 @@ async fn create_template(
             let changelog = template_data.changelog.clone();
             let meta_id = meta_id.clone();
             Box::pin(async move {
-                cancel_pending_deletion(txn, DeletionRoot::Template, &template_id).await?;
+                job::cancel(txn, DeletionRoot::Template, &template_id).await?;
                 template::Entity::insert(template::ActiveModel {
                     id: Set(template_id.clone()),
                     app_id: Set(app_id),
@@ -208,7 +207,21 @@ pub async fn upsert_template(
     )));
 
     template.updated_at = Set(chrono::Utc::now().naive_utc());
-    template.update(&state.db).await?;
+    let cancelled_id = app_upsert.0.clone();
+    state
+        .transaction(|txn| {
+            let template = template.clone();
+            let cancelled_id = cancelled_id.clone();
+            Box::pin(async move {
+                // The create branch cancels too, but a `202` leaves the
+                // template row present until the drain reaches `DeleteRoot`,
+                // so re-publishing its id lands here rather than there.
+                job::cancel(txn, DeletionRoot::Template, &cancelled_id).await?;
+                template.update(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     audit_branch!(
         state,

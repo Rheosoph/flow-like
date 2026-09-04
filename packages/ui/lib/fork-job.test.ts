@@ -103,6 +103,50 @@ describe("awaitForkJob", () => {
 		).rejects.toThrow("without a report");
 	});
 
+	test("gives up on a job that never leaves RUNNING", async () => {
+		let clock = 0;
+		await expect(
+			awaitForkJob(job(), async () => job({ status: "RUNNING" }), {
+				pollIntervalMs: 1_000,
+				deadlineMs: 5_000,
+				sleep: async (ms) => {
+					clock += ms;
+				},
+				now: () => clock,
+			}),
+		).rejects.toThrow("still RUNNING after 5s");
+	});
+
+	test("rides out a transient poll failure instead of failing the fork", async () => {
+		let polls = 0;
+		const result = await awaitForkJob(
+			job(),
+			async () => {
+				polls += 1;
+				if (polls <= 2) throw new Error("network down");
+				return job({ status: "DONE", report });
+			},
+			{ sleep: noSleep },
+		);
+		expect(polls).toBe(3);
+		expect(result).toEqual({ new_app_id: "dst_app", report });
+	});
+
+	test("stops after the consecutive-failure budget and rethrows", async () => {
+		let polls = 0;
+		await expect(
+			awaitForkJob(
+				job(),
+				async () => {
+					polls += 1;
+					throw new ApiResponseError({ status: 502, message: "bad gateway" });
+				},
+				{ sleep: noSleep, maxConsecutiveFailures: 3 },
+			),
+		).rejects.toThrow("bad gateway");
+		expect(polls).toBe(3);
+	});
+
 	test("backs off between polls up to the cap", async () => {
 		const waits: number[] = [];
 		const states = [

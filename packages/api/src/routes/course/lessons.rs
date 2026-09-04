@@ -1,14 +1,15 @@
 use crate::{
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{
+        self, AcceptedDeletion, Deleted, DeletionRoot,
+        job::{self, not_pending_deletion},
+    },
     entity::{
         challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt,
     },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::{
-        app::internal::delete_app::cancel_pending_deletion,
-        course::{
+    routes::course::{
         access::{
             ensure_course_readable, ensure_lesson_in_module, ensure_module_in_course,
             has_course_read_grant,
@@ -17,7 +18,6 @@ use crate::{
         assets::{CourseAssetKind, course_asset_storage_path},
         attempts::ChallengeAttemptView,
         challenges::ChallengeView,
-        },
     },
     state::AppState,
 };
@@ -106,6 +106,10 @@ pub async fn get_lesson(
     let module_fut = course_module::Entity::find_by_id(&module_id).one(&state.db);
     let lesson_fut = lesson::Entity::find_by_id(&lesson_id).one(&state.db);
     let challenges_fut = challenge::Entity::find()
+        .filter(not_pending_deletion(
+            DeletionRoot::Challenge,
+            (challenge::Entity, challenge::Column::Id),
+        ))
         .filter(challenge::Column::LessonId.eq(&lesson_id))
         .order_by_asc(challenge::Column::Position)
         .all(&state.db);
@@ -224,28 +228,36 @@ pub async fn upsert_lesson(
         .one(&state.db)
         .await?;
 
-    let saved = if let Some(m) = existing {
+    if existing.is_some() {
         ensure_lesson_in_module(&state, &course_id, &module_id, &lesson_id).await?;
-        let mut active = m.into_active_model();
-        active.title = Set(body.title);
-        active.language = Set(body.language.unwrap_or_else(|| "en".to_string()));
-        active.content = Set(body.content);
-        active.video_url = Set(body.video_url);
-        active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(5));
-        active.position = Set(body.position.unwrap_or(0));
-        active.is_optional = Set(body.is_optional.unwrap_or(false));
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
     } else {
         ensure_module_in_course(&state, &course_id, &module_id).await?;
-        state
-            .transaction(|txn| {
-                let lesson_id = lesson_id.clone();
-                let module_id = module_id.clone();
-                let body = body.clone();
-                Box::pin(async move {
-                    cancel_pending_deletion(txn, DeletionRoot::Lesson, &lesson_id).await?;
-                    let saved = lesson::ActiveModel {
+    }
+
+    let saved = state
+        .transaction(|txn| {
+            let lesson_id = lesson_id.clone();
+            let module_id = module_id.clone();
+            let body = body.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the lesson row present until
+                // the drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::Lesson, &lesson_id).await?;
+                let saved = if let Some(m) = existing {
+                    let mut active = m.into_active_model();
+                    active.title = Set(body.title);
+                    active.language = Set(body.language.unwrap_or_else(|| "en".to_string()));
+                    active.content = Set(body.content);
+                    active.video_url = Set(body.video_url);
+                    active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(5));
+                    active.position = Set(body.position.unwrap_or(0));
+                    active.is_optional = Set(body.is_optional.unwrap_or(false));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    lesson::ActiveModel {
                         id: Set(lesson_id),
                         module_id: Set(module_id),
                         title: Set(body.title),
@@ -259,12 +271,12 @@ pub async fn upsert_lesson(
                         updated_at: Set(now),
                     }
                     .insert(txn)
-                    .await?;
-                    Ok::<_, ApiError>(saved)
-                })
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
             })
-            .await?
-    };
+        })
+        .await?;
 
     Ok(Json(saved))
 }

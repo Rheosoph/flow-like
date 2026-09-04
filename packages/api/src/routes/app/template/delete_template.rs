@@ -60,9 +60,10 @@ pub async fn delete_template(
         return Ok(Deleted::Completed(templates));
     }
 
-    // The board, its versions and the template's page payloads live under the
-    // owning app's prefix, so they go before the rows and outside every
-    // transaction; the plan itself only drains the database.
+    // Only the app's own template list is updated here. The board, its
+    // versions and the page payloads are swept by
+    // `ExternalStep::TemplateStorage` after the last child row drains, so the
+    // objects never die ahead of the row a `202` leaves visible.
     let mut app = state
         .scoped_app(
             &sub,
@@ -71,7 +72,7 @@ pub async fn delete_template(
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
-    app.delete_template(&template_id).await?;
+    app.detach_template(&template_id).await?;
 
     let deleted = deletion::delete_now(
         &state,

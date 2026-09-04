@@ -2295,7 +2295,7 @@ impl Board {
 
     /// Root of a template's version archive. Keyed on the **template** id, never the board the
     /// template was cut from: listing, versioned reads and template deletion all look here.
-    fn versioned_template_dir(board_dir: &Path, template_id: &str) -> Path {
+    pub fn versioned_template_dir(board_dir: &Path, template_id: &str) -> Path {
         board_dir
             .child("templates")
             .child("versions")

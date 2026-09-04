@@ -1,13 +1,10 @@
 use crate::{
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job},
     entity::{challenge, sea_orm_active_enums::ChallengeKind},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::{
-        app::internal::delete_app::cancel_pending_deletion,
-        course::access::{ensure_challenge_in_lesson, ensure_lesson_in_course},
-    },
+    routes::course::access::{ensure_challenge_in_lesson, ensure_lesson_in_course},
     state::AppState,
 };
 use axum::{
@@ -138,28 +135,36 @@ pub async fn upsert_challenge(
         .await?;
     let kind = parse_kind(&body.kind);
 
-    let saved = if let Some(c) = existing {
+    if existing.is_some() {
         ensure_challenge_in_lesson(&state, &course_id, &lesson_id, &challenge_id).await?;
-        let mut active = c.into_active_model();
-        active.kind = Set(kind);
-        active.prompt = Set(body.prompt);
-        active.explanation = Set(body.explanation);
-        active.payload = Set(body.payload);
-        active.points = Set(body.points.unwrap_or(10));
-        active.position = Set(body.position.unwrap_or(0));
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
     } else {
         ensure_lesson_in_course(&state, &course_id, &lesson_id).await?;
-        state
-            .transaction(|txn| {
-                let challenge_id = challenge_id.clone();
-                let lesson_id = lesson_id.clone();
-                let body = body.clone();
-                let kind = kind.clone();
-                Box::pin(async move {
-                    cancel_pending_deletion(txn, DeletionRoot::Challenge, &challenge_id).await?;
-                    let saved = challenge::ActiveModel {
+    }
+
+    let saved = state
+        .transaction(|txn| {
+            let challenge_id = challenge_id.clone();
+            let lesson_id = lesson_id.clone();
+            let body = body.clone();
+            let kind = kind.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the challenge row present until
+                // the drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::Challenge, &challenge_id).await?;
+                let saved = if let Some(c) = existing {
+                    let mut active = c.into_active_model();
+                    active.kind = Set(kind);
+                    active.prompt = Set(body.prompt);
+                    active.explanation = Set(body.explanation);
+                    active.payload = Set(body.payload);
+                    active.points = Set(body.points.unwrap_or(10));
+                    active.position = Set(body.position.unwrap_or(0));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    challenge::ActiveModel {
                         id: Set(challenge_id),
                         lesson_id: Set(lesson_id),
                         kind: Set(kind),
@@ -172,12 +177,12 @@ pub async fn upsert_challenge(
                         updated_at: Set(now),
                     }
                     .insert(txn)
-                    .await?;
-                    Ok::<_, ApiError>(saved)
-                })
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
             })
-            .await?
-    };
+        })
+        .await?;
 
     Ok(Json(saved.into()))
 }

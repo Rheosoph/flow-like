@@ -75,6 +75,12 @@ impl PassBudget {
             max_duration: max_secs,
         }
     }
+
+    /// Whether a pass that has done `chunks` units of work over `elapsed` owes
+    /// the job back to the queue.
+    pub fn is_exhausted(&self, chunks: usize, elapsed: Duration) -> bool {
+        chunks >= self.max_chunks || elapsed >= self.max_duration
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +152,8 @@ impl<'a> Pass<'a> {
     /// Whether this pass has spent its budget and owes the job back to the
     /// queue. Steps that are not chunked check it before they start.
     pub fn exhausted(&self) -> bool {
-        self.chunks >= self.budget.max_chunks || self.started.elapsed() >= self.budget.max_duration
+        self.budget
+            .is_exhausted(self.chunks, self.started.elapsed())
     }
 
     /// Persist the phase and extend the lease.
@@ -344,6 +351,20 @@ pub async fn apply_page(
     .await
 }
 
+/// The stall counter after a page that wrote `affected` rows.
+///
+/// [`apply_page`] re-applies the plan predicate, so a row that stopped matching
+/// between the pooled select and the write leaves the page at zero. That is a
+/// benign unmatch, not a stall: the next select skips those rows and moves on.
+/// Only the *same* page coming back untouched proves the drain cannot progress.
+fn stall_after(previous: usize, affected: u64, repeated: bool) -> usize {
+    if affected == 0 && repeated {
+        previous + 1
+    } else {
+        0
+    }
+}
+
 /// Apply `op` to every row of `table` matching any of `predicates`, one page
 /// per transaction, until nothing matches or the pass budget is spent.
 pub async fn drain(
@@ -355,15 +376,20 @@ pub async fn drain(
     let limit = page_size(table);
     for predicate in predicates {
         let mut stalled = 0usize;
+        let mut previous: Option<Vec<Vec<Value>>> = None;
         loop {
             let keys = select_page(&pass.state.db, table, predicate, &pass.root_id, limit).await?;
             if keys.is_empty() {
                 break;
             }
             let fetched = keys.len();
+            // A benign unmatch re-selects; the pass budget still bounds the
+            // loop because every attempt counts a chunk.
+            let repeated = previous.as_ref() == Some(&keys);
+            previous = Some(keys.clone());
             let affected =
                 apply_page(pass.state, table, op, keys, predicate, &pass.root_id).await?;
-            stalled = if affected == 0 { stalled + 1 } else { 0 };
+            stalled = stall_after(stalled, affected, repeated);
             if stalled >= MAX_STALLED_CHUNKS {
                 return Err(ApiError::internal_error(anyhow!(
                     "draining {} made no progress on {} selected rows ({predicate})",
@@ -429,6 +455,42 @@ mod tests {
                 .collect(),
             columns: keys.iter().map(|k| (*k).to_string()).collect(),
         }
+    }
+
+    /// Once `apply_page` re-applies the plan predicate, a page whose rows
+    /// stopped matching between the select and the write reports zero. Three
+    /// of those in a row used to fail the whole drain with "made no progress"
+    /// even though every one of them had moved the drain forward.
+    #[test]
+    fn a_benign_unmatch_re_selects_instead_of_tripping_the_stall_detector() {
+        let mut stalled = 0;
+        for _ in 0..MAX_STALLED_CHUNKS + 2 {
+            stalled = stall_after(stalled, 0, false);
+        }
+        assert_eq!(stalled, 0);
+
+        // The same page coming back untouched is the real stall.
+        for expected in 1..=MAX_STALLED_CHUNKS {
+            stalled = stall_after(stalled, 0, true);
+            assert_eq!(stalled, expected);
+        }
+        assert!(stalled >= MAX_STALLED_CHUNKS);
+
+        // Any written row clears the counter.
+        assert_eq!(stall_after(stalled, 1, true), 0);
+    }
+
+    /// `drive` tests the budget before an external step, which is not chunked
+    /// at its own boundary; without that a spent pass still entered a
+    /// minutes-long prefix walk holding a five-minute lease.
+    #[test]
+    fn a_spent_budget_is_exhausted_before_the_next_step() {
+        let budget = PassBudget::inline();
+        assert!(!budget.is_exhausted(0, Duration::ZERO));
+        assert!(!budget.is_exhausted(budget.max_chunks - 1, Duration::ZERO));
+        assert!(budget.is_exhausted(budget.max_chunks, Duration::ZERO));
+        assert!(budget.is_exhausted(0, budget.max_duration));
+        assert!(budget.is_exhausted(0, budget.max_duration + Duration::from_secs(1)));
     }
 
     #[test]

@@ -1,13 +1,10 @@
 use crate::{
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job},
     entity::course_module,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::{
-        app::internal::delete_app::cancel_pending_deletion,
-        course::access::{ensure_course_exists, ensure_module_in_course},
-    },
+    routes::course::access::{ensure_course_exists, ensure_module_in_course},
     state::AppState,
 };
 use axum::{
@@ -57,26 +54,34 @@ pub async fn upsert_module(
         .one(&state.db)
         .await?;
 
-    let saved = if let Some(m) = existing {
-        if m.course_id != course_id {
-            return Err(ApiError::NOT_FOUND);
+    match &existing {
+        Some(m) if m.course_id != course_id => return Err(ApiError::NOT_FOUND),
+        Some(_) => {}
+        None => {
+            ensure_course_exists(&state, &course_id).await?;
         }
-        let mut active = m.into_active_model();
-        active.title = Set(body.title);
-        active.description = Set(body.description);
-        active.position = Set(body.position.unwrap_or(0));
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
-    } else {
-        ensure_course_exists(&state, &course_id).await?;
-        state
-            .transaction(|txn| {
-                let module_id = module_id.clone();
-                let course_id = course_id.clone();
-                let body = body.clone();
-                Box::pin(async move {
-                    cancel_pending_deletion(txn, DeletionRoot::CourseModule, &module_id).await?;
-                    let saved = course_module::ActiveModel {
+    }
+
+    let saved = state
+        .transaction(|txn| {
+            let module_id = module_id.clone();
+            let course_id = course_id.clone();
+            let body = body.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the module row present until
+                // the drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::CourseModule, &module_id).await?;
+                let saved = if let Some(m) = existing {
+                    let mut active = m.into_active_model();
+                    active.title = Set(body.title);
+                    active.description = Set(body.description);
+                    active.position = Set(body.position.unwrap_or(0));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    course_module::ActiveModel {
                         id: Set(module_id),
                         course_id: Set(course_id),
                         title: Set(body.title),
@@ -86,12 +91,12 @@ pub async fn upsert_module(
                         updated_at: Set(now),
                     }
                     .insert(txn)
-                    .await?;
-                    Ok::<_, ApiError>(saved)
-                })
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
             })
-            .await?
-    };
+        })
+        .await?;
 
     Ok(Json(saved))
 }

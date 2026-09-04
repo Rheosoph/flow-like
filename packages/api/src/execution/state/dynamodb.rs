@@ -24,7 +24,6 @@ const EVENTS_TABLE: &str = "ExecutionEvents";
 const APP_INDEX: &str = "AppIdIndex";
 const RUN_INDEX: &str = "RunIdIndex";
 const DEFAULT_TTL_SECS: i64 = 86400;
-const PAYLOAD_SIZE_THRESHOLD: usize = 100 * 1024; // 100KB - offload to object store above this
 const POLLING_PREFIX: &str = "polling";
 const EVENT_WRITE_MAX_ATTEMPTS: usize = 6;
 const EVENT_WRITE_BASE_DELAY_MS: u64 = 25;
@@ -38,15 +37,6 @@ const TERMINAL_LEASE_CONDITION: &str = "#app_id = :app_id AND #status IN (:pendi
 fn event_write_retry_delay(attempt: usize) -> Duration {
     let shift = attempt.min(5) as u32;
     Duration::from_millis(EVENT_WRITE_BASE_DELAY_MS.saturating_mul(1_u64 << shift))
-}
-
-fn canonical_execution_event_id(run_id: &str, sequence: i32) -> String {
-    let digest = blake3::hash(format!("{run_id}:{sequence}").as_bytes());
-    format!("evt-{}", digest.to_hex())
-}
-
-fn has_canonical_identity(event: &CreateEventInput) -> bool {
-    event.id == canonical_execution_event_id(&event.run_id, event.sequence)
 }
 
 pub struct DynamoDbStateStore {
@@ -1297,7 +1287,7 @@ impl ExecutionStateStore for DynamoDbStateStore {
         let mut processed_events = Vec::new();
         for event in &events {
             let payload_json = event.payload.to_string();
-            let payload_ref = if payload_json.len() > PAYLOAD_SIZE_THRESHOLD {
+            let payload_ref = if payload_json.len() > PAYLOAD_OFFLOAD_BYTES {
                 // Avoid touching object storage for the ordinary HTTP retry
                 // of an already-accepted canonical event. A simultaneous
                 // first write can still create an unreferenced content-hash

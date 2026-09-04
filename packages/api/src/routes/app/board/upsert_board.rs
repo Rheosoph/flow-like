@@ -220,7 +220,11 @@ mod tests {
         assert_eq!(rows.len(), pages.len());
         let chunks = rows.chunks(DEFAULT_WRITE_CHUNK).collect::<Vec<_>>();
         assert_eq!(chunks.len(), 3);
-        assert!(chunks.iter().all(|chunk| chunk.len() <= DEFAULT_WRITE_CHUNK));
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.len() <= DEFAULT_WRITE_CHUNK)
+        );
     }
 
     #[test]

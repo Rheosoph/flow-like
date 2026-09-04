@@ -762,8 +762,16 @@ impl App {
         Ok(template)
     }
 
-    pub async fn delete_template(&mut self, template_id: &str) -> flow_like_types::Result<()> {
+    /// Drop the template from the app's own list without touching its stored board, versions or
+    /// page payloads. Split out of [`Self::delete_template`] so a deployment that sweeps object
+    /// storage asynchronously can hide the template first and remove its objects afterwards.
+    pub async fn detach_template(&mut self, template_id: &str) -> flow_like_types::Result<()> {
         self.templates.retain(|b| b != template_id);
+        self.updated_at = SystemTime::now();
+        self.save().await
+    }
+
+    pub async fn delete_template(&mut self, template_id: &str) -> flow_like_types::Result<()> {
         let template_dir = Path::from("apps")
             .child(self.id.clone())
             .child(format!("{}.template", template_id));
@@ -810,9 +818,7 @@ impl App {
             tracing::warn!("sweeping pages of template {}: {}", template_id, error);
         }
 
-        self.updated_at = SystemTime::now();
-        self.save().await?;
-        Ok(())
+        self.detach_template(template_id).await
     }
 
     pub async fn push_template_meta(

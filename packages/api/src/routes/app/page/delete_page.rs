@@ -91,6 +91,7 @@ pub async fn delete_page(
                     board_id
                 );
             }
+            page_id_guard.ensure_held()?;
             if let Err(e) = board_guard.save(None).await {
                 tracing::warn!("delete_page board save failed for {}: {e}", board_id);
             }

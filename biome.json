@@ -9,6 +9,7 @@
 		"ignoreUnknown": false,
 		"ignore": [
 			"apps/desktop/src-tauri/**",
+			"**/src-tauri/**",
 			"**/.next/**",
 			"**/node_modules/**",
 			"target/**",

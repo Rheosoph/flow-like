@@ -4,14 +4,14 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Select,
 };
 use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::{
     audit_branch,
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job::not_pending_deletion},
     ensure_permission,
     entity::{
         app, app_group, app_group_member, meta,
@@ -25,10 +25,18 @@ use crate::{
         groups::{
             GroupInfo, assemble_groups, notify_member_app, parse_status, resolve_member_status,
         },
-        internal::delete_app::not_pending_deletion,
     },
     state::AppState,
 };
+
+/// A group queued for deletion is already losing its members, branding and
+/// publication history, so listings read through this.
+fn groups_not_deleting() -> Select<app_group::Entity> {
+    app_group::Entity::find().filter(not_pending_deletion(
+        DeletionRoot::AppGroup,
+        (app_group::Entity, app_group::Column::Id),
+    ))
+}
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateGroupRequest {
@@ -242,12 +250,8 @@ pub async fn list_groups(
         return Ok(Json(vec![]));
     }
 
-    let groups = app_group::Entity::find()
+    let groups = groups_not_deleting()
         .filter(app_group::Column::Id.is_in(group_ids.clone()))
-        .filter(not_pending_deletion(
-            DeletionRoot::AppGroup,
-            (app_group::Entity, app_group::Column::Id),
-        ))
         .order_by_desc(app_group::Column::CreatedAt)
         .all(&state.db)
         .await?;
@@ -490,4 +494,32 @@ pub(crate) async fn single_group(
         .pop()
         .map(Json)
         .ok_or(ApiError::NOT_FOUND)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::QueryTrait;
+    use sea_orm::sea_query::PostgresQueryBuilder;
+
+    #[test]
+    fn group_listing_skips_roots_with_an_unfinished_deletion_job() {
+        let sql = groups_not_deleting()
+            .into_query()
+            .to_string(PostgresQueryBuilder);
+
+        assert!(
+            sql.contains("NOT EXISTS(SELECT 1 FROM \"DeletionJob\""),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(r#""DeletionJob"."rootId" = "AppGroup"."id""#),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(r#""DeletionJob"."rootKind" = 'AppGroup'"#),
+            "{sql}"
+        );
+        assert!(sql.contains(r#""DeletionJob"."status" <> 'DONE'"#), "{sql}");
+    }
 }

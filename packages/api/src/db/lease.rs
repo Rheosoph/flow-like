@@ -78,11 +78,16 @@ pub(crate) fn new_owner_id() -> String {
     format!("{}:{}", std::process::id(), uuid::Uuid::new_v4())
 }
 
-/// Full-jitter exponential backoff. A flat 50-200 ms retry lets a handful of waiters spend the
+/// Longest wait before claim attempt `attempt + 1`.
+fn retry_delay_ceiling_ms(attempt: u32) -> u64 {
+    (LEASE_RETRY_BASE_MS << attempt.min(6)).min(LEASE_RETRY_MAX_MS)
+}
+
+/// Half-jitter exponential backoff. A flat 50-200 ms retry lets a handful of waiters spend the
 /// whole connection pool on failing claims, which starves the *holder's* heartbeat and expires
 /// the very lease they are waiting for.
 fn retry_delay(attempt: u32) -> Duration {
-    let ceiling = (LEASE_RETRY_BASE_MS << attempt.min(6)).min(LEASE_RETRY_MAX_MS);
+    let ceiling = retry_delay_ceiling_ms(attempt);
     Duration::from_millis(rand::random_range(ceiling.div_ceil(2)..=ceiling))
 }
 
@@ -419,12 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn retry_delay_is_jittered_within_bounds() {
+    fn retry_delay_is_jittered_within_its_attempt_bounds() {
         for attempt in 0..16u32 {
+            let ceiling = retry_delay_ceiling_ms(attempt);
             for _ in 0..64 {
                 let delay = retry_delay(attempt).as_millis() as u64;
-                assert!(delay >= LEASE_RETRY_BASE_MS / 2, "{attempt}: {delay}");
-                assert!(delay <= LEASE_RETRY_MAX_MS, "{attempt}: {delay}");
+                assert!(delay >= ceiling.div_ceil(2), "{attempt}: {delay}");
+                assert!(delay <= ceiling, "{attempt}: {delay}");
             }
         }
     }
@@ -433,28 +439,31 @@ mod tests {
     /// and starve the holder's heartbeat, expiring the lease they are queueing for.
     #[test]
     fn retry_delay_backs_off_exponentially_and_caps() {
-        let ceiling = |attempt: u32| (0..256).map(|_| retry_delay(attempt).as_millis() as u64).max().unwrap();
         let mut previous = 0;
         for attempt in 0..5u32 {
-            let observed = ceiling(attempt);
-            assert!(observed > previous, "attempt {attempt} did not back off: {observed} <= {previous}");
-            previous = observed;
+            let ceiling = retry_delay_ceiling_ms(attempt);
+            assert!(
+                ceiling > previous,
+                "attempt {attempt} did not back off: {ceiling}"
+            );
+            previous = ceiling;
         }
-        assert_eq!(ceiling(6), LEASE_RETRY_MAX_MS);
-        assert_eq!(ceiling(30), LEASE_RETRY_MAX_MS);
+        assert_eq!(retry_delay_ceiling_ms(6), LEASE_RETRY_MAX_MS);
+        assert_eq!(retry_delay_ceiling_ms(30), LEASE_RETRY_MAX_MS);
     }
 
-    /// Waiting out the whole budget must stay well under the number of transactions the old flat
-    /// 50-200 ms loop issued against a 10-connection pool.
+    /// Waiting out the whole budget, with jitter always landing on its shortest delay, must stay
+    /// far under the ~300 transactions the old flat 50-200 ms loop issued per waiter against a
+    /// 10-connection pool.
     #[test]
     fn claim_backoff_bounds_transactions_per_wait_budget() {
         let mut elapsed = Duration::ZERO;
         let mut attempts = 0u32;
         while elapsed < LEASE_WAIT_BUDGET {
-            elapsed += Duration::from_millis(LEASE_RETRY_BASE_MS << attempts.min(6));
+            elapsed += Duration::from_millis(retry_delay_ceiling_ms(attempts).div_ceil(2));
             attempts += 1;
         }
-        assert!(attempts <= 16, "{attempts} claim transactions per waiter");
+        assert!(attempts <= 24, "{attempts} claim transactions per waiter");
     }
 
     #[test]
@@ -467,7 +476,7 @@ mod tests {
 
     fn shared_for_test() -> Arc<LeaseShared> {
         Arc::new(LeaseShared {
-            db: DatabaseConnection::Disconnected,
+            db: DatabaseConnection::default(),
             owner: new_owner_id(),
             lock_ids: parking_lot::Mutex::new(vec![42]),
             held: AtomicBool::new(true),
@@ -482,7 +491,9 @@ mod tests {
         let lease = MutationLease::for_test(shared.clone());
         assert!(lease.ensure_held().is_ok());
         shared.mark_lost();
-        let error = lease.ensure_held().expect_err("a lost lease must fail the write");
+        let error = lease
+            .ensure_held()
+            .expect_err("a lost lease must fail the write");
         assert_eq!(error.status(), axum::http::StatusCode::LOCKED);
         assert_eq!(error.public_code(), "BOARD_LOCKED");
         assert!(error.public_message().unwrap_or_default().contains("42"));

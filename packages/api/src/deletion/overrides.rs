@@ -51,7 +51,13 @@ fn keep(table: &'static str, column: &'static str, reason: &'static str) -> Soft
 pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
     match root {
         DeletionRoot::App => RootOverrides {
-            before_drain: vec![ExternalStep::AppSinkSchedules],
+            // Staged execution-event payloads are keyed by the run, not the
+            // app, so the `payloadRef` on those rows is the only way to find
+            // them. Both steps must therefore run before the rows drain.
+            before_drain: vec![
+                ExternalStep::AppSinkSchedules,
+                ExternalStep::ExecutionEventPayloads,
+            ],
             after_drain: vec![
                 ExternalStep::AppStoragePrefixes,
                 ExternalStep::AppCacheBackend,
@@ -136,6 +142,13 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             ],
             ..RootOverrides::default()
         },
+        // The board, versions and page payloads live under the owning app's
+        // prefix and go after the last child drains, so a template that is
+        // still listed is still openable.
+        DeletionRoot::Template => RootOverrides {
+            after_drain: vec![ExternalStep::TemplateStorage],
+            ..RootOverrides::default()
+        },
         DeletionRoot::CourseModule
         | DeletionRoot::Lesson
         | DeletionRoot::Challenge
@@ -143,10 +156,6 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
         | DeletionRoot::Role
         | DeletionRoot::TechnicalUser
         | DeletionRoot::Membership
-        | DeletionRoot::AppGroup
-        // A template's board, versions and page payloads live under the owning
-        // app's prefix; they are removed through the app handle before the job
-        // is queued, so the plan itself has no external step.
-        | DeletionRoot::Template => RootOverrides::default(),
+        | DeletionRoot::AppGroup => RootOverrides::default(),
     }
 }

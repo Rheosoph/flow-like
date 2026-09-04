@@ -12,11 +12,25 @@ use axum::{
 use flow_like::{app::App, bit::Metadata};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
-    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Select,
 };
 
 /// Apps paired with their localized metadata, when any exists.
 pub type AppsWithMetadata = Vec<(App, Option<Metadata>)>;
+
+/// The apps `sub` may open, newest first.
+///
+/// `INACTIVE` is written by exactly two paths — the deletion tombstone and the
+/// destination of an in-flight fork — so an app that is draining and one that
+/// is still being copied both stay out of the library instead of showing up
+/// empty or unopenable.
+fn library_apps(sub: &str) -> Select<app::Entity> {
+    app::Entity::find()
+        .order_by_desc(app::Column::UpdatedAt)
+        .join(JoinType::InnerJoin, app::Relation::Membership.def())
+        .filter(app::Column::Status.ne(Status::Inactive))
+        .filter(membership::Column::UserId.eq(sub))
+}
 
 #[utoipa::path(
     get,
@@ -44,20 +58,13 @@ pub async fn get_apps(
 
     let sub = user.sub()?;
 
-    let apps_with_meta = app::Entity::find()
-        .order_by_desc(app::Column::UpdatedAt)
-        .join(JoinType::InnerJoin, app::Relation::Membership.def())
-        // INACTIVE is written by exactly two paths — the deletion tombstone and
-        // the destination of an in-flight fork — so both an app that is draining
-        // and one that is still being copied stay out of the library.
-        .filter(app::Column::Status.ne(Status::Inactive))
+    let apps_with_meta = library_apps(&sub)
         .find_with_related(meta::Entity)
         .filter(
             meta::Column::Lang
                 .eq(&language)
                 .or(meta::Column::Lang.eq("en")),
         )
-        .filter(membership::Column::UserId.eq(sub))
         .limit(Some(std::cmp::Ord::min(limit, 100)))
         .offset(query.offset)
         .all(&state.db)
@@ -88,4 +95,21 @@ pub async fn get_apps(
     }
 
     Ok(Json(apps))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::QueryTrait;
+    use sea_orm::sea_query::PostgresQueryBuilder;
+
+    #[test]
+    fn library_hides_tombstoned_and_half_forked_apps() {
+        let sql = library_apps("user_1")
+            .into_query()
+            .to_string(PostgresQueryBuilder);
+
+        assert!(sql.contains(r#""App"."status" <> 'INACTIVE'"#), "{sql}");
+        assert!(sql.contains(r#""Membership"."userId" = 'user_1'"#), "{sql}");
+    }
 }

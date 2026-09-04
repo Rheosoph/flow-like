@@ -1,13 +1,10 @@
 use crate::{
-    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job},
     entity::{course, learning_path, learning_path_course, meta},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::{
-        app::internal::delete_app::cancel_pending_deletion,
-        course::{access::has_course_read_grant, courses::CourseListItem},
-    },
+    routes::course::{access::has_course_read_grant, courses::CourseListItem},
     state::AppState,
 };
 use axum::{
@@ -281,27 +278,31 @@ pub async fn upsert_learning_path(
         .one(&state.db)
         .await?;
 
-    let saved = if let Some(existing) = existing {
-        let mut active = existing.into_active_model();
-        active.title = Set(body.title.clone());
-        active.slug = Set(body.slug.clone());
-        active.description = Set(body.description.clone());
-        if let Some(position) = body.position {
-            active.position = Set(position);
-        }
-        if let Some(is_published) = body.is_published {
-            active.is_published = Set(is_published);
-        }
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
-    } else {
-        state
-            .transaction(|txn| {
-                let path_id = path_id.clone();
-                let body = body.clone();
-                Box::pin(async move {
-                    cancel_pending_deletion(txn, DeletionRoot::LearningPath, &path_id).await?;
-                    let saved = learning_path::ActiveModel {
+    let saved = state
+        .transaction(|txn| {
+            let path_id = path_id.clone();
+            let body = body.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the path row present until the
+                // drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::LearningPath, &path_id).await?;
+                let saved = if let Some(existing) = existing {
+                    let mut active = existing.into_active_model();
+                    active.title = Set(body.title);
+                    active.slug = Set(body.slug);
+                    active.description = Set(body.description);
+                    if let Some(position) = body.position {
+                        active.position = Set(position);
+                    }
+                    if let Some(is_published) = body.is_published {
+                        active.is_published = Set(is_published);
+                    }
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    learning_path::ActiveModel {
                         id: Set(path_id),
                         title: Set(body.title),
                         slug: Set(body.slug),
@@ -312,12 +313,12 @@ pub async fn upsert_learning_path(
                         updated_at: Set(now),
                     }
                     .insert(txn)
-                    .await?;
-                    Ok::<_, ApiError>(saved)
-                })
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
             })
-            .await?
-    };
+        })
+        .await?;
 
     let steps = learning_path_course::Entity::find()
         .filter(learning_path_course::Column::PathId.eq(&saved.id))

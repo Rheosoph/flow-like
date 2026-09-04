@@ -4,6 +4,43 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
+/// Event payloads whose serialized form exceeds this go to the content store,
+/// leaving only a reference on the record. Every backend shares the boundary so
+/// that it does not move when a deployment changes cloud.
+pub const PAYLOAD_OFFLOAD_BYTES: usize = 100 * 1024;
+
+/// How long an event row lives, set where events are pushed
+/// (`routes/execution/progress.rs`). A staged object outlives its row by at
+/// most this long before the TTL sweep drains both.
+pub const EVENT_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// How old a staged object must be before an age-based sweep may delete it
+/// without consulting a row. Two event lifetimes: an object younger than this
+/// can still belong to a live row, to a row the TTL sweep has not reached, or
+/// to an insert that is still in flight.
+pub const STAGED_PAYLOAD_MIN_AGE_SECS: u64 = 2 * EVENT_TTL_SECS;
+
+/// `EXECUTION_STAGED_PAYLOAD_MIN_AGE_SECS`, floored at one event lifetime so a
+/// misconfiguration cannot delete objects out from under live rows.
+pub fn staged_payload_min_age_secs() -> u64 {
+    std::env::var("EXECUTION_STAGED_PAYLOAD_MIN_AGE_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(STAGED_PAYLOAD_MIN_AGE_SECS)
+        .max(EVENT_TTL_SECS)
+}
+
+/// What one age-based sweep of the staged-payload prefix achieved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StagedPayloadSweep {
+    /// Objects the listing walked.
+    pub scanned: u64,
+    /// Objects old enough to have lost their row, and removed.
+    pub deleted: u64,
+    /// The scan budget ran out while objects were still listed; call again.
+    pub stopped_early: bool,
+}
+
 /// Run status enum (matches Prisma schema)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -132,6 +169,19 @@ pub struct CreateEventInput {
     pub event_type: String,
     pub payload: serde_json::Value,
     pub expires_at: i64,
+}
+
+/// The id an executor derives for `(run_id, sequence)`. Mirrors
+/// `routes::execution::progress::execution_event_id`, which mints it.
+pub fn canonical_execution_event_id(run_id: &str, sequence: i32) -> String {
+    let digest = blake3::hash(format!("{run_id}:{sequence}").as_bytes());
+    format!("evt-{}", digest.to_hex())
+}
+
+/// Whether a retry of this event would carry the same id, which is what makes
+/// "already stored" a safe answer to "should I write it again".
+pub fn has_canonical_identity(event: &CreateEventInput) -> bool {
+    event.id == canonical_execution_event_id(&event.run_id, event.sequence)
 }
 
 /// Guard for cold imports from the canonical SQL run store: an expired source
@@ -300,4 +350,18 @@ pub trait ExecutionStateStore: Send + Sync + Debug {
 
     /// Delete expired events (for cleanup jobs)
     async fn delete_expired_events(&self) -> Result<i64, StateStoreError>;
+
+    /// Delete staged payload objects older than `min_age_secs`.
+    ///
+    /// The row is the only pointer to a staged object, so an object whose row
+    /// was never committed — a write that failed after the object went up, a
+    /// partially applied multi-chunk insert — is unreachable by any row-driven
+    /// cleanup. Age is the one property such an object still carries. Backends
+    /// whose store expires staged objects on its own do nothing here.
+    async fn sweep_staged_payloads(
+        &self,
+        _min_age_secs: u64,
+    ) -> Result<StagedPayloadSweep, StateStoreError> {
+        Ok(StagedPayloadSweep::default())
+    }
 }

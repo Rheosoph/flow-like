@@ -1067,7 +1067,9 @@ async fn abort_best_effort(state: &AppState, job: &fork_job::Model) {
 /// The `ForkJob` row is removed only once the deletion finished. While it
 /// lives it keeps the destination in [`live_dest_app_ids`], so the orphan
 /// cleaner leaves the half-deleted prefix alone, and it keeps the job in
-/// [`tick`]'s expired set, so the next tick runs another pass.
+/// [`tick`]'s expired set, so the next tick runs another pass — unless the
+/// deletion job has parked itself at `FAILED`, in which case the tick warns
+/// and does nothing until an operator retries it.
 pub async fn abort(state: &AppState, job: &fork_job::Model) -> Result<(), ApiError> {
     let dest = job.dest_app_id.as_str();
     let aborting = fork_job::ActiveModel {
@@ -1079,6 +1081,24 @@ pub async fn abort(state: &AppState, job: &fork_job::Model) -> Result<(), ApiErr
     };
     if let Err(error) = fork_job::Entity::update(aborting).exec(&state.db).await {
         tracing::debug!(job_id = %job.id, %error, "fork job row not marked aborting");
+    }
+
+    // `deletion::enqueue` resurrects a `FAILED` job from phase 0, so the status
+    // read after `delete_now` can never report a parked one. A destination
+    // whose deletion keeps failing needs an operator: restarting it from phase
+    // 0 on every tick would burn a full pass and erase the only signal.
+    if let Some(parked) = deletion::job::find(state, DeletionRoot::App, dest).await?
+        && parked.status == deletion::job::STATUS_FAILED
+    {
+        tracing::warn!(
+            job_id = %job.id,
+            dest_app_id = %dest,
+            deletion_job_id = %parked.id,
+            last_error = parked.last_error.as_deref().unwrap_or(""),
+            "deletion of an aborted fork destination is parked at FAILED; \
+             an operator has to retry it from the admin deletions endpoint"
+        );
+        return Ok(());
     }
 
     let requested_by = (!job.user_id.is_empty()).then_some(job.user_id.as_str());
@@ -1183,6 +1203,13 @@ pub async fn tick(state: &AppState) -> Result<ForkTickOutcome, ApiError> {
     Ok(outcome)
 }
 
+/// Take a job by compare-and-set on the `updatedAt` the sweeper read.
+///
+/// The body is a CAS on the job's own `updatedAt`, so re-running it after an
+/// ambiguous commit would read back the bump it just made, match no row and
+/// report `false` — the caller would skip a job it actually owns, and the
+/// bumped `updatedAt` pushes it another [`STALE_AFTER`] out. Serialization
+/// conflicts are still retried; only the ambiguous-commit re-run is dropped.
 async fn claim(state: &AppState, job: &fork_job::Model) -> Result<bool, ApiError> {
     let job_id = job.id.clone();
     let seen = job.updated_at;
@@ -1190,7 +1217,7 @@ async fn claim(state: &AppState, job: &fork_job::Model) -> Result<bool, ApiError
         &state.db,
         state.db_dialect,
         None,
-        &RetryPolicy::idempotent(),
+        &RetryPolicy::default(),
         move |txn| {
             let job_id = job_id.clone();
             Box::pin(async move {
@@ -1210,6 +1237,60 @@ async fn claim(state: &AppState, job: &fork_job::Model) -> Result<bool, ApiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M3: the claim body is a compare-and-set on the job's own `updatedAt`.
+    /// Re-running it after an ambiguous commit reads back the bump it just
+    /// made, matches no row and reports "someone else holds it" — the sweeper
+    /// then skips a job it owns, and the bump pushes it another `STALE_AFTER`
+    /// out. Serialization conflicts stay retryable; only the ambiguous-commit
+    /// re-run is dropped.
+    #[test]
+    fn the_claim_cas_does_not_re_run_an_ambiguous_commit() {
+        assert!(!RetryPolicy::default().idempotent);
+        assert!(RetryPolicy::default().max_attempts > 1);
+
+        let source = include_str!("job.rs");
+        let claim = source
+            .split_once("async fn claim(")
+            .expect("fork jobs are claimed by CAS")
+            .1;
+        let policy = claim
+            .split_once("RetryPolicy::")
+            .expect("claim runs under a retry policy")
+            .1;
+        assert!(
+            policy.starts_with("default()"),
+            "fork::job::claim must not retry an ambiguous commit"
+        );
+    }
+
+    /// H4: `deletion::enqueue` resurrects a `FAILED` job from phase 0, so a
+    /// status read *after* `delete_now` never sees a parked one. The warning
+    /// never fired, a permanently failing destination deletion was restarted
+    /// from phase 0 on every tick, and the operator-visible `FAILED` state
+    /// never survived to the next tick.
+    #[test]
+    fn abort_reads_the_deletion_status_before_it_re_enqueues() {
+        let source = include_str!("job.rs");
+        let abort = source
+            .split_once("pub async fn abort(")
+            .expect("forks are aborted through the deletion queue")
+            .1;
+        let read = abort
+            .find("deletion::job::find(")
+            .expect("abort must read the deletion job's status");
+        let enqueue = abort
+            .find("deletion::delete_now(")
+            .expect("abort must hand the destination to the deletion queue");
+        assert!(
+            read < enqueue,
+            "abort must read the deletion job status before delete_now re-queues it"
+        );
+        assert!(
+            abort[read..enqueue].contains("STATUS_FAILED"),
+            "abort must skip the re-enqueue of a parked deletion job"
+        );
+    }
 
     /// `abort` no longer drains the destination by hand; it hands the App to
     /// the deletion queue. If the plan ever stops covering one of the tables
