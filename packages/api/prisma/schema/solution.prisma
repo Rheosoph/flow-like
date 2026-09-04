@@ -36,14 +36,14 @@ model SolutionRequest {
 
   adminNotes  String?
   assignedTo  String?
-  deliveredAt DateTime?
+  deliveredAt DateTime? @db.Timestamptz(3)
 
   trackingToken String @unique
 
   logs SolutionLog[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([email])
   @@index([status])
@@ -60,7 +60,7 @@ model SolutionLog {
   details String?
   actor   String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([solutionId])
   @@index([createdAt])
@@ -69,7 +69,7 @@ model SolutionLog {
 model StripeEvent {
   id          String   @id
   eventType   String
-  processedAt DateTime @default(now())
+  processedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([eventType])
 }

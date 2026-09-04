@@ -1000,7 +1000,7 @@ pub async fn get_regression_suite(
 
     Ok(Json(RegressionSuiteResponse {
         suite,
-        next_run_at: suite_row.next_run_at.map(|at| at.and_utc().to_rfc3339()),
+        next_run_at: suite_row.next_run_at.map(|at| at.to_rfc3339()),
         fixtures: fixtures.iter().map(fixture_summary).collect(),
     }))
 }
@@ -1068,7 +1068,7 @@ pub async fn put_regression_suite(
                 .map_err(|error| {
                     ApiError::bad_request(format!("Invalid cron schedule '{expr}': {error}"))
                 })?
-                .naive_utc(),
+                .fixed_offset(),
         ),
         None => None,
     };
@@ -1127,7 +1127,7 @@ pub async fn put_regression_suite(
     };
     suite.save(&app).await.map_err(ApiError::internal_error)?;
 
-    let now_naive = chrono::Utc::now().naive_utc();
+    let now_stamp = chrono::Utc::now().fixed_offset();
     let created = existing.is_none();
     match existing {
         Some(row) => {
@@ -1139,7 +1139,7 @@ pub async fn put_regression_suite(
             active.gate_mode = Set(gate_mode_as_str(gate_mode).to_string());
             active.allow_live_side_effects = Set(body.allow_live_side_effects);
             active.next_run_at = Set(next_run_at);
-            active.updated_at = Set(now_naive);
+            active.updated_at = Set(now_stamp);
             active.update(&state.db).await.map_err(|e| {
                 ApiError::internal_error(anyhow!("Failed to update suite projection row: {e}"))
             })?;
@@ -1156,8 +1156,8 @@ pub async fn put_regression_suite(
                 gate_mode: Set(gate_mode_as_str(gate_mode).to_string()),
                 allow_live_side_effects: Set(body.allow_live_side_effects),
                 next_run_at: Set(next_run_at),
-                created_at: Set(now_naive),
-                updated_at: Set(now_naive),
+                created_at: Set(now_stamp),
+                updated_at: Set(now_stamp),
             };
             active.insert(&state.db).await.map_err(|e| {
                 ApiError::internal_error(anyhow!("Failed to insert suite projection row: {e}"))
@@ -1187,7 +1187,7 @@ pub async fn put_regression_suite(
 
     Ok(Json(RegressionSuiteResponse {
         suite,
-        next_run_at: next_run_at.map(|at| at.and_utc().to_rfc3339()),
+        next_run_at: next_run_at.map(|at| at.to_rfc3339()),
         fixtures: fixtures.iter().map(fixture_summary).collect(),
     }))
 }
@@ -1252,10 +1252,10 @@ fn suite_run_summary(row: regression_suite_run::Model) -> SuiteRunSummary {
         still_failing: row.still_failing,
         ok: row.ok,
         skipped: row.skipped,
-        started_at: row.started_at.map(|at| at.and_utc().to_rfc3339()),
-        completed_at: row.completed_at.map(|at| at.and_utc().to_rfc3339()),
+        started_at: row.started_at.map(|at| at.to_rfc3339()),
+        completed_at: row.completed_at.map(|at| at.to_rfc3339()),
         error: row.error,
-        created_at: row.created_at.and_utc().to_rfc3339(),
+        created_at: row.created_at.to_rfc3339(),
     }
 }
 

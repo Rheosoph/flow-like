@@ -143,7 +143,7 @@ pub async fn upsert_info(
     if let Some(dev_mode) = payload.dev_mode {
         updated_user.dev_mode = Set(dev_mode);
     }
-    updated_user.updated_at = Set(chrono::Utc::now().naive_utc());
+    updated_user.updated_at = Set(chrono::Utc::now().fixed_offset());
     updated_user.update(&state.db).await?;
 
     Ok(Json(response))

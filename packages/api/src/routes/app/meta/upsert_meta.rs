@@ -55,7 +55,7 @@ pub async fn upsert_meta(
     let mut model = meta::Model::from(meta.clone());
 
     model.lang = language.clone();
-    model.updated_at = chrono::Utc::now().naive_utc();
+    model.updated_at = chrono::Utc::now().fixed_offset();
 
     model.template_id = None;
     model.bit_id = None;
@@ -105,7 +105,7 @@ pub async fn upsert_meta(
                 }
 
                 model.id = new_meta_id;
-                model.created_at = chrono::Utc::now().naive_utc();
+                model.created_at = chrono::Utc::now().fixed_offset();
                 let active_model: meta::ActiveModel = model.into();
                 active_model.insert(txn).await?;
                 Ok::<_, ApiError>(true)

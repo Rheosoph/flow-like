@@ -64,8 +64,8 @@ impl From<BitTypes> for BitType {
 
 impl From<bit::Model> for Bit {
     fn from(value: bit::Model) -> Self {
-        let created = value.created_at.and_utc().to_rfc3339();
-        let updated = value.updated_at.and_utc().to_rfc3339();
+        let created = value.created_at.to_rfc3339();
+        let updated = value.updated_at.to_rfc3339();
         let id = value.id.clone();
 
         Self {
@@ -98,12 +98,8 @@ impl From<Bit> for bit::Model {
             id: value.id,
             authors: Some(value.authors.into()),
             r#type: value.bit_type.into(),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&value.updated)
-                .unwrap_or_default()
-                .naive_utc(),
-            created_at: chrono::DateTime::parse_from_rfc3339(&value.created)
-                .unwrap_or_default()
-                .naive_utc(),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&value.updated).unwrap_or_default(),
+            created_at: chrono::DateTime::parse_from_rfc3339(&value.created).unwrap_or_default(),
             dependencies: Some(value.dependencies.into()),
             dependency_tree_hash: Some(value.dependency_tree_hash),
             download_link: value.download_link,
@@ -140,9 +136,9 @@ impl From<meta::Model> for Metadata {
                 .organization_specific_values
                 .map(|json| json.to_string().into_bytes()),
             created_at: SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(model.created_at.and_utc().timestamp() as u64),
+                + std::time::Duration::from_secs(model.created_at.timestamp() as u64),
             updated_at: SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(model.updated_at.and_utc().timestamp() as u64),
+                + std::time::Duration::from_secs(model.updated_at.timestamp() as u64),
         }
     }
 }
@@ -197,7 +193,7 @@ impl From<Metadata> for meta::Model {
                 0,
             )
             .unwrap_or_default()
-            .naive_utc(),
+            .fixed_offset(),
             updated_at: chrono::DateTime::from_timestamp(
                 metadata
                     .updated_at
@@ -207,7 +203,7 @@ impl From<Metadata> for meta::Model {
                 0,
             )
             .unwrap_or_default()
-            .naive_utc(),
+            .fixed_offset(),
         }
     }
 }

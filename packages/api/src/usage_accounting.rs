@@ -73,7 +73,7 @@ pub async fn start_usage_invocation(
     )
     .await?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let id = create_id();
     usage_invocation::ActiveModel {
         id: Set(id.clone()),
@@ -130,7 +130,7 @@ pub async fn settle_usage_invocation(
         return Ok(());
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut active: usage_invocation::ActiveModel = existing.into();
     active.status = Set(settlement.status.to_string());
     active.input_tokens = Set(settlement.input_tokens.max(0));
@@ -152,14 +152,14 @@ pub async fn reconcile_stale_invocations(
     db: &DatabaseConnection,
     older_than_minutes: i64,
 ) -> Result<UsageReconciliationResult, sea_orm::DbErr> {
-    let cutoff = Utc::now().naive_utc() - Duration::minutes(older_than_minutes.max(1));
+    let cutoff = Utc::now().fixed_offset() - Duration::minutes(older_than_minutes.max(1));
     let stale = usage_invocation::Entity::find()
         .filter(usage_invocation::Column::Status.eq(STATUS_PENDING))
         .filter(usage_invocation::Column::StartedAt.lt(cutoff))
         .all(db)
         .await?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut marked = 0;
     for row in stale {
         let mut active: usage_invocation::ActiveModel = row.into();
@@ -193,7 +193,7 @@ pub async fn record_usage_limit_audit(
         action: Set(action.to_string()),
         before: Set(before),
         after: Set(after),
-        created_at: Set(Utc::now().naive_utc()),
+        created_at: Set(Utc::now().fixed_offset()),
     }
     .insert(db)
     .await?;

@@ -37,6 +37,7 @@ import {
 	type QueryClient,
 	isAzureBlobStorageUrl,
 	offlineSyncDB,
+	parseDateValue,
 	useAuthStatusStore,
 	useBackend,
 	useBackendStore,
@@ -1256,12 +1257,10 @@ export function ProfileSyncer({
 						? profileShortcuts.get(hubProfile.id)
 						: undefined;
 
-					const updatedAt = hubProfile.updated
-						? new Date(hubProfile.updated).toISOString()
-						: undefined;
-					const createdAt = hubProfile.created
-						? new Date(hubProfile.created).toISOString()
-						: undefined;
+					// Normalized to an explicit-UTC instant so a hub timestamp without a
+					// zone is not frozen into the local reading before it is stored.
+					const updatedAt = parseDateValue(hubProfile.updated)?.toISOString();
+					const createdAt = parseDateValue(hubProfile.created)?.toISOString();
 
 					return {
 						id: hubProfile.id,
@@ -1623,10 +1622,12 @@ export function ProfileSyncer({
 							}
 						} else {
 							// Merge: update existing local profile if server is newer
-							const serverTime = new Date(onlineProfile.updated_at).getTime();
-							const localTime = new Date(
-								localProfile.hub_profile.updated || localProfile.updated || 0,
-							).getTime();
+							const serverTime =
+								parseDateValue(onlineProfile.updated_at)?.getTime() ?? 0;
+							const localTime =
+								parseDateValue(
+									localProfile.hub_profile.updated || localProfile.updated || 0,
+								)?.getTime() ?? 0;
 
 							if (serverTime > localTime) {
 								console.log(

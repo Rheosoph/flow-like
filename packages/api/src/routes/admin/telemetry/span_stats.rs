@@ -9,7 +9,7 @@ use crate::state::AppState;
 use crate::telemetry::percentiles_in_sql;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Statement,
 };
@@ -129,7 +129,7 @@ fn fold_span_samples(rows: Vec<SpanSampleRow>) -> Vec<SpanOperationStats> {
 
 async fn span_stats_from_sql<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Result<Vec<SpanOperationStats>, ApiError> {
     let backend = db.get_database_backend();
@@ -175,7 +175,7 @@ async fn span_stats_from_sql<C: ConnectionTrait>(
 
 async fn span_stats_from_fold<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Result<Vec<SpanOperationStats>, ApiError> {
     let mut select = telemetry_span::Entity::find()
@@ -230,7 +230,7 @@ pub async fn telemetry_span_stats(
         .hours
         .unwrap_or(DEFAULT_SPAN_STATS_HOURS)
         .clamp(1, MAX_SPAN_STATS_HOURS);
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
     let source = q.source.as_deref().filter(|value| !value.is_empty());
 
     let operations = if percentiles_in_sql(state.db.get_database_backend(), state.db_dialect) {

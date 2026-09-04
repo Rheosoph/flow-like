@@ -30,13 +30,13 @@ model AiActAssessment {
   responsibleName   String?
   responsibleEmail  String?
 
-  submittedAt  DateTime?
+  submittedAt  DateTime? @db.Timestamptz(3)
   reviewedById String?
-  reviewedAt   DateTime?
+  reviewedAt   DateTime? @db.Timestamptz(3)
   reviewNote   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, version])
   @@index([appId])
@@ -66,8 +66,8 @@ model AiActModelObservation {
 
   driftFlagged Boolean @default(false)
 
-  firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
+  firstSeenAt DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([appId, modelId])
   @@index([appId])
@@ -92,8 +92,8 @@ model AiActModelRegistry {
 
   note String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([provider, modelId])
   @@index([posture])

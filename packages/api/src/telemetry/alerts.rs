@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::sea_query::{Expr, IntoColumnRef, NullOrdering, SimpleExpr};
 use sea_orm::{
@@ -309,7 +309,7 @@ async fn evaluate_rule<C: ConnectionTrait>(
     dialect: DbDialect,
     rule: &telemetry_alert_rule::Model,
 ) -> Result<RuleEvaluation, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let window_minutes = rule
         .window_minutes
         .clamp(MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES);
@@ -411,7 +411,7 @@ async fn baseline_samples<C: ConnectionTrait>(
     dialect: DbDialect,
     metric: &str,
     source: Option<&str>,
-    now: NaiveDateTime,
+    now: DateTime<FixedOffset>,
     window: ChronoDuration,
     min_samples: usize,
 ) -> Result<Vec<f64>, DbErr> {
@@ -432,8 +432,8 @@ async fn metric_value<C: ConnectionTrait>(
     dialect: DbDialect,
     metric: &str,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<Option<f64>, DbErr> {
     match metric {
         "event_count" => Ok(Some(event_count(db, source, from, to).await? as f64)),
@@ -496,8 +496,8 @@ where
 async fn event_count<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<i64, DbErr> {
     let mut select = telemetry_event::Entity::find()
         .filter(telemetry_event::Column::CreatedAt.gte(from))
@@ -511,8 +511,8 @@ async fn event_count<C: ConnectionTrait>(
 async fn error_event_count<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<i64, DbErr> {
     let mut select = telemetry_error_event::Entity::find()
         .filter(telemetry_error_event::Column::CreatedAt.gte(from))
@@ -526,8 +526,8 @@ async fn error_event_count<C: ConnectionTrait>(
 async fn session_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
     use sea_orm::sea_query::ExprTrait;
 
@@ -557,8 +557,8 @@ async fn session_pair<C: ConnectionTrait>(
 async fn span_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
     use sea_orm::sea_query::ExprTrait;
 
@@ -588,8 +588,8 @@ async fn span_pair<C: ConnectionTrait>(
 async fn llm_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
     use sea_orm::sea_query::ExprTrait;
 
@@ -622,8 +622,8 @@ async fn span_p95<C: ConnectionTrait>(
     db: &C,
     dialect: DbDialect,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<Option<f64>, DbErr> {
     let backend = db.get_database_backend();
     if !percentiles_in_sql(backend, dialect) {

@@ -8,12 +8,12 @@ model DeletionJob {
   phase       Int       @default(0)
   cursor      Json?
   attempts    Int       @default(0)
-  leaseUntil  DateTime?
+  leaseUntil  DateTime? @db.Timestamptz(3)
   lastError   String?
   requestedBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([rootKind, rootId])
   @@index([status, leaseUntil])
@@ -33,9 +33,9 @@ model ForkJob {
   report      Json?
   lastError   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  expiresAt DateTime
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
 
   @@index([status, updatedAt])
   @@index([destAppId])

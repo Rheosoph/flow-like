@@ -54,7 +54,7 @@ impl From<audit_entry::Model> for AuditEntryOutput {
         Self {
             id: m.id,
             sequence: m.sequence,
-            timestamp: m.timestamp.and_utc().to_rfc3339(),
+            timestamp: m.timestamp.to_rfc3339(),
             actor_id: m.actor_id,
             actor_type: format!("{:?}", m.actor_type),
             action: m.action,
@@ -102,7 +102,7 @@ impl AuditService {
         dialect: DbDialect,
         input: AuditEntryInput,
     ) -> flow_like_types::Result<audit_entry::Model> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
         let entry = retry_transaction::<_, audit_entry::Model, DbErr>(
             db,
             dialect,
@@ -120,7 +120,7 @@ impl AuditService {
     async fn append_entry(
         txn: &DatabaseTransaction,
         input: AuditEntryInput,
-        now: chrono::NaiveDateTime,
+        now: chrono::DateTime<chrono::FixedOffset>,
     ) -> Result<audit_entry::Model, DbErr> {
         use sea_orm::sea_query::ExprTrait;
 

@@ -170,7 +170,7 @@ impl PostgresStateStore {
         events: &[CreateEventInput],
         bodies: Vec<Vec<u8>>,
         already_stored: &HashSet<String>,
-        now: sea_orm::prelude::DateTime,
+        now: sea_orm::prelude::DateTimeWithTimeZone,
     ) -> Result<Vec<execution_event::ActiveModel>, StateStoreError> {
         let mut models = Vec::with_capacity(events.len());
         for (event, body) in events.iter().zip(bodies) {
@@ -186,7 +186,7 @@ impl PostgresStateStore {
         &self,
         event: &CreateEventInput,
         body: Vec<u8>,
-        now: sea_orm::prelude::DateTime,
+        now: sea_orm::prelude::DateTimeWithTimeZone,
     ) -> Result<execution_event::ActiveModel, StateStoreError> {
         let staged = if body.len() > PAYLOAD_OFFLOAD_BYTES {
             self.stage_payload(&event.run_id, &event.id, body).await?
@@ -416,9 +416,9 @@ impl PostgresStateStore {
 
 fn accepted_mirror_is_obsolete(
     existing_status: &EntityRunStatus,
-    existing_updated_at: sea_orm::prelude::DateTime,
+    existing_updated_at: sea_orm::prelude::DateTimeWithTimeZone,
     accepted: &ExecutionRunRecord,
-    accepted_updated_at: sea_orm::prelude::DateTime,
+    accepted_updated_at: sea_orm::prelude::DateTimeWithTimeZone,
 ) -> bool {
     matches!(
         existing_status,
@@ -483,7 +483,7 @@ fn event_first_write_wins() -> OnConflict {
         .to_owned()
 }
 
-fn expired_runs(now: sea_orm::prelude::DateTime) -> Condition {
+fn expired_runs(now: sea_orm::prelude::DateTimeWithTimeZone) -> Condition {
     Condition::all()
         .add(execution_run::Column::ExpiresAt.is_not_null())
         .add(execution_run::Column::ExpiresAt.lt(now))
@@ -753,15 +753,15 @@ fn type_run_variant_to_entity(v: RunVariant) -> EntityRunVariant {
     }
 }
 
-fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTime {
-    Utc.timestamp_millis_opt(ts).unwrap().naive_utc()
+fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTimeWithTimeZone {
+    Utc.timestamp_millis_opt(ts).unwrap().fixed_offset()
 }
 
-fn datetime_to_ts(dt: sea_orm::prelude::DateTime) -> i64 {
-    dt.and_utc().timestamp_millis()
+fn datetime_to_ts(dt: sea_orm::prelude::DateTimeWithTimeZone) -> i64 {
+    dt.timestamp_millis()
 }
 
-fn opt_datetime_to_ts(dt: Option<sea_orm::prelude::DateTime>) -> Option<i64> {
+fn opt_datetime_to_ts(dt: Option<sea_orm::prelude::DateTimeWithTimeZone>) -> Option<i64> {
     dt.map(datetime_to_ts)
 }
 
@@ -820,7 +820,7 @@ impl ExecutionStateStore for PostgresStateStore {
         &self,
         input: CreateRunInput,
     ) -> Result<ExecutionRunRecord, StateStoreError> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let model = execution_run::ActiveModel {
             id: Set(input.id.clone()),
             board_id: Set(input.board_id),
@@ -907,7 +907,7 @@ impl ExecutionStateStore for PostgresStateStore {
         }
 
         let mut model: execution_run::ActiveModel = existing.into();
-        model.updated_at = Set(chrono::Utc::now().naive_utc());
+        model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
         if let Some(progress) = input.progress {
             model.progress = Set(progress);
@@ -986,7 +986,7 @@ impl ExecutionStateStore for PostgresStateStore {
     /// rows are drained first, then the runs themselves, so every transaction
     /// touches a known number of rows and the cascade finds nothing left.
     async fn delete_expired_runs(&self) -> Result<i64, StateStoreError> {
-        let expired = expired_runs(chrono::Utc::now().naive_utc());
+        let expired = expired_runs(chrono::Utc::now().fixed_offset());
         let mut deleted = 0u64;
         let mut pages = 0usize;
         loop {
@@ -1040,7 +1040,7 @@ impl ExecutionStateStore for PostgresStateStore {
             return Ok(0);
         }
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         // Serialized once: the size decides whether the payload is offloaded,
         // and these are the bytes that get staged.
         let mut bodies = Vec::with_capacity(events.len());
@@ -1163,7 +1163,7 @@ impl ExecutionStateStore for PostgresStateStore {
     }
 
     async fn delete_expired_events(&self) -> Result<i64, StateStoreError> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let expired = Condition::all().add(execution_event::Column::ExpiresAt.lt(now));
         let drain = self
             .drain_offloaded_events(&expired, MAX_CHUNKS_PER_CLEANUP)

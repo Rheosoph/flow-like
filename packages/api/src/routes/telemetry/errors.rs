@@ -167,7 +167,7 @@ struct ValidatedError {
     stacktrace: Option<Value>,
     breadcrumbs: Option<Value>,
     context: Option<Value>,
-    client_ts: Option<chrono::NaiveDateTime>,
+    client_ts: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 struct IssueGroup {
@@ -382,7 +382,7 @@ pub(super) async fn upsert_release<C: ConnectionTrait>(
     db: &C,
     version: &str,
     source: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), DbErr> {
     telemetry_release::Entity::insert(telemetry_release::ActiveModel {
         id: Set(flow_like_types::create_id()),
@@ -410,7 +410,7 @@ fn new_issue(
     fingerprint: &str,
     group: &IssueGroup,
     payload: &BatchContext,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> telemetry_issue::ActiveModel {
     telemetry_issue::ActiveModel {
         id: Set(id.to_string()),
@@ -441,7 +441,7 @@ async fn bump_issue<C: ConnectionTrait>(
     issue_id: &str,
     count: i32,
     release: Option<&str>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), DbErr> {
     let mut update = telemetry_issue::Entity::update_many()
         .col_expr(
@@ -466,7 +466,7 @@ async fn resolve_issues<C: ConnectionTrait>(
     db: &C,
     groups: &BTreeMap<String, IssueGroup>,
     payload: &BatchContext,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<HashMap<String, String>, DbErr> {
     let fingerprints: Vec<String> = groups.keys().cloned().collect();
     let existing = telemetry_issue::Entity::find()
@@ -554,7 +554,7 @@ async fn persist_errors(
         release: payload.release.clone(),
         country,
     };
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     state
         .transaction(|txn| {
@@ -569,7 +569,7 @@ async fn persist_batch<C: ConnectionTrait>(
     txn: &C,
     context: &BatchContext,
     errors: Vec<ValidatedError>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<TelemetryErrorIngestResponse, DbErr> {
     if let Some(release) = context.release.as_deref() {
         upsert_release(txn, release, &context.source, now).await?;

@@ -100,7 +100,7 @@ pub async fn upsert_event_feedback(
                     feedback.context = Set(context);
                     feedback.comment = Set(comment);
                     feedback.rating = Set(rating);
-                    feedback.updated_at = Set(chrono::Utc::now().naive_utc());
+                    feedback.updated_at = Set(chrono::Utc::now().fixed_offset());
                     feedback.update(txn).await?;
                     return Ok(());
                 }
@@ -114,8 +114,8 @@ pub async fn upsert_event_feedback(
                     comment,
                     rating,
                     template_id: None,
-                    created_at: chrono::Utc::now().naive_utc(),
-                    updated_at: chrono::Utc::now().naive_utc(),
+                    created_at: chrono::Utc::now().fixed_offset(),
+                    updated_at: chrono::Utc::now().fixed_offset(),
                 };
 
                 feedback::ActiveModel::from(feedback)

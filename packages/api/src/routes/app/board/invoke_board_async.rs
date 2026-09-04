@@ -135,7 +135,7 @@ pub async fn invoke_board_async(
     }
 
     let run_id = create_id();
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     let input_payload_len = params
         .payload
@@ -206,8 +206,8 @@ pub async fn invoke_board_async(
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),

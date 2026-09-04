@@ -132,14 +132,31 @@ docker build -f apps/backend/aws/migration/Dockerfile -t flow-like-aws-migration
 
 Local: `bun install`, `bun test`, `bunx tsc --noEmit`, `bunx biome check .`.
 To run against a cluster from a workstation with admin credentials (drop
-`DSQL_RUNTIME_ROLE_ARN` on a cluster that has no runtime role yet):
+`DSQL_RUNTIME_ROLE_ARN` on a cluster that has no runtime role yet). The image
+bakes the mirrored schema in as `prisma/schema`; from a checkout it does not
+exist, so build it first and point `DSQL_SCHEMA_DIR` at it - without it every
+statement still applies and only the final `prisma migrate status` fails
+("Could not load schema from ... prisma/schema"), which exits the job `1`.
+Never point `DSQL_SCHEMA_DIR` at `packages/api/prisma/schema` itself: the
+tracked schema declares `provider = "cockroachdb"`.
 
 ```sh
+bun run --cwd ../../../../packages/api db:mirror:dsql    # -> packages/api/prisma-dsql-mirror/schema
+
 DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
 DSQL_RUNTIME_ROLE_ARN=arn:aws:iam::<account>:role/<runtime-role> \
 DSQL_MIGRATIONS_DIR=../../../../packages/api/prisma/migrations-dsql \
+DSQL_SCHEMA_DIR=../../../../packages/api/prisma-dsql-mirror/schema \
 bun run migrate.ts
 ```
 
 New migrations are generated in `packages/api` with `bun run db:dsql:diff -- <name>`
-(see `packages/api/scripts/dsql-migration.ts`).
+(see `packages/api/scripts/dsql-migration.ts`); that script builds and removes
+the mirror itself.
+
+## Data cutover
+
+The one-off CockroachDB → Aurora DSQL row copy is deliberately NOT in this repo;
+it runs once per cutover and is not part of the deployed system. It lives at
+`flow-like-ops/dsql-sync/` alongside this checkout. This directory keeps only the
+schema-migration runner, which is permanent infrastructure.

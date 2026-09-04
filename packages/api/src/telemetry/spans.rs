@@ -118,7 +118,7 @@ pub struct FinishedSpan {
     pub parent_span_id: Option<String>,
     pub name: String,
     pub kind: String,
-    pub started_at: chrono::NaiveDateTime,
+    pub started_at: chrono::DateTime<chrono::FixedOffset>,
     pub duration_ms: i32,
     pub status: String,
     pub attributes: Option<Value>,
@@ -274,7 +274,7 @@ struct SpanState {
     kind: String,
     status: String,
     started: Instant,
-    started_at: chrono::NaiveDateTime,
+    started_at: chrono::DateTime<chrono::FixedOffset>,
     attributes: Map<String, Value>,
 }
 
@@ -338,7 +338,7 @@ where
                 .take()
                 .unwrap_or_else(|| STATUS_OK.to_string()),
             started: Instant::now(),
-            started_at: chrono::Utc::now().naive_utc(),
+            started_at: chrono::Utc::now().fixed_offset(),
             attributes: if sampled {
                 std::mem::take(&mut visitor.attributes)
             } else {
@@ -513,7 +513,7 @@ impl TelemetrySpanExporter {
             return;
         }
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let models: Vec<telemetry_span::ActiveModel> = spans
             .into_iter()
             .map(|span| telemetry_span::ActiveModel {

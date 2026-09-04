@@ -5,7 +5,7 @@ model AuditEntry {
   id       String @id @default(cuid())
   sequence BigInt
 
-  timestamp DateTime @default(now())
+  timestamp DateTime @default(now()) @db.Timestamptz(3)
 
   // Actor
   actorId   String

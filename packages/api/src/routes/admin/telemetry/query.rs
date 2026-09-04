@@ -16,7 +16,7 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime, Utc};
 use sea_orm::{FromQueryResult, Statement, Value};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -38,7 +38,9 @@ const NULL_GROUP: &str = "unknown";
 const TS_COLUMN: &str = "ts";
 const GROUP_COLUMN: &str = "group_key";
 const VALUE_COLUMN: &str = "metric_value";
-const NULL_TS: &str = "CAST(NULL AS TIMESTAMP)";
+/// TIMESTAMPTZ, not TIMESTAMP: the `ts` column decodes into an instant, and sqlx
+/// type-checks the column even when every row is NULL.
+const NULL_TS: &str = "CAST(NULL AS TIMESTAMPTZ)";
 const NULL_GROUP_EXPR: &str = "CAST(NULL AS TEXT)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,7 +387,7 @@ pub struct TelemetryQueryResponse {
 
 #[derive(Debug, FromQueryResult)]
 struct QueryRow {
-    ts: Option<NaiveDateTime>,
+    ts: Option<DateTime<FixedOffset>>,
     group_key: Option<String>,
     metric_value: Option<f64>,
 }
@@ -502,7 +504,7 @@ fn filter_sql(filter: &FilterPlan, binder: &mut Binder) -> String {
 /// one row past its cap and orders so the cap keeps the rows that matter.
 fn build_query(
     plan: &QueryPlan,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     stage: Stage,
     groups: Option<&[String]>,
 ) -> BoundQuery {
@@ -521,10 +523,14 @@ fn build_query(
         None => NULL_GROUP_EXPR.to_string(),
     };
 
+    // The column is `timestamptz`, so `date_trunc` alone would bucket in the
+    // session `TimeZone` while the window filter below is UTC. The trailing
+    // cast puts the truncated value back on `timestamptz` for the
+    // `DateTime<FixedOffset>` decode.
     let ts_expr = match interval {
         Interval::None => NULL_TS.to_string(),
         bucket => format!(
-            "date_trunc('{}', {})",
+            "date_trunc('{}', {} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
             bucket.as_str(),
             quoted(plan.dataset.time_column)
         ),
@@ -611,11 +617,22 @@ fn like_pattern(term: &str) -> String {
     format!("%{}%", escaped)
 }
 
-fn parse_timestamp(raw: &str) -> Option<NaiveDateTime> {
+/// Accepts an RFC3339 string, or a zone-less one which is read as UTC — the
+/// filter input is free text and saved queries persist whatever was typed, so
+/// both `2026-07-26T10:00:00` and `2026-07-26 10:00:00` have to keep working.
+/// Both separators are spelled out because `FromStr` requires a literal `T`
+/// and `FromStr for DateTime<FixedOffset>` requires an offset outright.
+/// Normalised to UTC so a client offset never leaks into the bound value; the
+/// instant is unchanged either way.
+fn parse_timestamp(raw: &str) -> Option<DateTime<FixedOffset>> {
+    let raw = raw.trim();
     if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
-        return Some(parsed.naive_utc());
+        return Some(parsed.to_utc().fixed_offset());
     }
-    raw.parse::<NaiveDateTime>().ok()
+    NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f"))
+        .ok()
+        .map(|naive| naive.and_utc().fixed_offset())
 }
 
 fn scalar_value(field: &FieldDef, raw: &serde_json::Value) -> Result<Value, ApiError> {
@@ -924,9 +941,7 @@ fn project(plan: &QueryPlan, rows: Vec<QueryRow>, truncated: bool) -> TelemetryQ
             let mut cells: Vec<serde_json::Value> = Vec::with_capacity(columns.len());
             if plan.interval != Interval::None {
                 cells.push(match row.ts {
-                    Some(ts) => serde_json::Value::String(
-                        DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc).to_rfc3339(),
-                    ),
+                    Some(ts) => serde_json::Value::String(ts.to_rfc3339()),
                     None => serde_json::Value::Null,
                 });
             }
@@ -984,7 +999,7 @@ pub async fn run_telemetry_query(
             "Percentile metrics need an ordered-set aggregate this database engine does not provide; use count, sum, avg, min or max instead",
         ));
     }
-    let cutoff = Utc::now().naive_utc() - Duration::hours(plan.hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(plan.hours);
     let backend = state.db.get_database_backend();
 
     let mut groups: Vec<String> = Vec::new();
@@ -1048,11 +1063,65 @@ mod tests {
         "%'; TRUNCATE \"TelemetryIssue\"; --",
     ];
 
-    fn cutoff() -> NaiveDateTime {
+    fn cutoff() -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, 26)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
+    }
+
+    /// The filter input is free text and saved queries persist whatever was
+    /// typed, so both the RFC3339 and the zone-less form have to keep parsing.
+    /// `FromStr for DateTime<FixedOffset>` requires an offset, so the zone-less
+    /// arm cannot be folded into it.
+    #[test]
+    fn timestamps_parse_with_and_without_a_zone() {
+        let expected = NaiveDate::from_ymd_opt(2026, 7, 26)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
+
+        // Zone-less, space- and `T`-separated: read as UTC.
+        assert_eq!(parse_timestamp("2026-07-26 10:00:00"), Some(expected));
+        assert_eq!(parse_timestamp("2026-07-26T10:00:00"), Some(expected));
+        // RFC3339, both spellings of the zero offset.
+        assert_eq!(parse_timestamp("2026-07-26T10:00:00Z"), Some(expected));
+        assert_eq!(parse_timestamp("2026-07-26T10:00:00+00:00"), Some(expected));
+        // A client offset is normalised away; the instant is what is bound.
+        assert_eq!(parse_timestamp("2026-07-26T12:00:00+02:00"), Some(expected));
+        assert_eq!(parse_timestamp("2026-07-26T06:00:00-04:00"), Some(expected));
+        // Fractional seconds survive the zone-less arm too.
+        assert_eq!(
+            parse_timestamp("2026-07-26 10:00:00.500"),
+            Some(expected + Duration::milliseconds(500))
+        );
+
+        for raw in ["", "not a timestamp", "2026-13-45T99:00:00Z", "1753524000"] {
+            assert_eq!(parse_timestamp(raw), None, "{raw} should not parse");
+        }
+    }
+
+    /// A zone-less filter value must reach the bound parameter instead of
+    /// being rejected as a type error.
+    #[test]
+    fn zone_less_timestamp_filters_are_accepted() {
+        let field = FieldDef {
+            kind: FieldKind::Timestamp,
+            ..*DATASETS
+                .iter()
+                .flat_map(|dataset| dataset.fields)
+                .find(|field| field.kind == FieldKind::Timestamp)
+                .expect("a timestamp field exists")
+        };
+        assert!(
+            scalar_value(&field, &serde_json::json!("2026-07-26 10:00:00")).is_ok(),
+            "zone-less timestamps must not 400"
+        );
+        assert!(scalar_value(&field, &serde_json::json!("nope")).is_err());
     }
 
     fn status(error: ApiError) -> StatusCode {
@@ -1408,12 +1477,14 @@ mod tests {
         let expected = NaiveDate::from_ymd_opt(2026, 7, 26)
             .unwrap()
             .and_hms_opt(10, 0, 0)
-            .unwrap();
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
         assert!(built.sql.contains("\"createdAt\" >= $2"), "{}", built.sql);
         assert!(
             built.values.iter().any(|value| matches!(
                 value,
-                Value::ChronoDateTime(Some(ts)) if ts == &expected
+                Value::ChronoDateTimeWithTimeZone(Some(ts)) if ts == &expected
             )),
             "{:?}",
             built.values
@@ -1500,8 +1571,14 @@ mod tests {
             rows.sql
         );
         assert!(rows.sql.contains("GROUP BY ts, group_key"), "{}", rows.sql);
+        // The column is `timestamptz`: the inner cast buckets on the UTC
+        // calendar rather than the session `TimeZone`, matching the UTC cutoff
+        // in the WHERE clause, and the outer one restores `timestamptz` for the
+        // `DateTime<FixedOffset>` decode of `ts`.
         assert!(
-            rows.sql.contains("date_trunc('hour', \"createdAt\")"),
+            rows.sql.contains(
+                "date_trunc('hour', \"createdAt\" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"
+            ),
             "{}",
             rows.sql
         );
@@ -1555,7 +1632,7 @@ mod tests {
         assert!(
             built
                 .sql
-                .starts_with("SELECT CAST(NULL AS TIMESTAMP) AS ts, CAST(NULL AS TEXT) AS group_key, CAST(COUNT(*) AS DOUBLE PRECISION) AS metric_value FROM \"TelemetryEvent\" WHERE \"createdAt\" >= $1"),
+                .starts_with("SELECT CAST(NULL AS TIMESTAMPTZ) AS ts, CAST(NULL AS TEXT) AS group_key, CAST(COUNT(*) AS DOUBLE PRECISION) AS metric_value FROM \"TelemetryEvent\" WHERE \"createdAt\" >= $1"),
             "{}",
             built.sql
         );

@@ -8,6 +8,7 @@ import {
 	fromDateTimeInputValue,
 	inferTemporalValue,
 	looksLikeTemporalName,
+	parseDateValue,
 	parseTemporalValue,
 	toDateInputValue,
 	toDateTimeInputValue,
@@ -227,5 +228,126 @@ describe("inferTemporalValue", () => {
 			inferTemporalValue("created_at", "1786353300000")?.getFullYear(),
 		).toBe(2026);
 		expect(inferTemporalValue("subtotal_amount", "12450")).toBeNull();
+	});
+});
+
+describe("parseDateValue on API timestamps", () => {
+	// The API sends timestamptz, so an instant now names its own zone. Older
+	// caches and local backends still hold the zone-less form, and both have to
+	// resolve to the same instant regardless of where the viewer sits.
+	test("honours an explicit UTC offset", () => {
+		expect(parseDateValue("2026-09-04T08:18:44+00:00")?.toISOString()).toBe(
+			"2026-09-04T08:18:44.000Z",
+		);
+		expect(parseDateValue("2026-09-04T08:18:44Z")?.toISOString()).toBe(
+			"2026-09-04T08:18:44.000Z",
+		);
+	});
+
+	test("keeps sub-second precision the wire may carry", () => {
+		expect(parseDateValue("2026-09-04T08:18:44.123+00:00")?.toISOString()).toBe(
+			"2026-09-04T08:18:44.123Z",
+		);
+		expect(
+			parseDateValue("2026-09-04T08:18:44.123456+00:00")?.toISOString(),
+		).toBe("2026-09-04T08:18:44.123Z");
+	});
+
+	test("honours a non-UTC offset rather than reading it as UTC", () => {
+		expect(parseDateValue("2026-09-04T08:18:44-05:00")?.toISOString()).toBe(
+			"2026-09-04T13:18:44.000Z",
+		);
+		expect(parseDateValue("2026-09-04T08:18:44+02:00")?.toISOString()).toBe(
+			"2026-09-04T06:18:44.000Z",
+		);
+	});
+
+	test("reads the legacy zone-less form as the same instant", () => {
+		const offsetBearing = parseDateValue("2026-09-04T08:18:44+00:00");
+		expect(parseDateValue("2026-09-04T08:18:44")?.getTime()).toBe(
+			offsetBearing?.getTime(),
+		);
+		expect(parseDateValue("2026-09-04 08:18:44")?.getTime()).toBe(
+			offsetBearing?.getTime(),
+		);
+		expect(parseDateValue("2026-09-04 08:18:44 UTC")?.getTime()).toBe(
+			offsetBearing?.getTime(),
+		);
+	});
+
+	// chrono's `Display` — a space separator AND a space before the offset — is
+	// neither RFC3339 nor accepted by JavaScriptCore, which returns `Invalid
+	// Date` where V8 parses it. That split is why this reached WebKit (the Tauri
+	// desktop app on macOS and Linux, and Safari) while Chromium looked fine.
+	// The API emits `to_rfc3339()` now; this keeps the gap from reopening for
+	// anything still holding the old shape.
+	//
+	// Note the guard is the regex in `parseChronoDateString`, not the runtime:
+	// bun's JSC is more lenient than the WKWebView one and parses most of these
+	// on its own, so a green run here does not by itself prove WebKit is happy.
+	// `…T08:18:44 +00:00` is the case the bun parser also rejects.
+	test("parses chrono's space-separated Display form", () => {
+		const expected = Date.parse("2026-09-04T08:18:44.000Z");
+		for (const wire of [
+			"2026-09-04 08:18:44 +00:00",
+			"2026-09-04 08:18:44+00:00",
+			"2026-09-04 08:18:44 Z",
+			"2026-09-04 08:18:44 +0000",
+			"2026-09-04T08:18:44 +00:00",
+		]) {
+			expect(parseDateValue(wire)?.getTime(), wire).toBe(expected);
+		}
+
+		expect(
+			parseDateValue("2026-09-04 08:18:44.123 +00:00")?.toISOString(),
+		).toBe("2026-09-04T08:18:44.123Z");
+	});
+
+	test("honours a non-UTC offset in the Display form rather than reading it as UTC", () => {
+		expect(parseDateValue("2026-09-04 08:18:44 -05:00")?.toISOString()).toBe(
+			"2026-09-04T13:18:44.000Z",
+		);
+		expect(parseDateValue("2026-09-04 08:18:44 +02:00")?.toISOString()).toBe(
+			"2026-09-04T06:18:44.000Z",
+		);
+	});
+
+	test("orders offset-bearing timestamps lexicographically", () => {
+		const rows = [
+			"2026-09-04T08:18:44+00:00",
+			"2026-01-04T08:18:44+00:00",
+			"2026-09-04T08:18:43+00:00",
+		];
+		expect([...rows].sort()).toEqual([
+			"2026-01-04T08:18:44+00:00",
+			"2026-09-04T08:18:43+00:00",
+			"2026-09-04T08:18:44+00:00",
+		]);
+		const byInstant = [...rows].sort(
+			(a, b) =>
+				(parseDateValue(a)?.getTime() ?? 0) -
+				(parseDateValue(b)?.getTime() ?? 0),
+		);
+		expect(byInstant).toEqual([...rows].sort());
+	});
+
+	test("still falls back rather than returning an invalid Date", () => {
+		expect(parseDateValue("not a date")).toBeNull();
+		expect(parseDateValue("")).toBeNull();
+	});
+});
+
+describe("datetime-local round trip against an API instant", () => {
+	// The input speaks wall-clock time in the viewer's zone, so an instant read
+	// out of it and written straight back must not move.
+	test("survives an untouched edit", () => {
+		const instant = parseDateValue("2026-09-04T08:18:44+00:00") as Date;
+		const shown = toDateTimeInputValue(instant, "minute");
+		const written = fromDateTimeInputValue(shown) as Date;
+		expect(written.getTime()).toBe(
+			// The input has minute precision, so only the seconds are dropped.
+			instant.getTime() - instant.getSeconds() * 1000,
+		);
+		expect(toDateTimeInputValue(written, "minute")).toBe(shown);
 	});
 });

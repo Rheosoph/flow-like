@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { parseDateValue } from "../../lib/date";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IPage,
@@ -927,11 +928,17 @@ function PageSettingsPanel({
 				<Separator />
 				<div className="space-y-2">
 					<Label>{t("created", "Created")}</Label>
-					<Input value={new Date(page.createdAt).toLocaleString()} disabled />
+					<Input
+						value={parseDateValue(page.createdAt)?.toLocaleString() ?? "—"}
+						disabled
+					/>
 				</div>
 				<div className="space-y-2">
 					<Label>{t("lastUpdated", "Last Updated")}</Label>
-					<Input value={new Date(page.updatedAt).toLocaleString()} disabled />
+					<Input
+						value={parseDateValue(page.updatedAt)?.toLocaleString() ?? "—"}
+						disabled
+					/>
 				</div>
 			</TabsContent>
 		</Tabs>

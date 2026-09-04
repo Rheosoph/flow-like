@@ -15,5 +15,10 @@
 		"noImplicitOverride": true,
 		"types": ["bun"]
 	},
-	"include": ["migrate.ts", "migrate.test.ts", "prisma.dsql.config.ts"]
+	"include": [
+		"migrate.ts",
+		"migrate.test.ts",
+		"shared.ts",
+		"prisma.dsql.config.ts"
+	]
 }

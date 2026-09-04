@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, FixedOffset, SubsecRound};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::sea_query::{
     Expr, ExprTrait, IntoColumnRef, OnConflict, Query as SeaQuery, SimpleExpr,
@@ -39,11 +39,21 @@ pub const MAX_ATTEMPTS: i32 = 5;
 pub const CHECKPOINT_EVERY_CHUNKS: usize = 10;
 const MAX_ERROR_CHARS: usize = 2_000;
 
-fn now() -> NaiveDateTime {
-    chrono::Utc::now().naive_utc()
+/// Now, truncated to the millisecond the `timestamptz(3)` columns store.
+///
+/// `leaseUntil` is fenced on with an equality compare in [`write_fenced`], and
+/// [`checkpoint`] hands the caller the value it just wrote rather than reading
+/// it back. At the microsecond precision `Utc::now` carries, that value never
+/// equals the millisecond one the column actually stores, so every fenced
+/// write after the first checkpoint matched no row and reported a lost lease —
+/// leaving the job stuck at its current phase until it exhausted
+/// [`MAX_ATTEMPTS`]. Minting the instant at the storage precision keeps the
+/// value the job holds and the value the row carries identical.
+fn now() -> DateTime<FixedOffset> {
+    chrono::Utc::now().trunc_subsecs(3).fixed_offset()
 }
 
-fn lease_from(now: NaiveDateTime) -> NaiveDateTime {
+fn lease_from(now: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
     now + chrono::Duration::from_std(LEASE).unwrap_or(chrono::Duration::minutes(5))
 }
 
@@ -419,7 +429,7 @@ async fn update(state: &AppState, model: ActiveModel) -> Result<(), ApiError> {
 async fn write_fenced(
     state: &AppState,
     job_id: &str,
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     model: ActiveModel,
 ) -> Result<bool, ApiError> {
     let job_id = job_id.to_owned();
@@ -456,11 +466,11 @@ pub fn lease_lost(job_id: &str) -> ApiError {
 pub async fn checkpoint(
     state: &AppState,
     job_id: &str,
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     phase: usize,
     cursor: serde_json::Value,
     progressed: bool,
-) -> Result<Option<NaiveDateTime>, ApiError> {
+) -> Result<Option<DateTime<FixedOffset>>, ApiError> {
     let now = now();
     let renewed = lease_from(now);
     let model = ActiveModel {
@@ -484,7 +494,7 @@ pub async fn checkpoint(
 pub async fn release(
     state: &AppState,
     job_id: &str,
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     phase: usize,
     cursor: serde_json::Value,
     progressed: bool,
@@ -512,7 +522,7 @@ pub async fn release(
 pub async fn complete(
     state: &AppState,
     job_id: &str,
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     cursor: serde_json::Value,
 ) -> Result<bool, ApiError> {
     write_fenced(
@@ -538,7 +548,7 @@ pub async fn complete(
 pub async fn fail(
     state: &AppState,
     job_id: &str,
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     attempts: i32,
     phase: usize,
     error: &str,
@@ -627,6 +637,30 @@ mod tests {
     use crate::deletion::graph::fk_graph;
     use crate::entity::course;
     use sea_orm::sea_query::PostgresQueryBuilder;
+
+    /// Every date column is `timestamptz(3)`, and `checkpoint` fences the next
+    /// write on the `leaseUntil` value it just wrote instead of reading it
+    /// back. A sub-millisecond instant therefore never matches the stored row:
+    /// against a live Aurora DSQL cluster the pass tombstoned the root, moved
+    /// to phase 1 and then failed every subsequent fenced write with "lost its
+    /// lease to another worker", so no cascade could ever finish.
+    #[test]
+    fn the_lease_instant_is_minted_at_the_stored_precision() {
+        let now = now();
+        assert_eq!(
+            now.timestamp_subsec_micros() % 1_000,
+            0,
+            "now() carries sub-millisecond precision the column cannot store, \
+             so a fenced write comparing it would match no row"
+        );
+        let lease = lease_from(now);
+        assert_eq!(
+            lease.timestamp_subsec_micros() % 1_000,
+            0,
+            "lease_from must stay at the stored precision"
+        );
+        assert_eq!(lease, lease.trunc_subsecs(3), "lease must round-trip");
+    }
 
     /// H2: `job::cancel` was wired into the *insert* branch of each
     /// id-accepting upsert only. A `202` merely tombstones the root — the row

@@ -390,7 +390,7 @@ pub async fn update_run_on_completion(
     log_level: i32,
 ) -> Result<(), sea_orm::DbErr> {
     if let Some(existing) = ExecutionRun::find_by_id(run_id).one(db).await? {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let started_at = existing.started_at;
         let created_at = existing.created_at;
         let tracking_board_id = existing.board_id.clone();
@@ -449,7 +449,7 @@ async fn track_execution_usage_from_run(
     user_id: Option<&str>,
     technical_user_id: Option<&str>,
     app_id: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), sea_orm::DbErr> {
     let existing = execution_usage_tracking::Entity::find()
         .filter(execution_usage_tracking::Column::Version.eq(run_id))

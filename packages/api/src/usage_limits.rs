@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     state::AppState,
 };
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DbBackend,
@@ -92,8 +92,8 @@ pub fn normalize_period(period: &str) -> Option<String> {
     }
 }
 
-pub fn period_start(period: &str) -> Option<NaiveDateTime> {
-    let now = Utc::now().naive_utc();
+pub fn period_start(period: &str) -> Option<DateTime<FixedOffset>> {
+    let now = Utc::now().fixed_offset();
     match normalize_period(period).as_deref() {
         Some(WEEKLY) => Some(now - Duration::days(7)),
         Some(MONTHLY) => Some(now - Duration::days(30)),
@@ -136,7 +136,7 @@ pub async fn set_app_usage_limits_for_scope(
     scoped_user_id: &str,
     limits: AppUsageLimits,
 ) -> Result<AppUsageLimits, sea_orm::DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     for (period, window) in limits.iter() {
         if window.cost_micro_dollars.is_none() && window.token_limit.is_none() {
@@ -309,7 +309,7 @@ pub async fn query_usage_totals(
     db: &DatabaseConnection,
     app_id: &str,
     user_id: Option<&str>,
-    start: NaiveDateTime,
+    start: DateTime<FixedOffset>,
 ) -> Result<UsageLimitTotals, sea_orm::DbErr> {
     let backend = db.get_database_backend();
     let user_id = user_id.unwrap_or("");
@@ -358,7 +358,7 @@ async fn usage_total_row(
     table: UsageTotalTable,
     app_id: &str,
     user_id: &str,
-    start: NaiveDateTime,
+    start: DateTime<FixedOffset>,
 ) -> Result<UsageSqlRow, sea_orm::DbErr> {
     let sql = match (backend, table) {
         (DbBackend::Postgres, UsageTotalTable::Llm) => {
@@ -503,7 +503,7 @@ async fn emit_usage_alert(
         return Ok(());
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let message = if limit.user_id.is_empty() {
         format!("App usage {} for {}", kind.replace('_', " "), limit.period)
     } else {

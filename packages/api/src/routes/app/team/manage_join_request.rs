@@ -122,9 +122,9 @@ pub async fn accept_join_request(
                     user_id: Set(request.user_id.clone()),
                     app_id: Set(app_id),
                     role_id: Set(default_role_id),
-                    created_at: Set(chrono::Utc::now().naive_utc()),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
                     joined_via: Set(Some("accept_join_request".to_string())),
-                    updated_at: Set(chrono::Utc::now().naive_utc()),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
                 };
 
                 let request: join_queue::ActiveModel = request.into();

@@ -25,10 +25,12 @@ pub struct Model {
         unique_key = "TelemetrySourceMap_release_source_fileName_key"
     )]
     pub file_name: String,
-    #[sea_orm(column_type = "Text")]
-    pub map: String,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub map: Option<String>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
+    #[sea_orm(column_name = "mapRef", column_type = "Text", nullable)]
+    pub map_ref: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

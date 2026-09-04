@@ -38,70 +38,77 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { DsqlSigner } from "@aws-sdk/dsql-signer";
-import pg from "pg";
+import type pg from "pg";
+import {
+	ADMIN_USER,
+	ConfigError,
+	DsqlSession,
+	type DsqlTarget,
+	type Environment,
+	type Executor,
+	MigrationError,
+	TOKEN_EXPIRES_IN_SECONDS,
+	clientConfig as composeClientConfig,
+	composeDatabaseUrl as composeUrl,
+	envReader,
+	interruption,
+	invalid,
+	isAlreadyExistsError,
+	isTransientError,
+	makeLog,
+	parseDsqlTarget,
+	redactDatabaseUrl,
+	redactSecret,
+	sleep,
+} from "./shared";
+
+export {
+	ACCEPTED,
+	ConfigError,
+	ENDPOINT_ENV,
+	FORBIDDEN_SETTINGS,
+	MigrationError,
+	REGION_ENV,
+	interruption,
+	isAlreadyExistsError,
+	isConnectionError,
+	isTransientError,
+	redactDatabaseUrl,
+	redactSecret,
+	withRetries,
+} from "./shared";
+export type {
+	Environment,
+	Executor,
+	RetryOptions,
+	RunOptions,
+} from "./shared";
 
 const LOG_PREFIX = "[aws-migration]";
 const APPLICATION_NAME = "flow-like-aws-migration";
-const ADMIN_USER = "admin";
-const DATABASE = "postgres";
-const PORT = 5432;
 const DEFAULT_RUNTIME_DB_ROLE = "flow_like_api";
 const DEFAULT_MIGRATIONS_DIR = "prisma/migrations-dsql";
 const LEASE_TABLE = "_flow_migration_lock";
 const LEASE_MINUTES = 30;
 const LEASE_RENEW_MS = 5 * 60_000;
-const TOKEN_EXPIRES_IN_SECONDS = 900;
-// DSQL closes connections after 60 minutes; reconnect well before that.
-const CONNECTION_MAX_AGE_MS = 50 * 60_000;
 const JOB_POLL_MS = 5_000;
 const WATCHDOG_MS = 500;
-const MAX_ATTEMPTS = 8;
 const DEFAULT_JOB_WAIT_TIMEOUT_SECS = 2 * 60 * 60;
 const MIN_JOB_WAIT_TIMEOUT_SECS = 60;
 const MAX_JOB_WAIT_TIMEOUT_SECS = 24 * 60 * 60;
 
-export const ENDPOINT_ENV = "DSQL_CLUSTER_ENDPOINT";
-export const REGION_ENV = "DSQL_REGION";
 export const RUNTIME_ROLE_ARN_ENV = "DSQL_RUNTIME_ROLE_ARN";
 export const RUNTIME_DB_ROLE_ENV = "DSQL_RUNTIME_DB_ROLE";
 export const MIGRATIONS_DIR_ENV = "DSQL_MIGRATIONS_DIR";
 export const JOB_WAIT_TIMEOUT_ENV = "DSQL_JOB_WAIT_TIMEOUT_SECS";
 
-// Verbatim flow_like_aws_data::dsql::FORBIDDEN_SETTINGS: static database
-// credentials and libpq's own connection sources are refused, even when empty,
-// because any of them could redirect where the token goes or replace it with a
-// password.
-export const FORBIDDEN_SETTINGS = [
-	"DATABASE_URL",
-	"PGPASSWORD",
-	"PGPASSFILE",
-	"PGSERVICE",
-	"PGSERVICEFILE",
-	"PGHOST",
-	"PGHOSTADDR",
-	"PGPORT",
-	"PGUSER",
-	"PGDATABASE",
-	"PGSSLMODE",
-	"PGSSLROOTCERT",
-	"PGSSLCERT",
-	"PGSSLKEY",
-	"PGOPTIONS",
-] as const;
-
-const ENDPOINT_PATTERN =
-	/^([a-z0-9]{1,63})\.dsql\.([a-z]{2}(?:-[a-z]+)+-\d)\.on\.aws$/;
 const ROLE_ARN_PATTERN =
 	/^arn:aws(?:-[a-z]+)*:iam::\d{12}:role\/[\w+=,.@/-]{1,512}$/;
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]{0,62}$/;
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export type Environment = Record<string, string | undefined>;
-
-export interface MigrationConfig {
-	readonly endpoint: string;
-	readonly region: string;
+export interface MigrationConfig extends DsqlTarget {
 	// null: no runtime role is bound yet (dev clusters); the grant step is skipped.
 	readonly runtimeRoleArn: string | null;
 	readonly runtimeDbRole: string;
@@ -111,14 +118,6 @@ export interface MigrationConfig {
 	readonly jobWaitTimeoutMs: number;
 }
 
-export class ConfigError extends Error {
-	override readonly name = "ConfigError";
-}
-
-export class MigrationError extends Error {
-	override readonly name: string = "MigrationError";
-}
-
 // Thrown when a wait on async jobs is cut short (signal or wait budget). The
 // jobs keep running on the cluster and nothing is wrong with the schema, so a
 // migration whose statements are all committed stays resumable.
@@ -126,48 +125,9 @@ export class JobsPendingError extends MigrationError {
 	override readonly name = "JobsPendingError";
 }
 
-function invalid(name: string, reason: string): never {
-	throw new ConfigError(`invalid ${name}: ${reason}`);
-}
-
 export function parseConfig(env: Environment): MigrationConfig {
-	for (const name of FORBIDDEN_SETTINGS) {
-		if (env[name] !== undefined) {
-			throw new ConfigError(
-				`${name} is forbidden: Aurora DSQL uses IAM tokens, never a static password or libpq connection source`,
-			);
-		}
-	}
-
-	const optional = (name: string): string | undefined => {
-		const value = env[name];
-		if (value === undefined) return undefined;
-		if (value === "" || value.trim() !== value) {
-			invalid(name, "must be non-empty and have no surrounding whitespace");
-		}
-		return value;
-	};
-	const required = (name: string): string => {
-		const value = optional(name);
-		if (value === undefined) {
-			throw new ConfigError(`missing required environment variable ${name}`);
-		}
-		return value;
-	};
-
-	const endpoint = required(ENDPOINT_ENV);
-	const endpointMatch = endpoint.match(ENDPOINT_PATTERN);
-	if (!endpointMatch) {
-		invalid(
-			ENDPOINT_ENV,
-			"must be the bare cluster endpoint <id>.dsql.<region>.on.aws (no scheme, port, or path)",
-		);
-	}
-	const derivedRegion = endpointMatch[2] as string;
-	const region = optional(REGION_ENV) ?? derivedRegion;
-	if (region !== derivedRegion) {
-		invalid(REGION_ENV, `must match the endpoint's region ${derivedRegion}`);
-	}
+	const target = parseDsqlTarget(env);
+	const { optional } = envReader(env);
 
 	const runtimeRoleArn = optional(RUNTIME_ROLE_ARN_ENV) ?? null;
 	if (runtimeRoleArn !== null && !ROLE_ARN_PATTERN.test(runtimeRoleArn)) {
@@ -209,8 +169,7 @@ export function parseConfig(env: Environment): MigrationConfig {
 	}
 
 	return {
-		endpoint,
-		region,
+		...target,
 		runtimeRoleArn,
 		runtimeDbRole,
 		migrationsDir,
@@ -218,51 +177,15 @@ export function parseConfig(env: Environment): MigrationConfig {
 	};
 }
 
-// Prisma's schema engine (quaint) parses PostgreSQL URLs itself: `sslmode`
-// knows only disable|prefer|require and silently falls back to `prefer` for
-// anything else, and certificate verification is the separate `sslaccept`
-// switch. `sslmode=require&sslaccept=strict` is quaint's spelling of
-// verify-full. This URL is handed only to the `prisma migrate status` child;
-// the job's own connections are built from `clientConfig` below.
-export function composeDatabaseUrl(
-	config: MigrationConfig,
-	token: string,
-): string {
-	const params = new URLSearchParams({
-		sslmode: "require",
-		sslaccept: "strict",
-		connect_timeout: "15",
-		application_name: APPLICATION_NAME,
-	});
-	return `postgresql://${ADMIN_USER}:${encodeURIComponent(token)}@${config.endpoint}:${PORT}/${DATABASE}?${params}`;
+export function composeDatabaseUrl(config: DsqlTarget, token: string): string {
+	return composeUrl(config, token, APPLICATION_NAME);
 }
 
-export function redactDatabaseUrl(url: string): string {
-	return url.replace(/^(postgresql:\/\/[^:/?#]+:)[^@]*@/, "$1***@");
-}
-
-export function redactSecret(text: string, secret: string): string {
-	return secret.length === 0 ? text : text.split(secret).join("***");
-}
-
-// verify-full for the job's own connections: node-postgres verifies the chain
-// against the system CA store and sets `servername` to the host for SNI and
-// hostname checking whenever `ssl` is an options object.
 export function clientConfig(
-	config: MigrationConfig,
+	config: DsqlTarget,
 	token: string,
 ): pg.ClientConfig {
-	return {
-		host: config.endpoint,
-		port: PORT,
-		user: ADMIN_USER,
-		password: token,
-		database: DATABASE,
-		ssl: { rejectUnauthorized: true },
-		application_name: APPLICATION_NAME,
-		connectionTimeoutMillis: 15_000,
-		keepAlive: true,
-	};
+	return composeClientConfig(config, token, APPLICATION_NAME);
 }
 
 // ---------------------------------------------------------------------------
@@ -526,17 +449,7 @@ export function pendingMigrations(
 // Runtime
 // ---------------------------------------------------------------------------
 
-function log(message: string): void {
-	console.log(`${LOG_PREFIX} ${message}`);
-}
-
-function logError(message: string): void {
-	console.error(`${LOG_PREFIX} ${message}`);
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((done) => setTimeout(done, ms));
-}
+const { log, logError } = makeLog(LOG_PREFIX);
 
 // Client-side expiry (timestamptz parameter): a 30-minute lease tolerates the
 // clock skew between this task and the cluster, and needs no interval
@@ -545,191 +458,20 @@ function leaseExpiry(): Date {
 	return new Date(Date.now() + LEASE_MINUTES * 60_000);
 }
 
-// Set by the signal handlers in main(); read between statements and, while a
-// wait blocks the session, by the watchdog in waitForJobs.
-export const interruption: { signal: NodeJS.Signals | null } = { signal: null };
-
 interface PgError extends Error {
 	code?: string;
-}
-
-// DSQL reports OCC conflicts as SQLSTATE 40001 with OC000/OC001 in the message;
-// OC001 also fires on the first statement of a session after a schema change.
-// Connection loss (60-minute limit, idle close) is retried after a reconnect.
-export function isTransientError(error: unknown): boolean {
-	const e = error as PgError;
-	if (!e) return false;
-	if (e.code === "40001") return true;
-	if (/\bOC00[01]\b/.test(e.message ?? "")) return true;
-	return isConnectionError(error);
-}
-
-export function isConnectionError(error: unknown): boolean {
-	const e = error as PgError;
-	if (!e) return false;
-	return (
-		e.code === "57P01" ||
-		e.code === "08006" ||
-		e.code === "08003" ||
-		e.code === "ECONNRESET" ||
-		e.code === "EPIPE" ||
-		/connection terminated|client has encountered a connection error|closed the connection/i.test(
-			e.message ?? "",
-		)
-	);
-}
-
-// duplicate_table (also indexes), duplicate_object (constraints), duplicate_column.
-export function isAlreadyExistsError(error: unknown): boolean {
-	const e = error as PgError;
-	if (!e) return false;
-	return e.code === "42P07" || e.code === "42710" || e.code === "42701";
-}
-
-export interface RunOptions {
-	readonly maxAttempts?: number;
-	// Consulted on the second and later attempts only: an error the first
-	// attempt could not have produced if it had not been committed after all.
-	readonly acceptOnRetry?: (error: unknown) => boolean;
-}
-
-export interface RetryOptions extends RunOptions {
-	readonly onTransient?: (error: unknown) => Promise<void>;
-	readonly pause?: (ms: number) => Promise<void>;
-}
-
-export const ACCEPTED: unique symbol = Symbol("accepted");
-
-// Runs `attempt` until it succeeds. OCC conflicts and connection loss are
-// retried with jittered backoff. DSQL can commit a DDL statement and still
-// report OC001 for it, so a retry may hit "already exists": `acceptOnRetry`
-// turns that into ACCEPTED (with a warning) instead of a failure.
-export async function withRetries<T>(
-	label: string,
-	attempt: () => Promise<T>,
-	options: RetryOptions = {},
-): Promise<T | typeof ACCEPTED> {
-	const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
-	const pause = options.pause ?? sleep;
-	for (let n = 1; ; n++) {
-		try {
-			return await attempt();
-		} catch (error) {
-			const e = error as PgError;
-			if (n > 1 && options.acceptOnRetry?.(error)) {
-				log(
-					`warning: accepted ${e.code ?? "error"} "${e.message}" on attempt ${n} as already applied by attempt ${n - 1} — ${label}`,
-				);
-				return ACCEPTED;
-			}
-			if (n >= maxAttempts || !isTransientError(error)) throw error;
-			log(
-				`retrying (${n}/${maxAttempts}) after ${e.code ?? "error"}: ${e.message} — ${label}`,
-			);
-			await options.onTransient?.(error);
-			await pause(Math.min(200 * 2 ** n, 5_000) * (0.5 + Math.random()));
-		}
-	}
-}
-
-function emptyResult<R extends pg.QueryResultRow>(): pg.QueryResult<R> {
-	return { command: "", rowCount: 0, oid: 0, fields: [], rows: [] };
-}
-
-// What applyMigration and waitForJobs need from a connection; Session is the
-// real one, the tests substitute a scripted one.
-export interface Executor {
-	run<R extends pg.QueryResultRow = pg.QueryResultRow>(
-		sql: string,
-		values?: unknown[],
-		label?: string,
-		options?: RunOptions,
-	): Promise<pg.QueryResult<R>>;
-	close(): Promise<void>;
 }
 
 export interface LeaseHolder {
 	touch(): Promise<void>;
 }
 
-class Session implements Executor {
-	private client: pg.Client | null = null;
-	private openedAt = 0;
-	private readonly config: MigrationConfig;
-	private readonly signer: DsqlSigner;
-
-	constructor(config: MigrationConfig, signer: DsqlSigner) {
-		this.config = config;
-		this.signer = signer;
-	}
-
-	async token(): Promise<string> {
-		return this.signer.getDbConnectAdminAuthToken();
-	}
-
-	async connect(): Promise<void> {
-		await this.close();
-		const token = await this.token();
-		const client = new pg.Client(clientConfig(this.config, token));
-		client.on("error", (error) =>
-			logError(`connection error: ${error.message}`),
-		);
-		await client.connect();
-		this.client = client;
-		this.openedAt = Date.now();
-		log(
-			`connected to ${ADMIN_USER}@${this.config.endpoint}:${PORT}/${DATABASE} (verify-full)`,
-		);
-	}
-
-	async ensureFresh(): Promise<void> {
-		if (!this.client || Date.now() - this.openedAt > CONNECTION_MAX_AGE_MS) {
-			if (this.client)
-				log("connection is approaching DSQL's 60-minute limit; reconnecting");
-			await this.connect();
-		}
-	}
-
-	async close(): Promise<void> {
-		const client = this.client;
-		this.client = null;
-		if (client) await client.end().catch(() => undefined);
-	}
-
-	// One statement, autocommit, retried on OCC conflicts and connection loss.
-	// An accepted retry (see withRetries) yields an empty result.
-	async run<R extends pg.QueryResultRow = pg.QueryResultRow>(
-		sql: string,
-		values: unknown[] = [],
-		label = sql.slice(0, 80),
-		options: RunOptions = {},
-	): Promise<pg.QueryResult<R>> {
-		const outcome = await withRetries(
-			label,
-			async () => {
-				await this.ensureFresh();
-				const client = this.client as pg.Client;
-				return values.length === 0
-					? await client.query<R>(sql)
-					: await client.query<R>(sql, values);
-			},
-			{
-				...options,
-				onTransient: async (error) => {
-					if (isConnectionError(error)) await this.close();
-				},
-			},
-		);
-		return outcome === ACCEPTED ? emptyResult<R>() : outcome;
-	}
-}
-
 class Lease implements LeaseHolder {
 	private renewedAt = 0;
 	readonly holder: string;
-	private readonly session: Session;
+	private readonly session: DsqlSession;
 
-	constructor(session: Session, holder: string) {
+	constructor(session: DsqlSession, holder: string) {
 		this.session = session;
 		this.holder = holder;
 	}
@@ -1147,7 +889,7 @@ async function grantRuntimeRole(
 
 async function prismaMigrateStatus(
 	config: MigrationConfig,
-	session: Session,
+	session: DsqlSession,
 ): Promise<number> {
 	const token = await session.token();
 	const databaseUrl = composeDatabaseUrl(config, token);
@@ -1223,7 +965,10 @@ async function main(): Promise<number> {
 		region: config.region,
 		expiresIn: TOKEN_EXPIRES_IN_SECONDS,
 	});
-	const session = new Session(config, signer);
+	const session = new DsqlSession(config, signer, APPLICATION_NAME, {
+		log,
+		logError,
+	});
 	const lease = new Lease(session, Lease.holderName());
 	let held = false;
 	const onSignal = (signal: NodeJS.Signals) => {

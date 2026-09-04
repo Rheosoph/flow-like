@@ -148,7 +148,7 @@ fn sanitize_props(value: &mut Value) {
 struct ValidatedEvent {
     name: String,
     props: Option<Value>,
-    client_ts: Option<chrono::NaiveDateTime>,
+    client_ts: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 /// Derives an ISO 3166-1 alpha-2 country code from proxy geolocation headers,
@@ -168,9 +168,11 @@ fn country_from_headers(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-fn parse_client_ts(raw: Option<&str>) -> Option<chrono::NaiveDateTime> {
+/// Normalised to UTC so the client's offset never leaks into the stored value —
+/// a later `date_naive()` on it must read the UTC calendar day, not theirs.
+fn parse_client_ts(raw: Option<&str>) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     chrono::DateTime::parse_from_rfc3339(raw?.trim())
-        .map(|dt| dt.naive_utc())
+        .map(|dt| dt.to_utc().fixed_offset())
         .ok()
 }
 
@@ -276,7 +278,7 @@ pub async fn ingest_events(
         }));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let accepted = validated.len();
     let country = country_from_headers(&headers);
     let models: Vec<telemetry_event::ActiveModel> = validated

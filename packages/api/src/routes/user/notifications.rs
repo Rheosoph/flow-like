@@ -141,7 +141,7 @@ pub async fn mark_notification_read(
 
     let mut active: notification::ActiveModel = notification.into();
     active.read = Set(true);
-    active.read_at = Set(Some(chrono::Utc::now().naive_utc()));
+    active.read_at = Set(Some(chrono::Utc::now().fixed_offset()));
     active.update(&state.db).await?;
 
     Ok(Json(()))
@@ -212,7 +212,7 @@ pub async fn mark_all_read(
             (notification::Column::Read, Expr::value(true)),
             (
                 notification::Column::ReadAt,
-                Expr::value(chrono::Utc::now().naive_utc()),
+                Expr::value(chrono::Utc::now().fixed_offset()),
             ),
         ],
         crate::db::DEFAULT_WRITE_CHUNK,

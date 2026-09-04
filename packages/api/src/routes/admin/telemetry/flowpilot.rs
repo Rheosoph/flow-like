@@ -22,7 +22,7 @@ use crate::state::AppState;
 use crate::telemetry::flowpilot::{FLOWPILOT_METRICS_EVENT, parse_failure_signatures};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -164,7 +164,7 @@ pub struct TelemetryFlowPilotResponse {
 struct FlowPilotRow {
     anon_id: String,
     props: Option<serde_json::Value>,
-    created_at: NaiveDateTime,
+    created_at: DateTime<FixedOffset>,
 }
 
 fn counter_value(props: Option<&serde_json::Value>, key: &str) -> i64 {
@@ -201,12 +201,12 @@ fn fold_flowpilot_totals(rows: &[FlowPilotRow]) -> FlowPilotTotals {
 
 fn fold_flowpilot_trend(
     rows: &[FlowPilotRow],
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Vec<FlowPilotTrendPoint> {
     let step = bucket_step(bucket);
-    let mut buckets: BTreeMap<NaiveDateTime, (i64, i64, i64)> = BTreeMap::new();
+    let mut buckets: BTreeMap<DateTime<FixedOffset>, (i64, i64, i64)> = BTreeMap::new();
     let mut slot = trunc_to_bucket(cutoff, bucket);
     let end = trunc_to_bucket(now, bucket);
     while slot <= end {
@@ -228,7 +228,7 @@ fn fold_flowpilot_trend(
     buckets
         .into_iter()
         .map(|(ts, (started, succeeded, failed))| FlowPilotTrendPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc).to_rfc3339(),
+            ts: ts.to_rfc3339(),
             runs_started: started,
             runs_succeeded: succeeded,
             runs_failed: failed,
@@ -328,10 +328,10 @@ fn fold_daily_totals(rows: &[telemetry_flowpilot_daily::Model]) -> (FlowPilotTot
 
 fn fold_daily_trend(
     rows: &[telemetry_flowpilot_daily::Model],
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> Vec<FlowPilotTrendPoint> {
-    let counts: BTreeMap<NaiveDateTime, (i64, i64, i64)> = rows
+    let counts: BTreeMap<DateTime<FixedOffset>, (i64, i64, i64)> = rows
         .iter()
         .map(|row| {
             (
@@ -350,7 +350,7 @@ fn fold_daily_trend(
         .map(|slot| {
             let (started, succeeded, failed) = counts.get(&slot).copied().unwrap_or((0, 0, 0));
             FlowPilotTrendPoint {
-                ts: DateTime::<Utc>::from_naive_utc_and_offset(slot, Utc).to_rfc3339(),
+                ts: slot.to_rfc3339(),
                 runs_started: started,
                 runs_succeeded: succeeded,
                 runs_failed: failed,
@@ -381,7 +381,7 @@ pub async fn telemetry_flowpilot(
         .await?;
 
     let hours = q.hours.unwrap_or(720).clamp(1, 2160);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     if reads_raw(hours) {
         let bucket = window_bucket(hours, None);
@@ -462,7 +462,7 @@ mod tests {
     fn flowpilot_row(
         anon: &str,
         props: Option<serde_json::Value>,
-        created_at: NaiveDateTime,
+        created_at: DateTime<FixedOffset>,
     ) -> FlowPilotRow {
         FlowPilotRow {
             anon_id: anon.to_string(),
@@ -471,8 +471,12 @@ mod tests {
         }
     }
 
-    fn ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> NaiveDateTime {
-        day(y, m, d).and_hms_opt(h, min, 0).unwrap()
+    fn ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<FixedOffset> {
+        day(y, m, d)
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn daily(

@@ -138,7 +138,7 @@ pub async fn request_publication(
             }
         }
     }
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let request_id = create_id();
     let author_id = user.sub().ok();
 
@@ -168,6 +168,6 @@ pub async fn request_publication(
         app_id,
         target_visibility: body.target_visibility.to_uppercase(),
         status: "PENDING".to_string(),
-        created_at: now.to_string(),
+        created_at: now.to_rfc3339(),
     }))
 }

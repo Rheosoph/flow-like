@@ -97,7 +97,7 @@ pub async fn join_invite_link(
                     })?;
 
                 if let Some(expires_at) = invite_link.expires_at
-                    && expires_at < chrono::Utc::now().naive_utc()
+                    && expires_at < chrono::Utc::now().fixed_offset()
                 {
                     tracing::warn!(
                         "User {} attempted to join app {} with expired invite link {}",
@@ -144,8 +144,8 @@ pub async fn join_invite_link(
                     user_id: Set(sub.clone()),
                     app_id: Set(app_id.clone()),
                     role_id: Set(default_role_id),
-                    created_at: Set(chrono::Utc::now().naive_utc()),
-                    updated_at: Set(chrono::Utc::now().naive_utc()),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
                     joined_via: Set(Some("invite_link".to_string())),
                 };
 
@@ -174,7 +174,7 @@ pub async fn join_invite_link(
                     )
                     .col_expr(
                         invite_link::Column::UpdatedAt,
-                        Expr::value(chrono::Utc::now().naive_utc()),
+                        Expr::value(chrono::Utc::now().fixed_offset()),
                     )
                     .filter(invite_link::Column::Id.eq(invite_link.id.clone()))
                     .filter(

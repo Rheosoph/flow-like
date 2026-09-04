@@ -52,7 +52,7 @@ pub async fn push_meta(
         updated_meta.thumbnail = Set(meta.thumbnail.or(existing_meta.thumbnail.clone()));
         updated_meta.use_case = Set(meta.use_case.or(existing_meta.use_case.clone()));
         updated_meta.website = Set(meta.website.or(existing_meta.website.clone()));
-        updated_meta.updated_at = Set(chrono::Utc::now().naive_utc());
+        updated_meta.updated_at = Set(chrono::Utc::now().fixed_offset());
         updated_meta.update(&state.db).await?;
 
         return Ok(Json(()));
@@ -78,8 +78,8 @@ pub async fn push_meta(
         thumbnail: Set(meta.thumbnail),
         use_case: Set(meta.use_case),
         website: Set(meta.website),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         app_id: Set(None),
         course_id: Set(None),
         preview_media: Set(None),

@@ -37,7 +37,7 @@ impl PageInfo {
             board_id: page.board_id.clone(),
             name: page.name.clone(),
             description: page.description.clone(),
-            updated_at: Some(page.updated_at.and_utc().to_rfc3339()),
+            updated_at: Some(page.updated_at.to_rfc3339()),
         }
     }
 }

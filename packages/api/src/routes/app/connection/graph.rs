@@ -57,8 +57,8 @@ impl From<app_process_note::Model> for ProcessNoteInfo {
             id: model.id,
             author_user_id: model.author_user_id,
             content: model.content,
-            created_at: model.created_at.and_utc().timestamp(),
-            updated_at: model.updated_at.and_utc().timestamp(),
+            created_at: model.created_at.timestamp(),
+            updated_at: model.updated_at.timestamp(),
         }
     }
 }
@@ -151,9 +151,9 @@ pub struct ProcessGraphQuery {
     pub days: Option<i64>,
 }
 
-pub(crate) fn flow_window(query: &ProcessGraphQuery) -> chrono::NaiveDateTime {
+pub(crate) fn flow_window(query: &ProcessGraphQuery) -> chrono::DateTime<chrono::FixedOffset> {
     let days = query.days.unwrap_or(30).clamp(1, 365);
-    chrono::Utc::now().naive_utc() - chrono::Duration::days(days)
+    chrono::Utc::now().fixed_offset() - chrono::Duration::days(days)
 }
 
 /// BFS over the connection topology in both directions, starting at `seed`.
@@ -229,7 +229,7 @@ fn flow_from_row(row: &sea_orm::QueryResult) -> Result<ObservedFlow, ApiError> {
     let run_count: i64 = row.try_get("", "run_count")?;
     let failed_count: i64 = row.try_get("", "failed_count")?;
     let avg_duration_ms: Option<f64> = row.try_get("", "avg_duration_ms")?;
-    let last_run: chrono::NaiveDateTime = row.try_get("", "last_run")?;
+    let last_run: chrono::DateTime<chrono::FixedOffset> = row.try_get("", "last_run")?;
     let event_name: Option<String> = row.try_get("", "event_name")?;
     let event_type: Option<String> = row.try_get("", "event_type")?;
     let mut path = chain;
@@ -239,7 +239,7 @@ fn flow_from_row(row: &sea_orm::QueryResult) -> Result<ObservedFlow, ApiError> {
         run_count,
         failed_count,
         avg_duration_ms,
-        last_run_at: last_run.and_utc().timestamp(),
+        last_run_at: last_run.timestamp(),
         event_name,
         event_type,
     })
@@ -265,7 +265,7 @@ const OBSERVED_FLOW_GROUP: &str =
 pub(crate) async fn observed_flows_for_app(
     state: &AppState,
     app_id: &str,
-    since: chrono::NaiveDateTime,
+    since: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
     let sql = format!(
         r#"{OBSERVED_FLOW_SELECT}
@@ -294,7 +294,7 @@ pub(crate) async fn observed_flows_for_app(
 /// All observed chains platform-wide.
 pub(crate) async fn observed_flows_global(
     state: &AppState,
-    since: chrono::NaiveDateTime,
+    since: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
     let sql = format!(
         r#"{OBSERVED_FLOW_SELECT}

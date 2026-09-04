@@ -2,6 +2,7 @@
 //! frames, and triage status updates.
 
 use super::overview::PlatformBucket;
+use super::sourcemaps::load_source_map;
 use super::symbolicate::{SourceMapEntry, StackFrame, basename, symbolicate_frames};
 use super::{TOP_LIST_LIMIT, bucket_for, bucket_slots};
 use crate::entity::{telemetry_error_event, telemetry_issue, telemetry_source_map};
@@ -11,7 +12,9 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_storage::files::store::FlowLikeStore;
+use futures::{StreamExt, stream};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Expr, Func};
 use sea_orm::{
@@ -30,6 +33,9 @@ const ISSUE_DETAIL_HOURS: i64 = 24 * 30;
 const MAX_SYMBOLICATION_MAPS: u64 = 25;
 /// Upper bound on the map index scanned to find candidates for a stack trace.
 const SOURCE_MAP_INDEX_CAP: u64 = 500;
+/// Stored maps fetched from the meta store at once. Symbolication runs inside
+/// one issue-detail request, so the fetches overlap rather than queueing.
+const SOURCE_MAP_FETCH_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ListTelemetryIssuesQuery {
@@ -164,7 +170,7 @@ struct KeyCountRow {
 
 #[derive(Debug, FromQueryResult)]
 struct IssueBucketRow {
-    bucket: NaiveDateTime,
+    bucket: DateTime<FixedOffset>,
     cnt: i64,
 }
 
@@ -207,8 +213,8 @@ fn issue_record(model: telemetry_issue::Model, install_count: i64) -> TelemetryI
         platform: model.platform,
         status: model.status,
         resolved_in_release: model.resolved_in_release,
-        first_seen: model.first_seen.and_utc().to_rfc3339(),
-        last_seen: model.last_seen.and_utc().to_rfc3339(),
+        first_seen: model.first_seen.to_rfc3339(),
+        last_seen: model.last_seen.to_rfc3339(),
         event_count: model.event_count as i64,
         install_count,
         first_release: model.first_release,
@@ -251,7 +257,7 @@ async fn install_counts<C: ConnectionTrait>(
 fn breakdown_query(
     column: telemetry_error_event::Column,
     issue_id: &str,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Select<telemetry_error_event::Entity> {
     telemetry_error_event::Entity::find()
         .select_only()
@@ -268,7 +274,7 @@ async fn breakdown<C: ConnectionTrait>(
     db: &C,
     column: telemetry_error_event::Column,
     issue_id: &str,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Result<Vec<KeyCountRow>, ApiError> {
     let rows = breakdown_query(column, issue_id, cutoff)
         .into_model::<KeyCountRow>()
@@ -279,16 +285,16 @@ async fn breakdown<C: ConnectionTrait>(
 
 fn fill_timeseries(
     rows: Vec<IssueBucketRow>,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Vec<IssueTimeseriesPoint> {
-    let counts: HashMap<NaiveDateTime, i64> =
+    let counts: HashMap<DateTime<FixedOffset>, i64> =
         rows.into_iter().map(|row| (row.bucket, row.cnt)).collect();
     bucket_slots(cutoff, now, bucket)
         .into_iter()
         .map(|slot| IssueTimeseriesPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(slot, Utc).to_rfc3339(),
+            ts: slot.to_rfc3339(),
             count: counts.get(&slot).copied().unwrap_or(0),
         })
         .collect()
@@ -297,14 +303,14 @@ fn fill_timeseries(
 async fn issue_timeseries<C: ConnectionTrait>(
     db: &C,
     issue_id: &str,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Result<Vec<IssueTimeseriesPoint>, ApiError> {
     let backend = db.get_database_backend();
     let sql = match backend {
         DbBackend::Postgres => format!(
-            r#"SELECT date_trunc('{bucket}', "createdAt") AS bucket, COUNT(*) AS cnt
+            r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket, COUNT(*) AS cnt
                FROM "TelemetryErrorEvent"
                WHERE "issueId" = $1 AND "createdAt" >= $2
                GROUP BY bucket
@@ -329,6 +335,7 @@ async fn issue_timeseries<C: ConnectionTrait>(
 /// option.
 async fn source_maps_for_frames<C: ConnectionTrait>(
     db: &C,
+    store: &FlowLikeStore,
     release: &str,
     source: &str,
     frames: &[StackFrame],
@@ -369,17 +376,56 @@ async fn source_maps_for_frames<C: ConnectionTrait>(
         .all(db)
         .await?;
 
-    Ok(maps
-        .into_iter()
-        .map(|model| SourceMapEntry {
-            file_name: model.file_name,
-            map: model.map,
-        })
-        .collect())
+    Ok(stream::iter(maps)
+        .map(|model| source_map_entry(store, model))
+        .buffer_unordered(SOURCE_MAP_FETCH_CONCURRENCY)
+        .filter_map(|entry| async move { entry })
+        .collect()
+        .await)
+}
+
+/// The bytes of one stored map, or `None` when they cannot be had.
+///
+/// Symbolication is best effort, so an object the meta store will not hand over
+/// degrades exactly like a map that will not decode: it is logged and left out,
+/// and the remaining maps still resolve the frames they cover.
+async fn source_map_entry(
+    store: &FlowLikeStore,
+    model: telemetry_source_map::Model,
+) -> Option<SourceMapEntry> {
+    let map = match (model.map_ref.as_deref(), model.map.as_deref()) {
+        (Some(reference), _) => match load_source_map(store, reference).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    file = %model.file_name,
+                    reference,
+                    %error,
+                    "stored telemetry source map could not be read; symbolicating without it"
+                );
+                return None;
+            }
+        },
+        // Written before the map moved to the meta store.
+        (None, Some(inline)) => inline.as_bytes().to_vec(),
+        (None, None) => {
+            tracing::warn!(
+                file = %model.file_name,
+                "telemetry source map row carries neither a map nor a reference"
+            );
+            return None;
+        }
+    };
+
+    Some(SourceMapEntry {
+        file_name: model.file_name,
+        map,
+    })
 }
 
 async fn latest_event<C: ConnectionTrait>(
     db: &C,
+    store: &FlowLikeStore,
     issue_id: &str,
 ) -> Result<Option<TelemetryIssueEvent>, ApiError> {
     let Some(model) = telemetry_error_event::Entity::find()
@@ -398,7 +444,7 @@ async fn latest_event<C: ConnectionTrait>(
 
     let (stacktrace, symbolicated) = match model.release.as_deref() {
         Some(release) if !frames.is_empty() => {
-            let maps = source_maps_for_frames(db, release, &model.source, &frames).await?;
+            let maps = source_maps_for_frames(db, store, release, &model.source, &frames).await?;
             symbolicate_frames(frames, &maps)
         }
         _ => (frames, false),
@@ -415,8 +461,8 @@ async fn latest_event<C: ConnectionTrait>(
         breadcrumbs: model.breadcrumbs,
         context: model.context,
         country: model.country,
-        client_ts: model.client_ts.map(|ts| ts.and_utc().to_rfc3339()),
-        created_at: model.created_at.and_utc().to_rfc3339(),
+        client_ts: model.client_ts.map(|ts| ts.to_rfc3339()),
+        created_at: model.created_at.to_rfc3339(),
         symbolicated,
     }))
 }
@@ -445,7 +491,7 @@ pub async fn list_telemetry_issues(
     let hours = q.hours.unwrap_or(24 * 30).clamp(1, 24 * 90);
     let page = q.page.unwrap_or(0);
     let page_size = q.page_size.unwrap_or(25).clamp(1, 100);
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
 
     let mut select =
         telemetry_issue::Entity::find().filter(telemetry_issue::Column::LastSeen.gte(cutoff));
@@ -543,7 +589,7 @@ pub async fn get_telemetry_issue(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let cutoff = now - Duration::hours(ISSUE_DETAIL_HOURS);
     let bucket = bucket_for(ISSUE_DETAIL_HOURS, None);
 
@@ -553,7 +599,7 @@ pub async fn get_telemetry_issue(
         .copied()
         .unwrap_or(0);
 
-    let latest_event = latest_event(&state.db, &issue_id).await?;
+    let latest_event = latest_event(&state.db, &state.meta_bucket, &issue_id).await?;
     let timeseries = issue_timeseries(&state.db, &issue_id, cutoff, now, bucket).await?;
 
     let releases = breakdown(
@@ -637,7 +683,7 @@ pub async fn update_telemetry_issue(
         active.resolved_in_release = Set(resolved_in_release.filter(|v| !v.trim().is_empty()));
     }
 
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
 
     let model = active.update(&state.db).await?;
     let installs = install_counts(&state.db, vec![issue_id.clone()])
@@ -655,11 +701,13 @@ mod tests {
     use chrono::NaiveDate;
     use sea_orm::QueryTrait;
 
-    fn ts(y: i32, m: u32, d: u32, h: u32) -> NaiveDateTime {
+    fn ts(y: i32, m: u32, d: u32, h: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(h, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     #[test]
@@ -772,5 +820,91 @@ mod tests {
         let set: UpdateTelemetryIssuePayload =
             serde_json::from_str(r#"{"resolved_in_release":"1.2.3"}"#).unwrap();
         assert_eq!(set.resolved_in_release, Some(Some("1.2.3".to_string())));
+    }
+
+    mod source_maps {
+        use super::*;
+        use crate::routes::admin::telemetry::sourcemaps::source_map_reference_path;
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+        use std::sync::Arc;
+
+        fn row(map: Option<&str>, map_ref: Option<&str>) -> telemetry_source_map::Model {
+            telemetry_source_map::Model {
+                id: "id".to_string(),
+                release: "1.2.3".to_string(),
+                source: "web".to_string(),
+                file_name: "main-abc123.js".to_string(),
+                map: map.map(str::to_string),
+                map_ref: map_ref.map(str::to_string),
+                created_at: ts(2026, 1, 1, 0),
+            }
+        }
+
+        async fn store_with(reference: &str, body: &[u8]) -> FlowLikeStore {
+            let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+            store
+                .as_generic()
+                .put(&source_map_reference_path(reference), body.to_vec().into())
+                .await
+                .unwrap();
+            store
+        }
+
+        const REFERENCE: &str = "store://telemetry/sourcemaps/a/b-c.map";
+
+        #[tokio::test]
+        async fn a_referenced_map_is_read_from_the_store() {
+            let store = store_with(REFERENCE, b"stored bytes").await;
+
+            let entry = source_map_entry(&store, row(None, Some(REFERENCE)))
+                .await
+                .unwrap();
+
+            assert_eq!(entry.file_name, "main-abc123.js");
+            assert_eq!(entry.map, b"stored bytes");
+        }
+
+        /// Rows written before the map moved to the meta store.
+        #[tokio::test]
+        async fn a_legacy_inline_map_is_used_as_is() {
+            let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+
+            let entry = source_map_entry(&store, row(Some("inline bytes"), None))
+                .await
+                .unwrap();
+
+            assert_eq!(entry.map, b"inline bytes");
+        }
+
+        /// The reference wins over a stale inline copy, so a row that once held
+        /// both never symbolicates against the superseded bytes.
+        #[tokio::test]
+        async fn a_reference_takes_precedence_over_an_inline_map() {
+            let store = store_with(REFERENCE, b"stored bytes").await;
+
+            let entry = source_map_entry(&store, row(Some("inline bytes"), Some(REFERENCE)))
+                .await
+                .unwrap();
+
+            assert_eq!(entry.map, b"stored bytes");
+        }
+
+        #[tokio::test]
+        async fn a_missing_object_is_skipped_rather_than_raised() {
+            let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+
+            assert!(
+                source_map_entry(&store, row(None, Some(REFERENCE)))
+                    .await
+                    .is_none()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_row_with_neither_a_map_nor_a_reference_is_skipped() {
+            let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+
+            assert!(source_map_entry(&store, row(None, None)).await.is_none());
+        }
     }
 }

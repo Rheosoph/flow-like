@@ -31,7 +31,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, PrimaryKeyTrait, TryGetable,
@@ -201,7 +201,7 @@ impl TelemetrySweeperConfig {
 pub enum RollupFloor {
     /// Rollups exist through this day; raw rows are safe to delete up to the
     /// start of it, i.e. through the end of the previous day.
-    UpTo(NaiveDateTime),
+    UpTo(DateTime<FixedOffset>),
     /// The rollup job is enabled but has never produced a day. Hold everything.
     Pending,
     /// The rollup job is switched off, so retention is the operator's call.
@@ -281,7 +281,7 @@ pub async fn sweep_once(
     dialect: DbDialect,
     config: &TelemetrySweeperConfig,
 ) -> Result<TelemetrySweepResult, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let floor = rollup_floor(db).await?;
     let mut result = TelemetrySweepResult::default();
 
@@ -374,7 +374,7 @@ async fn delete_before<E>(
     db: &DatabaseConnection,
     dialect: DbDialect,
     column: E::Column,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr>
 where
     E: EntityTrait,
@@ -405,7 +405,7 @@ where
 async fn sweep_rollups(
     db: &DatabaseConnection,
     dialect: DbDialect,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     macro_rules! delete_days_before {
         ($($entity:ty => $column:expr),+ $(,)?) => {{
@@ -450,7 +450,10 @@ fn sweeper_disabled() -> bool {
 /// Returns `None` when the table must not be swept at all this pass. The clamp
 /// only ever pulls the cutoff *back*, so the failure mode of a lagging rollup
 /// job is keeping data longer than configured — never losing it.
-pub(crate) fn clamp_cutoff(cutoff: NaiveDateTime, floor: RollupFloor) -> Option<NaiveDateTime> {
+pub(crate) fn clamp_cutoff(
+    cutoff: DateTime<FixedOffset>,
+    floor: RollupFloor,
+) -> Option<DateTime<FixedOffset>> {
     match floor {
         RollupFloor::Disabled => Some(cutoff),
         RollupFloor::Pending => None,
@@ -458,7 +461,7 @@ pub(crate) fn clamp_cutoff(cutoff: NaiveDateTime, floor: RollupFloor) -> Option<
     }
 }
 
-pub(crate) fn retention_cutoff(now: NaiveDateTime, days: i64) -> NaiveDateTime {
+pub(crate) fn retention_cutoff(now: DateTime<FixedOffset>, days: i64) -> DateTime<FixedOffset> {
     now - chrono::Duration::days(days.max(MIN_RETENTION_DAYS))
 }
 
@@ -485,14 +488,16 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
-    fn ts(day: u32, hour: u32) -> NaiveDateTime {
+    fn ts(day: u32, hour: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, day)
             .unwrap()
             .and_hms_opt(hour, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
-    fn midnight(day: u32) -> NaiveDateTime {
+    fn midnight(day: u32) -> DateTime<FixedOffset> {
         ts(day, 0)
     }
 

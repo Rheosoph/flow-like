@@ -176,10 +176,7 @@ export function SurfacesTable({
 									</td>
 									<td className="hidden px-2 py-2 text-xs text-muted-foreground lg:table-cell">
 										{surface.lastAt
-											? formatRelativeTime(
-													new Date(surface.lastAt).toISOString(),
-													"narrow",
-												)
+											? formatRelativeTime(surface.lastAt, "narrow")
 											: "—"}
 									</td>
 									<td className="px-4 py-2 text-right text-xs tabular-nums">

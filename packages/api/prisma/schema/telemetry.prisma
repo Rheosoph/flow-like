@@ -7,8 +7,8 @@ model TelemetryEvent {
   appVersion String?
   platform   String?
   country    String?
-  clientTs   DateTime?
-  createdAt  DateTime  @default(now())
+  clientTs   DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([name, createdAt])
@@ -26,14 +26,14 @@ model TelemetryIssue {
   platform          String?
   status            String   @default("unresolved")
   resolvedInRelease String?
-  firstSeen         DateTime
-  lastSeen          DateTime
+  firstSeen         DateTime @db.Timestamptz(3)
+  lastSeen          DateTime @db.Timestamptz(3)
   eventCount        Int      @default(0)
   installCount      Int      @default(0)
   firstRelease      String?
   lastRelease       String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lastSeen])
   @@index([status, lastSeen])
@@ -56,8 +56,8 @@ model TelemetryErrorEvent {
   breadcrumbs Json?
   context     Json?
   country     String?
-  clientTs    DateTime?
-  createdAt   DateTime  @default(now())
+  clientTs    DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([issueId, createdAt])
   @@index([createdAt])
@@ -69,8 +69,8 @@ model TelemetryRelease {
   version     String
   source      String
   commitSha   String?
-  firstSeenAt DateTime
-  createdAt   DateTime @default(now())
+  firstSeenAt DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([version, source])
 }
@@ -80,8 +80,14 @@ model TelemetrySourceMap {
   release   String
   source    String
   fileName  String
-  map       String
-  createdAt DateTime @default(now())
+  /// Inline source map of a legacy row. New uploads store the bytes on the
+  /// meta store and leave this null; a whole source map exceeds the 1 MiB
+  /// Aurora DSQL allows in a text value.
+  map       String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Object-store reference ("store://<path>") to the stored source map
+  mapRef    String?
 
   @@unique([release, source, fileName])
 }
@@ -93,10 +99,10 @@ model TelemetrySession {
   release    String?
   platform   String?
   status     String
-  startedAt  DateTime
+  startedAt  DateTime @db.Timestamptz(3)
   durationMs Int?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([startedAt])
   @@index([release, startedAt])
@@ -114,11 +120,11 @@ model TelemetrySpan {
   anonId       String?
   release      String?
   platform     String?
-  startedAt    DateTime
+  startedAt    DateTime @db.Timestamptz(3)
   durationMs   Int
   status       String
   attributes   Json?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([traceId])
   @@index([createdAt])
@@ -136,8 +142,8 @@ model TelemetryPerfMetric {
   value     Float
   path      String?
   country   String?
-  clientTs  DateTime?
-  createdAt DateTime  @default(now())
+  clientTs  DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([metric, createdAt])
   @@index([createdAt])
@@ -157,11 +163,11 @@ model TelemetryAlertRule {
   enabled         Boolean   @default(true)
   notifyEmail     Boolean   @default(false)
   notifyPush      Boolean   @default(false)
-  lastEvaluatedAt DateTime?
-  lastTriggeredAt DateTime?
+  lastEvaluatedAt DateTime? @db.Timestamptz(3)
+  lastTriggeredAt DateTime? @db.Timestamptz(3)
   lastValue       Float?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([enabled])
 }
@@ -174,8 +180,8 @@ model TelemetryAlertEvent {
   value          Float
   threshold      Float?
   message        String
-  acknowledgedAt DateTime?
-  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([ruleId, createdAt])
   @@index([createdAt])
@@ -186,16 +192,16 @@ model TelemetrySavedQuery {
   id         String   @id
   name       String
   definition Json
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TelemetryDashboard {
   id        String   @id
   name      String
   tiles     Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TelemetryLlmCall {
@@ -214,7 +220,7 @@ model TelemetryLlmCall {
   errorKind        String?
   toolCalls        Int      @default(0)
   streamed         Boolean  @default(false)
-  createdAt        DateTime @default(now())
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([model, createdAt])
@@ -242,11 +248,11 @@ model TelemetryLlmCall {
 /// (DAU/WAU/MAU, new vs returning, churn, retention cohorts, adoption).
 model TelemetryInstallDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   anonId    String
   source    String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, anonId, source])
   @@index([day])
@@ -257,13 +263,13 @@ model TelemetryInstallDaily {
 /// into a single `__other__` row to bound the long tail.
 model TelemetryEventDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   name      String
   source    String
   count     Int      @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, name, source])
   @@index([day])
@@ -273,13 +279,13 @@ model TelemetryEventDaily {
 /// Values beyond the top 200 per dimension per day fold into `__other__`.
 model TelemetryDimensionDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   dimension String
   value     String
   count     Int      @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, dimension, value])
   @@index([day, dimension])
@@ -289,7 +295,7 @@ model TelemetryDimensionDaily {
 /// upsertable on CockroachDB; unknown releases collapse into a sentinel value.
 model TelemetrySessionDaily {
   id              String   @id
-  day             DateTime
+  day             DateTime @db.Timestamptz(3)
   release         String
   source          String
   sessions        Int      @default(0)
@@ -297,8 +303,8 @@ model TelemetrySessionDaily {
   erroredSessions Int      @default(0)
   installs        Int      @default(0)
   crashedInstalls Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, release, source])
   @@index([day])
@@ -307,7 +313,7 @@ model TelemetrySessionDaily {
 /// Daily LLM usage and cost drivers per provider/model/source.
 model TelemetryLlmDaily {
   id               String   @id
-  day              DateTime
+  day              DateTime @db.Timestamptz(3)
   provider         String
   model            String
   source           String
@@ -318,8 +324,8 @@ model TelemetryLlmDaily {
   totalTokens      BigInt   @default(0)
   durationSumMs    BigInt   @default(0)
   durationMaxMs    Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, provider, model, source])
   @@index([day])
@@ -329,15 +335,15 @@ model TelemetryLlmDaily {
 /// samples for the whole day, never merged across days.
 model TelemetryPerfDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   metric    String
   source    String
   count     Int      @default(0)
   p50       Float    @default(0)
   p75       Float    @default(0)
   p95       Float    @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, metric, source])
   @@index([day])
@@ -347,7 +353,7 @@ model TelemetryPerfDaily {
 /// client `IFlowPilotProductionMetrics` payload.
 model TelemetryFlowpilotDaily {
   id                            String   @id
-  day                           DateTime
+  day                           DateTime @db.Timestamptz(3)
   runsStarted                   BigInt   @default(0)
   runsSucceeded                 BigInt   @default(0)
   runsFailed                    BigInt   @default(0)
@@ -379,8 +385,8 @@ model TelemetryFlowpilotDaily {
   toolFailures                  BigInt   @default(0)
   runFailures                   BigInt   @default(0)
   installs                      Int      @default(0)
-  createdAt                     DateTime @default(now())
-  updatedAt                     DateTime @updatedAt
+  createdAt                     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt                     DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day])
 }
@@ -391,15 +397,15 @@ model TelemetryFlowpilotDaily {
 /// generalized on the client before it is ever sent.
 model TelemetryFlowpilotFailureDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   kind      String
   tool      String
   code      String
   message   String
   count     BigInt   @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, kind, tool, code, message])
   @@index([day])

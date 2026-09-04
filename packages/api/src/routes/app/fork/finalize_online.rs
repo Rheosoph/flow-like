@@ -219,7 +219,7 @@ pub async fn finalize_online_fork(
         active.version = Set(settings.version.clone());
         active.execution_mode = Set(to_db_execution_mode(&settings.execution_mode));
     }
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     active.update(&state.db).await?;
     job::complete_upload(&state, &app_id).await?;
 

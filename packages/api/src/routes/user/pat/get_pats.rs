@@ -41,8 +41,8 @@ pub async fn get_pats(
         .map(|pat| {
             Ok(PatOut {
                 name: pat.name,
-                created_at: pat.created_at.and_utc().timestamp_millis(),
-                valid_until: pat.valid_until.map(|dt| dt.and_utc().timestamp_millis()),
+                created_at: pat.created_at.timestamp_millis(),
+                valid_until: pat.valid_until.map(|dt| dt.timestamp_millis()),
                 permissions: pat.permissions,
                 id: pat.id,
             })

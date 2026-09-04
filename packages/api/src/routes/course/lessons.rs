@@ -223,7 +223,7 @@ pub async fn upsert_lesson(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = lesson::Entity::find_by_id(&lesson_id)
         .one(&state.db)
         .await?;

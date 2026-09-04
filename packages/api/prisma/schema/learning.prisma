@@ -21,8 +21,8 @@ model Course {
   certificates Certificate[]
   pathSteps    LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([language])
   @@index([category])
@@ -41,8 +41,8 @@ model LearningPath {
 
   steps LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([isPublished])
   @@index([slug])
@@ -73,8 +73,8 @@ model CourseModule {
 
   lessons Lesson[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([courseId])
   @@index([courseId, position])
@@ -97,8 +97,8 @@ model Lesson {
   appRefs    LessonAppRef[]
   progress   UserLessonProgress[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([moduleId])
   @@index([moduleId, position])
@@ -119,8 +119,8 @@ model Challenge {
   attempts         UserChallengeAttempt[]
   weeklyChallenges WeeklyChallenge[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -135,8 +135,8 @@ model CourseAppLink {
   purpose String  @default("SHARED_TEMPLATE")
   alias   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, appId])
   @@index([appId])
@@ -155,8 +155,8 @@ model CourseAsset {
   size       Int
   kind       String @default("DOCUMENT")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, name])
   @@index([courseId])
@@ -175,8 +175,8 @@ model LessonAppRef {
 
   label String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -197,9 +197,9 @@ model UserCourseEnrollment {
   // payloads/refs) into the user-specific ones at validation/navigation time.
   idMaps Json @default("{}")
 
-  startedAt   DateTime  @default(now())
-  lastSeenAt  DateTime  @default(now())
-  completedAt DateTime?
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
 
   @@unique([userId, courseId])
   @@index([userId])
@@ -213,10 +213,10 @@ model UserLessonProgress {
   lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
   status      String    @default("IN_PROGRESS")
-  completedAt DateTime?
+  completedAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, lessonId])
   @@index([userId])
@@ -232,7 +232,7 @@ model UserChallengeAttempt {
   submission    Json
   isCorrect     Boolean
   pointsAwarded Int      @default(0)
-  attemptedAt   DateTime @default(now())
+  attemptedAt   DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([userId])
   @@index([challengeId])
@@ -245,7 +245,7 @@ model Certificate {
   courseId String
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  issuedAt DateTime @default(now())
+  issuedAt DateTime @default(now()) @db.Timestamptz(3)
   hash     String
   pdfUrl   String?
 
@@ -258,7 +258,7 @@ model LeaderboardOptIn {
   displayName String
   isOptedIn   Boolean  @default(true)
   totalPoints Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model WeeklyChallenge {
@@ -266,8 +266,8 @@ model WeeklyChallenge {
   weekIso     String
   challengeId String
   challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
-  expiresAt   DateTime
-  createdAt   DateTime  @default(now())
+  expiresAt   DateTime  @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@unique([weekIso])
   @@index([expiresAt])

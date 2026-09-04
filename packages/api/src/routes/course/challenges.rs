@@ -129,7 +129,7 @@ pub async fn upsert_challenge(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = challenge::Entity::find_by_id(&challenge_id)
         .one(&state.db)
         .await?;

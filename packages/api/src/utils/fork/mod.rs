@@ -1075,7 +1075,7 @@ async fn overlay_app_row_into_manifest(
     manifest.forked_from = row.forked_from.clone();
     manifest.forked_at = row.forked_at.map(|dt| {
         flow_like_types::Timestamp::from(
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.and_utc().timestamp() as u64),
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.timestamp() as u64),
         )
     });
     if let Some(cat) = row.primary_category.as_ref() {
@@ -1519,7 +1519,7 @@ pub(crate) struct ForkContext {
     pub language: String,
     pub remote_event_token: Option<String>,
     pub dst_visibility: Visibility,
-    pub now: chrono::NaiveDateTime,
+    pub now: chrono::DateTime<chrono::FixedOffset>,
     pub src_meta_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
     pub src_content_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
     pub dst_meta_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
@@ -1596,7 +1596,7 @@ impl ForkContext {
             language: spec.language.clone(),
             remote_event_token: spec.remote_event_token(state),
             dst_visibility: spec.visibility.clone(),
-            now: chrono::Utc::now().naive_utc(),
+            now: chrono::Utc::now().fixed_offset(),
             src_prefix: Path::from("apps").child(src_app_id.clone()),
             dst_prefix: Path::from("apps").child(fork_job.dest_app_id.clone()),
             policy: spec.policy.clone(),
@@ -2515,7 +2515,7 @@ fn copy_meta_row(
     m: &meta::Model,
     id: String,
     owner: MetaOwner,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> meta::ActiveModel {
     let (app_id, widget_id, template_id) = match owner {
         MetaOwner::App(id) => (Some(id), None, None),
@@ -2571,7 +2571,7 @@ pub(crate) fn plan_roles(
     role_map: &HashMap<String, String>,
     src_owner_role_id: Option<&str>,
     src_default_role_id: Option<&str>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> RolePlan {
     let mut roles: Vec<role::ActiveModel> = roles_to_copy
         .iter()
@@ -2690,7 +2690,7 @@ pub async fn sync_uploaded_metadata_media_to_db(
     let metadata_dir_str = metadata_dir.as_ref().to_string();
 
     let mut listing = content_store.list(Some(&metadata_dir));
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     while let Some(item) = listing
         .try_next()
         .await
@@ -3350,7 +3350,7 @@ async fn update_meta_media_fields(
     app_id: &str,
     target: UploadedMetadataTarget,
     uploaded: proto::Metadata,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), ApiError> {
     let row = match &target {
         UploadedMetadataTarget::App { lang } => {
@@ -4146,7 +4146,7 @@ fn prepare_dst_sinks(
     remote_event_token: Option<&str>,
     encryption_key: &[u8; 32],
     new_app_id: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> (Vec<event_sink::ActiveModel>, Vec<SkippedItem>) {
     use crate::routes::app::events::db::encrypt_token;
 
@@ -4340,7 +4340,7 @@ mod tests {
     use super::*;
 
     fn page_row(id: &str, board_id: Option<&str>) -> page::Model {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         page::Model {
             id: id.to_string(),
             name: id.to_string(),

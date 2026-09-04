@@ -76,7 +76,7 @@ pub async fn remove_media(
                     .ok_or(ApiError::NOT_FOUND)?;
 
                 let mut model: meta::ActiveModel = existing_meta.clone().into();
-                model.updated_at = Set(chrono::Utc::now().naive_utc());
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
                 match &query.item {
                     MediaItem::Icon => {

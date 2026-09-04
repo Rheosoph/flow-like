@@ -157,10 +157,14 @@ pub async fn list_purchases(
                 discount_id: p.discount_id,
                 currency: p.currency,
                 status: format!("{:?}", p.status),
-                completed_at: p.completed_at.map(|d: chrono::NaiveDateTime| d.to_string()),
-                refunded_at: p.refunded_at.map(|d: chrono::NaiveDateTime| d.to_string()),
+                completed_at: p
+                    .completed_at
+                    .map(|d: chrono::DateTime<chrono::FixedOffset>| d.to_rfc3339()),
+                refunded_at: p
+                    .refunded_at
+                    .map(|d: chrono::DateTime<chrono::FixedOffset>| d.to_rfc3339()),
                 refund_reason: p.refund_reason,
-                created_at: p.created_at.to_string(),
+                created_at: p.created_at.to_rfc3339(),
             }
         })
         .collect();

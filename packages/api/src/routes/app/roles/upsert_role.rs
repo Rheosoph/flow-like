@@ -68,7 +68,7 @@ pub async fn upsert_role(
 
                     payload.id = role.id;
                     payload.created_at = role.created_at;
-                    payload.updated_at = chrono::Utc::now().naive_utc();
+                    payload.updated_at = chrono::Utc::now().fixed_offset();
                     payload.app_id = role.app_id;
 
                     if permission.contains(RolePermissions::Owner) {
@@ -91,8 +91,8 @@ pub async fn upsert_role(
                 }
 
                 payload.id = new_role_id;
-                payload.created_at = chrono::Utc::now().naive_utc();
-                payload.updated_at = chrono::Utc::now().naive_utc();
+                payload.created_at = chrono::Utc::now().fixed_offset();
+                payload.updated_at = chrono::Utc::now().fixed_offset();
                 payload.app_id = Some(app_id);
 
                 let role: role::ActiveModel = payload.into();

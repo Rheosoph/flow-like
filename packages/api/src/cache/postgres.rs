@@ -78,15 +78,15 @@ fn scope_to_entity(scope: CacheScope) -> EntityCacheScope {
     }
 }
 
-fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTime {
+fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTimeWithTimeZone {
     Utc.timestamp_millis_opt(ts)
         .single()
         .unwrap_or_else(|| Utc.timestamp_nanos(0))
-        .naive_utc()
+        .fixed_offset()
 }
 
-fn datetime_to_ts(dt: sea_orm::prelude::DateTime) -> i64 {
-    dt.and_utc().timestamp_millis()
+fn datetime_to_ts(dt: sea_orm::prelude::DateTimeWithTimeZone) -> i64 {
+    dt.timestamp_millis()
 }
 
 fn model_to_entry(model: app_cache_entry::Model) -> CacheEntry {
@@ -108,7 +108,7 @@ fn key_condition(key: &CacheKey) -> Condition {
 }
 
 /// Matches rows that have not expired: either no TTL at all, or one still in the future.
-fn live_condition(now: sea_orm::prelude::DateTime) -> Condition {
+fn live_condition(now: sea_orm::prelude::DateTimeWithTimeZone) -> Condition {
     Condition::any()
         .add(app_cache_entry::Column::ExpiresAt.is_null())
         .add(app_cache_entry::Column::ExpiresAt.gt(now))
@@ -116,7 +116,7 @@ fn live_condition(now: sea_orm::prelude::DateTime) -> Condition {
 
 fn active_model(
     entry: &SetCacheEntry,
-    now: sea_orm::prelude::DateTime,
+    now: sea_orm::prelude::DateTimeWithTimeZone,
 ) -> app_cache_entry::ActiveModel {
     app_cache_entry::ActiveModel {
         app_id: Set(entry.key.app_id.clone()),
@@ -179,9 +179,9 @@ const TABLE_SIZE_SQL: &str = r#"SELECT pg_total_relation_size(cls.oid)::bigint A
 /// rows actually match — the exact shape of a healthy, well-swept cache. The ordering
 /// makes the index on `expiresAt` the cheaper plan.
 ///
-/// The cutoff is bound as a naive timestamp because `expiresAt` is
-/// `timestamp without time zone`; comparing it against `now()` would silently shift the
-/// boundary by the session's UTC offset.
+/// The cutoff is bound as an instant rather than compared against `now()`, so the
+/// boundary is the one the caller measured and not whatever the database clock reads
+/// when the probe finally runs.
 const EXPIRED_PENDING_SQL: &str = r#"SELECT count(*)::bigint AS expired
     FROM (
         SELECT 1
@@ -257,7 +257,7 @@ impl CacheStore for PostgresCacheStore {
         // value ever leaving the database.
         let count = app_cache_entry::Entity::find()
             .filter(key_condition(key))
-            .filter(live_condition(Utc::now().naive_utc()))
+            .filter(live_condition(Utc::now().fixed_offset()))
             .count(self.db.as_ref())
             .await
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
@@ -266,7 +266,7 @@ impl CacheStore for PostgresCacheStore {
     }
 
     async fn set(&self, entry: SetCacheEntry) -> Result<CacheEntry, CacheStoreError> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
 
         // A hot key is a commit-time conflict on optimistic engines, so the
         // upsert runs under the retry wrapper; every attempt writes the same row.
@@ -306,7 +306,7 @@ impl CacheStore for PostgresCacheStore {
         &self,
         entry: SetCacheEntry,
     ) -> Result<Option<CacheEntry>, CacheStoreError> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
 
         // One statement, so two concurrent callers cannot both decide the key is free.
         // The guard on the DO UPDATE branch is what makes this "insert if absent" rather
@@ -410,7 +410,7 @@ impl CacheStore for PostgresCacheStore {
     }
 
     async fn delete_expired(&self) -> Result<i64, CacheStoreError> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
         self.delete_where(
             Condition::all()
                 .add(app_cache_entry::Column::ExpiresAt.is_not_null())
@@ -457,7 +457,7 @@ impl CacheStore for PostgresCacheStore {
             Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 EXPIRED_PENDING_SQL,
-                [Utc::now().naive_utc().into(), EXPIRED_SCAN_CAP.into()],
+                [Utc::now().fixed_offset().into(), EXPIRED_SCAN_CAP.into()],
             ),
         )
         .await;

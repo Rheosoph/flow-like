@@ -36,7 +36,7 @@ pub struct UserLookupResponse {
     avatar_url: Option<String>,
     additional_information: Option<Value>,
     description: Option<String>,
-    created_at: Option<chrono::NaiveDateTime>,
+    created_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

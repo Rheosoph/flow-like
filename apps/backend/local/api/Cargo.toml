@@ -10,6 +10,7 @@ flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, features = ["executor-local-metadata"] }
+flow-like-aws-data = { workspace = true, optional = true }
 mimalloc.workspace = true
 socket2 = "0.6.0"
 tracing.workspace = true
@@ -18,3 +19,11 @@ dotenv.workspace = true
 sentry-tracing.workspace = true
 sentry.workspace = true
 oasgen = {version="0.25.0", features = ["axum"]}
+
+[features]
+default = ["dsql"]
+# Aurora DSQL connectivity through IAM tokens, selected at runtime by
+# `DSQL_CLUSTER_ENDPOINT`. Gated so a build that will never talk to DSQL can
+# drop the connector; the AWS SDK core itself is already in this binary via
+# the Bedrock model provider, so the feature only trims a handful of crates.
+dsql = ["dep:flow-like-aws-data"]

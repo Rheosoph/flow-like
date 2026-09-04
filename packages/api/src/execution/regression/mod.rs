@@ -156,8 +156,8 @@ pub(crate) fn parse_gate_mode(raw: &str) -> Option<GateMode> {
     }
 }
 
-pub(crate) fn datetime_micros(dt: chrono::NaiveDateTime) -> u64 {
-    dt.and_utc().timestamp_micros().max(0) as u64
+pub(crate) fn datetime_micros(dt: chrono::DateTime<chrono::FixedOffset>) -> u64 {
+    dt.timestamp_micros().max(0) as u64
 }
 
 /// Rebuild a suite config from its Postgres projection row — the degraded
@@ -345,8 +345,8 @@ fn outcome_label(outcome: &CaseOutcome) -> &'static str {
     }
 }
 
-fn now_naive() -> chrono::NaiveDateTime {
-    chrono::Utc::now().naive_utc()
+fn now_naive() -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::Utc::now().fixed_offset()
 }
 
 /// Resolve the candidate into the dispatch pin and the `SuiteRun.boardVersion`
@@ -1099,7 +1099,7 @@ pub async fn maintenance_tick(state: &AppState) -> Result<RegressionMaintenanceO
             continue;
         };
         let next = match flow_like_sinks::scheduler::next_cron_occurrence_utc(schedule) {
-            Ok(next) => next.naive_utc(),
+            Ok(next) => next.fixed_offset(),
             Err(error) => {
                 tracing::warn!(suite_id = %row.id, %error, "Stored cron schedule no longer parses; skipping");
                 continue;

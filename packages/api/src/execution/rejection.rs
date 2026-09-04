@@ -263,7 +263,7 @@ async fn suppression(
         return Ok(Suppression::Record);
     };
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let since = now - chrono::Duration::minutes(DEDUP_WINDOW_MINUTES);
     let recent = || {
         execution_run::Entity::find()
@@ -309,7 +309,7 @@ async fn record_run_row(
     state: &AppState,
     context: &RejectedRunContext,
 ) -> flow_like_types::Result<()> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = execution_run::Entity::find_by_id(&context.run_id)
         .filter(execution_run::Column::AppId.eq(&context.app_id))
         .one(&state.db)

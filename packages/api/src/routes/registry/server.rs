@@ -455,7 +455,7 @@ fn package_version_from_model(v: wasm_package_version::Model) -> PackageVersion 
         wasm_size: v.wasm_size as u64,
         status: status_to_package_status(&v.status),
         download_url: None,
-        published_at: chrono::DateTime::from_naive_utc_and_offset(v.published_at, chrono::Utc),
+        published_at: v.published_at.to_utc(),
         min_flow_like_version: v.min_flow_like_version,
         release_notes: v.release_notes,
         yanked: v.yanked,
@@ -1011,10 +1011,7 @@ impl ServerRegistry {
                 version.widgets,
                 version.widget_bundle_hash.filter(|h| !h.is_empty()),
                 version.widget_bundle_size.map(|s| s as u64),
-                Some(chrono::DateTime::from_naive_utc_and_offset(
-                    version.published_at,
-                    chrono::Utc,
-                )),
+                Some(version.published_at.to_utc()),
             )
         } else {
             (
@@ -1025,8 +1022,7 @@ impl ServerRegistry {
                 pkg.widgets.clone(),
                 pkg.widget_bundle_hash.clone().filter(|h| !h.is_empty()),
                 pkg.widget_bundle_size.map(|s| s as u64),
-                pkg.published_at
-                    .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
+                pkg.published_at.map(|dt| dt.to_utc()),
             )
         };
 
@@ -1053,8 +1049,8 @@ impl ServerRegistry {
             visibility: visibility_to_string(&pkg.visibility),
             primary_category: pkg.primary_category.as_ref().map(db_cat_to_string),
             secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_string),
-            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
-            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
+            created_at: pkg.created_at.to_utc(),
+            updated_at: pkg.updated_at.to_utc(),
             published_at,
         })
     }
@@ -1218,8 +1214,8 @@ impl ServerRegistry {
             versions: package_versions,
             status: status_to_package_status(&pkg.status),
             download_count: pkg.download_count as u64,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
-            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
+            created_at: pkg.created_at.to_utc(),
+            updated_at: pkg.updated_at.to_utc(),
             source: PackageSource::Remote {
                 registry_url: String::new(),
                 download_url: String::new(),
@@ -1697,7 +1693,7 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<PublishResponse> {
         use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         let existing_version = wasm_package_version::Entity::find()
             .filter(wasm_package_version::Column::PackageId.eq(&manifest.id))
@@ -2015,7 +2011,7 @@ impl ServerRegistry {
             // Widgets-only package: nothing to compile. Auto-approve private
             // packages immediately (mirrors the inline compilation auto-approval).
             if is_private_package {
-                let now_approve = chrono::Utc::now().naive_utc();
+                let now_approve = chrono::Utc::now().fixed_offset();
                 let _ = wasm_package_version::ActiveModel {
                     id: Set(version_id.clone()),
                     status: Set(WasmPackageStatus::Active),
@@ -2236,7 +2232,7 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<PackageReview> {
         use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         // Verify package exists
         let Some(pkg) = wasm_package::Entity::find_by_id(package_id)
@@ -2360,7 +2356,7 @@ impl ServerRegistry {
             security_score: review.security_score,
             code_quality_score: review.code_quality_score,
             documentation_score: review.documentation_score,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(now, chrono::Utc),
+            created_at: now.to_utc(),
         })
     }
 
@@ -2399,10 +2395,7 @@ impl ServerRegistry {
                 security_score: review.security_score,
                 code_quality_score: review.code_quality_score,
                 documentation_score: review.documentation_score,
-                created_at: chrono::DateTime::from_naive_utc_and_offset(
-                    review.created_at,
-                    chrono::Utc,
-                ),
+                created_at: review.created_at.to_utc(),
             });
         }
 
@@ -2416,7 +2409,7 @@ impl ServerRegistry {
         status: &str,
         verified: Option<bool>,
     ) -> flow_like_types::Result<()> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let new_status = status_to_enum(status);
 
         let mut update_model = wasm_package::ActiveModel {
@@ -2447,7 +2440,7 @@ impl ServerRegistry {
         user_id: &str,
         role: Option<String>,
     ) -> flow_like_types::Result<AuthorInfo> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         // Verify package exists
         let Some(_pkg) = wasm_package::Entity::find_by_id(package_id)

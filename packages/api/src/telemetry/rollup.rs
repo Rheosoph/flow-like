@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, Utc};
 use flow_like_types::create_id;
 use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::sea_query::{
@@ -226,7 +226,7 @@ pub async fn rollup_once_with(
     dialect: DbDialect,
     config: &TelemetryRollupConfig,
 ) -> Result<TelemetryRollupResult, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut result = TelemetryRollupResult::default();
 
     for day in rollup_days(now, config.backfill_days) {
@@ -249,7 +249,7 @@ pub async fn rollup_once_with(
 /// this so raw rows can never be deleted before they were aggregated.
 pub async fn latest_rolled_up_day<C: ConnectionTrait>(
     db: &C,
-) -> Result<Option<NaiveDateTime>, DbErr> {
+) -> Result<Option<DateTime<FixedOffset>>, DbErr> {
     Ok(telemetry_install_daily::Entity::find()
         .select_only()
         .column_as(telemetry_install_daily::Column::Day.max(), "day")
@@ -264,14 +264,18 @@ pub async fn latest_rolled_up_day<C: ConnectionTrait>(
 // ---------------------------------------------------------------------------
 
 /// UTC midnight of the day `ts` falls in.
-pub fn day_start(ts: NaiveDateTime) -> NaiveDateTime {
-    ts.date()
-        .and_hms_opt(0, 0, 0)
-        .unwrap_or_else(|| ts.date().and_time(chrono::NaiveTime::MIN))
+pub fn day_start(ts: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
+    ts.date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+        .fixed_offset()
 }
 
 /// Days recomputed by one pass, oldest first, always including today.
-pub(crate) fn rollup_days(now: NaiveDateTime, backfill_days: i64) -> Vec<NaiveDateTime> {
+pub(crate) fn rollup_days(
+    now: DateTime<FixedOffset>,
+    backfill_days: i64,
+) -> Vec<DateTime<FixedOffset>> {
     let days = backfill_days.clamp(MIN_BACKFILL_DAYS, MAX_BACKFILL_DAYS);
     let today = day_start(now);
     (0..days)
@@ -349,7 +353,7 @@ struct TotalCount {
 
 #[derive(Debug, FromQueryResult)]
 struct MaxDayRow {
-    day: Option<NaiveDateTime>,
+    day: Option<DateTime<FixedOffset>>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -630,8 +634,8 @@ where
 
 async fn install_pairs<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<(String, String)>, DbErr> {
     let mut pairs: HashSet<(String, String)> = HashSet::new();
 
@@ -693,15 +697,15 @@ async fn install_pairs<C: ConnectionTrait>(
 
 async fn rollup_installs(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     let pairs = install_pairs(db, day, next).await?;
     if pairs.is_empty() {
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let models: Vec<telemetry_install_daily::ActiveModel> = pairs
         .into_iter()
         .map(|(anon_id, source)| telemetry_install_daily::ActiveModel {
@@ -735,8 +739,8 @@ fn install_on_conflict() -> OnConflict {
 
 async fn event_name_counts<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<GroupedCount>, DbErr> {
     let mut query = SeaQuery::select();
     query
@@ -765,7 +769,7 @@ async fn event_name_counts<C: ConnectionTrait>(
 /// exactly the events whose name has no row of its own. Reading the kept keys
 /// back from the rollup table instead of binding them keeps the statement
 /// small however many names a day keeps.
-fn event_name_not_kept(day: NaiveDateTime) -> SimpleExpr {
+fn event_name_not_kept(day: DateTime<FixedOffset>) -> SimpleExpr {
     let mut kept = SeaQuery::select();
     kept.expr(Expr::val(1))
         .from(telemetry_event_daily::Entity)
@@ -795,8 +799,8 @@ fn event_name_not_kept(day: NaiveDateTime) -> SimpleExpr {
 
 async fn event_name_tail<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<BucketCount>, DbErr> {
     let mut query = SeaQuery::select();
     query
@@ -823,8 +827,8 @@ async fn event_name_tail<C: ConnectionTrait>(
 }
 
 fn event_daily_models(
-    day: NaiveDateTime,
-    now: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     rows: Vec<GroupedCount>,
 ) -> Vec<telemetry_event_daily::ActiveModel> {
     rows.into_iter()
@@ -846,8 +850,8 @@ fn event_daily_models(
 /// `__other__` row partition the day exactly once.
 async fn rollup_events(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     let grouped = event_name_counts(db, day, next).await?;
     // The grouped read is capped, so a day past the cap has keys the split
@@ -858,7 +862,7 @@ async fn rollup_events(
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut upserted = upsert_chunked(
         db,
         event_daily_models(day, now, split.kept),
@@ -917,8 +921,8 @@ fn event_daily_on_conflict() -> OnConflict {
 
 async fn dimension_counts<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
     dimension: &str,
     column: telemetry_event::Column,
 ) -> Result<Vec<GroupedCount>, DbErr> {
@@ -945,7 +949,7 @@ async fn dimension_counts<C: ConnectionTrait>(
 /// `NOT EXISTS` against the values already stored for `day` and `dimension`;
 /// the counterpart of [`event_name_not_kept`] keyed on the coalesced column.
 fn dimension_value_not_kept(
-    day: NaiveDateTime,
+    day: DateTime<FixedOffset>,
     dimension: &str,
     column: telemetry_event::Column,
 ) -> SimpleExpr {
@@ -985,8 +989,8 @@ fn dimension_value_not_kept(
 
 async fn dimension_tail<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
     dimension: &str,
     column: telemetry_event::Column,
 ) -> Result<TotalCount, DbErr> {
@@ -1011,8 +1015,8 @@ async fn dimension_tail<C: ConnectionTrait>(
 }
 
 fn dimension_daily_models(
-    day: NaiveDateTime,
-    now: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     rows: Vec<GroupedCount>,
 ) -> Vec<telemetry_dimension_daily::ActiveModel> {
     rows.into_iter()
@@ -1033,10 +1037,10 @@ fn dimension_daily_models(
 /// before their tail is read.
 async fn rollup_dimensions(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut upserted = 0u64;
     let mut tails: Vec<GroupedCount> = Vec::new();
 
@@ -1115,8 +1119,8 @@ struct SessionDailyRow {
 
 async fn session_counts<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<SessionDailyRow>, DbErr> {
     let mut query = SeaQuery::select();
     query
@@ -1163,15 +1167,15 @@ async fn session_counts<C: ConnectionTrait>(
 
 async fn rollup_sessions(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     let rows = session_counts(db, day, next).await?;
     if rows.is_empty() {
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let models: Vec<telemetry_session_daily::ActiveModel> = rows
         .into_iter()
         .map(|row| telemetry_session_daily::ActiveModel {
@@ -1229,8 +1233,8 @@ struct LlmDailyRow {
 
 async fn llm_counts<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<LlmDailyRow>, DbErr> {
     let error_case = Expr::case(
         Expr::col(telemetry_llm_call::Column::Status).eq(LLM_ERROR_STATUS),
@@ -1297,15 +1301,15 @@ async fn llm_counts<C: ConnectionTrait>(
 
 async fn rollup_llm(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     let rows = llm_counts(db, day, next).await?;
     if rows.is_empty() {
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let models: Vec<telemetry_llm_daily::ActiveModel> = rows
         .into_iter()
         .map(|row| telemetry_llm_daily::ActiveModel {
@@ -1355,8 +1359,8 @@ fn llm_daily_on_conflict() -> OnConflict {
 
 async fn perf_percentiles_sql<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<PerfDailyRow>, DbErr> {
     let sql = r#"SELECT "metric" AS metric,
                         "source" AS source,
@@ -1380,8 +1384,8 @@ async fn perf_percentiles_sql<C: ConnectionTrait>(
 
 async fn perf_percentiles_fold<C: ConnectionTrait>(
     db: &C,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<Vec<PerfDailyRow>, DbErr> {
     let rows = telemetry_perf_metric::Entity::find()
         .select_only()
@@ -1410,8 +1414,8 @@ async fn perf_percentiles_fold<C: ConnectionTrait>(
 async fn rollup_perf(
     db: &DatabaseConnection,
     dialect: DbDialect,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     // `percentile_cont` is an ordered-set aggregate; engines without it fold
     // the raw samples with identical interpolation semantics.
@@ -1434,7 +1438,7 @@ async fn rollup_perf(
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let models: Vec<telemetry_perf_daily::ActiveModel> = rows
         .into_iter()
         .map(|row| telemetry_perf_daily::ActiveModel {
@@ -1476,8 +1480,8 @@ fn perf_daily_on_conflict() -> OnConflict {
 
 async fn rollup_flowpilot(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
-    next: NaiveDateTime,
+    day: DateTime<FixedOffset>,
+    next: DateTime<FixedOffset>,
 ) -> Result<u64, DbErr> {
     let rows = telemetry_event::Entity::find()
         .select_only()
@@ -1503,7 +1507,7 @@ async fn rollup_flowpilot(
     }
 
     let (counters, installs) = fold_flowpilot(&rows);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let model = telemetry_flowpilot_daily::ActiveModel {
         id: Set(create_id()),
         day: Set(day),
@@ -1552,7 +1556,7 @@ async fn rollup_flowpilot(
 /// group, which is what separates one loud install from a real regression.
 async fn rollup_flowpilot_failures(
     db: &DatabaseConnection,
-    day: NaiveDateTime,
+    day: DateTime<FixedOffset>,
     rows: &[FlowPilotRow],
 ) -> Result<u64, DbErr> {
     let mut grouped: HashMap<(String, String, String, String), (FailureSignature, HashSet<&str>)> =
@@ -1577,7 +1581,7 @@ async fn rollup_flowpilot_failures(
         return Ok(0);
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let models: Vec<telemetry_flowpilot_failure_daily::ActiveModel> = grouped
         .into_values()
         .map(
@@ -1662,11 +1666,13 @@ mod tests {
     use sea_orm::sea_query::PostgresQueryBuilder;
     use serde_json::json;
 
-    fn ts(day: u32, hour: u32, minute: u32) -> NaiveDateTime {
+    fn ts(day: u32, hour: u32, minute: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, day)
             .unwrap()
             .and_hms_opt(hour, minute, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn grouped(key: &str, bucket: &str, cnt: i64, installs: i64) -> GroupedCount {
@@ -2159,10 +2165,7 @@ mod tests {
     /// bound, so the statement stays the same size however many are kept.
     #[test]
     fn tail_filter_excludes_exactly_the_kept_keys() {
-        let day = NaiveDate::from_ymd_opt(2026, 7, 26)
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap();
+        let day = ts(26, 0, 0);
 
         let sql = SeaQuery::select()
             .from(telemetry_event::Entity)

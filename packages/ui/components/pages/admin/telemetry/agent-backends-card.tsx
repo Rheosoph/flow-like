@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { Terminal } from "lucide-react";
 import { useMemo } from "react";
+import { parseDateValue } from "../../../../lib/date";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
 import { type IApiState, useBackend } from "../../../../state/backend-state";
 import {
@@ -191,13 +192,14 @@ async function fetchAgentEvents(
 		if (batch.length === 0) break;
 
 		for (const event of batch) {
-			if (new Date(event.createdAt).getTime() >= sinceMs) collected.push(event);
+			const at = parseDateValue(event.createdAt)?.getTime();
+			if (at !== undefined && at >= sinceMs) collected.push(event);
 		}
 
 		const oldest = batch[batch.length - 1];
 		if (
 			batch.length < EVENT_PAGE_SIZE ||
-			new Date(oldest.createdAt).getTime() < sinceMs
+			(parseDateValue(oldest.createdAt)?.getTime() ?? 0) < sinceMs
 		) {
 			break;
 		}

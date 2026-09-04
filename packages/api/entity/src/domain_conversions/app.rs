@@ -131,9 +131,9 @@ impl From<app::Model> for App {
             secondary_category: model.secondary_category.map(Into::into),
             app_type: model.app_type.map(Into::into),
             updated_at: SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(model.updated_at.and_utc().timestamp() as u64),
+                + std::time::Duration::from_secs(model.updated_at.timestamp() as u64),
             created_at: SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(model.created_at.and_utc().timestamp() as u64),
+                + std::time::Duration::from_secs(model.created_at.timestamp() as u64),
             version: model.version,
             frontend: None,
             app_state: None,
@@ -143,7 +143,7 @@ impl From<app::Model> for App {
             forked_from: model.forked_from,
             forked_at: model.forked_at.map(|date_time| {
                 SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(date_time.and_utc().timestamp() as u64)
+                    + std::time::Duration::from_secs(date_time.timestamp() as u64)
             }),
         }
     }
@@ -183,8 +183,8 @@ impl From<App> for app::Model {
             rating_count: app.rating_count as i64,
             rating_sum: app.rating_sum as i64,
             version: app.version,
-            updated_at: chrono::Utc::now().naive_utc(),
-            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: chrono::Utc::now().fixed_offset(),
+            created_at: chrono::Utc::now().fixed_offset(),
             primary_category: app.primary_category.map(Into::into),
             secondary_category: app.secondary_category.map(Into::into),
             app_type: app.app_type.map(Into::into),
@@ -201,7 +201,7 @@ impl From<App> for app::Model {
                             duration.as_secs() as i64,
                             0,
                         )
-                        .map(|date_time| date_time.naive_utc())
+                        .map(|date_time| date_time.fixed_offset())
                     })
             }),
         }

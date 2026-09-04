@@ -48,15 +48,23 @@ impl StatsPeriod {
     /// so it parses back with `NaiveDate::parse_from_str` and agrees with
     /// [`StatsPeriod::bucket_start`] day for day. `column` is always a
     /// compile-time constant, never caller input.
+    ///
+    /// The column is `timestamptz`, so `to_char`/`date_trunc` would otherwise
+    /// render it in the session `TimeZone`. The callers' window filters and
+    /// bucket keys are UTC by construction, so `AT TIME ZONE 'UTC'` pins the
+    /// SQL half to the same clock — without it a non-UTC session GUC labels a
+    /// row with a day outside the requested range and it silently drops out.
     pub fn bucket_expr(self, backend: DbBackend, column: &str) -> SimpleExpr {
         match backend {
             DbBackend::Postgres => match self {
-                Self::Day => Expr::cust(format!(r#"to_char("{column}", 'YYYY-MM-DD')"#)),
+                Self::Day => Expr::cust(format!(
+                    r#"to_char("{column}" AT TIME ZONE 'UTC', 'YYYY-MM-DD')"#
+                )),
                 Self::Week => Expr::cust(format!(
-                    r#"to_char(date_trunc('week', "{column}"), 'YYYY-MM-DD')"#
+                    r#"to_char(date_trunc('week', "{column}" AT TIME ZONE 'UTC'), 'YYYY-MM-DD')"#
                 )),
                 Self::Month => Expr::cust(format!(
-                    r#"to_char(date_trunc('month', "{column}"), 'YYYY-MM-DD')"#
+                    r#"to_char(date_trunc('month', "{column}" AT TIME ZONE 'UTC'), 'YYYY-MM-DD')"#
                 )),
             },
             // SQLite; the MySQL fallback path is unused in this project.
@@ -140,7 +148,7 @@ mod tests {
     fn day_bucket_sql_is_unchanged_per_backend() {
         assert_eq!(
             render(StatsPeriod::Day, DbBackend::Postgres),
-            r#"to_char("createdAt", 'YYYY-MM-DD')"#
+            r#"to_char("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')"#
         );
         assert_eq!(
             render(StatsPeriod::Day, DbBackend::Sqlite),
@@ -148,15 +156,29 @@ mod tests {
         );
     }
 
+    /// The Rust half of every caller (`utc_midnight` window filters,
+    /// `NaiveDate::parse_from_str` bucket keys) is UTC, so the SQL half must be
+    /// too regardless of the session `TimeZone`.
+    #[test]
+    fn postgres_buckets_are_pinned_to_utc() {
+        for period in [StatsPeriod::Day, StatsPeriod::Week, StatsPeriod::Month] {
+            let sql = render(period, DbBackend::Postgres);
+            assert!(
+                sql.contains(r#""createdAt" AT TIME ZONE 'UTC'"#),
+                "{period:?} bucket is not pinned to UTC: {sql}"
+            );
+        }
+    }
+
     #[test]
     fn week_and_month_bucket_sql_truncates() {
         assert_eq!(
             render(StatsPeriod::Week, DbBackend::Postgres),
-            r#"to_char(date_trunc('week', "createdAt"), 'YYYY-MM-DD')"#
+            r#"to_char(date_trunc('week', "createdAt" AT TIME ZONE 'UTC'), 'YYYY-MM-DD')"#
         );
         assert_eq!(
             render(StatsPeriod::Month, DbBackend::Postgres),
-            r#"to_char(date_trunc('month', "createdAt"), 'YYYY-MM-DD')"#
+            r#"to_char(date_trunc('month', "createdAt" AT TIME ZONE 'UTC'), 'YYYY-MM-DD')"#
         );
         assert_eq!(
             render(StatsPeriod::Week, DbBackend::Sqlite),

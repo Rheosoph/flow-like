@@ -194,7 +194,7 @@ pub async fn upsert_alias(
     let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
 
     let sub = permission.sub().ok();
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let existing = EventAlias::find_by_id(&storage_slug).one(&state.db).await?;
 

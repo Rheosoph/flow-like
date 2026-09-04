@@ -273,7 +273,7 @@ pub async fn upsert_learning_path(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = learning_path::Entity::find_by_id(&path_id)
         .one(&state.db)
         .await?;

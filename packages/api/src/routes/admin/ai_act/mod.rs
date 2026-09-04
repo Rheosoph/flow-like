@@ -109,7 +109,7 @@ struct AppScoreAgg {
     governance: i32,
     worst_score: i32,
     board_count: i64,
-    updated_at: Option<chrono::NaiveDateTime>,
+    updated_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -117,7 +117,7 @@ struct ModelCounts {
     model_count: i64,
     unvetted_model_count: i64,
     drift_count: i64,
-    updated_at: Option<chrono::NaiveDateTime>,
+    updated_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 #[derive(Clone, Serialize, Debug, ToSchema)]
@@ -270,9 +270,9 @@ async fn load_inventory_items(
             let score = scores.get(&app_id);
             let models = model_counts.get(&app_id).copied().unwrap_or_default();
             let updated_at = assessment
-                .map(|a| a.updated_at.to_string())
-                .or_else(|| score.and_then(|s| s.updated_at).map(|ts| ts.to_string()))
-                .or_else(|| models.updated_at.map(|ts| ts.to_string()))
+                .map(|a| a.updated_at.to_rfc3339())
+                .or_else(|| score.and_then(|s| s.updated_at).map(|ts| ts.to_rfc3339()))
+                .or_else(|| models.updated_at.map(|ts| ts.to_rfc3339()))
                 .unwrap_or_default();
 
             InventoryItem {
@@ -456,8 +456,8 @@ impl From<ai_act_model_observation::Model> for ModelObservationItem {
             vetted: m.vetted,
             dynamic_selector: m.dynamic_selector,
             drift_flagged: m.drift_flagged,
-            first_seen_at: m.first_seen_at.to_string(),
-            last_seen_at: m.last_seen_at.to_string(),
+            first_seen_at: m.first_seen_at.to_rfc3339(),
+            last_seen_at: m.last_seen_at.to_rfc3339(),
         }
     }
 }
@@ -659,7 +659,7 @@ pub async fn put_inventory_assessment(
 
     let classification =
         crate::routes::app::ai_act::questionnaire::classify(&body.answers, &signals);
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let requested_status = body.review_status.as_deref().and_then(parse_status);
     let is_review_decision = matches!(requested_status, Some(S::Approved) | Some(S::Rejected));
@@ -874,7 +874,7 @@ struct ObservedRegistryModel {
     provider: Option<String>,
     model_id: String,
     observed_count: i64,
-    last_seen_at: Option<chrono::NaiveDateTime>,
+    last_seen_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 fn normalise_registry_provider(provider: Option<&str>) -> String {
@@ -947,7 +947,7 @@ impl RegistryItem {
             systemic_risk: m.systemic_risk,
             vetted: m.vetted,
             note: m.note,
-            updated_at: m.updated_at.to_string(),
+            updated_at: m.updated_at.to_rfc3339(),
             observed,
             registered: true,
             needs_rating,
@@ -974,7 +974,7 @@ impl RegistryItem {
             systemic_risk: false,
             vetted: false,
             note: Some(note),
-            updated_at: m.last_seen_at.map(|ts| ts.to_string()).unwrap_or_default(),
+            updated_at: m.last_seen_at.map(|ts| ts.to_rfc3339()).unwrap_or_default(),
             observed: true,
             registered: false,
             needs_rating: true,
@@ -1168,7 +1168,7 @@ pub async fn upsert_model(
     user.check_global_permission(&state, GlobalPermission::WritePublishing)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let posture = parse_posture(&body.posture);
     let provider = normalise_registry_provider(Some(&body.provider));
     let model_id = body.model_id.trim().to_string();

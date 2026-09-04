@@ -2,7 +2,7 @@ model LlmModel {
   slug String @id
 
   name        String
-  releaseDate DateTime?
+  releaseDate DateTime? @db.Timestamptz(3)
 
   creatorName String
   creatorSlug String
@@ -14,8 +14,8 @@ model LlmModel {
   medianTimeToFirstTokenSeconds Float?
   medianTimeToFirstAnswerToken  Float?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   bits Bit[]
 
@@ -46,8 +46,8 @@ model Bit {
   modelSlug String?
   model     LlmModel? @relation(fields: [modelSlug], references: [slug])
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   cache  BitTreeCache?
   caches BitCache[]
@@ -71,8 +71,8 @@ model BitCache {
   bitTreeCache       BitTreeCache @relation(fields: [dependencyTreeHash], references: [dependencyTreeHash], onDelete: Cascade)
   dependencyTreeHash String
 
-  updatedAt DateTime @updatedAt
-  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([dependencyTreeHash])
 }
@@ -83,8 +83,8 @@ model BitTreeCache {
 
   bits BitCache[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TemplateProfile {
@@ -107,6 +107,6 @@ model TemplateProfile {
   hub    String
   hubs   Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }

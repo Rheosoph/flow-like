@@ -711,7 +711,7 @@ async fn track_execution_usage(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let instance = std::env::var("INSTANCE_ID").ok();
     let record = execution_usage_tracking::ActiveModel {
         id: Set(create_id()),

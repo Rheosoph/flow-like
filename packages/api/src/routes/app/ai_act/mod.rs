@@ -388,11 +388,11 @@ impl From<ai_act_assessment::Model> for AssessmentResponse {
             transparency_obligations: m.transparency_obligations,
             responsible_name: m.responsible_name,
             responsible_email: m.responsible_email,
-            submitted_at: m.submitted_at.map(|d| d.to_string()),
-            reviewed_at: m.reviewed_at.map(|d| d.to_string()),
+            submitted_at: m.submitted_at.map(|d| d.to_rfc3339()),
+            reviewed_at: m.reviewed_at.map(|d| d.to_rfc3339()),
             review_note: m.review_note,
-            created_at: m.created_at.to_string(),
-            updated_at: m.updated_at.to_string(),
+            created_at: m.created_at.to_rfc3339(),
+            updated_at: m.updated_at.to_rfc3339(),
         }
     }
 }
@@ -474,7 +474,7 @@ pub async fn put_assessment(
         .unwrap_or_default();
 
     let classification = classify(&body.answers, &signals);
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     // Determine status: prohibited -> BLOCKED; submit -> SUBMITTED; else DRAFT.
     let status = if classification.blocked {

@@ -327,8 +327,8 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
             .settings
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default(),
-        updated: model.updated_at.to_string(),
-        created: model.created_at.to_string(),
+        updated: model.updated_at.to_rfc3339(),
+        created: model.created_at.to_rfc3339(),
     }
 }
 

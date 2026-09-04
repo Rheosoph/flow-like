@@ -48,7 +48,7 @@ pub struct ChallengeAttemptView {
     pub submission: Value,
     pub is_correct: bool,
     pub points_awarded: i32,
-    pub attempted_at: chrono::NaiveDateTime,
+    pub attempted_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 impl From<user_challenge_attempt::Model> for ChallengeAttemptView {
@@ -665,7 +665,7 @@ pub async fn submit_attempt(
     Json(body): Json<AttemptSubmission>,
 ) -> Result<Json<AttemptResult>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let challenge = ensure_challenge_course_readable(&state, &user, &challenge_id).await?;
     let course_id = course_id_for_challenge(&state, &challenge).await?;
 

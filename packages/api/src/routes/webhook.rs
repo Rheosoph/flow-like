@@ -76,7 +76,7 @@ async fn mark_event_processed(
     let new_event = stripe_event::ActiveModel {
         id: Set(event_id.to_string()),
         event_type: Set(event_type.to_string()),
-        processed_at: Set(chrono::Utc::now().naive_utc()),
+        processed_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     new_event.insert(&state.db).await?;
@@ -178,7 +178,7 @@ async fn handle_checkout_completed(
         // Mark deposit as paid and move to PendingReview (in queue)
         active.paid_deposit = Set(true);
         active.status = Set(crate::entity::sea_orm_active_enums::SolutionStatus::PendingReview);
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
+        active.updated_at = Set(chrono::Utc::now().fixed_offset());
 
         active.update(&state.db).await?;
 
@@ -285,7 +285,7 @@ async fn handle_app_purchase_completed(
 
     // Create purchase record
     let purchase_id = flow_like_types::create_id();
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let new_purchase = app_purchase::ActiveModel {
         id: Set(purchase_id.clone()),
@@ -452,7 +452,7 @@ async fn handle_wasm_purchase_completed(
         .map(|c| c.to_string().to_uppercase())
         .unwrap_or_else(|| "EUR".to_string());
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let purchase_id = flow_like_types::create_id();
 
     wasm_package_purchase::ActiveModel {
@@ -597,7 +597,7 @@ async fn handle_checkout_expired(
         if let Some(solution) = existing {
             let mut active: solution_request::ActiveModel = solution.into();
             active.status = Set(crate::entity::sea_orm_active_enums::SolutionStatus::Cancelled);
-            active.updated_at = Set(chrono::Utc::now().naive_utc());
+            active.updated_at = Set(chrono::Utc::now().fixed_offset());
             active.update(&state.db).await?;
 
             tracing::info!(
@@ -649,7 +649,7 @@ async fn handle_subscription_change(
 
         let mut active: user::ActiveModel = user_model.into();
         active.tier = Set(new_tier.clone());
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
+        active.updated_at = Set(chrono::Utc::now().fixed_offset());
         active.update(&state.db).await?;
 
         tracing::info!(
@@ -747,7 +747,7 @@ async fn handle_payment_intent_succeeded(
         let mut active: solution_request::ActiveModel = sol.into();
         active.paid_deposit = Set(true);
         active.priority = Set(true);
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
+        active.updated_at = Set(chrono::Utc::now().fixed_offset());
         active.update(&state.db).await?;
 
         tracing::info!(
@@ -778,8 +778,8 @@ async fn handle_payment_intent_succeeded(
                     id: Set(flow_like_types::create_id()),
                     user_id: Set(Some(u.id.clone())),
                     stripe_id: Set(intent_id.clone()),
-                    created_at: Set(chrono::Utc::now().naive_utc()),
-                    updated_at: Set(chrono::Utc::now().naive_utc()),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
                 };
                 new_tx.insert(&state.db).await?;
 
@@ -819,7 +819,7 @@ async fn handle_payment_intent_failed(
             "Payment failed at {}",
             chrono::Utc::now().to_rfc3339()
         )));
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
+        active.updated_at = Set(chrono::Utc::now().fixed_offset());
         active.update(&state.db).await?;
     }
 

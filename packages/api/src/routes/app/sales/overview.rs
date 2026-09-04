@@ -1,3 +1,4 @@
+use crate::utils::time::utc_midnight;
 use crate::{
     entity::{
         app, app_purchase, app_sales_daily, membership,
@@ -186,7 +187,7 @@ pub async fn get_sales_overview(
         .iter()
         .filter(|p| {
             p.completed_at
-                .map(|d| d.date() >= thirty_days_ago)
+                .map(|d| d.date_naive() >= thirty_days_ago)
                 .unwrap_or(false)
         })
         .collect();
@@ -197,7 +198,7 @@ pub async fn get_sales_overview(
         .iter()
         .filter(|p| {
             p.completed_at
-                .map(|d| d.date() >= sixty_days_ago && d.date() < thirty_days_ago)
+                .map(|d| d.date_naive() >= sixty_days_ago && d.date_naive() < thirty_days_ago)
                 .unwrap_or(false)
         })
         .collect();
@@ -399,8 +400,8 @@ async fn count_unique_buyers_by_bucket(
     use std::collections::HashMap;
 
     let bucket_expr = period.bucket_expr(state.db.get_database_backend(), "completedAt");
-    let start_of_range = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let end_of_range = end_date.and_hms_opt(0, 0, 0).unwrap() + Duration::days(1);
+    let start_of_range = utc_midnight(start_date);
+    let end_of_range = utc_midnight(end_date) + Duration::days(1);
 
     let rows = app_purchase::Entity::find()
         .filter(app_purchase::Column::AppId.eq(app_id))
@@ -515,8 +516,8 @@ async fn compute_daily_stats_from_purchases(
 ) -> Result<Vec<DailyStat>, ApiError> {
     use std::collections::HashMap;
 
-    let start_of_range = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let end_of_range = end_date.and_hms_opt(0, 0, 0).unwrap() + Duration::days(1);
+    let start_of_range = utc_midnight(start_date);
+    let end_of_range = utc_midnight(end_date) + Duration::days(1);
 
     let purchases = app_purchase::Entity::find()
         .filter(app_purchase::Column::AppId.eq(app_id))
@@ -530,7 +531,7 @@ async fn compute_daily_stats_from_purchases(
 
     for purchase in &purchases {
         if let Some(completed_at) = purchase.completed_at {
-            let date = completed_at.date();
+            let date = completed_at.date_naive();
             if date >= start_date && date <= end_date {
                 daily_map.entry(date).or_default().push(purchase);
             }

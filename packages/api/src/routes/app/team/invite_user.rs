@@ -187,8 +187,8 @@ pub async fn invite_user(
                 invitation::ActiveModel {
                     id: Set(invitation_id),
                     app_id: Set(app_id),
-                    created_at: Set(chrono::Utc::now().naive_utc()),
-                    updated_at: Set(chrono::Utc::now().naive_utc()),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
                     by_member_id: Set(member.id),
                     message: Set(message),
                     user_id: Set(invitee),

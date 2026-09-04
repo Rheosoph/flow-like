@@ -28,7 +28,7 @@ pub async fn enroll(
     Path(course_id): Path<String>,
 ) -> Result<Json<user_course_enrollment::Model>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     ensure_course_readable(&state, &user, &course_id).await?;
 
     let existing = user_course_enrollment::Entity::find()

@@ -82,7 +82,7 @@ pub async fn get_current_weekly(
         } else {
             None
         };
-        (c, Some(e.expires_at.and_utc().to_rfc3339()))
+        (c, Some(e.expires_at.to_rfc3339()))
     } else {
         (None, None)
     };
@@ -145,8 +145,8 @@ pub async fn rotate_weekly(
         candidates.choose(&mut rng).cloned()
     };
 
-    let now_naive = now_utc.naive_utc();
-    let expires = (now_utc + chrono::Duration::days(7)).naive_utc();
+    let now = now_utc.fixed_offset();
+    let expires = (now_utc + chrono::Duration::days(7)).fixed_offset();
 
     let existing = weekly_challenge::Entity::find()
         .filter(weekly_challenge::Column::WeekIso.eq(&week))
@@ -165,7 +165,7 @@ pub async fn rotate_weekly(
             week_iso: Set(week.clone()),
             challenge_id: Set(c.id.clone()),
             expires_at: Set(expires),
-            created_at: Set(now_naive),
+            created_at: Set(now),
         };
         active.insert(&state.db).await?;
         Some(ChallengeView::from_model(c, true))
@@ -176,6 +176,6 @@ pub async fn rotate_weekly(
     Ok(Json(CurrentWeekly {
         week_iso: week,
         challenge: challenge_opt,
-        expires_at: Some(expires.and_utc().to_rfc3339()),
+        expires_at: Some(expires.to_rfc3339()),
     }))
 }

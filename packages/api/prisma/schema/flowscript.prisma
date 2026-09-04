@@ -49,7 +49,7 @@ model FlowScriptApplyFailure {
   /// Trace the apply request belonged to, when it carried one, so a row opens in the trace explorer.
   traceId    String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([outcome, createdAt])

@@ -678,10 +678,7 @@ export function LaunchPath({
 							</span>
 							<span className="ml-auto font-medium">
 								{runs.lastRunAt
-									? formatRelativeTime(
-											new Date(runs.lastRunAt).toISOString(),
-											"narrow",
-										)
+									? formatRelativeTime(runs.lastRunAt, "narrow")
 									: "never"}
 							</span>
 						</div>

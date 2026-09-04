@@ -143,7 +143,7 @@ pub async fn get_my_opt_in(
     }
     let mut active = row.into_active_model();
     active.display_name = Set(display_name);
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     let row = active.update(&state.db).await?;
     Ok(Json(Some(row)))
 }
@@ -164,7 +164,7 @@ pub async fn update_my_opt_in(
     Json(body): Json<OptInBody>,
 ) -> Result<Json<leaderboard_opt_in::Model>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let (display_name, _) = verified_user_snapshot(&state, &sub).await?;
     let existing = leaderboard_opt_in::Entity::find_by_id(&sub)
         .one(&state.db)

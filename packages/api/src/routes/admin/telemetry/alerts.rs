@@ -356,11 +356,11 @@ fn alert_rule_record(model: telemetry_alert_rule::Model) -> TelemetryAlertRuleRe
         enabled: model.enabled,
         notify_email: model.notify_email,
         notify_push: model.notify_push,
-        last_evaluated_at: model.last_evaluated_at.map(|ts| ts.and_utc().to_rfc3339()),
-        last_triggered_at: model.last_triggered_at.map(|ts| ts.and_utc().to_rfc3339()),
+        last_evaluated_at: model.last_evaluated_at.map(|ts| ts.to_rfc3339()),
+        last_triggered_at: model.last_triggered_at.map(|ts| ts.to_rfc3339()),
         last_value: model.last_value,
-        created_at: model.created_at.and_utc().to_rfc3339(),
-        updated_at: model.updated_at.and_utc().to_rfc3339(),
+        created_at: model.created_at.to_rfc3339(),
+        updated_at: model.updated_at.to_rfc3339(),
     }
 }
 
@@ -373,8 +373,8 @@ fn alert_event_record(model: telemetry_alert_event::Model) -> TelemetryAlertEven
         value: model.value,
         threshold: model.threshold,
         message: model.message,
-        acknowledged_at: model.acknowledged_at.map(|ts| ts.and_utc().to_rfc3339()),
-        created_at: model.created_at.and_utc().to_rfc3339(),
+        acknowledged_at: model.acknowledged_at.map(|ts| ts.to_rfc3339()),
+        created_at: model.created_at.to_rfc3339(),
     }
 }
 
@@ -449,7 +449,7 @@ pub async fn create_telemetry_alert_rule(
         payload.sensitivity,
         payload.min_samples,
     )?;
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     let model = telemetry_alert_rule::ActiveModel {
         id: Set(flow_like_types::create_id()),
@@ -571,7 +571,7 @@ pub async fn update_telemetry_alert_rule(
     active.threshold = Set(resolved.threshold);
     active.sensitivity = Set(resolved.sensitivity);
     active.min_samples = Set(resolved.min_samples);
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
 
     let model = active.update(&state.db).await?;
     Ok(Json(alert_rule_record(model)))
@@ -654,7 +654,7 @@ pub async fn list_telemetry_alert_events(
         .page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
     let rule_id = q.rule_id.as_deref().filter(|value| !value.is_empty());
 
     let mut select = telemetry_alert_event::Entity::find()
@@ -733,7 +733,7 @@ pub async fn acknowledge_telemetry_alert_event(
     }
 
     let mut active = model.into_active_model();
-    active.acknowledged_at = Set(Some(Utc::now().naive_utc()));
+    active.acknowledged_at = Set(Some(Utc::now().fixed_offset()));
 
     let model = active.update(&state.db).await?;
     Ok(Json(alert_event_record(model)))

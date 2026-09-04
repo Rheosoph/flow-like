@@ -77,8 +77,8 @@ impl From<telemetry_dashboard::Model> for TelemetryDashboardRecord {
             id: model.id,
             name: model.name,
             tiles: model.tiles,
-            created_at: model.created_at.and_utc().to_rfc3339(),
-            updated_at: model.updated_at.and_utc().to_rfc3339(),
+            created_at: model.created_at.to_rfc3339(),
+            updated_at: model.updated_at.to_rfc3339(),
         }
     }
 }
@@ -297,7 +297,7 @@ pub async fn create_telemetry_dashboard(
     let name = require_name("name", &payload.name)?;
     check_tiles(&state, &payload.tiles).await?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let model = telemetry_dashboard::ActiveModel {
         id: Set(flow_like_types::create_id()),
         name: Set(name),
@@ -359,7 +359,7 @@ pub async fn update_telemetry_dashboard(
         return Ok(Json(active.try_into_model()?.into()));
     }
 
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
     let model = active.update(&state.db).await?;
 
     Ok(Json(model.into()))

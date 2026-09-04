@@ -141,7 +141,7 @@ pub async fn sync_profiles(
             // If the client sends no timestamp we cannot determine freshness → skip.
             let should_update = if let Some(local_updated) = &profile_req.updated_at {
                 match chrono::DateTime::parse_from_rfc3339(local_updated) {
-                    Ok(local_time) => local_time.naive_utc() > existing.updated_at,
+                    Ok(local_time) => local_time > existing.updated_at,
                     Err(_) => false,
                 }
             } else {
@@ -200,7 +200,7 @@ pub async fn sync_profiles(
                     None
                 };
 
-                active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+                active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
                 active_model.update(&state.db).await?;
 
                 updated.push(UpdatedProfile {
@@ -250,7 +250,7 @@ pub async fn sync_profiles(
                         None
                     };
 
-                    active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+                    active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
                     active_model.update(&state.db).await?;
 
                     updated.push(UpdatedProfile {
@@ -316,7 +316,7 @@ pub async fn sync_profiles(
             let mut skipped_existing_local = false;
 
             for attempt in 0..4 {
-                let now = chrono::Utc::now().naive_utc();
+                let now = chrono::Utc::now().fixed_offset();
                 let new_profile = profile::ActiveModel {
                     id: Set(server_id.clone()),
                     user_id: Set(sub.clone()),

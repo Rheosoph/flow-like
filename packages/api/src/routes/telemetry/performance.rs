@@ -70,7 +70,7 @@ struct ValidatedMetric {
     metric: String,
     value: f64,
     path: Option<String>,
-    client_ts: Option<chrono::NaiveDateTime>,
+    client_ts: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 /// Server-side equivalent of `sanitizeTelemetryPath`, hardened to the same rule
@@ -139,7 +139,7 @@ async fn persist_metrics<C: ConnectionTrait>(
     metrics: Vec<ValidatedMetric>,
     country: Option<String>,
 ) -> Result<usize, DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let accepted = metrics.len();
     let models: Vec<telemetry_perf_metric::ActiveModel> = metrics
         .into_iter()

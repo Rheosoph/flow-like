@@ -196,7 +196,7 @@ pub async fn canary_stats(
             )));
         }
     };
-    let since = chrono::Utc::now().naive_utc()
+    let since = chrono::Utc::now().fixed_offset()
         - match window {
             "7d" => chrono::Duration::days(7),
             _ => chrono::Duration::hours(24),
@@ -206,8 +206,8 @@ pub async fn canary_stats(
         RunVariant,
         Option<String>,
         RunStatus,
-        Option<chrono::NaiveDateTime>,
-        Option<chrono::NaiveDateTime>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
     )> = execution_run::Entity::find()
         .select_only()
         .column_as(execution_run::Column::RunVariant, "run_variant")
@@ -1061,7 +1061,7 @@ pub struct EventSetupInfo {
     /// `ok`, `running` or `error`
     pub setup_status: Option<String>,
     #[schema(value_type = Option<String>)]
-    pub last_setup_at: Option<chrono::NaiveDateTime>,
+    pub last_setup_at: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub last_setup_error: Option<String>,
 }
 

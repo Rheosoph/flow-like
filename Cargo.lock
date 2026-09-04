@@ -15005,6 +15005,7 @@ dependencies = [
  "dotenv",
  "flow-like",
  "flow-like-api",
+ "flow-like-aws-data",
  "flow-like-catalog",
  "flow-like-secrets",
  "flow-like-storage",

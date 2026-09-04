@@ -3,8 +3,8 @@ use flow_like::profile::{Profile, Settings};
 
 impl From<template_profile::Model> for Profile {
     fn from(model: template_profile::Model) -> Self {
-        let created = model.created_at.and_utc().to_rfc3339();
-        let updated = model.updated_at.and_utc().to_rfc3339();
+        let created = model.created_at.to_rfc3339();
+        let updated = model.updated_at.to_rfc3339();
 
         Self {
             id: model.id,
@@ -46,12 +46,8 @@ impl From<Profile> for template_profile::Model {
             tags: Some(profile.tags.into()),
             thumbnail: profile.thumbnail,
             theme: None,
-            created_at: chrono::DateTime::parse_from_rfc3339(&profile.created)
-                .unwrap_or_default()
-                .naive_utc(),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&profile.updated)
-                .unwrap_or_default()
-                .naive_utc(),
+            created_at: chrono::DateTime::parse_from_rfc3339(&profile.created).unwrap_or_default(),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&profile.updated).unwrap_or_default(),
         }
     }
 }

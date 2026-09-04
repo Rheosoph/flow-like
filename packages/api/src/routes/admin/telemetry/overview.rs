@@ -13,9 +13,10 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::telemetry::rollup::day_start;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{Duration, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Alias, Expr, Func, Order as SeaOrder, Query as SeaQuery, SimpleExpr};
 use sea_orm::{
@@ -63,20 +64,18 @@ pub(super) fn window_bucket(hours: i64, requested: Option<&str>) -> &'static str
 }
 
 /// Inclusive UTC-midnight day range covering every day the window touches.
-pub(super) fn day_window(now: NaiveDateTime, hours: i64) -> (NaiveDateTime, NaiveDateTime) {
-    (
-        (now - Duration::hours(hours))
-            .date()
-            .and_time(NaiveTime::MIN),
-        now.date().and_time(NaiveTime::MIN),
-    )
+pub(super) fn day_window(
+    now: DateTime<FixedOffset>,
+    hours: i64,
+) -> (DateTime<FixedOffset>, DateTime<FixedOffset>) {
+    (day_start(now - Duration::hours(hours)), day_start(now))
 }
 
 /// The equally long day range immediately preceding `start..=end`.
 pub(super) fn previous_day_window(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
-) -> (NaiveDateTime, NaiveDateTime) {
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+) -> (DateTime<FixedOffset>, DateTime<FixedOffset>) {
     let span = Duration::days((end - start).num_days() + 1);
     (start - span, start - Duration::days(1))
 }
@@ -129,7 +128,7 @@ struct ScalarSum {
 async fn group_counts<C: ConnectionTrait>(
     db: &C,
     column: telemetry_event::Column,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Result<Vec<GroupRow>, ApiError> {
     let mut q = SeaQuery::select();
     q.from(telemetry_event::Entity)
@@ -163,7 +162,7 @@ async fn group_counts<C: ConnectionTrait>(
 
 async fn active_installs<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Result<i64, ApiError> {
     let mut q = SeaQuery::select();
     q.from(telemetry_event::Entity)
@@ -185,8 +184,8 @@ async fn active_installs<C: ConnectionTrait>(
 
 async fn daily_event_total<C: ConnectionTrait>(
     db: &C,
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> Result<i64, ApiError> {
     Ok(telemetry_event_daily::Entity::find()
         .select_only()
@@ -202,8 +201,8 @@ async fn daily_event_total<C: ConnectionTrait>(
 
 async fn daily_top_events<C: ConnectionTrait>(
     db: &C,
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> Result<Vec<DailyGroupRow>, ApiError> {
     Ok(telemetry_event_daily::Entity::find()
         .select_only()
@@ -223,8 +222,8 @@ async fn daily_top_events<C: ConnectionTrait>(
 async fn daily_dimension<C: ConnectionTrait>(
     db: &C,
     dimension: &str,
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> Result<Vec<DailyGroupRow>, ApiError> {
     Ok(telemetry_dimension_daily::Entity::find()
         .select_only()
@@ -249,8 +248,8 @@ async fn daily_dimension<C: ConnectionTrait>(
 /// stores one row per install per day rather than per event.
 pub(super) async fn daily_active_installs<C: ConnectionTrait>(
     db: &C,
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> Result<i64, ApiError> {
     Ok(telemetry_install_daily::Entity::find()
         .select_only()
@@ -350,7 +349,7 @@ pub async fn telemetry_overview(
         .await?;
 
     let hours = q.hours.unwrap_or(24).clamp(1, 24 * 90);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     if reads_raw(hours) {
         let cutoff = now - Duration::hours(hours);
@@ -501,11 +500,13 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
-    fn ts(y: i32, m: u32, d: u32, h: u32) -> NaiveDateTime {
+    fn ts(y: i32, m: u32, d: u32, h: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(h, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     #[test]

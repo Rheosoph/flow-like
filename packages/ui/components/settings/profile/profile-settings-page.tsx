@@ -17,6 +17,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import { parseDateValue } from "../../../lib/date";
 import type { ISettingsProfile } from "../../../types";
 import { IConnectionMode, IThemes } from "../../../types";
 import { Badge } from "../../ui/badge";
@@ -321,11 +322,15 @@ export function ProfileSettingsPage({
 							<div className="space-y-2">
 								<ProfileStat
 									label={t("created", "Created")}
-									value={new Date(profile.created).toLocaleDateString()}
+									value={
+										parseDateValue(profile.created)?.toLocaleDateString() ?? "—"
+									}
 								/>
 								<ProfileStat
 									label={t("updated", "Updated")}
-									value={new Date(profile.updated).toLocaleDateString()}
+									value={
+										parseDateValue(profile.updated)?.toLocaleDateString() ?? "—"
+									}
 								/>
 								<ProfileStat
 									label={t("apps", "Apps")}

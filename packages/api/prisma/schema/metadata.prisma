@@ -43,8 +43,8 @@ model Meta {
   group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   groupId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([appId, lang])

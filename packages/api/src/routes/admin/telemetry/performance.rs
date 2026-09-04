@@ -24,7 +24,7 @@ use crate::state::AppState;
 use crate::{db::DbDialect, telemetry::percentiles_in_sql};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,
@@ -130,7 +130,7 @@ struct SummaryRow {
 
 #[derive(Debug, FromQueryResult)]
 struct TrendRow {
-    bucket: NaiveDateTime,
+    bucket: DateTime<FixedOffset>,
     metric: String,
     p75: f64,
 }
@@ -148,7 +148,7 @@ struct PerfSampleRow {
     metric: String,
     value: f64,
     path: Option<String>,
-    created_at: NaiveDateTime,
+    created_at: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, Default)]
@@ -267,7 +267,7 @@ impl WeightedPercentiles {
 
 fn fold_perf_samples(rows: Vec<PerfSampleRow>, bucket: &str) -> PerfFold {
     let mut per_metric: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    let mut per_bucket: BTreeMap<(NaiveDateTime, String), Vec<f64>> = BTreeMap::new();
+    let mut per_bucket: BTreeMap<(DateTime<FixedOffset>, String), Vec<f64>> = BTreeMap::new();
     let mut per_path: BTreeMap<(String, String), Vec<f64>> = BTreeMap::new();
 
     for row in rows {
@@ -295,7 +295,7 @@ fn fold_perf_samples(rows: Vec<PerfSampleRow>, bucket: &str) -> PerfFold {
     let trend = per_bucket
         .into_iter()
         .map(|((ts, metric), values)| PerfTrendPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc).to_rfc3339(),
+            ts: ts.to_rfc3339(),
             metric,
             p75: round3(percentile_cont(&sorted_values(values), 0.75)),
         })
@@ -339,7 +339,7 @@ fn fold_perf_daily(
     rows: &[telemetry_perf_daily::Model],
 ) -> (Vec<PerfMetricSummary>, Vec<PerfTrendPoint>) {
     let mut per_metric: BTreeMap<&str, WeightedPercentiles> = BTreeMap::new();
-    let mut per_day: BTreeMap<(NaiveDateTime, &str), WeightedPercentiles> = BTreeMap::new();
+    let mut per_day: BTreeMap<(DateTime<FixedOffset>, &str), WeightedPercentiles> = BTreeMap::new();
 
     for row in rows {
         per_metric
@@ -370,7 +370,7 @@ fn fold_perf_daily(
     let trend = per_day
         .into_iter()
         .map(|((day, metric), weighted)| PerfTrendPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(day, Utc).to_rfc3339(),
+            ts: day.to_rfc3339(),
             metric: metric.to_string(),
             p75: weighted.resolve().1,
         })
@@ -391,14 +391,14 @@ fn validate_metric(metric: &str) -> Result<(), ApiError> {
 }
 
 struct PerfFilters {
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     metric: Option<String>,
     source: Option<String>,
     path: Option<String>,
 }
 
 impl PerfFilters {
-    fn new(q: &TelemetryPerformanceQuery, cutoff: NaiveDateTime) -> Self {
+    fn new(q: &TelemetryPerformanceQuery, cutoff: DateTime<FixedOffset>) -> Self {
         Self {
             cutoff,
             metric: q.metric.clone().filter(|v| !v.is_empty()),
@@ -410,7 +410,11 @@ impl PerfFilters {
 
 /// Raw samples only exist for as long as the sweeper keeps them, so a raw read
 /// is clipped to that retention and reports the hours it really covers.
-fn raw_window(now: NaiveDateTime, hours: i64, retention_hours: i64) -> (NaiveDateTime, i64) {
+fn raw_window(
+    now: DateTime<FixedOffset>,
+    hours: i64,
+    retention_hours: i64,
+) -> (DateTime<FixedOffset>, i64) {
     let effective = hours.min(retention_hours);
     (now - Duration::hours(effective), effective)
 }
@@ -520,7 +524,7 @@ async fn perf_from_sql<C: ConnectionTrait>(
     .await?;
 
     let trend_sql = format!(
-        r#"SELECT date_trunc('{bucket}', "createdAt") AS bucket,
+        r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                   "metric" AS metric,
                   percentile_cont(0.75::float8) WITHIN GROUP (ORDER BY "value") AS p75
            FROM "TelemetryPerfMetric"
@@ -551,7 +555,7 @@ async fn perf_from_sql<C: ConnectionTrait>(
         trend: trend_rows
             .into_iter()
             .map(|row| PerfTrendPoint {
-                ts: DateTime::<Utc>::from_naive_utc_and_offset(row.bucket, Utc).to_rfc3339(),
+                ts: row.bucket.to_rfc3339(),
                 metric: row.metric,
                 p75: round3(row.p75),
             })
@@ -627,8 +631,8 @@ async fn perf_paths<C: ConnectionTrait>(
 }
 
 fn daily_perf_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     metric: Option<&str>,
     source: Option<&str>,
 ) -> Select<telemetry_perf_daily::Entity> {
@@ -688,7 +692,7 @@ pub async fn telemetry_performance(
         .unwrap_or(DEFAULT_PERF_HOURS)
         .clamp(1, MAX_PERF_HOURS);
     let bucket = window_bucket(hours, None);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let (raw_cutoff, by_path_window_hours) = raw_window(now, hours, perf_retention_hours());
     let filters = PerfFilters::new(&q, raw_cutoff);
 
@@ -734,18 +738,22 @@ mod tests {
     use chrono::NaiveDate;
     use sea_orm::DbBackend;
 
-    fn ts(hour: u32, minute: u32) -> NaiveDateTime {
+    fn ts(hour: u32, minute: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, 26)
             .unwrap()
             .and_hms_opt(hour, minute, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
-    fn day(y: i32, m: u32, d: u32) -> NaiveDateTime {
+    fn day(y: i32, m: u32, d: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn sample(metric: &str, value: f64, path: Option<&str>, hour: u32) -> PerfSampleRow {

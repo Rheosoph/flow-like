@@ -71,7 +71,7 @@ pub async fn upsert_app(
 
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     if let (Some(app), Some(app_updates)) = (&app, &app_body.app) {
         let sub = user.app_permission(&app_id, &state).await?;

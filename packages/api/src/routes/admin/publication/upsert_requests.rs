@@ -86,7 +86,7 @@ pub async fn upsert_request(
         ));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let approver_id = user.sub().ok();
 
     let new_status = match body.action.to_lowercase().as_str() {

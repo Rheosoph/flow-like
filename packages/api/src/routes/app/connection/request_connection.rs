@@ -103,8 +103,8 @@ pub async fn request_connection(
         comment: Set(payload.comment.clone()),
         requested_by_user_id: Set(permission.effective_user_id().ok()),
         approved_by_user_id: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     connection.insert(&state.db).await.map_err(|err| {
         if err.to_string().to_lowercase().contains("duplicate") {

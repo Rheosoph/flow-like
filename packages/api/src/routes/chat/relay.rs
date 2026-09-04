@@ -1019,7 +1019,7 @@ async fn track_llm_usage(
 ) -> Result<(), flow_like_types::Error> {
     use chrono::Utc;
     use llm_usage_tracking::ActiveModel;
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let record = ActiveModel {
         id: Set(create_id()),
         model_id: Set(model.to_string()),

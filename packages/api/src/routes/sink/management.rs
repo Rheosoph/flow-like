@@ -57,8 +57,8 @@ impl From<event_sink::Model> for SinkResponse {
             path: model.path,
             has_auth_token: model.auth_token.is_some(),
             webhook_secret: model.webhook_secret,
-            created_at: model.created_at.to_string(),
-            updated_at: model.updated_at.to_string(),
+            created_at: model.created_at.to_rfc3339(),
+            updated_at: model.updated_at.to_rfc3339(),
             event_name: None,
             event_type: None,
             board_id: None,
@@ -314,7 +314,7 @@ pub async fn update_sink(
         });
     }
 
-    active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+    active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
     let updated = active_model
         .update(&state.db)

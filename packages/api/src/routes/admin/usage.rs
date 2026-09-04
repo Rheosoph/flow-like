@@ -20,7 +20,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
 };
@@ -95,7 +95,7 @@ struct PowerUserAggregate {
     ai_invocations: u64,
     executions: u64,
     active_days: HashSet<String>,
-    last_seen: Option<NaiveDateTime>,
+    last_seen: Option<DateTime<FixedOffset>>,
 }
 
 impl PowerUserAggregate {
@@ -103,9 +103,9 @@ impl PowerUserAggregate {
         self.ai_invocations + self.executions
     }
 
-    fn touch(&mut self, created_at: NaiveDateTime) {
+    fn touch(&mut self, created_at: DateTime<FixedOffset>) {
         self.active_days
-            .insert(created_at.date().format("%Y-%m-%d").to_string());
+            .insert(created_at.date_naive().format("%Y-%m-%d").to_string());
         self.last_seen = Some(match self.last_seen {
             Some(last_seen) => last_seen.max(created_at),
             None => created_at,
@@ -325,10 +325,10 @@ impl From<usage_invocation::Model> for AdminUsageInvocation {
             cost_micro_dollars: row.cost_micro_dollars,
             latency: row.latency,
             error: row.error,
-            started_at: row.started_at.and_utc().to_rfc3339(),
+            started_at: row.started_at.to_rfc3339(),
             completed_at: row
                 .completed_at
-                .map(|completed_at| completed_at.and_utc().to_rfc3339()),
+                .map(|completed_at| completed_at.to_rfc3339()),
         }
     }
 }
@@ -365,8 +365,8 @@ impl From<usage_alert::Model> for AdminUsageAlert {
             current_tokens: row.current_tokens,
             acknowledged_at: row
                 .acknowledged_at
-                .map(|acknowledged_at| acknowledged_at.and_utc().to_rfc3339()),
-            created_at: row.created_at.and_utc().to_rfc3339(),
+                .map(|acknowledged_at| acknowledged_at.to_rfc3339()),
+            created_at: row.created_at.to_rfc3339(),
         }
     }
 }
@@ -394,7 +394,7 @@ impl From<usage_limit_audit_log::Model> for AdminUsageAuditLog {
             action: row.action,
             before: row.before,
             after: row.after,
-            created_at: row.created_at.and_utc().to_rfc3339(),
+            created_at: row.created_at.to_rfc3339(),
         }
     }
 }
@@ -424,7 +424,7 @@ pub async fn overview(
         .unwrap_or_else(|| MONTHLY.to_string());
     let started_at =
         period_start(&period).ok_or_else(|| ApiError::bad_request("Invalid period"))?;
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let daily_start = now - Duration::days(1);
     let weekly_start = now - Duration::days(7);
     let monthly_start = now - Duration::days(30);
@@ -745,7 +745,7 @@ pub async fn overview(
 
     Ok(Json(AdminUsageOverview {
         period,
-        started_at: started_at.and_utc().to_rfc3339(),
+        started_at: started_at.to_rfc3339(),
         totals: totals.into(),
         user_stats,
         trend,
@@ -1013,7 +1013,7 @@ pub async fn acknowledge_alert(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     let actor_user_id = user.executor_scoped_sub().ok();
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let mut active: usage_alert::ActiveModel = existing.into();
     active.acknowledged_at = Set(Some(now));
     active.acknowledged_by_user_id = Set(actor_user_id);
@@ -1077,9 +1077,9 @@ async fn build_user_stats(
     llm_rows: &[llm_usage_tracking::Model],
     embedding_rows: &[embedding_usage_tracking::Model],
     execution_rows: &[execution_usage_tracking::Model],
-    daily_start: NaiveDateTime,
-    weekly_start: NaiveDateTime,
-    monthly_start: NaiveDateTime,
+    daily_start: DateTime<FixedOffset>,
+    weekly_start: DateTime<FixedOffset>,
+    monthly_start: DateTime<FixedOffset>,
 ) -> Result<AdminUserStats, ApiError> {
     let total_users = user::Entity::find()
         .count(&state.db)
@@ -1126,7 +1126,10 @@ async fn build_user_stats(
     })
 }
 
-async fn count_new_users_since(state: &AppState, start: NaiveDateTime) -> Result<u64, ApiError> {
+async fn count_new_users_since(
+    state: &AppState,
+    start: DateTime<FixedOffset>,
+) -> Result<u64, ApiError> {
     user::Entity::find()
         .filter(user::Column::CreatedAt.gte(start))
         .count(&state.db)
@@ -1148,7 +1151,7 @@ fn build_activity_sets(
     llm_rows: &[llm_usage_tracking::Model],
     embedding_rows: &[embedding_usage_tracking::Model],
     execution_rows: &[execution_usage_tracking::Model],
-    start: NaiveDateTime,
+    start: DateTime<FixedOffset>,
 ) -> ActivitySets {
     let mut activity = ActivitySets::default();
 
@@ -1201,15 +1204,16 @@ fn build_activity_sets(
 
 fn build_usage_trend(
     period: &str,
-    started_at: NaiveDateTime,
-    now: NaiveDateTime,
+    started_at: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     llm_rows: &[llm_usage_tracking::Model],
     embedding_rows: &[embedding_usage_tracking::Model],
     execution_rows: &[execution_usage_tracking::Model],
     new_user_rows: &[user::Model],
 ) -> Vec<AdminUsageTrendPoint> {
     let monthly_buckets = period == crate::usage_limits::YEARLY;
-    let mut buckets = seed_trend_buckets(started_at.date(), now.date(), monthly_buckets);
+    let mut buckets =
+        seed_trend_buckets(started_at.date_naive(), now.date_naive(), monthly_buckets);
 
     for row in new_user_rows {
         let key = trend_key(row.created_at, monthly_buckets);
@@ -1298,7 +1302,7 @@ fn seed_trend_buckets(
     buckets
 }
 
-fn trend_key(created_at: NaiveDateTime, monthly_buckets: bool) -> String {
+fn trend_key(created_at: DateTime<FixedOffset>, monthly_buckets: bool) -> String {
     if monthly_buckets {
         created_at.format("%Y-%m").to_string()
     } else {
@@ -1319,7 +1323,7 @@ fn build_power_user_aggregates(
     llm_rows: &[llm_usage_tracking::Model],
     embedding_rows: &[embedding_usage_tracking::Model],
     execution_rows: &[execution_usage_tracking::Model],
-    start: NaiveDateTime,
+    start: DateTime<FixedOffset>,
 ) -> HashMap<String, PowerUserAggregate> {
     let mut users = HashMap::<String, PowerUserAggregate>::new();
 
@@ -1380,9 +1384,7 @@ fn build_power_users(
                 executions: totals.executions,
                 total_interactions: totals.total_interactions(),
                 active_days: totals.active_days.len() as u64,
-                last_seen: totals
-                    .last_seen
-                    .map(|last_seen| last_seen.and_utc().to_rfc3339()),
+                last_seen: totals.last_seen.map(|last_seen| last_seen.to_rfc3339()),
             }
         })
         .collect();

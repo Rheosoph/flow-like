@@ -8,7 +8,8 @@ import { Client } from "pg";
  * `prisma db push` directly instead of through db-push.ts.
  *
  * SQL that has to run before `prisma db push` on an existing database: type changes
- * Prisma emits without the `USING` clause they need (enum -> TEXT, array -> JSONB).
+ * Prisma emits without the `USING` clause they need (enum -> TEXT, array -> JSONB,
+ * timestamp -> TIMESTAMPTZ).
  * Files under prisma/pre-push hold one statement per line; `-- @` comment lines
  * directly above a statement guard it (see the header of 834-enums-arrays.sql).
  * Column-type statements are skipped once the column already has the target type
@@ -17,7 +18,13 @@ import { Client } from "pg";
  */
 const PRE_PUSH_DIR = "prisma/pre-push";
 const COLUMN_TYPE_STATEMENT =
-	/^ALTER TABLE "([^"]+)" ALTER COLUMN "([^"]+)" TYPE (TEXT|JSONB)\b/i;
+	/^ALTER TABLE "([^"]+)" ALTER COLUMN "([^"]+)" TYPE (TEXT|JSONB|TIMESTAMPTZ)\b/i;
+/** information_schema.columns.data_type for the SQL types those statements target. */
+const TARGET_DATA_TYPE: Record<string, string> = {
+	text: "text",
+	jsonb: "jsonb",
+	timestamptz: "timestamp with time zone",
+};
 const GUARD_LINE = /^-- @(dialect|if-type|unless-type) (.+)$/;
 const COLUMN_REF = /^"([^"]+)"\."([^"]+)"\s+(\S+)$/;
 
@@ -106,7 +113,7 @@ async function columnTypes(client: Client): Promise<Map<string, string>> {
 	);
 }
 
-async function detectDialect(client: Client): Promise<Dialect> {
+export async function detectDialect(client: Client): Promise<Dialect> {
 	try {
 		const result = await client.query("SELECT version() AS version");
 		return /cockroach/i.test(result.rows[0]?.version ?? "")
@@ -138,7 +145,10 @@ function shouldRun(
 	const column = COLUMN_TYPE_STATEMENT.exec(statement.sql);
 	if (column) {
 		const current = types.get(`${column[1]}.${column[2]}`);
-		if (current === undefined || current === column[3].toLowerCase())
+		if (
+			current === undefined ||
+			current === TARGET_DATA_TYPE[column[3].toLowerCase()]
+		)
 			return false;
 	}
 	return true;

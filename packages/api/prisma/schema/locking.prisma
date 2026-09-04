@@ -5,7 +5,7 @@
 /// engines that never block; expiry covers crashed holders.
 model MutationLock {
   id        BigInt    @id
-  updatedAt DateTime  @default(now()) @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
   owner     String?
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
 }

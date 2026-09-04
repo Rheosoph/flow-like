@@ -34,13 +34,13 @@ pub struct ProfileResponse {
     pub hub: String,
     pub hubs: Option<Vec<String>>,
     #[schema(value_type = String)]
-    pub created_at: chrono::NaiveDateTime,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
     #[schema(value_type = String)]
-    pub updated_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::DateTime<chrono::FixedOffset>,
     /// Set for soft-deleted profiles (tombstones). Clients should delete these locally.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
-    pub deleted_at: Option<chrono::NaiveDateTime>,
+    pub deleted_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 /// Get all profiles for the authenticated user.
@@ -63,7 +63,7 @@ pub async fn get_profiles(
     let sub = user.sub()?;
 
     // Purge tombstones older than 30 days
-    let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(30);
+    let cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
     profile::Entity::delete_many()
         .filter(
             profile::Column::UserId

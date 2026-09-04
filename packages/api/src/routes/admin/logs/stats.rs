@@ -64,7 +64,7 @@ struct ScalarCount {
 async fn group_count<C: ConnectionTrait>(
     db: &C,
     column: error_report::Column,
-    cutoff: chrono::NaiveDateTime,
+    cutoff: chrono::DateTime<chrono::FixedOffset>,
     limit: u64,
 ) -> Result<Vec<CountRow>, ApiError> {
     use sea_orm::sea_query::ExprTrait;
@@ -89,7 +89,7 @@ async fn group_count<C: ConnectionTrait>(
 async fn distinct_count<C: ConnectionTrait>(
     db: &C,
     column: error_report::Column,
-    cutoff: chrono::NaiveDateTime,
+    cutoff: chrono::DateTime<chrono::FixedOffset>,
     only_non_null: bool,
 ) -> Result<i64, ApiError> {
     use sea_orm::sea_query::ExprTrait;
@@ -134,7 +134,7 @@ pub async fn error_stats(
     let hours = q.hours.unwrap_or(24).clamp(1, 24 * 30);
     let top = q.top.unwrap_or(5).clamp(1, 25);
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let cutoff = now - Duration::hours(hours);
     let prev_cutoff = cutoff - Duration::hours(hours);
 

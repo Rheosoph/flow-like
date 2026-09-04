@@ -78,7 +78,7 @@ impl AppPackageResponse {
             visibility: pkg.map(|p| format!("{:?}", p.visibility)),
             verified: pkg.map(|p| p.verified),
             keywords: pkg.and_then(|p| p.keywords.clone().map(Into::into)),
-            added_at: DateTime::from_naive_utc_and_offset(model.added_at, Utc),
+            added_at: model.added_at.to_utc(),
             stale: model.stale,
             metadata: meta.map(MetaSummary::from_model),
         }
@@ -248,7 +248,7 @@ pub async fn add_package(
         .await?
         .ok_or(ApiError::bad_request("Not a member of this app"))?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let model = app_package::ActiveModel {
         id: Set(create_id()),
         app_id: Set(app_id.clone()),

@@ -62,7 +62,7 @@ fn build_user_response(
         name: u.as_ref().and_then(|u| u.name.clone()),
         avatar: u.as_ref().and_then(|u| u.avatar.clone()),
         permission: pu.permission,
-        granted_at: pu.granted_at.and_utc(),
+        granted_at: pu.granted_at.to_utc(),
     }
 }
 
@@ -74,8 +74,8 @@ fn build_invitation_response(inv: wasm_package_invitation::Model) -> InvitationR
         invited_by_id: inv.invited_by_id,
         permission: inv.permission,
         status: format!("{:?}", inv.status),
-        created_at: inv.created_at.and_utc(),
-        expires_at: inv.expires_at.map(|dt| dt.and_utc()),
+        created_at: inv.created_at.to_utc(),
+        expires_at: inv.expires_at.map(|dt| dt.to_utc()),
     }
 }
 
@@ -209,7 +209,7 @@ pub async fn invite_user(
         ));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let expires_at = now + chrono::Duration::days(7);
 
     // Upsert on the (packageId, inviteeId) unique key: re-inviting a user whose
@@ -293,12 +293,12 @@ pub async fn accept_invitation(
     }
 
     if let Some(expires_at) = invitation.expires_at
-        && chrono::Utc::now().naive_utc() > expires_at
+        && chrono::Utc::now().fixed_offset() > expires_at
     {
         return Err(ApiError::bad_request("Invitation has expired"));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let package_user = wasm_package_user::ActiveModel {
         id: Set(create_id()),

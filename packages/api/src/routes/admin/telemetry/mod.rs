@@ -31,7 +31,7 @@ pub use flowpilot::*;
 pub use overview::*;
 pub use timeseries::*;
 
-use chrono::{Duration, DurationRound, NaiveDateTime};
+use chrono::{DateTime, Duration, DurationRound, FixedOffset};
 
 const TOP_LIST_LIMIT: u64 = 10;
 
@@ -61,12 +61,16 @@ fn bucket_step(bucket: &str) -> Duration {
     }
 }
 
-fn trunc_to_bucket(ts: NaiveDateTime, bucket: &str) -> NaiveDateTime {
+fn trunc_to_bucket(ts: DateTime<FixedOffset>, bucket: &str) -> DateTime<FixedOffset> {
     ts.duration_trunc(bucket_step(bucket)).unwrap_or(ts)
 }
 
 /// Ordered, gap-free bucket starts covering `cutoff..=now`, used to zero-fill charts.
-fn bucket_slots(cutoff: NaiveDateTime, now: NaiveDateTime, bucket: &str) -> Vec<NaiveDateTime> {
+fn bucket_slots(
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
+    bucket: &str,
+) -> Vec<DateTime<FixedOffset>> {
     let step = bucket_step(bucket);
     let end = trunc_to_bucket(now, bucket);
     let mut slot = trunc_to_bucket(cutoff, bucket);

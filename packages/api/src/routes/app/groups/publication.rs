@@ -123,7 +123,7 @@ pub async fn change_group_visibility(
         }));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let currently_public = is_public_target(&current);
     let wants_public = is_public_target(&target_visibility);
 
@@ -344,7 +344,7 @@ pub async fn get_group_publication(
                     author_id: log.author_id,
                     message: log.message,
                     visibility: log.visibility.as_ref().map(visibility_to_string),
-                    created_at: log.created_at.to_string(),
+                    created_at: log.created_at.to_rfc3339(),
                 });
         }
     }
@@ -381,8 +381,8 @@ pub async fn get_group_publication(
             .map(|r| GroupPublicationRequestItem {
                 target_visibility: visibility_to_string(&r.target_visibility),
                 status: format!("{:?}", r.status).to_uppercase(),
-                created_at: r.created_at.to_string(),
-                updated_at: r.updated_at.to_string(),
+                created_at: r.created_at.to_rfc3339(),
+                updated_at: r.updated_at.to_rfc3339(),
                 logs: logs_by_request.remove(&r.id).unwrap_or_default(),
                 group_id: group_id.clone(),
                 id: r.id,

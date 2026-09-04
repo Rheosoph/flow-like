@@ -79,7 +79,7 @@ pub async fn create_group(
         return Err(ApiError::bad_request("Group name is required"));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let group_id = create_id();
     let actor = permission.effective_user_id().ok();
 
@@ -356,7 +356,7 @@ pub async fn update_group(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let mut active: app_group::ActiveModel = group.into();
     if let Some(status) = &payload.status {
         active.status = Set(parse_status(status));

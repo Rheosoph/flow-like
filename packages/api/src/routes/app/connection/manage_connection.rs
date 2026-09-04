@@ -75,7 +75,7 @@ pub async fn accept_connection_request(
     active.role_id = Set(Some(payload.role_id.clone()));
     active.status = Set(AppConnectionStatus::Active);
     active.approved_by_user_id = Set(permission.effective_user_id().ok());
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     active.update(&state.db).await?;
 
     state.invalidate_permission(&app_connection_cache_sub(&source_app_id), &app_id);

@@ -6,7 +6,7 @@
 #
 # Both targets only swap the datasource provider. The dsql target additionally refuses
 # anything Aurora DSQL cannot create (enums, scalar arrays, GIN indexes, native type
-# attributes other than Date/Timestamp) so a regression in the schema of record fails here
+# attributes other than Date/Timestamp/Timestamptz) so a regression in the schema of record fails here
 # instead of at deploy time.
 set -euo pipefail
 
@@ -69,8 +69,8 @@ if [ "$TARGET" = "dsql" ]; then
   [ -n "$hits" ] && report "scalar list columns (no array types on DSQL)" "$hits"
   hits=$(grep -rnE 'type:[[:space:]]*Gin' "$DST_ROOT" || true)
   [ -n "$hits" ] && report "GIN indexes (unsupported on DSQL)" "$hits"
-  hits=$(grep -rnE '@db\.' "$DST_ROOT" | grep -vE '@db\.(Date|Timestamp)' || true)
-  [ -n "$hits" ] && report "native type attributes other than @db.Date/@db.Timestamp" "$hits"
+  hits=$(grep -rnE '@db\.' "$DST_ROOT" | grep -vE '@db\.(Date|Timestamptz?)\b' || true)
+  [ -n "$hits" ] && report "native type attributes other than @db.Date/@db.Timestamp/@db.Timestamptz" "$hits"
   if [ "$violations" -ne 0 ]; then
     rm -rf "$DST_PARENT"
     exit 1

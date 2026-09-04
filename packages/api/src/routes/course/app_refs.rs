@@ -134,7 +134,7 @@ pub async fn upsert_app_ref(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let kind = parse_ref_kind(&body.kind);
     ensure_app_ref_targets_allowed(&state, &user, &kind, &body).await?;
     let existing = lesson_app_ref::Entity::find_by_id(&ref_id)

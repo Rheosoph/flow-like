@@ -2284,7 +2284,7 @@ async fn dispatch_event_collect(
         artifact: None,
     };
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id),

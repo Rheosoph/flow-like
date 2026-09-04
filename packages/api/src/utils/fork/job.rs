@@ -268,9 +268,7 @@ impl From<&fork_job::Model> for ForkJobView {
             .report
             .clone()
             .and_then(|value| serde_json::from_value(value).ok());
-        let utc = |naive: chrono::NaiveDateTime| {
-            chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc)
-        };
+        let utc = |stamp: chrono::DateTime<chrono::FixedOffset>| stamp.to_utc();
         Self {
             job_id: job.id.clone(),
             source_app_id: job.source_app_id.clone(),
@@ -294,8 +292,8 @@ impl From<&fork_job::Model> for ForkJobView {
     }
 }
 
-fn now() -> chrono::NaiveDateTime {
-    chrono::Utc::now().naive_utc()
+fn now() -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::Utc::now().fixed_offset()
 }
 
 fn do_nothing() -> OnConflict {
@@ -571,7 +569,7 @@ fn build_report(plan: &ForkPlan, cursor: &ForkJobCursor) -> ForkReport {
 fn hidden_app_shell(
     dest_app_id: &str,
     forked_from: Option<String>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> app::ActiveModel {
     app::ActiveModel {
         id: Set(dest_app_id.to_string()),

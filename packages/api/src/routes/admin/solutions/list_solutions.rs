@@ -160,10 +160,10 @@ pub async fn list_solutions(
             remainder_cents: s.remainder_cents,
             assigned_to: s.assigned_to,
             admin_notes: s.admin_notes,
-            delivered_at: s.delivered_at.map(|d| d.to_string()),
+            delivered_at: s.delivered_at.map(|d| d.to_rfc3339()),
             tracking_token: s.tracking_token,
-            created_at: s.created_at.to_string(),
-            updated_at: s.updated_at.to_string(),
+            created_at: s.created_at.to_rfc3339(),
+            updated_at: s.updated_at.to_rfc3339(),
         })
         .collect();
 

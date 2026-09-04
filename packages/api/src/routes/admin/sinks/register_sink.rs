@@ -125,7 +125,7 @@ pub async fn register_sink(
         .map_err(|e| ApiError::internal_error(anyhow!("JWT encoding error: {}", e)))?;
 
     // Store in database for revocation tracking
-    let now_dt = chrono::Utc::now().naive_utc();
+    let now_dt = chrono::Utc::now().fixed_offset();
     let sink_token = sink_token::ActiveModel {
         id: Set(jti.clone()),
         sink_type: Set(sink_type.clone()),

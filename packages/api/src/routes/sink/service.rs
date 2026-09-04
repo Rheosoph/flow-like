@@ -79,7 +79,7 @@ pub async fn sync_sink(
     state: &AppState,
     config: SinkConfig,
 ) -> flow_like_types::Result<event_sink::Model> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let is_http_sink = config.sink_type == sink_types::HTTP;
     let auth_token = normalized_http_auth_token(config.auth_token.as_deref());
     let method = normalized_http_method(config.method.as_deref());
@@ -305,7 +305,7 @@ pub async fn toggle_sink_active(
 
     let mut active_model: event_sink::ActiveModel = sink.into();
     active_model.active = Set(new_active);
-    active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+    active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
     let updated = active_model.update(db).await?;
 

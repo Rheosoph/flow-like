@@ -120,8 +120,14 @@ impl DbDialect {
     }
 
     /// Whether `percentile_cont(…) WITHIN GROUP (ORDER BY …)` is available.
+    ///
+    /// Aurora DSQL does support it — verified against a live cluster by
+    /// `dsql_live::percentile_cont_reports_support`, which fails if this ever
+    /// disagrees with the engine. Without it, percentile metrics fall back to
+    /// folding every row in the API process and the admin query endpoint
+    /// refuses them outright.
     pub fn supports_ordered_set_aggregates(self) -> bool {
-        matches!(self, Self::Postgres | Self::CockroachDb)
+        true
     }
 }
 
@@ -171,7 +177,7 @@ mod tests {
         }
         assert!(!DbDialect::Dsql.has_pg_stat_catalog());
         assert!(!DbDialect::Dsql.supports_set_config_timeouts());
-        assert!(!DbDialect::Dsql.supports_ordered_set_aggregates());
+        assert!(DbDialect::Dsql.supports_ordered_set_aggregates());
         assert!(DbDialect::Dsql.bounded_transactions());
         assert!(DbDialect::Dsql.optimistic_concurrency());
         assert!(DbDialect::CockroachDb.optimistic_concurrency());

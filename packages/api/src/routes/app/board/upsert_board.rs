@@ -70,7 +70,7 @@ async fn persist_instantiated_pages(
         return Ok(());
     }
 
-    let rows = instantiated_page_rows(app_id, board_id, pages, chrono::Utc::now().naive_utc());
+    let rows = instantiated_page_rows(app_id, board_id, pages, chrono::Utc::now().fixed_offset());
 
     insert_in_chunks(
         &state.db,
@@ -87,7 +87,7 @@ fn instantiated_page_rows(
     app_id: &str,
     board_id: &str,
     pages: &[Page],
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Vec<page::ActiveModel> {
     pages
         .iter()
@@ -214,7 +214,7 @@ mod tests {
         let pages = (0..DEFAULT_WRITE_CHUNK * 2 + 7)
             .map(|index| page(&format!("page-{index}")))
             .collect::<Vec<_>>();
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let rows = instantiated_page_rows("app", "board", &pages, now);
 
         assert_eq!(rows.len(), pages.len());
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn instantiated_page_rows_are_scoped_to_the_created_board() {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let rows = instantiated_page_rows("app", "board", &[page("a")], now);
         let row = rows.first().expect("one row");
         assert_eq!(row.app_id, Set("app".to_string()));

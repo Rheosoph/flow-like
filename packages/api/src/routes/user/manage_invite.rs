@@ -134,8 +134,8 @@ pub async fn accept_invite(
                         user_id: Set(sub),
                         app_id: Set(app.id),
                         role_id: Set(default_role),
-                        created_at: Set(chrono::Utc::now().naive_utc()),
-                        updated_at: Set(chrono::Utc::now().naive_utc()),
+                        created_at: Set(chrono::Utc::now().fixed_offset()),
+                        updated_at: Set(chrono::Utc::now().fixed_offset()),
                         joined_via: Set(Some("invite".to_string())),
                     };
 

@@ -303,8 +303,8 @@ pub(crate) async fn assemble_groups(
             tags: preview.map(|p| p.tags.clone()).unwrap_or_default(),
             member_count: member_infos.len(),
             members: member_infos,
-            created_at: group.created_at.and_utc().timestamp(),
-            updated_at: group.updated_at.and_utc().timestamp(),
+            created_at: group.created_at.timestamp(),
+            updated_at: group.updated_at.timestamp(),
         });
     }
 

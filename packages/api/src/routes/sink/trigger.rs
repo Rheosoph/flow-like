@@ -162,7 +162,7 @@ pub(crate) async fn resolve_sink_pat_user_id(
     };
 
     if let Some(valid_until) = db_pat.valid_until
-        && valid_until < chrono::Utc::now().naive_utc()
+        && valid_until < chrono::Utc::now().fixed_offset()
     {
         tracing::warn!(
             sink_id = %sink.id,
@@ -568,7 +568,7 @@ pub(crate) async fn maybe_refresh_oauth_tokens(
         let update = event_sink::ActiveModel {
             id: Set(sink_id.to_string()),
             oauth_tokens_encrypted: Set(Some(encrypted)),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
             ..Default::default()
         };
 
@@ -683,7 +683,7 @@ pub async fn trigger_event(
 
     // Create run
     let run_id = create_id();
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
     // Decrypt PAT from sink if available
     let token = sink
         .pat_encrypted
@@ -822,8 +822,8 @@ pub async fn trigger_event(
         parent_run_id: Set(None),
         correlation_keys: Set(None),
         app_id: Set(sink.app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     // Insert run record
@@ -1030,7 +1030,7 @@ pub async fn trigger_http(
     // weighted draw on the run id.
     let target = variant::resolve_sink_target(&event, None, &run_id);
 
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     let input_payload_len = payload
         .as_ref()
@@ -1144,8 +1144,8 @@ pub async fn trigger_http(
         parent_run_id: Set(None),
         correlation_keys: Set(None),
         app_id: Set(app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching HTTP sink");
@@ -1423,7 +1423,7 @@ pub async fn trigger_telegram(
 
     // Create run
     let run_id = create_id();
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     // Live-variant split, resolved before the run row and the executor JWT.
     // Webhook fires carry no occurrence identity, so each is an independent
@@ -1562,8 +1562,8 @@ pub async fn trigger_telegram(
         parent_run_id: Set(None),
         correlation_keys: Set(None),
         app_id: Set(sink.app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching Telegram webhook (async)");
@@ -1781,7 +1781,7 @@ pub async fn trigger_discord(
 
     // Create run
     let run_id = create_id();
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     // Live-variant split, resolved before the run row and the executor JWT.
     // Webhook fires carry no occurrence identity, so each is an independent
@@ -1915,8 +1915,8 @@ pub async fn trigger_discord(
         parent_run_id: Set(None),
         correlation_keys: Set(None),
         app_id: Set(sink.app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching Discord webhook (async)");

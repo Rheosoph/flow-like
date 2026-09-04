@@ -22,10 +22,10 @@ pub struct PageUpsert {
 /// page is stale, so it has to be the same clock the cached payload carries — `get_page`'s
 /// merge already treats the payload timestamp as authoritative. A clock running far ahead
 /// would freeze the revision for everyone else, so the future is capped.
-fn payload_revision(page: &Page) -> chrono::NaiveDateTime {
+fn payload_revision(page: &Page) -> chrono::DateTime<chrono::FixedOffset> {
     let stamped: chrono::DateTime<chrono::Utc> = page.updated_at.into();
     let ceiling = chrono::Utc::now() + chrono::Duration::minutes(5);
-    stamped.min(ceiling).naive_utc()
+    stamped.min(ceiling).fixed_offset()
 }
 
 #[utoipa::path(
@@ -166,7 +166,7 @@ pub async fn upsert_page(
         ..Default::default()
     };
     if is_new {
-        row.created_at = Set(chrono::Utc::now().naive_utc());
+        row.created_at = Set(chrono::Utc::now().fixed_offset());
     }
     state
         .transaction(|txn| {

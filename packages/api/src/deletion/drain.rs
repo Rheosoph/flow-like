@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, FixedOffset};
 use flow_like_types::anyhow;
 use sea_orm::sea_query::{DynIden, Expr, ExprTrait, Keyword, Order, Query, ValueTuple};
 use sea_orm::{ConnectionTrait, DatabaseConnection, QueryResult, Value};
@@ -99,7 +99,7 @@ pub struct Pass<'a> {
     /// The `leaseUntil` this pass owns. Every progress write is fenced on it
     /// and replaces it, so a write that matches no row proves another worker
     /// re-claimed the job while this pass was running.
-    lease: Option<NaiveDateTime>,
+    lease: Option<DateTime<FixedOffset>>,
     lease_lost: bool,
     started: Instant,
     chunks: usize,
@@ -139,7 +139,7 @@ impl<'a> Pass<'a> {
     }
 
     /// The lease value the next write must be fenced on.
-    pub fn lease(&self) -> Option<NaiveDateTime> {
+    pub fn lease(&self) -> Option<DateTime<FixedOffset>> {
         self.lease
     }
 

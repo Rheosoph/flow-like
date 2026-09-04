@@ -354,7 +354,7 @@ pub(crate) async fn run_event_setup(
     // Deliberately DO NOT touch the serving pointers here —
     // `last_setup_version` (stable) and `EventSetup.eventVersion` (variants)
     // must keep pointing at the last successful setup until this completes.
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     if variant_name == STABLE_VARIANT {
         let _ = event::ActiveModel {
             id: Set(core_event.id.clone()),
@@ -752,7 +752,7 @@ async fn record_setup_failure(
     msg: &str,
 ) {
     let result = if variant == STABLE_VARIANT {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         (event::ActiveModel {
             id: Set(event_id.to_string()),
             setup_status: Set(Some("error".to_string())),
@@ -847,7 +847,7 @@ async fn write_event_setup_row<C: ConnectionTrait>(
     } else {
         (String::new(), String::new(), None)
     };
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     event_setup::Entity::insert(event_setup::ActiveModel {
         id: Set(flow_like_types::create_id()),
         app_id: Set(app_id.to_string()),
@@ -880,7 +880,7 @@ async fn touch_event_setup_status<C: ConnectionTrait>(
     status: &str,
     error: Option<&str>,
 ) -> Result<(), sea_orm::DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     event_setup::Entity::update_many()
         .col_expr(event_setup::Column::SetupStatus, Expr::value(status))
         .col_expr(event_setup::Column::LastSetupAt, Expr::value(now))
@@ -1044,7 +1044,7 @@ async fn persist_registrations_in(
 
     let mut reg_count = 0usize;
     let mut auth_count = 0usize;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     // Dedup `(variant, kind, method, path)` across all envelopes for this
     // event version. A misconfigured graph can produce duplicate routes (e.g.
     // two REST server nodes both registering `POST /webhook`). We keep the
@@ -1355,7 +1355,7 @@ async fn persist_registrations_in(
         );
         touch_event_setup_status(txn, app_id, event_id, variant, "ok", None).await?;
         if variant == STABLE_VARIANT {
-            let now = chrono::Utc::now().naive_utc();
+            let now = chrono::Utc::now().fixed_offset();
             event::ActiveModel {
                 id: Set(event_id.to_string()),
                 setup_status: Set(Some("ok".to_string())),
@@ -1387,7 +1387,7 @@ async fn persist_registrations_in(
         // has not been backfilled yet, and three read surfaces still consume
         // it.
         if variant == STABLE_VARIANT {
-            let now = chrono::Utc::now().naive_utc();
+            let now = chrono::Utc::now().fixed_offset();
             event::ActiveModel {
                 id: Set(event_id.to_string()),
                 setup_status: Set(Some("ok".to_string())),
@@ -1586,7 +1586,7 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
     kind: &str,
     auth: Option<&Value>,
     auth_count: &mut usize,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
     txn: &C,
 ) -> flow_like_types::Result<Option<String>> {
     // Treat missing, null, plain `"none"`, or `{ "type": "none" }` as "no auth".
@@ -1964,7 +1964,7 @@ async fn expand_rest_config<C: ConnectionTrait>(
     node_id: &str,
     config: &Value,
     auth_count: &mut usize,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
     txn: &C,
 ) -> flow_like_types::Result<(Vec<event_remote_registration::ActiveModel>, Option<String>)> {
     let auth_id = maybe_insert_auth_from_value(

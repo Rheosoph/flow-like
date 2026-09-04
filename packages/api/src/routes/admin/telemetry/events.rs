@@ -62,8 +62,8 @@ impl From<telemetry_event::Model> for TelemetryEventRecord {
             props: m.props,
             app_version: m.app_version,
             platform: m.platform,
-            client_ts: m.client_ts.map(|ts| ts.and_utc().to_rfc3339()),
-            created_at: m.created_at.and_utc().to_rfc3339(),
+            client_ts: m.client_ts.map(|ts| ts.to_rfc3339()),
+            created_at: m.created_at.to_rfc3339(),
         }
     }
 }

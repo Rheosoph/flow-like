@@ -198,8 +198,8 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
             0,
         )
         .unwrap_or_default()
-        .naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        .fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         // Setup tracking fields are only written by the remote-setup endpoint
         // (see routes::app::events::setup_event). Preserve existing values on
         // event upserts by leaving them NotSet here.
@@ -268,10 +268,10 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
-    let created_at = std::time::UNIX_EPOCH
-        + std::time::Duration::from_secs(model.created_at.and_utc().timestamp() as u64);
-    let updated_at = std::time::UNIX_EPOCH
-        + std::time::Duration::from_secs(model.updated_at.and_utc().timestamp() as u64);
+    let created_at =
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(model.created_at.timestamp() as u64);
+    let updated_at =
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(model.updated_at.timestamp() as u64);
 
     Ok(CoreEvent {
         id: model.id,

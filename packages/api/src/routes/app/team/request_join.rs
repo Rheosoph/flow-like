@@ -90,8 +90,8 @@ pub async fn request_join(
                         user_id: Set(sub),
                         app_id: Set(app_id),
                         role_id: Set(default_role_id),
-                        created_at: Set(chrono::Utc::now().naive_utc()),
-                        updated_at: Set(chrono::Utc::now().naive_utc()),
+                        created_at: Set(chrono::Utc::now().fixed_offset()),
+                        updated_at: Set(chrono::Utc::now().fixed_offset()),
                         joined_via: Set(Some("request_join".to_string())),
                     }
                     .insert(txn)
@@ -126,7 +126,7 @@ pub async fn request_join(
 
                     let mut existing_request: join_queue::ActiveModel = existing_request.into();
                     existing_request.comment = Set(comment);
-                    existing_request.updated_at = Set(chrono::Utc::now().naive_utc());
+                    existing_request.updated_at = Set(chrono::Utc::now().fixed_offset());
                     existing_request.update(txn).await?;
                     return Ok(JoinOutcome::RequestUpdated);
                 }
@@ -136,8 +136,8 @@ pub async fn request_join(
                     user_id: Set(sub),
                     app_id: Set(app_id),
                     comment: Set(comment),
-                    created_at: Set(chrono::Utc::now().naive_utc()),
-                    updated_at: Set(chrono::Utc::now().naive_utc()),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
                 }
                 .insert(txn)
                 .await?;

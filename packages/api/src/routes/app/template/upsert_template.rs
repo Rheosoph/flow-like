@@ -68,7 +68,7 @@ async fn create_template(
             template_data.board_version,
         )
         .await?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let meta_id = create_id();
     let version_label = format!("{}.{}.{}", version.0, version.1, version.2);
 
@@ -206,7 +206,7 @@ pub async fn upsert_template(
         app_upsert.1.0, app_upsert.1.1, app_upsert.1.2
     )));
 
-    template.updated_at = Set(chrono::Utc::now().naive_utc());
+    template.updated_at = Set(chrono::Utc::now().fixed_offset());
     let cancelled_id = app_upsert.0.clone();
     state
         .transaction(|txn| {

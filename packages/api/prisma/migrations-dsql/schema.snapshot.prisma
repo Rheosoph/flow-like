@@ -34,13 +34,13 @@ model AiActAssessment {
   responsibleName   String?
   responsibleEmail  String?
 
-  submittedAt  DateTime?
+  submittedAt  DateTime? @db.Timestamptz(3)
   reviewedById String?
-  reviewedAt   DateTime?
+  reviewedAt   DateTime? @db.Timestamptz(3)
   reviewNote   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, version])
   @@index([appId])
@@ -70,8 +70,8 @@ model AiActModelObservation {
 
   driftFlagged Boolean @default(false)
 
-  firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
+  firstSeenAt DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([appId, modelId])
   @@index([appId])
@@ -96,8 +96,8 @@ model AiActModelRegistry {
 
   note String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([provider, modelId])
   @@index([posture])
@@ -115,10 +115,10 @@ model InviteLink {
   appId String
 
   countJoined BigInt    @default(0)
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
   @@index([appId, token])
@@ -135,8 +135,8 @@ model JoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, appId])
@@ -159,8 +159,8 @@ model Invitation {
   byMember   Membership @relation(fields: [byMemberId], references: [id], onDelete: Cascade)
   byMemberId String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, createdAt])
@@ -185,8 +185,8 @@ model AppConnection {
   requestedByUserId String?
   approvedByUserId  String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([sourceAppId, targetAppId])
   @@index([targetAppId, status])
@@ -204,8 +204,8 @@ model AppProcessNote {
   authorUserId String?
   content      String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
 }
@@ -226,8 +226,8 @@ model Membership {
   addedPackages         AppPackage[]
   technicalUsersCreated TechnicalUser[] @relation("TechnicalUserCreatorMembership")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   joinedVia String?
 
@@ -254,8 +254,8 @@ model Role {
   defaultForApp App? @relation("defaultForApp")
   ownerForApp   App? @relation("ownerForApp")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Notification {
@@ -278,8 +278,8 @@ model Notification {
   sourceRunId  String?
   sourceNodeId String?
 
-  createdAt DateTime  @default(now())
-  readAt    DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  readAt    DateTime? @db.Timestamptz(3)
 
   @@index([userId, createdAt])
   @@index([userId, read])
@@ -306,13 +306,13 @@ model PushNotificationTarget {
 
   pushEnabled        Boolean   @default(true)
   failureCount       Int       @default(0)
-  lastRegisteredAt   DateTime  @default(now())
-  lastSeenAt         DateTime  @default(now())
-  invalidatedAt      DateTime?
+  lastRegisteredAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime  @default(now()) @db.Timestamptz(3)
+  invalidatedAt      DateTime? @db.Timestamptz(3)
   invalidationReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, deviceId, provider])
   @@index([userId, pushEnabled])
@@ -343,8 +343,8 @@ model AppGroup {
   /// visibility; see `PublicationRequest`.
   publicationRequests PublicationRequest[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([ownerAppId])
   @@index([visibility])
@@ -374,8 +374,8 @@ model AppGroupMember {
   addedByUserId    String?
   approvedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([groupId, appId])
   @@index([groupId, status])
@@ -445,7 +445,7 @@ model App {
   /// fork survives even if the source app is later deleted.
   forkedFrom   String?
   /// For forked apps: when the fork happened.
-  forkedAt     DateTime?
+  forkedAt     DateTime? @db.Timestamptz(3)
 
   technicalUsers TechnicalUser[]
 
@@ -485,8 +485,8 @@ model App {
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
 
-  createdAt               DateTime                 @default(now())
-  updatedAt               DateTime                 @updatedAt
+  createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
   embeddingUsageTrackings EmbeddingUsageTracking[]
 
   @@index([createdAt])
@@ -514,8 +514,8 @@ model AppUsageLimit {
   hard                    Boolean @default(true)
   warningThresholdPercent Int?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, userId, period])
   @@index([appId])
@@ -543,10 +543,10 @@ model AppCacheEntry {
 
   /// Null means the entry persists until it is explicitly deleted. Postgres has no
   /// native TTL, so expired rows are removed by the cache sweeper.
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@id([appId, scope, userId, namespace, key])
   @@index([expiresAt])
@@ -576,9 +576,9 @@ model TechnicalUser {
   executionUsage ExecutionUsageTracking[]
   executionRuns  ExecutionRun[]
 
-  validUntil DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  validUntil DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([creatorUserId])
@@ -602,8 +602,8 @@ model Feedback {
   comment String
   rating  BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId])
   @@index([appId])
@@ -629,8 +629,8 @@ model Comment {
   package   WasmPackage? @relation(fields: [packageId], references: [id], onDelete: Cascade)
   packageId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@unique([userId, packageId])
@@ -657,8 +657,8 @@ model Template {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
 }
@@ -673,8 +673,8 @@ model Widget {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
 }
@@ -692,8 +692,8 @@ model Page {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([boardId])
@@ -706,12 +706,12 @@ model BoardSync {
   appId String
 
   boardId      String
-  lastSyncedAt DateTime
+  lastSyncedAt DateTime @db.Timestamptz(3)
 
   syncEncryptionKey String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, boardId])
 }
@@ -748,8 +748,8 @@ model AppBoardScore {
   /// to serve board summaries without reading every board from object storage.
   summary Json?
 
-  computedAt DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  computedAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, boardId])
   @@index([appId])
@@ -839,7 +839,7 @@ model Event {
   setupStatus String?
 
   /// Timestamp of the last setup run completion.
-  lastSetupAt DateTime?
+  lastSetupAt DateTime? @db.Timestamptz(3)
 
   /// Event version that was active during the last successful setup. Used to
   /// match `EventRemoteRegistration` rows when serving inbound requests.
@@ -855,8 +855,8 @@ model Event {
   aliases             EventAlias[]
   setups              EventSetup[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, route])
   @@index([appId])
@@ -895,13 +895,13 @@ model EventSetup {
   setupStatus String?
 
   /// Timestamp of the last setup run completion.
-  lastSetupAt DateTime?
+  lastSetupAt DateTime? @db.Timestamptz(3)
 
   /// Last setup error message (truncated), populated only when setupStatus = "error".
   lastSetupError String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([eventId, variant])
   @@index([appId, eventId])
@@ -936,8 +936,8 @@ model EventRemoteAuth {
 
   registrations EventRemoteRegistration[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, nodeId, kind])
@@ -990,7 +990,7 @@ model EventRemoteRegistration {
   auth   EventRemoteAuth? @relation(fields: [authId], references: [id], onDelete: SetNull)
   authId String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, kind])
@@ -1016,8 +1016,8 @@ model EventAlias {
 
   createdBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, eventId])
   @@index([appId])
@@ -1072,8 +1072,8 @@ model EventSink {
   /// Snapshot of the last updater's profile JSON (bits, hubs) for trigger execution
   profileJson Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, path, method])
   @@index([appId])
@@ -1098,13 +1098,13 @@ model SinkToken {
   revoked Boolean @default(false)
 
   /// When the token was revoked (if applicable)
-  revokedAt DateTime?
+  revokedAt DateTime? @db.Timestamptz(3)
 
   /// Who/what revoked the token
   revokedBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([sinkType])
   @@index([revoked])
@@ -1144,14 +1144,14 @@ model AppPurchase {
   status String @default("PENDING")
 
   /// When purchase was completed
-  completedAt  DateTime?
+  completedAt  DateTime? @db.Timestamptz(3)
   /// When refunded (if applicable)
-  refundedAt   DateTime?
+  refundedAt   DateTime? @db.Timestamptz(3)
   /// Refund reason if refunded
   refundReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([appId])
@@ -1186,16 +1186,16 @@ model AppDiscount {
   minPurchaseAmount BigInt?
 
   /// When the discount becomes active
-  startsAt  DateTime  @default(now())
+  startsAt  DateTime  @default(now()) @db.Timestamptz(3)
   /// When the discount expires (null = never)
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
   /// Whether the discount is currently active
   isActive  Boolean   @default(true)
 
   purchases AppPurchase[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, code])
   @@index([appId])
@@ -1231,8 +1231,8 @@ model AppAnalyticsDaily {
   totalEmbeddingTokens BigInt @default(0)
   totalEmbeddingCost   BigInt @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, date])
   @@index([appId])
@@ -1268,8 +1268,8 @@ model AppSalesDaily {
   /// Number of discount codes used
   discountCodesUsed BigInt @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, date])
   @@index([appId])
@@ -1289,7 +1289,7 @@ model AppPackage {
   packageId String
   version   String
 
-  addedAt    DateTime @default(now())
+  addedAt    DateTime @default(now()) @db.Timestamptz(3)
   autoUpdate Boolean  @default(false)
 
   /// When true the package is frozen: can’t be updated, version-changed, or placed on new boards
@@ -1309,7 +1309,7 @@ model AuditEntry {
   id       String @id @default(cuid())
   sequence BigInt
 
-  timestamp DateTime @default(now())
+  timestamp DateTime @default(now()) @db.Timestamptz(3)
 
   // Actor
   actorId   String
@@ -1353,8 +1353,8 @@ model Node {
 
   bitId String @unique
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 // ---- channel.prisma
@@ -1373,7 +1373,7 @@ model Channel {
   status    String   @default("PENDING")
   expiresAt BigInt
   value     String? // reply / inbound body, JSON text
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([channelId, kind])
   @@index([sub, expiresAt])
@@ -1390,8 +1390,8 @@ model ErrorReport {
   publicCode String
   summary    String
   details    Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
 // ---- flowscript.prisma
@@ -1446,7 +1446,7 @@ model FlowScriptApplyFailure {
   /// Trace the apply request belonged to, when it carried one, so a row opens in the trace explorer.
   traceId    String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([outcome, createdAt])
@@ -1484,8 +1484,8 @@ model PublicationRequest {
 
   logs PublicationLog[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([status])
   @@index([appId])
@@ -1506,8 +1506,8 @@ model PublicationLog {
   message    String?
   visibility String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([requestId])
 }
@@ -1517,7 +1517,7 @@ model LlmModel {
   slug String @id
 
   name        String
-  releaseDate DateTime?
+  releaseDate DateTime? @db.Timestamptz(3)
 
   creatorName String
   creatorSlug String
@@ -1529,8 +1529,8 @@ model LlmModel {
   medianTimeToFirstTokenSeconds Float?
   medianTimeToFirstAnswerToken  Float?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   bits Bit[]
 
@@ -1561,8 +1561,8 @@ model Bit {
   modelSlug String?
   model     LlmModel? @relation(fields: [modelSlug], references: [slug])
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   cache  BitTreeCache?
   caches BitCache[]
@@ -1586,8 +1586,8 @@ model BitCache {
   bitTreeCache       BitTreeCache @relation(fields: [dependencyTreeHash], references: [dependencyTreeHash], onDelete: Cascade)
   dependencyTreeHash String
 
-  updatedAt DateTime @updatedAt
-  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([dependencyTreeHash])
 }
@@ -1598,8 +1598,8 @@ model BitTreeCache {
 
   bits BitCache[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TemplateProfile {
@@ -1622,8 +1622,8 @@ model TemplateProfile {
   hub    String
   hubs   Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 // ---- jobs.prisma
@@ -1637,12 +1637,12 @@ model DeletionJob {
   phase       Int       @default(0)
   cursor      Json?
   attempts    Int       @default(0)
-  leaseUntil  DateTime?
+  leaseUntil  DateTime? @db.Timestamptz(3)
   lastError   String?
   requestedBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([rootKind, rootId])
   @@index([status, leaseUntil])
@@ -1662,9 +1662,9 @@ model ForkJob {
   report      Json?
   lastError   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  expiresAt DateTime
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
 
   @@index([status, updatedAt])
   @@index([destAppId])
@@ -1679,8 +1679,8 @@ model LandingPage {
   image       String
   link        String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 // ---- learning.prisma
@@ -1707,8 +1707,8 @@ model Course {
   certificates Certificate[]
   pathSteps    LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([language])
   @@index([category])
@@ -1727,8 +1727,8 @@ model LearningPath {
 
   steps LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([isPublished])
   @@index([slug])
@@ -1759,8 +1759,8 @@ model CourseModule {
 
   lessons Lesson[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([courseId])
   @@index([courseId, position])
@@ -1783,8 +1783,8 @@ model Lesson {
   appRefs    LessonAppRef[]
   progress   UserLessonProgress[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([moduleId])
   @@index([moduleId, position])
@@ -1805,8 +1805,8 @@ model Challenge {
   attempts         UserChallengeAttempt[]
   weeklyChallenges WeeklyChallenge[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -1821,8 +1821,8 @@ model CourseAppLink {
   purpose String  @default("SHARED_TEMPLATE")
   alias   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, appId])
   @@index([appId])
@@ -1841,8 +1841,8 @@ model CourseAsset {
   size       Int
   kind       String @default("DOCUMENT")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, name])
   @@index([courseId])
@@ -1861,8 +1861,8 @@ model LessonAppRef {
 
   label String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -1883,9 +1883,9 @@ model UserCourseEnrollment {
   // payloads/refs) into the user-specific ones at validation/navigation time.
   idMaps Json @default("{}")
 
-  startedAt   DateTime  @default(now())
-  lastSeenAt  DateTime  @default(now())
-  completedAt DateTime?
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
 
   @@unique([userId, courseId])
   @@index([userId])
@@ -1899,10 +1899,10 @@ model UserLessonProgress {
   lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
   status      String    @default("IN_PROGRESS")
-  completedAt DateTime?
+  completedAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, lessonId])
   @@index([userId])
@@ -1918,7 +1918,7 @@ model UserChallengeAttempt {
   submission    Json
   isCorrect     Boolean
   pointsAwarded Int      @default(0)
-  attemptedAt   DateTime @default(now())
+  attemptedAt   DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([userId])
   @@index([challengeId])
@@ -1931,7 +1931,7 @@ model Certificate {
   courseId String
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  issuedAt DateTime @default(now())
+  issuedAt DateTime @default(now()) @db.Timestamptz(3)
   hash     String
   pdfUrl   String?
 
@@ -1944,7 +1944,7 @@ model LeaderboardOptIn {
   displayName String
   isOptedIn   Boolean  @default(true)
   totalPoints Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model WeeklyChallenge {
@@ -1952,8 +1952,8 @@ model WeeklyChallenge {
   weekIso     String
   challengeId String
   challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
-  expiresAt   DateTime
-  createdAt   DateTime  @default(now())
+  expiresAt   DateTime  @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@unique([weekIso])
   @@index([expiresAt])
@@ -1968,9 +1968,9 @@ model WeeklyChallenge {
 /// engines that never block; expiry covers crashed holders.
 model MutationLock {
   id        BigInt    @id
-  updatedAt DateTime  @default(now()) @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
   owner     String?
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
 }
 
 // ---- main.prisma
@@ -2028,8 +2028,8 @@ model Meta {
   group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   groupId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([appId, lang])
@@ -2077,10 +2077,10 @@ model RegressionSuite {
   allowLiveSideEffects Boolean @default(false)
 
   /// Next scheduled run, maintained by the RegressionSuites maintenance job.
-  nextRunAt DateTime?
+  nextRunAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, eventId])
   @@index([appId, boardId])
@@ -2119,14 +2119,14 @@ model RegressionSuiteRun {
   ok           Int @default(0)
   skipped      Int @default(0)
 
-  startedAt   DateTime?
-  completedAt DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
   /// Suite-level failure message when status = "errored".
   error       String?
 
   caseResults RegressionCaseResult[]
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([appId, boardId, boardVersion, createdAt])
   @@index([suiteId, createdAt])
@@ -2160,7 +2160,7 @@ model RegressionCaseResult {
 
   durationMs Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([suiteRunId])
 }
@@ -2204,14 +2204,14 @@ model SolutionRequest {
 
   adminNotes  String?
   assignedTo  String?
-  deliveredAt DateTime?
+  deliveredAt DateTime? @db.Timestamptz(3)
 
   trackingToken String @unique
 
   logs SolutionLog[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([email])
   @@index([status])
@@ -2228,7 +2228,7 @@ model SolutionLog {
   details String?
   actor   String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([solutionId])
   @@index([createdAt])
@@ -2237,7 +2237,7 @@ model SolutionLog {
 model StripeEvent {
   id          String   @id
   eventType   String
-  processedAt DateTime @default(now())
+  processedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([eventType])
 }
@@ -2252,8 +2252,8 @@ model TelemetryEvent {
   appVersion String?
   platform   String?
   country    String?
-  clientTs   DateTime?
-  createdAt  DateTime  @default(now())
+  clientTs   DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([name, createdAt])
@@ -2271,14 +2271,14 @@ model TelemetryIssue {
   platform          String?
   status            String   @default("unresolved")
   resolvedInRelease String?
-  firstSeen         DateTime
-  lastSeen          DateTime
+  firstSeen         DateTime @db.Timestamptz(3)
+  lastSeen          DateTime @db.Timestamptz(3)
   eventCount        Int      @default(0)
   installCount      Int      @default(0)
   firstRelease      String?
   lastRelease       String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lastSeen])
   @@index([status, lastSeen])
@@ -2301,8 +2301,8 @@ model TelemetryErrorEvent {
   breadcrumbs Json?
   context     Json?
   country     String?
-  clientTs    DateTime?
-  createdAt   DateTime  @default(now())
+  clientTs    DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([issueId, createdAt])
   @@index([createdAt])
@@ -2314,8 +2314,8 @@ model TelemetryRelease {
   version     String
   source      String
   commitSha   String?
-  firstSeenAt DateTime
-  createdAt   DateTime @default(now())
+  firstSeenAt DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([version, source])
 }
@@ -2325,8 +2325,14 @@ model TelemetrySourceMap {
   release   String
   source    String
   fileName  String
-  map       String
-  createdAt DateTime @default(now())
+  /// Inline source map of a legacy row. New uploads store the bytes on the
+  /// meta store and leave this null; a whole source map exceeds the 1 MiB
+  /// Aurora DSQL allows in a text value.
+  map       String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Object-store reference ("store://<path>") to the stored source map
+  mapRef String?
 
   @@unique([release, source, fileName])
 }
@@ -2338,10 +2344,10 @@ model TelemetrySession {
   release    String?
   platform   String?
   status     String
-  startedAt  DateTime
+  startedAt  DateTime @db.Timestamptz(3)
   durationMs Int?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([startedAt])
   @@index([release, startedAt])
@@ -2359,11 +2365,11 @@ model TelemetrySpan {
   anonId       String?
   release      String?
   platform     String?
-  startedAt    DateTime
+  startedAt    DateTime @db.Timestamptz(3)
   durationMs   Int
   status       String
   attributes   Json?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([traceId])
   @@index([createdAt])
@@ -2381,8 +2387,8 @@ model TelemetryPerfMetric {
   value     Float
   path      String?
   country   String?
-  clientTs  DateTime?
-  createdAt DateTime  @default(now())
+  clientTs  DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([metric, createdAt])
   @@index([createdAt])
@@ -2402,11 +2408,11 @@ model TelemetryAlertRule {
   enabled         Boolean   @default(true)
   notifyEmail     Boolean   @default(false)
   notifyPush      Boolean   @default(false)
-  lastEvaluatedAt DateTime?
-  lastTriggeredAt DateTime?
+  lastEvaluatedAt DateTime? @db.Timestamptz(3)
+  lastTriggeredAt DateTime? @db.Timestamptz(3)
   lastValue       Float?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([enabled])
 }
@@ -2419,8 +2425,8 @@ model TelemetryAlertEvent {
   value          Float
   threshold      Float?
   message        String
-  acknowledgedAt DateTime?
-  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([ruleId, createdAt])
   @@index([createdAt])
@@ -2431,16 +2437,16 @@ model TelemetrySavedQuery {
   id         String   @id
   name       String
   definition Json
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TelemetryDashboard {
   id        String   @id
   name      String
   tiles     Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model TelemetryLlmCall {
@@ -2459,7 +2465,7 @@ model TelemetryLlmCall {
   errorKind        String?
   toolCalls        Int      @default(0)
   streamed         Boolean  @default(false)
-  createdAt        DateTime @default(now())
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([model, createdAt])
@@ -2487,11 +2493,11 @@ model TelemetryLlmCall {
 /// (DAU/WAU/MAU, new vs returning, churn, retention cohorts, adoption).
 model TelemetryInstallDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   anonId    String
   source    String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, anonId, source])
   @@index([day])
@@ -2502,13 +2508,13 @@ model TelemetryInstallDaily {
 /// into a single `__other__` row to bound the long tail.
 model TelemetryEventDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   name      String
   source    String
   count     Int      @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, name, source])
   @@index([day])
@@ -2518,13 +2524,13 @@ model TelemetryEventDaily {
 /// Values beyond the top 200 per dimension per day fold into `__other__`.
 model TelemetryDimensionDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   dimension String
   value     String
   count     Int      @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, dimension, value])
   @@index([day, dimension])
@@ -2534,7 +2540,7 @@ model TelemetryDimensionDaily {
 /// upsertable on CockroachDB; unknown releases collapse into a sentinel value.
 model TelemetrySessionDaily {
   id              String   @id
-  day             DateTime
+  day             DateTime @db.Timestamptz(3)
   release         String
   source          String
   sessions        Int      @default(0)
@@ -2542,8 +2548,8 @@ model TelemetrySessionDaily {
   erroredSessions Int      @default(0)
   installs        Int      @default(0)
   crashedInstalls Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, release, source])
   @@index([day])
@@ -2552,7 +2558,7 @@ model TelemetrySessionDaily {
 /// Daily LLM usage and cost drivers per provider/model/source.
 model TelemetryLlmDaily {
   id               String   @id
-  day              DateTime
+  day              DateTime @db.Timestamptz(3)
   provider         String
   model            String
   source           String
@@ -2563,8 +2569,8 @@ model TelemetryLlmDaily {
   totalTokens      BigInt   @default(0)
   durationSumMs    BigInt   @default(0)
   durationMaxMs    Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, provider, model, source])
   @@index([day])
@@ -2574,15 +2580,15 @@ model TelemetryLlmDaily {
 /// samples for the whole day, never merged across days.
 model TelemetryPerfDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   metric    String
   source    String
   count     Int      @default(0)
   p50       Float    @default(0)
   p75       Float    @default(0)
   p95       Float    @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, metric, source])
   @@index([day])
@@ -2592,7 +2598,7 @@ model TelemetryPerfDaily {
 /// client `IFlowPilotProductionMetrics` payload.
 model TelemetryFlowpilotDaily {
   id                            String   @id
-  day                           DateTime
+  day                           DateTime @db.Timestamptz(3)
   runsStarted                   BigInt   @default(0)
   runsSucceeded                 BigInt   @default(0)
   runsFailed                    BigInt   @default(0)
@@ -2624,8 +2630,8 @@ model TelemetryFlowpilotDaily {
   toolFailures                  BigInt   @default(0)
   runFailures                   BigInt   @default(0)
   installs                      Int      @default(0)
-  createdAt                     DateTime @default(now())
-  updatedAt                     DateTime @updatedAt
+  createdAt                     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt                     DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day])
 }
@@ -2636,15 +2642,15 @@ model TelemetryFlowpilotDaily {
 /// generalized on the client before it is ever sent.
 model TelemetryFlowpilotFailureDaily {
   id        String   @id
-  day       DateTime
+  day       DateTime @db.Timestamptz(3)
   kind      String
   tool      String
   code      String
   message   String
   count     BigInt   @default(0)
   installs  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([day, kind, tool, code, message])
   @@index([day])
@@ -2707,8 +2713,8 @@ model User {
   totalEmbeddingPrice   BigInt  @default(0)
   llmPriceTrackingMonth String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   // User search resolves a pasted address exactly before it falls back to a scan.
   @@index([email])
@@ -2737,9 +2743,9 @@ model Profile {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   @@id([userId, id])
   @@index([userId])
@@ -2771,8 +2777,8 @@ model UserBit {
   version String?
   license String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([userId, type])
@@ -2788,9 +2794,9 @@ model PAT {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  validUntil DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  validUntil DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -2803,8 +2809,8 @@ model Transaction {
 
   stripeId String @unique
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -2834,8 +2840,8 @@ model LLMUsageTracking {
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -2869,8 +2875,8 @@ model EmbeddingUsageTracking {
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -2902,8 +2908,8 @@ model ExecutionUsageTracking {
   technicalUserId String?
   technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -2940,10 +2946,10 @@ model UsageInvocation {
   rawUsage Json?
   error    String?
 
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([status, createdAt])
@@ -2970,11 +2976,11 @@ model UsageAlert {
   currentCostMicroDollars BigInt?
   currentTokens           BigInt?
 
-  acknowledgedAt       DateTime?
+  acknowledgedAt       DateTime? @db.Timestamptz(3)
   acknowledgedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -2993,7 +2999,7 @@ model UsageLimitAuditLog {
   before      Json?
   after       Json?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -3021,9 +3027,13 @@ model ExecutionEvent {
   delivered Boolean @default(false)
 
   /// Auto-cleanup after TTL
-  expiresAt DateTime
+  expiresAt DateTime @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Object-store reference ("store://<path>") when the payload was too large
+  /// to keep in the row; `payload` then holds a marked placeholder
+  payloadRef String?
 
   @@index([runId, delivered, sequence])
   @@index([expiresAt])
@@ -3064,11 +3074,11 @@ model ExecutionRun {
   currentStep String?
 
   /// When execution started
-  startedAt   DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
   /// When execution completed
-  completedAt DateTime?
+  completedAt DateTime? @db.Timestamptz(3)
   /// TTL - auto-cleanup streaming events after this time
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
   /// User who initiated the run
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -3110,8 +3120,8 @@ model ExecutionRun {
   /// Streaming events for this run
   events ExecutionEvent[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, status])
   @@index([userId, status])
@@ -3181,9 +3191,9 @@ model WasmPackage {
 
   metadata Meta[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  publishedAt DateTime?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
 
   versions    WasmPackageVersion[]
   reviews     WasmPackageReview[]
@@ -3243,8 +3253,8 @@ model WasmPackageVersion {
   duplicateOfVersion   String?
   duplicateFlagged     Boolean @default(false)
 
-  publishedAt DateTime  @default(now())
-  approvedAt  DateTime?
+  publishedAt DateTime  @default(now()) @db.Timestamptz(3)
+  approvedAt  DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, version])
   @@index([packageId])
@@ -3272,7 +3282,7 @@ model WasmPackageReview {
   codeQualityScore   Int?
   documentationScore Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([packageId])
   @@index([reviewerId])
@@ -3292,7 +3302,7 @@ model WasmPackageUser {
   permission BigInt // Bitflag: Owner=1, Maintainer=2, User=4
 
   grantedBy String?
-  grantedAt DateTime @default(now())
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -3315,8 +3325,8 @@ model WasmPackageInvitation {
   permission BigInt // Permission level being offered
 
   status    String    @default("PENDING")
-  createdAt DateTime  @default(now())
-  expiresAt DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, inviteeId])
   @@index([packageId])
@@ -3334,7 +3344,7 @@ model WasmPackageAuthor {
   userId String
 
   role    String?
-  addedAt DateTime @default(now())
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -3353,8 +3363,8 @@ model WasmPackageJoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, packageId])
   @@index([userId, packageId])
@@ -3389,14 +3399,14 @@ model WasmPackagePurchase {
   status String @default("PENDING")
 
   /// When purchase was completed
-  completedAt  DateTime?
+  completedAt  DateTime? @db.Timestamptz(3)
   /// When refunded (if applicable)
-  refundedAt   DateTime?
+  refundedAt   DateTime? @db.Timestamptz(3)
   /// Refund reason if refunded
   refundReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([packageId])

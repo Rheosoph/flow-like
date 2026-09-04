@@ -94,8 +94,8 @@ pub async fn get_app_scores(
                 node_count: row.node_count,
                 scored_node_count: row.scored_node_count,
                 flagged_patterns,
-                computed_at: row.computed_at.and_utc().to_rfc3339(),
-                updated_at: row.updated_at.and_utc().to_rfc3339(),
+                computed_at: row.computed_at.to_rfc3339(),
+                updated_at: row.updated_at.to_rfc3339(),
             }
         })
         .collect();

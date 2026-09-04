@@ -21,8 +21,8 @@ pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate
     let user = user::ActiveModel {
         id: sea_orm::ActiveValue::Set(sub.to_string()),
         tracking_id: sea_orm::ActiveValue::Set(Some(create_id())),
-        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
-        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
 

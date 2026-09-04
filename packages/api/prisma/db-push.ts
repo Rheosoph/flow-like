@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import { Client } from "pg";
-import { runPrePush } from "./pre-push";
+import { detectDialect, runPrePush } from "./pre-push";
 
 /**
  * CockroachDB creates tables with `schema_locked = true` when the cluster
@@ -166,7 +166,19 @@ if (client && locked.length > 0) {
 	await setSchemaLocked(client, locked, false);
 }
 
+// The schema of record declares `@db.Timestamptz(3)` on every DateTime column
+// (#834). `prisma db push` — not the pre-push runner — is what converts column
+// types, and its statements carry no dialect guard, so a push would rewrite all
+// 264 columns on the CockroachDB instance. Cockroach is a frozen legacy source
+// that is only ever read, so refuse rather than rely on the operator noticing.
 if (client) {
+	if ((await detectDialect(client)) === "cockroachdb") {
+		console.error(
+			"Refusing to push: the schema declares @db.Timestamptz(3) and this database is CockroachDB, which must stay unconverted (#834). Point DATABASE_URL at a PostgreSQL target, or use the DSQL migration job.",
+		);
+		await client.end().catch(() => undefined);
+		process.exit(1);
+	}
 	await runPrePush(client);
 }
 

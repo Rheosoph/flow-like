@@ -151,8 +151,8 @@ pub async fn get_publication_requests(
                 visibility: log
                     .visibility
                     .map(|visibility| format!("{:?}", visibility).to_uppercase()),
-                created_at: log.created_at.to_string(),
-                updated_at: log.updated_at.to_string(),
+                created_at: log.created_at.to_rfc3339(),
+                updated_at: log.updated_at.to_rfc3339(),
             });
     }
 
@@ -164,8 +164,8 @@ pub async fn get_publication_requests(
             target_visibility: format!("{:?}", r.target_visibility).to_uppercase(),
             status: format!("{:?}", r.status).to_uppercase(),
             approver_id: r.approver_id,
-            created_at: r.created_at.to_string(),
-            updated_at: r.updated_at.to_string(),
+            created_at: r.created_at.to_rfc3339(),
+            updated_at: r.updated_at.to_rfc3339(),
         })
         .collect();
 

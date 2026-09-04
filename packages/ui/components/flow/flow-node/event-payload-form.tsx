@@ -11,6 +11,12 @@ import {
 	TypeIcon,
 } from "lucide-react";
 import { type RefObject, useCallback, useMemo, useState } from "react";
+import {
+	type DateValue,
+	fromDateTimeInputValue,
+	parseDateValue,
+	toDateTimeInputValue,
+} from "../../../lib/date";
 import type { IBoard } from "../../../lib/schema/flow/board";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
@@ -33,6 +39,12 @@ import {
 } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 import { typeToColor } from "../utils";
+
+/** The instant, rendered as wall-clock time in the viewer's zone for the input. */
+function dateTimeInputValue(value: unknown): string {
+	const parsed = parseDateValue(value as DateValue);
+	return parsed ? toDateTimeInputValue(parsed, "minute") : "";
+}
 
 interface EventPayloadFormProps {
 	node: INode;
@@ -649,19 +661,19 @@ export function EventPayloadForm({
 								{icon}
 								{pin.friendly_name}
 							</Label>
+							{/*
+							 * The input speaks wall-clock time in the viewer's zone, so the
+							 * stored instant is rendered through the local getters. Reading it
+							 * back as UTC while writing it back as local shifted the value by
+							 * the offset on every untouched save.
+							 */}
 							<Input
 								type="datetime-local"
-								value={
-									value
-										? new Date(value as string).toISOString().slice(0, 16)
-										: ""
-								}
+								value={dateTimeInputValue(value)}
 								onChange={(e) =>
 									handleFieldChange(
 										pin.name,
-										e.target.value
-											? new Date(e.target.value).toISOString()
-											: "",
+										fromDateTimeInputValue(e.target.value)?.toISOString() ?? "",
 									)
 								}
 							/>

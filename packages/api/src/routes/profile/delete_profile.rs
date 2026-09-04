@@ -61,8 +61,8 @@ pub async fn delete_profile(
         }
 
         let mut active_model: profile::ActiveModel = existing.into();
-        active_model.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
-        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.deleted_at = Set(Some(chrono::Utc::now().fixed_offset()));
+        active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
         active_model.update(&state.db).await?;
     }
 

@@ -153,8 +153,8 @@ pub async fn create_note(
         app_id: Set(app_id.clone()),
         author_user_id: Set(author_user_id),
         content: Set(payload.content.trim().to_string()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     let note = note.insert(&state.db).await?;
     let note_id = note.id.clone();
@@ -221,7 +221,7 @@ pub async fn update_note(
 
     let mut active: app_process_note::ActiveModel = note.into();
     active.content = Set(payload.content.trim().to_string());
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     let note = active.update(&state.db).await?;
 
     audit_branch!(

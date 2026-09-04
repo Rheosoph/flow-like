@@ -290,6 +290,37 @@ fn default_openid_leeway_seconds() -> u64 {
     DEFAULT_OPENID_LEEWAY_SECONDS
 }
 
+/// Statement pinning a pooled Postgres session to UTC.
+///
+/// Every timestamp column is `timestamptz`, so `date_trunc`/`to_char` and any
+/// offset-less literal resolve against the session `TimeZone`. The Rust half of
+/// the analytics endpoints is UTC by construction, so a non-UTC default would
+/// silently bucket rows onto the wrong calendar day rather than fail. The SQL
+/// in `utils::stats_period` and the telemetry timeseries pins UTC per
+/// expression; this pins it per connection so nothing new can drift.
+const PIN_SESSION_TIME_ZONE_SQL: &str = "SET TIME ZONE 'UTC'";
+
+/// Runs [`PIN_SESSION_TIME_ZONE_SQL`] on every newly established pooled
+/// connection.
+///
+/// sea-orm's own `ConnectOptions::after_connect` fires once against the whole
+/// pool, which would leave later connections unpinned; sqlx's pool-level hook
+/// is the per-connection one. Non-Postgres backends ignore this entirely.
+fn pin_session_time_zone_to_utc(opt: &mut ConnectOptions) {
+    opt.map_sqlx_postgres_pool_opts(|pool_opts| {
+        pool_opts.after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sea_orm::sqlx::Executor::execute(
+                    conn,
+                    sea_orm::sqlx::AssertSqlSafe(PIN_SESSION_TIME_ZONE_SQL.to_owned()),
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+    });
+}
+
 #[derive(Debug)]
 pub(crate) struct ValidatedOpenIdToken {
     pub(crate) claims: HashMap<String, Value>,
@@ -733,6 +764,7 @@ impl State {
                     .connect_timeout(Duration::from_secs(8))
                     .connect_lazy(true)
                     .sqlx_logging(platform_config.environment == Environment::Development);
+                pin_session_time_zone_to_utc(&mut opt);
 
                 Database::connect(opt)
                     .await

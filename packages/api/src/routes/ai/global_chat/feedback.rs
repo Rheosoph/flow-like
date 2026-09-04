@@ -157,12 +157,12 @@ pub async fn upsert_global_chat_feedback(
                     row.comment = Set(comment);
                     row.rating = Set(rating);
                     row.event_id = Set(Some(FLOWPILOT_FEEDBACK_SCOPE.to_string()));
-                    row.updated_at = Set(chrono::Utc::now().naive_utc());
+                    row.updated_at = Set(chrono::Utc::now().fixed_offset());
                     row.update(txn).await?;
                     return Ok("stored");
                 }
 
-                let now = chrono::Utc::now().naive_utc();
+                let now = chrono::Utc::now().fixed_offset();
                 let row = feedback::Model {
                     id: row_id,
                     app_id: None,

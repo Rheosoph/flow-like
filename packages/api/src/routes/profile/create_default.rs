@@ -34,8 +34,8 @@ pub async fn create_default_profile(
         }))),
         hub: Set(default_hub.clone()),
         hubs: Set(Some(vec![default_hub].into())),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
 

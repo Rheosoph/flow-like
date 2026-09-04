@@ -241,8 +241,8 @@ pub(crate) fn to_connection_info(
         app_name,
         app_description,
         app_icon,
-        created_at: model.created_at.and_utc().timestamp(),
-        updated_at: model.updated_at.and_utc().timestamp(),
+        created_at: model.created_at.timestamp(),
+        updated_at: model.updated_at.timestamp(),
     }
 }
 

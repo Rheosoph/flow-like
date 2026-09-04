@@ -445,7 +445,7 @@ pub async fn upsert_course(
         .await?;
     let sub = user.sub()?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = course::Entity::find_by_id(&course_id)
         .one(&state.db)
         .await?;
@@ -812,7 +812,7 @@ pub async fn push_course_media(
                     .ok_or(ApiError::NOT_FOUND)?;
 
                 let mut model: meta::ActiveModel = existing_meta.clone().into();
-                model.updated_at = Set(chrono::Utc::now().naive_utc());
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
                 let replaced = match item {
                     CourseMediaItem::Icon => {

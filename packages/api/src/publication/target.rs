@@ -84,7 +84,7 @@ pub fn new_request(
     target: &PublicationTarget,
     target_visibility: crate::entity::sea_orm_active_enums::Visibility,
     ai_act_assessment_id: Option<String>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> publication_request::ActiveModel {
     let mut model = publication_request::ActiveModel {
         id: Set(id),

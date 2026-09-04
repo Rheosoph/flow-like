@@ -50,9 +50,9 @@ pub async fn upsert_model(
         .release_date
         .as_deref()
         .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default());
+        .map(|d| d.and_time(chrono::NaiveTime::MIN).and_utc().fixed_offset());
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let audit_slug = slug.clone();
     let audit_name = body.name.clone();
 

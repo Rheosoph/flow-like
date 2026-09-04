@@ -142,7 +142,7 @@ pub async fn dispatch_notification(
     input: DispatchNotificationInput,
 ) -> Result<String, sea_orm::DbErr> {
     if input.source_run_id.is_some() || input.source_node_id.is_some() {
-        let cutoff = chrono::Utc::now().naive_utc()
+        let cutoff = chrono::Utc::now().fixed_offset()
             - chrono::Duration::seconds(NOTIFICATION_DEDUPE_WINDOW_SECONDS);
         let mut existing = notification::Entity::find()
             .filter(notification::Column::UserId.eq(input.user_id.clone()))
@@ -204,7 +204,7 @@ pub async fn dispatch_notification(
         read: Set(false),
         source_run_id: Set(input.source_run_id.clone()),
         source_node_id: Set(input.source_node_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
         read_at: Set(None),
     };
 
@@ -335,7 +335,7 @@ async fn push_to_user(
         return Ok(());
     };
 
-    let stale_cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(30);
+    let stale_cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
 
     let targets = push_notification_target::Entity::find()
         .filter(push_notification_target::Column::UserId.eq(input.user_id.clone()))
@@ -471,7 +471,7 @@ async fn record_invalidation_failure(
     target_id: &str,
     reason: &str,
 ) -> Result<(), sea_orm::DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     push_notification_target::Entity::update_many()
         .col_expr(
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     fn target(platform: PushNotificationTargetPlatform) -> push_notification_target::Model {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         push_notification_target::Model {
             id: "target-id".to_string(),

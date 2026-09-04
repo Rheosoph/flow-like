@@ -54,8 +54,8 @@ model User {
   totalEmbeddingPrice   BigInt  @default(0)
   llmPriceTrackingMonth String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   // User search resolves a pasted address exactly before it falls back to a scan.
   @@index([email])
@@ -84,9 +84,9 @@ model Profile {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   @@id([userId, id])
   @@index([userId])
@@ -118,8 +118,8 @@ model UserBit {
   version String?
   license String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([userId, type])
@@ -135,9 +135,9 @@ model PAT {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  validUntil DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  validUntil DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -150,8 +150,8 @@ model Transaction {
 
   stripeId String @unique
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -181,8 +181,8 @@ model LLMUsageTracking {
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -216,8 +216,8 @@ model EmbeddingUsageTracking {
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -249,8 +249,8 @@ model ExecutionUsageTracking {
   technicalUserId String?
   technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -287,10 +287,10 @@ model UsageInvocation {
   rawUsage Json?
   error    String?
 
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([status, createdAt])
@@ -317,11 +317,11 @@ model UsageAlert {
   currentCostMicroDollars BigInt?
   currentTokens           BigInt?
 
-  acknowledgedAt       DateTime?
+  acknowledgedAt       DateTime? @db.Timestamptz(3)
   acknowledgedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -340,7 +340,7 @@ model UsageLimitAuditLog {
   before      Json?
   after       Json?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -368,9 +368,9 @@ model ExecutionEvent {
   delivered Boolean @default(false)
 
   /// Auto-cleanup after TTL
-  expiresAt DateTime
+  expiresAt DateTime @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   /// Object-store reference ("store://<path>") when the payload was too large
   /// to keep in the row; `payload` then holds a marked placeholder
@@ -415,11 +415,11 @@ model ExecutionRun {
   currentStep String?
 
   /// When execution started
-  startedAt   DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
   /// When execution completed
-  completedAt DateTime?
+  completedAt DateTime? @db.Timestamptz(3)
   /// TTL - auto-cleanup streaming events after this time
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
   /// User who initiated the run
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -461,8 +461,8 @@ model ExecutionRun {
   /// Streaming events for this run
   events ExecutionEvent[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, status])
   @@index([userId, status])

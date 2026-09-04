@@ -73,7 +73,7 @@ pub async fn sync_models(
     user.check_global_permission(&state, GlobalPermission::WriteBits)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let models: Vec<llm_model::ActiveModel> = body
         .data
@@ -83,7 +83,7 @@ pub async fn sync_models(
                 .release_date
                 .as_deref()
                 .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default());
+                .map(|d| d.and_time(chrono::NaiveTime::MIN).and_utc().fixed_offset());
 
             llm_model::ActiveModel {
                 slug: Set(entry.slug),

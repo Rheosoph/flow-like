@@ -81,7 +81,7 @@ pub async fn upsert_comment(
                     let mut active = existing.into_active_model();
                     active.text = Set(text);
                     active.rating = Set(new_rating);
-                    active.updated_at = Set(chrono::Utc::now().naive_utc());
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
                     active.update(txn).await?;
                     adjust_app_ratings(txn, &app_id, new_rating - old_rating, 0).await?;
                     id
@@ -94,8 +94,8 @@ pub async fn upsert_comment(
                         app_id: Some(app_id.clone()),
                         template_id: None,
                         package_id: None,
-                        created_at: chrono::Utc::now().naive_utc(),
-                        updated_at: chrono::Utc::now().naive_utc(),
+                        created_at: chrono::Utc::now().fixed_offset(),
+                        updated_at: chrono::Utc::now().fixed_offset(),
                     };
                     let active = comment::ActiveModel::from(model).reset_all();
                     active.insert(txn).await?;

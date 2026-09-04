@@ -390,7 +390,7 @@ async fn track_embedding_usage(
     use chrono::Utc;
     use embedding_usage_tracking::ActiveModel;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let record = ActiveModel {
         id: Set(create_id()),
         model_id: Set(model.to_string()),

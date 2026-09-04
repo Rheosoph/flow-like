@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { ChevronRight, Flame, List } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { parseDateValue } from "../../../../lib/date";
 import { Button } from "../../../ui";
 import { EmptyState } from "./telemetry-shared";
 import { formatDurationMs, isErrorStatus } from "./traces-shared";
@@ -32,8 +33,7 @@ interface FlameTree {
 }
 
 function spanStartMs(span: ITelemetryTraceSpan): number {
-	const parsed = new Date(span.startedAt).getTime();
-	return Number.isNaN(parsed) ? 0 : parsed;
+	return parseDateValue(span.startedAt)?.getTime() ?? 0;
 }
 
 function buildFlameTree(spans: ITelemetryTraceSpan[]): FlameTree {

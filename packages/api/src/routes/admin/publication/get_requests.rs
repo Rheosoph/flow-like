@@ -259,7 +259,7 @@ pub async fn get_requests(
             author,
             message: log.message,
             visibility: log.visibility.map(|v| format!("{:?}", v).to_uppercase()),
-            created_at: log.created_at.to_string(),
+            created_at: log.created_at.to_rfc3339(),
         });
     }
 
@@ -315,8 +315,8 @@ pub async fn get_requests(
             target_visibility: format!("{:?}", r.target_visibility).to_uppercase(),
             status: format!("{:?}", r.status).to_uppercase(),
             approver_id: r.approver_id,
-            created_at: r.created_at.to_string(),
-            updated_at: r.updated_at.to_string(),
+            created_at: r.created_at.to_rfc3339(),
+            updated_at: r.updated_at.to_rfc3339(),
             app_name: meta_record.map(|m| m.name.clone()),
             app_description: meta_record.and_then(|m| m.description.clone()),
             app_icon,

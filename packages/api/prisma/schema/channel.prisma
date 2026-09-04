@@ -13,7 +13,7 @@ model Channel {
   status    String   @default("PENDING")
   expiresAt BigInt
   value     String? // reply / inbound body, JSON text
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([channelId, kind])
   @@index([sub, expiresAt])

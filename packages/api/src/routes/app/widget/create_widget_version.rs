@@ -79,7 +79,7 @@ pub async fn create_widget_version(
             id: Set(widget_id.clone()),
             app_id: Set(app_id.to_string()),
             version: Set(Some(format!("{}.{}.{}", version.0, version.1, version.2))),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
             ..Default::default()
         };
         update.update(&state.db).await?;

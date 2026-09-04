@@ -27,9 +27,9 @@ pub struct UserLessonProgressView {
     pub user_id: String,
     pub lesson_id: String,
     pub status: String,
-    pub completed_at: Option<chrono::NaiveDateTime>,
-    pub created_at: chrono::NaiveDateTime,
-    pub updated_at: chrono::NaiveDateTime,
+    pub completed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+    pub updated_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 fn lesson_status_to_string(status: &LessonStatus) -> &'static str {
@@ -142,7 +142,7 @@ async fn refresh_course_enrollment_completion(
     state: &AppState,
     user_id: &str,
     course_id: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), ApiError> {
     let is_complete = required_lessons_completed(state, user_id, course_id).await?;
     let existing = user_course_enrollment::Entity::find()
@@ -192,7 +192,7 @@ pub async fn mark_lesson_complete(
     Path(lesson_id): Path<String>,
 ) -> Result<Json<UserLessonProgressView>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let (_lesson, module) = ensure_lesson_course_readable(&state, &user, &lesson_id).await?;
     if !lesson_challenges_completed(&state, &sub, &lesson_id).await? {

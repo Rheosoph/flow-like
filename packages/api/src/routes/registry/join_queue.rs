@@ -101,7 +101,7 @@ pub async fn request_access(
                         user_id: Set(sub),
                         permission: Set(WasmPackagePermission::User.bits()),
                         granted_by: Set(None),
-                        granted_at: Set(chrono::Utc::now().naive_utc()),
+                        granted_at: Set(chrono::Utc::now().fixed_offset()),
                     }
                     .insert(txn)
                     .await?;
@@ -121,7 +121,7 @@ pub async fn request_access(
                 if let Some(existing_request) = existing_request {
                     let mut active: wasm_package_join_queue::ActiveModel = existing_request.into();
                     active.comment = Set(comment);
-                    active.updated_at = Set(chrono::Utc::now().naive_utc());
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
                     active.update(txn).await?;
                 } else {
                     wasm_package_join_queue::ActiveModel {
@@ -129,8 +129,8 @@ pub async fn request_access(
                         user_id: Set(sub),
                         package_id: Set(package_id),
                         comment: Set(comment),
-                        created_at: Set(chrono::Utc::now().naive_utc()),
-                        updated_at: Set(chrono::Utc::now().naive_utc()),
+                        created_at: Set(chrono::Utc::now().fixed_offset()),
+                        updated_at: Set(chrono::Utc::now().fixed_offset()),
                     }
                     .insert(txn)
                     .await?;
@@ -227,7 +227,7 @@ pub async fn accept_access_request(
                         user_id: Set(request.user_id.clone()),
                         permission: Set(WasmPackagePermission::User.bits()),
                         granted_by: Set(Some(sub)),
-                        granted_at: Set(chrono::Utc::now().naive_utc()),
+                        granted_at: Set(chrono::Utc::now().fixed_offset()),
                     }
                     .insert(txn)
                     .await?;
@@ -328,7 +328,7 @@ pub async fn list_access_requests(
             user_id: r.user_id,
             package_id: r.package_id,
             comment: r.comment,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(r.created_at, chrono::Utc),
+            created_at: r.created_at.to_utc(),
         })
         .collect();
 

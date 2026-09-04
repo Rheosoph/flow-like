@@ -90,7 +90,7 @@ pub fn record_backend_event(state: &AppState, name: impl Into<String>, props: Op
             platform: Set(None),
             country: Set(None),
             client_ts: Set(None),
-            created_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
         };
         if let Err(e) = telemetry_event::Entity::insert(model).exec(&db).await {
             tracing::error!("Failed to persist backend telemetry event: {}", e);

@@ -181,7 +181,7 @@ pub async fn change_visibility(
                     .one(txn)
                     .await?
                     .ok_or(ApiError::NOT_FOUND)?;
-                let now = chrono::Utc::now().naive_utc();
+                let now = chrono::Utc::now().fixed_offset();
 
                 match transition {
                     Transition::Toggle | Transition::PublicSwap => {

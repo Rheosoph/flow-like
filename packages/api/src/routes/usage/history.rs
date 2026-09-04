@@ -104,7 +104,7 @@ pub async fn get_llm_history(
             app_id: r.app_id,
             technical_user_id: r.technical_user_id,
             price: r.price,
-            created_at: r.created_at.and_utc().to_rfc3339(),
+            created_at: r.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -182,7 +182,7 @@ pub async fn get_embedding_history(
             app_id: r.app_id,
             technical_user_id: r.technical_user_id,
             price: r.price,
-            created_at: r.created_at.and_utc().to_rfc3339(),
+            created_at: r.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -260,7 +260,7 @@ pub async fn get_execution_history(
             status: format!("{:?}", r.status),
             app_id: r.app_id,
             technical_user_id: r.technical_user_id,
-            created_at: r.created_at.and_utc().to_rfc3339(),
+            created_at: r.created_at.to_rfc3339(),
         })
         .collect();
 

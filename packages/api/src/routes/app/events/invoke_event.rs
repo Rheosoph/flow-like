@@ -60,7 +60,7 @@ fn sync_dispatch_failure_message(error: &DispatchError) -> String {
 fn sql_dispatch_failure_update(
     run_id: &str,
     app_id: &str,
-    now: sea_orm::prelude::DateTime,
+    now: sea_orm::prelude::DateTimeWithTimeZone,
     error_message: String,
 ) -> sea_orm::UpdateMany<execution_run::Entity> {
     execution_run::Entity::update_many()
@@ -138,7 +138,7 @@ async fn mark_sync_dispatch_failure(
     // The state backend may be unavailable. Preserve any terminal winner and
     // scope the fallback to this app instead of overwriting a completed run.
     if let Err(update_error) =
-        sql_dispatch_failure_update(run_id, app_id, now.naive_utc(), error_message)
+        sql_dispatch_failure_update(run_id, app_id, now.fixed_offset(), error_message)
             .exec(&state.db)
             .await
     {
@@ -453,7 +453,7 @@ async fn invoke_event_impl(
             allowed_entry_nodes: resolved.entry_node_ids.clone(),
         })
     });
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     let input_payload_len = params
         .payload
@@ -560,8 +560,8 @@ async fn invoke_event_impl(
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),
@@ -1041,7 +1041,7 @@ mod tests {
     fn sync_dispatch_failure_fallback_is_app_scoped_and_terminal_monotonic() {
         let now = chrono::DateTime::from_timestamp(1_800_000_000, 0)
             .unwrap()
-            .naive_utc();
+            .fixed_offset();
         let statement =
             sql_dispatch_failure_update("run-1", "app-1", now, "Failed to dispatch job".into())
                 .build(DatabaseBackend::Postgres)

@@ -111,8 +111,8 @@ struct RawCase {
     failed_count: i64,
     running_count: i64,
     correlation_keys: Option<serde_json::Value>,
-    started_at: Option<chrono::NaiveDateTime>,
-    last_activity_at: chrono::NaiveDateTime,
+    started_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    last_activity_at: chrono::DateTime<chrono::FixedOffset>,
     duration_ms: Option<f64>,
 }
 
@@ -146,7 +146,7 @@ pub async fn list_process_cases(
     let viewer_sub = permission.effective_user_id().ok();
 
     let days = query.days.unwrap_or(30).clamp(1, 365);
-    let since = chrono::Utc::now().naive_utc() - chrono::Duration::days(days);
+    let since = chrono::Utc::now().fixed_offset() - chrono::Duration::days(days);
 
     // Roots are runs the app started (no parent) in the window; the recursive
     // arm walks parent_run_id down through every app the case reached. `depth`
@@ -269,8 +269,8 @@ pub async fn list_process_cases(
                 failed_count: raw.failed_count,
                 correlation_keys: raw.correlation_keys,
                 status: status.to_string(),
-                started_at: raw.started_at.map(|dt| dt.and_utc().timestamp()),
-                last_activity_at: raw.last_activity_at.and_utc().timestamp(),
+                started_at: raw.started_at.map(|dt| dt.timestamp()),
+                last_activity_at: raw.last_activity_at.timestamp(),
                 duration_ms: raw.duration_ms,
             }
         })
@@ -356,9 +356,9 @@ pub async fn get_process_case(
         status: String,
         event_name: Option<String>,
         event_type: Option<String>,
-        started_at: chrono::NaiveDateTime,
-        completed_at: Option<chrono::NaiveDateTime>,
-        updated_at: chrono::NaiveDateTime,
+        started_at: chrono::DateTime<chrono::FixedOffset>,
+        completed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+        updated_at: chrono::DateTime<chrono::FixedOffset>,
         duration_ms: Option<f64>,
     }
 
@@ -415,9 +415,9 @@ pub async fn get_process_case(
             status: raw.status,
             event_name: raw.event_name,
             event_type: raw.event_type,
-            started_at: raw.started_at.and_utc().timestamp(),
-            completed_at: raw.completed_at.map(|dt| dt.and_utc().timestamp()),
-            updated_at: raw.updated_at.and_utc().timestamp(),
+            started_at: raw.started_at.timestamp(),
+            completed_at: raw.completed_at.map(|dt| dt.timestamp()),
+            updated_at: raw.updated_at.timestamp(),
             duration_ms: raw.duration_ms,
         })
         .collect();

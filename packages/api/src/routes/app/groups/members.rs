@@ -103,7 +103,7 @@ pub async fn add_member(
         .await?
         .map(|m| m.position + 1)
         .unwrap_or(0);
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     app_group_member::ActiveModel {
         id: Set(create_id()),

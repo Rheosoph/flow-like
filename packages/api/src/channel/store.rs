@@ -77,7 +77,7 @@ fn new_row(
         kind: Set(kind),
         expires_at: Set(expires_at),
         value: Set(value),
-        created_at: Set(Utc::now().naive_utc()),
+        created_at: Set(Utc::now().fixed_offset()),
     }
 }
 

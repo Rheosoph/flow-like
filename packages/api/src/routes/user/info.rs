@@ -130,7 +130,7 @@ pub async fn user_info(
         }
 
         if let Some(mut updated_user) = updated_user {
-            updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc());
+            updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset());
             user_info = persist_identity_sync(&state, updated_user, user_info).await?;
         }
 
@@ -158,8 +158,8 @@ pub async fn user_info(
         username: sea_orm::ActiveValue::Set(username),
         preferred_username: sea_orm::ActiveValue::Set(preferred_username),
         name: sea_orm::ActiveValue::Set(display_name),
-        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
-        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+        updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
 
@@ -231,7 +231,7 @@ async fn ensure_stripe_user(
     let stripe_customer = generate_stripe_user(state, &user_info.id, email).await?;
     let mut updated_user: user::ActiveModel = user_info.into();
     updated_user.stripe_id = sea_orm::ActiveValue::Set(Some(stripe_customer.id.to_string()));
-    updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc());
+    updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().fixed_offset());
 
     Ok(updated_user.update(&state.db).await?)
 }

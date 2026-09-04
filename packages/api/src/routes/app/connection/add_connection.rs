@@ -93,7 +93,7 @@ pub async fn add_connection(
             active.role_id = Set(Some(payload.role_id.clone()));
             active.status = Set(AppConnectionStatus::Active);
             active.approved_by_user_id = Set(approved_by);
-            active.updated_at = Set(chrono::Utc::now().naive_utc());
+            active.updated_at = Set(chrono::Utc::now().fixed_offset());
             active.update(&state.db).await?;
             pending_id
         }
@@ -108,8 +108,8 @@ pub async fn add_connection(
                 comment: Set(None),
                 requested_by_user_id: Set(None),
                 approved_by_user_id: Set(approved_by),
-                created_at: Set(chrono::Utc::now().naive_utc()),
-                updated_at: Set(chrono::Utc::now().naive_utc()),
+                created_at: Set(chrono::Utc::now().fixed_offset()),
+                updated_at: Set(chrono::Utc::now().fixed_offset()),
             };
             connection.insert(&state.db).await.map_err(|err| {
                 if err.to_string().to_lowercase().contains("duplicate") {

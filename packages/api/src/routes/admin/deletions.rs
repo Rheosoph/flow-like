@@ -40,11 +40,11 @@ pub struct DeletionJobView {
     pub total_steps: Option<usize>,
     pub cursor: Option<serde_json::Value>,
     pub attempts: i32,
-    pub lease_until: Option<chrono::NaiveDateTime>,
+    pub lease_until: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub last_error: Option<String>,
     pub requested_by: Option<String>,
-    pub created_at: chrono::NaiveDateTime,
-    pub updated_at: chrono::NaiveDateTime,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+    pub updated_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 impl From<deletion_job::Model> for DeletionJobView {

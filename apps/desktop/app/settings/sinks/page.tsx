@@ -31,6 +31,7 @@ import {
 	TooltipTrigger,
 	cn,
 	formatRelativeTime,
+	parseTemporalValue,
 	useBackend,
 } from "@flow-like/flow-like-ui";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
@@ -494,7 +495,7 @@ function SinkRow({
 			</TableCell>
 			<TableCell className="hidden xl:table-cell">
 				<span className="text-sm text-muted-foreground">
-					{formatRelativeTime(new Date(sink.created_at).toISOString())}
+					{formatRelativeTime(parseTemporalValue(sink.created_at))}
 				</span>
 			</TableCell>
 			<TableCell className="text-right">

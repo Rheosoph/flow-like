@@ -194,10 +194,7 @@ export function MissionControl({
 						icon={ActivityIcon}
 						value={
 							runs.lastRunAt
-								? formatRelativeTime(
-										new Date(runs.lastRunAt).toISOString(),
-										"narrow",
-									)
+								? formatRelativeTime(runs.lastRunAt, "narrow")
 								: "—"
 						}
 						hint={

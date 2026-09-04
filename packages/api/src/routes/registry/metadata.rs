@@ -168,7 +168,7 @@ pub async fn update_readme(
     let update = wasm_package::ActiveModel {
         id: Set(package_id.clone()),
         readme: Set(Some(body.readme.clone())),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
     update.update(&state.db).await?;
@@ -227,7 +227,7 @@ pub async fn request_publication(
     wasm_package::ActiveModel {
         id: Set(package_id.clone()),
         status: Set(WasmPackageStatus::PendingReview),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     }
     .update(&state.db)
@@ -243,7 +243,7 @@ pub async fn request_publication(
         security_score: Set(None),
         code_quality_score: Set(None),
         documentation_score: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
     };
     review.insert(&state.db).await?;
 
@@ -491,7 +491,7 @@ pub async fn upsert_meta(
 
     crate::ensure_wasm_permission!(state, &sub, &package_id, WasmPackagePermission::Maintainer);
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let lang = &query.language;
 
     let existing = meta::Entity::find()
@@ -640,7 +640,7 @@ pub async fn push_package_media(
                     .ok_or(ApiError::NOT_FOUND)?;
 
                 let mut model: meta::ActiveModel = existing_meta.clone().into();
-                model.updated_at = Set(chrono::Utc::now().naive_utc());
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
                 let replaced = match item {
                     PackageMediaItem::Icon => {
@@ -769,7 +769,7 @@ pub async fn remove_package_media(
                     .ok_or(ApiError::NOT_FOUND)?;
 
                 let mut model: meta::ActiveModel = existing_meta.clone().into();
-                model.updated_at = Set(chrono::Utc::now().naive_utc());
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
                 match item {
                     PackageMediaItem::Icon => {

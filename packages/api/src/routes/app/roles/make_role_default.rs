@@ -65,7 +65,7 @@ pub async fn make_role_default(
 
     let mut app: app::ActiveModel = app.into();
     app.default_role_id = Set(Some(role_id.clone()));
-    app.updated_at = Set(chrono::Utc::now().naive_utc());
+    app.updated_at = Set(chrono::Utc::now().fixed_offset());
     app.update(&state.db).await?;
 
     audit_branch!(

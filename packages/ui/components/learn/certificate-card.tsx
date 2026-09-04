@@ -11,6 +11,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { useMemo } from "react";
 import { toast } from "sonner";
+import { parseDateValue } from "../../lib/date";
 import type { CertificateView } from "../../lib/learn/types";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -26,9 +27,10 @@ export function CertificateCard({
 	verifyUrl,
 	index = 0,
 }: CertificateCardProps) {
-	const issued = new Date(certificate.issued_at).toLocaleDateString(undefined, {
-		dateStyle: "long",
-	});
+	const issued =
+		parseDateValue(certificate.issued_at)?.toLocaleDateString(undefined, {
+			dateStyle: "long",
+		}) ?? "";
 	const shortHash = certificate.hash.slice(0, 8);
 	const verifyLink = verifyUrl(certificate.id);
 	const recipient = certificate.recipient_name?.trim() || "Anonymous learner";

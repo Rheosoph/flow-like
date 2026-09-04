@@ -150,7 +150,7 @@ pub async fn upsert_profile(
             None
         };
 
-        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
         let updated_profile = active_model.update(&state.db).await?;
         return Ok(Json(UpsertProfileResponse {
@@ -216,7 +216,7 @@ pub async fn upsert_profile(
     };
 
     let make_new_profile = |id: String| {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         profile::ActiveModel {
             id: Set(id),
             user_id: Set(sub.clone()),

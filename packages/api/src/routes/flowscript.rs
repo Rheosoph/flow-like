@@ -192,7 +192,7 @@ pub fn record_flowscript_apply_failure(state: &AppState, failure: FlowScriptAppl
         app_version: Set(clamp_opt(failure.app_version, MAX_VERSION_CHARS)),
         platform: Set(clamp_opt(failure.platform, MAX_VERSION_CHARS)),
         trace_id: Set(clamp_opt(failure.trace_id, MAX_ID_CHARS)),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     let db = state.db.clone();

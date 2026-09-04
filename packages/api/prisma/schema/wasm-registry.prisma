@@ -43,9 +43,9 @@ model WasmPackage {
 
   metadata Meta[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  publishedAt DateTime?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
 
   versions    WasmPackageVersion[]
   reviews     WasmPackageReview[]
@@ -105,8 +105,8 @@ model WasmPackageVersion {
   duplicateOfVersion   String?
   duplicateFlagged     Boolean @default(false)
 
-  publishedAt DateTime  @default(now())
-  approvedAt  DateTime?
+  publishedAt DateTime  @default(now()) @db.Timestamptz(3)
+  approvedAt  DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, version])
   @@index([packageId])
@@ -134,7 +134,7 @@ model WasmPackageReview {
   codeQualityScore   Int?
   documentationScore Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([packageId])
   @@index([reviewerId])
@@ -154,7 +154,7 @@ model WasmPackageUser {
   permission BigInt // Bitflag: Owner=1, Maintainer=2, User=4
 
   grantedBy String?
-  grantedAt DateTime @default(now())
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -177,8 +177,8 @@ model WasmPackageInvitation {
   permission BigInt // Permission level being offered
 
   status    String    @default("PENDING")
-  createdAt DateTime  @default(now())
-  expiresAt DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, inviteeId])
   @@index([packageId])
@@ -196,7 +196,7 @@ model WasmPackageAuthor {
   userId String
 
   role    String?
-  addedAt DateTime @default(now())
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -215,8 +215,8 @@ model WasmPackageJoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, packageId])
   @@index([userId, packageId])
@@ -251,14 +251,14 @@ model WasmPackagePurchase {
   status String @default("PENDING")
 
   /// When purchase was completed
-  completedAt  DateTime?
+  completedAt  DateTime? @db.Timestamptz(3)
   /// When refunded (if applicable)
-  refundedAt   DateTime?
+  refundedAt   DateTime? @db.Timestamptz(3)
   /// Refund reason if refunded
   refundReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([packageId])

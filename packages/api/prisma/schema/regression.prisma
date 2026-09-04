@@ -32,10 +32,10 @@ model RegressionSuite {
   allowLiveSideEffects Boolean @default(false)
 
   /// Next scheduled run, maintained by the RegressionSuites maintenance job.
-  nextRunAt DateTime?
+  nextRunAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, eventId])
   @@index([appId, boardId])
@@ -74,14 +74,14 @@ model RegressionSuiteRun {
   ok           Int @default(0)
   skipped      Int @default(0)
 
-  startedAt   DateTime?
-  completedAt DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
   /// Suite-level failure message when status = "errored".
   error       String?
 
   caseResults RegressionCaseResult[]
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([appId, boardId, boardVersion, createdAt])
   @@index([suiteId, createdAt])
@@ -115,7 +115,7 @@ model RegressionCaseResult {
 
   durationMs Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([suiteRunId])
 }

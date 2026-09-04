@@ -10,7 +10,9 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "3.1126.0",
 		"@aws-sdk/dsql-signer": "3.1126.0",
+		"@noble/hashes": "2.4.0",
 		"pg": "8.23.0",
 		"prisma": "7.3.0"
 	},
@@ -19,5 +21,8 @@
 		"@types/pg": "8.23.1",
 		"typescript": "^5.9.3"
 	},
-	"trustedDependencies": ["@prisma/engines", "prisma"]
+	"trustedDependencies": [
+		"@prisma/engines",
+		"prisma"
+	]
 }

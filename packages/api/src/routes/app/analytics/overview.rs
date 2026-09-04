@@ -24,6 +24,7 @@ use utoipa::ToSchema;
 
 use super::update_aggregations::ensure_aggregations_current;
 use crate::utils::stats_period::StatsPeriod;
+use crate::utils::time::{utc_day_end, utc_midnight};
 
 fn successful_execution_count(total_executions: i64, failed_executions: i64) -> i64 {
     (total_executions - failed_executions).max(0)
@@ -573,16 +574,13 @@ fn member_executions_query(
     );
 
     if let Some(start_date) = start_date {
-        query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .gte(start_date.and_hms_opt(0, 0, 0).unwrap()),
-        );
+        query =
+            query.filter(execution_usage_tracking::Column::CreatedAt.gte(utc_midnight(start_date)));
     }
 
     if let Some(end_date_exclusive) = end_date_exclusive {
         query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .lt(end_date_exclusive.and_hms_opt(0, 0, 0).unwrap()),
+            execution_usage_tracking::Column::CreatedAt.lt(utc_midnight(end_date_exclusive)),
         );
     }
 
@@ -849,7 +847,7 @@ async fn compute_overview_from_raw(
     };
     let total_embedding_cost: i64 = embedding_records.iter().map(|r| r.price).sum();
 
-    let current_start = thirty_days_ago.and_hms_opt(0, 0, 0).unwrap();
+    let current_start = utc_midnight(thirty_days_ago);
     let period_execs: Vec<_> = executions
         .iter()
         .filter(|e| e.created_at >= current_start)
@@ -858,7 +856,7 @@ async fn compute_overview_from_raw(
     let period_unique_users =
         count_unique_users(state, app_id, Some(thirty_days_ago), None, event_filter).await?;
 
-    let prev_start = sixty_days_ago.and_hms_opt(0, 0, 0).unwrap();
+    let prev_start = utc_midnight(sixty_days_ago);
     let prev_execs: Vec<_> = executions
         .iter()
         .filter(|e| e.created_at >= prev_start && e.created_at < current_start)
@@ -902,8 +900,8 @@ async fn compute_daily_stats_from_raw(
     use crate::entity::sea_orm_active_enums::ExecutionStatus;
     use std::collections::HashMap;
 
-    let start_dt = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let end_dt = end_date.and_hms_opt(23, 59, 59).unwrap();
+    let start_dt = utc_midnight(start_date);
+    let end_dt = utc_day_end(end_date);
 
     let executions = filter_execution_query_by_event(
         execution_usage_tracking::Entity::find()
@@ -948,27 +946,33 @@ async fn compute_daily_stats_from_raw(
 
     let mut exec_by_day: HashMap<NaiveDate, Vec<&execution_usage_tracking::Model>> = HashMap::new();
     for e in &executions {
-        exec_by_day.entry(e.created_at.date()).or_default().push(e);
+        exec_by_day
+            .entry(e.created_at.date_naive())
+            .or_default()
+            .push(e);
     }
 
     let mut feedback_by_day: HashMap<NaiveDate, Vec<&feedback::Model>> = HashMap::new();
     for f in &feedbacks {
         feedback_by_day
-            .entry(f.created_at.date())
+            .entry(f.created_at.date_naive())
             .or_default()
             .push(f);
     }
 
     let mut llm_by_day: HashMap<NaiveDate, Vec<&llm_usage_tracking::Model>> = HashMap::new();
     for l in &llm_records {
-        llm_by_day.entry(l.created_at.date()).or_default().push(l);
+        llm_by_day
+            .entry(l.created_at.date_naive())
+            .or_default()
+            .push(l);
     }
 
     let mut embedding_by_day: HashMap<NaiveDate, Vec<&embedding_usage_tracking::Model>> =
         HashMap::new();
     for e in &embedding_records {
         embedding_by_day
-            .entry(e.created_at.date())
+            .entry(e.created_at.date_naive())
             .or_default()
             .push(e);
     }
@@ -1063,7 +1067,7 @@ async fn compute_today_live(
     use std::collections::HashSet;
 
     let today = Utc::now().date_naive();
-    let start_of_day = today.and_hms_opt(0, 0, 0).unwrap();
+    let start_of_day = utc_midnight(today);
 
     let executions = filter_execution_query_by_event(
         execution_usage_tracking::Entity::find()

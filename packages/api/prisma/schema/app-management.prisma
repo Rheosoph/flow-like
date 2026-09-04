@@ -9,10 +9,10 @@ model InviteLink {
   appId String
 
   countJoined BigInt    @default(0)
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
   @@index([appId, token])
@@ -29,8 +29,8 @@ model JoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, appId])
@@ -53,8 +53,8 @@ model Invitation {
   byMember   Membership @relation(fields: [byMemberId], references: [id], onDelete: Cascade)
   byMemberId String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, createdAt])
@@ -79,8 +79,8 @@ model AppConnection {
   requestedByUserId String?
   approvedByUserId  String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([sourceAppId, targetAppId])
   @@index([targetAppId, status])
@@ -98,8 +98,8 @@ model AppProcessNote {
   authorUserId String?
   content      String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
 }
@@ -120,8 +120,8 @@ model Membership {
   addedPackages         AppPackage[]
   technicalUsersCreated TechnicalUser[] @relation("TechnicalUserCreatorMembership")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   joinedVia String?
 
@@ -148,8 +148,8 @@ model Role {
   defaultForApp App? @relation("defaultForApp")
   ownerForApp   App? @relation("ownerForApp")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Notification {
@@ -172,8 +172,8 @@ model Notification {
   sourceRunId  String?
   sourceNodeId String?
 
-  createdAt DateTime  @default(now())
-  readAt    DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  readAt    DateTime? @db.Timestamptz(3)
 
   @@index([userId, createdAt])
   @@index([userId, read])
@@ -200,13 +200,13 @@ model PushNotificationTarget {
 
   pushEnabled        Boolean   @default(true)
   failureCount       Int       @default(0)
-  lastRegisteredAt   DateTime  @default(now())
-  lastSeenAt         DateTime  @default(now())
-  invalidatedAt      DateTime?
+  lastRegisteredAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime  @default(now()) @db.Timestamptz(3)
+  invalidatedAt      DateTime? @db.Timestamptz(3)
   invalidationReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, deviceId, provider])
   @@index([userId, pushEnabled])
@@ -237,8 +237,8 @@ model AppGroup {
   /// visibility; see `PublicationRequest`.
   publicationRequests PublicationRequest[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([ownerAppId])
   @@index([visibility])
@@ -268,8 +268,8 @@ model AppGroupMember {
   addedByUserId    String?
   approvedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([groupId, appId])
   @@index([groupId, status])

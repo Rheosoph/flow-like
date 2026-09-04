@@ -13,7 +13,7 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
@@ -64,21 +64,21 @@ pub struct TelemetryTimeseriesResponse {
 
 #[derive(Debug, FromQueryResult)]
 struct TimeseriesRow {
-    bucket: NaiveDateTime,
+    bucket: DateTime<FixedOffset>,
     cnt: i64,
     installs: i64,
 }
 
 #[derive(Debug, FromQueryResult)]
 struct DailyCountRow {
-    day: NaiveDateTime,
+    day: DateTime<FixedOffset>,
     cnt: i64,
     installs: i64,
 }
 
 #[derive(Debug, FromQueryResult)]
 struct DailyInstallRow {
-    day: NaiveDateTime,
+    day: DateTime<FixedOffset>,
     installs: i64,
 }
 
@@ -88,7 +88,7 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 
 async fn raw_points<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     bucket: &str,
     name: Option<&str>,
     source: Option<&str>,
@@ -118,7 +118,7 @@ async fn raw_points<C: ConnectionTrait>(
                 conditions.push_str(&format!(r#" AND "source" = ${}"#, idx));
             }
             format!(
-                r#"SELECT date_trunc('{bucket}', "createdAt") AS bucket,
+                r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                           COUNT(*) AS cnt,
                           COUNT(DISTINCT "anonId") FILTER (WHERE "anonId" <> '{BACKEND_ANON_ID}') AS installs
                    FROM "TelemetryEvent"
@@ -153,7 +153,7 @@ async fn raw_points<C: ConnectionTrait>(
     Ok(rows
         .into_iter()
         .map(|r| TelemetryTimeseriesPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(r.bucket, Utc).to_rfc3339(),
+            ts: r.bucket.to_rfc3339(),
             count: r.cnt,
             installs: r.installs,
         })
@@ -161,8 +161,8 @@ async fn raw_points<C: ConnectionTrait>(
 }
 
 fn daily_counts_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     name: Option<&str>,
     source: Option<&str>,
 ) -> Select<telemetry_event_daily::Entity> {
@@ -188,8 +188,8 @@ fn daily_counts_query(
 /// Exact distinct installs per day. Only usable without an event-name filter,
 /// because `TelemetryInstallDaily` is not broken down by event.
 fn daily_installs_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_install_daily::Entity> {
     let mut select = telemetry_install_daily::Entity::find()
@@ -212,8 +212,8 @@ fn daily_installs_query(
 
 async fn daily_points<C: ConnectionTrait>(
     db: &C,
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     name: Option<&str>,
     source: Option<&str>,
 ) -> Result<Vec<TelemetryTimeseriesPoint>, ApiError> {
@@ -222,7 +222,7 @@ async fn daily_points<C: ConnectionTrait>(
         .all(db)
         .await?;
 
-    let mut points: BTreeMap<NaiveDateTime, (i64, i64)> = counts
+    let mut points: BTreeMap<DateTime<FixedOffset>, (i64, i64)> = counts
         .into_iter()
         .map(|row| (row.day, (row.cnt, row.installs)))
         .collect();
@@ -240,7 +240,7 @@ async fn daily_points<C: ConnectionTrait>(
     Ok(points
         .into_iter()
         .map(|(day, (count, installs))| TelemetryTimeseriesPoint {
-            ts: DateTime::<Utc>::from_naive_utc_and_offset(day, Utc).to_rfc3339(),
+            ts: day.to_rfc3339(),
             count,
             installs,
         })
@@ -270,7 +270,7 @@ pub async fn telemetry_timeseries(
 
     let hours = q.hours.unwrap_or(24).clamp(1, 24 * 90);
     let bucket = window_bucket(hours, q.bucket.as_deref());
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let name = non_empty(&q.name);
     let source = non_empty(&q.source);
 
@@ -302,11 +302,13 @@ mod tests {
     use chrono::NaiveDate;
     use sea_orm::QueryTrait;
 
-    fn ts(y: i32, m: u32, d: u32) -> NaiveDateTime {
+    fn ts(y: i32, m: u32, d: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     #[test]
