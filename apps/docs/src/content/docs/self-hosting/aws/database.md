@@ -144,15 +144,17 @@ docker run --rm \
   flow-like-aws-migration
 ```
 
-Without the image, straight from the checkout, `DSQL_MIGRATIONS_DIR` points
-the job at the committed files:
+Without the image, straight from the checkout, run the mise task from the repo
+root. It installs the job's dependencies, builds the mirrored schema the final
+`prisma migrate status` check needs, points `DSQL_MIGRATIONS_DIR` and
+`DSQL_SCHEMA_DIR` at the checkout, and drops the forbidden variables (a
+workstation almost always has `DATABASE_URL` set, and the job refuses to start
+while it is present):
 
 ```sh
-cd apps/backend/aws/migration && bun install
 DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
 DSQL_RUNTIME_ROLE_ARN=arn:aws:iam::<account>:role/<runtime-role> \
-DSQL_MIGRATIONS_DIR=../../../../packages/api/prisma/migrations-dsql \
-bun run migrate.ts
+mise run db:dsql:migrate
 ```
 
 Leave `DSQL_RUNTIME_ROLE_ARN` out on a development cluster that has no
@@ -191,9 +193,7 @@ CockroachDB/PostgreSQL targets keep using `prisma db push`). For DSQL, generate
 and commit a migration:
 
 ```sh
-cd packages/api
-bun install
-bun run db:dsql:diff -- <name>
+mise run db:dsql:diff <name>
 ```
 
 `scripts/dsql-migration.ts`:
@@ -230,7 +230,7 @@ from every message:
 ```sh
 TOKEN=$(aws dsql generate-db-connect-admin-auth-token --hostname <endpoint> --region <region> | jq -Rr @uri)
 DSQL_DIFF_URL="postgresql://admin:${TOKEN}@<endpoint>:5432/postgres?sslmode=require&sslaccept=strict" \
-  bun run db:dsql:diff -- <name> --from-url
+  mise run db:dsql:diff <name> --from-url
 ```
 
 `dsql-lint` is pinned to one version in one place, `DSQL_LINT_VERSION` in

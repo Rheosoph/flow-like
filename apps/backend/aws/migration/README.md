@@ -131,28 +131,45 @@ docker build -f apps/backend/aws/migration/Dockerfile -t flow-like-aws-migration
 ```
 
 Local: `bun install`, `bun test`, `bunx tsc --noEmit`, `bunx biome check .`.
-To run against a cluster from a workstation with admin credentials (drop
-`DSQL_RUNTIME_ROLE_ARN` on a cluster that has no runtime role yet). The image
-bakes the mirrored schema in as `prisma/schema`; from a checkout it does not
-exist, so build it first and point `DSQL_SCHEMA_DIR` at it - without it every
-statement still applies and only the final `prisma migrate status` fails
-("Could not load schema from ... prisma/schema"), which exits the job `1`.
-Never point `DSQL_SCHEMA_DIR` at `packages/api/prisma/schema` itself: the
-tracked schema declares `provider = "cockroachdb"`.
+
+## Running it from a checkout
+
+Both halves are mise tasks, from the repo root:
+
+```sh
+mise run db:dsql:diff <name>                                    # generate a migration
+DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
+  mise run db:dsql:migrate                                      # apply it
+```
+
+`db:dsql:migrate` builds the mirrored schema, drops the forbidden variables
+from the child and passes the two directory overrides, so the only thing the
+caller has to name is the cluster. Add `DSQL_RUNTIME_ROLE_ARN` to grant the
+runtime role; without it that step is skipped with a warning and only `admin`
+can connect.
+
+The raw form, if you need to vary something the task fixes:
 
 ```sh
 bun run --cwd ../../../../packages/api db:mirror:dsql    # -> packages/api/prisma-dsql-mirror/schema
 
-DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
-DSQL_RUNTIME_ROLE_ARN=arn:aws:iam::<account>:role/<runtime-role> \
-DSQL_MIGRATIONS_DIR=../../../../packages/api/prisma/migrations-dsql \
-DSQL_SCHEMA_DIR=../../../../packages/api/prisma-dsql-mirror/schema \
-bun run migrate.ts
+env -u DATABASE_URL -u PGUSER -u PGHOST ... \
+  DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
+  DSQL_MIGRATIONS_DIR=../../../../packages/api/prisma/migrations-dsql \
+  DSQL_SCHEMA_DIR=../../../../packages/api/prisma-dsql-mirror/schema \
+  bun run migrate.ts
 ```
 
-New migrations are generated in `packages/api` with `bun run db:dsql:diff -- <name>`
-(see `packages/api/scripts/dsql-migration.ts`); that script builds and removes
-the mirror itself.
+`DSQL_SCHEMA_DIR` is not optional from a checkout. The image bakes the mirrored
+schema in as `prisma/schema`; in a checkout that path does not exist, so every
+statement still applies and only the final `prisma migrate status` fails
+("Could not load schema from ... prisma/schema") - which exits the job `1` on a
+run that actually succeeded. Never point it at `packages/api/prisma/schema`
+itself: the tracked schema declares `provider = "cockroachdb"`.
+
+New migrations are generated in `packages/api` by
+`packages/api/scripts/dsql-migration.ts`, which builds and removes the mirror
+itself.
 
 ## Data cutover
 
