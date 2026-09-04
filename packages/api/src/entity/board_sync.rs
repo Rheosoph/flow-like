@@ -22,13 +22,13 @@ pub struct Model {
     )]
     pub board_id: String,
     #[sea_orm(column_name = "lastSyncedAt")]
-    pub last_synced_at: DateTime,
+    pub last_synced_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "syncEncryptionKey", column_type = "Text")]
     pub sync_encryption_key: String,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "app_id",

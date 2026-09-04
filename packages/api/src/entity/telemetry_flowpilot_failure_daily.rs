@@ -10,7 +10,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(unique_key = "TelemetryFlowpilotFailureDaily_day_kind_tool_code_message_key")]
-    pub day: DateTime,
+    pub day: DateTimeWithTimeZone,
     #[sea_orm(
         column_type = "Text",
         unique_key = "TelemetryFlowpilotFailureDaily_day_kind_tool_code_message_key"
@@ -34,9 +34,9 @@ pub struct Model {
     pub count: i64,
     pub installs: i32,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

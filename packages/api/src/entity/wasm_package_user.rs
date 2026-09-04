@@ -25,7 +25,7 @@ pub struct Model {
     #[sea_orm(column_name = "grantedBy", column_type = "Text", nullable)]
     pub granted_by: Option<String>,
     #[sea_orm(column_name = "grantedAt")]
-    pub granted_at: DateTime,
+    pub granted_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "user_id",

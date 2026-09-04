@@ -28,13 +28,13 @@ pub struct Model {
     #[sea_orm(column_name = "setupStatus", column_type = "Text", nullable)]
     pub setup_status: Option<String>,
     #[sea_orm(column_name = "lastSetupAt")]
-    pub last_setup_at: Option<DateTime>,
+    pub last_setup_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "lastSetupError", column_type = "Text", nullable)]
     pub last_setup_error: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "app_id",

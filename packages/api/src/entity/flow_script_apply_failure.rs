@@ -51,7 +51,7 @@ pub struct Model {
     #[sea_orm(column_name = "traceId", column_type = "Text", nullable)]
     pub trace_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "user_id",

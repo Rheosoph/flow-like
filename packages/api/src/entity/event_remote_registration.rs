@@ -30,7 +30,7 @@ pub struct Model {
     #[sea_orm(column_name = "authId", column_type = "Text", nullable)]
     pub auth_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub variant: String,
     #[sea_orm(

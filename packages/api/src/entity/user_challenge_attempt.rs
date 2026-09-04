@@ -20,7 +20,7 @@ pub struct Model {
     #[sea_orm(column_name = "pointsAwarded")]
     pub points_awarded: i32,
     #[sea_orm(column_name = "attemptedAt")]
-    pub attempted_at: DateTime,
+    pub attempted_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "challenge_id",

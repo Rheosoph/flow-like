@@ -34,9 +34,9 @@ pub struct Model {
     #[sea_orm(column_name = "driftFlagged")]
     pub drift_flagged: bool,
     #[sea_orm(column_name = "firstSeenAt")]
-    pub first_seen_at: DateTime,
+    pub first_seen_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "lastSeenAt")]
-    pub last_seen_at: DateTime,
+    pub last_seen_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub source: crate::sea_orm_active_enums::AiModelSource,
     #[sea_orm(column_type = "Text")]

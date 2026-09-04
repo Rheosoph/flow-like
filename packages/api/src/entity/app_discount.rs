@@ -30,15 +30,15 @@ pub struct Model {
     #[sea_orm(column_name = "minPurchaseAmount")]
     pub min_purchase_amount: Option<i64>,
     #[sea_orm(column_name = "startsAt")]
-    pub starts_at: DateTime,
+    pub starts_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "expiresAt")]
-    pub expires_at: Option<DateTime>,
+    pub expires_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "isActive")]
     pub is_active: bool,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "discountType", column_type = "Text")]
     pub discount_type: crate::sea_orm_active_enums::DiscountType,
     #[sea_orm(

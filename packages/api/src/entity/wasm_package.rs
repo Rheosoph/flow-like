@@ -40,11 +40,11 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary")]
     pub permissions: Json,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "publishedAt")]
-    pub published_at: Option<DateTime>,
+    pub published_at: Option<DateTimeWithTimeZone>,
     pub price: i64,
     #[sea_orm(column_type = "Text", nullable)]
     pub readme: Option<String>,

@@ -12,7 +12,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub name: String,
     #[sea_orm(column_name = "releaseDate")]
-    pub release_date: Option<DateTime>,
+    pub release_date: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "creatorName", column_type = "Text")]
     pub creator_name: String,
     #[sea_orm(column_name = "creatorSlug", column_type = "Text")]
@@ -40,9 +40,9 @@ pub struct Model {
     )]
     pub median_time_to_first_answer_token: Option<f64>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(has_many)]
     pub bits: HasMany<super::bit::Entity>,
 }

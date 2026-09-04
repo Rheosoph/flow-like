@@ -35,11 +35,11 @@ pub struct Model {
     )]
     pub user_id: String,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "deletedAt")]
-    pub deleted_at: Option<DateTime>,
+    pub deleted_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub interests: Option<crate::json_types::StringList>,
     #[sea_orm(column_type = "JsonBinary", nullable)]

@@ -26,9 +26,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub country: Option<String>,
     #[sea_orm(column_name = "clientTs")]
-    pub client_ts: Option<DateTime>,
+    pub client_ts: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

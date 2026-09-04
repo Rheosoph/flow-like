@@ -22,7 +22,7 @@ pub struct Model {
     )]
     pub course_id: String,
     #[sea_orm(column_name = "issuedAt")]
-    pub issued_at: DateTime,
+    pub issued_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub hash: String,
     #[sea_orm(column_name = "pdfUrl", column_type = "Text", nullable)]

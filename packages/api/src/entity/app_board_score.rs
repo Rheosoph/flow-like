@@ -40,9 +40,9 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub summary: Option<Json>,
     #[sea_orm(column_name = "computedAt")]
-    pub computed_at: DateTime,
+    pub computed_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "app_id",

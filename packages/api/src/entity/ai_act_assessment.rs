@@ -38,17 +38,17 @@ pub struct Model {
     #[sea_orm(column_name = "responsibleEmail", column_type = "Text", nullable)]
     pub responsible_email: Option<String>,
     #[sea_orm(column_name = "submittedAt")]
-    pub submitted_at: Option<DateTime>,
+    pub submitted_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "reviewedById", column_type = "Text", nullable)]
     pub reviewed_by_id: Option<String>,
     #[sea_orm(column_name = "reviewedAt")]
-    pub reviewed_at: Option<DateTime>,
+    pub reviewed_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "reviewNote", column_type = "Text", nullable)]
     pub review_note: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub status: crate::sea_orm_active_enums::AiActAssessmentStatus,
     #[sea_orm(column_name = "riskCategory", column_type = "Text")]

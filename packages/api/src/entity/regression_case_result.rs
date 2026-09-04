@@ -26,7 +26,7 @@ pub struct Model {
     #[sea_orm(column_name = "durationMs")]
     pub duration_ms: Option<i32>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "suite_run_id",

@@ -18,7 +18,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub actor: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "solution_id",

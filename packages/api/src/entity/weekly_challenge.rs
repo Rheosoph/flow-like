@@ -14,9 +14,9 @@ pub struct Model {
     #[sea_orm(column_name = "challengeId", column_type = "Text")]
     pub challenge_id: String,
     #[sea_orm(column_name = "expiresAt")]
-    pub expires_at: DateTime,
+    pub expires_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "challenge_id",

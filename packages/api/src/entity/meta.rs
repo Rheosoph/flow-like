@@ -50,9 +50,9 @@ pub struct Model {
     #[sea_orm(column_name = "widgetId", column_type = "Text", nullable)]
     pub widget_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "wasmPackageId", column_type = "Text", nullable)]
     pub wasm_package_id: Option<String>,
     #[sea_orm(column_name = "groupId", column_type = "Text", nullable)]

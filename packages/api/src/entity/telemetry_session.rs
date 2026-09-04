@@ -20,13 +20,13 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub status: String,
     #[sea_orm(column_name = "startedAt")]
-    pub started_at: DateTime,
+    pub started_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "durationMs")]
     pub duration_ms: Option<i32>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

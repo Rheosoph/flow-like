@@ -22,7 +22,7 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub after: Option<Json>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

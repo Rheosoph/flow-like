@@ -28,15 +28,15 @@ pub struct Model {
     pub cursor: Option<Json>,
     pub attempts: i32,
     #[sea_orm(column_name = "leaseUntil")]
-    pub lease_until: Option<DateTime>,
+    pub lease_until: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "lastError", column_type = "Text", nullable)]
     pub last_error: Option<String>,
     #[sea_orm(column_name = "requestedBy", column_type = "Text", nullable)]
     pub requested_by: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

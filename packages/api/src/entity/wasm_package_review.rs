@@ -24,7 +24,7 @@ pub struct Model {
     #[sea_orm(column_name = "documentationScore")]
     pub documentation_score: Option<i32>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub action: crate::sea_orm_active_enums::WasmReviewAction,
     #[sea_orm(

@@ -31,19 +31,19 @@ pub struct Model {
     #[sea_orm(column_name = "currentStep", column_type = "Text", nullable)]
     pub current_step: Option<String>,
     #[sea_orm(column_name = "startedAt")]
-    pub started_at: Option<DateTime>,
+    pub started_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "completedAt")]
-    pub completed_at: Option<DateTime>,
+    pub completed_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "expiresAt")]
-    pub expires_at: Option<DateTime>,
+    pub expires_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "userId", column_type = "Text", nullable)]
     pub user_id: Option<String>,
     #[sea_orm(column_name = "appId", column_type = "Text")]
     pub app_id: String,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
     pub technical_user_id: Option<String>,
     #[sea_orm(column_name = "correlationKeys", column_type = "JsonBinary", nullable)]

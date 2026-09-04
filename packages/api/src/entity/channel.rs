@@ -20,7 +20,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub value: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub kind: crate::sea_orm_active_enums::ChannelMessageKind,
     #[sea_orm(column_type = "Text")]

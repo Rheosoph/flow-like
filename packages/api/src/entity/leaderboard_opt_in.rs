@@ -21,7 +21,7 @@ pub struct Model {
     #[sea_orm(column_name = "totalPoints")]
     pub total_points: i32,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

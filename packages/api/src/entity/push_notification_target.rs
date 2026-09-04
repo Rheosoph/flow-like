@@ -36,17 +36,17 @@ pub struct Model {
     #[sea_orm(column_name = "pushEnabled")]
     pub push_enabled: bool,
     #[sea_orm(column_name = "lastRegisteredAt")]
-    pub last_registered_at: DateTime,
+    pub last_registered_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "lastSeenAt")]
-    pub last_seen_at: DateTime,
+    pub last_seen_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "invalidatedAt")]
-    pub invalidated_at: Option<DateTime>,
+    pub invalidated_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "invalidationReason", column_type = "Text", nullable)]
     pub invalidation_reason: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "failureCount")]
     pub failure_count: i32,
     #[sea_orm(column_type = "Text")]

@@ -28,13 +28,13 @@ pub struct Model {
     pub ok: i32,
     pub skipped: i32,
     #[sea_orm(column_name = "startedAt")]
-    pub started_at: Option<DateTime>,
+    pub started_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "completedAt")]
-    pub completed_at: Option<DateTime>,
+    pub completed_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "app_id",

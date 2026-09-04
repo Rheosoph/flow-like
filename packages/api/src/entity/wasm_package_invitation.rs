@@ -25,9 +25,9 @@ pub struct Model {
     pub invitee_id: String,
     pub permission: i64,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "expiresAt")]
-    pub expires_at: Option<DateTime>,
+    pub expires_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_type = "Text")]
     pub status: crate::sea_orm_active_enums::InvitationStatus,
     #[sea_orm(

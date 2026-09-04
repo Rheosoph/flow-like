@@ -22,9 +22,9 @@ pub struct Model {
     #[sea_orm(column_name = "commitSha", column_type = "Text", nullable)]
     pub commit_sha: Option<String>,
     #[sea_orm(column_name = "firstSeenAt")]
-    pub first_seen_at: DateTime,
+    pub first_seen_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -19,9 +19,9 @@ pub struct Model {
     #[sea_orm(column_name = "isPublished")]
     pub is_published: bool,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(has_many, via = "learning_path_course")]
     pub courses: HasMany<super::course::Entity>,
 }

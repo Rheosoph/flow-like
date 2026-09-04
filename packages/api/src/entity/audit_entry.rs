@@ -11,7 +11,7 @@ pub struct Model {
     pub id: String,
     #[sea_orm(unique_key = "AuditEntry_chainId_sequence_key")]
     pub sequence: i64,
-    pub timestamp: DateTime,
+    pub timestamp: DateTimeWithTimeZone,
     #[sea_orm(column_name = "actorId", column_type = "Text")]
     pub actor_id: String,
     #[sea_orm(column_name = "actorIp", column_type = "Text", nullable)]

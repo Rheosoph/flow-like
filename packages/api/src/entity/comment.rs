@@ -28,9 +28,9 @@ pub struct Model {
     #[sea_orm(column_name = "templateId", column_type = "Text", nullable)]
     pub template_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         column_name = "packageId",
         column_type = "Text",

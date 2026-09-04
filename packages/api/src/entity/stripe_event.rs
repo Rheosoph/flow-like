@@ -12,7 +12,7 @@ pub struct Model {
     #[sea_orm(column_name = "eventType", column_type = "Text")]
     pub event_type: String,
     #[sea_orm(column_name = "processedAt")]
-    pub processed_at: DateTime,
+    pub processed_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

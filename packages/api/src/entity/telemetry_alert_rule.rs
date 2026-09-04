@@ -33,15 +33,15 @@ pub struct Model {
     #[sea_orm(column_name = "notifyPush")]
     pub notify_push: bool,
     #[sea_orm(column_name = "lastEvaluatedAt")]
-    pub last_evaluated_at: Option<DateTime>,
+    pub last_evaluated_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "lastTriggeredAt")]
-    pub last_triggered_at: Option<DateTime>,
+    pub last_triggered_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "lastValue", column_type = "Double", nullable)]
     pub last_value: Option<f64>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

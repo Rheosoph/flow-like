@@ -37,7 +37,7 @@ pub struct Model {
     pub tool_calls: i32,
     pub streamed: bool,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

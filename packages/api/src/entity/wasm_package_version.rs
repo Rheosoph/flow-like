@@ -32,9 +32,9 @@ pub struct Model {
     pub min_flow_like_version: Option<String>,
     pub yanked: bool,
     #[sea_orm(column_name = "publishedAt")]
-    pub published_at: DateTime,
+    pub published_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "approvedAt")]
-    pub approved_at: Option<DateTime>,
+    pub approved_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "compilationError", column_type = "Text", nullable)]
     pub compilation_error: Option<String>,
     #[sea_orm(column_name = "duplicateFlagged")]

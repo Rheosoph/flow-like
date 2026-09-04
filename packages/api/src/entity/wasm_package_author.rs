@@ -24,7 +24,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub role: Option<String>,
     #[sea_orm(column_name = "addedAt")]
-    pub added_at: DateTime,
+    pub added_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "user_id",

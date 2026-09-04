@@ -18,9 +18,9 @@ pub struct Model {
     pub payload: Json,
     pub delivered: bool,
     #[sea_orm(column_name = "expiresAt")]
-    pub expires_at: DateTime,
+    pub expires_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "payloadRef", column_type = "Text", nullable)]
     pub payload_ref: Option<String>,
     #[sea_orm(

@@ -33,13 +33,13 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub version: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "allowForking")]
     pub allow_forking: bool,
     #[sea_orm(column_name = "forkedAt")]
-    pub forked_at: Option<DateTime>,
+    pub forked_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]
     pub forked_from: Option<String>,
     #[sea_orm(column_name = "forkPolicy", column_type = "JsonBinary", nullable)]

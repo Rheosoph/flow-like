@@ -27,9 +27,9 @@ pub struct Model {
     #[sea_orm(column_name = "sourceNodeId", column_type = "Text", nullable)]
     pub source_node_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "readAt")]
-    pub read_at: Option<DateTime>,
+    pub read_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_type = "Text")]
     pub r#type: crate::sea_orm_active_enums::NotificationType,
     #[sea_orm(

@@ -15,13 +15,13 @@ pub struct Model {
     pub name: Option<String>,
     pub revoked: bool,
     #[sea_orm(column_name = "revokedAt")]
-    pub revoked_at: Option<DateTime>,
+    pub revoked_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "revokedBy", column_type = "Text", nullable)]
     pub revoked_by: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

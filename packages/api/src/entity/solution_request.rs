@@ -74,13 +74,13 @@ pub struct Model {
     #[sea_orm(column_name = "assignedTo", column_type = "Text", nullable)]
     pub assigned_to: Option<String>,
     #[sea_orm(column_name = "deliveredAt")]
-    pub delivered_at: Option<DateTime>,
+    pub delivered_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "trackingToken", column_type = "Text", unique)]
     pub tracking_token: String,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "pricingTier", column_type = "Text")]
     pub pricing_tier: crate::sea_orm_active_enums::SolutionPricingTier,
     #[sea_orm(column_type = "Text")]

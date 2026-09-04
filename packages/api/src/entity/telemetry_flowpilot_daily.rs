@@ -10,7 +10,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(unique)]
-    pub day: DateTime,
+    pub day: DateTimeWithTimeZone,
     #[sea_orm(column_name = "runsStarted")]
     pub runs_started: i64,
     #[sea_orm(column_name = "runsSucceeded")]
@@ -57,9 +57,9 @@ pub struct Model {
     pub empty_boards_after_run: i64,
     pub installs: i32,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "dataApplyFailures")]
     pub data_apply_failures: i64,
     #[sea_orm(column_name = "failuresTotal")]

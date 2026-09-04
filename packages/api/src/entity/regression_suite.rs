@@ -35,11 +35,11 @@ pub struct Model {
     #[sea_orm(column_name = "allowLiveSideEffects")]
     pub allow_live_side_effects: bool,
     #[sea_orm(column_name = "nextRunAt")]
-    pub next_run_at: Option<DateTime>,
+    pub next_run_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "app_id",

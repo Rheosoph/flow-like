@@ -17,11 +17,11 @@ pub struct Model {
     #[sea_orm(column_name = "userId", column_type = "Text")]
     pub user_id: String,
     #[sea_orm(column_name = "validUntil")]
-    pub valid_until: Option<DateTime>,
+    pub valid_until: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(
         belongs_to,
         from = "user_id",

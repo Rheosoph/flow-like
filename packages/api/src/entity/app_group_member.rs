@@ -27,9 +27,9 @@ pub struct Model {
     #[sea_orm(column_name = "approvedByUserId", column_type = "Text", nullable)]
     pub approved_by_user_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub kind: crate::sea_orm_active_enums::AppGroupMemberKind,
     #[sea_orm(column_type = "Text")]

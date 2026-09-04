@@ -12,9 +12,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub language: String,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "authorId", column_type = "Text", nullable)]
     pub author_id: Option<String>,
     #[sea_orm(column_name = "bannerUrl", column_type = "Text", nullable)]

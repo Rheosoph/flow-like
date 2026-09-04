@@ -22,9 +22,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub message: String,
     #[sea_orm(column_name = "acknowledgedAt")]
-    pub acknowledged_at: Option<DateTime>,
+    pub acknowledged_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

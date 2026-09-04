@@ -23,9 +23,9 @@ pub struct Model {
     pub app_id: Option<String>,
     pub price: i64,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text", nullable)]
     pub endpoint: Option<String>,
     #[sea_orm(column_name = "invocationId", column_type = "Text", nullable)]

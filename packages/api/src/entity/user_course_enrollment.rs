@@ -26,11 +26,11 @@ pub struct Model {
     #[sea_orm(column_name = "idMaps", column_type = "JsonBinary")]
     pub id_maps: Json,
     #[sea_orm(column_name = "startedAt")]
-    pub started_at: DateTime,
+    pub started_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "lastSeenAt")]
-    pub last_seen_at: DateTime,
+    pub last_seen_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "completedAt")]
-    pub completed_at: Option<DateTime>,
+    pub completed_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
         from = "course_id",

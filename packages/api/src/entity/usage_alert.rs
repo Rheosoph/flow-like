@@ -28,13 +28,13 @@ pub struct Model {
     #[sea_orm(column_name = "currentTokens")]
     pub current_tokens: Option<i64>,
     #[sea_orm(column_name = "acknowledgedAt")]
-    pub acknowledged_at: Option<DateTime>,
+    pub acknowledged_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "acknowledgedByUserId", column_type = "Text", nullable)]
     pub acknowledged_by_user_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
-    pub created_at: DateTime,
+    pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]
-    pub updated_at: DateTime,
+    pub updated_at: DateTimeWithTimeZone,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
