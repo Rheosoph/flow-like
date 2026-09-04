@@ -17,7 +17,7 @@ use flow_like::flow::event::{
     CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, EventVariant,
     ReleaseNotes,
 };
-use flow_like_types::anyhow;
+use flow_like_types::{anyhow, utils::constant_time_eq};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
     DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
@@ -42,7 +42,13 @@ pub fn preserve_event_config_secrets(incoming: &mut CoreEvent, existing: &CoreEv
         return;
     }
     let live_token = extract_http_auth_token(&existing.config);
-    if live_token == extract_http_auth_token(&incoming.config) {
+    let incoming_token = extract_http_auth_token(&incoming.config);
+    let tokens_match = match (live_token.as_deref(), incoming_token.as_deref()) {
+        (Some(live), Some(incoming)) => constant_time_eq(live.as_bytes(), incoming.as_bytes()),
+        (None, None) => true,
+        _ => false,
+    };
+    if tokens_match {
         return;
     }
     let mut config: serde_json::Value = if incoming.config.is_empty() {

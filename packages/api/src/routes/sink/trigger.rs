@@ -29,7 +29,9 @@ use axum::{
 };
 use flow_like_storage::{Path as StorePath, files::store::FlowLikeStore, object_store::PutPayload};
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
-use flow_like_types::{Bytes, Result as FlResult, anyhow, create_id, tokio};
+use flow_like_types::{
+    Bytes, Result as FlResult, anyhow, create_id, tokio, utils::constant_time_eq,
+};
 use ipnetwork::IpNetwork;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
@@ -107,6 +109,28 @@ fn normalize_authorization_token(value: &str) -> &str {
         return token.trim();
     }
     trimmed
+}
+
+fn http_auth_token_matches(headers: &HeaderMap, expected_token: &str) -> bool {
+    let expected_token = normalize_authorization_token(expected_token);
+    authorization_token_from_headers(headers).is_some_and(|provided_token| {
+        constant_time_eq(provided_token.as_bytes(), expected_token.as_bytes())
+    })
+}
+
+fn telegram_secret_matches(
+    headers: &HeaderMap,
+    query_secret: Option<&str>,
+    expected_secret: &str,
+) -> bool {
+    let provided_secret = headers
+        .get("X-Telegram-Bot-Api-Secret-Token")
+        .and_then(|value| value.to_str().ok())
+        .or(query_secret);
+
+    provided_secret.is_some_and(|provided_secret| {
+        constant_time_eq(provided_secret.as_bytes(), expected_secret.as_bytes())
+    })
 }
 
 fn parse_pat_token(value: &str) -> Option<(&str, &str)> {
@@ -950,22 +974,16 @@ pub async fn trigger_http(
 
     // Check auth token if set
     if let Some(expected_token) = &sink.auth_token {
-        let expected_token = normalize_authorization_token(expected_token);
-        let provided_token = authorization_token_from_headers(&headers);
-
-        match provided_token {
-            Some(token) if token == expected_token => {}
-            _ => {
-                return Ok((
-                    StatusCode::UNAUTHORIZED,
-                    Json(TriggerResponse {
-                        triggered: false,
-                        run_id: None,
-                        message: "Invalid or missing auth token".to_string(),
-                    }),
-                )
-                    .into_response());
-            }
+        if !http_auth_token_matches(&headers, expected_token) {
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                Json(TriggerResponse {
+                    triggered: false,
+                    run_id: None,
+                    message: "Invalid or missing auth token".to_string(),
+                }),
+            )
+                .into_response());
         }
     }
 
@@ -1364,29 +1382,20 @@ pub async fn trigger_telegram(
 
     // Verify secret token (from header X-Telegram-Bot-Api-Secret-Token or query param)
     if let Some(expected_secret) = &sink.webhook_secret {
-        let provided_secret = headers
-            .get("X-Telegram-Bot-Api-Secret-Token")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or(query.secret_token);
-
-        match provided_secret {
-            Some(token) if &token == expected_secret => {}
-            _ => {
-                tracing::warn!(
-                    "Invalid or missing Telegram secret token for event {}",
-                    event_id
-                );
-                return Ok((
-                    StatusCode::UNAUTHORIZED,
-                    Json(TriggerResponse {
-                        triggered: false,
-                        run_id: None,
-                        message: "Invalid or missing secret token".to_string(),
-                    }),
-                )
-                    .into_response());
-            }
+        if !telegram_secret_matches(&headers, query.secret_token.as_deref(), expected_secret) {
+            tracing::warn!(
+                "Invalid or missing Telegram secret token for event {}",
+                event_id
+            );
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                Json(TriggerResponse {
+                    triggered: false,
+                    run_id: None,
+                    message: "Invalid or missing secret token".to_string(),
+                }),
+            )
+                .into_response());
         }
     }
 
@@ -2674,9 +2683,18 @@ pub async fn get_sink_configs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::header;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
 
     const TEST_SECRET: &str = "test-sink-secret";
+
+    fn authorization_headers(value: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+        }
+        headers
+    }
 
     fn sign_test_sink_claims(exp: Option<usize>) -> String {
         let now = chrono::Utc::now().timestamp() as usize;
@@ -2716,5 +2734,66 @@ mod tests {
         let token = sign_test_sink_claims(Some(expired_at));
 
         assert!(validate_sink_trigger_jwt(&token, TEST_SECRET).is_err());
+    }
+
+    #[test]
+    fn http_auth_accepts_valid_token() {
+        let headers = authorization_headers(Some(TEST_SECRET));
+
+        assert!(http_auth_token_matches(&headers, TEST_SECRET));
+    }
+
+    #[test]
+    fn http_auth_rejects_invalid_or_missing_token() {
+        let invalid = authorization_headers(Some("best-sink-secret"));
+
+        assert!(!http_auth_token_matches(&invalid, TEST_SECRET));
+        assert!(!http_auth_token_matches(&HeaderMap::new(), TEST_SECRET));
+    }
+
+    #[test]
+    fn http_auth_preserves_bearer_token_normalization() {
+        let bearer = authorization_headers(Some("bEaReR   test-sink-secret"));
+        let raw = authorization_headers(Some(TEST_SECRET));
+
+        assert!(http_auth_token_matches(&bearer, "Bearer test-sink-secret"));
+        assert!(http_auth_token_matches(&raw, "Bearer test-sink-secret"));
+    }
+
+    #[test]
+    fn telegram_auth_accepts_header_or_query_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Telegram-Bot-Api-Secret-Token",
+            TEST_SECRET.parse().unwrap(),
+        );
+
+        assert!(telegram_secret_matches(&headers, None, TEST_SECRET));
+        assert!(telegram_secret_matches(
+            &HeaderMap::new(),
+            Some(TEST_SECRET),
+            TEST_SECRET
+        ));
+    }
+
+    #[test]
+    fn telegram_auth_rejects_invalid_or_missing_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Telegram-Bot-Api-Secret-Token",
+            "best-sink-secret".parse().unwrap(),
+        );
+
+        assert!(!telegram_secret_matches(&headers, None, TEST_SECRET));
+        assert!(!telegram_secret_matches(
+            &HeaderMap::new(),
+            None,
+            TEST_SECRET
+        ));
+        assert!(!telegram_secret_matches(
+            &headers,
+            Some(TEST_SECRET),
+            TEST_SECRET
+        ));
     }
 }

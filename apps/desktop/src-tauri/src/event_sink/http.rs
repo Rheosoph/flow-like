@@ -12,6 +12,7 @@ use flow_like::flow_like_storage::{
 };
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::BufferedInterComHandler;
+use flow_like_types::utils::constant_time_eq;
 use flow_like_types::{Bytes, create_id};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,13 @@ fn normalize_authorization_token(value: &str) -> &str {
         return token.trim();
     }
     trimmed
+}
+
+fn http_auth_token_matches(headers: &HeaderMap, expected_token: &str) -> bool {
+    let expected_token = normalize_authorization_token(expected_token);
+    authorization_token_from_headers(headers).is_some_and(|provided_token| {
+        constant_time_eq(provided_token.as_bytes(), expected_token.as_bytes())
+    })
 }
 
 fn is_multipart_content_type(content_type: Option<&str>) -> bool {
@@ -546,16 +554,10 @@ impl HttpSink {
             // Lock is released here when conn goes out of scope
         };
 
-        println!(
-            "[HTTP] Route found: event_id: {}, auth_token: {:?}",
-            event_id, auth_token
-        );
+        println!("[HTTP] Route found: event_id: {}", event_id);
 
         if let Some(auth_token) = auth_token {
-            let expected_token = normalize_authorization_token(&auth_token);
-            let header_token = authorization_token_from_headers(&headers);
-
-            if header_token.as_deref() != Some(expected_token) {
+            if !http_auth_token_matches(&headers, &auth_token) {
                 return (StatusCode::UNAUTHORIZED, "Invalid auth token").into_response();
             }
         }
@@ -702,6 +704,51 @@ impl HttpSink {
         }
 
         (StatusCode::OK, "Event triggered").into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOKEN: &str = "test-http-auth-token";
+
+    fn authorization_headers(value: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn auth_accepts_valid_token() {
+        let headers = authorization_headers(Some(TOKEN));
+
+        assert!(http_auth_token_matches(&headers, TOKEN));
+    }
+
+    #[test]
+    fn auth_rejects_invalid_or_missing_token() {
+        let invalid = authorization_headers(Some("best-http-auth-token"));
+
+        assert!(!http_auth_token_matches(&invalid, TOKEN));
+        assert!(!http_auth_token_matches(&HeaderMap::new(), TOKEN));
+    }
+
+    #[test]
+    fn auth_preserves_bearer_token_normalization() {
+        let bearer = authorization_headers(Some("bEaReR   test-http-auth-token"));
+        let raw = authorization_headers(Some(TOKEN));
+
+        assert!(http_auth_token_matches(
+            &bearer,
+            "Bearer test-http-auth-token"
+        ));
+        assert!(http_auth_token_matches(
+            &raw,
+            "Bearer test-http-auth-token"
+        ));
     }
 }
 

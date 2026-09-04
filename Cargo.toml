@@ -157,6 +157,7 @@ futures-util = "0.3.31"
 moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
+constant_time_eq = "0.4.2"
 lambda_runtime = "0.14.2"
 aws-config = "1.11.0"
 aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }

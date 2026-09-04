@@ -5,6 +5,7 @@ use crate::{
     traits::{Executor, SinkContext, SinkError, SinkResult, SinkTrait, TriggerResponse},
     types::{SinkRegistration, SinkType},
 };
+use flow_like_types::utils::constant_time_eq;
 use serde::{Deserialize, Serialize};
 
 /// HTTP sink for REST API endpoints
@@ -170,12 +171,83 @@ impl HttpTriggerRequest {
     pub fn verify_auth(&self, registration: &SinkRegistration) -> SinkResult<()> {
         if let Some(expected_token) = &registration.auth_token {
             match &self.auth_header {
-                Some(header) if header == expected_token => Ok(()),
+                Some(header) if constant_time_eq(header.as_bytes(), expected_token.as_bytes()) => {
+                    Ok(())
+                }
                 Some(_) => Err(SinkError::AuthFailed("Invalid auth token".to_string())),
                 None => Err(SinkError::AuthFailed("Missing auth token".to_string())),
             }
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::SinkExecution;
+
+    const TOKEN: &str = "test-http-auth-token";
+
+    fn registration(auth_token: Option<&str>) -> SinkRegistration {
+        SinkRegistration {
+            id: "sink-1".to_string(),
+            event_id: "event-1".to_string(),
+            board_id: "board-1".to_string(),
+            app_id: "app-1".to_string(),
+            sink_type: SinkType::Http,
+            config: serde_json::json!({}),
+            execution: SinkExecution::Remote,
+            active: true,
+            auth_token: auth_token.map(ToOwned::to_owned),
+            path: Some("/hook".to_string()),
+            method: Some("POST".to_string()),
+            cron_expression: None,
+            default_payload: None,
+            personal_access_token: None,
+            oauth_tokens: None,
+        }
+    }
+
+    fn request(auth_header: Option<&str>) -> HttpTriggerRequest {
+        HttpTriggerRequest {
+            app_id: "app-1".to_string(),
+            path: "/hook".to_string(),
+            method: "POST".to_string(),
+            auth_header: auth_header.map(ToOwned::to_owned),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn auth_accepts_valid_token() {
+        assert!(
+            request(Some(TOKEN))
+                .verify_auth(&registration(Some(TOKEN)))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn auth_rejects_invalid_token() {
+        assert!(matches!(
+            request(Some("best-http-auth-token"))
+                .verify_auth(&registration(Some(TOKEN))),
+            Err(SinkError::AuthFailed(message)) if message == "Invalid auth token"
+        ));
+    }
+
+    #[test]
+    fn auth_rejects_missing_token() {
+        assert!(matches!(
+            request(None).verify_auth(&registration(Some(TOKEN))),
+            Err(SinkError::AuthFailed(message)) if message == "Missing auth token"
+        ));
+    }
+
+    #[test]
+    fn auth_is_optional_when_no_token_is_configured() {
+        assert!(request(None).verify_auth(&registration(None)).is_ok());
     }
 }

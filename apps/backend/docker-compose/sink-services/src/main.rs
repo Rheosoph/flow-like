@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = match RedisStorage::new(&redis_url).await {
         Ok(s) => {
-            info!("Connected to Redis at {}", redis_url);
+            info!("Connected to Redis");
             Some(Arc::new(s))
         }
         Err(e) => {

@@ -108,8 +108,7 @@ impl TelegramClientManager {
             let mut bot = bot_instance.lock().await;
             bot.handlers.insert(registration.event_id.clone(), handler);
             tracing::info!(
-                "Updated Telegram bot {} with new handler for event {}",
-                &token[..8.min(token.len())],
+                "Updated Telegram bot handler for event {}",
                 registration.event_id
             );
         } else {
@@ -173,7 +172,7 @@ impl TelegramClientManager {
 
         if let Some(handle) = self.running_clients.remove(token) {
             handle.abort();
-            tracing::info!("Stopped Telegram bot: {}", &token[..8.min(token.len())]);
+            tracing::info!("Stopped Telegram bot client");
         }
 
         Ok(())
@@ -873,10 +872,7 @@ async fn run_telegram_bot(
     token: String,
     bot_instance: Arc<flow_like_types::tokio::sync::Mutex<BotInstance>>,
 ) -> Result<()> {
-    tracing::info!(
-        "[TELEGRAM] Starting bot with token {}...",
-        &token[..8.min(token.len())]
-    );
+    tracing::info!("[TELEGRAM] Starting bot");
 
     let bot = Bot::new(&token);
 
@@ -1239,9 +1235,8 @@ impl EventSink for TelegramSink {
             let mut manager = TELEGRAM_MANAGER.lock().await;
             for (registration, config) in handlers {
                 tracing::info!(
-                    "[TELEGRAM_SINK] Registering handler for event {} with token {}...",
-                    registration.event_id,
-                    &config.bot_token[..8.min(config.bot_token.len())]
+                    "[TELEGRAM_SINK] Registering handler for event {}",
+                    registration.event_id
                 );
                 if let Err(e) = manager
                     .add_or_update_bot(app_handle, &db, &registration, &config)
