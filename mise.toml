@@ -398,8 +398,8 @@ set -eu
 # drop the whole forbidden list from the child rather than making every caller
 # remember to.
 bun run --cwd packages/api db:mirror:dsql
-[ -d apps/backend/aws/migration/node_modules ] || bun install --cwd apps/backend/aws/migration
 cd apps/backend/aws/migration
+[ -d node_modules ] || bun install
 exec env -u DATABASE_URL -u PGPASSWORD -u PGPASSFILE -u PGSERVICE -u PGSERVICEFILE \
          -u PGHOST -u PGHOSTADDR -u PGPORT -u PGUSER -u PGDATABASE -u PGSSLMODE \
          -u PGSSLROOTCERT -u PGSSLCERT -u PGSSLKEY -u PGOPTIONS \
