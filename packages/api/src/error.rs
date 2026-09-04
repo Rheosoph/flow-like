@@ -78,6 +78,11 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         self.status
     }
+
+    /// The stable machine-readable code clients branch on.
+    pub fn public_code(&self) -> &str {
+        &self.public_code
+    }
 }
 
 impl ApiError {
@@ -169,6 +174,15 @@ impl ApiError {
             Some(msg),
             ReportPolicy::Ignore,
         )
+    }
+
+    /// A named resource is held by another writer for a bounded time. Distinct from
+    /// [`Self::conflict`] on purpose: 409 says "your write lost a race, resubmit", 423 says
+    /// "nothing was attempted, wait and retry the same request".
+    pub fn locked(code: impl Into<String>, msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::debug!("Locked: {}", msg);
+        Self::new(StatusCode::LOCKED, code, Some(msg), ReportPolicy::Ignore)
     }
 
     pub fn payment_required(msg: impl Into<String>) -> Self {

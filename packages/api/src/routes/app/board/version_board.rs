@@ -39,7 +39,8 @@ pub struct CreateVersionQuery {
     responses(
         (status = 200, description = "New version created as (major, minor, patch) tuple", body = (u32, u32, u32)),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -54,11 +55,12 @@ pub async fn version_board(
 ) -> Result<Json<(u32, u32, u32)>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)
         .await?;
+    mutation_guard.ensure_held()?;
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;

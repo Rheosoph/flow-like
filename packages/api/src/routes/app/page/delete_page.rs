@@ -29,7 +29,8 @@ pub struct PageBoardQuery {
     responses(
         (status = 200, description = "Page deleted"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(name = "DELETE /apps/{app_id}/pages/{page_id}", skip(state, user))]
@@ -82,6 +83,7 @@ pub async fn delete_page(
 
     if let Some(board_id) = board_id {
         if let Ok(board) = app.open_board(board_id.clone(), None, None).await {
+            page_id_guard.ensure_held()?;
             let mut board_guard = board.lock().await;
             if let Err(e) = board_guard.delete_page(&page_id, None).await {
                 tracing::warn!(

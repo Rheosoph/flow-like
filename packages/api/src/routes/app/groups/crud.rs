@@ -25,6 +25,7 @@ use crate::{
         groups::{
             GroupInfo, assemble_groups, notify_member_app, parse_status, resolve_member_status,
         },
+        internal::delete_app::not_pending_deletion,
     },
     state::AppState,
 };
@@ -243,6 +244,10 @@ pub async fn list_groups(
 
     let groups = app_group::Entity::find()
         .filter(app_group::Column::Id.is_in(group_ids.clone()))
+        .filter(not_pending_deletion(
+            DeletionRoot::AppGroup,
+            (app_group::Entity, app_group::Column::Id),
+        ))
         .order_by_desc(app_group::Column::CreatedAt)
         .all(&state.db)
         .await?;

@@ -1,7 +1,13 @@
 use crate::{
-    audit_branch, ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
+    audit_branch,
+    db::{DEFAULT_WRITE_CHUNK, insert_in_chunks},
+    ensure_permission,
+    entity::page,
+    error::ApiError,
+    middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::board::secrets::filter_board_secrets, state::AppState,
+    routes::app::board::secrets::filter_board_secrets,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -14,7 +20,7 @@ use flow_like::{
         execution::LogLevel,
     },
 };
-use sea_orm::{ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveValue::Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use utoipa::ToSchema;
@@ -49,6 +55,11 @@ pub struct UpsertBoardResponse {
 /// Instantiated pages are minted inside the core board path, so no page-upload call ever describes
 /// them. Without a row each, `GET /apps/{app_id}/pages` cannot see them and a later fork — which is
 /// driven off the `Page` table — drops them silently.
+///
+/// A template carries an unbounded number of pages, so the insert is chunked: each chunk commits in
+/// its own retried transaction, which both stays under a bounded engine's per-statement row cap and
+/// absorbs the serialization conflicts a bare `exec(&state.db)` would surface as a `409`. Page ids
+/// come from the instantiation, so `DO NOTHING` makes a replayed chunk harmless.
 async fn persist_instantiated_pages(
     state: &AppState,
     app_id: &str,
@@ -59,8 +70,26 @@ async fn persist_instantiated_pages(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().naive_utc();
-    let rows = pages
+    let rows = instantiated_page_rows(app_id, board_id, pages, chrono::Utc::now().naive_utc());
+
+    insert_in_chunks(
+        &state.db,
+        state.db_dialect,
+        rows,
+        DEFAULT_WRITE_CHUNK,
+        Some(OnConflict::new().do_nothing().to_owned()),
+    )
+    .await?;
+    Ok(())
+}
+
+fn instantiated_page_rows(
+    app_id: &str,
+    board_id: &str,
+    pages: &[Page],
+    now: chrono::NaiveDateTime,
+) -> Vec<page::ActiveModel> {
+    pages
         .iter()
         .map(|page| page::ActiveModel {
             id: Set(page.id.clone()),
@@ -74,10 +103,7 @@ async fn persist_instantiated_pages(
             created_at: Set(now),
             updated_at: Set(now),
         })
-        .collect::<Vec<_>>();
-
-    page::Entity::insert_many(rows).exec(&state.db).await?;
-    Ok(())
+        .collect()
 }
 
 #[utoipa::path(
@@ -92,7 +118,8 @@ async fn persist_instantiated_pages(
     responses(
         (status = 200, description = "Board created or updated", body = UpsertBoardResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -107,7 +134,7 @@ pub async fn upsert_board(
 ) -> Result<Json<UpsertBoardResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let mut id = board_id.clone();
@@ -120,6 +147,7 @@ pub async fn upsert_board(
         let created = app
             .create_board(Some(board_id.clone()), params.template)
             .await?;
+        mutation_guard.ensure_held()?;
         app.save().await?;
         id = created.board_id;
         persist_instantiated_pages(&state, &app_id, &id, &created.pages).await?;
@@ -136,6 +164,7 @@ pub async fn upsert_board(
         .execution_mode
         .unwrap_or(board.execution_mode.clone());
     board.mark_changed();
+    mutation_guard.ensure_held()?;
     board.save(None).await?;
 
     if let Err(err) =
@@ -166,4 +195,41 @@ pub async fn upsert_board(
         updated_at: board.updated_at,
         board: response_board,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_db::DEFAULT_WRITE_CHUNK;
+
+    fn page(id: &str) -> Page {
+        Page::new(id, id, format!("/{id}"))
+    }
+
+    /// L2: the instantiation used to send one `insert_many` per template, unbounded by page count
+    /// and outside any retry wrapper. Chunking is what keeps it under a bounded engine's
+    /// per-statement row cap.
+    #[test]
+    fn instantiated_pages_chunk_below_the_write_cap() {
+        let pages = (0..DEFAULT_WRITE_CHUNK * 2 + 7)
+            .map(|index| page(&format!("page-{index}")))
+            .collect::<Vec<_>>();
+        let now = chrono::Utc::now().naive_utc();
+        let rows = instantiated_page_rows("app", "board", &pages, now);
+
+        assert_eq!(rows.len(), pages.len());
+        let chunks = rows.chunks(DEFAULT_WRITE_CHUNK).collect::<Vec<_>>();
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|chunk| chunk.len() <= DEFAULT_WRITE_CHUNK));
+    }
+
+    #[test]
+    fn instantiated_page_rows_are_scoped_to_the_created_board() {
+        let now = chrono::Utc::now().naive_utc();
+        let rows = instantiated_page_rows("app", "board", &[page("a")], now);
+        let row = rows.first().expect("one row");
+        assert_eq!(row.app_id, Set("app".to_string()));
+        assert_eq!(row.board_id, Set(Some("board".to_string())));
+        assert_eq!(row.created_at, Set(now));
+    }
 }

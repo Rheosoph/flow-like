@@ -4,7 +4,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::course::access::{ensure_course_exists, ensure_module_in_course},
+    routes::{
+        app::internal::delete_app::cancel_pending_deletion,
+        course::access::{ensure_course_exists, ensure_module_in_course},
+    },
     state::AppState,
 };
 use axum::{
@@ -66,16 +69,28 @@ pub async fn upsert_module(
         active.update(&state.db).await?
     } else {
         ensure_course_exists(&state, &course_id).await?;
-        let active = course_module::ActiveModel {
-            id: Set(module_id),
-            course_id: Set(course_id),
-            title: Set(body.title),
-            description: Set(body.description),
-            position: Set(body.position.unwrap_or(0)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
+        state
+            .transaction(|txn| {
+                let module_id = module_id.clone();
+                let course_id = course_id.clone();
+                let body = body.clone();
+                Box::pin(async move {
+                    cancel_pending_deletion(txn, DeletionRoot::CourseModule, &module_id).await?;
+                    let saved = course_module::ActiveModel {
+                        id: Set(module_id),
+                        course_id: Set(course_id),
+                        title: Set(body.title),
+                        description: Set(body.description),
+                        position: Set(body.position.unwrap_or(0)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?;
+                    Ok::<_, ApiError>(saved)
+                })
+            })
+            .await?
     };
 
     Ok(Json(saved))

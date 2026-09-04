@@ -906,7 +906,8 @@ mod terminal_mirror_tests {
         assert!(large >= large_payload.to_string().len());
         assert!(
             large - small
-                >= large_payload.to_string().len() - small_payload.to_string().len()
+                >= large_payload.to_string().len()
+                    - small_payload.to_string().len()
                     - JSON_NUMBER_BYTES
         );
     }

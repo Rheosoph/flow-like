@@ -2,6 +2,7 @@ use flow_like_storage::object_store::path::Path;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use super::delete_prefix;
+use crate::deletion::drain::{Flow, Pass};
 use crate::entity::event_sink;
 use crate::error::ApiError;
 use crate::routes::sink::service::sink_types;
@@ -34,16 +35,26 @@ pub async fn delete_sink_schedules(state: &AppState, app_id: &str) -> Result<(),
 
 /// `apps/{id}` on the meta and content stores and `media/apps/{id}` on the
 /// content store, paginated and re-runnable.
-pub async fn delete_storage_prefixes(state: &AppState, app_id: &str) -> Result<(), ApiError> {
+pub async fn delete_storage_prefixes(
+    state: &AppState,
+    app_id: &str,
+    pass: &mut Pass<'_>,
+) -> Result<Flow, ApiError> {
     let credentials = state.master_credentials().await?;
     let meta = credentials.to_store(true).await?.as_generic();
     let content = credentials.to_store(false).await?.as_generic();
     let app_prefix = Path::from("apps").child(app_id);
     let media_prefix = Path::from("media").child("apps").child(app_id);
-    delete_prefix(&meta, &app_prefix, "meta").await?;
-    delete_prefix(&content, &app_prefix, "content").await?;
-    delete_prefix(&content, &media_prefix, "media").await?;
-    Ok(())
+    for (store, prefix, label) in [
+        (&meta, &app_prefix, "meta"),
+        (&content, &app_prefix, "content"),
+        (&content, &media_prefix, "media"),
+    ] {
+        if delete_prefix(store, prefix, label, pass).await? == Flow::Suspend {
+            return Ok(Flow::Suspend);
+        }
+    }
+    Ok(Flow::Continue)
 }
 
 /// Best effort: entries on redis/dynamo/cosmos/firestore expire on their own,

@@ -7,6 +7,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     publication::{PublicationTarget, target::new_request},
+    routes::app::team::remove_user::detach_membership_children,
     state::AppState,
 };
 use axum::{
@@ -16,7 +17,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
-    QueryFilter,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -25,6 +26,44 @@ use utoipa::ToSchema;
 /// invitations and created API keys along, so this stays well under the
 /// per-transaction row budget.
 const MEMBERSHIP_PURGE_CHUNK: usize = 500;
+
+/// Delete every membership matching `condition`, page by page.
+///
+/// A membership cascades into its invitations and the technical users it
+/// created, and deleting a technical user nulls its rows in four usage tables —
+/// tens of thousands of rows for a single API key. Detaching those children in
+/// their own bounded sweeps first leaves the membership rows as the only work
+/// the delete transaction has to do.
+async fn purge_memberships(state: &AppState, condition: &Condition) -> Result<(), ApiError> {
+    loop {
+        let ids: Vec<String> = membership::Entity::find()
+            .filter(condition.clone())
+            .select_only()
+            .column(membership::Column::Id)
+            .order_by_asc(membership::Column::Id)
+            .limit(MEMBERSHIP_PURGE_CHUNK as u64)
+            .into_tuple()
+            .all(&state.db)
+            .await?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        for membership_id in &ids {
+            detach_membership_children(state, membership_id).await?;
+        }
+        let removed = delete_in_batches::<membership::Entity>(
+            &state.db,
+            state.db_dialect,
+            condition.clone().add(membership::Column::Id.is_in(ids)),
+            MEMBERSHIP_PURGE_CHUNK,
+            Some(1),
+        )
+        .await?;
+        if removed.rows == 0 {
+            return Ok(());
+        }
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpdateVisibilityBody {
@@ -114,18 +153,12 @@ pub async fn change_visibility(
         .add(membership::Column::AppId.eq(app_id.clone()))
         .add(membership::Column::UserId.ne(sub.clone()));
 
-    // Going private removes every other member. The bulk of that runs in
-    // bounded batches before the flip; the transaction below only sweeps up
-    // whoever joined in between, atomically with the visibility change.
+    // Going private removes every other member. The purge runs in bounded
+    // batches around the flip rather than inside it: the fan-out behind one
+    // membership does not fit a transaction that also has to stay atomic with
+    // the visibility change.
     if purge_members {
-        delete_in_batches::<membership::Entity>(
-            &state.db,
-            state.db_dialect,
-            other_members.clone(),
-            MEMBERSHIP_PURGE_CHUNK,
-            None,
-        )
-        .await?;
+        purge_memberships(&state, &other_members).await?;
     }
 
     let request_id = create_id();
@@ -136,7 +169,6 @@ pub async fn change_visibility(
             let app_id = app_id.clone();
             let sub = sub.clone();
             let target = target.clone();
-            let other_members = other_members.clone();
             let request_id = request_id.clone();
             let log_id = log_id.clone();
             Box::pin(async move {
@@ -152,13 +184,6 @@ pub async fn change_visibility(
                         app.visibility = Set(target);
                         app.updated_at = Set(now);
                         app.update(txn).await?;
-
-                        if purge_members {
-                            membership::Entity::delete_many()
-                                .filter(other_members)
-                                .exec(txn)
-                                .await?;
-                        }
                     }
                     Transition::Review => {
                         let old_visibility = app.visibility.clone();
@@ -193,6 +218,12 @@ pub async fn change_visibility(
             })
         })
         .await?;
+
+    // Nobody can join a private app, so this second sweep only has to catch
+    // whoever slipped in between the first one and the flip.
+    if purge_members {
+        purge_memberships(&state, &other_members).await?;
+    }
 
     let (action, summary) = match transition {
         Transition::Toggle | Transition::PublicSwap => (

@@ -183,6 +183,16 @@ impl BoardMutationGuard {
             .await
     }
 
+    /// Fail the request when the lease is no longer provably ours.
+    ///
+    /// Call immediately before every canonical board or app write made under this guard. The
+    /// heartbeat can only report a lapsed lease, never renew one retroactively: without this
+    /// check a writer whose lease expired mid-request goes on to a full-object PUT that a second
+    /// replica is already making, and the lost update is recorded as nothing but a log line.
+    pub(crate) fn ensure_held(&self) -> std::result::Result<(), ApiError> {
+        self.lease.ensure_held()
+    }
+
     pub(crate) async fn release(self) {
         self.lease.release().await
     }

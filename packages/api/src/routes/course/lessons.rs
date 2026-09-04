@@ -6,7 +6,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::course::{
+    routes::{
+        app::internal::delete_app::cancel_pending_deletion,
+        course::{
         access::{
             ensure_course_readable, ensure_lesson_in_module, ensure_module_in_course,
             has_course_read_grant,
@@ -15,6 +17,7 @@ use crate::{
         assets::{CourseAssetKind, course_asset_storage_path},
         attempts::ChallengeAttemptView,
         challenges::ChallengeView,
+        },
     },
     state::AppState,
 };
@@ -235,20 +238,32 @@ pub async fn upsert_lesson(
         active.update(&state.db).await?
     } else {
         ensure_module_in_course(&state, &course_id, &module_id).await?;
-        let active = lesson::ActiveModel {
-            id: Set(lesson_id),
-            module_id: Set(module_id),
-            title: Set(body.title),
-            language: Set(body.language.unwrap_or_else(|| "en".to_string())),
-            content: Set(body.content),
-            video_url: Set(body.video_url),
-            estimated_minutes: Set(body.estimated_minutes.unwrap_or(5)),
-            position: Set(body.position.unwrap_or(0)),
-            is_optional: Set(body.is_optional.unwrap_or(false)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
+        state
+            .transaction(|txn| {
+                let lesson_id = lesson_id.clone();
+                let module_id = module_id.clone();
+                let body = body.clone();
+                Box::pin(async move {
+                    cancel_pending_deletion(txn, DeletionRoot::Lesson, &lesson_id).await?;
+                    let saved = lesson::ActiveModel {
+                        id: Set(lesson_id),
+                        module_id: Set(module_id),
+                        title: Set(body.title),
+                        language: Set(body.language.unwrap_or_else(|| "en".to_string())),
+                        content: Set(body.content),
+                        video_url: Set(body.video_url),
+                        estimated_minutes: Set(body.estimated_minutes.unwrap_or(5)),
+                        position: Set(body.position.unwrap_or(0)),
+                        is_optional: Set(body.is_optional.unwrap_or(false)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?;
+                    Ok::<_, ApiError>(saved)
+                })
+            })
+            .await?
     };
 
     Ok(Json(saved))

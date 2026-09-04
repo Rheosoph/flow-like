@@ -4,7 +4,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::course::{access::has_course_read_grant, courses::CourseListItem},
+    routes::{
+        app::internal::delete_app::cancel_pending_deletion,
+        course::{access::has_course_read_grant, courses::CourseListItem},
+    },
     state::AppState,
 };
 use axum::{
@@ -292,17 +295,28 @@ pub async fn upsert_learning_path(
         active.updated_at = Set(now);
         active.update(&state.db).await?
     } else {
-        let active = learning_path::ActiveModel {
-            id: Set(path_id.clone()),
-            title: Set(body.title.clone()),
-            slug: Set(body.slug.clone()),
-            description: Set(body.description.clone()),
-            position: Set(body.position.unwrap_or(0)),
-            is_published: Set(body.is_published.unwrap_or(false)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
+        state
+            .transaction(|txn| {
+                let path_id = path_id.clone();
+                let body = body.clone();
+                Box::pin(async move {
+                    cancel_pending_deletion(txn, DeletionRoot::LearningPath, &path_id).await?;
+                    let saved = learning_path::ActiveModel {
+                        id: Set(path_id),
+                        title: Set(body.title),
+                        slug: Set(body.slug),
+                        description: Set(body.description),
+                        position: Set(body.position.unwrap_or(0)),
+                        is_published: Set(body.is_published.unwrap_or(false)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?;
+                    Ok::<_, ApiError>(saved)
+                })
+            })
+            .await?
     };
 
     let steps = learning_path_course::Entity::find()

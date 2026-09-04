@@ -4,7 +4,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::course::access::{ensure_challenge_in_lesson, ensure_lesson_in_course},
+    routes::{
+        app::internal::delete_app::cancel_pending_deletion,
+        course::access::{ensure_challenge_in_lesson, ensure_lesson_in_course},
+    },
     state::AppState,
 };
 use axum::{
@@ -148,19 +151,32 @@ pub async fn upsert_challenge(
         active.update(&state.db).await?
     } else {
         ensure_lesson_in_course(&state, &course_id, &lesson_id).await?;
-        let active = challenge::ActiveModel {
-            id: Set(challenge_id),
-            lesson_id: Set(lesson_id),
-            kind: Set(kind),
-            prompt: Set(body.prompt),
-            explanation: Set(body.explanation),
-            payload: Set(body.payload),
-            points: Set(body.points.unwrap_or(10)),
-            position: Set(body.position.unwrap_or(0)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
+        state
+            .transaction(|txn| {
+                let challenge_id = challenge_id.clone();
+                let lesson_id = lesson_id.clone();
+                let body = body.clone();
+                let kind = kind.clone();
+                Box::pin(async move {
+                    cancel_pending_deletion(txn, DeletionRoot::Challenge, &challenge_id).await?;
+                    let saved = challenge::ActiveModel {
+                        id: Set(challenge_id),
+                        lesson_id: Set(lesson_id),
+                        kind: Set(kind),
+                        prompt: Set(body.prompt),
+                        explanation: Set(body.explanation),
+                        payload: Set(body.payload),
+                        points: Set(body.points.unwrap_or(10)),
+                        position: Set(body.position.unwrap_or(0)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?;
+                    Ok::<_, ApiError>(saved)
+                })
+            })
+            .await?
     };
 
     Ok(Json(saved.into()))

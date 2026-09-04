@@ -15,6 +15,10 @@ import {
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
+import {
+	type IForkJobView,
+	resolveOnlineFork,
+} from "@flow-like/flow-like-ui/lib/fork-job";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -22,37 +26,10 @@ import type {
 	IForkPolicy,
 	IForkPreviewResponse,
 	IForkPreviewTarget,
-	IForkReport,
 	IForkSettings,
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
-
-/**
- * `POST /apps/{id}/fork` answers `202` with this shape when the fork is too
- * large to finish inside the request; `GET /apps/fork/jobs/{job_id}` returns
- * the same shape until `status` is `DONE` and `report` is filled in.
- */
-interface IForkJobView {
-	job_id: string;
-	source_app_id: string;
-	new_app_id: string;
-	status: string;
-	step: string;
-	bytes_copied: number;
-	objects_copied: number;
-	report?: IForkReport;
-	last_error?: string | null;
-}
-
-const FORK_JOB_POLL_INTERVAL_MS = 2_000;
-const FORK_JOB_POLL_MAX_INTERVAL_MS = 10_000;
-
-function isForkJobView(
-	response: IOnlineForkResponse | IForkJobView,
-): response is IForkJobView {
-	return typeof (response as IForkJobView).job_id === "string";
-}
 import {
 	mergeMetadataMedia,
 	stabilizeMetadata,
@@ -1002,60 +979,28 @@ export class AppState implements IAppState {
 		appId: string,
 		body: IOnlineForkBody,
 	): Promise<IOnlineForkResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
+		const profile = this.backend.profile;
+		const auth = this.backend.auth;
+		if (!profile || !auth) {
 			throw new Error("not authenticated");
 		}
 		const response = await fetcher<IOnlineForkResponse | IForkJobView>(
-			this.backend.profile,
+			profile,
 			`apps/${appId}/fork`,
 			{
 				method: "POST",
 				body: JSON.stringify(body),
 			},
-			this.backend.auth,
+			auth,
 		);
-		if (!isForkJobView(response)) return response;
-		return this.awaitForkJob(response);
-	}
-
-	/**
-	 * A fork the server accepted with `202` finishes in the background; the
-	 * dialog keeps its "Forking…" state while this polls the job until it is
-	 * done, so callers see the same `IOnlineForkResponse` either way.
-	 */
-	private async awaitForkJob(job: IForkJobView): Promise<IOnlineForkResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("not authenticated");
-		}
-		let interval = FORK_JOB_POLL_INTERVAL_MS;
-		let current = job;
-		for (;;) {
-			if (current.status === "DONE" && current.report) {
-				return { new_app_id: current.new_app_id, report: current.report };
-			}
-			if (current.status === "FAILED" || current.status === "ABORTING") {
-				throw new Error(
-					current.last_error ?? `Fork ${current.job_id} failed`,
-				);
-			}
-			await new Promise((resolve) => setTimeout(resolve, interval));
-			interval = Math.min(interval * 1.5, FORK_JOB_POLL_MAX_INTERVAL_MS);
-			try {
-				current = await fetcher<IForkJobView>(
-					this.backend.profile,
-					`apps/fork/jobs/${job.job_id}`,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-			} catch (error) {
-				if (isMissingResourceError(error)) {
-					throw new Error(
-						`Fork ${job.job_id} was aborted before it finished`,
-					);
-				}
-				throw error;
-			}
-		}
+		return resolveOnlineFork(response, (jobId) =>
+			fetcher<IForkJobView>(
+				profile,
+				`apps/fork/jobs/${jobId}`,
+				{ method: "GET" },
+				auth,
+			),
+		);
 	}
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {

@@ -117,8 +117,8 @@ impl Chaos {
             ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'c>>
             + Send
             + Sync,
-        T: Send,
-        E: From<DbErr> + AsDbConflict + std::fmt::Display + std::fmt::Debug + Send,
+        T: Send + 'static,
+        E: From<DbErr> + AsDbConflict + std::fmt::Display + std::fmt::Debug + Send + 'static,
     {
         let sequence = self.counters.transactions.fetch_add(1, Ordering::Relaxed) + 1;
         let conflict_on_first_attempt = self
@@ -163,8 +163,8 @@ impl Chaos {
             ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'c>>
             + Send
             + Sync,
-        T: Send,
-        E: From<DbErr> + AsDbConflict + std::fmt::Display + std::fmt::Debug + Send,
+        T: Send + 'static,
+        E: From<DbErr> + AsDbConflict + std::fmt::Display + std::fmt::Debug + Send + 'static,
     {
         self.transaction(
             &state.db,

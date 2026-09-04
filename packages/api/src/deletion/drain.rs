@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use chrono::NaiveDateTime;
 use flow_like_types::anyhow;
 use sea_orm::sea_query::{DynIden, Expr, ExprTrait, Keyword, Order, Query, ValueTuple};
 use sea_orm::{ConnectionTrait, DatabaseConnection, QueryResult, Value};
@@ -89,6 +90,11 @@ pub struct Pass<'a> {
     pub root_id: String,
     pub phase: usize,
     pub budget: PassBudget,
+    /// The `leaseUntil` this pass owns. Every progress write is fenced on it
+    /// and replaces it, so a write that matches no row proves another worker
+    /// re-claimed the job while this pass was running.
+    lease: Option<NaiveDateTime>,
+    lease_lost: bool,
     started: Instant,
     chunks: usize,
     rows: u64,
@@ -109,6 +115,8 @@ impl<'a> Pass<'a> {
             root_id: job.root_id.clone(),
             phase: if phase < total_steps { phase } else { 0 },
             budget,
+            lease: job.lease_until,
+            lease_lost: false,
             started: Instant::now(),
             chunks: 0,
             rows: 0,
@@ -124,9 +132,39 @@ impl<'a> Pass<'a> {
         self.rows
     }
 
+    /// The lease value the next write must be fenced on.
+    pub fn lease(&self) -> Option<NaiveDateTime> {
+        self.lease
+    }
+
+    /// Whether a fenced write already found the job re-claimed. The pass must
+    /// not write an outcome after that.
+    pub fn lease_lost(&self) -> bool {
+        self.lease_lost
+    }
+
+    /// Whether this pass has spent its budget and owes the job back to the
+    /// queue. Steps that are not chunked check it before they start.
+    pub fn exhausted(&self) -> bool {
+        self.chunks >= self.budget.max_chunks || self.started.elapsed() >= self.budget.max_duration
+    }
+
     /// Persist the phase and extend the lease.
     pub async fn checkpoint(&mut self) -> Result<(), ApiError> {
-        job::checkpoint(self.state, &self.job_id, self.phase, self.cursor()).await?;
+        let renewed = job::checkpoint(
+            self.state,
+            &self.job_id,
+            self.lease,
+            self.phase,
+            self.cursor(),
+            self.rows > 0,
+        )
+        .await?;
+        let Some(renewed) = renewed else {
+            self.lease_lost = true;
+            return Err(job::lease_lost(&self.job_id));
+        };
+        self.lease = Some(renewed);
         self.since_checkpoint = 0;
         Ok(())
     }
@@ -137,16 +175,16 @@ impl<'a> Pass<'a> {
         self.checkpoint().await
     }
 
-    async fn after_chunk(&mut self, rows: u64) -> Result<Flow, ApiError> {
+    /// Account for `rows` written by one bounded unit of work — a drain chunk
+    /// or a page of an external listing — and renew the lease periodically.
+    pub async fn after_chunk(&mut self, rows: u64) -> Result<Flow, ApiError> {
         self.chunks += 1;
         self.rows += rows;
         self.since_checkpoint += 1;
         if self.since_checkpoint >= job::CHECKPOINT_EVERY_CHUNKS {
             self.checkpoint().await?;
         }
-        let exhausted = self.chunks >= self.budget.max_chunks
-            || self.started.elapsed() >= self.budget.max_duration;
-        Ok(if exhausted {
+        Ok(if self.exhausted() {
             Flow::Suspend
         } else {
             Flow::Continue
@@ -240,15 +278,31 @@ fn key_filter(table: &TableMeta, keys: &[Vec<Value>]) -> Expr {
     }
 }
 
+/// The write's own `WHERE`: the selected keys **and** the plan predicate, so a
+/// row that stopped belonging to the root between the pooled select and this
+/// transaction is left alone.
+fn write_condition(
+    table: &TableMeta,
+    keys: &[Vec<Value>],
+    predicate: &Predicate,
+    root_id: &str,
+) -> Expr {
+    key_filter(table, keys).and(predicate_expr(predicate, root_id))
+}
+
 /// Apply `op` to exactly `keys` in one retried transaction.
 pub async fn apply_page(
     state: &AppState,
     table: &TableMeta,
     op: &DrainOp,
     keys: Vec<Vec<Value>>,
+    predicate: &Predicate,
+    root_id: &str,
 ) -> Result<u64, ApiError> {
     let table = table.clone();
     let op = op.clone();
+    let predicate = predicate.clone();
+    let root_id = root_id.to_owned();
     retry_transaction::<_, u64, ApiError>(
         &state.db,
         state.db_dialect,
@@ -258,8 +312,10 @@ pub async fn apply_page(
             let table = table.clone();
             let op = op.clone();
             let keys = keys.clone();
+            let predicate = predicate.clone();
+            let root_id = root_id.clone();
             Box::pin(async move {
-                let filter = key_filter(&table, &keys);
+                let filter = write_condition(&table, &keys, &predicate, &root_id);
                 let result = match &op {
                     DrainOp::Delete => {
                         txn.execute(
@@ -305,7 +361,8 @@ pub async fn drain(
                 break;
             }
             let fetched = keys.len();
-            let affected = apply_page(pass.state, table, op, keys).await?;
+            let affected =
+                apply_page(pass.state, table, op, keys, predicate, &pass.root_id).await?;
             stalled = if affected == 0 { stalled + 1 } else { 0 };
             if stalled >= MAX_STALLED_CHUNKS {
                 return Err(ApiError::internal_error(anyhow!(
@@ -345,6 +402,10 @@ pub async fn delete_root(pass: &mut Pass<'_>, table: &TableMeta) -> Result<(), A
         table,
         &DrainOp::Delete,
         vec![vec![Value::from(pass.root_id.clone())]],
+        &Predicate::Root {
+            column: key.name.clone(),
+        },
+        &pass.root_id,
     )
     .await?;
     pass.after_chunk(affected).await?;
@@ -420,6 +481,32 @@ mod tests {
         assert_eq!(
             sql,
             r#"DELETE FROM "LearningPathCourse" WHERE ("pathId", "courseId") IN (($1, $2), ($3, $4))"#
+        );
+    }
+
+    /// The select runs on the pool, the write in its own transaction; a row
+    /// that stopped matching in between must survive, so the write repeats the
+    /// plan predicate next to the key list.
+    #[test]
+    fn writes_re_apply_the_plan_predicate() {
+        let meta = table("App", &["id"]);
+        let predicate = Predicate::Via {
+            column: "defaultRoleId".into(),
+            parent: "Role".into(),
+            parent_column: "id".into(),
+            inner: Box::new(Predicate::Root {
+                column: "appId".into(),
+            }),
+        };
+        let keys = vec![vec![Value::from("app_other")]];
+        let (sql, _) = Query::update()
+            .table(iden(&meta.name))
+            .value(iden("defaultRoleId"), Keyword::Null)
+            .and_where(write_condition(&meta, &keys, &predicate, "app_1"))
+            .build(PostgresQueryBuilder);
+        assert_eq!(
+            sql,
+            r#"UPDATE "App" SET "defaultRoleId" = NULL WHERE "id" IN ($1) AND "defaultRoleId" IN (SELECT "id" FROM "Role" WHERE "appId" = $2)"#
         );
     }
 

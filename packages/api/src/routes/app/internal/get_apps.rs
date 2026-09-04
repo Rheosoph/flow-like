@@ -1,5 +1,5 @@
 use crate::{
-    entity::{app, membership, meta},
+    entity::{app, membership, meta, sea_orm_active_enums::Status},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::LanguageParams,
@@ -47,6 +47,10 @@ pub async fn get_apps(
     let apps_with_meta = app::Entity::find()
         .order_by_desc(app::Column::UpdatedAt)
         .join(JoinType::InnerJoin, app::Relation::Membership.def())
+        // INACTIVE is written by exactly two paths — the deletion tombstone and
+        // the destination of an in-flight fork — so both an app that is draining
+        // and one that is still being copied stay out of the library.
+        .filter(app::Column::Status.ne(Status::Inactive))
         .find_with_related(meta::Entity)
         .filter(
             meta::Column::Lang

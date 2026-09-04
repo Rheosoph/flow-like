@@ -38,7 +38,8 @@ pub struct ExecuteCommandsBody {
     responses(
         (status = 200, description = "Undo operation completed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -53,7 +54,7 @@ pub async fn undo_board(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)
@@ -74,8 +75,9 @@ pub async fn undo_board(
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.undo(params.commands, flow_state.clone()).await?;
+    mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
-    drop(_mutation_guard);
+    drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 
     Ok(Json(()))
@@ -93,7 +95,8 @@ pub async fn undo_board(
     responses(
         (status = 200, description = "Redo operation completed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -108,7 +111,7 @@ pub async fn redo_board(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)
@@ -129,8 +132,9 @@ pub async fn redo_board(
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.redo(params.commands, flow_state.clone()).await?;
+    mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
-    drop(_mutation_guard);
+    drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 
     Ok(Json(()))

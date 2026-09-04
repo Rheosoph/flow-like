@@ -68,6 +68,9 @@ function isProtectedAppRoute(path: string, method: string): boolean {
 	const appOrRoute = parts[1];
 	if (appOrRoute === "search" || appOrRoute === "nodes") return false;
 	if (appOrRoute === "new") return true;
+	// `apps/fork/jobs/{job_id}` only ever returns the caller's own job, so the
+	// token has to be on the request rather than renewed after a 401.
+	if (appOrRoute === "fork" && parts[2] === "jobs") return true;
 
 	if (parts.length === 2) return method !== "GET";
 

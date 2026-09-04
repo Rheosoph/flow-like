@@ -3202,38 +3202,40 @@ pub(crate) async fn copy_object_prefix_resumable(
         Some(offset) => src_store.list_with_offset(Some(src_prefix), offset),
         None => src_store.list(Some(src_prefix)),
     };
-    let mut entries: Vec<(Path, Path, u64)> = Vec::new();
-    while let Some(item) = listing
-        .try_next()
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
-    {
-        let path_str = item.location.as_ref().to_string();
-        let suffix = match path_str.strip_prefix(src_prefix.as_ref()) {
-            Some(s) if s.is_empty() || s.starts_with('/') => s.trim_start_matches('/'),
-            Some(_) => continue,
-            None => continue,
-        };
-        if skip_relative.is_some_and(|skip| skip(suffix)) {
+    let mut page: Vec<(Path, Path, u64)> = Vec::with_capacity(COPY_PAGE);
+    let mut tally = CopyTally::default();
+    loop {
+        let next = listing
+            .try_next()
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?;
+        let exhausted = next.is_none();
+        if let Some(item) = next
+            && let Some(entry) = plan_copy_entry(src_prefix, dst_prefix, &item, skip_relative)
+        {
+            page.push(entry);
+        }
+        if !exhausted && page.len() < COPY_PAGE {
             continue;
         }
-        let dst_path = join_relative(dst_prefix, suffix);
-        entries.push((item.location, dst_path, item.size));
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+        if page.is_empty() {
+            break;
+        }
 
-    let mut tally = CopyTally::default();
-    for page in entries.chunks(COPY_PAGE) {
-        let results: Vec<Result<u64, ApiError>> =
-            futures::stream::iter(page.to_vec().into_iter().map(
-                |(src_path, dst_path, size)| async move {
-                    copy_one(src_store, dst_store, &src_path, &dst_path, label).await?;
-                    Ok(size)
-                },
-            ))
-            .buffer_unordered(COPY_CONCURRENCY)
-            .collect()
-            .await;
+        // Sorting only the page keeps the peak allocation at COPY_PAGE
+        // entries. Resuming already depends on the listing arriving in key
+        // order (`list_with_offset` returns keys greater than the cursor),
+        // so the page's last key is still the high-water mark.
+        page.sort_by(|a, b| a.0.cmp(&b.0));
+        let results: Vec<Result<u64, ApiError>> = futures::stream::iter(page.iter().cloned().map(
+            |(src_path, dst_path, size)| async move {
+                copy_one(src_store, dst_store, &src_path, &dst_path, label).await?;
+                Ok(size)
+            },
+        ))
+        .buffer_unordered(COPY_CONCURRENCY)
+        .collect()
+        .await;
         let mut page_tally = CopyTally::default();
         for r in results {
             page_tally.bytes = page_tally.bytes.saturating_add(r?);
@@ -3255,10 +3257,38 @@ pub(crate) async fn copy_object_prefix_resumable(
                 .saturating_add(page_tally.objects);
             job::persist_cursor(checkpoint.state, checkpoint.job_id, checkpoint.cursor).await?;
         }
+        page.clear();
+        if exhausted {
+            break;
+        }
     }
     Ok(tally)
 }
 
+/// The source/destination pair one listed object contributes, or `None` when
+/// the object is outside `src_prefix` or excluded by the fork policy.
+fn plan_copy_entry(
+    src_prefix: &Path,
+    dst_prefix: &Path,
+    item: &flow_like_storage::object_store::ObjectMeta,
+    skip_relative: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
+) -> Option<(Path, Path, u64)> {
+    let suffix = match item.location.as_ref().strip_prefix(src_prefix.as_ref()) {
+        Some(s) if s.is_empty() || s.starts_with('/') => s.trim_start_matches('/'),
+        _ => return None,
+    };
+    if skip_relative.is_some_and(|skip| skip(suffix)) {
+        return None;
+    }
+    Some((
+        item.location.clone(),
+        join_relative(dst_prefix, suffix),
+        item.size,
+    ))
+}
+
+/// Delete every object under `prefix`, streaming the listing straight into
+/// the store's bulk delete so neither side is held in memory at once.
 pub(crate) async fn delete_object_prefix(
     store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     prefix: &Path,
@@ -3266,29 +3296,15 @@ pub(crate) async fn delete_object_prefix(
 ) -> Result<(), ApiError> {
     use futures::StreamExt;
 
-    let mut listing = store.list(Some(prefix));
-    let mut paths: Vec<Path> = Vec::new();
-    while let Some(item) = listing
-        .try_next()
+    let locations = store
+        .list(Some(prefix))
+        .map_ok(|meta| meta.location)
+        .boxed();
+    store
+        .delete_stream(locations)
+        .try_fold(0u64, |count, _| async move { Ok(count + 1) })
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
-    {
-        paths.push(item.location);
-    }
-
-    let results: Vec<Result<(), ApiError>> =
-        futures::stream::iter(paths.into_iter().map(|path| async move {
-            store
-                .delete(&path)
-                .await
-                .map_err(|e| ApiError::internal_error(anyhow!("delete {label}: {e}")))
-        }))
-        .buffer_unordered(COPY_CONCURRENCY)
-        .collect()
-        .await;
-    for result in results {
-        result?;
-    }
+        .map_err(|e| ApiError::internal_error(anyhow!("delete {label} prefix {prefix}: {e}")))?;
     Ok(())
 }
 
@@ -5382,5 +5398,129 @@ mod tests {
             "the reason names the component: {}",
             issues.reason("page")
         );
+    }
+
+    fn memory_store() -> Arc<dyn flow_like_storage::object_store::ObjectStore> {
+        Arc::new(flow_like_storage::object_store::memory::InMemory::new())
+    }
+
+    async fn seed(store: &Arc<dyn flow_like_storage::object_store::ObjectStore>, keys: &[String]) {
+        for key in keys {
+            store
+                .put(&Path::from(key.as_str()), key.as_bytes().to_vec().into())
+                .await
+                .expect("seed object");
+        }
+    }
+
+    async fn listed(store: &Arc<dyn flow_like_storage::object_store::ObjectStore>) -> Vec<String> {
+        let mut keys: Vec<String> = store
+            .list(None)
+            .map_ok(|meta| meta.location.as_ref().to_string())
+            .try_collect()
+            .await
+            .expect("list");
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn a_listed_object_maps_onto_the_destination_only_inside_its_own_prefix() {
+        let src = Path::from("apps/a");
+        let dst = Path::from("apps/b");
+        let meta = |key: &str| flow_like_storage::object_store::ObjectMeta {
+            location: Path::from(key),
+            last_modified: chrono::Utc::now(),
+            size: 7,
+            e_tag: None,
+            version: None,
+        };
+
+        let (from, to, size) =
+            plan_copy_entry(&src, &dst, &meta("apps/a/storage/x.lance"), None).expect("in prefix");
+        assert_eq!(from.as_ref(), "apps/a/storage/x.lance");
+        assert_eq!(to.as_ref(), "apps/b/storage/x.lance");
+        assert_eq!(size, 7);
+
+        // "apps/ab" shares the textual prefix but is a different app.
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/ab/storage/x"), None).is_none());
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/c/x"), None).is_none());
+
+        let skip: &(dyn Fn(&str) -> bool + Send + Sync) = &|rel: &str| rel.starts_with("db/");
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/a/db/t.lance"), Some(skip)).is_none());
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/a/upload/f"), Some(skip)).is_some());
+    }
+
+    /// The listing is consumed page by page instead of being materialized and
+    /// sorted up front, so a prefix far larger than one page must still copy
+    /// exactly once and nothing outside the prefix may follow along.
+    #[tokio::test]
+    async fn a_prefix_larger_than_one_page_is_copied_page_by_page() {
+        let src_store = memory_store();
+        let dst_store = memory_store();
+        let count = COPY_PAGE * 2 + 7;
+        let mut keys: Vec<String> = (0..count)
+            .map(|i| format!("apps/src/storage/{i:06}.bin"))
+            .collect();
+        keys.push("apps/src/db/skipped.lance".to_string());
+        keys.push("apps/srcother/storage/nope.bin".to_string());
+        seed(&src_store, &keys).await;
+
+        let skip: &(dyn Fn(&str) -> bool + Send + Sync) = &|rel: &str| rel.starts_with("db/");
+        let tally = copy_object_prefix_resumable(
+            &src_store,
+            &dst_store,
+            &Path::from("apps/src"),
+            &Path::from("apps/dst"),
+            "storage",
+            Some(skip),
+            None,
+        )
+        .await
+        .expect("copy");
+
+        assert_eq!(tally.objects, count as u64);
+        let copied = listed(&dst_store).await;
+        assert_eq!(copied.len(), count);
+        assert_eq!(copied[0], "apps/dst/storage/000000.bin");
+        assert_eq!(
+            copied.last().map(String::as_str),
+            Some(format!("apps/dst/storage/{:06}.bin", count - 1).as_str())
+        );
+    }
+
+    /// The deletion streams the listing into the store's bulk delete rather
+    /// than collecting every path first; a sibling prefix must survive.
+    #[tokio::test]
+    async fn deleting_a_prefix_streams_the_listing_and_spares_its_siblings() {
+        let store = memory_store();
+        let mut keys: Vec<String> = (0..COPY_PAGE + 3)
+            .map(|i| format!("apps/doomed/storage/{i:06}.bin"))
+            .collect();
+        keys.push("apps/keep/storage/0.bin".to_string());
+        keys.push("apps/doomedtwin/storage/0.bin".to_string());
+        seed(&store, &keys).await;
+
+        delete_object_prefix(&store, &Path::from("apps/doomed"), "test")
+            .await
+            .expect("delete");
+
+        assert_eq!(
+            listed(&store).await,
+            vec![
+                "apps/doomedtwin/storage/0.bin".to_string(),
+                "apps/keep/storage/0.bin".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_empty_prefix_is_a_no_op() {
+        let store = memory_store();
+        seed(&store, &["apps/keep/x".to_string()]).await;
+        delete_object_prefix(&store, &Path::from("apps/gone"), "test")
+            .await
+            .expect("delete");
+        assert_eq!(listed(&store).await, vec!["apps/keep/x".to_string()]);
     }
 }

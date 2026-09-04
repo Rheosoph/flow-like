@@ -11,19 +11,23 @@ export interface JoinAttemptResult {
 	error?: unknown;
 }
 
+const RETRYABLE_JOIN_STATUSES = new Set([401, 408, 429]);
+
 /**
  * 4xx responses are verdicts, not glitches — retrying them just burns ~50s of
  * backoff before showing the user a wrong "expired link" message.
+ *
+ * `409 DATABASE_CONFLICT` is the exception: a serialized-write engine answers
+ * it when several people open the same invite link at once, and the loser must
+ * retry. Reading it as a verdict tells a user with a perfectly good link that
+ * it has been used up.
  */
 export function isTerminalJoinError(error: unknown): boolean {
-	return (
-		error instanceof ApiResponseError &&
-		error.status >= 400 &&
-		error.status < 500 &&
-		error.status !== 401 &&
-		error.status !== 408 &&
-		error.status !== 429
-	);
+	if (!(error instanceof ApiResponseError)) return false;
+	if (error.status < 400 || error.status >= 500) return false;
+	if (RETRYABLE_JOIN_STATUSES.has(error.status)) return false;
+	if (error.status === 409 && error.code === "DATABASE_CONFLICT") return false;
+	return true;
 }
 
 export function joinFailureMessage(kind: JoinFailureKind): string {

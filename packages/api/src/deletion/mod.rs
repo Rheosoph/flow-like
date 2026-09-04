@@ -91,7 +91,7 @@ use utoipa::ToSchema;
 pub use drain::{CHUNK, PassBudget};
 pub use external::ExternalStep;
 pub use graph::{FkEdge, FkGraph, fk_graph};
-pub use plan::{Plan, PlanError, Predicate, Step, plan_for};
+pub use plan::{Plan, PlanError, Predicate, RootKey, Step, plan_for};
 pub use request::{AcceptedDeletion, Deleted, delete_now};
 pub use worker::{DeletionWorkerConfig, spawn_deletion_worker};
 
@@ -223,14 +223,29 @@ pub async fn run_pass(
     let span = tracing::info_span!("deletion_pass", job_id = %job.id, root = root.kind(), root_id = %job.root_id);
     let _guard = span.enter();
 
-    match drive(state, &plan, &mut pass).await {
+    let outcome = drive(state, &plan, &mut pass).await;
+    let progressed = pass.rows() > 0;
+    match outcome {
         Ok(Flow::Continue) => {
-            job::complete(state, &job.id, pass.cursor()).await?;
+            if !job::complete(state, &job.id, pass.lease(), pass.cursor()).await? {
+                return Ok(lease_lost(&job.id, pass.phase));
+            }
             tracing::info!(rows = pass.rows(), "Deletion job completed");
             Ok(PassOutcome::Completed)
         }
         Ok(Flow::Suspend) => {
-            job::release(state, &job.id, pass.phase, pass.cursor()).await?;
+            if !job::release(
+                state,
+                &job.id,
+                pass.lease(),
+                pass.phase,
+                pass.cursor(),
+                progressed,
+            )
+            .await?
+            {
+                return Ok(lease_lost(&job.id, pass.phase));
+            }
             tracing::info!(
                 phase = pass.phase,
                 rows = pass.rows(),
@@ -238,13 +253,37 @@ pub async fn run_pass(
             );
             Ok(PassOutcome::Suspended { phase: pass.phase })
         }
+        // The pass lost its lease mid-flight: the job belongs to another
+        // worker now and writing an outcome would rewind that worker's row.
+        Err(error) if pass.lease_lost() => {
+            tracing::warn!(phase = pass.phase, error = %error, "Deletion pass abandoned");
+            Ok(PassOutcome::Failed {
+                error: error.to_string(),
+            })
+        }
         Err(error) => {
             let message = error.to_string();
-            job::fail(state, &job.id, job.attempts, pass.phase, &message).await?;
-            tracing::error!(phase = pass.phase, error = %message, "Deletion pass failed");
+            // `attempts` counts consecutive failed passes, so a pass that
+            // drained rows before erroring does not spend one.
+            let attempts = if progressed { 0 } else { job.attempts };
+            if !job::fail(state, &job.id, pass.lease(), attempts, pass.phase, &message).await? {
+                return Ok(lease_lost(&job.id, pass.phase));
+            }
+            tracing::error!(
+                phase = pass.phase,
+                attempts,
+                error = %message,
+                "Deletion pass failed"
+            );
             Ok(PassOutcome::Failed { error: message })
         }
     }
+}
+
+fn lease_lost(job_id: &str, phase: usize) -> PassOutcome {
+    let error = job::lease_lost(job_id).to_string();
+    tracing::warn!(phase, error = %error, "Deletion outcome not written");
+    PassOutcome::Failed { error }
 }
 
 async fn drive(state: &AppState, plan: &Plan, pass: &mut Pass<'_>) -> Result<Flow, ApiError> {
@@ -263,10 +302,14 @@ async fn drive(state: &AppState, plan: &Plan, pass: &mut Pass<'_>) -> Result<Flo
                 job::tombstone_root(state, plan.root, &pass.root_id).await?;
                 Flow::Continue
             }
+            // An external step is not chunked at its own boundary, so the
+            // budget is tested before it starts as well as inside it.
             Step::External(external_step) => {
+                if pass.exhausted() {
+                    return Ok(Flow::Suspend);
+                }
                 pass.checkpoint().await?;
-                external::run(state, *external_step, &pass.root_id).await?;
-                Flow::Continue
+                external::run(state, *external_step, pass).await?
             }
             Step::NullOut {
                 table,

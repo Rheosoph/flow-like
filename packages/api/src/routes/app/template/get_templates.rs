@@ -1,10 +1,11 @@
 use crate::{
+    deletion::DeletionRoot,
     ensure_permission,
     entity::{meta, template},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::LanguageParams,
+    routes::{LanguageParams, app::internal::delete_app::not_pending_deletion},
     state::AppState,
 };
 use axum::{
@@ -54,6 +55,10 @@ pub async fn get_templates(
     let templates_with_meta = template::Entity::find()
         .find_with_related(meta::Entity)
         .filter(template::Column::AppId.eq(&app_id))
+        .filter(not_pending_deletion(
+            DeletionRoot::Template,
+            (template::Entity, template::Column::Id),
+        ))
         .filter(
             meta::Column::Lang
                 .eq(language)

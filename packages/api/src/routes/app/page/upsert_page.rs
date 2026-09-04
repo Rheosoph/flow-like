@@ -41,7 +41,8 @@ fn payload_revision(page: &Page) -> chrono::NaiveDateTime {
         (status = 200, description = "Page created or updated", body = Object),
         (status = 400, description = "Page payload is missing board_id, or names a board that does not belong to this app"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -148,6 +149,7 @@ pub async fn upsert_page(
 
     {
         let mut board_guard = board.lock().await;
+        page_id_guard.ensure_held()?;
         board_guard.save_page(&page, None).await?;
         board_guard.save(None).await?;
     }

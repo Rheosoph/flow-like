@@ -7,7 +7,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::LanguageParams,
+    routes::{
+        LanguageParams,
+        app::internal::delete_app::{cancel_pending_deletion, not_pending_deletion},
+    },
     state::AppState,
 };
 use axum::{
@@ -230,6 +233,10 @@ pub async fn list_courses(
     let limit = Ord::min(q.limit.unwrap_or(100), 100);
 
     let mut query = course::Entity::find()
+        .filter(not_pending_deletion(
+            DeletionRoot::Course,
+            (course::Entity, course::Column::Id),
+        ))
         .order_by_asc(course::Column::Position)
         .order_by_desc(course::Column::UpdatedAt);
 
@@ -462,23 +469,37 @@ pub async fn upsert_course(
         active.updated_at = Set(now);
         active.update(&state.db).await?
     } else {
-        let active = course::ActiveModel {
-            id: Set(course_id.clone()),
-            language: Set(body.language.clone()),
-            slug: Set(body.slug.clone()),
-            difficulty: Set(difficulty),
-            category: Set(category),
-            estimated_minutes: Set(body.estimated_minutes.unwrap_or(0)),
-            is_published: Set(body.is_published.unwrap_or(false)),
-            author_id: Set(Some(sub.clone())),
-            icon_url: Set(None),
-            banner_url: Set(None),
-            tags: Set(body.tags.clone().map(Into::into)),
-            position: Set(body.position),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
+        state
+            .transaction(|txn| {
+                let course_id = course_id.clone();
+                let body = body.clone();
+                let sub = sub.clone();
+                let difficulty = difficulty.clone();
+                let category = category.clone();
+                Box::pin(async move {
+                    cancel_pending_deletion(txn, DeletionRoot::Course, &course_id).await?;
+                    let saved = course::ActiveModel {
+                        id: Set(course_id),
+                        language: Set(body.language),
+                        slug: Set(body.slug),
+                        difficulty: Set(difficulty),
+                        category: Set(category),
+                        estimated_minutes: Set(body.estimated_minutes.unwrap_or(0)),
+                        is_published: Set(body.is_published.unwrap_or(false)),
+                        author_id: Set(Some(sub)),
+                        icon_url: Set(None),
+                        banner_url: Set(None),
+                        tags: Set(body.tags.map(Into::into)),
+                        position: Set(body.position),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?;
+                    Ok::<_, ApiError>(saved)
+                })
+            })
+            .await?
     };
 
     let existing_meta = meta::Entity::find()
@@ -598,6 +619,10 @@ pub async fn get_course_structure(
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
     let (c, metas) = course::Entity::find_by_id(&course_id)
+        .filter(not_pending_deletion(
+            DeletionRoot::Course,
+            (course::Entity, course::Column::Id),
+        ))
         .find_with_related(meta::Entity)
         .filter(
             meta::Column::Lang

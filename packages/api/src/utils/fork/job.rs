@@ -12,17 +12,15 @@
 
 use super::{
     CopyCheckpoint, ForkContext, ForkPlan, ForkPolicy, ForkReport, copy_object_prefix_resumable,
-    db_schema, delete_object_prefix, ids, materialize_meta, owner_membership_id, plan_event_rows,
-    plan_meta_rows, plan_package_rows, plan_page_rows, plan_roles, plan_template_meta_rows,
-    plan_template_rows, plan_widget_meta_rows, plan_widget_rows, policy,
+    db_schema, ids, materialize_meta, owner_membership_id, plan_event_rows, plan_meta_rows,
+    plan_package_rows, plan_page_rows, plan_roles, plan_template_meta_rows, plan_template_rows,
+    plan_widget_meta_rows, plan_widget_rows, policy,
 };
 use crate::{
-    db::{
-        DEFAULT_WRITE_CHUNK, RetryPolicy, delete_in_batches, insert_in_chunks, retry_transaction,
-    },
+    db::{DEFAULT_WRITE_CHUNK, RetryPolicy, insert_in_chunks, retry_transaction},
+    deletion::{self, Deleted, DeletionRoot},
     entity::{
-        app, app_package, event, event_alias, event_remote_auth, event_remote_registration,
-        event_setup, event_sink, fork_job, membership, meta, page, role,
+        app, app_package, event, event_sink, fork_job, membership, meta, page, role,
         sea_orm_active_enums::{ExecutionMode, Status, Visibility},
         template, widget,
     },
@@ -35,9 +33,9 @@ use flow_like_types::create_id;
 use sea_orm::{
     ActiveEnum,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, Condition, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
+    ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect,
-    sea_query::{Expr, OnConflict, Query},
+    sea_query::{Expr, OnConflict},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -422,9 +420,10 @@ pub async fn enqueue(
 }
 
 /// Run every remaining step of the job in this process and return the full
-/// in-memory report. A failure aborts the job (rows, storage, App and job
-/// row are removed) before the error is returned, so a synchronous caller
-/// never leaves a half-built destination behind.
+/// in-memory report. A failure aborts the job before the error is returned,
+/// so a synchronous caller never leaves a half-built destination behind: a
+/// destination this small is gone within [`abort`]'s inline deletion pass,
+/// and anything larger finishes on the deletion queue.
 pub async fn run_inline(
     state: &AppState,
     job: fork_job::Model,
@@ -1055,26 +1054,20 @@ async fn abort_best_effort(state: &AppState, job: &fork_job::Model) {
     }
 }
 
-async fn drain<E>(state: &AppState, condition: Condition) -> Result<(), ApiError>
-where
-    E: EntityTrait,
-    <E::PrimaryKey as sea_orm::PrimaryKeyTrait>::ValueType:
-        Into<sea_orm::Value> + sea_orm::TryGetable + Clone + Send + Sync + 'static,
-{
-    delete_in_batches::<E>(
-        &state.db,
-        state.db_dialect,
-        condition,
-        DEFAULT_WRITE_CHUNK,
-        None,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Tear the destination down: child rows first (so the App delete's
-/// cascades find nothing), then the storage prefixes on both stores and
-/// the app media, then the App and the job row.
+/// Tear the destination down through the deletion queue.
+///
+/// A destination is a real App: an `OfflineUpload` one can be edited through
+/// the normal app-edit endpoints for the whole [`FORK_JOB_TTL`], so by the
+/// time the sweeper aborts it, tables the fork itself never wrote (board
+/// sync rows, execution runs, notifications, usage tracking) can hold
+/// thousands of rows. `DeletionRoot::App` drains all of them in bounded
+/// chunks and owns the storage prefixes, the cache entries and the sink
+/// schedules as plan steps.
+///
+/// The `ForkJob` row is removed only once the deletion finished. While it
+/// lives it keeps the destination in [`live_dest_app_ids`], so the orphan
+/// cleaner leaves the half-deleted prefix alone, and it keeps the job in
+/// [`tick`]'s expired set, so the next tick runs another pass.
 pub async fn abort(state: &AppState, job: &fork_job::Model) -> Result<(), ApiError> {
     let dest = job.dest_app_id.as_str();
     let aborting = fork_job::ActiveModel {
@@ -1088,98 +1081,36 @@ pub async fn abort(state: &AppState, job: &fork_job::Model) -> Result<(), ApiErr
         tracing::debug!(job_id = %job.id, %error, "fork job row not marked aborting");
     }
 
-    let by_app = |column: sea_orm::sea_query::SimpleExpr| Condition::all().add(column);
-    drain::<event_sink::Entity>(state, by_app(event_sink::Column::AppId.eq(dest))).await?;
-    drain::<event_alias::Entity>(state, by_app(event_alias::Column::AppId.eq(dest))).await?;
-    drain::<event_setup::Entity>(state, by_app(event_setup::Column::AppId.eq(dest))).await?;
-    drain::<event_remote_registration::Entity>(
-        state,
-        by_app(event_remote_registration::Column::AppId.eq(dest)),
-    )
-    .await?;
-    drain::<event_remote_auth::Entity>(state, by_app(event_remote_auth::Column::AppId.eq(dest)))
-        .await?;
-    drain::<event::Entity>(state, by_app(event::Column::AppId.eq(dest))).await?;
-    drain::<page::Entity>(state, by_app(page::Column::AppId.eq(dest))).await?;
-    drain::<meta::Entity>(
-        state,
-        by_app(
-            meta::Column::WidgetId.in_subquery(
-                Query::select()
-                    .column(widget::Column::Id)
-                    .from(widget::Entity)
-                    .and_where(widget::Column::AppId.eq(dest))
-                    .to_owned(),
-            ),
-        ),
-    )
-    .await?;
-    drain::<widget::Entity>(state, by_app(widget::Column::AppId.eq(dest))).await?;
-    drain::<meta::Entity>(
-        state,
-        by_app(
-            meta::Column::TemplateId.in_subquery(
-                Query::select()
-                    .column(template::Column::Id)
-                    .from(template::Entity)
-                    .and_where(template::Column::AppId.eq(dest))
-                    .to_owned(),
-            ),
-        ),
-    )
-    .await?;
-    drain::<template::Entity>(state, by_app(template::Column::AppId.eq(dest))).await?;
-    drain::<app_package::Entity>(state, by_app(app_package::Column::AppId.eq(dest))).await?;
-    drain::<membership::Entity>(state, by_app(membership::Column::AppId.eq(dest))).await?;
-    drain::<meta::Entity>(state, by_app(meta::Column::AppId.eq(dest))).await?;
-
-    let dest_owned = dest.to_string();
-    state
-        .transaction(|txn| {
-            let dest = dest_owned.clone();
-            Box::pin(async move {
-                app::Entity::update_many()
-                    .col_expr(app::Column::OwnerRoleId, Expr::value(None::<String>))
-                    .col_expr(app::Column::DefaultRoleId, Expr::value(None::<String>))
-                    .filter(app::Column::Id.eq(dest))
-                    .exec(txn)
-                    .await?;
-                Ok::<_, ApiError>(())
-            })
-        })
-        .await?;
-    drain::<role::Entity>(state, by_app(role::Column::AppId.eq(dest))).await?;
-
-    delete_dest_storage(state, dest).await?;
-
-    let job_id = job.id.clone();
-    state
-        .transaction(|txn| {
-            let dest = dest_owned.clone();
-            let job_id = job_id.clone();
-            Box::pin(async move {
-                app::Entity::delete_by_id(dest).exec(txn).await?;
-                fork_job::Entity::delete_by_id(job_id).exec(txn).await?;
-                Ok::<_, ApiError>(())
-            })
-        })
-        .await
-}
-
-/// Every object a destination owns: `apps/{id}` on the meta and content
-/// stores and `media/apps/{id}` on the content store.
-pub async fn delete_dest_storage(state: &AppState, dest_app_id: &str) -> Result<(), ApiError> {
-    let credentials = state.master_credentials().await?;
-    let meta_store = credentials.to_store(true).await?.as_generic();
-    let content_store = credentials.to_store(false).await?.as_generic();
-    let app_prefix = Path::from("apps").child(dest_app_id.to_string());
-    let media_prefix = Path::from("media")
-        .child("apps")
-        .child(dest_app_id.to_string());
-    delete_object_prefix(&meta_store, &app_prefix, "destination meta").await?;
-    delete_object_prefix(&content_store, &app_prefix, "destination content").await?;
-    delete_object_prefix(&content_store, &media_prefix, "destination media").await?;
-    Ok(())
+    let requested_by = (!job.user_id.is_empty()).then_some(job.user_id.as_str());
+    match deletion::delete_now(state, DeletionRoot::App, dest, requested_by, ()).await? {
+        Deleted::Completed(()) => {
+            fork_job::Entity::delete_by_id(job.id.clone())
+                .exec(&state.db)
+                .await?;
+            Ok(())
+        }
+        Deleted::Accepted(accepted) => {
+            // A parked deletion job needs an operator; the fork sweeper would
+            // otherwise re-enqueue the same destination every tick in silence.
+            if accepted.status == deletion::job::STATUS_FAILED {
+                tracing::warn!(
+                    job_id = %job.id,
+                    dest_app_id = %dest,
+                    deletion_job_id = %accepted.job_id,
+                    last_error = accepted.last_error.as_deref().unwrap_or(""),
+                    "deletion of an aborted fork destination is failing"
+                );
+            } else {
+                tracing::info!(
+                    job_id = %job.id,
+                    dest_app_id = %dest,
+                    deletion_job_id = %accepted.job_id,
+                    "fork destination handed to the deletion queue"
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 /// What one worker tick did.
@@ -1279,6 +1210,57 @@ async fn claim(state: &AppState, job: &fork_job::Model) -> Result<bool, ApiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `abort` no longer drains the destination by hand; it hands the App to
+    /// the deletion queue. If the plan ever stops covering one of the tables
+    /// the hand-written list used to clear, the abort would leave the row
+    /// behind — or, worse, let the engine cascade it inside one transaction.
+    #[test]
+    fn the_app_deletion_plan_covers_what_abort_used_to_drain_by_hand() {
+        use crate::deletion::{ExternalStep, Plan, Step, plan_for};
+
+        let plan: Plan = plan_for(DeletionRoot::App).expect("App has a deletion plan");
+        let touched: HashSet<&str> = plan.steps.iter().filter_map(Step::table).collect();
+        for table in [
+            "EventSink",
+            "EventAlias",
+            "EventSetup",
+            "EventRemoteRegistration",
+            "EventRemoteAuth",
+            "Event",
+            "Page",
+            "Meta",
+            "Widget",
+            "Template",
+            "AppPackage",
+            "Membership",
+            "Role",
+        ] {
+            assert!(
+                touched.contains(table),
+                "the App plan must reach {table}; abort relies on it instead of its own drain"
+            );
+        }
+        for column in ["ownerRoleId", "defaultRoleId"] {
+            assert!(
+                plan.steps.iter().any(|step| matches!(
+                    step,
+                    Step::NullOut { table, column: c, .. } if table == "App" && c == column
+                )),
+                "the App plan must null \"App\".\"{column}\" before draining Role"
+            );
+        }
+        assert!(
+            plan.steps
+                .contains(&Step::External(ExternalStep::AppStoragePrefixes)),
+            "the App plan owns the storage prefixes abort used to delete itself"
+        );
+        assert_eq!(
+            plan.steps.last(),
+            Some(&Step::DeleteRoot),
+            "the App row goes last, after every child is drained"
+        );
+    }
 
     #[test]
     fn status_and_step_round_trip() {

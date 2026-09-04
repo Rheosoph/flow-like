@@ -151,7 +151,7 @@ export function parseArgs(
 				break;
 			case "--from-url": {
 				const next = argv[i + 1];
-				if (next !== undefined && next.includes("://")) {
+				if (next?.includes("://")) {
 					throw new UsageError(
 						`--from-url takes no argument: a URL in argv is visible in ps and shell history; export ${DIFF_URL_ENV} or pipe the URL on stdin`,
 					);

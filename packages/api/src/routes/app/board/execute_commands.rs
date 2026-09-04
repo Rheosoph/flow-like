@@ -232,7 +232,8 @@ fn prune_command_receipts(
     responses(
         (status = 200, description = "Commands executed. Returns the resulting commands, or `{commands, sync}` when the request carried a sync manifest", body = Object),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -301,6 +302,7 @@ pub async fn execute_commands(
         }
         let mut cached = None;
         if released_receipt || pruned_receipts {
+            mutation_guard.ensure_held()?;
             let put = board.save(None).await?;
             // Re-pin the cache to what this request just wrote. Without it the next mutation's
             // `If-None-Match` misses and pays a full board load and normalisation sweep for an
@@ -326,6 +328,7 @@ pub async fn execute_commands(
             && receipt.version == 1
         {
             if pruned_receipts || released_receipt {
+                mutation_guard.ensure_held()?;
                 board.save(None).await?;
             }
             if receipt.request_digest != *digest {
@@ -356,6 +359,7 @@ pub async fn execute_commands(
                 })?;
         }
         if pruned_receipts || released_receipt {
+            mutation_guard.ensure_held()?;
             board.save(None).await?;
         }
         return Err(ApiError::conflict(
@@ -426,6 +430,7 @@ pub async fn execute_commands(
             })?;
     }
 
+    mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board)
         .instrument(tracing::debug_span!("execute_commands.save"))
         .await?;

@@ -107,7 +107,7 @@ pub async fn remove_user(
 /// before the row itself goes: packages per the leave policy, the API keys
 /// the member created (with their usage rows detached first), and the
 /// invitations they sent.
-async fn detach_membership_children(
+pub(crate) async fn detach_membership_children(
     state: &AppState,
     membership_id: &str,
 ) -> Result<(), sea_orm::DbErr> {

@@ -3,19 +3,23 @@
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
-use flow_like_types::create_id;
+use flow_like_types::{anyhow, create_id};
 use sea_orm::sea_query::{Expr, ExprTrait, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ActiveValue, ColumnTrait, Condition, DatabaseTransaction, EntityTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
 use super::DeletionRoot;
 use super::plan::plan_for;
 use crate::db::{RetryPolicy, retry_transaction};
 use crate::entity::deletion_job::{ActiveModel, Column, Entity, Model};
-use crate::entity::sea_orm_active_enums::{Status, Visibility};
-use crate::entity::{app, deletion_job};
+use crate::entity::sea_orm_active_enums::{
+    Status, UserStatus, Visibility, WasmPackageStatus, WasmPackageVisibility,
+};
+use crate::entity::{
+    app, app_group, course, deletion_job, event, learning_path, user, wasm_package,
+};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -41,27 +45,110 @@ fn lease_from(now: NaiveDateTime) -> NaiveDateTime {
     now + chrono::Duration::from_std(LEASE).unwrap_or(chrono::Duration::minutes(5))
 }
 
-/// Hide the root from readers while its rows drain.
+/// Hide the root from readers while its rows drain, so a `202` never leaves a
+/// live-looking row whose children and storage are disappearing underneath it.
 ///
-/// An app flips to `INACTIVE`/`OFFLINE`, the marker listings already skip
-/// for in-flight forks. Other roots are hidden by their own state or are
-/// small enough to disappear within the same pass.
+/// Every root that carries a state column of its own is flipped to the value
+/// its listings and read paths already treat as "not available". The roots
+/// without such a column — `Template`, `CourseModule`, `Lesson`, `Challenge`,
+/// `Membership`, `TechnicalUser`, `Bit`, `ExecutionRun` — can only be hidden by
+/// their listings excluding rows with an unfinished `DeletionJob`.
 async fn tombstone(
     txn: &DatabaseTransaction,
     root: DeletionRoot,
     root_id: &str,
 ) -> Result<(), sea_orm::DbErr> {
-    if root == DeletionRoot::App {
-        app::Entity::update_many()
-            .set(app::ActiveModel {
-                status: Set(Status::Inactive),
-                visibility: Set(Visibility::Offline),
-                updated_at: Set(now()),
-                ..Default::default()
-            })
-            .filter(app::Column::Id.eq(root_id))
-            .exec(txn)
-            .await?;
+    let now = now();
+    match root {
+        DeletionRoot::App => {
+            app::Entity::update_many()
+                .set(app::ActiveModel {
+                    status: Set(Status::Inactive),
+                    visibility: Set(Visibility::Offline),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(app::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::AppGroup => {
+            app_group::Entity::update_many()
+                .set(app_group::ActiveModel {
+                    status: Set(Status::Inactive),
+                    visibility: Set(Visibility::Offline),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(app_group::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::WasmPackage => {
+            wasm_package::Entity::update_many()
+                .set(wasm_package::ActiveModel {
+                    status: Set(WasmPackageStatus::Disabled),
+                    visibility: Set(WasmPackageVisibility::Private),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(wasm_package::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::Course => {
+            course::Entity::update_many()
+                .set(course::ActiveModel {
+                    is_published: Set(false),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(course::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::LearningPath => {
+            learning_path::Entity::update_many()
+                .set(learning_path::ActiveModel {
+                    is_published: Set(false),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(learning_path::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::Event => {
+            event::Entity::update_many()
+                .set(event::ActiveModel {
+                    active: Set(false),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(event::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::User => {
+            user::Entity::update_many()
+                .set(user::ActiveModel {
+                    status: Set(UserStatus::Inactive),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .filter(user::Column::Id.eq(root_id))
+                .exec(txn)
+                .await?;
+        }
+        DeletionRoot::Template
+        | DeletionRoot::CourseModule
+        | DeletionRoot::Lesson
+        | DeletionRoot::Challenge
+        | DeletionRoot::Role
+        | DeletionRoot::TechnicalUser
+        | DeletionRoot::Membership
+        | DeletionRoot::Bit
+        | DeletionRoot::ExecutionRun => {}
     }
     Ok(())
 }
@@ -192,13 +279,18 @@ pub async fn due_jobs(state: &AppState, limit: u64) -> Result<Vec<Model>, ApiErr
 }
 
 /// Take a 5-minute lease on `job_id`; `None` when another worker holds it.
+///
+/// The body is a compare-and-set on the job's own lease, so re-running it
+/// after an ambiguous commit would read back the claim it just made and report
+/// "someone else holds it" while having burned an attempt: this is the one
+/// place that must not retry an ambiguous commit.
 pub async fn claim(state: &AppState, job_id: &str) -> Result<Option<Model>, ApiError> {
     let job_id = job_id.to_owned();
     retry_transaction::<_, Option<Model>, ApiError>(
         &state.db,
         state.db_dialect,
         None,
-        &RetryPolicy::idempotent(),
+        &RetryPolicy::default(),
         move |txn| {
             let job_id = job_id.clone();
             Box::pin(async move {
@@ -239,42 +331,97 @@ async fn update(state: &AppState, model: ActiveModel) -> Result<(), ApiError> {
         .await
 }
 
-/// Record progress and extend the lease.
+/// Write `model` onto the job only while it still carries `lease`.
+///
+/// A lapsed lease can be re-claimed by another worker at any moment, so an
+/// unfenced write from the old pass would overwrite the new worker's phase,
+/// status and attempts. `false` means the job now belongs to someone else.
+async fn write_fenced(
+    state: &AppState,
+    job_id: &str,
+    lease: Option<NaiveDateTime>,
+    model: ActiveModel,
+) -> Result<bool, ApiError> {
+    let job_id = job_id.to_owned();
+    state
+        .transaction(move |txn| {
+            let job_id = job_id.clone();
+            let model = model.clone();
+            Box::pin(async move {
+                let mut query = Entity::update_many()
+                    .set(model)
+                    .filter(Column::Id.eq(job_id));
+                if let Some(lease) = lease {
+                    query = query.filter(Column::LeaseUntil.eq(lease));
+                }
+                Ok::<_, ApiError>(query.exec(txn).await?.rows_affected > 0)
+            })
+        })
+        .await
+}
+
+/// The error a pass aborts with once a fenced write matched no row.
+pub fn lease_lost(job_id: &str) -> ApiError {
+    ApiError::internal_error(anyhow!(
+        "deletion job {job_id} lost its lease to another worker"
+    ))
+}
+
+/// Record progress and extend the lease, returning the new `leaseUntil` the
+/// next write must be fenced on, or `None` when the lease was lost.
+///
+/// `progressed` resets `attempts`: a pass that moved rows is not a failed
+/// attempt, so a long root cannot exhaust [`MAX_ATTEMPTS`] just by needing
+/// more passes than that.
 pub async fn checkpoint(
     state: &AppState,
     job_id: &str,
+    lease: Option<NaiveDateTime>,
     phase: usize,
     cursor: serde_json::Value,
-) -> Result<(), ApiError> {
+    progressed: bool,
+) -> Result<Option<NaiveDateTime>, ApiError> {
     let now = now();
-    update(
-        state,
-        ActiveModel {
-            id: Set(job_id.to_owned()),
-            phase: Set(i32::try_from(phase).unwrap_or(i32::MAX)),
-            cursor: Set(Some(cursor)),
-            lease_until: Set(Some(lease_from(now))),
-            updated_at: Set(now),
-            ..Default::default()
+    let renewed = lease_from(now);
+    let model = ActiveModel {
+        phase: Set(i32::try_from(phase).unwrap_or(i32::MAX)),
+        cursor: Set(Some(cursor)),
+        lease_until: Set(Some(renewed)),
+        attempts: if progressed {
+            Set(0)
+        } else {
+            ActiveValue::NotSet
         },
-    )
-    .await
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    Ok(write_fenced(state, job_id, lease, model)
+        .await?
+        .then_some(renewed))
 }
 
 /// The pass ran out of budget; make the job claimable again right away.
 pub async fn release(
     state: &AppState,
     job_id: &str,
+    lease: Option<NaiveDateTime>,
     phase: usize,
     cursor: serde_json::Value,
-) -> Result<(), ApiError> {
-    update(
+    progressed: bool,
+) -> Result<bool, ApiError> {
+    write_fenced(
         state,
+        job_id,
+        lease,
         ActiveModel {
-            id: Set(job_id.to_owned()),
             phase: Set(i32::try_from(phase).unwrap_or(i32::MAX)),
             cursor: Set(Some(cursor)),
             lease_until: Set(None),
+            attempts: if progressed {
+            Set(0)
+        } else {
+            ActiveValue::NotSet
+        },
             updated_at: Set(now()),
             ..Default::default()
         },
@@ -285,12 +432,14 @@ pub async fn release(
 pub async fn complete(
     state: &AppState,
     job_id: &str,
+    lease: Option<NaiveDateTime>,
     cursor: serde_json::Value,
-) -> Result<(), ApiError> {
-    update(
+) -> Result<bool, ApiError> {
+    write_fenced(
         state,
+        job_id,
+        lease,
         ActiveModel {
-            id: Set(job_id.to_owned()),
             status: Set(STATUS_DONE.to_owned()),
             cursor: Set(Some(cursor)),
             lease_until: Set(None),
@@ -302,27 +451,28 @@ pub async fn complete(
     .await
 }
 
-/// Record a failed pass. The job goes back to the queue until it has used
-/// [`MAX_ATTEMPTS`] passes, then stays `FAILED` for an operator.
+/// Record a failed pass. `attempts` counts *consecutive* failed passes, so the
+/// caller passes 0 for a pass that made progress; the job goes back to the
+/// queue until it has used [`MAX_ATTEMPTS`] of them, then stays `FAILED` for
+/// an operator.
 pub async fn fail(
     state: &AppState,
     job_id: &str,
+    lease: Option<NaiveDateTime>,
     attempts: i32,
     phase: usize,
     error: &str,
-) -> Result<(), ApiError> {
-    let status = if attempts >= MAX_ATTEMPTS {
-        STATUS_FAILED
-    } else {
-        STATUS_QUEUED
-    };
+) -> Result<bool, ApiError> {
+    let status = status_after_failure(attempts);
     let message: String = error.chars().take(MAX_ERROR_CHARS).collect();
-    update(
+    write_fenced(
         state,
+        job_id,
+        lease,
         ActiveModel {
-            id: Set(job_id.to_owned()),
             status: Set(status.to_owned()),
             phase: Set(i32::try_from(phase).unwrap_or(i32::MAX)),
+            attempts: Set(attempts),
             lease_until: Set(None),
             last_error: Set(Some(message)),
             updated_at: Set(now()),
@@ -330,6 +480,15 @@ pub async fn fail(
         },
     )
     .await
+}
+
+/// The status a pass's outcome writes for `attempts` consecutive failures.
+pub fn status_after_failure(attempts: i32) -> &'static str {
+    if attempts >= MAX_ATTEMPTS {
+        STATUS_FAILED
+    } else {
+        STATUS_QUEUED
+    }
 }
 
 /// Operator retry: back to the queue from phase 0 with a fresh attempt budget.

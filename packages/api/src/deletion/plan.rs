@@ -16,6 +16,14 @@ use super::overrides::{RootOverrides, overrides_for};
 
 const MAX_DEPTH: usize = 8;
 
+/// The row a plan starts from: the root table and its single-column primary
+/// key, the only value a job carries (`DeletionJob.rootId`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RootKey {
+    pub table: String,
+    pub column: String,
+}
+
 /// Which rows of a table belong to the root being deleted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Predicate {
@@ -33,20 +41,39 @@ pub enum Predicate {
 impl Predicate {
     /// The predicate selecting the rows reached from the root along `path`
     /// (root → `path[0].child` → … → `path.last().child`).
-    pub fn from_path(path: &[FkEdge]) -> Self {
+    pub fn from_path(root: &RootKey, path: &[FkEdge]) -> Self {
         let (last, prefix) = path
             .split_last()
             .expect("a cascade path has at least one edge");
         if prefix.is_empty() {
-            Self::Root {
-                column: last.column.clone(),
-            }
+            Self::from_root(root, last)
         } else {
             Self::Via {
                 column: last.column.clone(),
                 parent: last.parent.clone(),
                 parent_column: last.parent_column.clone(),
-                inner: Box::new(Self::from_path(prefix)),
+                inner: Box::new(Self::from_path(root, prefix)),
+            }
+        }
+    }
+
+    /// The first hop out of the root. `$root` is the root's primary key, so an
+    /// edge onto any other root column (`BitTreeCache.dependencyTreeHash ->
+    /// Bit.dependencyTreeHash`) must read that column back out of the root row
+    /// instead of comparing the child column to the root id.
+    fn from_root(root: &RootKey, edge: &FkEdge) -> Self {
+        if edge.parent_column == root.column {
+            Self::Root {
+                column: edge.column.clone(),
+            }
+        } else {
+            Self::Via {
+                column: edge.column.clone(),
+                parent: root.table.clone(),
+                parent_column: edge.parent_column.clone(),
+                inner: Box::new(Self::Root {
+                    column: root.column.clone(),
+                }),
             }
         }
     }
@@ -65,6 +92,15 @@ impl Predicate {
         match self {
             Self::Root { .. } => 1,
             Self::Via { inner, .. } => 1 + inner.depth(),
+        }
+    }
+
+    /// The table and column the innermost `= $root` comparison reads, given
+    /// the table this predicate filters.
+    pub fn root_hop<'p>(&'p self, table: &'p str) -> (&'p str, &'p str) {
+        match self {
+            Self::Root { column } => (table, column),
+            Self::Via { parent, inner, .. } => inner.root_hop(parent),
         }
     }
 }
@@ -195,6 +231,18 @@ pub enum PlanError {
         table: String,
         column: String,
     },
+    /// The root table has no single-column primary key, so `DeletionJob.rootId`
+    /// cannot address one root row.
+    CompositeRootKey {
+        table: String,
+    },
+    /// A predicate's innermost comparison is not the root's primary key and no
+    /// foreign key connects it to one, so it would select the wrong rows.
+    PredicateNotRooted {
+        table: String,
+        column: String,
+        root: String,
+    },
     Cycle(Vec<String>),
 }
 
@@ -219,6 +267,18 @@ impl fmt::Display for PlanError {
                     "primary key {table}.{column} has a type the deleter cannot page"
                 )
             }
+            Self::CompositeRootKey { table } => write!(
+                f,
+                "root table {table} needs a single-column primary key to be deleted by id"
+            ),
+            Self::PredicateNotRooted {
+                table,
+                column,
+                root,
+            } => write!(
+                f,
+                "{table}.{column} is compared to the {root} id but is not a foreign key onto the {root} primary key"
+            ),
             Self::Cycle(tables) => write!(f, "cascade constraints form a cycle through {tables:?}"),
         }
     }
@@ -243,9 +303,24 @@ fn build_plan(
     overrides: &RootOverrides,
 ) -> Result<Plan, PlanError> {
     let root_table = root.table_name();
-    graph
+    let root_meta = graph
         .table(root_table)
         .ok_or_else(|| PlanError::UnknownTable(root_table.to_owned()))?;
+    let [root_pk] = root_meta.primary_key.as_slice() else {
+        return Err(PlanError::CompositeRootKey {
+            table: root_table.to_owned(),
+        });
+    };
+    if root_pk.kind.is_none() {
+        return Err(PlanError::UnsupportedPrimaryKey {
+            table: root_table.to_owned(),
+            column: root_pk.name.clone(),
+        });
+    }
+    let root_key = RootKey {
+        table: root_table.to_owned(),
+        column: root_pk.name.clone(),
+    };
 
     let cascades = |edge: &FkEdge| {
         edge.action == FkAction::Cascade
@@ -343,7 +418,7 @@ fn build_plan(
             .map(|table_paths| {
                 table_paths
                     .iter()
-                    .map(|path| Predicate::from_path(path))
+                    .map(|path| Predicate::from_path(&root_key, path))
                     .collect()
             })
             .unwrap_or_default()
@@ -355,9 +430,7 @@ fn build_plan(
             .into_iter()
             .map(|edge| {
                 let predicates = if parent == root_table {
-                    vec![Predicate::Root {
-                        column: edge.column.clone(),
-                    }]
+                    vec![Predicate::from_root(&root_key, &edge)]
                 } else {
                     predicates_for(parent)
                         .into_iter()
@@ -407,7 +480,42 @@ fn build_plan(
     steps.extend(overrides.after_drain.iter().copied().map(Step::External));
     steps.push(Step::DeleteRoot);
 
+    ensure_rooted(graph, &root_key, &steps)?;
+
     Ok(Plan { root, steps })
+}
+
+/// Every predicate must bottom out at the root's primary key, either through
+/// a foreign key onto it or by reading another root column out of the root
+/// row. A bare `column = $root` on an edge that references a non-key column
+/// compares unrelated values and silently matches nothing.
+fn ensure_rooted(graph: &FkGraph, root: &RootKey, steps: &[Step]) -> Result<(), PlanError> {
+    for step in steps {
+        let (Step::Drain { table, predicates } | Step::NullOut {
+            table, predicates, ..
+        }) = step
+        else {
+            continue;
+        };
+        for predicate in predicates {
+            let (owner, column) = predicate.root_hop(table);
+            let rooted = (owner == root.table && column == root.column)
+                || graph.edges().iter().any(|edge| {
+                    edge.child == owner
+                        && edge.column == column
+                        && edge.parent == root.table
+                        && edge.parent_column == root.column
+                });
+            if !rooted {
+                return Err(PlanError::PredicateNotRooted {
+                    table: owner.to_owned(),
+                    column: column.to_owned(),
+                    root: root.table.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Kahn's algorithm over `before` (child → parents that must come later),
@@ -515,6 +623,116 @@ mod tests {
                 assert_eq!(plan.steps.last(), Some(&Step::DeleteRoot));
             }
         }
+    }
+
+    /// The root hop is the one place `$root` is compared to a column, so it
+    /// has to name the root's primary key — directly on a foreign key onto it,
+    /// or through a subquery over the root row for every other column.
+    #[test]
+    fn every_root_hop_reaches_the_root_primary_key() {
+        for root in DeletionRoot::ALL {
+            let Ok(plan) = plan_for(root) else { continue };
+            let root_table = root.table_name();
+            let root_pk = fk_graph().table(root_table).expect(root_table).primary_key[0]
+                .name
+                .clone();
+            for step in &plan.steps {
+                let (Step::Drain { table, predicates } | Step::NullOut {
+                    table, predicates, ..
+                }) = step
+                else {
+                    continue;
+                };
+                for predicate in predicates {
+                    let (owner, column) = predicate.root_hop(table);
+                    if owner == root_table && column == root_pk {
+                        continue;
+                    }
+                    let edge = fk_graph()
+                        .edges()
+                        .iter()
+                        .find(|edge| edge.child == owner && edge.column == column)
+                        .unwrap_or_else(|| panic!("{root:?}: {owner}.{column} is not a foreign key"));
+                    assert_eq!(edge.parent, root_table, "{root:?}: {}", edge.describe());
+                    assert_eq!(edge.parent_column, root_pk, "{root:?}: {}", edge.describe());
+                }
+            }
+        }
+    }
+
+    /// `BitTreeCache.dependencyTreeHash` references `Bit.dependencyTreeHash`,
+    /// not `Bit.id`, so the hash has to be read out of the root row.
+    #[test]
+    fn bit_plan_reads_the_tree_hash_out_of_the_root_row() {
+        let plan = plan_for(DeletionRoot::Bit).unwrap();
+        let through_root = Predicate::Via {
+            column: "dependencyTreeHash".into(),
+            parent: "Bit".into(),
+            parent_column: "dependencyTreeHash".into(),
+            inner: Box::new(Predicate::Root {
+                column: "id".into(),
+            }),
+        };
+        let Step::Drain { predicates, .. } = &plan.steps[drain_index(&plan, "BitTreeCache")] else {
+            unreachable!()
+        };
+        assert_eq!(predicates, &[through_root.clone()], "{}", render(&plan));
+        assert_eq!(
+            through_root.to_string(),
+            r#""dependencyTreeHash" IN (SELECT "dependencyTreeHash" FROM "Bit" WHERE "id" = $root)"#
+        );
+
+        let Step::Drain { predicates, .. } = &plan.steps[drain_index(&plan, "BitCache")] else {
+            unreachable!()
+        };
+        assert!(
+            predicates.contains(&Predicate::Root {
+                column: "bitId".into()
+            }),
+            "{}",
+            render(&plan)
+        );
+        assert!(
+            predicates.contains(&Predicate::Via {
+                column: "dependencyTreeHash".into(),
+                parent: "BitTreeCache".into(),
+                parent_column: "dependencyTreeHash".into(),
+                inner: Box::new(through_root),
+            }),
+            "{}",
+            render(&plan)
+        );
+        assert!(drain_index(&plan, "BitCache") < drain_index(&plan, "BitTreeCache"));
+    }
+
+    /// The guard that keeps H1 from recurring: a bare `= $root` on a column
+    /// that is not a foreign key onto the root primary key is rejected.
+    #[test]
+    fn a_root_hop_off_the_primary_key_is_a_plan_error() {
+        let root = RootKey {
+            table: "Bit".into(),
+            column: "id".into(),
+        };
+        let steps = vec![Step::Drain {
+            table: "BitTreeCache".into(),
+            predicates: vec![Predicate::Root {
+                column: "dependencyTreeHash".into(),
+            }],
+        }];
+        assert_eq!(
+            ensure_rooted(fk_graph(), &root, &steps),
+            Err(PlanError::PredicateNotRooted {
+                table: "BitTreeCache".into(),
+                column: "dependencyTreeHash".into(),
+                root: "Bit".into(),
+            })
+        );
+        let app_root = RootKey {
+            table: "App".into(),
+            column: "id".into(),
+        };
+        assert!(ensure_rooted(fk_graph(), &app_root, &app_plan().steps).is_ok());
+        assert!(ensure_rooted(fk_graph(), &root, &plan_for(DeletionRoot::Bit).unwrap().steps).is_ok());
     }
 
     #[test]

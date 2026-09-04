@@ -13,13 +13,17 @@ use crate::state::State;
 use flow_like_types::tokio::{self, sync::OwnedMutexGuard, task::JoinHandle};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const LEASE_TTL: Duration = Duration::from_secs(30);
 pub const LEASE_HEARTBEAT: Duration = Duration::from_secs(10);
 pub const LEASE_WAIT_BUDGET: Duration = Duration::from_secs(15);
-const LEASE_RETRY_MIN_MS: u64 = 50;
-const LEASE_RETRY_MAX_MS: u64 = 200;
+const LEASE_RETRY_BASE_MS: u64 = 50;
+const LEASE_RETRY_MAX_MS: u64 = 1_600;
+/// Consecutive failed heartbeat ticks after which the lease is treated as lost. Two ticks span
+/// [`LEASE_HEARTBEAT`] * 2, so a third failure could only be observed past [`LEASE_TTL`].
+const LEASE_MAX_HEARTBEAT_ERRORS: u32 = 2;
 
 pub(crate) const ENSURE_LOCK_ROW_SQL: &str =
     r#"INSERT INTO "MutationLock" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING"#;
@@ -74,23 +78,44 @@ pub(crate) fn new_owner_id() -> String {
     format!("{}:{}", std::process::id(), uuid::Uuid::new_v4())
 }
 
-fn retry_delay() -> Duration {
-    Duration::from_millis(rand::random_range(LEASE_RETRY_MIN_MS..=LEASE_RETRY_MAX_MS))
+/// Full-jitter exponential backoff. A flat 50-200 ms retry lets a handful of waiters spend the
+/// whole connection pool on failing claims, which starves the *holder's* heartbeat and expires
+/// the very lease they are waiting for.
+fn retry_delay(attempt: u32) -> Duration {
+    let ceiling = (LEASE_RETRY_BASE_MS << attempt.min(6)).min(LEASE_RETRY_MAX_MS);
+    Duration::from_millis(rand::random_range(ceiling.div_ceil(2)..=ceiling))
 }
 
 fn lease_busy(lock_id: i64) -> ApiError {
-    ApiError::conflict(format!(
-        "BOARD_LOCKED: another writer holds mutation lock {lock_id}; retry shortly"
-    ))
+    ApiError::locked(
+        "BOARD_LOCKED",
+        format!("Another writer holds mutation lock {lock_id}; retry shortly."),
+    )
 }
 
-async fn try_claim(state: &State, lock_id: i64, owner: &str) -> Result<bool, ApiError> {
+fn lease_lost(lock_id: i64) -> ApiError {
+    ApiError::locked(
+        "BOARD_LOCKED",
+        format!(
+            "The mutation lease for lock {lock_id} expired before this write; nothing was written. Retry shortly."
+        ),
+    )
+}
+
+async fn try_claim(
+    state: &State,
+    lock_id: i64,
+    owner: &str,
+    ensure_row: bool,
+) -> Result<bool, ApiError> {
     let owner = owner.to_owned();
     state
         .transaction(move |txn| {
             let owner = owner.clone();
             Box::pin(async move {
-                ensure_lock_row(txn, lock_id).await?;
+                if ensure_row {
+                    ensure_lock_row(txn, lock_id).await?;
+                }
                 let result = txn
                     .execute_raw(statement(
                         txn,
@@ -106,8 +131,11 @@ async fn try_claim(state: &State, lock_id: i64, owner: &str) -> Result<bool, Api
 
 async fn claim_with_wait(state: &State, lock_id: i64, owner: &str) -> Result<(), ApiError> {
     let deadline = Instant::now() + LEASE_WAIT_BUDGET;
+    let mut attempt = 0u32;
     loop {
-        match try_claim(state, lock_id, owner).await {
+        // The row only has to be inserted once: after the first attempt it either exists or the
+        // insert lost a commit race to another waiter that created it.
+        match try_claim(state, lock_id, owner, attempt == 0).await {
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(err) if err.db_conflict().is_some() => {
@@ -118,7 +146,8 @@ async fn claim_with_wait(state: &State, lock_id: i64, owner: &str) -> Result<(),
         if Instant::now() >= deadline {
             return Err(lease_busy(lock_id));
         }
-        tokio::time::sleep(retry_delay()).await;
+        tokio::time::sleep(retry_delay(attempt)).await;
+        attempt = attempt.saturating_add(1);
     }
 }
 
@@ -152,18 +181,36 @@ struct LeaseShared {
     db: DatabaseConnection,
     owner: String,
     lock_ids: parking_lot::Mutex<Vec<i64>>,
+    /// Cleared by the heartbeat the moment it can no longer prove the rows are ours. Writers test
+    /// it right before a canonical write, so a lapsed lease fails the request instead of letting
+    /// two replicas overwrite each other's full-object PUT.
+    held: AtomicBool,
 }
 
 impl LeaseShared {
     fn take_lock_ids(&self) -> Vec<i64> {
         std::mem::take(&mut *self.lock_ids.lock())
     }
+
+    fn is_held(&self) -> bool {
+        self.held.load(Ordering::Acquire)
+    }
+
+    fn mark_lost(&self) {
+        self.held.store(false, Ordering::Release);
+    }
+
+    fn lost_lock_id(&self) -> i64 {
+        self.lock_ids.lock().first().copied().unwrap_or_default()
+    }
 }
 
 async fn heartbeat(shared: Arc<LeaseShared>) {
+    let mut consecutive_errors = 0u32;
     loop {
         tokio::time::sleep(LEASE_HEARTBEAT).await;
         let lock_ids = shared.lock_ids.lock().clone();
+        let mut errored = false;
         for lock_id in lock_ids {
             let result = shared
                 .db
@@ -175,18 +222,39 @@ async fn heartbeat(shared: Arc<LeaseShared>) {
                 .await;
             match result {
                 Ok(result) if result.rows_affected() == 1 => {}
-                Ok(_) => tracing::warn!(
-                    lock_id,
-                    owner = %shared.owner,
-                    "mutation lease expired while still held; another writer may have taken it"
-                ),
-                Err(err) => tracing::debug!(
-                    lock_id,
-                    owner = %shared.owner,
-                    %err,
-                    "mutation lease heartbeat failed; retrying on the next tick"
-                ),
+                Ok(_) => {
+                    tracing::warn!(
+                        lock_id,
+                        owner = %shared.owner,
+                        "mutation lease expired while still held; another writer may have taken it"
+                    );
+                    shared.mark_lost();
+                    return;
+                }
+                Err(err) => {
+                    errored = true;
+                    tracing::debug!(
+                        lock_id,
+                        owner = %shared.owner,
+                        %err,
+                        "mutation lease heartbeat failed; retrying on the next tick"
+                    );
+                }
             }
+        }
+        if !errored {
+            consecutive_errors = 0;
+            continue;
+        }
+        consecutive_errors += 1;
+        if consecutive_errors >= LEASE_MAX_HEARTBEAT_ERRORS {
+            tracing::warn!(
+                owner = %shared.owner,
+                consecutive_errors,
+                "mutation lease heartbeat failed repeatedly; treating the lease as lost"
+            );
+            shared.mark_lost();
+            return;
         }
     }
 }
@@ -218,6 +286,7 @@ impl MutationLease {
             db: state.db.clone(),
             owner,
             lock_ids: parking_lot::Mutex::new(vec![lock_id]),
+            held: AtomicBool::new(true),
         });
         let heartbeat = tokio::spawn(heartbeat(shared.clone()));
         Ok(Self {
@@ -244,10 +313,29 @@ impl MutationLease {
         &self.shared.owner
     }
 
+    /// `Err` once the heartbeat has proven the rows are no longer ours. Call immediately before
+    /// each canonical write; the window between this check and the write is bounded by the
+    /// remaining [`LEASE_TTL`], which is what the lease can guarantee at all.
+    pub(crate) fn ensure_held(&self) -> Result<(), ApiError> {
+        if self.shared.is_held() {
+            return Ok(());
+        }
+        Err(lease_lost(self.shared.lost_lock_id()))
+    }
+
     pub(crate) async fn release(mut self) {
         self.stop_heartbeat();
         let lock_ids = self.shared.take_lock_ids();
         release_rows(&self.shared.db, &self.shared.owner, &lock_ids).await;
+    }
+
+    #[cfg(test)]
+    fn for_test(shared: Arc<LeaseShared>) -> Self {
+        Self {
+            shared,
+            locals: Vec::new(),
+            heartbeat: None,
+        }
     }
 
     fn stop_heartbeat(&mut self) {
@@ -332,9 +420,76 @@ mod tests {
 
     #[test]
     fn retry_delay_is_jittered_within_bounds() {
-        for _ in 0..64 {
-            let delay = retry_delay().as_millis() as u64;
-            assert!((LEASE_RETRY_MIN_MS..=LEASE_RETRY_MAX_MS).contains(&delay));
+        for attempt in 0..16u32 {
+            for _ in 0..64 {
+                let delay = retry_delay(attempt).as_millis() as u64;
+                assert!(delay >= LEASE_RETRY_BASE_MS / 2, "{attempt}: {delay}");
+                assert!(delay <= LEASE_RETRY_MAX_MS, "{attempt}: {delay}");
+            }
         }
+    }
+
+    /// H6: a flat retry interval lets waiters spend the whole connection pool on failing claims
+    /// and starve the holder's heartbeat, expiring the lease they are queueing for.
+    #[test]
+    fn retry_delay_backs_off_exponentially_and_caps() {
+        let ceiling = |attempt: u32| (0..256).map(|_| retry_delay(attempt).as_millis() as u64).max().unwrap();
+        let mut previous = 0;
+        for attempt in 0..5u32 {
+            let observed = ceiling(attempt);
+            assert!(observed > previous, "attempt {attempt} did not back off: {observed} <= {previous}");
+            previous = observed;
+        }
+        assert_eq!(ceiling(6), LEASE_RETRY_MAX_MS);
+        assert_eq!(ceiling(30), LEASE_RETRY_MAX_MS);
+    }
+
+    /// Waiting out the whole budget must stay well under the number of transactions the old flat
+    /// 50-200 ms loop issued against a 10-connection pool.
+    #[test]
+    fn claim_backoff_bounds_transactions_per_wait_budget() {
+        let mut elapsed = Duration::ZERO;
+        let mut attempts = 0u32;
+        while elapsed < LEASE_WAIT_BUDGET {
+            elapsed += Duration::from_millis(LEASE_RETRY_BASE_MS << attempts.min(6));
+            attempts += 1;
+        }
+        assert!(attempts <= 16, "{attempts} claim transactions per waiter");
+    }
+
+    #[test]
+    fn a_lost_lease_is_reported_as_locked_not_conflict() {
+        for error in [lease_busy(7), lease_lost(7)] {
+            assert_eq!(error.status(), axum::http::StatusCode::LOCKED);
+            assert_eq!(error.public_code(), "BOARD_LOCKED");
+        }
+    }
+
+    fn shared_for_test() -> Arc<LeaseShared> {
+        Arc::new(LeaseShared {
+            db: DatabaseConnection::Disconnected,
+            owner: new_owner_id(),
+            lock_ids: parking_lot::Mutex::new(vec![42]),
+            held: AtomicBool::new(true),
+        })
+    }
+
+    /// H6: heartbeat used to only `warn!` when the row was no longer ours, so the writer went on
+    /// to a full-object PUT that a second replica was already making.
+    #[test]
+    fn ensure_held_fails_once_the_heartbeat_marked_the_lease_lost() {
+        let shared = shared_for_test();
+        let lease = MutationLease::for_test(shared.clone());
+        assert!(lease.ensure_held().is_ok());
+        shared.mark_lost();
+        let error = lease.ensure_held().expect_err("a lost lease must fail the write");
+        assert_eq!(error.status(), axum::http::StatusCode::LOCKED);
+        assert_eq!(error.public_code(), "BOARD_LOCKED");
+        assert!(error.public_message().unwrap_or_default().contains("42"));
+    }
+
+    #[test]
+    fn heartbeat_error_budget_stays_inside_the_ttl() {
+        assert!(LEASE_HEARTBEAT * LEASE_MAX_HEARTBEAT_ERRORS < LEASE_TTL);
     }
 }

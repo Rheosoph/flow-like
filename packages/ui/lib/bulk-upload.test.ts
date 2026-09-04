@@ -406,8 +406,8 @@ describe("assertBulkUploadSucceeded", () => {
 });
 
 describe("isRetryableUploadError", () => {
-	test("retries transport faults and server backpressure", () => {
-		for (const status of [0, 403, 408, 429, 500, 502, 503]) {
+	test("retries transport faults, server backpressure and write conflicts", () => {
+		for (const status of [0, 403, 408, 409, 429, 500, 502, 503]) {
 			expect(isRetryableUploadError(new BulkUploadHttpError(status, "x"))).toBe(
 				true,
 			);
@@ -415,7 +415,7 @@ describe("isRetryableUploadError", () => {
 	});
 
 	test("does not retry a refusal", () => {
-		for (const status of [400, 401, 404, 409, 413]) {
+		for (const status of [400, 401, 404, 413]) {
 			expect(isRetryableUploadError(new BulkUploadHttpError(status, "x"))).toBe(
 				false,
 			);

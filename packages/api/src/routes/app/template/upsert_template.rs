@@ -1,9 +1,12 @@
 use crate::{
-    audit_branch, ensure_permission,
+    audit_branch,
+    deletion::DeletionRoot,
+    ensure_permission,
     entity::{meta, template},
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, AppUser},
     permission::role_permission::RolePermissions,
+    routes::app::internal::delete_app::cancel_pending_deletion,
     state::AppState,
 };
 use axum::{
@@ -66,31 +69,45 @@ async fn create_template(
             template_data.board_version,
         )
         .await?;
-    let new_template = template::ActiveModel {
-        id: Set(template_id.clone()),
-        app_id: Set(app_id.to_string()),
-        version: Set(Some(format!("{}.{}.{}", version.0, version.1, version.2))),
-        changelog: Set(template_data.changelog.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    };
+    let now = chrono::Utc::now().naive_utc();
+    let meta_id = create_id();
+    let version_label = format!("{}.{}.{}", version.0, version.1, version.2);
 
-    template::Entity::insert(new_template)
-        .exec_with_returning(&state.db)
+    state
+        .transaction(|txn| {
+            let template_id = template_id.clone();
+            let app_id = app_id.to_string();
+            let version_label = version_label.clone();
+            let changelog = template_data.changelog.clone();
+            let meta_id = meta_id.clone();
+            Box::pin(async move {
+                cancel_pending_deletion(txn, DeletionRoot::Template, &template_id).await?;
+                template::Entity::insert(template::ActiveModel {
+                    id: Set(template_id.clone()),
+                    app_id: Set(app_id),
+                    version: Set(Some(version_label)),
+                    changelog: Set(changelog),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .exec_without_returning(txn)
+                .await?;
+                meta::Entity::insert(meta::ActiveModel {
+                    id: Set(meta_id),
+                    lang: Set("en".to_string()),
+                    name: Set("New Template".to_string()),
+                    template_id: Set(Some(template_id)),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .exec_without_returning(txn)
+                .await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    let meta = meta::ActiveModel {
-        id: Set(create_id()),
-        lang: Set("en".to_string()),
-        name: Set("New Template".to_string()),
-        template_id: Set(Some(template_id.clone())),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    };
-
-    meta::Entity::insert(meta).exec(&state.db).await?;
     Ok((template_id, version))
 }
 
