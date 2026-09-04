@@ -48,7 +48,7 @@ pub async fn push_meta(
         updated_meta.release_notes =
             Set(meta.release_notes.or(existing_meta.release_notes.clone()));
         updated_meta.support_url = Set(meta.support_url.or(existing_meta.support_url.clone()));
-        updated_meta.tags = Set(Some(meta.tags));
+        updated_meta.tags = Set(Some(meta.tags.into()));
         updated_meta.thumbnail = Set(meta.thumbnail.or(existing_meta.thumbnail.clone()));
         updated_meta.use_case = Set(meta.use_case.or(existing_meta.use_case.clone()));
         updated_meta.website = Set(meta.website.or(existing_meta.website.clone()));
@@ -74,7 +74,7 @@ pub async fn push_meta(
             .and_then(|v| from_slice(v).ok())),
         release_notes: Set(meta.release_notes),
         support_url: Set(meta.support_url),
-        tags: Set(Some(meta.tags)),
+        tags: Set(Some(meta.tags.into())),
         thumbnail: Set(meta.thumbnail),
         use_case: Set(meta.use_case),
         website: Set(meta.website),

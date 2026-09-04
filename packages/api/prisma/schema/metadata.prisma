@@ -7,13 +7,13 @@ model Meta {
   description     String?
   longDescription String?
   releaseNotes    String?
-  tags            String[]
+  tags            Json?
 
   useCase String?
 
   icon         String?
   thumbnail    String?
-  previewMedia String[]
+  previewMedia Json?
 
   ageRating BigInt?
 
@@ -55,5 +55,4 @@ model Meta {
   @@index([wasmPackageId, lang])
   @@index([groupId, lang])
   @@index([lang])
-  @@index([tags])
 }

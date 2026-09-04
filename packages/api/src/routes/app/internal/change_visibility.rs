@@ -1,9 +1,12 @@
 use crate::{
-    audit_branch, ensure_permission,
+    audit_branch,
+    db::delete_in_batches,
+    ensure_permission,
     entity::{app, membership, publication_log, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    publication::{PublicationTarget, target::new_request},
     state::AppState,
 };
 use axum::{
@@ -12,16 +15,45 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
+    QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+/// Memberships per purge transaction. Each membership drags its packages,
+/// invitations and created API keys along, so this stays well under the
+/// per-transaction row budget.
+const MEMBERSHIP_PURGE_CHUNK: usize = 500;
 
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct UpdateVisibilityBody {
     #[schema(value_type = String)]
     pub visibility: Visibility,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Transition {
+    /// Private <-> Prototype: no restrictions.
+    Toggle,
+    /// Public <-> Public Request Join: no restrictions.
+    PublicSwap,
+    /// Prototype -> Public / Public Request Join: goes to review.
+    Review,
+}
+
+fn transition(from: &Visibility, to: &Visibility) -> Option<Transition> {
+    let restricted = |v: &Visibility| matches!(v, Visibility::Private | Visibility::Prototype);
+    let public = |v: &Visibility| matches!(v, Visibility::Public | Visibility::PublicRequestAccess);
+    if restricted(from) && restricted(to) {
+        Some(Transition::Toggle)
+    } else if public(from) && public(to) {
+        Some(Transition::PublicSwap)
+    } else if *from == Visibility::Prototype && public(to) {
+        Some(Transition::Review)
+    } else {
+        None
+    }
 }
 
 /// The following visibility changes are allowed:
@@ -59,11 +91,8 @@ pub async fn change_visibility(
     ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
     let sub = user.sub()?;
 
-    let txn = state.db.begin().await?;
-
-    let app = app::Entity::find()
-        .filter(app::Column::Id.eq(&app_id))
-        .one(&txn)
+    let app = app::Entity::find_by_id(&app_id)
+        .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
@@ -76,106 +105,105 @@ pub async fn change_visibility(
         return Ok(Json(()));
     }
 
-    // The user should be able to switch between Prototype and Private visibility without restrictions
-    if matches!(app.visibility, Visibility::Private | Visibility::Prototype)
-        && matches!(body.visibility, Visibility::Private | Visibility::Prototype)
-    {
-        let mut app = app.into_active_model();
-        app.visibility = Set(body.visibility.clone());
-        app.updated_at = Set(chrono::Utc::now().naive_utc());
-        app.update(&txn).await?;
+    let Some(transition) = transition(&app.visibility, &body.visibility) else {
+        return Err(ApiError::FORBIDDEN);
+    };
+    let target = body.visibility.clone();
+    let purge_members = transition == Transition::Toggle && target == Visibility::Private;
+    let other_members = Condition::all()
+        .add(membership::Column::AppId.eq(app_id.clone()))
+        .add(membership::Column::UserId.ne(sub.clone()));
 
-        // If the visibility is changed to Private, remove all other users
-        if body.visibility == Visibility::Private {
-            membership::Entity::delete_many()
-                .filter(membership::Column::AppId.eq(&app_id))
-                .filter(membership::Column::UserId.ne(sub.clone()))
-                .exec(&txn)
-                .await?;
-        }
-
-        txn.commit().await?;
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "app.visibility",
-            "App",
-            app_id,
-            format!("Visibility changed to {:?}", body.visibility)
-        );
-        return Ok(Json(()));
-    }
-
-    if matches!(
-        app.visibility,
-        Visibility::Public | Visibility::PublicRequestAccess
-    ) && matches!(
-        body.visibility,
-        Visibility::Public | Visibility::PublicRequestAccess
-    ) {
-        let mut app = app.into_active_model();
-        app.visibility = Set(body.visibility.clone());
-        app.updated_at = Set(chrono::Utc::now().naive_utc());
-
-        app.update(&txn).await?;
-        txn.commit().await?;
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "app.visibility",
-            "App",
-            app_id,
-            format!("Visibility changed to {:?}", body.visibility)
-        );
-        return Ok(Json(()));
-    }
-
-    if app.visibility == Visibility::Prototype
-        && matches!(
-            body.visibility,
-            Visibility::Public | Visibility::PublicRequestAccess
-        )
-    {
-        let old_visibility = app.visibility.clone();
-        let mut updated_app = app.into_active_model();
-        updated_app.updated_at = Set(chrono::Utc::now().naive_utc());
-
-        let request = crate::publication::target::new_request(
-            create_id(),
-            &crate::publication::PublicationTarget::App(app_id.clone()),
-            body.visibility.clone(),
+    // Going private removes every other member. The bulk of that runs in
+    // bounded batches before the flip; the transaction below only sweeps up
+    // whoever joined in between, atomically with the visibility change.
+    if purge_members {
+        delete_in_batches::<membership::Entity>(
+            &state.db,
+            state.db_dialect,
+            other_members.clone(),
+            MEMBERSHIP_PURGE_CHUNK,
             None,
-            chrono::Utc::now().naive_utc(),
         )
-        .insert(&txn)
+        .await?;
+    }
+
+    let request_id = create_id();
+    let log_id = create_id();
+
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let sub = sub.clone();
+            let target = target.clone();
+            let other_members = other_members.clone();
+            let request_id = request_id.clone();
+            let log_id = log_id.clone();
+            Box::pin(async move {
+                let app = app::Entity::find_by_id(&app_id)
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+                let now = chrono::Utc::now().naive_utc();
+
+                match transition {
+                    Transition::Toggle | Transition::PublicSwap => {
+                        let mut app = app.into_active_model();
+                        app.visibility = Set(target);
+                        app.updated_at = Set(now);
+                        app.update(txn).await?;
+
+                        if purge_members {
+                            membership::Entity::delete_many()
+                                .filter(other_members)
+                                .exec(txn)
+                                .await?;
+                        }
+                    }
+                    Transition::Review => {
+                        let old_visibility = app.visibility.clone();
+                        let mut updated_app = app.into_active_model();
+                        updated_app.updated_at = Set(now);
+
+                        new_request(
+                            request_id.clone(),
+                            &PublicationTarget::App(app_id),
+                            target,
+                            None,
+                            now,
+                        )
+                        .insert(txn)
+                        .await?;
+
+                        publication_log::ActiveModel {
+                            id: Set(log_id),
+                            author_id: Set(Some(sub)),
+                            request_id: Set(request_id),
+                            message: Set(Some("Request initiated".to_string())),
+                            visibility: Set(Some(old_visibility)),
+                            created_at: Set(now),
+                            updated_at: Set(now),
+                        }
+                        .insert(txn)
+                        .await?;
+                        updated_app.update(txn).await?;
+                    }
+                }
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
 
-        let log_entry = publication_log::ActiveModel {
-            id: Set(create_id()),
-            author_id: Set(Some(sub.clone())),
-            request_id: Set(request.id),
-            message: Set(Some("Request initiated".to_string())),
-            visibility: Set(Some(old_visibility)),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
-        };
-
-        log_entry.insert(&txn).await?;
-        updated_app.update(&txn).await?;
-        txn.commit().await?;
-        audit_branch!(
-            state,
-            user,
-            app_id,
+    let (action, summary) = match transition {
+        Transition::Toggle | Transition::PublicSwap => (
+            "app.visibility",
+            format!("Visibility changed to {:?}", body.visibility),
+        ),
+        Transition::Review => (
             "app.visibility.request",
-            "App",
-            app_id,
-            format!("Publication review requested for {:?}", body.visibility)
-        );
-        return Ok(Json(()));
-    }
-
-    Err(ApiError::FORBIDDEN)
+            format!("Publication review requested for {:?}", body.visibility),
+        ),
+    };
+    audit_branch!(state, user, app_id, action, "App", app_id, summary);
+    Ok(Json(()))
 }

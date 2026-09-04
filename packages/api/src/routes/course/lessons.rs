@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
     entity::{
         challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt,
     },
@@ -264,6 +265,7 @@ pub async fn upsert_lesson(
     ),
     responses(
         (status = 200, description = "Lesson deleted"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -275,12 +277,17 @@ pub async fn delete_lesson(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((course_id, module_id, lesson_id)): Path<(String, String, String)>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
     ensure_lesson_in_module(&state, &course_id, &module_id, &lesson_id).await?;
-    lesson::Entity::delete_by_id(lesson_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::Lesson,
+        &lesson_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }

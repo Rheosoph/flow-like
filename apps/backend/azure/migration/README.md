@@ -6,8 +6,10 @@ PostgreSQL Flexible Server database with `prisma db push`, authenticated as the
 manually triggered Container Apps job: one execution, one push, exit code =
 Prisma's. There is no password on this cloud; `migrate.ts` mints an Entra token
 for `https://ossrdbms-aad.database.windows.net/.default` and uses it as the
-PostgreSQL password of a connection URL that exists only in the environment of
-the Prisma child process.
+PostgreSQL password of connection URLs that exist only in the environment of
+the two child processes it spawns in turn: `packages/api/prisma/pre-push.ts`
+(column type changes `db push` emits without the `USING` clause they need on an
+existing database; idempotent) and Prisma.
 
 `--accept-data-loss` is never passed. When the diff would destroy or narrow
 anything, Prisma prints the exact warnings, refuses (the job has no TTY) and
@@ -40,13 +42,16 @@ alternate identity endpoints (`MSI_ENDPOINT`, `MSI_SECRET`, `IMDS_ENDPOINT`,
 Behavior:
 
 - Exit `2` when the environment is refused, `1` when the token cannot be
-  acquired or Prisma is terminated by a signal, otherwise Prisma's exit code.
+  acquired or a child is terminated by a signal, otherwise the pre-push
+  runner's exit code when it fails (Prisma is then not started) or Prisma's.
 - The connection URL uses `sslmode=require&sslaccept=strict`, which is how
   Prisma's engine spells verify-full (it does not implement libpq's `verify-*`
   modes and would silently skip certificate checks on them); the chain is
   verified against the image's CA store and the hostname against
   `AZURE_POSTGRES_HOST`. `application_name=flow-like-azure-migration` for
-  `pg_stat_activity`.
+  `pg_stat_activity`. The pre-push runner connects with node-postgres, which
+  gets the same posture in its own spelling
+  (`uselibpqcompat=true&sslmode=verify-full`).
 - The tracked schema declares `provider = "cockroachdb"`; the image rewrites the
   datasource provider to `postgresql` at build time (the same edit
   `packages/api/scripts/make-postgres-prisma-mirror.sh` makes for every plain-
@@ -56,8 +61,8 @@ Behavior:
   leave it mid-statement.
 
 Build from the `flow-like` root; the Dockerfile copies
-`apps/backend/azure/migration/{package.json,bun.lock,prisma.config.ts,migrate.ts}`
-and `packages/api/prisma/schema`:
+`apps/backend/azure/migration/{package.json,bun.lock,prisma.config.ts,migrate.ts}`,
+`packages/api/prisma/schema` and `packages/api/prisma/{pre-push.ts,pre-push/}`:
 
 ```sh
 docker build -f apps/backend/azure/migration/Dockerfile -t flow-like-azure-migration .

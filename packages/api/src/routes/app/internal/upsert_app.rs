@@ -22,8 +22,8 @@ use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, DbErr, EntityTrait, IntoActiveModel, JoinType, PaginatorTrait, QueryFilter,
-    QuerySelect, RelationTrait, TransactionTrait,
+    ColumnTrait, EntityTrait, IntoActiveModel, JoinType, PaginatorTrait, QueryFilter, QuerySelect,
+    RelationTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -208,9 +208,14 @@ pub async fn upsert_app(
         new_app
     };
 
-    let _app = state
-        .db
-        .transaction::<_, app::Model, DbErr>(|txn| {
+    let bits = app_body.bits.unwrap_or_default();
+    state
+        .transaction(|txn| {
+            let new_id = new_id.clone();
+            let bits = bits.clone();
+            let metadata = metadata.clone();
+            let language = language.clone();
+            let sub = sub.clone();
             Box::pin(async move {
                 let app = app::ActiveModel {
                     id: Set(new_id),
@@ -218,7 +223,7 @@ pub async fn upsert_app(
                     created_at: Set(now),
                     updated_at: Set(now),
                     visibility: Set(Visibility::Private),
-                    bits: Set(Some(app_body.bits.unwrap_or_default())),
+                    bits: Set(Some(bits.into())),
                     ..Default::default()
                 };
 
@@ -231,7 +236,7 @@ pub async fn upsert_app(
                     name: Set(metadata.name),
                     description: Set(Some(metadata.description)),
                     long_description: Set(metadata.long_description),
-                    tags: Set(Some(metadata.tags)),
+                    tags: Set(Some(metadata.tags.into())),
                     lang: Set(language),
                     created_at: Set(now),
                     updated_at: Set(now),
@@ -299,14 +304,10 @@ pub async fn upsert_app(
                 };
                 membership.insert(txn).await?;
 
-                Ok(app)
+                Ok::<_, ApiError>(())
             })
         })
-        .await
-        .map_err(|e| match e {
-            sea_orm::TransactionError::Connection(db_err) => ApiError::from(db_err),
-            sea_orm::TransactionError::Transaction(db_err) => ApiError::from(db_err),
-        })?;
+        .await?;
 
     audit_branch!(
         state,

@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
     entity::course_module,
     error::ApiError,
     middleware::jwt::AppUser,
@@ -90,6 +91,7 @@ pub async fn upsert_module(
     ),
     responses(
         (status = 200, description = "Module deleted"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -101,12 +103,17 @@ pub async fn delete_module(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((course_id, module_id)): Path<(String, String)>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
     ensure_module_in_course(&state, &course_id, &module_id).await?;
-    course_module::Entity::delete_by_id(module_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::CourseModule,
+        &module_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }

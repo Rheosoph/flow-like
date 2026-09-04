@@ -6,7 +6,7 @@ use flow_like_types::create_id;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, TransactionTrait,
+    QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -184,33 +184,44 @@ pub async fn change_group_visibility(
     // its active member apps'.
     require_group_assessments(&state, &group_id).await?;
 
-    let txn = state.db.begin().await?;
     let request_id = create_id();
-    new_request(
-        request_id.clone(),
-        &PublicationTarget::Group(group_id.clone()),
-        target_visibility.clone(),
-        None,
-        now,
-    )
-    .insert(&txn)
-    .await?;
+    let log_id = create_id();
+    let author_id = user.sub().ok();
+    state
+        .transaction(|txn| {
+            let request_id = request_id.clone();
+            let log_id = log_id.clone();
+            let group_id = group_id.clone();
+            let target_visibility = target_visibility.clone();
+            let author_id = author_id.clone();
+            let message = payload.message.clone();
+            let current = current.clone();
+            Box::pin(async move {
+                new_request(
+                    request_id.clone(),
+                    &PublicationTarget::Group(group_id),
+                    target_visibility,
+                    None,
+                    now,
+                )
+                .insert(txn)
+                .await?;
 
-    publication_log::ActiveModel {
-        id: Set(create_id()),
-        request_id: Set(request_id.clone()),
-        author_id: Set(user.sub().ok()),
-        message: Set(payload
-            .message
-            .clone()
-            .or_else(|| Some("Request initiated".to_string()))),
-        visibility: Set(Some(current.clone())),
-        created_at: Set(now),
-        updated_at: Set(now),
-    }
-    .insert(&txn)
-    .await?;
-    txn.commit().await?;
+                publication_log::ActiveModel {
+                    id: Set(log_id),
+                    request_id: Set(request_id),
+                    author_id: Set(author_id),
+                    message: Set(message.or_else(|| Some("Request initiated".to_string()))),
+                    visibility: Set(Some(current)),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                }
+                .insert(txn)
+                .await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     audit_branch!(
         state,

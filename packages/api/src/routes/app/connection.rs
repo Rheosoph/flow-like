@@ -162,7 +162,7 @@ pub(crate) async fn app_meta_lookup(
                             banner: m.thumbnail,
                             website: m.website,
                             docs_url: m.docs_url,
-                            tags: m.tags.unwrap_or_default(),
+                            tags: m.tags.unwrap_or_default().into(),
                         },
                         is_english,
                     ),

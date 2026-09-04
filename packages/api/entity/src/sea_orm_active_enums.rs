@@ -1,0 +1,673 @@
+//! Hand-maintained database enums.
+//!
+//! The database stores these columns as plain TEXT (no `CREATE TYPE`), so the codegen no
+//! longer emits them. Keep this file in sync with the Prisma schema and
+//! `scripts/entity-typemap.tsv`, which re-types the generated fields to these enums.
+
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AiActAssessmentStatus {
+    #[sea_orm(string_value = "DRAFT")]
+    Draft,
+    #[sea_orm(string_value = "SUBMITTED")]
+    Submitted,
+    #[sea_orm(string_value = "APPROVED")]
+    Approved,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "BLOCKED")]
+    Blocked,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AiGpaiPosture {
+    #[sea_orm(string_value = "UNKNOWN")]
+    Unknown,
+    #[sea_orm(string_value = "HOSTED")]
+    Hosted,
+    #[sea_orm(string_value = "OPEN_LICENCE")]
+    OpenLicence,
+    #[sea_orm(string_value = "CLOSED")]
+    Closed,
+    #[sea_orm(string_value = "SYSTEMIC")]
+    Systemic,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AiModelSource {
+    #[sea_orm(string_value = "MONITORED")]
+    Monitored,
+    #[sea_orm(string_value = "BOARD_SCAN")]
+    BoardScan,
+    #[sea_orm(string_value = "BOTH")]
+    Both,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AiRiskCategory {
+    #[sea_orm(string_value = "PROHIBITED")]
+    Prohibited,
+    #[sea_orm(string_value = "HIGH")]
+    High,
+    #[sea_orm(string_value = "LIMITED")]
+    Limited,
+    #[sea_orm(string_value = "MINIMAL")]
+    Minimal,
+    #[sea_orm(string_value = "UNDETERMINED")]
+    Undetermined,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AppConnectionStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AppGroupMemberKind {
+    #[sea_orm(string_value = "PRIMARY")]
+    Primary,
+    #[sea_orm(string_value = "MEMBER")]
+    Member,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AppGroupMemberStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AppType {
+    #[sea_orm(string_value = "AGENT")]
+    Agent,
+    #[sea_orm(string_value = "CUSTOM_INTERFACE")]
+    CustomInterface,
+    #[sea_orm(string_value = "DATA_FOCUS")]
+    DataFocus,
+    #[sea_orm(string_value = "DATA_PIPELINE")]
+    DataPipeline,
+    #[sea_orm(string_value = "ANALYTICS")]
+    Analytics,
+    #[sea_orm(string_value = "FORM")]
+    Form,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AssetKind {
+    #[sea_orm(string_value = "IMAGE")]
+    Image,
+    #[sea_orm(string_value = "VIDEO")]
+    Video,
+    #[sea_orm(string_value = "AUDIO")]
+    Audio,
+    #[sea_orm(string_value = "DOCUMENT")]
+    Document,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum AuditActorType {
+    #[sea_orm(string_value = "USER")]
+    User,
+    #[sea_orm(string_value = "TECHNICAL_USER")]
+    TechnicalUser,
+    #[sea_orm(string_value = "API_KEY")]
+    ApiKey,
+    #[sea_orm(string_value = "SYSTEM")]
+    System,
+    #[sea_orm(string_value = "EXECUTOR")]
+    Executor,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum BitType {
+    #[sea_orm(string_value = "COURSE")]
+    Course,
+    #[sea_orm(string_value = "LLM")]
+    Llm,
+    #[sea_orm(string_value = "VLM")]
+    Vlm,
+    #[sea_orm(string_value = "EMBEDDING")]
+    Embedding,
+    #[sea_orm(string_value = "IMAGE_EMBEDDING")]
+    ImageEmbedding,
+    #[sea_orm(string_value = "OBJECT_DETECTION")]
+    ObjectDetection,
+    #[sea_orm(string_value = "FILE")]
+    File,
+    #[sea_orm(string_value = "MEDIA")]
+    Media,
+    #[sea_orm(string_value = "TEMPLATE")]
+    Template,
+    #[sea_orm(string_value = "TOKENIZER")]
+    Tokenizer,
+    #[sea_orm(string_value = "TOKENIZER_CONFIG")]
+    TokenizerConfig,
+    #[sea_orm(string_value = "SPECIAL_TOKENS_MAP")]
+    SpecialTokensMap,
+    #[sea_orm(string_value = "CONFIG")]
+    Config,
+    #[sea_orm(string_value = "PREPROCESSOR_CONFIG")]
+    PreprocessorConfig,
+    #[sea_orm(string_value = "PROJECTION")]
+    Projection,
+    #[sea_orm(string_value = "PROJECT")]
+    Project,
+    #[sea_orm(string_value = "BOARD")]
+    Board,
+    #[sea_orm(string_value = "OTHER")]
+    Other,
+    #[sea_orm(string_value = "IMAGE_GENERATION")]
+    ImageGeneration,
+    #[sea_orm(string_value = "VIDEO_GENERATION")]
+    VideoGeneration,
+    #[sea_orm(string_value = "TTS")]
+    Tts,
+    #[sea_orm(string_value = "STT")]
+    Stt,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum CacheScope {
+    #[sea_orm(string_value = "APP")]
+    App,
+    #[sea_orm(string_value = "USER")]
+    User,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum Category {
+    #[sea_orm(string_value = "OTHER")]
+    Other,
+    #[sea_orm(string_value = "PRODUCTIVITY")]
+    Productivity,
+    #[sea_orm(string_value = "SOCIAL")]
+    Social,
+    #[sea_orm(string_value = "ENTERTAINMENT")]
+    Entertainment,
+    #[sea_orm(string_value = "EDUCATION")]
+    Education,
+    #[sea_orm(string_value = "HEALTH")]
+    Health,
+    #[sea_orm(string_value = "FINANCE")]
+    Finance,
+    #[sea_orm(string_value = "LIFESTYLE")]
+    Lifestyle,
+    #[sea_orm(string_value = "TRAVEL")]
+    Travel,
+    #[sea_orm(string_value = "NEWS")]
+    News,
+    #[sea_orm(string_value = "SPORTS")]
+    Sports,
+    #[sea_orm(string_value = "SHOPPING")]
+    Shopping,
+    #[sea_orm(string_value = "FOOD_AND_DRINK")]
+    FoodAndDrink,
+    #[sea_orm(string_value = "MUSIC")]
+    Music,
+    #[sea_orm(string_value = "PHOTOGRAPHY")]
+    Photography,
+    #[sea_orm(string_value = "UTILITIES")]
+    Utilities,
+    #[sea_orm(string_value = "WEATHER")]
+    Weather,
+    #[sea_orm(string_value = "GAMES")]
+    Games,
+    #[sea_orm(string_value = "BUSINESS")]
+    Business,
+    #[sea_orm(string_value = "COMMUNICATION")]
+    Communication,
+    #[sea_orm(string_value = "ANIME")]
+    Anime,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ChallengeKind {
+    #[sea_orm(string_value = "SINGLE_CHOICE")]
+    SingleChoice,
+    #[sea_orm(string_value = "MULTIPLE_CHOICE")]
+    MultipleChoice,
+    #[sea_orm(string_value = "BOARD_RIDDLE")]
+    BoardRiddle,
+    #[sea_orm(string_value = "EXECUTE_NODE")]
+    ExecuteNode,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ChannelMessageKind {
+    #[sea_orm(string_value = "REQUEST")]
+    Request,
+    #[sea_orm(string_value = "INBOUND")]
+    Inbound,
+    #[sea_orm(string_value = "CANCEL")]
+    Cancel,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ChannelMessageStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "RESPONDED")]
+    Responded,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum CourseAppPurpose {
+    #[sea_orm(string_value = "SHARED_TEMPLATE")]
+    SharedTemplate,
+    #[sea_orm(string_value = "REFERENCE")]
+    Reference,
+    #[sea_orm(string_value = "PLAYGROUND")]
+    Playground,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum CourseCategory {
+    #[sea_orm(string_value = "GENERAL")]
+    General,
+    #[sea_orm(string_value = "GETTING_STARTED")]
+    GettingStarted,
+    #[sea_orm(string_value = "FLOWS")]
+    Flows,
+    #[sea_orm(string_value = "PAGES")]
+    Pages,
+    #[sea_orm(string_value = "EVENTS")]
+    Events,
+    #[sea_orm(string_value = "DATA")]
+    Data,
+    #[sea_orm(string_value = "AI")]
+    Ai,
+    #[sea_orm(string_value = "INTEGRATIONS")]
+    Integrations,
+    #[sea_orm(string_value = "DEPLOYMENT")]
+    Deployment,
+    #[sea_orm(string_value = "ADVANCED")]
+    Advanced,
+    #[sea_orm(string_value = "EXPERT")]
+    Expert,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum CourseDifficulty {
+    #[sea_orm(string_value = "BEGINNER")]
+    Beginner,
+    #[sea_orm(string_value = "INTERMEDIATE")]
+    Intermediate,
+    #[sea_orm(string_value = "ADVANCED")]
+    Advanced,
+    #[sea_orm(string_value = "EXPERT")]
+    Expert,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum DiscountType {
+    #[sea_orm(string_value = "PERCENTAGE")]
+    Percentage,
+    #[sea_orm(string_value = "FIXED_AMOUNT")]
+    FixedAmount,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ExecutionMode {
+    #[sea_orm(string_value = "ANY")]
+    Any,
+    #[sea_orm(string_value = "LOCAL")]
+    Local,
+    #[sea_orm(string_value = "REMOTE")]
+    Remote,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ExecutionStatus {
+    #[sea_orm(string_value = "DEBUG")]
+    Debug,
+    #[sea_orm(string_value = "INFO")]
+    Info,
+    #[sea_orm(string_value = "WARN")]
+    Warn,
+    #[sea_orm(string_value = "ERROR")]
+    Error,
+    #[sea_orm(string_value = "FATAL")]
+    Fatal,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum InvitationStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACCEPTED")]
+    Accepted,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "EXPIRED")]
+    Expired,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum LessonAppRefKind {
+    #[sea_orm(string_value = "NAVIGATE")]
+    Navigate,
+    #[sea_orm(string_value = "FOCUS_NODE")]
+    FocusNode,
+    #[sea_orm(string_value = "ADD_NODE")]
+    AddNode,
+    #[sea_orm(string_value = "CREATE_EVENT")]
+    CreateEvent,
+    #[sea_orm(string_value = "OPEN_OR_CLONE_APP")]
+    OpenOrCloneApp,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum LessonStatus {
+    #[sea_orm(string_value = "NOT_STARTED")]
+    NotStarted,
+    #[sea_orm(string_value = "IN_PROGRESS")]
+    InProgress,
+    #[sea_orm(string_value = "COMPLETED")]
+    Completed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum NotificationType {
+    #[sea_orm(string_value = "WORKFLOW")]
+    Workflow,
+    #[sea_orm(string_value = "SYSTEM")]
+    System,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum PublicationRequestStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ON_HOLD")]
+    OnHold,
+    #[sea_orm(string_value = "ACCEPTED")]
+    Accepted,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum PurchaseStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "COMPLETED")]
+    Completed,
+    #[sea_orm(string_value = "REFUNDED")]
+    Refunded,
+    #[sea_orm(string_value = "PARTIALLY_REFUNDED")]
+    PartiallyRefunded,
+    #[sea_orm(string_value = "FAILED")]
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum PushNotificationTargetPlatform {
+    #[sea_orm(string_value = "IOS")]
+    Ios,
+    #[sea_orm(string_value = "ANDROID")]
+    Android,
+    #[sea_orm(string_value = "DESKTOP")]
+    Desktop,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum PushNotificationTargetProvider {
+    #[sea_orm(string_value = "FCM")]
+    Fcm,
+    #[sea_orm(string_value = "AWS_SNS")]
+    AwsSns,
+    #[sea_orm(string_value = "AZURE_NOTIFICATION_HUBS")]
+    AzureNotificationHubs,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum RunMode {
+    #[sea_orm(string_value = "LOCAL")]
+    Local,
+    #[sea_orm(string_value = "HTTP")]
+    Http,
+    #[sea_orm(string_value = "LAMBDA")]
+    Lambda,
+    #[sea_orm(string_value = "KUBERNETES_ISOLATED")]
+    KubernetesIsolated,
+    #[sea_orm(string_value = "KUBERNETES_POOL")]
+    KubernetesPool,
+    #[sea_orm(string_value = "FUNCTION")]
+    Function,
+    #[sea_orm(string_value = "QUEUE")]
+    Queue,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum RunStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "RUNNING")]
+    Running,
+    #[sea_orm(string_value = "COMPLETED")]
+    Completed,
+    #[sea_orm(string_value = "FAILED")]
+    Failed,
+    #[sea_orm(string_value = "CANCELLED")]
+    Cancelled,
+    #[sea_orm(string_value = "TIMEOUT")]
+    Timeout,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum RunVariant {
+    #[sea_orm(string_value = "PRIMARY")]
+    Primary,
+    #[sea_orm(string_value = "CANARY")]
+    Canary,
+    #[sea_orm(string_value = "SHADOW")]
+    Shadow,
+    #[sea_orm(string_value = "REGRESSION")]
+    Regression,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum SolutionPricingTier {
+    #[sea_orm(string_value = "STANDARD")]
+    Standard,
+    #[sea_orm(string_value = "APPSTORE")]
+    Appstore,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum SolutionStatus {
+    #[sea_orm(string_value = "AWAITING_DEPOSIT")]
+    AwaitingDeposit,
+    #[sea_orm(string_value = "PENDING_REVIEW")]
+    PendingReview,
+    #[sea_orm(string_value = "IN_QUEUE")]
+    InQueue,
+    #[sea_orm(string_value = "ONBOARDING_DONE")]
+    OnboardingDone,
+    #[sea_orm(string_value = "IN_PROGRESS")]
+    InProgress,
+    #[sea_orm(string_value = "DELIVERED")]
+    Delivered,
+    #[sea_orm(string_value = "AWAITING_PAYMENT")]
+    AwaitingPayment,
+    #[sea_orm(string_value = "PAID")]
+    Paid,
+    #[sea_orm(string_value = "CANCELLED")]
+    Cancelled,
+    #[sea_orm(string_value = "REFUNDED")]
+    Refunded,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum Status {
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+    #[sea_orm(string_value = "INACTIVE")]
+    Inactive,
+    #[sea_orm(string_value = "ARCHIVED")]
+    Archived,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum UserStatus {
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+    #[sea_orm(string_value = "INACTIVE")]
+    Inactive,
+    #[sea_orm(string_value = "BANNED")]
+    Banned,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum UserTier {
+    #[sea_orm(string_value = "FREE")]
+    Free,
+    #[sea_orm(string_value = "PREMIUM")]
+    Premium,
+    #[sea_orm(string_value = "PRO")]
+    Pro,
+    #[sea_orm(string_value = "ENTERPRISE")]
+    Enterprise,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum Visibility {
+    #[sea_orm(string_value = "PUBLIC")]
+    Public,
+    #[sea_orm(string_value = "PUBLIC_REQUEST_ACCESS")]
+    PublicRequestAccess,
+    #[sea_orm(string_value = "PRIVATE")]
+    Private,
+    #[sea_orm(string_value = "PROTOTYPE")]
+    Prototype,
+    #[sea_orm(string_value = "OFFLINE")]
+    Offline,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum WasmCompilationStatus {
+    #[sea_orm(string_value = "COMPILED")]
+    Compiled,
+    #[sea_orm(string_value = "LOCAL_ONLY")]
+    LocalOnly,
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum WasmPackageCategory {
+    #[sea_orm(string_value = "DOCUMENT_PROCESSING")]
+    DocumentProcessing,
+    #[sea_orm(string_value = "DATA_TRANSFORMATION")]
+    DataTransformation,
+    #[sea_orm(string_value = "WORKFLOW_AUTOMATION")]
+    WorkflowAutomation,
+    #[sea_orm(string_value = "COMMUNICATION")]
+    Communication,
+    #[sea_orm(string_value = "ANALYTICS_REPORTING")]
+    AnalyticsReporting,
+    #[sea_orm(string_value = "FINANCE_BILLING")]
+    FinanceBilling,
+    #[sea_orm(string_value = "COMPLIANCE_REGULATORY")]
+    ComplianceRegulatory,
+    #[sea_orm(string_value = "HR_PEOPLE")]
+    HrPeople,
+    #[sea_orm(string_value = "AI_ML")]
+    AiMl,
+    #[sea_orm(string_value = "INTEGRATION_CONNECTORS")]
+    IntegrationConnectors,
+    #[sea_orm(string_value = "SECURITY_IDENTITY")]
+    SecurityIdentity,
+    #[sea_orm(string_value = "DEVOPS")]
+    Devops,
+    #[sea_orm(string_value = "IOT_INDUSTRIAL")]
+    IotIndustrial,
+    #[sea_orm(string_value = "ROBOTICS_PHYSICAL_AI")]
+    RoboticsPhysicalAi,
+    #[sea_orm(string_value = "GAMING_SIMULATION")]
+    GamingSimulation,
+    #[sea_orm(string_value = "HEALTHCARE")]
+    Healthcare,
+    #[sea_orm(string_value = "VETERINARY")]
+    Veterinary,
+    #[sea_orm(string_value = "LEGAL")]
+    Legal,
+    #[sea_orm(string_value = "MANUFACTURING")]
+    Manufacturing,
+    #[sea_orm(string_value = "AGRICULTURE")]
+    Agriculture,
+    #[sea_orm(string_value = "REAL_ESTATE")]
+    RealEstate,
+    #[sea_orm(string_value = "LOGISTICS")]
+    Logistics,
+    #[sea_orm(string_value = "ENERGY")]
+    Energy,
+    #[sea_orm(string_value = "CONSTRUCTION_TRADES")]
+    ConstructionTrades,
+    #[sea_orm(string_value = "EDUCATION")]
+    Education,
+    #[sea_orm(string_value = "GOVERNMENT_DEFENSE")]
+    GovernmentDefense,
+    #[sea_orm(string_value = "ECOMMERCE")]
+    Ecommerce,
+    #[sea_orm(string_value = "INSURANCE")]
+    Insurance,
+    #[sea_orm(string_value = "TELECOM")]
+    Telecom,
+    #[sea_orm(string_value = "SCIENTIFIC_ENGINEERING")]
+    ScientificEngineering,
+    #[sea_orm(string_value = "GEOSPATIAL")]
+    Geospatial,
+    #[sea_orm(string_value = "MEDIA_CONTENT")]
+    MediaContent,
+    #[sea_orm(string_value = "OTHER")]
+    Other,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum WasmPackageStatus {
+    #[sea_orm(string_value = "PENDING_REVIEW")]
+    PendingReview,
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "DEPRECATED")]
+    Deprecated,
+    #[sea_orm(string_value = "DISABLED")]
+    Disabled,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum WasmPackageVisibility {
+    #[sea_orm(string_value = "PRIVATE")]
+    Private,
+    #[sea_orm(string_value = "PUBLIC")]
+    Public,
+    #[sea_orm(string_value = "PUBLIC_REQUEST_ACCESS")]
+    PublicRequestAccess,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum WasmReviewAction {
+    #[sea_orm(string_value = "SUBMITTED")]
+    Submitted,
+    #[sea_orm(string_value = "APPROVED")]
+    Approved,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "REQUESTED_CHANGES")]
+    RequestedChanges,
+    #[sea_orm(string_value = "COMMENTED")]
+    Commented,
+    #[sea_orm(string_value = "FLAGGED")]
+    Flagged,
+}

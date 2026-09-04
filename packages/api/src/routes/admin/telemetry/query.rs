@@ -977,6 +977,13 @@ pub async fn run_telemetry_query(
         .await?;
 
     let plan = plan_query(&payload)?;
+    if matches!(plan.metric, MetricPlan::Percentile { .. })
+        && !state.db_dialect.supports_ordered_set_aggregates()
+    {
+        return Err(ApiError::not_implemented(
+            "Percentile metrics need an ordered-set aggregate this database engine does not provide; use count, sum, avg, min or max instead",
+        ));
+    }
     let cutoff = Utc::now().naive_utc() - Duration::hours(plan.hours);
     let backend = state.db.get_database_backend();
 

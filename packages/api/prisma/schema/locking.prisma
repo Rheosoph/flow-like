@@ -1,8 +1,11 @@
 /// Durable coordination rows for operations whose source of truth lives outside SQL.
 ///
-/// Rows are intentionally unreferenced and retained: a transaction updates one row to hold a
-/// database-native write intent while it mutates canonical board files or computes a score.
+/// Rows are intentionally unreferenced and retained. A holder claims a row as a lease
+/// (`owner` + `expiresAt`) instead of holding a row lock, so the mutex works on optimistic
+/// engines that never block; expiry covers crashed holders.
 model MutationLock {
-  id        BigInt   @id
-  updatedAt DateTime @default(now()) @updatedAt
+  id        BigInt    @id
+  updatedAt DateTime  @default(now()) @updatedAt
+  owner     String?
+  expiresAt DateTime?
 }

@@ -25,12 +25,13 @@ use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use crate::telemetry::llm::LLM_STATUS_ERROR;
+use crate::telemetry::percentiles_in_sql;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,
 };
 use serde::{Deserialize, Serialize};
@@ -1052,15 +1053,14 @@ pub async fn telemetry_llm(
     let filters = LlmFilters::new(&q, raw_cutoff);
 
     if reads_raw(hours) {
-        let fold = match state.db.get_database_backend() {
-            DbBackend::Postgres => {
-                let mut fold = llm_from_sql(&state.db, &filters, now, bucket).await?;
-                let (by_operation, top_errors) = raw_breakdowns(&state.db, &filters).await?;
-                fold.by_operation = by_operation;
-                fold.top_errors = top_errors;
-                fold
-            }
-            _ => llm_from_fold(&state.db, &filters, now, bucket).await?,
+        let fold = if percentiles_in_sql(state.db.get_database_backend(), state.db_dialect) {
+            let mut fold = llm_from_sql(&state.db, &filters, now, bucket).await?;
+            let (by_operation, top_errors) = raw_breakdowns(&state.db, &filters).await?;
+            fold.by_operation = by_operation;
+            fold.top_errors = top_errors;
+            fold
+        } else {
+            llm_from_fold(&state.db, &filters, now, bucket).await?
         };
 
         return Ok(Json(TelemetryLlmResponse {
@@ -1098,7 +1098,7 @@ pub async fn telemetry_llm(
 mod tests {
     use super::*;
     use chrono::NaiveDate;
-    use sea_orm::QueryTrait;
+    use sea_orm::{DbBackend, QueryTrait};
 
     fn ts(hour: u32, minute: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 7, 26)

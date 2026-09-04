@@ -325,7 +325,7 @@ impl AppPermissionResponse {
                 id: self.role.id.clone(),
                 name: self.role.name.clone(),
                 permissions: self.role.permissions,
-                attributes: self.role.attributes.clone().unwrap_or_default(),
+                attributes: self.role.attributes.clone().unwrap_or_default().into(),
                 custom_attributes: std::collections::HashMap::new(),
             },
         )

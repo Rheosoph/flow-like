@@ -15,6 +15,7 @@ blake3.workspace = true
 chrono.workspace = true
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-azure-data.workspace = true
+flow-like-db.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-compiler.workspace = true

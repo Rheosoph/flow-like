@@ -60,11 +60,6 @@ model Invitation {
   @@index([userId, createdAt])
 }
 
-enum AppConnectionStatus {
-  PENDING
-  ACTIVE
-}
-
 model AppConnection {
   id String @id
 
@@ -77,7 +72,7 @@ model AppConnection {
   role   Role?   @relation(fields: [roleId], references: [id], onDelete: SetNull)
   roleId String?
 
-  status AppConnectionStatus @default(PENDING)
+  status String @default("PENDING")
 
   comment String?
 
@@ -121,8 +116,8 @@ model Membership {
   role   Role   @relation(fields: [roleId], references: [id])
   roleId String
 
-  invitations   Invitation[]
-  addedPackages AppPackage[]
+  invitations           Invitation[]
+  addedPackages         AppPackage[]
   technicalUsersCreated TechnicalUser[] @relation("TechnicalUserCreatorMembership")
 
   createdAt DateTime @default(now())
@@ -140,7 +135,7 @@ model Role {
   name        String
   description String?
 
-  attributes  String[]
+  attributes  Json?
   permissions BigInt
 
   memberships    Membership[]
@@ -157,23 +152,6 @@ model Role {
   updatedAt DateTime @updatedAt
 }
 
-enum NotificationType {
-  WORKFLOW
-  SYSTEM
-}
-
-enum PushNotificationTargetPlatform {
-  IOS
-  ANDROID
-  DESKTOP
-}
-
-enum PushNotificationTargetProvider {
-  FCM
-  AWS_SNS
-  AZURE_NOTIFICATION_HUBS
-}
-
 model Notification {
   id String @id
 
@@ -188,8 +166,8 @@ model Notification {
   icon        String?
   link        String?
 
-  type NotificationType @default(WORKFLOW)
-  read Boolean          @default(false)
+  type String  @default("WORKFLOW")
+  read Boolean @default(false)
 
   sourceRunId  String?
   sourceNodeId String?
@@ -210,8 +188,8 @@ model PushNotificationTarget {
 
   deviceId String
 
-  platform PushNotificationTargetPlatform
-  provider PushNotificationTargetProvider
+  platform String
+  provider String
 
   tokenEncrypted String
   endpointArn    String?
@@ -236,16 +214,6 @@ model PushNotificationTarget {
   @@index([invalidatedAt])
 }
 
-enum AppGroupMemberStatus {
-  PENDING
-  ACTIVE
-}
-
-enum AppGroupMemberKind {
-  PRIMARY
-  MEMBER
-}
-
 /// A curated, store-facing bundle of related apps presented as a single unit
 /// (a "suite"). Branding (name/icon/banner/description) lives in Meta,
 /// per-language, exactly like apps — no bespoke columns here. The group is
@@ -253,8 +221,8 @@ enum AppGroupMemberKind {
 model AppGroup {
   id String @id
 
-  status     Status     @default(ACTIVE)
-  visibility Visibility @default(PRIVATE)
+  status     String @default("ACTIVE")
+  visibility String @default("PRIVATE")
 
   meta Meta[]
 
@@ -291,8 +259,8 @@ model AppGroupMember {
   app   App    @relation("appGroupMemberships", fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  kind   AppGroupMemberKind   @default(MEMBER)
-  status AppGroupMemberStatus @default(PENDING)
+  kind   String @default("MEMBER")
+  status String @default("PENDING")
 
   /// Curated display order within the group.
   position Int @default(0)

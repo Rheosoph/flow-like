@@ -125,7 +125,9 @@ pub async fn open_shared_app(
                 "course app fork did not carry everything"
             );
         }
-        (new_app_id, Some(report.id_map), true)
+        // Node / pin / layer maps run to thousands of pairs and are derivable
+        // from the top-level ids; only those are persisted on the enrollment.
+        (new_app_id, Some(report.id_map.top_level()), true)
     } else {
         (
             existing_link.clone().unwrap_or_else(|| link.app_id.clone()),

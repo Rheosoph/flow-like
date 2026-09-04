@@ -304,7 +304,31 @@ pub struct DatabaseRates {
     pub blocks_read: f64,
 }
 
-/// Postgres-only extras, rendered on the detail page rather than the dashboard card.
+/// Asynchronous schema jobs on engines that build indexes out of band (Aurora DSQL
+/// `sys.jobs`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseJobs {
+    /// Submitted or still processing.
+    pub pending: i64,
+    pub failed: i64,
+    pub completed: i64,
+}
+
+/// An index the planner ignores because its build failed or has not finished.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidIndex {
+    pub table: String,
+    pub name: String,
+}
+
+/// Relational extras, rendered on the detail page rather than the dashboard card.
+///
+/// Engines without the `pg_stat_*` catalog leave `connections`, `counters` and `rates`
+/// empty and name the missing sections in `unsupported`, so a bare section reads as a
+/// known limitation rather than a failed query. `largest_tables` then carries row
+/// estimates with zero byte sizes.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseDetail {
@@ -321,6 +345,13 @@ pub struct DatabaseDetail {
     /// When the counters were last zeroed; rates before a second sample are absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stats_reset_at: Option<String>,
+    /// Statistics this engine cannot provide at all, e.g. `size on disk`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<DatabaseJobs>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_indexes: Vec<InvalidIndex>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

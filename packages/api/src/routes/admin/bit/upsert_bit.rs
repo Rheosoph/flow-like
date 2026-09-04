@@ -89,7 +89,7 @@ fn standalone_dependency_tree_hash(bit: &bit::Model) -> String {
     artifact_dependency_tree_hash(
         content_hash,
         bit.file_name.as_deref(),
-        &bit.r#type.to_value().value,
+        &bit.r#type.to_value(),
     )
 }
 
@@ -640,7 +640,7 @@ async fn download_and_hash(
     bit.dependency_tree_hash = Some(artifact_dependency_tree_hash(
         &file_hash,
         bit.file_name.as_deref(),
-        &bit.r#type.to_value().value,
+        &bit.r#type.to_value(),
     ));
 
     bit.size = Some(total_downloaded as i64);
@@ -753,7 +753,7 @@ async fn build_dependency_hash(
         .as_ref()
         .map(|_| standalone_dependency_tree_hash(bit));
     let dependency_hash = resolved_dependency_tree_hash(
-        &bit.r#type.to_value().value,
+        &bit.r#type.to_value(),
         bit.file_name.as_deref(),
         own_artifact_identity.as_deref(),
         &resolved_dependencies,
@@ -824,7 +824,7 @@ mod tests {
         assert!(bit_identity_changed(&existing, &retyped));
 
         let mut rewired = existing.clone();
-        rewired.dependencies = Some(vec!["hub:other-dependency".to_string()]);
+        rewired.dependencies = Some(vec!["hub:other-dependency".to_string()].into());
         assert!(bit_identity_changed(&existing, &rewired));
     }
 

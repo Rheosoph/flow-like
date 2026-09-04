@@ -386,6 +386,10 @@ run = "cargo clippy --fix && cargo fmt && bunx biome check --write"
 description = "Run all checks without fixing"
 run = "cargo clippy && cargo fmt --check && bunx biome check"
 
+[tasks."lint:db"]
+description = "Enforce the database portability rules (transaction bodies, dialect branches)"
+run = "./tools/check-transaction-bodies.sh && ./tools/check-db-dialect-branches.sh"
+
 [tasks.bench]
 description = "Run all benchmarks"
 run = "cargo bench"

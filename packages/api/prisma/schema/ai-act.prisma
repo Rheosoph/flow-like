@@ -2,36 +2,6 @@
 // See todo/EU-AI.md for the design. These tables are the record-keeping
 // artefact auditors ask for (Art. 11/12/19/72).
 
-enum AiRiskCategory {
-  PROHIBITED
-  HIGH
-  LIMITED
-  MINIMAL
-  UNDETERMINED
-}
-
-enum AiActAssessmentStatus {
-  DRAFT
-  SUBMITTED
-  APPROVED
-  REJECTED
-  BLOCKED
-}
-
-enum AiGpaiPosture {
-  UNKNOWN
-  HOSTED
-  OPEN_LICENCE
-  CLOSED
-  SYSTEMIC
-}
-
-enum AiModelSource {
-  MONITORED
-  BOARD_SCAN
-  BOTH
-}
-
 /// One current assessment per app version. History kept via versioned rows.
 model AiActAssessment {
   id String @id
@@ -39,10 +9,10 @@ model AiActAssessment {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  version Int                   @default(1)
-  status  AiActAssessmentStatus @default(DRAFT)
+  version Int    @default(1)
+  status  String @default("DRAFT")
 
-  riskCategory    AiRiskCategory @default(UNDETERMINED)
+  riskCategory    String  @default("UNDETERMINED")
   conformityScore Int?
   conformityBand  String?
 
@@ -85,8 +55,8 @@ model AiActModelObservation {
   modelId  String
   provider String?
 
-  source  AiModelSource @default(MONITORED)
-  posture AiGpaiPosture @default(UNKNOWN)
+  source  String @default("MONITORED")
+  posture String @default("UNKNOWN")
 
   hosted          Boolean @default(false)
   openLicence     Boolean @default(false)
@@ -114,11 +84,11 @@ model AiActModelRegistry {
   provider String
   modelId  String
 
-  posture      AiGpaiPosture @default(UNKNOWN)
-  hosted       Boolean       @default(false)
-  openLicence  Boolean       @default(false)
-  systemicRisk Boolean       @default(false)
-  vetted       Boolean       @default(false)
+  posture      String  @default("UNKNOWN")
+  hosted       Boolean @default(false)
+  openLicence  Boolean @default(false)
+  systemicRisk Boolean @default(false)
+  vetted       Boolean @default(false)
 
   note String?
 

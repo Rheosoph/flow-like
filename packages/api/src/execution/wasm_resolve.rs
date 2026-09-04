@@ -80,6 +80,7 @@ pub async fn resolve_wasm_packages(
             && version_record
                 .compiled_platforms
                 .as_deref()
+                .map(Vec::as_slice)
                 .unwrap_or_default()
                 .iter()
                 .any(|platform| platform == &target);

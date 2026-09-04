@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
     entity::{course, learning_path, learning_path_course, meta},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -108,7 +109,7 @@ async fn course_list_items_by_id(
                 is_published: c.is_published,
                 icon_url: c.icon_url,
                 banner_url: c.banner_url,
-                tags: c.tags.unwrap_or_default(),
+                tags: c.tags.unwrap_or_default().into(),
                 position: c.position,
                 name: chosen.map(|m| m.name.clone()),
                 description: chosen.and_then(|m| m.description.clone()),
@@ -319,7 +320,8 @@ pub async fn upsert_learning_path(
     tag = "courses",
     params(("path_id" = String, Path, description = "Learning path identifier")),
     responses(
-        (status = 204, description = "Deleted the learning path"),
+        (status = 200, description = "Deleted the learning path"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden — requires WriteCourses permission")
     )
 )]
@@ -328,13 +330,25 @@ pub async fn delete_learning_path(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(path_id): Path<String>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
-    learning_path::Entity::delete_by_id(path_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    if learning_path::Entity::find_by_id(&path_id)
+        .one(&state.db)
+        .await?
+        .is_none()
+    {
+        return Ok(Deleted::Completed(()));
+    }
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::LearningPath,
+        &path_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }
 
 #[utoipa::path(

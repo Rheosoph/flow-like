@@ -309,11 +309,11 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
         description: model.description,
         icon: model.icon,
         thumbnail: model.thumbnail,
-        interests: model.interests.unwrap_or_default(),
-        tags: model.tags.unwrap_or_default(),
+        interests: model.interests.unwrap_or_default().into(),
+        tags: model.tags.unwrap_or_default().into(),
         hub: model.hub,
         secure: true,
-        hubs: model.hubs.unwrap_or_default(),
+        hubs: model.hubs.unwrap_or_default().into(),
         apps: model
             .apps
             .and_then(|value| serde_json::from_value(value).ok()),
@@ -321,7 +321,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
         theme: model.theme,
-        bits: model.bit_ids.unwrap_or_default(),
+        bits: model.bit_ids.unwrap_or_default().into(),
         custom_bits: vec![],
         settings: model
             .settings

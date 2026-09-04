@@ -19,12 +19,17 @@ RUN bun add -g prisma@latest
 
 WORKDIR /workspace
 
-# Copy the prisma schema from packages/api
+# Copy the prisma schema from packages/api, plus the guarded, idempotent SQL
+# that must run before `db push` on an existing database (column type changes
+# Prisma emits without the USING clause they need; CockroachDB and PostgreSQL)
 COPY packages/api/prisma/schema ./prisma/schema
+COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
+COPY packages/api/prisma/pre-push ./prisma/pre-push
 COPY packages/api/package.json ./package.json
 
 # Install dependencies for prisma (including prisma which has the config module)
-RUN bun install --production && bun add prisma @prisma/client
+# and for prisma/pre-push.ts (pg, dotenv)
+RUN bun install --production && bun add prisma @prisma/client pg dotenv
 
 # Create a minimal prisma.config.ts for migrations
 RUN cat > ./prisma.config.ts <<'CONFIGEOF'
@@ -60,6 +65,9 @@ until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" 2>/dev/null; do
 done
 
 echo "Database is ready!"
+echo "Applying pre-push SQL..."
+bun prisma/pre-push.ts
+
 echo "Applying database schema..."
 
 # Run prisma db push to create/update schema

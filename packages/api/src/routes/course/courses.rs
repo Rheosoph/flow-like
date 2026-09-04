@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
     entity::{
         course, course_module, lesson, meta,
         sea_orm_active_enums::{CourseCategory, CourseDifficulty},
@@ -17,7 +18,7 @@ use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, TransactionTrait,
+    QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -289,7 +290,7 @@ pub async fn list_courses(
             is_published: c.is_published,
             icon_url,
             banner_url,
-            tags: c.tags.unwrap_or_default(),
+            tags: c.tags.unwrap_or_default().into(),
             position: c.position,
             name: chosen.map(|m| m.name.clone()),
             description: chosen.and_then(|m| m.description.clone()),
@@ -402,7 +403,7 @@ pub async fn get_course(
         is_published: c.is_published,
         icon_url,
         banner_url,
-        tags: c.tags.unwrap_or_default(),
+        tags: c.tags.unwrap_or_default().into(),
         position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
@@ -456,7 +457,7 @@ pub async fn upsert_course(
         active.category = Set(category);
         active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
         active.is_published = Set(body.is_published.unwrap_or(false));
-        active.tags = Set(body.tags.clone());
+        active.tags = Set(body.tags.clone().map(Into::into));
         active.position = Set(body.position);
         active.updated_at = Set(now);
         active.update(&state.db).await?
@@ -472,7 +473,7 @@ pub async fn upsert_course(
             author_id: Set(Some(sub.clone())),
             icon_url: Set(None),
             banner_url: Set(None),
-            tags: Set(body.tags.clone()),
+            tags: Set(body.tags.clone().map(Into::into)),
             position: Set(body.position),
             created_at: Set(now),
             updated_at: Set(now),
@@ -538,7 +539,7 @@ pub async fn upsert_course(
         is_published: saved.is_published,
         icon_url,
         banner_url,
-        tags: saved.tags.unwrap_or_default(),
+        tags: saved.tags.unwrap_or_default().into(),
         position: saved.position,
         name: Some(body.name),
         description: body.description,
@@ -642,7 +643,7 @@ pub async fn get_course_structure(
         is_published: c.is_published,
         icon_url,
         banner_url,
-        tags: c.tags.clone().unwrap_or_default(),
+        tags: c.tags.clone().unwrap_or_default().into(),
         position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
@@ -751,65 +752,62 @@ pub async fn push_course_media(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let txn = state.db.begin().await?;
-    let existing_meta = meta::Entity::find()
-        .filter(meta::Column::CourseId.eq(&course_id))
-        .filter(meta::Column::Lang.eq(&query.language))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
     let item_id = create_id();
     let extension = normalize_media_extension(&query.extension)?;
     let item_name = format!("{item_id}.{extension}");
+    let item = query.item;
+    let language = query.language.clone();
+
+    let replaced_media = state
+        .transaction(|txn| {
+            let course_id = course_id.clone();
+            let language = language.clone();
+            let item_id = item_id.clone();
+            Box::pin(async move {
+                let existing_meta = meta::Entity::find()
+                    .filter(meta::Column::CourseId.eq(&course_id))
+                    .filter(meta::Column::Lang.eq(&language))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().naive_utc());
+
+                let replaced = match item {
+                    CourseMediaItem::Icon => {
+                        model.icon = Set(Some(item_id));
+                        existing_meta.icon
+                    }
+                    CourseMediaItem::Thumbnail => {
+                        model.thumbnail = Set(Some(item_id));
+                        existing_meta.thumbnail
+                    }
+                };
+
+                model.update(txn).await?;
+                Ok::<_, ApiError>(replaced)
+            })
+        })
+        .await?;
 
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
 
-    match query.item {
-        CourseMediaItem::Icon => {
-            if let Some(icon) = &existing_meta.icon
-                && !icon.starts_with("http://")
-                && !icon.starts_with("https://")
-            {
-                let path = course_media_storage_path(
-                    &course_id,
-                    &transformed_course_media_file_name(icon),
-                );
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!(
-                        "Failed to delete existing course icon at {}: {:?}",
-                        path,
-                        err
-                    );
-                }
-            }
-            model.icon = Set(Some(item_id.clone()));
-        }
-        CourseMediaItem::Thumbnail => {
-            if let Some(thumbnail) = &existing_meta.thumbnail
-                && !thumbnail.starts_with("http://")
-                && !thumbnail.starts_with("https://")
-            {
-                let path = course_media_storage_path(
-                    &course_id,
-                    &transformed_course_media_file_name(thumbnail),
-                );
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!(
-                        "Failed to delete existing course thumbnail at {}: {:?}",
-                        path,
-                        err
-                    );
-                }
-            }
-            model.thumbnail = Set(Some(item_id.clone()));
+    if let Some(replaced) = replaced_media
+        && !replaced.starts_with("http://")
+        && !replaced.starts_with("https://")
+    {
+        let path =
+            course_media_storage_path(&course_id, &transformed_course_media_file_name(&replaced));
+        if let Err(err) = master_store.as_generic().delete(&path).await {
+            tracing::error!(
+                "Failed to delete replaced course media at {}: {:?}",
+                path,
+                err
+            );
         }
     }
-
-    model.update(&txn).await?;
 
     let path = course_media_storage_path(&course_id, &item_name);
     let signed_url = master_store
@@ -826,7 +824,6 @@ pub async fn push_course_media(
             ApiError::internal_error(anyhow!("Failed to create signed URL, reference ID: {}", id))
         })?;
 
-    txn.commit().await?;
     Ok(Json(PushCourseMediaResponse {
         signed_url: signed_url.to_string(),
     }))
@@ -839,6 +836,7 @@ pub async fn push_course_media(
     params(("course_id" = String, Path, description = "Course identifier")),
     responses(
         (status = 200, description = "Course deleted"),
+        (status = 202, description = "Course queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -847,11 +845,23 @@ pub async fn delete_course(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(course_id): Path<String>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
-    course::Entity::delete_by_id(course_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    if course::Entity::find_by_id(&course_id)
+        .one(&state.db)
+        .await?
+        .is_none()
+    {
+        return Ok(Deleted::Completed(()));
+    }
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::Course,
+        &course_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }

@@ -43,6 +43,7 @@ use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 use super::{parse_sample_rate, sink_from_env, trace_sample_rate_from_env};
+use crate::db::DEFAULT_WRITE_CHUNK;
 use crate::entity::telemetry_span;
 use crate::state::AppState;
 
@@ -138,6 +139,8 @@ pub struct SpanExportConfig {
     /// An empty value falls back to the default prefix.
     pub target_prefix: String,
     pub queue_capacity: usize,
+    /// Spans per `INSERT`; clamped to [`DEFAULT_WRITE_CHUNK`] so one flush
+    /// always fits a single bounded transaction.
     pub max_batch: usize,
     pub flush_interval: Duration,
 }
@@ -554,8 +557,9 @@ impl TelemetrySpanExporter {
 /// registry at startup, then call [`TelemetrySpanExporter::spawn`] once the
 /// database connection is available.
 pub fn telemetry_span_layer(
-    config: SpanExportConfig,
+    mut config: SpanExportConfig,
 ) -> (TelemetrySpanLayer, TelemetrySpanExporter) {
+    config.max_batch = config.max_batch.clamp(1, DEFAULT_WRITE_CHUNK);
     let (tx, rx) = mpsc::channel(config.queue_capacity.max(1));
     let sink = SpanSink {
         tx,
@@ -1271,6 +1275,21 @@ mod tests {
         assert_eq!(config.source, "backend");
         assert_eq!(config.sample_rate, 0.05);
         assert_eq!(config.target_prefix, "flow_like");
+    }
+
+    #[test]
+    fn batches_never_exceed_the_write_chunk() {
+        let (_layer, exporter) = telemetry_span_layer(SpanExportConfig {
+            max_batch: DEFAULT_WRITE_CHUNK * 4,
+            ..config(1.0)
+        });
+        assert_eq!(exporter.config.max_batch, DEFAULT_WRITE_CHUNK);
+
+        let (_layer, exporter) = telemetry_span_layer(SpanExportConfig {
+            max_batch: 0,
+            ..config(1.0)
+        });
+        assert_eq!(exporter.config.max_batch, 1);
     }
 
     #[test]

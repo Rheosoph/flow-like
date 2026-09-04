@@ -50,8 +50,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
-    let _channel_sweeper_handle =
-        spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
+    let _channel_sweeper_handle = spawn_channel_sweeper(
+        Arc::new(state.db.clone()),
+        state.db_dialect,
+        ChannelSweeperConfig::from_env(),
+    );
 
     // Only spawns for backends without native expiry; the others no-op and log why.
     let _cache_sweeper_handle =
@@ -67,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _telemetry_sweeper_handle = spawn_telemetry_sweeper(
         Arc::new(state.db.clone()),
+        state.db_dialect,
         TelemetrySweeperConfig::from_env(),
     );
 

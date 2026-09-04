@@ -26,20 +26,21 @@ use jsonwebtoken::{
         AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse,
     },
 };
-use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
-    DatabaseTransaction, IsolationLevel, Statement, TransactionTrait,
-};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection, DatabaseTransaction, IsolationLevel};
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
+pub use crate::db::DbDialect;
+
 use crate::channel::ChannelIssuer;
 use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
+use crate::db::lease::MutationLease;
 use crate::entity::role;
+use crate::error::ApiError;
 use crate::execution::{DispatchConfig, Dispatcher};
 use crate::mail::{DynMailClient, create_mail_client};
 use crate::permission::wasm_package_permission::WasmPackagePermission;
@@ -122,11 +123,6 @@ fn keyed_local_lock(
     lock
 }
 
-const ENSURE_MUTATION_LOCK_SQL: &str =
-    r#"INSERT INTO "MutationLock" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING"#;
-const ACQUIRE_MUTATION_LOCK_SQL: &str =
-    r#"UPDATE "MutationLock" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1"#;
-
 fn scoped_mutation_lock_id(domain: &[u8], parts: &[&str]) -> i64 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"flow-like.mutation-lock/v1\0");
@@ -157,83 +153,38 @@ pub(crate) fn course_attempt_lock_id(user_id: &str) -> i64 {
     scoped_mutation_lock_id(b"course-attempt-user", &[user_id])
 }
 
-async fn ensure_mutation_lock<C: ConnectionTrait>(
-    connection: &C,
-    lock_id: i64,
-) -> std::result::Result<(), sea_orm::DbErr> {
-    connection
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            ENSURE_MUTATION_LOCK_SQL,
-            [lock_id.into()],
-        ))
-        .await?;
-    Ok(())
-}
-
-async fn acquire_mutation_lock<C: ConnectionTrait>(
-    connection: &C,
-    lock_id: i64,
-) -> std::result::Result<(), sea_orm::DbErr> {
-    let result = connection
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            ACQUIRE_MUTATION_LOCK_SQL,
-            [lock_id.into()],
-        ))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(sea_orm::DbErr::RecordNotFound(format!(
-            "mutation lock row {lock_id} disappeared before acquisition"
-        )));
-    }
-    Ok(())
-}
-
-/// Holds both serialization layers for a canonical board mutation.
+/// Holds both serialization layers for a canonical board mutation: the process-local mutex and
+/// the committed `MutationLock` lease every API replica competes for.
 ///
-/// Dropping the transaction releases the database write intent. Call [`Self::release`] when a
-/// normal path wants to commit work performed through [`Self::connection`]; error and early-return
-/// paths can safely rely on drop/rollback.
+/// No database transaction stays open while the guard is held; callers do their row writes
+/// through [`State::transaction`] after the storage work. Dropping the guard hands the lease
+/// back in the background; [`Self::release`] waits for it so the next writer does not spin.
 pub(crate) struct BoardMutationGuard {
-    _locals: Vec<flow_like_types::tokio::sync::OwnedMutexGuard<()>>,
-    transaction: Option<DatabaseTransaction>,
+    lease: MutationLease,
 }
 
 impl BoardMutationGuard {
-    pub(crate) fn connection(&self) -> &DatabaseTransaction {
-        self.transaction
-            .as_ref()
-            .expect("mutation guard connection is unavailable after release")
-    }
-
-    /// Add another canonical board to this guard without opening a second transaction.
+    /// Add another canonical board to this guard under the same lease owner.
     ///
-    /// Page mutations first lock the globally unique page id, then add its owning board. Keeping
-    /// both database lock rows on one transaction prevents concurrent cross-board page-id claims
-    /// without consuming two pooled database connections per request.
+    /// Page mutations first lock the globally unique page id, then add its owning board, so
+    /// concurrent cross-board page-id claims serialize on the page id row.
     pub(crate) async fn acquire_additional_board(
         &mut self,
         state: &State,
         app_id: &str,
         board_id: &str,
-    ) -> std::result::Result<(), sea_orm::DbErr> {
+    ) -> std::result::Result<(), ApiError> {
         let local = state
             .board_mutation_lock(app_id, board_id)
             .lock_owned()
             .await;
-        let lock_id = board_mutation_lock_id(app_id, board_id);
-        ensure_mutation_lock(self.connection(), lock_id).await?;
-        acquire_mutation_lock(self.connection(), lock_id).await?;
-        self._locals.push(local);
-        Ok(())
+        self.lease
+            .claim_additional(state, board_mutation_lock_id(app_id, board_id), local)
+            .await
     }
 
-    pub(crate) async fn release(mut self) -> std::result::Result<(), sea_orm::DbErr> {
-        if let Some(transaction) = self.transaction.take() {
-            transaction.commit().await?;
-        }
-        Ok(())
+    pub(crate) async fn release(self) {
+        self.lease.release().await
     }
 }
 
@@ -338,6 +289,7 @@ pub(crate) struct ValidatedOpenIdToken {
 pub struct State {
     pub platform_config: Hub,
     pub db: DatabaseConnection,
+    pub db_dialect: DbDialect,
     jwks: flow_like_types::tokio::sync::RwLock<JwkSet>,
     jwks_refresh: flow_like_types::tokio::sync::Mutex<JwksRefreshState>,
     pub client: Client<HttpConnector, Body>,
@@ -362,7 +314,7 @@ pub struct State {
     pub flow_ir_draft_stores:
         moka::sync::Cache<String, Arc<flow_like::flow::copilot::FlowIrDraftStore>>,
     /// Process-local half of canonical app+board serialization. `board_mutation_guard` pairs each
-    /// mutex with a database lock row so API replicas enter the same mutation lane.
+    /// mutex with a leased database lock row so API replicas enter the same mutation lane.
     board_mutation_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     /// Hydrated boards pinned to the object identity they were loaded from. See
@@ -489,6 +441,64 @@ impl State {
         Ok(overlay)
     }
 
+    /// Run `body` in a transaction and retry it on a lost commit race.
+    ///
+    /// See [`crate::db::retry_transaction`] for what a body may and may not do.
+    pub async fn transaction<F, T, E>(&self, body: F) -> std::result::Result<T, E>
+    where
+        F: for<'c> Fn(
+                &'c DatabaseTransaction,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = std::result::Result<T, E>> + Send + 'c>,
+            > + Send
+            + Sync,
+        T: Send,
+        E: From<sea_orm::DbErr>
+            + crate::db::AsDbConflict
+            + std::fmt::Display
+            + std::fmt::Debug
+            + Send,
+    {
+        crate::db::retry_transaction(
+            &self.db,
+            self.db_dialect,
+            None,
+            &crate::db::RetryPolicy::default(),
+            body,
+        )
+        .await
+    }
+
+    /// [`Self::transaction`] with an isolation level, honoured where the engine has one.
+    pub async fn transaction_with<F, T, E>(
+        &self,
+        isolation: IsolationLevel,
+        body: F,
+    ) -> std::result::Result<T, E>
+    where
+        F: for<'c> Fn(
+                &'c DatabaseTransaction,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = std::result::Result<T, E>> + Send + 'c>,
+            > + Send
+            + Sync,
+        T: Send,
+        E: From<sea_orm::DbErr>
+            + crate::db::AsDbConflict
+            + std::fmt::Display
+            + std::fmt::Debug
+            + Send,
+    {
+        crate::db::retry_transaction(
+            &self.db,
+            self.db_dialect,
+            Some(isolation),
+            &crate::db::RetryPolicy::default(),
+            body,
+        )
+        .await
+    }
+
     fn board_mutation_lock(
         &self,
         app_id: &str,
@@ -500,48 +510,24 @@ impl State {
         )
     }
 
-    /// Open a transaction and acquire one durable, database-backed mutation lock.
-    ///
-    /// The lock row is created outside the transaction so rollback-only board mutations do not
-    /// remove it. `READ COMMITTED` gives CockroachDB durable locking reads/write intents and avoids
-    /// its retry-prone default `SERIALIZABLE` behavior for this mutex-only transaction; it also
-    /// matches PostgreSQL's default isolation.
-    pub(crate) async fn mutation_transaction(
-        &self,
-        lock_id: i64,
-    ) -> std::result::Result<DatabaseTransaction, sea_orm::DbErr> {
-        ensure_mutation_lock(&self.db, lock_id).await?;
-        let transaction = self
-            .db
-            .begin_with_config(Some(IsolationLevel::ReadCommitted), None)
-            .await?;
-        acquire_mutation_lock(&transaction, lock_id).await?;
-        Ok(transaction)
-    }
-
     /// Serialize one board writer both within this process and across API replicas.
     ///
-    /// The local mutex is acquired first to avoid spending a database connection on same-process
-    /// waiters. The database transaction remains open solely to retain its lock-row write intent
-    /// for the guard's lifetime; canonical board bytes continue to be read and written through
-    /// storage.
+    /// The local mutex is acquired first so same-process waiters never touch the database. The
+    /// lease row is then claimed in a short retried transaction and kept alive by a heartbeat;
+    /// canonical board bytes continue to be read and written through storage while it is held.
+    /// A lease that stays busy for [`crate::db::lease::LEASE_WAIT_BUDGET`] fails the request.
     pub(crate) async fn board_mutation_guard(
         &self,
         app_id: &str,
         board_id: &str,
-    ) -> std::result::Result<BoardMutationGuard, sea_orm::DbErr> {
+    ) -> std::result::Result<BoardMutationGuard, ApiError> {
         let local = self
             .board_mutation_lock(app_id, board_id)
             .lock_owned()
             .await;
-        let transaction = self
-            .mutation_transaction(board_mutation_lock_id(app_id, board_id))
-            .await?;
-
-        Ok(BoardMutationGuard {
-            _locals: vec![local],
-            transaction: Some(transaction),
-        })
+        let lease =
+            MutationLease::claim(self, board_mutation_lock_id(app_id, board_id), local).await?;
+        Ok(BoardMutationGuard { lease })
     }
 
     pub async fn new(
@@ -549,7 +535,7 @@ impl State {
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
     ) -> Self {
-        Self::new_inner(catalog, cdn_bucket, secret_store_config, None).await
+        Self::new_inner(catalog, cdn_bucket, secret_store_config, None, None).await
     }
 
     /// Construct API state around a caller-managed database connection.
@@ -558,13 +544,24 @@ impl State {
     /// must create the pool themselves so the access token never has to be stored
     /// in `DATABASE_URL`. The standard constructor intentionally retains its
     /// existing `DATABASE_URL` behavior for all other deployment targets.
+    ///
+    /// A caller that already knows which engine it connected to passes the
+    /// `dialect`; `None` falls back to `FLOW_LIKE_DB_DIALECT` and a probe.
     pub async fn new_with_database(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
         database: DatabaseConnection,
+        dialect: Option<DbDialect>,
     ) -> Self {
-        Self::new_inner(catalog, cdn_bucket, secret_store_config, Some(database)).await
+        Self::new_inner(
+            catalog,
+            cdn_bucket,
+            secret_store_config,
+            Some(database),
+            dialect,
+        )
+        .await
     }
 
     async fn new_inner(
@@ -572,6 +569,7 @@ impl State {
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
         database: Option<DatabaseConnection>,
+        dialect: Option<DbDialect>,
     ) -> Self {
         let secrets = {
             let config = secret_store_config.unwrap_or_else(|| {
@@ -732,7 +730,10 @@ impl State {
             }
         };
 
-        if let Err(error) = crate::db_backfills::run_startup_backfills(&db).await {
+        let db_dialect = DbDialect::resolve(dialect, &db).await;
+        tracing::info!(dialect = %db_dialect, "database dialect resolved");
+
+        if let Err(error) = crate::db_backfills::run_startup_backfills(&db, db_dialect).await {
             tracing::warn!("Failed to run startup database backfills: {error}");
         }
 
@@ -895,6 +896,7 @@ impl State {
         Self {
             platform_config,
             db,
+            db_dialect,
             client,
             jwks: flow_like_types::tokio::sync::RwLock::new(jwks),
             jwks_refresh: flow_like_types::tokio::sync::Mutex::new(JwksRefreshState::default()),
@@ -1862,10 +1864,9 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 #[cfg(test)]
 mod tests {
     use super::{
-        ACQUIRE_MUTATION_LOCK_SQL, ENSURE_MUTATION_LOCK_SQL, board_mutation_lock_id,
-        board_mutation_lock_key, cached_openid_is_current, course_attempt_lock_id,
-        entra_tenant_from_issuer, flow_ir_draft_store_key, validate_jwk_for_header,
-        validate_jwks_set, validate_openid_claims,
+        board_mutation_lock_id, board_mutation_lock_key, cached_openid_is_current,
+        course_attempt_lock_id, entra_tenant_from_issuer, flow_ir_draft_store_key,
+        validate_jwk_for_header, validate_jwks_set, validate_openid_claims,
     };
     use flow_like_types::Value;
     use jsonwebtoken::{
@@ -2276,13 +2277,5 @@ mod tests {
             course_attempt_lock_id("user"),
             course_attempt_lock_id("other")
         );
-    }
-
-    #[test]
-    fn mutation_lock_sql_uses_portable_row_writes() {
-        assert!(ENSURE_MUTATION_LOCK_SQL.contains("ON CONFLICT"));
-        assert!(ACQUIRE_MUTATION_LOCK_SQL.starts_with("UPDATE"));
-        assert!(!ENSURE_MUTATION_LOCK_SQL.contains("pg_advisory"));
-        assert!(!ACQUIRE_MUTATION_LOCK_SQL.contains("pg_advisory"));
     }
 }

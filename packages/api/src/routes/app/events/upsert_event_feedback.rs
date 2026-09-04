@@ -9,7 +9,6 @@ use axum::{
 use flow_like_types::Value;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -74,51 +73,59 @@ pub async fn upsert_event_feedback(
     if feedback_id.is_empty() {
         return Err(ApiError::bad_request("feedback_id is required"));
     }
+    let rating = rating.clamp(0, 5);
 
-    let txn = state.db.begin().await?;
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let event_id = event_id.clone();
+            let feedback_id = feedback_id.clone();
+            let sub = sub.clone();
+            let context = context.clone();
+            let comment = comment.clone();
+            Box::pin(async move {
+                let existing_feedback = feedback::Entity::find()
+                    .filter(feedback::Column::AppId.eq(app_id.clone()))
+                    .filter(feedback::Column::EventId.eq(event_id.clone()))
+                    .filter(feedback::Column::Id.eq(feedback_id.clone()))
+                    .one(txn)
+                    .await?;
 
-    let existing_feedback = feedback::Entity::find()
-        .filter(feedback::Column::AppId.eq(app_id.clone()))
-        .filter(feedback::Column::EventId.eq(event_id.clone()))
-        .filter(feedback::Column::Id.eq(feedback_id.clone()))
-        .one(&txn)
+                if let Some(existing) = existing_feedback {
+                    if existing.user_id.as_ref() != Some(&sub) {
+                        return Err(ApiError::FORBIDDEN);
+                    }
+
+                    let mut feedback = existing.into_active_model();
+                    feedback.context = Set(context);
+                    feedback.comment = Set(comment);
+                    feedback.rating = Set(rating);
+                    feedback.updated_at = Set(chrono::Utc::now().naive_utc());
+                    feedback.update(txn).await?;
+                    return Ok(());
+                }
+
+                let feedback = feedback::Model {
+                    id: feedback_id,
+                    app_id: Some(app_id),
+                    user_id: Some(sub),
+                    event_id: Some(event_id),
+                    context,
+                    comment,
+                    rating,
+                    template_id: None,
+                    created_at: chrono::Utc::now().naive_utc(),
+                    updated_at: chrono::Utc::now().naive_utc(),
+                };
+
+                feedback::ActiveModel::from(feedback)
+                    .reset_all()
+                    .insert(txn)
+                    .await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    if let Some(existing) = existing_feedback {
-        if existing.user_id.as_ref() != Some(&sub) {
-            return Err(ApiError::FORBIDDEN);
-        }
-
-        // Update existing feedback
-        let mut feedback = existing.into_active_model();
-        feedback.context = Set(context);
-        feedback.comment = Set(comment);
-        feedback.rating = Set(rating.clamp(0, 5));
-        feedback.updated_at = Set(chrono::Utc::now().naive_utc());
-
-        feedback.update(&txn).await?;
-        txn.commit().await?;
-        return Ok(Json(FeedbackResponse { feedback_id }));
-    }
-
-    let feedback = feedback::Model {
-        id: feedback_id.clone(),
-        app_id: Some(app_id.clone()),
-        user_id: Some(sub),
-        event_id: Some(event_id.clone()),
-        context,
-        comment,
-        rating: rating.clamp(0, 5),
-        template_id: None,
-        created_at: chrono::Utc::now().naive_utc(),
-        updated_at: chrono::Utc::now().naive_utc(),
-    };
-
-    let mut feedback = feedback::ActiveModel::from(feedback);
-    feedback = feedback.reset_all();
-
-    feedback.insert(&txn).await?;
-    txn.commit().await?;
 
     Ok(Json(FeedbackResponse { feedback_id }))
 }

@@ -8,7 +8,7 @@ use flow_like_types::async_trait;
 use flow_like_types::channel::{ChannelPoll, ChannelStore, MAX_TTL, now_unix};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::entity::{
@@ -22,6 +22,10 @@ pub const MAX_OPEN_REQUESTS_PER_SUB: u64 = 32;
 /// Unconsumed inbound messages per channel; a client hammering the composer during a slow
 /// round must not grow the next prompt without bound.
 pub const MAX_PENDING_INBOUND_PER_CHANNEL: u64 = 8;
+/// Inbound rows one drain takes. The push-side cap is checked before the insert, so a burst
+/// can overshoot it; the drain still reads and deletes a bounded set and leaves the rest for
+/// the next round.
+pub const MAX_INBOUND_PER_DRAIN: u64 = 64;
 
 pub fn cancel_row_id(channel_id: &str) -> String {
     format!("cancel:{channel_id}")
@@ -167,8 +171,9 @@ pub async fn remove_request(
     Ok(())
 }
 
-/// Take the pending inbound messages, oldest first. Only the rows read are deleted, so a push
-/// racing the drain keeps its row for the next round instead of being lost.
+/// Take up to [`MAX_INBOUND_PER_DRAIN`] pending inbound messages, oldest first. Only the rows
+/// read are deleted, so a push racing the drain keeps its row for the next round instead of
+/// being lost.
 pub async fn drain_inbound(
     db: &DatabaseConnection,
     channel_id: &str,
@@ -179,6 +184,8 @@ pub async fn drain_inbound(
         .filter(channel::Column::Sub.eq(sub))
         .filter(channel::Column::Kind.eq(ChannelMessageKind::Inbound))
         .order_by_asc(channel::Column::CreatedAt)
+        .order_by_asc(channel::Column::Id)
+        .limit(MAX_INBOUND_PER_DRAIN)
         .all(db)
         .await?;
     if rows.is_empty() {
@@ -387,6 +394,7 @@ mod tests {
         assert!(needs_eviction(MAX_OPEN_REQUESTS_PER_SUB));
         assert!(!inbound_is_full(MAX_PENDING_INBOUND_PER_CHANNEL - 1));
         assert!(inbound_is_full(MAX_PENDING_INBOUND_PER_CHANNEL));
+        assert!(MAX_INBOUND_PER_DRAIN >= MAX_PENDING_INBOUND_PER_CHANNEL);
         assert_eq!(cancel_row_id("run-1"), "cancel:run-1");
     }
 

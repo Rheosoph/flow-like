@@ -12,7 +12,7 @@ use axum::{Extension, Json, extract::State};
 use flow_like_types::Value;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, ModelTrait,
-    QueryFilter, TransactionTrait,
+    QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -122,70 +122,71 @@ pub async fn upsert_global_chat_feedback(
     let comment = truncate_chars(comment.trim(), MAX_COMMENT_CHARS);
     let rating = rating.clamp(0, 5);
 
-    let txn = state.db.begin().await?;
+    let status = state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let row_id = row_id.clone();
+            let context = context.clone();
+            let comment = comment.clone();
+            Box::pin(async move {
+                let existing = feedback::Entity::find()
+                    .filter(feedback::Column::Id.eq(row_id.clone()))
+                    .filter(feedback::Column::AppId.is_null())
+                    .one(txn)
+                    .await?;
 
-    let existing = feedback::Entity::find()
-        .filter(feedback::Column::Id.eq(row_id.clone()))
-        .filter(feedback::Column::AppId.is_null())
-        .one(&txn)
+                if let Some(existing) = &existing
+                    && existing.user_id.as_ref() != Some(&sub)
+                {
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                // A withdrawn rating deletes the row instead of storing a 0. Analytics reads treat
+                // every stored row as a rating, so leaving a neutral row behind would keep counting
+                // a rating the user removed.
+                if rating == 0 {
+                    if let Some(existing) = existing {
+                        existing.delete(txn).await?;
+                    }
+                    return Ok("withdrawn");
+                }
+
+                if let Some(existing) = existing {
+                    let mut row = existing.into_active_model();
+                    row.context = Set(context);
+                    row.comment = Set(comment);
+                    row.rating = Set(rating);
+                    row.event_id = Set(Some(FLOWPILOT_FEEDBACK_SCOPE.to_string()));
+                    row.updated_at = Set(chrono::Utc::now().naive_utc());
+                    row.update(txn).await?;
+                    return Ok("stored");
+                }
+
+                let now = chrono::Utc::now().naive_utc();
+                let row = feedback::Model {
+                    id: row_id,
+                    app_id: None,
+                    template_id: None,
+                    user_id: Some(sub),
+                    event_id: Some(FLOWPILOT_FEEDBACK_SCOPE.to_string()),
+                    context,
+                    comment,
+                    rating,
+                    created_at: now,
+                    updated_at: now,
+                };
+
+                let mut row = feedback::ActiveModel::from(row);
+                row = row.reset_all();
+                row.insert(txn).await?;
+                Ok::<_, ApiError>("stored")
+            })
+        })
         .await?;
-
-    if let Some(existing) = &existing
-        && existing.user_id.as_ref() != Some(&sub)
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
-
-    // A withdrawn rating deletes the row instead of storing a 0. Analytics reads treat every stored
-    // row as a rating, so leaving a neutral row behind would keep counting a rating the user removed.
-    if rating == 0 {
-        if let Some(existing) = existing {
-            existing.delete(&txn).await?;
-        }
-        txn.commit().await?;
-        return Ok(Json(FlowPilotFeedbackResponse {
-            feedback_id,
-            status: "withdrawn".to_string(),
-        }));
-    }
-
-    if let Some(existing) = existing {
-        let mut row = existing.into_active_model();
-        row.context = Set(context);
-        row.comment = Set(comment);
-        row.rating = Set(rating);
-        row.event_id = Set(Some(FLOWPILOT_FEEDBACK_SCOPE.to_string()));
-        row.updated_at = Set(chrono::Utc::now().naive_utc());
-        row.update(&txn).await?;
-        txn.commit().await?;
-        return Ok(Json(FlowPilotFeedbackResponse {
-            feedback_id,
-            status: "stored".to_string(),
-        }));
-    }
-
-    let now = chrono::Utc::now().naive_utc();
-    let row = feedback::Model {
-        id: row_id,
-        app_id: None,
-        template_id: None,
-        user_id: Some(sub),
-        event_id: Some(FLOWPILOT_FEEDBACK_SCOPE.to_string()),
-        context,
-        comment,
-        rating,
-        created_at: now,
-        updated_at: now,
-    };
-
-    let mut row = feedback::ActiveModel::from(row);
-    row = row.reset_all();
-    row.insert(&txn).await?;
-    txn.commit().await?;
 
     Ok(Json(FlowPilotFeedbackResponse {
         feedback_id,
-        status: "stored".to_string(),
+        status: status.to_string(),
     }))
 }
 

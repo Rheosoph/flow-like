@@ -35,3 +35,37 @@ jobs:
 
       - name: Check Formatting
         run: cargo fmt --check
+
+  dsql-migrations:
+    name: DSQL migrations lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Lint committed Aurora DSQL migrations
+        # The dsql-lint version is pinned once, as DSQL_LINT_VERSION in
+        # packages/api/scripts/dsql-migration.ts (the generator refuses any
+        # other version); this step lints with that version's npm build.
+        # Exit 3 means "fixed with warnings" in --fix mode; in lint mode only 0 is
+        # clean, but 3 is tolerated so a future dsql-lint that reports warnings
+        # without failing keeps this step green. 1 = DSQL-incompatible SQL.
+        run: |
+          version="$(sed -nE 's/^export const DSQL_LINT_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";$/\1/p' packages/api/scripts/dsql-migration.ts)"
+          if [ -z "$version" ]; then
+            echo "DSQL_LINT_VERSION not found in packages/api/scripts/dsql-migration.ts"
+            exit 1
+          fi
+          echo "linting with @aws/dsql-lint@${version}"
+          set +e
+          npx --yes --package="@aws/dsql-lint@${version}" dsql-lint packages/api/prisma/migrations-dsql/*/migration.sql
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+            echo "dsql-lint exited with $rc"
+            exit 1
+          fi

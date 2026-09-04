@@ -108,6 +108,8 @@ use std::sync::Arc;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 
+use crate::db::DbDialect;
+
 /// Backend type for cache storage.
 #[derive(Clone, Debug, Default)]
 pub enum CacheBackend {
@@ -153,6 +155,9 @@ impl CacheBackend {
 #[derive(Default)]
 pub struct CacheStoreConfig {
     pub db: Option<Arc<sea_orm::DatabaseConnection>>,
+    /// The engine behind `db`; probed on first use when the caller has not
+    /// resolved it already.
+    pub dialect: Option<DbDialect>,
     #[cfg(feature = "aws")]
     pub aws_config: Option<Arc<SdkConfig>>,
 }
@@ -160,6 +165,11 @@ pub struct CacheStoreConfig {
 impl CacheStoreConfig {
     pub fn with_db(mut self, db: Arc<sea_orm::DatabaseConnection>) -> Self {
         self.db = Some(db);
+        self
+    }
+
+    pub fn with_dialect(mut self, dialect: DbDialect) -> Self {
+        self.dialect = Some(dialect);
         self
     }
 
@@ -186,7 +196,8 @@ pub async fn create_cache_store(
                     "Database connection required for the Postgres cache backend".into(),
                 )
             })?;
-            Ok(Arc::new(PostgresCacheStore::new(db)))
+            let dialect = DbDialect::resolve(config.dialect, &db).await;
+            Ok(Arc::new(PostgresCacheStore::new(db, dialect)))
         }
 
         #[cfg(feature = "redis")]

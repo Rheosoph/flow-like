@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter};
 
 use super::upsert_comment::adjust_package_ratings;
 
@@ -44,27 +44,33 @@ pub async fn remove_comment(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    let txn = state.db.begin().await?;
-
-    let comment = comment::Entity::find_by_id(&comment_id)
-        .filter(comment::Column::PackageId.eq(&package_id))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let is_owner = comment.user_id == sub;
     let is_maintainer = crate::check_wasm_access!(state, &sub, &package_id)
         .map(|p| p.has_permission(WasmPackagePermission::Maintainer))
         .unwrap_or(false);
 
-    if !is_owner && !is_maintainer {
-        return Err(ApiError::FORBIDDEN);
-    }
+    state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let package_id = package_id.clone();
+            let comment_id = comment_id.clone();
+            Box::pin(async move {
+                let comment = comment::Entity::find_by_id(&comment_id)
+                    .filter(comment::Column::PackageId.eq(&package_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let rating = comment.rating;
-    comment.delete(&txn).await?;
-    adjust_package_ratings(&txn, &package_id, -rating, -1).await?;
-    txn.commit().await?;
+                if comment.user_id != sub && !is_maintainer {
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                let rating = comment.rating;
+                comment.delete(txn).await?;
+                adjust_package_ratings(txn, &package_id, -rating, -1).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     Ok(Json(()))
 }

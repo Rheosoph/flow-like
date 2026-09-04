@@ -5,6 +5,7 @@
 //! the inbox first; a rule may additionally mirror its transitions out of band,
 //! to the platform alerting mailbox and to the platform admins.
 
+use crate::db::{DEFAULT_WRITE_CHUNK, delete_in_batches};
 use crate::entity::{telemetry_alert_event, telemetry_alert_rule};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
@@ -21,8 +22,8 @@ use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use chrono::{Duration, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -603,10 +604,14 @@ pub async fn delete_telemetry_alert_rule(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let events = telemetry_alert_event::Entity::delete_many()
-        .filter(telemetry_alert_event::Column::RuleId.eq(&rule_id))
-        .exec(&state.db)
-        .await?;
+    let events = delete_in_batches::<telemetry_alert_event::Entity>(
+        &state.db,
+        state.db_dialect,
+        Condition::all().add(telemetry_alert_event::Column::RuleId.eq(&rule_id)),
+        DEFAULT_WRITE_CHUNK,
+        None,
+    )
+    .await?;
 
     telemetry_alert_rule::Entity::delete_by_id(&model.id)
         .exec(&state.db)
@@ -614,7 +619,7 @@ pub async fn delete_telemetry_alert_rule(
 
     Ok(Json(DeleteTelemetryAlertRuleResponse {
         id: rule_id,
-        events_deleted: events.rows_affected,
+        events_deleted: events.rows,
     }))
 }
 

@@ -80,6 +80,7 @@ services:
         wait-for-postgres.sh &&
         bun install || true &&
         make-postgres-prisma-mirror.sh &&
+        bun prisma/pre-push.ts &&
         bunx prisma db push --schema=prisma-postgres-mirror/schema &&
         echo '✅ Database schema applied!' &&
         rm -rf node_modules bun.lockb bun.lock prisma-postgres-mirror &&

@@ -157,13 +157,12 @@ pub async fn ensure_wasm_artifacts(
             let compiled_platforms = version_record.compiled_platforms.clone();
             let mut active: wasm_package_version::ActiveModel = version_record.into();
             active.compilation_status = Set(WasmCompilationStatus::Compiled);
-            active.compiled_platforms = Set(Some(add_target_platform(
-                compiled_platforms,
-                &target_platform,
-            )));
-            active.supported_wasmtime_versions = Set(Some(with_current_wasmtime_version(
-                supported_wasmtime_versions,
-            )));
+            active.compiled_platforms = Set(Some(
+                add_target_platform(compiled_platforms.map(Into::into), &target_platform).into(),
+            ));
+            active.supported_wasmtime_versions = Set(Some(
+                with_current_wasmtime_version(supported_wasmtime_versions.map(Into::into)).into(),
+            ));
             active.compilation_error = Set(None);
             active.update(&state.db).await?;
             already_available += 1;
@@ -176,11 +175,13 @@ pub async fn ensure_wasm_artifacts(
         }
 
         let version_id = version_record.id.clone();
-        let next_platforms =
-            remove_target_platform(version_record.compiled_platforms.clone(), &target_platform);
+        let next_platforms = remove_target_platform(
+            version_record.compiled_platforms.clone().map(Into::into),
+            &target_platform,
+        );
         let mut active: wasm_package_version::ActiveModel = version_record.into();
         active.compilation_status = Set(WasmCompilationStatus::Pending);
-        active.compiled_platforms = Set(Some(next_platforms));
+        active.compiled_platforms = Set(Some(next_platforms.into()));
         active.compilation_error = Set(None);
         active.update(&state.db).await?;
 

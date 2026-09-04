@@ -2,7 +2,7 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Category")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum Category {
     #[sea_orm(string_value = "OTHER")]
     Other,
@@ -49,7 +49,7 @@ pub enum Category {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "ExecutionMode")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum ExecutionMode {
     #[sea_orm(string_value = "ANY")]
     Any,
@@ -60,7 +60,7 @@ pub enum ExecutionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Status")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum Status {
     #[sea_orm(string_value = "ACTIVE")]
     Active,
@@ -71,7 +71,7 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Visibility")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum Visibility {
     #[sea_orm(string_value = "PUBLIC")]
     Public,
@@ -86,7 +86,7 @@ pub enum Visibility {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "UserStatus")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum UserStatus {
     #[sea_orm(string_value = "ACTIVE")]
     Active,
@@ -97,7 +97,7 @@ pub enum UserStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "UserTier")]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum UserTier {
     #[sea_orm(string_value = "FREE")]
     Free,
@@ -148,7 +148,8 @@ pub mod app {
         pub version: Option<String>,
         #[sea_orm(column_name = "executionMode")]
         pub execution_mode: ExecutionMode,
-        pub bits: Option<Vec<String>>,
+        #[sea_orm(column_type = "JsonBinary", nullable)]
+        pub bits: Option<Json>,
         #[sea_orm(column_name = "createdAt")]
         pub created_at: DateTime,
         #[sea_orm(column_name = "updatedAt")]

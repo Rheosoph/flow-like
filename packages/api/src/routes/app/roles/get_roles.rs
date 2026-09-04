@@ -9,7 +9,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 /// The app's default role id (when set) together with all of its roles.
 pub type AppRoles = (Option<String>, Vec<role::Model>);
@@ -47,10 +47,8 @@ pub async fn get_roles(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let txn = state.db.begin().await?;
-
     let app = app::Entity::find_by_id(app_id.clone())
-        .one(&txn)
+        .one(&state.db)
         .await?
         .ok_or_else(|| {
             tracing::warn!("App {} not found", app_id);
@@ -59,7 +57,7 @@ pub async fn get_roles(
 
     let roles = role::Entity::find()
         .filter(role::Column::AppId.eq(app_id.clone()))
-        .all(&txn)
+        .all(&state.db)
         .await?;
 
     Ok(Json((app.default_role_id, roles)))

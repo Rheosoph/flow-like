@@ -7,8 +7,9 @@ use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
-        MaintenanceRunRequest, MaintenanceRunResponse, RegressionSuitesMaintenanceResult,
-        RunSweepMaintenanceResult, StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
+        DeletionQueueMaintenanceResult, MaintenanceRunRequest, MaintenanceRunResponse,
+        RegressionSuitesMaintenanceResult, RunSweepMaintenanceResult,
+        StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
 
@@ -72,7 +73,7 @@ async fn run_maintenance_job(
         MaintenanceRunRequest::CacheCleanup => {
             // Channel rows are expiring coordination state with no native TTL either; they ride
             // the same scheduled job so serverless deployments need no second trigger.
-            match sweep_channels_once(&state.db).await {
+            match sweep_channels_once(&state.db, state.db_dialect).await {
                 Ok(deleted) => {
                     tracing::info!(deleted, "Maintenance channel sweep completed")
                 }
@@ -183,6 +184,33 @@ async fn run_maintenance_job(
                     dispatched: outcome.dispatched,
                     swept: outcome.swept,
                     executed: outcome.executed,
+                },
+            )))
+        }
+        MaintenanceRunRequest::DeletionQueue => {
+            let budget = crate::deletion::PassBudget::from_env();
+            let report = crate::deletion::run_queue(&state, budget)
+                .await
+                .map_err(|error| {
+                    tracing::error!(error = %error, "Scheduled deletion queue pass failed");
+                    error
+                })?;
+
+            tracing::info!(
+                claimed = report.claimed,
+                completed = report.completed,
+                suspended = report.suspended,
+                failed = report.failed,
+                max_chunks = budget.max_chunks,
+                "Maintenance deletion queue pass completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::DeletionQueue(
+                DeletionQueueMaintenanceResult {
+                    claimed: report.claimed,
+                    completed: report.completed,
+                    suspended: report.suspended,
+                    failed: report.failed,
                 },
             )))
         }

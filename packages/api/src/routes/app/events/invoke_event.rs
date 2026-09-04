@@ -555,7 +555,7 @@ async fn invoke_event_impl(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
-        caller_app_chain: Set(caller_app_chain.clone()),
+        caller_app_chain: Set(caller_app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation_keys.clone()),
@@ -579,10 +579,12 @@ async fn invoke_event_impl(
 
     // For local mode, insert synchronously and return JSON - no dispatch needed
     if query.local {
-        run.insert(&state.db).await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to create run record");
-            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-        })?;
+        crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to create run record");
+                ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+            })?;
         crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
         let poll_token = sign_execution_jwt(ExecutionJwtParams {
@@ -741,10 +743,12 @@ async fn invoke_event_impl(
 
     // For isolated K8s jobs, insert run record and dispatch async
     if query.isolated {
-        run.insert(&state.db).await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to create run record");
-            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-        })?;
+        crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to create run record");
+                ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+            })?;
         crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
         let response = match state
@@ -779,10 +783,12 @@ async fn invoke_event_impl(
     // Persist the run record BEFORE dispatch so infrastructure failures
     // (executor crashes, network drops, timeouts) leave a visible Pending
     // row that can be reconciled, rather than a silently lost workflow.
-    run.insert(&state.db).await.map_err(|e| {
-        tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
-        ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-    })?;
+    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+        .await
+        .map_err(|e| {
+            tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
+            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+        })?;
     crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
     // Dispatch based on the configured backend

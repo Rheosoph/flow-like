@@ -1,28 +1,3 @@
-enum BitType {
-  COURSE
-  LLM
-  VLM
-  TTS
-  STT
-  EMBEDDING
-  IMAGE_EMBEDDING
-  OBJECT_DETECTION
-  IMAGE_GENERATION
-  VIDEO_GENERATION
-  FILE
-  MEDIA
-  TEMPLATE
-  TOKENIZER
-  TOKENIZER_CONFIG
-  SPECIAL_TOKENS_MAP
-  CONFIG
-  PREPROCESSOR_CONFIG
-  PROJECTION
-  PROJECT
-  BOARD
-  OTHER
-}
-
 model LlmModel {
   slug String @id
 
@@ -50,8 +25,8 @@ model LlmModel {
 model Bit {
   id String @id
 
-  authors      String[]
-  type         BitType
+  authors      Json?
+  type         String
   meta         Meta[]
   repository   String?
   downloadLink String?
@@ -65,16 +40,14 @@ model Bit {
   version String?
   license String?
 
-  dependencies       String[]
-  dependencyTreeHash String?  @unique
+  dependencies       Json?
+  dependencyTreeHash String? @unique
 
   modelSlug String?
   model     LlmModel? @relation(fields: [modelSlug], references: [slug])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  featuredSwimlane SwimlaneItem[]
 
   cache  BitTreeCache?
   caches BitCache[]
@@ -121,18 +94,18 @@ model TemplateProfile {
   thumbnail   String?
   icon        String?
   description String?
-  secure      Boolean  @default(true)
-  interests   String[]
-  tags        String[]
+  secure      Boolean @default(true)
+  interests   Json?
+  tags        Json?
 
   theme    Json?
   settings Json?
 
   // JSON with the apps that are part of the profile. Contains the app ID, if it is favorite, pinned and position of the two
   apps   Json?
-  bitIds String[]
+  bitIds Json?
   hub    String
-  hubs   String[]
+  hubs   Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -77,7 +77,7 @@ impl AppPackageResponse {
             status: pkg.map(|p| format!("{:?}", p.status)),
             visibility: pkg.map(|p| format!("{:?}", p.visibility)),
             verified: pkg.map(|p| p.verified),
-            keywords: pkg.and_then(|p| p.keywords.clone()),
+            keywords: pkg.and_then(|p| p.keywords.clone().map(Into::into)),
             added_at: DateTime::from_naive_utc_and_offset(model.added_at, Utc),
             stale: model.stale,
             metadata: meta.map(MetaSummary::from_model),

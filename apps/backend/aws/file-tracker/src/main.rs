@@ -1,16 +1,30 @@
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_lambda_events::sqs::SqsEvent;
 use aws_sdk_dynamodb::Client as DynamoClient;
+use flow_like_aws_data::dsql::{self, DsqlConfig, DsqlDatabase};
+use flow_like_db::DbDialect;
 use flow_like_secrets::{
     AwsParameterStoreProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore,
     SecretStoreConfig,
 };
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use sea_orm::{ConnectOptions, Database};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 mod entity;
 mod event_handler;
+use std::sync::Arc;
 use std::time::Duration;
+
+const APPLICATION_NAME: &str = "flow-like-aws-file-tracker";
+
+/// The pool this process writes through, plus the DSQL token rotor when the
+/// endpoint selected IAM connectivity.
+#[derive(Clone)]
+struct DatabaseHandle {
+    connection: DatabaseConnection,
+    dialect: DbDialect,
+    dsql: Option<Arc<DsqlDatabase>>,
+}
 
 async fn resolve_database_url() -> String {
     match std::env::var("DATABASE_URL") {
@@ -30,6 +44,42 @@ async fn resolve_database_url() -> String {
                 .await
                 .expect("DATABASE_URL must be set via env or under SECRET_PREFIX");
             ExposeSecret::expose_secret(&*value).to_string()
+        }
+    }
+}
+
+/// A DSQL endpoint selects IAM-token connectivity; anything else keeps the
+/// `DATABASE_URL` path.
+async fn connect_database() -> DatabaseHandle {
+    let dsql = DsqlConfig::from_env().expect("invalid Aurora DSQL configuration");
+    match dsql {
+        Some(config) => {
+            let database = Arc::new(
+                dsql::connect_as(&config, APPLICATION_NAME)
+                    .await
+                    .expect("failed to connect to Aurora DSQL"),
+            );
+            DatabaseHandle {
+                connection: database.connection.clone(),
+                dialect: DbDialect::Dsql,
+                dsql: Some(database),
+            }
+        }
+        None => {
+            let db_url = resolve_database_url().await;
+            let mut opt = ConnectOptions::new(db_url);
+            opt.max_connections(100)
+                .min_connections(1)
+                .connect_timeout(Duration::from_secs(8));
+            let connection = Database::connect(opt)
+                .await
+                .expect("Failed to connect to database");
+            let dialect = DbDialect::resolve(None, &connection).await;
+            DatabaseHandle {
+                connection,
+                dialect,
+                dsql: None,
+            }
         }
     }
 }
@@ -60,22 +110,24 @@ async fn main() -> Result<(), Error> {
         .with(env_filter)
         .try_init();
 
-    let db_url = resolve_database_url().await;
-    let mut opt = ConnectOptions::new(db_url.to_owned());
-
-    opt.max_connections(100)
-        .min_connections(1)
-        .connect_timeout(Duration::from_secs(8));
-
-    let db = Database::connect(opt)
-        .await
-        .expect("Failed to connect to database");
+    let db = connect_database().await;
 
     let config = aws_config::load_from_env().await;
     let dynamo = create_dynamo_client(&config);
 
     run(service_fn(|event: LambdaEvent<SqsEvent>| {
-        event_handler::function_handler(event, dynamo.clone(), db.clone())
+        let db = db.clone();
+        let dynamo = dynamo.clone();
+        async move {
+            // A frozen Lambda's timers do not tick, so the token is checked per
+            // invocation; a failed mint surfaces on the query if it matters.
+            if let Some(dsql) = &db.dsql {
+                if let Err(error) = dsql.refresh_token_if_stale().await {
+                    tracing::warn!(%error, "Aurora DSQL token refresh failed before invocation");
+                }
+            }
+            event_handler::function_handler(event, dynamo, db.connection, db.dialect).await
+        }
     }))
     .await
 }

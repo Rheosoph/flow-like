@@ -491,7 +491,7 @@ pub async fn invoke_event_async(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
-        caller_app_chain: Set(caller_app_chain.clone()),
+        caller_app_chain: Set(caller_app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation_keys.clone()),
@@ -621,10 +621,12 @@ pub async fn invoke_event_async(
     // No executor can observe this run before dispatch. Insert only after all
     // fallible request preparation so an earlier failure cannot strand a
     // canonical Pending row.
-    run.insert(&state.db).await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to create run record");
-        ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-    })?;
+    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create run record");
+            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+        })?;
     crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
     let response = match state.dispatcher.dispatch_async(request).await {

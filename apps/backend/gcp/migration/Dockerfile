@@ -25,9 +25,10 @@
 #
 # Authentication: no password exists anywhere in the GCP installation (D4). The
 # entrypoint mints a metadata-server token carrying only the SQL login scope,
-# composes DATABASE_URL in memory and passes it to one child process; it refuses
-# to start if DATABASE_URL, PGPASSWORD, a key file, a metadata override or a
-# proxy variable is present. Env contract and validation mirror
+# composes DATABASE_URL in memory and passes it to its two child processes in
+# turn (packages/api/prisma/pre-push.ts, then prisma db push); it refuses to
+# start if DATABASE_URL, PGPASSWORD, a key file, a metadata override or a proxy
+# variable is present. Env contract and validation mirror
 # flow_like_gcp_data::postgres, see migrate.ts and README.md.
 #
 # Transport: Cloud SQL refuses cleartext (ENCRYPTED_ONLY) and the job always
@@ -83,6 +84,15 @@ RUN bun -e ' \
     console.log(`prisma ${installed} satisfies the packages/api pin ${range}`);'
 
 COPY packages/api/prisma/schema ./prisma/schema
+# Column type changes `db push` cannot emit correctly on an existing database
+# (enum -> TEXT, array -> JSONB need a USING clause); migrate.ts runs the
+# guarded, idempotent runner with the same token before it spawns Prisma. pg
+# and dotenv in package.json are its imports.
+COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
+COPY packages/api/prisma/pre-push ./prisma/pre-push
+# make-postgres-prisma-mirror.sh is a shim that execs make-prisma-mirror.sh
+# from its own directory.
+COPY packages/api/scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
 COPY packages/api/scripts/make-postgres-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh
 COPY apps/backend/gcp/migration/prisma.config.ts apps/backend/gcp/migration/migrate.ts ./
 
@@ -91,7 +101,7 @@ COPY apps/backend/gcp/migration/prisma.config.ts apps/backend/gcp/migration/migr
 # the rewrite an assertion rather than a hope, and running the schema engine
 # with --version proves the native binary loads (libssl present, right target)
 # before the image is ever pushed.
-RUN chmod +x /usr/local/bin/make-postgres-prisma-mirror.sh \
+RUN chmod +x /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh \
     && DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build make-postgres-prisma-mirror.sh \
     && rm -rf prisma/schema \
     && mv prisma-postgres-mirror/schema prisma/schema \

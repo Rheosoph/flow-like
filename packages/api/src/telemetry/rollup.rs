@@ -34,6 +34,7 @@ use sea_orm::{
     Statement,
 };
 
+use crate::db::DbDialect;
 use crate::entity::{
     telemetry_dimension_daily, telemetry_error_event, telemetry_event, telemetry_event_daily,
     telemetry_flowpilot_daily, telemetry_flowpilot_failure_daily, telemetry_install_daily,
@@ -43,6 +44,7 @@ use crate::entity::{
 use crate::telemetry::flowpilot::{
     FLOWPILOT_METRICS_EVENT, FailureSignature, parse_failure_signatures,
 };
+use crate::telemetry::percentiles_in_sql;
 
 const DEFAULT_INTERVAL_SECS: u64 = 3600;
 const MIN_INTERVAL_SECS: u64 = 60;
@@ -74,7 +76,7 @@ const GROUP_ROW_CAP: u64 = 5_000;
 /// Upper bound on the distinct installs a single day materialises in memory.
 const INSTALL_ROW_CAP: u64 = 250_000;
 const FLOWPILOT_ROW_CAP: u64 = 100_000;
-/// Only used by the non-Postgres percentile fallback.
+/// Only used by the in-memory percentile fallback.
 const PERF_ROW_CAP: u64 = 200_000;
 const INSERT_CHUNK: usize = 500;
 
@@ -180,10 +182,11 @@ pub fn spawn_telemetry_rollup(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // First tick fires immediately; let services come up before we hit the DB.
         ticker.tick().await;
+        let dialect = DbDialect::detect(db.as_ref()).await;
 
         loop {
             ticker.tick().await;
-            match rollup_once(db.as_ref(), &config).await {
+            match rollup_once_with(db.as_ref(), dialect, &config).await {
                 Ok(result) if result.is_empty() => {}
                 Ok(result) => tracing::info!(
                     days = result.days,
@@ -204,12 +207,23 @@ pub fn spawn_telemetry_rollup(
     Some(handle)
 }
 
+/// [`rollup_once_with`] for callers without a resolved dialect; probes the
+/// engine first. Prefer passing `State::db_dialect` where a state exists.
+pub async fn rollup_once(
+    db: &DatabaseConnection,
+    config: &TelemetryRollupConfig,
+) -> Result<TelemetryRollupResult, DbErr> {
+    let dialect = DbDialect::detect(db).await;
+    rollup_once_with(db, dialect, config).await
+}
+
 /// Recompute and upsert every daily rollup for each day in the backfill window.
 ///
 /// Exposed for tests, for the spawned task, and for the Admin-gated
 /// `POST /admin/telemetry/rollup` endpoint used by serverless deployments.
-pub async fn rollup_once(
+pub async fn rollup_once_with(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     config: &TelemetryRollupConfig,
 ) -> Result<TelemetryRollupResult, DbErr> {
     let now = Utc::now().naive_utc();
@@ -223,7 +237,7 @@ pub async fn rollup_once(
         result.dimensions_upserted += rollup_dimensions(db, day, next).await?;
         result.sessions_upserted += rollup_sessions(db, day, next).await?;
         result.llm_upserted += rollup_llm(db, day, next).await?;
-        result.perf_upserted += rollup_perf(db, day, next).await?;
+        result.perf_upserted += rollup_perf(db, dialect, day, next).await?;
         result.flowpilot_upserted += rollup_flowpilot(db, day, next).await?;
     }
 
@@ -550,7 +564,7 @@ fn event_count_expr() -> SimpleExpr {
 }
 
 /// `COALESCE(<column>, 'unknown')` — used identically in the projection, the
-/// `GROUP BY` and the long-tail `NOT IN`, so all three agree on the key.
+/// `GROUP BY` and the long-tail `NOT EXISTS`, so all three agree on the key.
 fn coalesced_key(column: impl sea_orm::sea_query::IntoColumnRef) -> SimpleExpr {
     Func::coalesce([Expr::col(column), Expr::val(UNKNOWN_VALUE.to_string())]).into()
 }
@@ -747,67 +761,73 @@ async fn event_name_counts<C: ConnectionTrait>(
     GroupedCount::find_by_statement(stmt).all(db).await
 }
 
+/// `NOT EXISTS` against the names already stored for `day`, so the tail is
+/// exactly the events whose name has no row of its own. Reading the kept keys
+/// back from the rollup table instead of binding them keeps the statement
+/// small however many names a day keeps.
+fn event_name_not_kept(day: NaiveDateTime) -> SimpleExpr {
+    let mut kept = SeaQuery::select();
+    kept.expr(Expr::val(1))
+        .from(telemetry_event_daily::Entity)
+        .and_where(
+            Expr::col((
+                telemetry_event_daily::Entity,
+                telemetry_event_daily::Column::Day,
+            ))
+            .eq(day),
+        )
+        .and_where(
+            Expr::col((
+                telemetry_event_daily::Entity,
+                telemetry_event_daily::Column::Name,
+            ))
+            .ne(OTHER_KEY),
+        )
+        .and_where(
+            Expr::col((
+                telemetry_event_daily::Entity,
+                telemetry_event_daily::Column::Name,
+            ))
+            .equals((telemetry_event::Entity, telemetry_event::Column::Name)),
+        );
+    Expr::not_exists(kept)
+}
+
 async fn event_name_tail<C: ConnectionTrait>(
     db: &C,
     day: NaiveDateTime,
     next: NaiveDateTime,
-    kept_keys: &[String],
 ) -> Result<Vec<BucketCount>, DbErr> {
     let mut query = SeaQuery::select();
     query
         .from(telemetry_event::Entity)
         .expr_as(
-            Expr::col(telemetry_event::Column::Source),
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::Source)),
             Alias::new("bucket"),
         )
         .expr_as(event_count_expr(), Alias::new("cnt"))
         .expr_as(event_installs_expr(), Alias::new("installs"))
-        .and_where(Expr::col(telemetry_event::Column::CreatedAt).gte(day))
-        .and_where(Expr::col(telemetry_event::Column::CreatedAt).lt(next))
-        .and_where(Expr::col(telemetry_event::Column::Name).is_not_in(kept_keys.to_vec()))
-        .add_group_by([Expr::col(telemetry_event::Column::Source).into()]);
+        .and_where(
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::CreatedAt)).gte(day),
+        )
+        .and_where(
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::CreatedAt)).lt(next),
+        )
+        .and_where(event_name_not_kept(day))
+        .add_group_by([
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::Source)).into(),
+        ]);
 
     let stmt = db.get_database_backend().build(&query);
     BucketCount::find_by_statement(stmt).all(db).await
 }
 
-async fn rollup_events(
-    db: &DatabaseConnection,
+fn event_daily_models(
     day: NaiveDateTime,
-    next: NaiveDateTime,
-) -> Result<u64, DbErr> {
-    let grouped = event_name_counts(db, day, next).await?;
-    // The grouped read is capped, so a day past the cap has keys the split
-    // never saw. Both cases route the remainder through the exact tail query.
-    let capped = grouped.len() as u64 >= GROUP_ROW_CAP;
-    let split = split_long_tail(grouped, ROLLUP_TOP_N);
-    let mut rows = split.kept;
-
-    if split.folded_keys > 0 || capped {
-        tracing::debug!(
-            day = %day,
-            folded_keys = split.folded_keys,
-            capped,
-            "Folding telemetry event long tail into {}",
-            OTHER_KEY
-        );
-        for tail in event_name_tail(db, day, next, &split.kept_keys).await? {
-            rows.push(GroupedCount {
-                key: OTHER_KEY.to_string(),
-                bucket: tail.bucket,
-                cnt: tail.cnt,
-                installs: tail.installs,
-            });
-        }
-    }
-
-    if rows.is_empty() {
-        return Ok(0);
-    }
-
-    let now = Utc::now().naive_utc();
-    let models: Vec<telemetry_event_daily::ActiveModel> = rows
-        .into_iter()
+    now: NaiveDateTime,
+    rows: Vec<GroupedCount>,
+) -> Vec<telemetry_event_daily::ActiveModel> {
+    rows.into_iter()
         .map(|row| telemetry_event_daily::ActiveModel {
             id: Set(create_id()),
             day: Set(day),
@@ -818,9 +838,63 @@ async fn rollup_events(
             created_at: Set(now),
             updated_at: Set(now),
         })
-        .collect();
+        .collect()
+}
 
-    upsert_chunked(db, models, event_daily_on_conflict()).await
+/// The kept names are written before the tail is read: the tail query defines
+/// itself as "every name without a row for this day", so kept rows and the
+/// `__other__` row partition the day exactly once.
+async fn rollup_events(
+    db: &DatabaseConnection,
+    day: NaiveDateTime,
+    next: NaiveDateTime,
+) -> Result<u64, DbErr> {
+    let grouped = event_name_counts(db, day, next).await?;
+    // The grouped read is capped, so a day past the cap has keys the split
+    // never saw. Both cases route the remainder through the exact tail query.
+    let capped = grouped.len() as u64 >= GROUP_ROW_CAP;
+    let split = split_long_tail(grouped, ROLLUP_TOP_N);
+    if split.kept.is_empty() {
+        return Ok(0);
+    }
+
+    let now = Utc::now().naive_utc();
+    let mut upserted = upsert_chunked(
+        db,
+        event_daily_models(day, now, split.kept),
+        event_daily_on_conflict(),
+    )
+    .await?;
+
+    if split.folded_keys > 0 || capped {
+        tracing::debug!(
+            day = %day,
+            folded_keys = split.folded_keys,
+            capped,
+            "Folding telemetry event long tail into {}",
+            OTHER_KEY
+        );
+        let tail: Vec<GroupedCount> = event_name_tail(db, day, next)
+            .await?
+            .into_iter()
+            .map(|tail| GroupedCount {
+                key: OTHER_KEY.to_string(),
+                bucket: tail.bucket,
+                cnt: tail.cnt,
+                installs: tail.installs,
+            })
+            .collect();
+        if !tail.is_empty() {
+            upserted += upsert_chunked(
+                db,
+                event_daily_models(day, now, tail),
+                event_daily_on_conflict(),
+            )
+            .await?;
+        }
+    }
+
+    Ok(upserted)
 }
 
 fn event_daily_on_conflict() -> OnConflict {
@@ -868,21 +942,66 @@ async fn dimension_counts<C: ConnectionTrait>(
     GroupedCount::find_by_statement(stmt).all(db).await
 }
 
+/// `NOT EXISTS` against the values already stored for `day` and `dimension`;
+/// the counterpart of [`event_name_not_kept`] keyed on the coalesced column.
+fn dimension_value_not_kept(
+    day: NaiveDateTime,
+    dimension: &str,
+    column: telemetry_event::Column,
+) -> SimpleExpr {
+    let mut kept = SeaQuery::select();
+    kept.expr(Expr::val(1))
+        .from(telemetry_dimension_daily::Entity)
+        .and_where(
+            Expr::col((
+                telemetry_dimension_daily::Entity,
+                telemetry_dimension_daily::Column::Day,
+            ))
+            .eq(day),
+        )
+        .and_where(
+            Expr::col((
+                telemetry_dimension_daily::Entity,
+                telemetry_dimension_daily::Column::Dimension,
+            ))
+            .eq(dimension),
+        )
+        .and_where(
+            Expr::col((
+                telemetry_dimension_daily::Entity,
+                telemetry_dimension_daily::Column::Value,
+            ))
+            .ne(OTHER_KEY),
+        )
+        .and_where(
+            Expr::col((
+                telemetry_dimension_daily::Entity,
+                telemetry_dimension_daily::Column::Value,
+            ))
+            .eq(coalesced_key((telemetry_event::Entity, column))),
+        );
+    Expr::not_exists(kept)
+}
+
 async fn dimension_tail<C: ConnectionTrait>(
     db: &C,
     day: NaiveDateTime,
     next: NaiveDateTime,
+    dimension: &str,
     column: telemetry_event::Column,
-    kept_keys: &[String],
 ) -> Result<TotalCount, DbErr> {
     let mut query = SeaQuery::select();
     query
         .from(telemetry_event::Entity)
         .expr_as(event_count_expr(), Alias::new("cnt"))
         .expr_as(event_installs_expr(), Alias::new("installs"))
-        .and_where(Expr::col(telemetry_event::Column::CreatedAt).gte(day))
-        .and_where(Expr::col(telemetry_event::Column::CreatedAt).lt(next))
-        .and_where(Expr::expr(coalesced_key(column)).is_not_in(kept_keys.to_vec()));
+        .and_where(
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::CreatedAt)).gte(day),
+        )
+        .and_where(
+            Expr::col((telemetry_event::Entity, telemetry_event::Column::CreatedAt)).lt(next),
+        )
+        .and_where(dimension_value_not_kept(day, dimension, column));
 
     let stmt = db.get_database_backend().build(&query);
     Ok(TotalCount::find_by_statement(stmt)
@@ -891,13 +1010,35 @@ async fn dimension_tail<C: ConnectionTrait>(
         .unwrap_or_default())
 }
 
+fn dimension_daily_models(
+    day: NaiveDateTime,
+    now: NaiveDateTime,
+    rows: Vec<GroupedCount>,
+) -> Vec<telemetry_dimension_daily::ActiveModel> {
+    rows.into_iter()
+        .map(|row| telemetry_dimension_daily::ActiveModel {
+            id: Set(create_id()),
+            day: Set(day),
+            dimension: Set(row.bucket),
+            value: Set(row.key),
+            count: Set(to_i32(row.cnt)),
+            installs: Set(to_i32(row.installs)),
+            created_at: Set(now),
+            updated_at: Set(now),
+        })
+        .collect()
+}
+
+/// Like [`rollup_events`], the kept values of every dimension are written
+/// before their tail is read.
 async fn rollup_dimensions(
     db: &DatabaseConnection,
     day: NaiveDateTime,
     next: NaiveDateTime,
 ) -> Result<u64, DbErr> {
     let now = Utc::now().naive_utc();
-    let mut models: Vec<telemetry_dimension_daily::ActiveModel> = Vec::new();
+    let mut upserted = 0u64;
+    let mut tails: Vec<GroupedCount> = Vec::new();
 
     for dimension in ROLLUP_DIMENSIONS {
         let Some(column) = dimension_column(dimension) else {
@@ -907,12 +1048,21 @@ async fn rollup_dimensions(
         let grouped = dimension_counts(db, day, next, dimension, column).await?;
         let capped = grouped.len() as u64 >= GROUP_ROW_CAP;
         let split = split_long_tail(grouped, ROLLUP_TOP_N);
-        let mut rows = split.kept;
+        if split.kept.is_empty() {
+            continue;
+        }
+
+        upserted += upsert_chunked(
+            db,
+            dimension_daily_models(day, now, split.kept),
+            dimension_daily_on_conflict(),
+        )
+        .await?;
 
         if split.folded_keys > 0 || capped {
-            let tail = dimension_tail(db, day, next, column, &split.kept_keys).await?;
+            let tail = dimension_tail(db, day, next, dimension, column).await?;
             if tail.cnt > 0 {
-                rows.push(GroupedCount {
+                tails.push(GroupedCount {
                     key: OTHER_KEY.to_string(),
                     bucket: dimension.to_string(),
                     cnt: tail.cnt,
@@ -920,27 +1070,18 @@ async fn rollup_dimensions(
                 });
             }
         }
-
-        models.extend(
-            rows.into_iter()
-                .map(|row| telemetry_dimension_daily::ActiveModel {
-                    id: Set(create_id()),
-                    day: Set(day),
-                    dimension: Set(row.bucket),
-                    value: Set(row.key),
-                    count: Set(to_i32(row.cnt)),
-                    installs: Set(to_i32(row.installs)),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                }),
-        );
     }
 
-    if models.is_empty() {
-        return Ok(0);
+    if !tails.is_empty() {
+        upserted += upsert_chunked(
+            db,
+            dimension_daily_models(day, now, tails),
+            dimension_daily_on_conflict(),
+        )
+        .await?;
     }
 
-    upsert_chunked(db, models, dimension_daily_on_conflict()).await
+    Ok(upserted)
 }
 
 fn dimension_daily_on_conflict() -> OnConflict {
@@ -1268,13 +1409,13 @@ async fn perf_percentiles_fold<C: ConnectionTrait>(
 
 async fn rollup_perf(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     day: NaiveDateTime,
     next: NaiveDateTime,
 ) -> Result<u64, DbErr> {
-    // `percentile_cont` is a Postgres ordered-set aggregate; other backends and
-    // Postgres-compatible engines that do not implement it fall back to folding
+    // `percentile_cont` is an ordered-set aggregate; engines without it fold
     // the raw samples with identical interpolation semantics.
-    let rows = if db.get_database_backend() == DbBackend::Postgres {
+    let rows = if percentiles_in_sql(db.get_database_backend(), dialect) {
         match perf_percentiles_sql(db, day, next).await {
             Ok(rows) => rows,
             Err(e) => {
@@ -2011,25 +2152,62 @@ mod tests {
         assert!(!sql.contains(r#""id" = "excluded"."id""#), "{}", sql);
     }
 
-    /// The kept keys drive the `NOT IN` of the tail query, so the tail and the
-    /// kept rows partition the day exactly once — that is what keeps
-    /// `__other__` from double-counting a name that was also stored on its own.
+    /// The tail query excludes every name that already has a row for the day,
+    /// so the tail and the kept rows partition the day exactly once — that is
+    /// what keeps `__other__` from double-counting a name that was also stored
+    /// on its own. The kept keys are read from the rollup table rather than
+    /// bound, so the statement stays the same size however many are kept.
     #[test]
     fn tail_filter_excludes_exactly_the_kept_keys() {
-        let rows: Vec<GroupedCount> = (0..205)
-            .map(|i| grouped(&format!("k{i:03}"), "web", 205 - i, 1))
-            .collect();
-        let split = split_long_tail(rows, ROLLUP_TOP_N);
+        let day = NaiveDate::from_ymd_opt(2026, 7, 26)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
 
         let sql = SeaQuery::select()
             .from(telemetry_event::Entity)
             .expr_as(event_count_expr(), Alias::new("cnt"))
-            .and_where(Expr::col(telemetry_event::Column::Name).is_not_in(split.kept_keys.clone()))
+            .and_where(event_name_not_kept(day))
             .to_string(PostgresQueryBuilder);
 
-        assert!(sql.contains(r#""name" NOT IN ("#), "{}", sql);
-        assert!(sql.contains("'k000'"), "{}", sql);
-        assert!(!sql.contains("'k204'"), "{}", sql);
+        assert!(
+            sql.contains("NOT EXISTS (SELECT 1 FROM \"TelemetryEventDaily\""),
+            "{}",
+            sql
+        );
+        assert!(
+            sql.contains(r#""TelemetryEventDaily"."name" = "TelemetryEvent"."name""#),
+            "{}",
+            sql
+        );
+        assert!(
+            sql.contains(r#""TelemetryEventDaily"."name" <> '__other__'"#),
+            "{}",
+            sql
+        );
+        assert!(!sql.contains("NOT IN"), "{}", sql);
+
+        let sql = SeaQuery::select()
+            .from(telemetry_event::Entity)
+            .expr_as(event_count_expr(), Alias::new("cnt"))
+            .and_where(dimension_value_not_kept(
+                day,
+                "platform",
+                telemetry_event::Column::Platform,
+            ))
+            .to_string(PostgresQueryBuilder);
+
+        assert!(
+            sql.contains("NOT EXISTS (SELECT 1 FROM \"TelemetryDimensionDaily\""),
+            "{}",
+            sql
+        );
+        assert!(sql.contains(r#""dimension" = 'platform'"#), "{}", sql);
+        assert!(
+            sql.contains(r#""TelemetryDimensionDaily"."value" = COALESCE("TelemetryEvent"."platform", 'unknown')"#),
+            "{}",
+            sql
+        );
     }
 
     #[test]

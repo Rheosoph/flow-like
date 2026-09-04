@@ -11,7 +11,9 @@
 		"test": "bun test tests/"
 	},
 	"dependencies": {
+		"dotenv": "17.2.3",
 		"google-auth-library": "11.0.2",
+		"pg": "8.23.0",
 		"prisma": "7.9.1"
 	},
 	"devDependencies": {

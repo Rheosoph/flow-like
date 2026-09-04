@@ -12,7 +12,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::bit::Metadata;
-use sea_orm::TransactionTrait;
 
 #[utoipa::path(
     get,
@@ -70,14 +69,13 @@ pub async fn get_meta(
     }
 
     let language = query.language.clone().unwrap_or_else(|| "en".to_string());
-    let txn = state.db.begin().await?;
 
     let existing_meta = mode
-        .find_existing_meta(&language, &txn)
+        .find_existing_meta(&language, &state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let mut metadata = Metadata::from(existing_meta.clone());
+    let mut metadata = Metadata::from(existing_meta);
 
     let master_store = state.master_credentials().await?;
     let store = master_store.to_store(false).await?;

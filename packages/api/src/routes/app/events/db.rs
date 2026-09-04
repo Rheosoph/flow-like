@@ -8,7 +8,10 @@
 
 use std::collections::HashMap;
 
-use crate::entity::event;
+use crate::db::{
+    DEFAULT_WRITE_CHUNK, DbDialect, RetryPolicy, delete_in_batches, retry_transaction,
+};
+use crate::entity::{event, event_remote_auth, event_remote_registration};
 use flow_like::app::App;
 use flow_like::flow::event::{
     CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, EventVariant,
@@ -16,10 +19,11 @@ use flow_like::flow::event::{
 };
 use flow_like_types::anyhow;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
 };
 use serde_json::json;
+use std::sync::Arc;
 
 // Shared with the desktop and any future restore/variant path — the
 // implementations moved to core so both crates blank and restore secrets
@@ -602,11 +606,32 @@ fn extract_http_auth_token(config: &[u8]) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Delete an event from the database
+/// Delete an event from the database.
+///
+/// The inbound rows are drained in bounded batches first — registrations
+/// before the auth rows they point at — so the event delete itself only
+/// cascades to the handful of alias and setup rows.
 pub async fn delete_event_from_db(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     event_id: &str,
 ) -> flow_like_types::Result<()> {
+    delete_in_batches::<event_remote_registration::Entity>(
+        db,
+        dialect,
+        Condition::all().add(event_remote_registration::Column::EventId.eq(event_id)),
+        DEFAULT_WRITE_CHUNK,
+        None,
+    )
+    .await?;
+    delete_in_batches::<event_remote_auth::Entity>(
+        db,
+        dialect,
+        Condition::all().add(event_remote_auth::Column::EventId.eq(event_id)),
+        DEFAULT_WRITE_CHUNK,
+        None,
+    )
+    .await?;
     event::Entity::delete_by_id(event_id).exec(db).await?;
     Ok(())
 }
@@ -623,7 +648,7 @@ pub async fn delete_event_with_sink(
     delete_sink(db, state, event_id).await?;
 
     // Then delete the event
-    delete_event_from_db(db, event_id).await?;
+    delete_event_from_db(db, state.db_dialect, event_id).await?;
 
     Ok(())
 }
@@ -843,6 +868,7 @@ pub async fn get_event_with_fallback_opt(
 /// If bucket has events not in DB, syncs them
 pub async fn get_events_with_fallback(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     app: &App,
 ) -> flow_like_types::Result<Vec<CoreEvent>> {
     // Try DB first
@@ -872,27 +898,36 @@ pub async fn get_events_with_fallback(
 
     // Commit the mirror backfill atomically. The complete bucket result is
     // still safe to serve when a transient DB write fails; rollback keeps the
-    // next request eligible to retry the repair.
-    let transaction = db.begin().await?;
-    let mut sync_error = None;
-    for event in &bucket_events {
-        if let Err(error) = sync_event_to_db(&transaction, &app.id, event).await {
-            sync_error = Some(error);
-            break;
-        }
-    }
-    if let Some(error) = sync_error {
-        transaction.rollback().await?;
+    // next request eligible to retry the repair. Every row is an upsert, so
+    // the body may be re-run after a lost commit race.
+    let bucket_events = Arc::new(bucket_events);
+    let app_id = app.id.clone();
+    let backfill =
+        retry_transaction::<_, (), DbErr>(db, dialect, None, &RetryPolicy::idempotent(), |txn| {
+            let bucket_events = bucket_events.clone();
+            let app_id = app_id.clone();
+            Box::pin(async move {
+                for event in bucket_events.iter() {
+                    sync_event_to_db(txn, &app_id, event)
+                        .await
+                        .map_err(|error| match error.downcast::<DbErr>() {
+                            Ok(db_error) => db_error,
+                            Err(other) => DbErr::Custom(other.to_string()),
+                        })?;
+                }
+                Ok(())
+            })
+        })
+        .await;
+    if let Err(error) = backfill {
         tracing::warn!(
             app_id = %app.id,
             %error,
             "Failed to backfill event database mirror; transaction rolled back"
         );
-    } else {
-        transaction.commit().await?;
     }
 
-    Ok(bucket_events)
+    Ok(Arc::try_unwrap(bucket_events).unwrap_or_else(|events| events.as_ref().clone()))
 }
 
 /// Get event by route with fallback - searches bucket events if not in DB

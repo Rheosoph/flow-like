@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import { Client } from "pg";
+import { runPrePush } from "./pre-push";
 
 /**
  * CockroachDB creates tables with `schema_locked = true` when the cluster
@@ -139,7 +140,7 @@ function runPush(): Promise<{ status: number; output: string }> {
 					// CockroachDB 26.1+ locks newly created tables by default. Prisma may
 					// create a table and add its indexes as separate schema changes, so a
 					// new lock would make the same push fail midway through.
-					DATABASE_URL: databaseUrlForPush(process.env.DATABASE_URL!),
+					DATABASE_URL: databaseUrlForPush(process.env.DATABASE_URL ?? ""),
 				},
 			},
 		);
@@ -163,6 +164,10 @@ const locked = client ? await findLockedTables(client) : [];
 if (client && locked.length > 0) {
 	console.log(`Unlocking schema on: ${locked.join(", ")}`);
 	await setSchemaLocked(client, locked, false);
+}
+
+if (client) {
+	await runPrePush(client);
 }
 
 let push = await runPush();

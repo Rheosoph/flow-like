@@ -114,7 +114,7 @@ pub async fn handle_compilation_callback(
     let mut update = wasm_package_version::ActiveModel {
         id: Set(version_record.id),
         compilation_status: Set(compilation_status),
-        compiled_platforms: Set(platforms),
+        compiled_platforms: Set(platforms.map(Into::into)),
         compilation_error: Set(error),
         ..Default::default()
     };
@@ -124,9 +124,9 @@ pub async fn handle_compilation_callback(
     }
 
     if compiled_ok {
-        update.supported_wasmtime_versions = Set(Some(with_current_wasmtime_version(
-            supported_wasmtime_versions,
-        )));
+        update.supported_wasmtime_versions = Set(Some(
+            with_current_wasmtime_version(supported_wasmtime_versions.map(Into::into)).into(),
+        ));
     }
 
     // Auto-approve private packages on successful compilation

@@ -11,9 +11,7 @@ use axum::{Extension, Json};
 use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::sea_query::ExprTrait;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use utoipa::ToSchema;
@@ -332,7 +330,7 @@ impl From<meta::Model> for PackageMetaResponse {
             name: m.name,
             description: m.description,
             long_description: m.long_description,
-            tags: m.tags,
+            tags: m.tags.map(Into::into),
             icon: m.icon,
             thumbnail: m.thumbnail,
             website: m.website,
@@ -340,7 +338,7 @@ impl From<meta::Model> for PackageMetaResponse {
             docs_url: m.docs_url,
             use_case: m.use_case,
             release_notes: m.release_notes,
-            preview_media: m.preview_media,
+            preview_media: m.preview_media.map(Into::into),
             age_rating: m.age_rating,
         }
     }
@@ -507,7 +505,7 @@ pub async fn upsert_meta(
         active.name = Set(body.name);
         active.description = Set(body.description);
         active.long_description = Set(body.long_description);
-        active.tags = Set(body.tags);
+        active.tags = Set(body.tags.map(Into::into));
         // Preserve icon, thumbnail and preview_media — managed via push/remove media endpoints
         active.icon = Set(existing_meta.icon);
         active.thumbnail = Set(existing_meta.thumbnail);
@@ -527,7 +525,7 @@ pub async fn upsert_meta(
             name: Set(body.name),
             description: Set(body.description),
             long_description: Set(body.long_description),
-            tags: Set(body.tags),
+            tags: Set(body.tags.map(Into::into)),
             icon: Set(None),
             thumbnail: Set(None),
             website: Set(body.website),
@@ -559,7 +557,7 @@ pub async fn upsert_meta(
 // ---------------------------------------------------------------------------
 
 /// Media item type for packages — reuses the same pattern as app media.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageMediaItem {
     Icon,
@@ -623,62 +621,62 @@ pub async fn push_package_media(
         WasmPackagePermission::Maintainer
     );
 
-    let txn = state.db.begin().await?;
-
-    let existing_meta = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&package_id))
-        .filter(meta::Column::Lang.eq(&query.language))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let mut existing_preview = existing_meta.preview_media.clone().unwrap_or_default();
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
     let item_id = create_id();
     let item_name = format!("{}.{}", item_id, query.extension);
+    let item = query.item;
+    let language = query.language.clone();
+
+    let replaced_media_id = state
+        .transaction(|txn| {
+            let package_id = package_id.clone();
+            let language = language.clone();
+            let item_id = item_id.clone();
+            Box::pin(async move {
+                let existing_meta = meta::Entity::find()
+                    .filter(meta::Column::WasmPackageId.eq(&package_id))
+                    .filter(meta::Column::Lang.eq(&language))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().naive_utc());
+
+                let replaced = match item {
+                    PackageMediaItem::Icon => {
+                        model.icon = Set(Some(item_id));
+                        existing_meta.icon
+                    }
+                    PackageMediaItem::Thumbnail => {
+                        model.thumbnail = Set(Some(item_id));
+                        existing_meta.thumbnail
+                    }
+                    PackageMediaItem::Preview => {
+                        let mut existing_preview =
+                            existing_meta.preview_media.clone().unwrap_or_default();
+                        existing_preview.push(item_id);
+                        model.preview_media = Set(Some(existing_preview));
+                        None
+                    }
+                };
+
+                model.update(txn).await?;
+                Ok::<_, ApiError>(replaced)
+            })
+        })
+        .await?;
 
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
 
-    match &query.item {
-        PackageMediaItem::Icon => {
-            if let Some(icon) = &existing_meta.icon {
-                let file_name = format!("{icon}.webp");
-                let path = FlowPath::from("media")
-                    .child("packages")
-                    .child(package_id.as_str())
-                    .child(file_name);
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!("Failed to delete existing icon at {}: {:?}", path, err);
-                }
-            }
-            model.icon = Set(Some(item_id));
-        }
-        PackageMediaItem::Thumbnail => {
-            if let Some(thumbnail) = &existing_meta.thumbnail {
-                let file_name = format!("{thumbnail}.webp");
-                let path = FlowPath::from("media")
-                    .child("packages")
-                    .child(package_id.as_str())
-                    .child(file_name);
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!("Failed to delete existing thumbnail at {}: {:?}", path, err);
-                }
-            }
-            model.thumbnail = Set(Some(item_id));
-        }
-        PackageMediaItem::Preview => {
-            existing_preview.push(item_id.clone());
-            model.preview_media = Set(Some(existing_preview));
+    if let Some(replaced) = replaced_media_id {
+        let path = package_media_path(&package_id, &format!("{replaced}.webp"));
+        if let Err(err) = master_store.as_generic().delete(&path).await {
+            tracing::error!("Failed to delete replaced media at {}: {:?}", path, err);
         }
     }
 
-    model.update(&txn).await?;
-    let path = FlowPath::from("media")
-        .child("packages")
-        .child(package_id.as_str())
-        .child(item_name.clone());
+    let path = package_media_path(&package_id, &item_name);
     let signed_url = master_store
         .sign("PUT", &path, Duration::from_secs(60 * 60 * 24))
         .await
@@ -693,10 +691,16 @@ pub async fn push_package_media(
             ApiError::internal_error(anyhow!("Failed to create signed URL, reference ID: {}", id))
         })?;
 
-    txn.commit().await?;
     Ok(Json(PushMediaResponse {
         signed_url: signed_url.to_string(),
     }))
+}
+
+fn package_media_path(package_id: &str, file_name: &str) -> FlowPath {
+    FlowPath::from("media")
+        .child("packages")
+        .child(package_id)
+        .child(file_name)
 }
 
 /// DELETE /registry/package/{package_id}/meta/media/{media_id}
@@ -748,45 +752,53 @@ pub async fn remove_package_media(
         WasmPackagePermission::Maintainer
     );
 
-    let txn = state.db.begin().await?;
+    let item = query.item;
+    let language = query.language.clone();
 
-    let existing_meta = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&package_id))
-        .filter(meta::Column::Lang.eq(&query.language))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    state
+        .transaction(|txn| {
+            let package_id = package_id.clone();
+            let language = language.clone();
+            let media_id = media_id.clone();
+            Box::pin(async move {
+                let existing_meta = meta::Entity::find()
+                    .filter(meta::Column::WasmPackageId.eq(&package_id))
+                    .filter(meta::Column::Lang.eq(&language))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().naive_utc());
 
-    match &query.item {
-        PackageMediaItem::Icon => {
-            if existing_meta.icon.as_deref() == Some(&media_id) {
-                model.icon = Set(None);
-            }
-        }
-        PackageMediaItem::Thumbnail => {
-            if existing_meta.thumbnail.as_deref() == Some(&media_id) {
-                model.thumbnail = Set(None);
-            }
-        }
-        PackageMediaItem::Preview => {
-            let mut existing_preview = existing_meta.preview_media.clone().unwrap_or_default();
-            existing_preview.retain(|id| id != &media_id);
-            model.preview_media = Set(Some(existing_preview));
-        }
-    }
+                match item {
+                    PackageMediaItem::Icon => {
+                        if existing_meta.icon.as_deref() == Some(&media_id) {
+                            model.icon = Set(None);
+                        }
+                    }
+                    PackageMediaItem::Thumbnail => {
+                        if existing_meta.thumbnail.as_deref() == Some(&media_id) {
+                            model.thumbnail = Set(None);
+                        }
+                    }
+                    PackageMediaItem::Preview => {
+                        let mut existing_preview =
+                            existing_meta.preview_media.clone().unwrap_or_default();
+                        existing_preview.retain(|id| id != &media_id);
+                        model.preview_media = Set(Some(existing_preview));
+                    }
+                }
 
-    model.update(&txn).await?;
+                model.update(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
-    let item_name = format!("{media_id}.webp");
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
-    let path = FlowPath::from("media")
-        .child("packages")
-        .child(package_id.as_str())
-        .child(item_name.clone());
+    let path = package_media_path(&package_id, &format!("{media_id}.webp"));
     if let Err(e) = master_store.as_generic().delete(&path).await {
         tracing::error!("Failed to delete media file at {}: {:?}", path, e);
         return Err(ApiError::internal_error(anyhow!(
@@ -794,7 +806,6 @@ pub async fn remove_package_media(
             create_id()
         )));
     }
-    txn.commit().await?;
 
     Ok(Json(()))
 }

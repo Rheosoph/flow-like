@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     audit_branch,
     entity::meta,
@@ -11,7 +13,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, TransactionTrait};
+use sea_orm::ActiveModelTrait;
 
 #[utoipa::path(
     put,
@@ -49,10 +51,10 @@ pub async fn upsert_meta(
     let mode = MetaMode::new(&query, &app_id);
     mode.ensure_write_permission(&user, &app_id, &state).await?;
 
-    let language = query.language.as_deref().unwrap_or("en");
+    let language = query.language.clone().unwrap_or_else(|| "en".to_string());
     let mut model = meta::Model::from(meta.clone());
 
-    model.lang = language.to_string();
+    model.lang = language.clone();
     model.updated_at = chrono::Utc::now().naive_utc();
 
     model.template_id = None;
@@ -80,44 +82,42 @@ pub async fn upsert_meta(
         }
     }
 
-    let txn = state.db.begin().await?;
+    let mode = Arc::new(mode);
+    let new_meta_id = create_id();
 
-    let existing_meta = mode.find_existing_meta(language, &txn).await?;
+    let created = state
+        .transaction(|txn| {
+            let mode = mode.clone();
+            let language = language.clone();
+            let mut model = model.clone();
+            let new_meta_id = new_meta_id.clone();
+            Box::pin(async move {
+                let existing_meta = mode.find_existing_meta(&language, txn).await?;
 
-    if let Some(existing) = existing_meta {
-        model.created_at = existing.created_at;
-        model.id = existing.id;
-        model.icon = existing.icon;
-        model.thumbnail = existing.thumbnail;
-        let mut active_model: meta::ActiveModel = model.into();
-        active_model = active_model.reset_all();
-        active_model.update(&txn).await?;
-        txn.commit().await?;
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "meta.upsert",
-            "meta",
-            app_id,
-            format!("Metadata updated (lang={})", language)
-        );
-        return Ok(Json(()));
-    }
+                if let Some(existing) = existing_meta {
+                    model.created_at = existing.created_at;
+                    model.id = existing.id;
+                    model.icon = existing.icon;
+                    model.thumbnail = existing.thumbnail;
+                    let active_model: meta::ActiveModel = model.into();
+                    active_model.reset_all().update(txn).await?;
+                    return Ok(false);
+                }
 
-    model.id = create_id();
-    model.created_at = chrono::Utc::now().naive_utc();
-    let active_model: meta::ActiveModel = model.into();
-    active_model.insert(&txn).await?;
-    txn.commit().await?;
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "meta.upsert",
-        "meta",
-        app_id,
+                model.id = new_meta_id;
+                model.created_at = chrono::Utc::now().naive_utc();
+                let active_model: meta::ActiveModel = model.into();
+                active_model.insert(txn).await?;
+                Ok::<_, ApiError>(true)
+            })
+        })
+        .await?;
+
+    let summary = if created {
         format!("Metadata created (lang={})", language)
-    );
+    } else {
+        format!("Metadata updated (lang={})", language)
+    };
+    audit_branch!(state, user, app_id, "meta.upsert", "meta", app_id, summary);
     Ok(Json(()))
 }

@@ -70,11 +70,11 @@ impl From<bit::Model> for Bit {
 
         Self {
             id: value.id,
-            authors: value.authors.unwrap_or_default(),
+            authors: value.authors.unwrap_or_default().into_inner(),
             bit_type: value.r#type.into(),
             updated,
             created,
-            dependencies: value.dependencies.unwrap_or_default(),
+            dependencies: value.dependencies.unwrap_or_default().into_inner(),
             dependency_tree_hash: value.dependency_tree_hash.unwrap_or_else(|| id.clone()),
             download_link: value.download_link,
             license: value.license,
@@ -96,7 +96,7 @@ impl From<Bit> for bit::Model {
     fn from(value: Bit) -> Self {
         Self {
             id: value.id,
-            authors: Some(value.authors),
+            authors: Some(value.authors.into()),
             r#type: value.bit_type.into(),
             updated_at: chrono::DateTime::parse_from_rfc3339(&value.updated)
                 .unwrap_or_default()
@@ -104,7 +104,7 @@ impl From<Bit> for bit::Model {
             created_at: chrono::DateTime::parse_from_rfc3339(&value.created)
                 .unwrap_or_default()
                 .naive_utc(),
-            dependencies: Some(value.dependencies),
+            dependencies: Some(value.dependencies.into()),
             dependency_tree_hash: Some(value.dependency_tree_hash),
             download_link: value.download_link,
             license: value.license,
@@ -127,11 +127,11 @@ impl From<meta::Model> for Metadata {
             description: model.description.unwrap_or_default(),
             long_description: model.long_description,
             release_notes: model.release_notes,
-            tags: model.tags.unwrap_or_default(),
+            tags: model.tags.unwrap_or_default().into_inner(),
             use_case: model.use_case,
             icon: model.icon,
             thumbnail: model.thumbnail,
-            preview_media: model.preview_media.unwrap_or_default(),
+            preview_media: model.preview_media.unwrap_or_default().into_inner(),
             age_rating: model.age_rating.map(|rating| rating as i32),
             website: model.website,
             support_url: model.support_url,
@@ -161,7 +161,7 @@ impl From<Metadata> for meta::Model {
             tags: if metadata.tags.is_empty() {
                 None
             } else {
-                Some(metadata.tags)
+                Some(metadata.tags.into())
             },
             use_case: metadata.use_case,
             icon: metadata.icon,
@@ -169,7 +169,7 @@ impl From<Metadata> for meta::Model {
             preview_media: if metadata.preview_media.is_empty() {
                 None
             } else {
-                Some(metadata.preview_media)
+                Some(metadata.preview_media.into())
             },
             age_rating: metadata.age_rating.map(|rating| rating as i64),
             website: metadata.website,

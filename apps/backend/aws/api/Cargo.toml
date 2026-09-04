@@ -8,6 +8,7 @@ flow-like = { workspace = true, features = ["app-runtime"] }
 # `dynamodb` and `s3` must stay enabled here: without them EXECUTION_STATE_BACKEND and
 # CACHE_BACKEND silently fall back to Postgres on the serverless target.
 flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "sentry", "secrets-aws", "dynamodb", "s3", "channel-aws"] }
+flow-like-aws-data = { workspace = true }
 flow-like-secrets = { workspace = true, features = ["aws"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
@@ -17,6 +18,7 @@ flow-like-catalog = { workspace = true, features = ["server-local-metadata"] }
 mimalloc.workspace = true
 lambda_http.workspace = true
 axum.workspace = true
+tower.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 sentry-tracing.workspace = true

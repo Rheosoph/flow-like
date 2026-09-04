@@ -12,6 +12,7 @@ pub mod ai_act;
 pub mod bit;
 pub mod cache;
 pub mod connections;
+pub mod deletions;
 pub mod forks;
 pub mod governance;
 pub mod logs;
@@ -161,6 +162,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/forks/orphans/{app_id}/delete",
             post(forks::delete_orphan_fork),
+        )
+        // Cascade deletion jobs
+        .route("/deletions", get(deletions::list_deletion_jobs))
+        .route("/deletions/run", post(deletions::run_deletion_queue))
+        .route("/deletions/{job_id}", get(deletions::get_deletion_job))
+        .route(
+            "/deletions/{job_id}/retry",
+            post(deletions::retry_deletion_job),
         )
         // Logs / observability
         .route("/logs/errors", get(logs::list_errors::list_errors))

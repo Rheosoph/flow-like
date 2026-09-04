@@ -11,6 +11,7 @@ serde_json.workspace = true
 axum.workspace = true
 sea-orm.workspace = true
 flow-like-api-entity = { workspace = true, features = ["domain-conversions"] }
+flow-like-db.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 pin-project-lite = "0.2.16"
 tower.workspace = true
@@ -187,8 +188,11 @@ full=[
     "channel-gcp",
 ]
 urlencoding = []
+# Fault injection for retried transactions (`crate::db::testing`); never on in a shipped binary.
+db-chaos = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenv = { workspace = true }
 flow-like-wasm.workspace = true
+flow-like-aws-data.workspace = true

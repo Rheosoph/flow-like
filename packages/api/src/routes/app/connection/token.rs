@@ -141,7 +141,7 @@ pub async fn create_app_connection_token(
                 };
                 (
                     Some(run.id),
-                    run.caller_app_chain.unwrap_or_default(),
+                    run.caller_app_chain.unwrap_or_default().into(),
                     Some(correlation),
                 )
             }

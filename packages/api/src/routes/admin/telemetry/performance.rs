@@ -21,11 +21,12 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::{db::DbDialect, telemetry::percentiles_in_sql};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,
 };
 use serde::{Deserialize, Serialize};
@@ -601,23 +602,27 @@ async fn perf_from_fold<C: ConnectionTrait>(
 
 async fn perf_raw<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     filters: &PerfFilters,
     bucket: &str,
 ) -> Result<PerfFold, ApiError> {
-    match db.get_database_backend() {
-        DbBackend::Postgres => perf_from_sql(db, filters, bucket).await,
-        _ => perf_from_fold(db, filters, bucket).await,
+    if percentiles_in_sql(db.get_database_backend(), dialect) {
+        perf_from_sql(db, filters, bucket).await
+    } else {
+        perf_from_fold(db, filters, bucket).await
     }
 }
 
 async fn perf_paths<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     filters: &PerfFilters,
     bucket: &str,
 ) -> Result<Vec<PerfPathRow>, ApiError> {
-    match db.get_database_backend() {
-        DbBackend::Postgres => perf_paths_from_sql(db, filters).await,
-        _ => Ok(perf_from_fold(db, filters, bucket).await?.by_path),
+    if percentiles_in_sql(db.get_database_backend(), dialect) {
+        perf_paths_from_sql(db, filters).await
+    } else {
+        Ok(perf_from_fold(db, filters, bucket).await?.by_path)
     }
 }
 
@@ -690,7 +695,7 @@ pub async fn telemetry_performance(
     // A route filter can only be answered by the raw samples: the rollup has no
     // path dimension, so silently ignoring it would return the wrong numbers.
     if reads_raw(hours) || filters.path.is_some() {
-        let fold = perf_raw(&state.db, &filters, bucket).await?;
+        let fold = perf_raw(&state.db, state.db_dialect, &filters, bucket).await?;
         return Ok(Json(TelemetryPerformanceResponse {
             hours,
             granularity: GRANULARITY_RAW.to_string(),
@@ -711,7 +716,7 @@ pub async fn telemetry_performance(
     .all(&state.db)
     .await?;
     let (metrics, trend) = fold_perf_daily(&rows);
-    let by_path = perf_paths(&state.db, &filters, bucket).await?;
+    let by_path = perf_paths(&state.db, state.db_dialect, &filters, bucket).await?;
 
     Ok(Json(TelemetryPerformanceResponse {
         hours,
@@ -727,6 +732,7 @@ pub async fn telemetry_performance(
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use sea_orm::DbBackend;
 
     fn ts(hour: u32, minute: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 7, 26)

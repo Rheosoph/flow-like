@@ -21,11 +21,11 @@ model RegressionSuite {
   nodeId  String
 
   /// Run the suite automatically when a new board version is published.
-  triggerOnPublish Boolean @default(false)
+  triggerOnPublish     Boolean @default(false)
   /// Cron expression for scheduled runs. NULL = not scheduled.
-  schedule         String?
+  schedule             String?
   /// Publish/promote gate behavior: "Off", "Warn", "Block".
-  gateMode         String  @default("Off")
+  gateMode             String  @default("Off")
   /// The owner acknowledged that replays execute live side effects
   /// (outbound HTTP from native nodes is not suppressible). Runs are
   /// refused while false.
@@ -97,9 +97,9 @@ model RegressionCaseResult {
   suiteRunId String
 
   /// "recorded_fixture" or "authored_test".
-  caseKind String
+  caseKind    String
   /// Fixture id (recorded) or start node id (authored).
-  caseRef  String
+  caseRef     String
   /// ExecutionRun.id of the replay dispatch. NULL when the case was skipped
   /// before dispatch (e.g. start node absent from the candidate version).
   replayRunId String?

@@ -6,12 +6,12 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::telemetry::percentiles_in_sql;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{Duration, NaiveDateTime, Utc};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
-    QuerySelect, Statement,
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Statement,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -233,9 +233,10 @@ pub async fn telemetry_span_stats(
     let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
     let source = q.source.as_deref().filter(|value| !value.is_empty());
 
-    let operations = match state.db.get_database_backend() {
-        DbBackend::Postgres => span_stats_from_sql(&state.db, cutoff, source).await?,
-        _ => span_stats_from_fold(&state.db, cutoff, source).await?,
+    let operations = if percentiles_in_sql(state.db.get_database_backend(), state.db_dialect) {
+        span_stats_from_sql(&state.db, cutoff, source).await?
+    } else {
+        span_stats_from_fold(&state.db, cutoff, source).await?
     };
 
     Ok(Json(TelemetrySpanStatsResponse { operations }))

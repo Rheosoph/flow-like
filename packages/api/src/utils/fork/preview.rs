@@ -185,6 +185,16 @@ pub async fn ensure_fork_within_limits(
     policy: &ForkPolicy,
 ) -> Result<(), ApiError> {
     let breakdown = compute_fork_size_breakdown(state, app_id).await?;
+    ensure_breakdown_within_limits(state, &breakdown, policy)
+}
+
+/// [`ensure_fork_within_limits`] for a caller that already holds the
+/// breakdown and needs it again to size the fork.
+pub fn ensure_breakdown_within_limits(
+    state: &AppState,
+    breakdown: &ForkSizeBreakdown,
+    policy: &ForkPolicy,
+) -> Result<(), ApiError> {
     let (selected_size, selected_count) = breakdown.selected(policy);
     let max_size = state.platform_config.forking.max_size_bytes;
     let max_count = state.platform_config.forking.max_file_count;

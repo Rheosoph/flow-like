@@ -39,10 +39,11 @@ services:
       - |
         wait-for-postgres.sh &&
         bun install || true &&
-        make-postgres-prisma-mirror.sh &&
+        make-prisma-mirror.sh --target postgresql &&
         bunx prisma db push --schema=prisma-postgres-mirror/schema --accept-data-loss || true &&
         sea-orm-cli generate entity -o src/entity --max-connections 10 --with-serde both --entity-format dense --ignore-tables _prisma_migrations -s public 2>&1 | tee /tmp/codegen.log;
         grep -q 'Writing src/entity/mod.rs' /tmp/codegen.log &&
+        bun scripts/retype-entities.ts &&
         echo '✅ Entities generated successfully! (rustfmt is absent from this image; db:sync formats on the host)' &&
         echo '🧹 Cleaning up...' &&
         rm -f bun.lockb &&

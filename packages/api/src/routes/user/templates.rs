@@ -12,8 +12,8 @@ use axum::{
 };
 use flow_like::bit::Metadata;
 use sea_orm::{
-    ColumnTrait, DatabaseTransaction, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect,
-    RelationTrait, TransactionTrait,
+    ColumnTrait, DatabaseConnection, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect,
+    RelationTrait,
 };
 
 /// One template per entry as (template id, board id, localized metadata).
@@ -45,15 +45,13 @@ pub async fn get_templates(
     let language = query.language.as_deref().unwrap_or("en");
     let user_id = user.sub()?;
 
-    let txn = state.db.begin().await?;
-    let app_ids = get_user_app_ids_with_template_access(&txn, user_id, &query).await?;
-    let templates = get_templates_with_metadata(&txn, &app_ids, language).await?;
-    txn.commit().await?;
+    let app_ids = get_user_app_ids_with_template_access(&state.db, user_id, &query).await?;
+    let templates = get_templates_with_metadata(&state.db, &app_ids, language).await?;
 
     Ok(Json(templates))
 }
 async fn get_user_app_ids_with_template_access(
-    txn: &DatabaseTransaction,
+    db: &DatabaseConnection,
     user_id: String,
     query: &LanguageParams,
 ) -> Result<Vec<String>, ApiError> {
@@ -68,7 +66,7 @@ async fn get_user_app_ids_with_template_access(
         .limit(Some(limit))
         .offset(query.offset)
         .into_tuple::<(String, i64)>()
-        .all(txn)
+        .all(db)
         .await?
         .into_iter()
         .filter_map(|(app_id, permissions)| {
@@ -81,7 +79,7 @@ async fn get_user_app_ids_with_template_access(
 }
 
 async fn get_templates_with_metadata(
-    txn: &DatabaseTransaction,
+    db: &DatabaseConnection,
     app_ids: &[String],
     language: &str,
 ) -> Result<UserTemplateListing, ApiError> {
@@ -95,7 +93,7 @@ async fn get_templates_with_metadata(
                 .eq(language)
                 .or(meta::Column::Lang.eq("en")),
         )
-        .all(txn)
+        .all(db)
         .await?;
 
     let result = templates

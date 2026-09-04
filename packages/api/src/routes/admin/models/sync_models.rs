@@ -1,9 +1,9 @@
 use crate::{
-    entity::llm_model, error::ApiError, middleware::jwt::AppUser,
+    db::insert_in_chunks, entity::llm_model, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ActiveValue::Set, EntityTrait, sea_query::OnConflict};
+use sea_orm::{ActiveValue::Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -30,6 +30,27 @@ pub struct SyncModelEntry {
 #[derive(Serialize, Deserialize, Clone, Debug, ToSchema)]
 pub struct SyncModelsRequest {
     pub data: Vec<SyncModelEntry>,
+}
+
+/// Rows per upsert transaction; the evaluation and pricing JSON keep a chunk
+/// well inside the per-transaction size budget.
+const SYNC_CHUNK: usize = 500;
+
+fn upsert_by_slug() -> OnConflict {
+    OnConflict::column(llm_model::Column::Slug)
+        .update_columns([
+            llm_model::Column::Name,
+            llm_model::Column::ReleaseDate,
+            llm_model::Column::CreatorName,
+            llm_model::Column::CreatorSlug,
+            llm_model::Column::Evaluations,
+            llm_model::Column::Pricing,
+            llm_model::Column::MedianOutputTokensPerSecond,
+            llm_model::Column::MedianTimeToFirstTokenSeconds,
+            llm_model::Column::MedianTimeToFirstAnswerToken,
+            llm_model::Column::UpdatedAt,
+        ])
+        .to_owned()
 }
 
 #[utoipa::path(
@@ -83,25 +104,14 @@ pub async fn sync_models(
 
     let count = models.len();
 
-    llm_model::Entity::insert_many(models)
-        .on_conflict(
-            OnConflict::column(llm_model::Column::Slug)
-                .update_columns([
-                    llm_model::Column::Name,
-                    llm_model::Column::ReleaseDate,
-                    llm_model::Column::CreatorName,
-                    llm_model::Column::CreatorSlug,
-                    llm_model::Column::Evaluations,
-                    llm_model::Column::Pricing,
-                    llm_model::Column::MedianOutputTokensPerSecond,
-                    llm_model::Column::MedianTimeToFirstTokenSeconds,
-                    llm_model::Column::MedianTimeToFirstAnswerToken,
-                    llm_model::Column::UpdatedAt,
-                ])
-                .to_owned(),
-        )
-        .exec(&state.db)
-        .await?;
+    insert_in_chunks(
+        &state.db,
+        state.db_dialect,
+        models,
+        SYNC_CHUNK,
+        Some(upsert_by_slug()),
+    )
+    .await?;
 
     Ok(Json(count))
 }

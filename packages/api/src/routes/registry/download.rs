@@ -91,7 +91,7 @@ pub async fn download(
         .await?;
 
     let package_id = package.id.clone();
-    let _ = registry.increment_downloads(&package_id).await;
+    let _ = registry.increment_downloads(&state, &package_id).await;
 
     // Fetch metadata (icon, thumbnail, localized name) for the package
     let mut metadata = meta::Entity::find()

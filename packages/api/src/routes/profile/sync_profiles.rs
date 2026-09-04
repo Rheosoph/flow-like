@@ -154,10 +154,10 @@ pub async fn sync_profiles(
 
                 active_model.name = Set(profile_req.name.clone());
                 active_model.description = Set(profile_req.description.clone());
-                active_model.interests = Set(profile_req.interests.clone());
-                active_model.tags = Set(profile_req.tags.clone());
+                active_model.interests = Set(profile_req.interests.clone().map(Into::into));
+                active_model.tags = Set(profile_req.tags.clone().map(Into::into));
                 active_model.theme = Set(profile_req.theme.clone());
-                active_model.bit_ids = Set(profile_req.bit_ids.clone());
+                active_model.bit_ids = Set(profile_req.bit_ids.clone().map(Into::into));
 
                 if let Some(apps) = profile_req.apps {
                     active_model.apps = Set(Some(to_value(&apps)?));
@@ -172,7 +172,7 @@ pub async fn sync_profiles(
                     active_model.settings = Set(Some(settings));
                 }
 
-                active_model.hubs = Set(profile_req.hubs.clone());
+                active_model.hubs = Set(profile_req.hubs.clone().map(Into::into));
 
                 // Handle icon upload request
                 let icon_upload_url = if let Some(ext) = &profile_req.icon_upload_ext {
@@ -324,15 +324,19 @@ pub async fn sync_profiles(
                     description: Set(profile_req.description.clone()),
                     icon: Set(icon_id.clone()),
                     thumbnail: Set(thumbnail_id.clone()),
-                    interests: Set(profile_req.interests.clone()),
-                    tags: Set(profile_req.tags.clone()),
+                    interests: Set(profile_req.interests.clone().map(Into::into)),
+                    tags: Set(profile_req.tags.clone().map(Into::into)),
                     theme: Set(profile_req.theme.clone()),
-                    bit_ids: Set(profile_req.bit_ids.clone()),
+                    bit_ids: Set(profile_req.bit_ids.clone().map(Into::into)),
                     apps: Set(apps.clone()),
                     shortcuts: Set(shortcuts.clone()),
                     settings: Set(settings.clone()),
                     hub: Set(default_hub.clone()),
-                    hubs: Set(profile_req.hubs.clone().or(Some(vec![default_hub.clone()]))),
+                    hubs: Set(profile_req
+                        .hubs
+                        .clone()
+                        .or(Some(vec![default_hub.clone()]))
+                        .map(Into::into)),
                     created_at: Set(now),
                     updated_at: Set(now),
                     ..Default::default()

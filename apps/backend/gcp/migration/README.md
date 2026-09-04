@@ -15,10 +15,16 @@ What the job does, in order:
    for an access token scoped to `https://www.googleapis.com/auth/sqlservice.login`,
    the narrowest scope Cloud SQL accepts for IAM database login.
 3. Composes `postgresql://<user>:<token>@<host>:5432/<db>?...` in memory and
-   passes it as `DATABASE_URL` to exactly one child process:
+   passes it as `DATABASE_URL` to exactly two child processes in turn:
+   `bun run prisma/pre-push.ts` (`packages/api/prisma/pre-push.ts`: guarded,
+   idempotent column type changes `db push` emits without the `USING` clause
+   they need on an existing database) and then
    `prisma db push --schema=prisma/schema`. The URL is never logged and never
-   written to disk.
-4. Exits with Prisma's exit code.
+   written to disk. The runner connects with node-postgres, which gets the
+   same TLS posture as Prisma in its own spelling (`uselibpqcompat=true`,
+   `sslmode=verify-full&sslrootcert=<pinned CA>` or a bare `sslmode=require`).
+4. Exits with the runner's exit code when it fails (Prisma is then not
+   started), otherwise with Prisma's.
 
 `--accept-data-loss` is deliberately absent. When the diff would drop a table
 or column that still holds data, Prisma applies nothing (the additive parts
@@ -105,11 +111,12 @@ it expires within the hour.
 
 `Dockerfile` (build context: `flow-like`) installs `prisma` and
 `google-auth-library` from the lockfile, asserts the installed Prisma satisfies
-the range `packages/api/package.json` pins, copies `packages/api/prisma/schema`,
-rewrites the datasource provider from `cockroachdb` to `postgresql` with the
-same `packages/api/scripts/make-postgres-prisma-mirror.sh` every other Postgres
-installation uses, validates the result, and proves the native schema engine
-loads. Runtime is `oven/bun:1.3.8-debian` as uid 10001 with `libssl3` (the
+the range `packages/api/package.json` pins, copies `packages/api/prisma/schema`
+and `packages/api/prisma/{pre-push.ts,pre-push/}`, rewrites the datasource
+provider from `cockroachdb` to `postgresql` with the same
+`packages/api/scripts/make-postgres-prisma-mirror.sh` (a shim over
+`make-prisma-mirror.sh --target postgresql`) every other Postgres installation
+uses, validates the result, and proves the native schema engine loads. Runtime is `oven/bun:1.3.8-debian` as uid 10001 with `libssl3` (the
 engine links OpenSSL 3), `CHECKPOINT_DISABLE=1` (no update-check call-outs from
 a job with no internet route) and `STOPSIGNAL SIGTERM`, which the entrypoint
 forwards to the running push.

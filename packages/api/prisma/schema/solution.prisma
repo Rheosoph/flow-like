@@ -1,21 +1,3 @@
-enum SolutionStatus {
-  AWAITING_DEPOSIT
-  PENDING_REVIEW
-  IN_QUEUE
-  ONBOARDING_DONE
-  IN_PROGRESS
-  DELIVERED
-  AWAITING_PAYMENT
-  PAID
-  CANCELLED
-  REFUNDED
-}
-
-enum SolutionPricingTier {
-  STANDARD
-  APPSTORE
-}
-
 model SolutionRequest {
   id String @id
 
@@ -34,13 +16,13 @@ model SolutionRequest {
   timeline        String?
   additionalNotes String?
 
-  pricingTier SolutionPricingTier
-  paidDeposit Boolean             @default(false)
+  pricingTier String
+  paidDeposit Boolean @default(false)
 
   files      Json?
   storageKey String?
 
-  status SolutionStatus @default(PENDING_REVIEW)
+  status String @default("PENDING_REVIEW")
 
   stripeCheckoutSessionId String? @unique
   stripePaymentIntentId   String? @unique

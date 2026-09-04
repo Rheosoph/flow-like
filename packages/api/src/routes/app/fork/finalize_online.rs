@@ -10,7 +10,7 @@ use crate::{
     permission::role_permission::RolePermissions,
     state::AppState,
     utils::fork::{
-        materialize_uploaded_app_media, preview::compute_app_content_size_and_count,
+        job, materialize_uploaded_app_media, preview::compute_app_content_size_and_count,
         sync_uploaded_metadata_media_to_db,
     },
 };
@@ -221,6 +221,7 @@ pub async fn finalize_online_fork(
     }
     active.updated_at = Set(chrono::Utc::now().naive_utc());
     active.update(&state.db).await?;
+    job::complete_upload(&state, &app_id).await?;
 
     Ok(Json(FinalizeOnlineForkResponse {
         app_id,

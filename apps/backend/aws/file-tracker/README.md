@@ -2,6 +2,25 @@
 
 file-tracker is a Rust project that implements an AWS Lambda function in Rust.
 
+## Environment
+
+Database, one of two modes:
+
+- **Aurora DSQL** (selected by `DSQL_CLUSTER_ENDPOINT`; same contract as the
+  API, `packages/aws-data/src/dsql.rs`): `DSQL_CLUSTER_ENDPOINT`
+  (`<id>.dsql.<region>.on.aws`), optional `DSQL_REGION`, `DSQL_USER` (default
+  `admin`; production uses `flow_like_api`), `DSQL_TOKEN_DURATION_SECS`
+  (default `3600`, range 1800–604800), `DSQL_MAX_CONNECTIONS` (default `4`). Forbidden alongside
+  it, even empty: `DATABASE_URL` and every libpq `PG*` source (`PGPASSWORD`,
+  `PGPASSFILE`, `PGSERVICE`, `PGSERVICEFILE`, `PGHOST`, `PGHOSTADDR`,
+  `PGPORT`, `PGUSER`, `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`,
+  `PGSSLKEY`, `PGOPTIONS`). IAM: `dsql:DbConnect` on the cluster ARN. The
+  schema is applied beforehand by `apps/backend/aws/migration`.
+- **PostgreSQL / CockroachDB**: `DATABASE_URL` from the environment or from
+  SSM Parameter Store under `SECRET_PREFIX`.
+
+See `apps/docs/src/content/docs/self-hosting/aws/database.md`.
+
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install)

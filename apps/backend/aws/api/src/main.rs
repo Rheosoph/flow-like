@@ -2,6 +2,8 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_api::construct_router;
+use flow_like_api::state::{DbDialect, State};
+use flow_like_aws_data::lambda::TokenRefreshLayer;
 use flow_like_catalog::get_catalog;
 use flow_like_secrets::{
     AwsParameterStoreProviderConfig, EnvProviderConfig, ProviderConfig, SecretStoreConfig,
@@ -10,6 +12,7 @@ use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
 use lambda_http::{Error, run_with_streaming_response};
 use std::sync::Arc;
+use tower::Layer;
 use tracing_subscriber::prelude::*;
 
 #[flow_like_types::tokio::main(flavor = "current_thread")]
@@ -85,10 +88,34 @@ async fn main() -> Result<(), Error> {
         flow_like_storage::files::store::FlowLikeStore::AWS(Arc::new(cdn_builder.build().unwrap()));
 
     let catalog = Arc::new(get_catalog());
-    let state = Arc::new(
-        flow_like_api::state::State::new(catalog, Arc::new(cdn_bucket), Some(secret_config)).await,
-    );
-    let app = construct_router(state);
-
-    run_with_streaming_response(app).await
+    let cdn_bucket = Arc::new(cdn_bucket);
+    // A DSQL endpoint selects IAM-token connectivity; anything else keeps the
+    // `DATABASE_URL` secret path of every other deployment target.
+    let dsql = flow_like_aws_data::dsql::DsqlConfig::from_env()
+        .expect("invalid Aurora DSQL configuration");
+    match dsql {
+        Some(config) => {
+            let database = Arc::new(
+                flow_like_aws_data::dsql::connect(&config)
+                    .await
+                    .expect("failed to connect to Aurora DSQL"),
+            );
+            let state = Arc::new(
+                State::new_with_database(
+                    catalog,
+                    cdn_bucket,
+                    Some(secret_config),
+                    database.connection.clone(),
+                    Some(DbDialect::Dsql),
+                )
+                .await,
+            );
+            let app = TokenRefreshLayer::new(database).layer(construct_router(state));
+            run_with_streaming_response(app).await
+        }
+        None => {
+            let state = Arc::new(State::new(catalog, cdn_bucket, Some(secret_config)).await);
+            run_with_streaming_response(construct_router(state)).await
+        }
+    }
 }

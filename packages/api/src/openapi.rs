@@ -1094,6 +1094,8 @@ impl Modify for SecurityAddon {
         crate::utils::fork::preview::ForkSizeBreakdown,
         crate::routes::app::internal::change_forking::ForkSettingsResponse,
         crate::routes::app::fork::preview::ForkPreviewTarget,
+        // Deletion schemas
+        crate::deletion::AcceptedDeletion,
     ))
 )]
 pub struct ApiDoc;

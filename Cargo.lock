@@ -1623,6 +1623,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurora-dsql-sqlx-connector"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d696e0e24715632c6c6a99b28a3ef868ab931c8aeb5a9502f17c76054b7fa15"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-dsql",
+ "derive_builder",
+ "log",
+ "rand 0.10.1",
+ "regex",
+ "sqlx 0.9.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "auto_enums"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1690,6 +1710,7 @@ dependencies = [
  "axum 0.8.8",
  "flow-like",
  "flow-like-api",
+ "flow-like-aws-data",
  "flow-like-catalog",
  "flow-like-secrets",
  "flow-like-storage",
@@ -1701,6 +1722,7 @@ dependencies = [
  "sentry-tracing",
  "serde",
  "serde_json",
+ "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1747,6 +1769,7 @@ checksum = "a767267da9e2c2e189b2f9df8b5657e850ecf5352644734ba130d4a57095cf1b"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
+ "aws-sdk-signin",
  "aws-sdk-sso",
  "aws-sdk-ssooidc",
  "aws-sdk-sts",
@@ -1758,15 +1781,20 @@ dependencies = [
  "aws-smithy-schema",
  "aws-smithy-types",
  "aws-types",
+ "base64-simd",
  "bytes",
  "fastrand 2.4.1",
  "hex",
  "http 1.4.0",
+ "p256",
+ "rand 0.8.6",
  "sha1 0.10.6",
+ "sha2 0.10.9",
  "time",
  "tokio",
  "tracing",
  "url",
+ "uuid 1.23.1",
  "zeroize",
 ]
 
@@ -1974,6 +2002,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-dsql"
+version = "1.68.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c094111e6bd5522b7560048815ec8ad83bacfec5ce37277c3f042767d0c4d2c4"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.4.1",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aws-sdk-dynamodb"
 version = "1.123.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2147,6 +2203,32 @@ name = "aws-sdk-sesv2"
 version = "1.131.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73d96fbeadaa7978656d5788f2cd24d5fe7c5f5126921c72420b67ee84cb1225"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.4.1",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-signin"
+version = "1.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfe75648eaee4b012e13ccbd50d88df640c9fb566310d083513af9fad3befb6"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -2893,6 +2975,7 @@ dependencies = [
  "flow-like-azure-data",
  "flow-like-catalog",
  "flow-like-compiler",
+ "flow-like-db",
  "flow-like-executor",
  "flow-like-storage",
  "flow-like-types-contracts",
@@ -7972,6 +8055,8 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws_lambda_events 0.16.1",
  "chrono",
+ "flow-like-aws-data",
+ "flow-like-db",
  "flow-like-secrets",
  "lambda_runtime 0.14.4",
  "sea-orm",
@@ -8182,9 +8267,11 @@ dependencies = [
  "eventsource-stream",
  "flow-like",
  "flow-like-api-entity",
+ "flow-like-aws-data",
  "flow-like-azure-data",
  "flow-like-catalog-core",
  "flow-like-channels",
+ "flow-like-db",
  "flow-like-gcp-data",
  "flow-like-secrets",
  "flow-like-sinks",
@@ -8254,6 +8341,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flow-like-aws-data"
+version = "0.1.0"
+dependencies = [
+ "aurora-dsql-sqlx-connector",
+ "flow-like-db",
+ "sea-orm",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower 0.5.3",
+ "tracing",
 ]
 
 [[package]]
@@ -8786,6 +8886,16 @@ name = "flow-like-core-contracts"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "flow-like-db"
+version = "0.1.0"
+dependencies = [
+ "sea-orm",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -9764,6 +9874,7 @@ dependencies = [
  "chrono",
  "flow-like-catalog",
  "flow-like-compiler",
+ "flow-like-db",
  "flow-like-executor",
  "flow-like-gcp-data",
  "flow-like-storage",
@@ -22689,6 +22800,7 @@ dependencies = [
  "sqlx-postgres 0.9.0",
  "sqlx-sqlite 0.9.0",
  "syn 2.0.117",
+ "thiserror 2.0.18",
  "tokio",
  "url",
 ]

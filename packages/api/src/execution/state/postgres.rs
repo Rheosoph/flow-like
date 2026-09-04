@@ -7,26 +7,84 @@ use super::types::*;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, sea_query::OnConflict,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, Select, Set, sea_query::OnConflict,
 };
 use std::sync::Arc;
 
+use crate::db::batch::{DEFAULT_WRITE_BYTES, chunk_by_rows_and_bytes_with, insert_chunks};
+use crate::db::{
+    DbDialect, RetryPolicy, delete_in_batches, delete_in_batches_by_tuple, retry_transaction,
+};
 use crate::entity::{
-    execution_event, execution_run,
+    execution_event, execution_run, execution_run_caller_app,
     sea_orm_active_enums::{
         RunMode as EntityRunMode, RunStatus as EntityRunStatus, RunVariant as EntityRunVariant,
     },
 };
 
+/// Rows per transaction for execution rows, whose JSONB payloads make them
+/// heavier than the default chunk.
+const EXECUTION_WRITE_CHUNK: usize = 500;
+/// Expired runs removed per transaction once their children are gone.
+const RUN_DELETE_PAGE: usize = 250;
+/// Transactions one cleanup call may spend per table; the maintenance
+/// schedule finishes a larger backlog over several calls.
+const MAX_CHUNKS_PER_CLEANUP: usize = 200;
+
 #[derive(Debug, Clone)]
 pub struct PostgresStateStore {
     db: Arc<DatabaseConnection>,
+    dialect: DbDialect,
 }
 
 impl PostgresStateStore {
+    /// A store for single-row work such as [`Self::mirror_run_update`]; bulk
+    /// cleanup callers pass the resolved dialect through [`Self::with_dialect`].
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+        Self::with_dialect(db, DbDialect::default())
+    }
+
+    pub fn with_dialect(db: Arc<DatabaseConnection>, dialect: DbDialect) -> Self {
+        Self { db, dialect }
+    }
+
+    /// Drain the children of `run_ids` (events, caller-app rows) leaf first so
+    /// the run delete that follows cascades onto nothing.
+    async fn delete_run_children(&self, run_ids: &[String]) -> Result<(), DbErr> {
+        delete_in_batches::<execution_event::Entity>(
+            self.db.as_ref(),
+            self.dialect,
+            Condition::all().add(execution_event::Column::RunId.is_in(run_ids.to_vec())),
+            EXECUTION_WRITE_CHUNK,
+            None,
+        )
+        .await?;
+        delete_in_batches_by_tuple::<execution_run_caller_app::Entity>(
+            self.db.as_ref(),
+            self.dialect,
+            Condition::all().add(execution_run_caller_app::Column::RunId.is_in(run_ids.to_vec())),
+            EXECUTION_WRITE_CHUNK,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_runs(&self, run_ids: Vec<String>, expired: &Condition) -> Result<u64, DbErr> {
+        retry_transaction::<_, u64, DbErr>(
+            self.db.as_ref(),
+            self.dialect,
+            None,
+            &RetryPolicy::idempotent(),
+            move |txn| {
+                let delete = execution_run::Entity::delete_many()
+                    .filter(execution_run::Column::Id.is_in(run_ids.clone()))
+                    .filter(expired.clone());
+                Box::pin(async move { delete.exec(txn).await.map(|result| result.rows_affected) })
+            },
+        )
+        .await
     }
 
     /// Mirror an update accepted by a non-Postgres execution store into the
@@ -140,6 +198,53 @@ fn event_first_write_wins() -> OnConflict {
     OnConflict::column(execution_event::Column::Id)
         .do_nothing()
         .to_owned()
+}
+
+fn expired_runs(now: sea_orm::prelude::DateTime) -> Condition {
+    Condition::all()
+        .add(execution_run::Column::ExpiresAt.is_not_null())
+        .add(execution_run::Column::ExpiresAt.lt(now))
+}
+
+fn expired_run_page(expired: &Condition) -> Select<execution_run::Entity> {
+    execution_run::Entity::find()
+        .filter(expired.clone())
+        .select_only()
+        .column(execution_run::Column::Id)
+        .order_by_asc(execution_run::Column::Id)
+        .limit(RUN_DELETE_PAGE as u64)
+}
+
+/// Widest decimal rendering of an `i64` or `f64`, charged for every number so
+/// the estimate can only ever overshoot.
+const JSON_NUMBER_BYTES: usize = 20;
+
+/// An upper bound on the serialized size of a JSON value without serializing it.
+fn json_bytes(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Null => 4,
+        serde_json::Value::Bool(_) => 5,
+        serde_json::Value::Number(_) => JSON_NUMBER_BYTES,
+        serde_json::Value::String(text) => text.len() + 2,
+        serde_json::Value::Array(items) => {
+            2 + items.iter().map(|item| json_bytes(item) + 1).sum::<usize>()
+        }
+        serde_json::Value::Object(fields) => {
+            2 + fields
+                .iter()
+                .map(|(key, item)| key.len() + 4 + json_bytes(item))
+                .sum::<usize>()
+        }
+    }
+}
+
+fn event_bytes(event: &execution_event::ActiveModel) -> usize {
+    let text = [&event.id, &event.run_id, &event.event_type]
+        .into_iter()
+        .map(|value| value.try_as_ref().map(String::len).unwrap_or(0))
+        .sum::<usize>();
+    let payload = event.payload.try_as_ref().map(json_bytes).unwrap_or(0);
+    text + payload + 64
 }
 
 // Conversion helpers
@@ -432,19 +537,46 @@ impl ExecutionStateStore for PostgresStateStore {
         Ok(results.into_iter().map(run_model_to_record).collect())
     }
 
+    /// Expired runs go one page at a time: the page's events and caller-app
+    /// rows are drained first, then the runs themselves, so every transaction
+    /// touches a known number of rows and the cascade finds nothing left.
     async fn delete_expired_runs(&self) -> Result<i64, StateStoreError> {
-        let now = chrono::Utc::now().naive_utc();
-        let result = execution_run::Entity::delete_many()
-            .filter(
-                Condition::all()
-                    .add(execution_run::Column::ExpiresAt.is_not_null())
-                    .add(execution_run::Column::ExpiresAt.lt(now)),
-            )
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
+        let expired = expired_runs(chrono::Utc::now().naive_utc());
+        let mut deleted = 0u64;
+        let mut pages = 0usize;
+        loop {
+            if pages >= MAX_CHUNKS_PER_CLEANUP {
+                tracing::warn!(
+                    deleted,
+                    max_pages = MAX_CHUNKS_PER_CLEANUP,
+                    "Expired run cleanup hit its budget; the rest is removed next call"
+                );
+                break;
+            }
+            let run_ids: Vec<String> = expired_run_page(&expired)
+                .into_tuple()
+                .all(self.db.as_ref())
+                .await
+                .map_err(|e| StateStoreError::Database(e.to_string()))?;
+            if run_ids.is_empty() {
+                break;
+            }
+            pages += 1;
+            let fetched = run_ids.len();
+            self.delete_run_children(&run_ids)
+                .await
+                .map_err(|e| StateStoreError::Database(e.to_string()))?;
+            let removed = self
+                .delete_runs(run_ids, &expired)
+                .await
+                .map_err(|e| StateStoreError::Database(e.to_string()))?;
+            deleted += removed;
+            if removed == 0 || fetched < RUN_DELETE_PAGE {
+                break;
+            }
+        }
 
-        Ok(result.rows_affected as i64)
+        Ok(deleted as i64)
     }
 
     async fn push_events(&self, events: Vec<CreateEventInput>) -> Result<i32, StateStoreError> {
@@ -468,13 +600,23 @@ impl ExecutionStateStore for PostgresStateStore {
             .collect();
 
         let count = models.len() as i32;
-        execution_event::Entity::insert_many(models)
-            // Canonical IDs make HTTP retries the same logical event. Keep the
-            // first accepted payload and never reset its delivery state.
-            .on_conflict(event_first_write_wins())
-            .exec_without_returning(self.db.as_ref())
-            .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
+        // Canonical IDs make HTTP retries the same logical event. Keep the
+        // first accepted payload and never reset its delivery state; the same
+        // rule makes a chunk that is replayed after an ambiguous commit a no-op.
+        let chunks = chunk_by_rows_and_bytes_with(
+            models,
+            EXECUTION_WRITE_CHUNK,
+            DEFAULT_WRITE_BYTES,
+            event_bytes,
+        );
+        insert_chunks(
+            self.db.as_ref(),
+            self.dialect,
+            chunks,
+            Some(event_first_write_wins()),
+        )
+        .await
+        .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         Ok(count)
     }
@@ -544,13 +686,24 @@ impl ExecutionStateStore for PostgresStateStore {
 
     async fn delete_expired_events(&self) -> Result<i64, StateStoreError> {
         let now = chrono::Utc::now().naive_utc();
-        let result = execution_event::Entity::delete_many()
-            .filter(execution_event::Column::ExpiresAt.lt(now))
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
+        let outcome = delete_in_batches::<execution_event::Entity>(
+            self.db.as_ref(),
+            self.dialect,
+            Condition::all().add(execution_event::Column::ExpiresAt.lt(now)),
+            EXECUTION_WRITE_CHUNK,
+            Some(MAX_CHUNKS_PER_CLEANUP),
+        )
+        .await
+        .map_err(|e| StateStoreError::Database(e.to_string()))?;
+        if outcome.stopped_early {
+            tracing::warn!(
+                deleted = outcome.rows,
+                max_chunks = MAX_CHUNKS_PER_CLEANUP,
+                "Expired event cleanup hit its budget; the rest is removed next call"
+            );
+        }
 
-        Ok(result.rows_affected as i64)
+        Ok(outcome.rows as i64)
     }
 }
 
@@ -709,5 +862,52 @@ mod terminal_mirror_tests {
 
         assert!(statement.contains("ON CONFLICT (\"id\") DO NOTHING"));
         assert!(!statement.contains("DO UPDATE"));
+    }
+
+    #[test]
+    fn expired_runs_are_paged_by_id_before_their_children_are_drained() {
+        let statement = expired_run_page(&expired_runs(ts_to_datetime(1_800_000_000_000)))
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+
+        assert!(statement.starts_with("SELECT \"ExecutionRun\".\"id\" FROM"));
+        assert!(statement.contains("\"ExecutionRun\".\"expiresAt\" IS NOT NULL"));
+        assert!(statement.contains("\"ExecutionRun\".\"expiresAt\" <"));
+        assert!(statement.ends_with(&format!(
+            "ORDER BY \"ExecutionRun\".\"id\" ASC LIMIT {RUN_DELETE_PAGE}"
+        )));
+    }
+
+    /// The estimate feeds the byte budget that chunks writes, so it must never
+    /// undercount the serialized row, and it must follow the payload instead of
+    /// staying flat. It does not track byte-for-byte: a JSON number is charged a
+    /// flat `JSON_NUMBER_BYTES` worst case, so replacing one with a 10 KB string
+    /// grows the estimate by slightly less than the string itself.
+    #[test]
+    fn event_size_estimate_tracks_the_payload() {
+        let event = |payload: serde_json::Value| execution_event::ActiveModel {
+            id: Set("evt-1".into()),
+            run_id: Set("run-1".into()),
+            sequence: Set(0),
+            event_type: Set("chunk".into()),
+            payload: Set(payload),
+            delivered: Set(false),
+            expires_at: Set(ts_to_datetime(1_900_000_000_000)),
+            created_at: Set(ts_to_datetime(1_800_000_000_000)),
+        };
+        let small_payload = serde_json::json!({"value": 1});
+        let large_payload = serde_json::json!({"value": "x".repeat(10_000)});
+        let small = event_bytes(&event(small_payload.clone()));
+        let large = event_bytes(&event(large_payload.clone()));
+
+        assert!(small < 200);
+        assert!(large > 10_000);
+        assert!(small >= small_payload.to_string().len());
+        assert!(large >= large_payload.to_string().len());
+        assert!(
+            large - small
+                >= large_payload.to_string().len() - small_payload.to_string().len()
+                    - JSON_NUMBER_BYTES
+        );
     }
 }

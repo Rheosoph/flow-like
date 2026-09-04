@@ -200,7 +200,7 @@ pub(crate) async fn group_meta_lookup(
                             use_case: m.use_case,
                             icon: m.icon,
                             banner: m.thumbnail,
-                            tags: m.tags.unwrap_or_default(),
+                            tags: m.tags.unwrap_or_default().into(),
                         },
                         is_english,
                     ),

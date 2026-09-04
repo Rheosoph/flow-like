@@ -21,6 +21,7 @@ use file_tracking::{FileTrackingContext, FileTrackingError};
 use flow_like_azure_data::cosmos::CosmosClient;
 use flow_like_azure_data::postgres::{self, ManagedIdentityPostgresConfig};
 use flow_like_compiler::{CompilerConfig, CompilerError, compile};
+use flow_like_db::DbDialect;
 use flow_like_executor::{
     ExecutionRequest, ExecutorConfig, ExecutorError, MAX_REMOTE_PAYLOAD_BYTES, ResolveError,
     fetch_bounded, report_queue_failure, resolve_payload_from_str,
@@ -815,6 +816,7 @@ impl WorkloadContext {
                         cosmos,
                         files_container,
                         content_container,
+                        dialect: DbDialect::resolve(None, &managed.connection).await,
                         database: managed.connection,
                     }),
                     Some(managed.lifecycle),

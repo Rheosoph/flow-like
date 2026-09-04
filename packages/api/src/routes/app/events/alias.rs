@@ -18,9 +18,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -96,8 +94,7 @@ pub async fn list_aliases(
         .filter(event_alias::Column::AppId.eq(&app_id))
         .filter(event_alias::Column::EventId.eq(&event_id))
         .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .await?;
 
     Ok(Json(rows.into_iter().map(AliasView::from).collect()))
 }
@@ -136,8 +133,7 @@ pub async fn get_alias(
     let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
     let row = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("alias '{slug}' not found")))?;
     if row.app_id != app_id || row.event_id != event_id {
         return Err(ApiError::not_found(format!(
@@ -200,19 +196,14 @@ pub async fn upsert_alias(
     let sub = permission.sub().ok();
     let now = chrono::Utc::now().naive_utc();
 
-    let existing = EventAlias::find_by_id(&storage_slug)
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    let existing = EventAlias::find_by_id(&storage_slug).one(&state.db).await?;
 
     let model = match existing {
         Some(row) if row.app_id == app_id && row.event_id == event_id => {
             // Touch updated_at — keep created_by/created_at intact.
             let mut am: event_alias::ActiveModel = row.into();
             am.updated_at = Set(now);
-            am.update(&state.db)
-                .await
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+            am.update(&state.db).await?
         }
         Some(_) => {
             return Err(ApiError::conflict(format!(
@@ -221,35 +212,33 @@ pub async fn upsert_alias(
             )));
         }
         None => {
-            let txn = state
-                .db
-                .begin()
-                .await
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+            state
+                .transaction(|txn| {
+                    let storage_slug = storage_slug.clone();
+                    let app_id = app_id.clone();
+                    let event_id = event_id.clone();
+                    let sub = sub.clone();
+                    Box::pin(async move {
+                        event_alias::Entity::delete_many()
+                            .filter(event_alias::Column::AppId.eq(&app_id))
+                            .filter(event_alias::Column::EventId.eq(&event_id))
+                            .exec(txn)
+                            .await?;
 
-            event_alias::Entity::delete_many()
-                .filter(event_alias::Column::AppId.eq(&app_id))
-                .filter(event_alias::Column::EventId.eq(&event_id))
-                .exec(&txn)
-                .await
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-
-            let model = event_alias::ActiveModel {
-                slug: Set(storage_slug),
-                app_id: Set(app_id.clone()),
-                event_id: Set(event_id.clone()),
-                created_by: Set(sub),
-                created_at: Set(now),
-                updated_at: Set(now),
-            }
-            .insert(&txn)
-            .await
-            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-
-            txn.commit()
-                .await
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-            model
+                        let model = event_alias::ActiveModel {
+                            slug: Set(storage_slug),
+                            app_id: Set(app_id),
+                            event_id: Set(event_id),
+                            created_by: Set(sub),
+                            created_at: Set(now),
+                            updated_at: Set(now),
+                        }
+                        .insert(txn)
+                        .await?;
+                        Ok::<_, ApiError>(model)
+                    })
+                })
+                .await?
         }
     };
 
@@ -297,8 +286,7 @@ pub async fn delete_alias(
     let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
     let row = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("alias '{slug}' not found")))?;
     if row.app_id != app_id || row.event_id != event_id {
         return Err(ApiError::not_found(format!(
@@ -307,8 +295,7 @@ pub async fn delete_alias(
     }
     EventAlias::delete_by_id(storage_slug)
         .exec(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .await?;
 
     audit_branch!(
         state,

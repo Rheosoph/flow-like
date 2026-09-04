@@ -91,7 +91,7 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
         details: Some(details),
     };
 
-    if let Err(err) = AuditService::record(&state.db, input).await {
+    if let Err(err) = AuditService::record(&state.db, state.db_dialect, input).await {
         tracing::error!(
             run_id = %run_id,
             app_id = %app_id,
@@ -114,6 +114,7 @@ macro_rules! audit {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
+            let dialect = $state.db_dialect;
             let action = $action.to_string();
             let resource_type = $resource_type.to_string();
             let resource_id = $resource_id.to_string();
@@ -134,7 +135,7 @@ macro_rules! audit {
                     summary,
                     details: None,
                 };
-                $crate::audit::AuditService::record(&db, input).await
+                $crate::audit::AuditService::record(&db, dialect, input).await
             }
             .await;
             if let Err(e) = &audit_result {
@@ -147,6 +148,7 @@ macro_rules! audit {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
+            let dialect = $state.db_dialect;
             let action = $action.to_string();
             let resource_type = $resource_type.to_string();
             let resource_id = $resource_id.to_string();
@@ -168,7 +170,7 @@ macro_rules! audit {
                     summary,
                     details: Some(details),
                 };
-                $crate::audit::AuditService::record(&db, input).await
+                $crate::audit::AuditService::record(&db, dialect, input).await
             }
             .await;
             if let Err(e) = &audit_result {
@@ -191,6 +193,7 @@ macro_rules! audit_branch {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
+            let dialect = $state.db_dialect;
             let chain_id = $chain_id.to_string();
             let action = $action.to_string();
             let resource_type = $resource_type.to_string();
@@ -212,7 +215,7 @@ macro_rules! audit_branch {
                     summary,
                     details: None,
                 };
-                $crate::audit::AuditService::record(&db, input).await
+                $crate::audit::AuditService::record(&db, dialect, input).await
             }
             .await;
             if let Err(e) = &audit_result {
@@ -225,6 +228,7 @@ macro_rules! audit_branch {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
+            let dialect = $state.db_dialect;
             let chain_id = $chain_id.to_string();
             let action = $action.to_string();
             let resource_type = $resource_type.to_string();
@@ -247,7 +251,7 @@ macro_rules! audit_branch {
                     summary,
                     details: Some(details),
                 };
-                $crate::audit::AuditService::record(&db, input).await
+                $crate::audit::AuditService::record(&db, dialect, input).await
             }
             .await;
             if let Err(e) = &audit_result {

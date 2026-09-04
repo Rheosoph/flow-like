@@ -13,6 +13,7 @@ base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 flow-like-gcp-data.workspace = true
+flow-like-db.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["server"] }
 flow-like-compiler.workspace = true

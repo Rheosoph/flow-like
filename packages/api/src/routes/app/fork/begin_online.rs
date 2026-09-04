@@ -2,27 +2,15 @@ use std::sync::Arc;
 
 use crate::{
     credentials::{CredentialsAccess, RuntimeCredentials},
-    entity::{
-        app, membership, role,
-        sea_orm_active_enums::{ExecutionMode, Status, Visibility},
-    },
     error::ApiError,
     middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
     state::AppState,
+    utils::fork::job::{self, ForkJobSpec},
 };
 use axum::{Extension, Json, extract::State};
 use flow_like::{
     app::{App, AppStatus as CoreAppStatus},
     bit::Metadata,
-};
-use flow_like_storage::Path;
-use flow_like_types::create_id;
-use futures_util::TryStreamExt;
-use sea_orm::{
-    ActiveModelTrait,
-    ActiveValue::{NotSet, Set},
-    EntityTrait, IntoActiveModel, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -58,8 +46,11 @@ pub struct BeginOnlineForkResponse {
     /// uploads to `apps/{new_app_id}/...` using the returned
     /// scoped credentials.
     pub new_app_id: String,
-    /// Opaque session id for the upload + finalize flow. Pass back
-    /// to `POST /apps/fork/online/{session_id}/finalize`.
+    /// The fork job that owns the upload. Readable through
+    /// `GET /apps/fork/jobs/{job_id}`; it completes when
+    /// `POST /apps/{new_app_id}/fork/online/finalize` succeeds and is
+    /// aborted (rows, storage and the app removed) if the upload is
+    /// abandoned past its expiry.
     pub fork_session_id: String,
     /// Path the desktop should treat as the upload root (matches
     /// the destination prefix on the server's master store).
@@ -123,114 +114,24 @@ pub async fn begin_online_fork(
     }
 
     let sub = user.sub()?;
-    let new_app_id = create_id();
-    let now = chrono::Utc::now().naive_utc();
     let source_app_id = body.source_app_id.clone();
+    let language = body.language.clone().unwrap_or_else(|| "en".to_string());
 
-    // Materialize an empty destination app + Owner/Admin/Member
-    // roles + caller membership, all in one transaction. The app
-    // starts in `Offline` visibility / `Inactive` status so it is
-    // hidden from listings; finalize flips it to `Private` / `Active`
-    // once the upload is verified.
-    let new_app_id_db = new_app_id.clone();
-    let sub_owned = sub.clone();
-    let source_app_id_owned = source_app_id.clone();
-    state
-        .db
-        .transaction::<_, (), sea_orm::DbErr>(|txn| {
-            Box::pin(async move {
-                let new_app = app::ActiveModel {
-                    id: Set(new_app_id_db.clone()),
-                    status: Set(Status::Inactive),
-                    visibility: Set(Visibility::Offline),
-                    changelog: Set(None),
-                    default_role_id: NotSet,
-                    owner_role_id: NotSet,
-                    primary_category: Set(None),
-                    secondary_category: Set(None),
-                    app_type: Set(None),
-                    rating_sum: Set(0),
-                    rating_count: Set(0),
-                    download_count: Set(0),
-                    interactions_count: Set(0),
-                    avg_rating: Set(None),
-                    relevance_score: Set(None),
-                    total_size: Set(0),
-                    price: Set(0),
-                    version: Set(None),
-                    execution_mode: Set(ExecutionMode::Any),
-                    bits: Set(Some(Vec::new())),
-                    allow_forking: Set(false),
-                    fork_policy: Set(None),
-                    forked_from: Set(source_app_id_owned),
-                    forked_at: Set(Some(now)),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                let inserted_app = new_app.insert(txn).await?;
-
-                let owner_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("Owner".to_string()),
-                    description: Set(Some("Owner role".to_string())),
-                    permissions: Set(RolePermissions::Owner.bits()),
-                    app_id: Set(Some(new_app_id_db.clone())),
-                    attributes: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                let owner_role = owner_role.insert(txn).await?;
-
-                let admin_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("Admin".to_string()),
-                    description: Set(Some("Admin role".to_string())),
-                    permissions: Set(RolePermissions::Admin.bits()),
-                    app_id: Set(Some(new_app_id_db.clone())),
-                    attributes: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                admin_role.insert(txn).await?;
-
-                let mut member_perms = RolePermissions::ReadTemplates;
-                member_perms.insert(RolePermissions::ExecuteEvents);
-                member_perms.insert(RolePermissions::ListEvents);
-                let member_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("User".to_string()),
-                    description: Set(Some("User role".to_string())),
-                    permissions: Set(member_perms.bits()),
-                    app_id: Set(Some(new_app_id_db.clone())),
-                    attributes: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                let member_role = member_role.insert(txn).await?;
-
-                let mut active_app = inserted_app.into_active_model();
-                active_app.owner_role_id = Set(Some(owner_role.id.clone()));
-                active_app.default_role_id = Set(Some(member_role.id.clone()));
-                active_app.update(txn).await?;
-
-                let mship = membership::ActiveModel {
-                    id: Set(create_id()),
-                    user_id: Set(sub_owned.clone()),
-                    app_id: Set(new_app_id_db.clone()),
-                    role_id: Set(owner_role.id.clone()),
-                    joined_via: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                mship.insert(txn).await?;
-                Ok(())
-            })
-        })
-        .await
-        .map_err(|e| match e {
-            sea_orm::TransactionError::Connection(err) => ApiError::from(err),
-            sea_orm::TransactionError::Transaction(err) => ApiError::from(err),
-        })?;
+    // The fork job is the "upload in progress" marker: its `allocate`
+    // step materializes the hidden destination app (`Offline` /
+    // `Inactive`), the Owner / Admin / User roles and the caller's
+    // membership. Finalize flips the app to `Private` / `Active` and
+    // completes the job; an upload that never finalizes is aborted by the
+    // job sweeper once it expires.
+    let fork_job = job::enqueue(
+        &state,
+        source_app_id.as_deref().unwrap_or(job::OFFLINE_SOURCE),
+        &sub,
+        ForkJobSpec::offline_upload(&language),
+    )
+    .await?;
+    let (fork_job, _) = job::run_pass(&state, fork_job).await?;
+    let new_app_id = fork_job.dest_app_id.clone();
 
     // The follow-up sync uses the regular app-edit endpoints. Those
     // endpoints load `manifest.app`, so the hidden destination needs a
@@ -259,7 +160,13 @@ pub async fn begin_online_fork(
     }
     .await;
     if let Err(err) = bootstrap_result {
-        cleanup_failed_online_fork_allocation(&state, &new_app_id).await;
+        if let Err(abort_err) = job::abort(&state, &fork_job).await {
+            tracing::warn!(
+                app_id = %new_app_id,
+                error = %abort_err,
+                "failed to clean up after offline-to-online fork allocation bootstrap error"
+            );
+        }
         return Err(err);
     }
 
@@ -292,7 +199,7 @@ pub async fn begin_online_fork(
     let upload_path = format!("apps/{}", new_app_id);
     Ok(Json(BeginOnlineForkResponse {
         new_app_id,
-        fork_session_id: create_id(),
+        fork_session_id: fork_job.id,
         upload_path,
         shared_credentials,
         expiration,
@@ -311,46 +218,4 @@ fn credentials_expiration(creds: &RuntimeCredentials) -> Option<chrono::DateTime
         RuntimeCredentials::R2(r2) => r2.expiration,
         RuntimeCredentials::Mixed(mixed) => credentials_expiration(&mixed.content),
     }
-}
-
-async fn cleanup_failed_online_fork_allocation(state: &AppState, app_id: &str) {
-    if let Err(err) = delete_app_storage_prefixes(state, app_id).await {
-        tracing::warn!(
-            app_id,
-            error = %err,
-            "failed to clean storage after offline-to-online fork allocation bootstrap error"
-        );
-    }
-
-    if let Err(err) = app::Entity::delete_by_id(app_id).exec(&state.db).await {
-        tracing::warn!(
-            app_id,
-            error = %err,
-            "failed to clean database row after offline-to-online fork allocation bootstrap error"
-        );
-    }
-}
-
-async fn delete_app_storage_prefixes(state: &AppState, app_id: &str) -> Result<(), ApiError> {
-    let credentials = state.master_credentials().await?;
-    let prefix = Path::from("apps").child(app_id.to_string());
-
-    for meta_store in [true, false] {
-        let store = credentials.to_store(meta_store).await?.as_generic();
-        let locations: Vec<Path> = store
-            .list(Some(&prefix))
-            .map_ok(|m| m.location)
-            .try_collect()
-            .await
-            .map_err(|err| ApiError::internal(format!("list app storage prefix: {err}")))?;
-
-        for location in locations {
-            store
-                .delete(&location)
-                .await
-                .map_err(|err| ApiError::internal(format!("delete app storage object: {err}")))?;
-        }
-    }
-
-    Ok(())
 }

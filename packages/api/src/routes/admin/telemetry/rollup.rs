@@ -15,7 +15,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     state::AppState,
-    telemetry::rollup::{TelemetryRollupConfig, rollup_once},
+    telemetry::rollup::{TelemetryRollupConfig, rollup_once_with},
 };
 
 #[derive(Clone, Copy, Debug, Serialize, ToSchema)]
@@ -59,10 +59,12 @@ pub async fn rollup_telemetry(
         .await?;
 
     let config = TelemetryRollupConfig::from_env();
-    let result = rollup_once(&state.db, &config).await.map_err(|e| {
-        tracing::error!(error = %e, "Admin telemetry rollup failed");
-        ApiError::internal_error(flow_like_types::anyhow!("Telemetry rollup failed: {}", e))
-    })?;
+    let result = rollup_once_with(&state.db, state.db_dialect, &config)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Admin telemetry rollup failed");
+            ApiError::internal_error(flow_like_types::anyhow!("Telemetry rollup failed: {}", e))
+        })?;
 
     if !result.is_empty() {
         tracing::info!(

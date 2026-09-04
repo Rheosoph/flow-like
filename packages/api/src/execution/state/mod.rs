@@ -167,6 +167,9 @@ impl StateBackend {
 #[derive(Default)]
 pub struct StateStoreConfig {
     pub db: Option<Arc<sea_orm::DatabaseConnection>>,
+    /// The engine behind `db`; missing means the default dialect, which only
+    /// changes how a lost commit race is logged.
+    pub dialect: Option<crate::db::DbDialect>,
     #[cfg(feature = "aws")]
     pub aws_config: Option<Arc<SdkConfig>>,
     #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
@@ -178,6 +181,11 @@ pub struct StateStoreConfig {
 impl StateStoreConfig {
     pub fn with_db(mut self, db: Arc<sea_orm::DatabaseConnection>) -> Self {
         self.db = Some(db);
+        self
+    }
+
+    pub fn with_dialect(mut self, dialect: crate::db::DbDialect) -> Self {
+        self.dialect = Some(dialect);
         self
     }
 
@@ -213,7 +221,10 @@ pub async fn create_state_store(
                     "Database connection required for Postgres backend".into(),
                 )
             })?;
-            Ok(Arc::new(PostgresStateStore::new(db)))
+            Ok(Arc::new(PostgresStateStore::with_dialect(
+                db,
+                config.dialect.unwrap_or_default(),
+            )))
         }
 
         #[cfg(feature = "redis")]

@@ -1,23 +1,15 @@
 // Cryptographic Audit Trail — blake3 hash chains with ES256 server signatures
 // Branching chain architecture: platform root chain + per-app/per-package sub-chains
 
-enum AuditActorType {
-  USER
-  TECHNICAL_USER
-  API_KEY
-  SYSTEM
-  EXECUTOR
-}
-
 model AuditEntry {
-  id        String @id @default(cuid())
-  sequence  BigInt
+  id       String @id @default(cuid())
+  sequence BigInt
 
   timestamp DateTime @default(now())
 
   // Actor
   actorId   String
-  actorType AuditActorType
+  actorType String
   actorIp   String?
 
   // Action
@@ -38,10 +30,10 @@ model AuditEntry {
   signature String? // raw P-256 ECDSA signature (base64 DER) over entryHash
   kid       String? // key identifier used for the signature — enables key rotation auditing
 
+  @@unique([chainId, sequence])
   @@index([chainId, sequence])
   @@index([chainId, timestamp])
   @@index([actorId, timestamp])
   @@index([resourceType, resourceId])
   @@index([action])
-  @@unique([chainId, sequence])
 }

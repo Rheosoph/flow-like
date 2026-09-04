@@ -29,12 +29,13 @@ use flow_like_storage::serde_arrow;
 use flow_like_types::{anyhow, create_id, tokio};
 use futures::{StreamExt, TryStreamExt};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, sea_query::Expr,
 };
 
 use crate::{
     credentials::CredentialsAccess,
+    db::{DEFAULT_WRITE_CHUNK, update_in_batches},
     entity::{
         event_sink, execution_run, regression_case_result, regression_suite, regression_suite_run,
         sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
@@ -1054,22 +1055,34 @@ pub async fn maintenance_tick(state: &AppState) -> Result<RegressionMaintenanceO
         - chrono::Duration::from_std(SUITE_WALL_CLOCK + SUITE_LIVENESS_GRACE)
             .unwrap_or_else(|_| chrono::Duration::minutes(20));
     // Keyed on startedAt, not createdAt: a queued run may start long after
-    // its row was inserted, and every `running` row has a startedAt.
-    let swept = regression_suite_run::Entity::update_many()
-        .set(regression_suite_run::ActiveModel {
-            status: Set(SUITE_RUN_ERRORED.to_string()),
-            completed_at: Set(Some(now)),
-            error: Set(Some(
-                "Suite run exceeded the wall clock plus grace without completing".to_string(),
-            )),
-            ..Default::default()
-        })
-        .filter(regression_suite_run::Column::Status.eq(SUITE_RUN_RUNNING))
-        .filter(regression_suite_run::Column::StartedAt.lt(liveness_cutoff))
-        .exec(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Suite-run liveness sweep failed: {e}")))?;
-    outcome.swept = swept.rows_affected;
+    // its row was inserted, and every `running` row has a startedAt. Dead
+    // rows are flipped in primary-key pages, each its own transaction.
+    outcome.swept = update_in_batches::<regression_suite_run::Entity>(
+        &state.db,
+        state.db_dialect,
+        Condition::all()
+            .add(regression_suite_run::Column::Status.eq(SUITE_RUN_RUNNING))
+            .add(regression_suite_run::Column::StartedAt.lt(liveness_cutoff)),
+        vec![
+            (
+                regression_suite_run::Column::Status,
+                Expr::value(SUITE_RUN_ERRORED),
+            ),
+            (
+                regression_suite_run::Column::CompletedAt,
+                Expr::value(Some(now)),
+            ),
+            (
+                regression_suite_run::Column::Error,
+                Expr::value(Some(
+                    "Suite run exceeded the wall clock plus grace without completing".to_string(),
+                )),
+            ),
+        ],
+        DEFAULT_WRITE_CHUNK,
+    )
+    .await
+    .map_err(|e| ApiError::internal_error(anyhow!("Suite-run liveness sweep failed: {e}")))?;
 
     let due: Vec<regression_suite::Model> = regression_suite::Entity::find()
         .filter(regression_suite::Column::Schedule.is_not_null())

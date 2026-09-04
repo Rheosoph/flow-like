@@ -321,7 +321,7 @@ pub async fn get_requests(
             app_description: meta_record.and_then(|m| m.description.clone()),
             app_icon,
             app_thumbnail,
-            app_tags: meta_record.and_then(|m| m.tags.clone()),
+            app_tags: meta_record.and_then(|m| m.tags.clone().map(Into::into)),
             current_visibility: app_record.map(|a| format!("{:?}", a.visibility).to_uppercase()),
             download_count: app_record.map(|a| a.download_count),
             rating_count: app_record.map(|a| a.rating_count),

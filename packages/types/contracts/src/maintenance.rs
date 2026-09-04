@@ -16,6 +16,7 @@ pub enum MaintenanceJob {
     RunSweep,
     StateCleanup,
     RegressionSuites,
+    DeletionQueue,
 }
 
 impl MaintenanceJob {
@@ -26,6 +27,7 @@ impl MaintenanceJob {
             Self::RunSweep => "run_sweep",
             Self::StateCleanup => "state_cleanup",
             Self::RegressionSuites => "regression_suites",
+            Self::DeletionQueue => "deletion_queue",
         }
     }
 }
@@ -38,6 +40,7 @@ pub enum MaintenanceRunRequest {
     RunSweep,
     StateCleanup,
     RegressionSuites,
+    DeletionQueue,
 }
 
 impl MaintenanceRunRequest {
@@ -48,6 +51,7 @@ impl MaintenanceRunRequest {
             Self::RunSweep => MaintenanceJob::RunSweep,
             Self::StateCleanup => MaintenanceJob::StateCleanup,
             Self::RegressionSuites => MaintenanceJob::RegressionSuites,
+            Self::DeletionQueue => MaintenanceJob::DeletionQueue,
         }
     }
 }
@@ -60,6 +64,7 @@ impl From<MaintenanceJob> for MaintenanceRunRequest {
             MaintenanceJob::RunSweep => Self::RunSweep,
             MaintenanceJob::StateCleanup => Self::StateCleanup,
             MaintenanceJob::RegressionSuites => Self::RegressionSuites,
+            MaintenanceJob::DeletionQueue => Self::DeletionQueue,
         }
     }
 }
@@ -102,6 +107,17 @@ pub struct RegressionSuitesMaintenanceResult {
     pub executed: u64,
 }
 
+/// One pass over the cascade-deletion queue: jobs claimed under a lease,
+/// finished, handed back because the pass budget ran out, or failed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionQueueMaintenanceResult {
+    pub claimed: u64,
+    pub completed: u64,
+    pub suspended: u64,
+    pub failed: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "job", content = "result", rename_all = "snake_case")]
 pub enum MaintenanceRunResponse {
@@ -110,6 +126,7 @@ pub enum MaintenanceRunResponse {
     RunSweep(RunSweepMaintenanceResult),
     StateCleanup(StateCleanupMaintenanceResult),
     RegressionSuites(RegressionSuitesMaintenanceResult),
+    DeletionQueue(DeletionQueueMaintenanceResult),
 }
 
 #[cfg(test)]
@@ -248,6 +265,38 @@ mod tests {
             .unwrap()
             .executed,
             0
+        );
+    }
+
+    #[test]
+    fn deletion_queue_round_trips() {
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunRequest::DeletionQueue).unwrap(),
+            json!({ "job": "deletion_queue" })
+        );
+        assert_eq!(
+            MaintenanceRunRequest::DeletionQueue.job().as_str(),
+            "deletion_queue"
+        );
+        assert_eq!(
+            serde_json::to_value(MaintenanceRunResponse::DeletionQueue(
+                DeletionQueueMaintenanceResult {
+                    claimed: 2,
+                    completed: 1,
+                    suspended: 1,
+                    failed: 0,
+                }
+            ))
+            .unwrap(),
+            json!({
+                "job": "deletion_queue",
+                "result": {
+                    "claimed": 2,
+                    "completed": 1,
+                    "suspended": 1,
+                    "failed": 0,
+                }
+            })
         );
     }
 
