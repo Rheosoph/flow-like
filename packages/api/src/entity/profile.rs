@@ -17,8 +17,6 @@ pub struct Model {
     pub icon: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
-    pub interests: Option<Vec<String>>,
-    pub tags: Option<Vec<String>>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub theme: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
@@ -27,11 +25,8 @@ pub struct Model {
     pub apps: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub shortcuts: Option<Json>,
-    #[sea_orm(column_name = "bitIds")]
-    pub bit_ids: Option<Vec<String>>,
     #[sea_orm(column_type = "Text")]
     pub hub: String,
-    pub hubs: Option<Vec<String>>,
     #[sea_orm(
         column_name = "userId",
         primary_key,
@@ -45,6 +40,14 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "deletedAt")]
     pub deleted_at: Option<DateTime>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub interests: Option<crate::json_types::StringList>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub tags: Option<crate::json_types::StringList>,
+    #[sea_orm(column_name = "bitIds", column_type = "JsonBinary", nullable)]
+    pub bit_ids: Option<crate::json_types::StringList>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub hubs: Option<crate::json_types::StringList>,
     #[sea_orm(
         belongs_to,
         from = "user_id",

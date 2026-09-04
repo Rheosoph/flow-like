@@ -18,23 +18,26 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
     pub secure: bool,
-    pub interests: Option<Vec<String>>,
-    pub tags: Option<Vec<String>>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub theme: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub settings: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub apps: Option<Json>,
-    #[sea_orm(column_name = "bitIds")]
-    pub bit_ids: Option<Vec<String>>,
     #[sea_orm(column_type = "Text")]
     pub hub: String,
-    pub hubs: Option<Vec<String>>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub interests: Option<crate::json_types::StringList>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub tags: Option<crate::json_types::StringList>,
+    #[sea_orm(column_name = "bitIds", column_type = "JsonBinary", nullable)]
+    pub bit_ids: Option<crate::json_types::StringList>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub hubs: Option<crate::json_types::StringList>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

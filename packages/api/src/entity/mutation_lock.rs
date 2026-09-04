@@ -11,6 +11,10 @@ pub struct Model {
     pub id: i64,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "expiresAt")]
+    pub expires_at: Option<DateTime>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub owner: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -19,15 +19,12 @@ pub struct Model {
     pub long_description: Option<String>,
     #[sea_orm(column_name = "releaseNotes", column_type = "Text", nullable)]
     pub release_notes: Option<String>,
-    pub tags: Option<Vec<String>>,
     #[sea_orm(column_name = "useCase", column_type = "Text", nullable)]
     pub use_case: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub icon: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub thumbnail: Option<String>,
-    #[sea_orm(column_name = "previewMedia")]
-    pub preview_media: Option<Vec<String>>,
     #[sea_orm(column_name = "ageRating")]
     pub age_rating: Option<i64>,
     #[sea_orm(column_type = "Text", nullable)]
@@ -60,6 +57,10 @@ pub struct Model {
     pub wasm_package_id: Option<String>,
     #[sea_orm(column_name = "groupId", column_type = "Text", nullable)]
     pub group_id: Option<String>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub tags: Option<crate::json_types::StringList>,
+    #[sea_orm(column_name = "previewMedia", column_type = "JsonBinary", nullable)]
+    pub preview_media: Option<crate::json_types::StringList>,
     #[sea_orm(
         belongs_to,
         from = "app_id",

@@ -13,7 +13,6 @@ pub struct Model {
     pub name: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
-    pub attributes: Option<Vec<String>>,
     pub permissions: i64,
     #[sea_orm(column_name = "appId", column_type = "Text", nullable)]
     pub app_id: Option<String>,
@@ -21,6 +20,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub attributes: Option<crate::json_types::StringList>,
     #[sea_orm(
         belongs_to,
         from = "app_id",
