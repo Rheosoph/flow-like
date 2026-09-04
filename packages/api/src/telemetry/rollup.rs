@@ -2171,7 +2171,7 @@ mod tests {
             .to_string(PostgresQueryBuilder);
 
         assert!(
-            sql.contains("NOT EXISTS (SELECT 1 FROM \"TelemetryEventDaily\""),
+            sql.contains("NOT EXISTS(SELECT 1 FROM \"TelemetryEventDaily\""),
             "{}",
             sql
         );
@@ -2198,7 +2198,7 @@ mod tests {
             .to_string(PostgresQueryBuilder);
 
         assert!(
-            sql.contains("NOT EXISTS (SELECT 1 FROM \"TelemetryDimensionDaily\""),
+            sql.contains("NOT EXISTS(SELECT 1 FROM \"TelemetryDimensionDaily\""),
             "{}",
             sql
         );
