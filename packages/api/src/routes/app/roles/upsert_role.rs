@@ -7,7 +7,12 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
+
+enum RoleWrite {
+    Updated,
+    Created,
+}
 
 #[utoipa::path(
     put,
@@ -38,86 +43,74 @@ pub async fn upsert_role(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, role_id)): Path<(String, String)>,
-    Json(mut payload): Json<role::Model>,
+    Json(payload): Json<role::Model>,
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
     let permission = RolePermissions::from_bits(payload.permissions).ok_or(ApiError::FORBIDDEN)?;
-
-    let txn = state.db.begin().await?;
-
     let is_owner = permission.contains(RolePermissions::Owner);
+    let new_role_id = create_id();
 
-    let role = role::Entity::find_by_id(role_id.clone())
-        .filter(role::Column::AppId.eq(app_id.clone()))
-        .one(&txn)
+    let written = state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let role_id = role_id.clone();
+            let new_role_id = new_role_id.clone();
+            let mut payload = payload.clone();
+            Box::pin(async move {
+                let role = role::Entity::find_by_id(role_id)
+                    .filter(role::Column::AppId.eq(app_id.clone()))
+                    .one(txn)
+                    .await?;
+
+                if let Some(role) = role {
+                    let permission =
+                        RolePermissions::from_bits(role.permissions).ok_or(ApiError::FORBIDDEN)?;
+
+                    payload.id = role.id;
+                    payload.created_at = role.created_at;
+                    payload.updated_at = chrono::Utc::now().fixed_offset();
+                    payload.app_id = role.app_id;
+
+                    if permission.contains(RolePermissions::Owner) {
+                        payload.permissions = role.permissions;
+                    }
+
+                    if is_owner && !permission.contains(RolePermissions::Owner) {
+                        tracing::warn!("Attempt to update a role with Owner permission");
+                        return Err(ApiError::FORBIDDEN);
+                    }
+
+                    let payload: role::ActiveModel = payload.into();
+                    payload.reset_all().update(txn).await?;
+                    return Ok(RoleWrite::Updated);
+                }
+
+                if is_owner {
+                    tracing::warn!("Attempt to create a role with Owner permission");
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                payload.id = new_role_id;
+                payload.created_at = chrono::Utc::now().fixed_offset();
+                payload.updated_at = chrono::Utc::now().fixed_offset();
+                payload.app_id = Some(app_id);
+
+                let role: role::ActiveModel = payload.into();
+                role.reset_all().insert(txn).await?;
+                Ok::<_, ApiError>(RoleWrite::Created)
+            })
+        })
         .await?;
 
-    if let Some(role) = role {
-        let permission = RolePermissions::from_bits(role.permissions).ok_or(ApiError::FORBIDDEN)?;
-
-        payload.id = role.id;
-        payload.created_at = role.created_at;
-        payload.updated_at = chrono::Utc::now().naive_utc();
-        payload.app_id = role.app_id;
-
-        if permission.contains(RolePermissions::Owner) {
-            payload.permissions = role.permissions;
-        }
-
-        if is_owner && !permission.contains(RolePermissions::Owner) {
-            tracing::warn!("Attempt to update a role with Owner permission");
-            return Err(ApiError::FORBIDDEN);
-        }
-
-        let payload: role::ActiveModel = payload.into();
-        let payload = payload.reset_all();
-        payload.update(&txn).await?;
-        txn.commit().await?;
-
-        if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
-            tracing::warn!(error = %e, "Failed to invalidate permission cache after role update");
-        }
-
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "role.update",
-            "Role",
-            role_id,
-            "Role updated"
-        );
-        return Ok(Json(()));
-    }
-
-    if is_owner {
-        tracing::warn!("Attempt to create a role with Owner permission");
-        return Err(ApiError::FORBIDDEN);
-    }
-
-    payload.id = create_id();
-    let new_role_id = payload.id.clone();
-    payload.created_at = chrono::Utc::now().naive_utc();
-    payload.updated_at = chrono::Utc::now().naive_utc();
-    payload.app_id = Some(app_id.clone());
-
-    let role: role::ActiveModel = payload.into();
-    let role = role.reset_all();
-    role.insert(&txn).await?;
-    txn.commit().await?;
+    let (action, summary, resource_id) = match written {
+        RoleWrite::Updated => ("role.update", "Role updated", role_id.clone()),
+        RoleWrite::Created => ("role.create", "Role created", new_role_id),
+    };
 
     if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
-        tracing::warn!(error = %e, "Failed to invalidate permission cache after role creation");
+        tracing::warn!(error = %e, "Failed to invalidate permission cache after {}", summary);
     }
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "role.create",
-        "Role",
-        new_role_id,
-        "Role created"
-    );
+    audit_branch!(state, user, app_id, action, "Role", resource_id, summary);
     Ok(Json(()))
 }

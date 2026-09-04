@@ -11,6 +11,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -108,7 +109,7 @@ pub async fn get_requests(
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
 
-    let page = query.page.unwrap_or(1).max(1);
+    let page = std::cmp::Ord::max(query.page.unwrap_or(1), 1);
     let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
     // Suites are reviewed in their own, lighter queue — see
@@ -182,7 +183,7 @@ pub async fn get_requests(
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .map(|r| (r.app_id, std::cmp::Ord::max(r.cnt, 0) as u64))
         .collect();
 
     // Package counts per app (aggregated in SQL)
@@ -196,7 +197,7 @@ pub async fn get_requests(
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .map(|r| (r.app_id, std::cmp::Ord::max(r.cnt, 0) as u64))
         .collect();
 
     // Publication logs
@@ -258,7 +259,7 @@ pub async fn get_requests(
             author,
             message: log.message,
             visibility: log.visibility.map(|v| format!("{:?}", v).to_uppercase()),
-            created_at: log.created_at.to_string(),
+            created_at: log.created_at.to_rfc3339(),
         });
     }
 
@@ -314,13 +315,13 @@ pub async fn get_requests(
             target_visibility: format!("{:?}", r.target_visibility).to_uppercase(),
             status: format!("{:?}", r.status).to_uppercase(),
             approver_id: r.approver_id,
-            created_at: r.created_at.to_string(),
-            updated_at: r.updated_at.to_string(),
+            created_at: r.created_at.to_rfc3339(),
+            updated_at: r.updated_at.to_rfc3339(),
             app_name: meta_record.map(|m| m.name.clone()),
             app_description: meta_record.and_then(|m| m.description.clone()),
             app_icon,
             app_thumbnail,
-            app_tags: meta_record.and_then(|m| m.tags.clone()),
+            app_tags: meta_record.and_then(|m| m.tags.clone().map(Into::into)),
             current_visibility: app_record.map(|a| format!("{:?}", a.visibility).to_uppercase()),
             download_count: app_record.map(|a| a.download_count),
             rating_count: app_record.map(|a| a.rating_count),

@@ -11,6 +11,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -102,8 +103,8 @@ pub async fn request_connection(
         comment: Set(payload.comment.clone()),
         requested_by_user_id: Set(permission.effective_user_id().ok()),
         approved_by_user_id: Set(None),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     connection.insert(&state.db).await.map_err(|err| {
         if err.to_string().to_lowercase().contains("duplicate") {

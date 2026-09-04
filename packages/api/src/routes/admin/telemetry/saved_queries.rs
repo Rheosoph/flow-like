@@ -60,8 +60,8 @@ impl From<telemetry_saved_query::Model> for TelemetrySavedQueryRecord {
             id: model.id,
             name: model.name,
             definition: model.definition,
-            created_at: model.created_at.and_utc().to_rfc3339(),
-            updated_at: model.updated_at.and_utc().to_rfc3339(),
+            created_at: model.created_at.to_rfc3339(),
+            updated_at: model.updated_at.to_rfc3339(),
         }
     }
 }
@@ -124,7 +124,7 @@ pub async fn create_telemetry_saved_query(
     let name = require_name("name", &payload.name)?;
     validate_query_definition(&payload.definition)?;
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let model = telemetry_saved_query::ActiveModel {
         id: Set(flow_like_types::create_id()),
         name: Set(name),
@@ -186,7 +186,7 @@ pub async fn update_telemetry_saved_query(
         return Ok(Json(active.try_into_model()?.into()));
     }
 
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
     let model = active.update(&state.db).await?;
 
     Ok(Json(model.into()))

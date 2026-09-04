@@ -48,8 +48,14 @@ import {
 	type IResourceStatus,
 	type ITableUsage,
 	RESOURCES_ENDPOINT,
+	UNSUPPORTED_ACTIVITY_COUNTERS,
+	UNSUPPORTED_CONNECTION_STATES,
+	UNSUPPORTED_DEAD_ROWS,
+	UNSUPPORTED_SIZE_ON_DISK,
+	UNSUPPORTED_TABLE_SIZES,
 	healthTone,
 	isFault,
+	isUnsupported,
 } from "./types";
 
 const KIND_ORDER: Record<IResourceKind, number> = {
@@ -223,8 +229,13 @@ function ResourceCard({ status }: { readonly status: IResourceStatus }) {
 
 function LargestTablesTable({
 	tables,
+	showBytes,
+	showDeadRows,
 }: {
 	readonly tables: readonly ITableUsage[];
+	/** False on engines that report no sizes — a column of `0 B` is worse than none. */
+	readonly showBytes: boolean;
+	readonly showDeadRows: boolean;
 }) {
 	const { t } = useTranslation("admin");
 
@@ -234,13 +245,19 @@ function LargestTablesTable({
 				<TableHeader>
 					<TableRow>
 						<TableHead>{t("table", "Table")}</TableHead>
-						<TableHead className="text-right">{t("total", "Total")}</TableHead>
-						<TableHead className="text-right">
-							{t("tableSize", "Table")}
-						</TableHead>
-						<TableHead className="text-right">
-							{t("indexSize", "Indexes")}
-						</TableHead>
+						{showBytes ? (
+							<>
+								<TableHead className="text-right">
+									{t("total", "Total")}
+								</TableHead>
+								<TableHead className="text-right">
+									{t("tableSize", "Table")}
+								</TableHead>
+								<TableHead className="text-right">
+									{t("indexSize", "Indexes")}
+								</TableHead>
+							</>
+						) : null}
 						<TableHead className="text-right">
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -256,9 +273,11 @@ function LargestTablesTable({
 								</TooltipContent>
 							</Tooltip>
 						</TableHead>
-						<TableHead className="text-right">
-							{t("deadRows", "Dead rows")}
-						</TableHead>
+						{showDeadRows ? (
+							<TableHead className="text-right">
+								{t("deadRows", "Dead rows")}
+							</TableHead>
+						) : null}
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -273,41 +292,47 @@ function LargestTablesTable({
 								<TableCell className="font-mono text-xs">
 									{table.name}
 								</TableCell>
-								<TableCell className="text-right text-xs tabular-nums">
-									{humanFileSize(table.totalBytes)}
-								</TableCell>
-								<TableCell className="text-right text-xs tabular-nums text-muted-foreground">
-									{humanFileSize(table.tableBytes)}
-								</TableCell>
-								<TableCell className="text-right text-xs tabular-nums text-muted-foreground">
-									{humanFileSize(table.indexBytes)}
-								</TableCell>
+								{showBytes ? (
+									<>
+										<TableCell className="text-right text-xs tabular-nums">
+											{humanFileSize(table.totalBytes)}
+										</TableCell>
+										<TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+											{humanFileSize(table.tableBytes)}
+										</TableCell>
+										<TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+											{humanFileSize(table.indexBytes)}
+										</TableCell>
+									</>
+								) : null}
 								<TableCell className="text-right text-xs tabular-nums text-muted-foreground">
 									~{table.estimatedRows.toLocaleString()}
 								</TableCell>
-								<TableCell className="text-right text-xs tabular-nums">
-									{bloated ? (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<span className="inline-flex cursor-help items-center gap-1 text-amber-600 dark:text-amber-400">
-													<TriangleAlert className="h-3 w-3" />~
-													{table.deadRows.toLocaleString()}
-												</span>
-											</TooltipTrigger>
-											<TooltipContent>
-												{t(
-													"deadRowShareIndicatesBloat",
-													"{{percent}}% of the estimated rows are dead — bloat awaiting VACUUM.",
-													{ percent: (share * 100).toFixed(0) },
-												)}
-											</TooltipContent>
-										</Tooltip>
-									) : (
-										<span className="text-muted-foreground">
-											~{table.deadRows.toLocaleString()}
-										</span>
-									)}
-								</TableCell>
+								{showDeadRows ? (
+									<TableCell className="text-right text-xs tabular-nums">
+										{bloated ? (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<span className="inline-flex cursor-help items-center gap-1 text-amber-600 dark:text-amber-400">
+														<TriangleAlert className="h-3 w-3" />~
+														{table.deadRows.toLocaleString()}
+													</span>
+												</TooltipTrigger>
+												<TooltipContent>
+													{t(
+														"deadRowShareIndicatesBloat",
+														"{{percent}}% of the estimated rows are dead — bloat awaiting VACUUM.",
+														{ percent: (share * 100).toFixed(0) },
+													)}
+												</TooltipContent>
+											</Tooltip>
+										) : (
+											<span className="text-muted-foreground">
+												~{table.deadRows.toLocaleString()}
+											</span>
+										)}
+									</TableCell>
+								) : null}
 							</TableRow>
 						);
 					})}
@@ -319,6 +344,14 @@ function LargestTablesTable({
 
 function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 	const { t } = useTranslation("admin");
+
+	const sizesUnsupported = isUnsupported(
+		detail,
+		UNSUPPORTED_SIZE_ON_DISK,
+		UNSUPPORTED_TABLE_SIZES,
+	);
+	const deadRowsUnsupported = isUnsupported(detail, UNSUPPORTED_DEAD_ROWS);
+	const invalidIndexes = detail.invalidIndexes ?? [];
 
 	const connectionRows = useMemo(
 		() =>
@@ -459,6 +492,15 @@ function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 						"Statistics Postgres already keeps in memory — no table scans are issued to build this view.",
 					)}
 				</p>
+				{detail.unsupported && detail.unsupported.length > 0 ? (
+					<p className="mt-1 text-sm text-muted-foreground">
+						{t(
+							"statisticsThisEngineDoesNotExpose",
+							"This engine does not expose {{statistics}}; the sections below are empty because the statistics do not exist here, not because a query failed.",
+							{ statistics: detail.unsupported.join(", ") },
+						)}
+					</p>
+				) : null}
 			</div>
 
 			<div className="grid gap-3 sm:grid-cols-3">
@@ -497,10 +539,14 @@ function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 					<CardContent>
 						<BarList
 							rows={connectionRows}
-							emptyMessage={t(
-								"noConnectionsReported",
-								"No connections reported.",
-							)}
+							emptyMessage={
+								isUnsupported(detail, UNSUPPORTED_CONNECTION_STATES)
+									? t(
+											"connectionStatesNotExposedByThisEngine",
+											"Connection states are not exposed by this engine.",
+										)
+									: t("noConnectionsReported", "No connections reported.")
+							}
 						/>
 					</CardContent>
 				</Card>
@@ -564,10 +610,15 @@ function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 							</>
 						) : (
 							<p className="text-xs text-muted-foreground">
-								{t(
-									"noThroughputCountersReported",
-									"No throughput counters were reported by this database.",
-								)}
+								{isUnsupported(detail, UNSUPPORTED_ACTIVITY_COUNTERS)
+									? t(
+											"activityCountersNotExposedByThisEngine",
+											"Activity counters are not exposed by this engine, so throughput cannot be derived.",
+										)
+									: t(
+											"noThroughputCountersReported",
+											"No throughput counters were reported by this database.",
+										)}
 							</p>
 						)}
 					</CardContent>
@@ -580,10 +631,15 @@ function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 						{t("largestTables", "Largest tables")}
 					</CardTitle>
 					<CardDescription>
-						{t(
-							"sizesIncludeIndexesAndToastRowCountsAreEstimates",
-							"Sizes include indexes and TOAST storage; row counts are planner estimates.",
-						)}
+						{sizesUnsupported
+							? t(
+									"tableSizesNotExposedRowCountsAreEstimates",
+									"This engine reports no table sizes; row counts are planner estimates.",
+								)
+							: t(
+									"sizesIncludeIndexesAndToastRowCountsAreEstimates",
+									"Sizes include indexes and TOAST storage; row counts are planner estimates.",
+								)}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="pb-6">
@@ -595,10 +651,77 @@ function DatabaseSection({ detail }: { readonly detail: IDatabaseDetail }) {
 							)}
 						</p>
 					) : (
-						<LargestTablesTable tables={detail.largestTables} />
+						<LargestTablesTable
+							tables={detail.largestTables}
+							showBytes={!sizesUnsupported}
+							showDeadRows={!deadRowsUnsupported}
+						/>
 					)}
 				</CardContent>
 			</Card>
+
+			{detail.jobs || invalidIndexes.length > 0 ? (
+				<Card>
+					<CardHeader className="pb-3">
+						<CardTitle className="text-base">
+							{t("schemaHealth", "Schema health")}
+						</CardTitle>
+						<CardDescription>
+							{t(
+								"asynchronousIndexBuildsAndTheIndexesThePlannerIgnores",
+								"Asynchronous index builds, and the indexes the planner ignores until they finish.",
+							)}
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-3">
+						{detail.jobs ? (
+							<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+								<MetricTile
+									metric={metricOf(
+										"pending_jobs",
+										t("pendingSchemaJobs", "Pending schema jobs"),
+										detail.jobs.pending,
+										"count",
+									)}
+								/>
+								<MetricTile
+									metric={metricOf(
+										"failed_jobs",
+										t("failedSchemaJobs", "Failed schema jobs"),
+										detail.jobs.failed,
+										"count",
+									)}
+								/>
+								<MetricTile
+									metric={metricOf(
+										"completed_jobs",
+										t("completedSchemaJobs", "Completed schema jobs"),
+										detail.jobs.completed,
+										"count",
+									)}
+								/>
+							</div>
+						) : null}
+						{invalidIndexes.length > 0 ? (
+							<div className="space-y-1">
+								<p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+									{t("invalidIndexes", "Invalid indexes")}
+								</p>
+								<ul className="space-y-0.5">
+									{invalidIndexes.map((index) => (
+										<li
+											key={`${index.table}.${index.name}`}
+											className="font-mono text-xs text-muted-foreground"
+										>
+											{index.table}.{index.name}
+										</li>
+									))}
+								</ul>
+							</div>
+						) : null}
+					</CardContent>
+				</Card>
+			) : null}
 		</section>
 	);
 }

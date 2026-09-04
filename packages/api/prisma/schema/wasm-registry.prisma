@@ -1,62 +1,6 @@
 // WASM Package Registry - stores custom node packages
 // Packages are private by default. Going public requires admin approval.
 
-enum WasmPackageStatus {
-  PENDING_REVIEW // Awaiting admin approval
-  ACTIVE // Approved and usable
-  REJECTED // Rejected by admin
-  DEPRECATED // Still usable but shows warning
-  DISABLED // Not usable
-}
-
-enum WasmPackageVisibility {
-  PRIVATE // Only WasmPackageUsers can discover and download
-  PUBLIC // Everyone can discover and download
-  PUBLIC_REQUEST_ACCESS // Visible to all, but requires access request or purchase
-}
-
-enum WasmCompilationStatus {
-  COMPILED // Server-side .cwasm available in meta bucket
-  LOCAL_ONLY // Compilation failed — only usable locally
-  PENDING // Compilation in progress or queued
-}
-
-enum WasmPackageCategory {
-  DOCUMENT_PROCESSING
-  DATA_TRANSFORMATION
-  WORKFLOW_AUTOMATION
-  COMMUNICATION
-  ANALYTICS_REPORTING
-  FINANCE_BILLING
-  COMPLIANCE_REGULATORY
-  HR_PEOPLE
-  AI_ML
-  INTEGRATION_CONNECTORS
-  SECURITY_IDENTITY
-  DEVOPS
-  IOT_INDUSTRIAL
-  ROBOTICS_PHYSICAL_AI
-  GAMING_SIMULATION
-  HEALTHCARE
-  VETERINARY
-  LEGAL
-  MANUFACTURING
-  AGRICULTURE
-  REAL_ESTATE
-  LOGISTICS
-  ENERGY
-  CONSTRUCTION_TRADES
-  EDUCATION
-  GOVERNMENT_DEFENSE
-  ECOMMERCE
-  INSURANCE
-  TELECOM
-  SCIENTIFIC_ENGINEERING
-  GEOSPATIAL
-  MEDIA_CONTENT
-  OTHER
-}
-
 model WasmPackage {
   id String @id
 
@@ -67,14 +11,14 @@ model WasmPackage {
   license     String?
   homepage    String?
   repository  String?
-  keywords    String[]
+  keywords    Json?
 
-  primaryCategory   WasmPackageCategory?
-  secondaryCategory WasmPackageCategory?
+  primaryCategory   String?
+  secondaryCategory String?
 
-  status     WasmPackageStatus     @default(PENDING_REVIEW)
-  visibility WasmPackageVisibility @default(PRIVATE)
-  verified   Boolean               @default(false)
+  status     String  @default("PENDING_REVIEW")
+  visibility String  @default("PRIVATE")
+  verified   Boolean @default(false)
 
   downloadCount BigInt @default(0)
 
@@ -99,9 +43,9 @@ model WasmPackage {
 
   metadata Meta[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  publishedAt DateTime?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
 
   versions    WasmPackageVersion[]
   reviews     WasmPackageReview[]
@@ -122,7 +66,6 @@ model WasmPackage {
   @@index([verified])
   @@index([downloadCount])
   @@index([createdAt])
-  @@index([keywords])
   @@index([primaryCategory])
   @@index([secondaryCategory])
   @@index([price])
@@ -150,20 +93,20 @@ model WasmPackageVersion {
 
   releaseNotes       String?
   minFlowLikeVersion String?
-  yanked             Boolean           @default(false)
-  status             WasmPackageStatus @default(PENDING_REVIEW)
+  yanked             Boolean @default(false)
+  status             String  @default("PENDING_REVIEW")
 
-  compilationStatus WasmCompilationStatus @default(PENDING)
-  compiledPlatforms String[]              @default([])
-  supportedWasmtimeVersions String[]      @default([])
-  compilationError  String?
+  compilationStatus         String  @default("PENDING")
+  compiledPlatforms         Json?   @default("[]")
+  supportedWasmtimeVersions Json?   @default("[]")
+  compilationError          String?
 
   duplicateOfPackageId String?
   duplicateOfVersion   String?
   duplicateFlagged     Boolean @default(false)
 
-  publishedAt DateTime  @default(now())
-  approvedAt  DateTime?
+  publishedAt DateTime  @default(now()) @db.Timestamptz(3)
+  approvedAt  DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, version])
   @@index([packageId])
@@ -181,9 +124,9 @@ model WasmPackageReview {
   package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
   packageId String
 
-  reviewer     User             @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewer     User    @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
   reviewerId   String
-  action       WasmReviewAction
+  action       String
   comment      String?
   internalNote String?
 
@@ -191,21 +134,12 @@ model WasmPackageReview {
   codeQualityScore   Int?
   documentationScore Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([packageId])
   @@index([reviewerId])
   @@index([action])
   @@index([createdAt])
-}
-
-enum WasmReviewAction {
-  SUBMITTED
-  APPROVED
-  REJECTED
-  REQUESTED_CHANGES
-  COMMENTED
-  FLAGGED
 }
 
 model WasmPackageUser {
@@ -220,7 +154,7 @@ model WasmPackageUser {
   permission BigInt // Bitflag: Owner=1, Maintainer=2, User=4
 
   grantedBy String?
-  grantedAt DateTime @default(now())
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -242,20 +176,13 @@ model WasmPackageInvitation {
 
   permission BigInt // Permission level being offered
 
-  status    InvitationStatus @default(PENDING)
-  createdAt DateTime         @default(now())
-  expiresAt DateTime?
+  status    String    @default("PENDING")
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
 
   @@unique([packageId, inviteeId])
   @@index([packageId])
   @@index([inviteeId])
-}
-
-enum InvitationStatus {
-  PENDING
-  ACCEPTED
-  REJECTED
-  EXPIRED
 }
 
 /// Authors / contributors of a WASM package
@@ -269,7 +196,7 @@ model WasmPackageAuthor {
   userId String
 
   role    String?
-  addedAt DateTime @default(now())
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([packageId, userId])
   @@index([packageId])
@@ -288,8 +215,8 @@ model WasmPackageJoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, packageId])
   @@index([userId, packageId])
@@ -307,9 +234,9 @@ model WasmPackagePurchase {
   packageId String
 
   /// Price paid in cents at time of purchase
-  pricePaid     BigInt
+  pricePaid      BigInt
   /// Original price before discount (in cents)
-  originalPrice BigInt
+  originalPrice  BigInt
   /// Discount amount in cents (0 if none)
   discountAmount BigInt @default(0)
 
@@ -321,17 +248,17 @@ model WasmPackagePurchase {
   /// Stripe payment intent ID
   stripePaymentIntentId String?
 
-  status PurchaseStatus @default(PENDING)
+  status String @default("PENDING")
 
   /// When purchase was completed
-  completedAt  DateTime?
+  completedAt  DateTime? @db.Timestamptz(3)
   /// When refunded (if applicable)
-  refundedAt   DateTime?
+  refundedAt   DateTime? @db.Timestamptz(3)
   /// Refund reason if refunded
   refundReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([packageId])

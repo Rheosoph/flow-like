@@ -37,7 +37,7 @@ impl From<certificate::Model> for CertificateView {
             id: c.id,
             user_id: c.user_id,
             course_id: c.course_id,
-            issued_at: c.issued_at.and_utc().to_rfc3339(),
+            issued_at: c.issued_at.to_rfc3339(),
             hash: c.hash,
             pdf_url: c.pdf_url,
             recipient_name: None,
@@ -122,13 +122,13 @@ pub async fn issue_certificate(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let mut hasher = Sha256::new();
     hasher.update(sub.as_bytes());
     hasher.update(b"|");
     hasher.update(course_id.as_bytes());
     hasher.update(b"|");
-    hasher.update(now.and_utc().timestamp().to_string().as_bytes());
+    hasher.update(now.timestamp().to_string().as_bytes());
     let hash = format!("{:x}", hasher.finalize());
 
     let active = certificate::ActiveModel {

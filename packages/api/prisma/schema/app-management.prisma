@@ -9,10 +9,10 @@ model InviteLink {
   appId String
 
   countJoined BigInt    @default(0)
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
   @@index([appId, token])
@@ -29,8 +29,8 @@ model JoinQueue {
 
   comment String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, appId])
@@ -53,16 +53,11 @@ model Invitation {
   byMember   Membership @relation(fields: [byMemberId], references: [id], onDelete: Cascade)
   byMemberId String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@index([userId, createdAt])
-}
-
-enum AppConnectionStatus {
-  PENDING
-  ACTIVE
 }
 
 model AppConnection {
@@ -77,15 +72,15 @@ model AppConnection {
   role   Role?   @relation(fields: [roleId], references: [id], onDelete: SetNull)
   roleId String?
 
-  status AppConnectionStatus @default(PENDING)
+  status String @default("PENDING")
 
   comment String?
 
   requestedByUserId String?
   approvedByUserId  String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([sourceAppId, targetAppId])
   @@index([targetAppId, status])
@@ -103,8 +98,8 @@ model AppProcessNote {
   authorUserId String?
   content      String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, createdAt])
 }
@@ -121,12 +116,12 @@ model Membership {
   role   Role   @relation(fields: [roleId], references: [id])
   roleId String
 
-  invitations   Invitation[]
-  addedPackages AppPackage[]
+  invitations           Invitation[]
+  addedPackages         AppPackage[]
   technicalUsersCreated TechnicalUser[] @relation("TechnicalUserCreatorMembership")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   joinedVia String?
 
@@ -140,7 +135,7 @@ model Role {
   name        String
   description String?
 
-  attributes  String[]
+  attributes  Json?
   permissions BigInt
 
   memberships    Membership[]
@@ -153,25 +148,8 @@ model Role {
   defaultForApp App? @relation("defaultForApp")
   ownerForApp   App? @relation("ownerForApp")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-enum NotificationType {
-  WORKFLOW
-  SYSTEM
-}
-
-enum PushNotificationTargetPlatform {
-  IOS
-  ANDROID
-  DESKTOP
-}
-
-enum PushNotificationTargetProvider {
-  FCM
-  AWS_SNS
-  AZURE_NOTIFICATION_HUBS
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Notification {
@@ -188,14 +166,14 @@ model Notification {
   icon        String?
   link        String?
 
-  type NotificationType @default(WORKFLOW)
-  read Boolean          @default(false)
+  type String  @default("WORKFLOW")
+  read Boolean @default(false)
 
   sourceRunId  String?
   sourceNodeId String?
 
-  createdAt DateTime  @default(now())
-  readAt    DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  readAt    DateTime? @db.Timestamptz(3)
 
   @@index([userId, createdAt])
   @@index([userId, read])
@@ -210,8 +188,8 @@ model PushNotificationTarget {
 
   deviceId String
 
-  platform PushNotificationTargetPlatform
-  provider PushNotificationTargetProvider
+  platform String
+  provider String
 
   tokenEncrypted String
   endpointArn    String?
@@ -222,28 +200,18 @@ model PushNotificationTarget {
 
   pushEnabled        Boolean   @default(true)
   failureCount       Int       @default(0)
-  lastRegisteredAt   DateTime  @default(now())
-  lastSeenAt         DateTime  @default(now())
-  invalidatedAt      DateTime?
+  lastRegisteredAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime  @default(now()) @db.Timestamptz(3)
+  invalidatedAt      DateTime? @db.Timestamptz(3)
   invalidationReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, deviceId, provider])
   @@index([userId, pushEnabled])
   @@index([provider, platform])
   @@index([invalidatedAt])
-}
-
-enum AppGroupMemberStatus {
-  PENDING
-  ACTIVE
-}
-
-enum AppGroupMemberKind {
-  PRIMARY
-  MEMBER
 }
 
 /// A curated, store-facing bundle of related apps presented as a single unit
@@ -253,8 +221,8 @@ enum AppGroupMemberKind {
 model AppGroup {
   id String @id
 
-  status     Status     @default(ACTIVE)
-  visibility Visibility @default(PRIVATE)
+  status     String @default("ACTIVE")
+  visibility String @default("PRIVATE")
 
   meta Meta[]
 
@@ -269,8 +237,8 @@ model AppGroup {
   /// visibility; see `PublicationRequest`.
   publicationRequests PublicationRequest[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([ownerAppId])
   @@index([visibility])
@@ -291,8 +259,8 @@ model AppGroupMember {
   app   App    @relation("appGroupMemberships", fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  kind   AppGroupMemberKind   @default(MEMBER)
-  status AppGroupMemberStatus @default(PENDING)
+  kind   String @default("MEMBER")
+  status String @default("PENDING")
 
   /// Curated display order within the group.
   position Int @default(0)
@@ -300,8 +268,8 @@ model AppGroupMember {
   addedByUserId    String?
   approvedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([groupId, appId])
   @@index([groupId, status])

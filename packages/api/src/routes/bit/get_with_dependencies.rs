@@ -1,4 +1,5 @@
 use crate::{
+    db::{DEFAULT_WRITE_CHUNK, insert_in_chunks},
     entity::{bit, bit_cache, bit_tree_cache},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -69,7 +70,7 @@ pub async fn get_with_dependencies(
 
     // Use the declared graph, not a hash equality heuristic. Legacy downloadable
     // leaves use `dependency_tree_hash == hash`, while path-aware identities do not.
-    if is_dependency_leaf(bit_model.dependencies.as_deref()) {
+    if is_dependency_leaf(bit_model.dependencies.as_deref().map(Vec::as_slice)) {
         let mut bit: Bit = bit_model.into();
         if !state.platform_config.features.unauthorized_read {
             bit = temporary_bit(bit, &state.cdn_bucket).await?;
@@ -118,8 +119,8 @@ pub async fn get_with_dependencies(
     if let Some(ref dep_hash) = original_dependency_tree_hash {
         bit_tree_cache::Entity::insert(bit_tree_cache::ActiveModel {
             dependency_tree_hash: Set(dep_hash.clone()),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
         })
         .on_conflict(
             OnConflict::column(bit_tree_cache::Column::DependencyTreeHash)
@@ -237,8 +238,8 @@ async fn insert_bit_cache(
             dependency_tree_hash: Set(dependency_tree_hash.to_string()),
             external_bit: Set(external_bit),
             id: Set(create_id()),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
             bit_id: Set(None),
         };
 
@@ -250,11 +251,14 @@ async fn insert_bit_cache(
         cache_entries.push(cache_entry);
     }
 
-    if !cache_entries.is_empty() {
-        bit_cache::Entity::insert_many(cache_entries)
-            .exec(&state.db)
-            .await?;
-    }
+    insert_in_chunks(
+        &state.db,
+        state.db_dialect,
+        cache_entries,
+        DEFAULT_WRITE_CHUNK,
+        None,
+    )
+    .await?;
 
     Ok(())
 }

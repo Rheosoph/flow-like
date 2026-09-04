@@ -1,16 +1,3 @@
-enum UserStatus {
-  ACTIVE
-  INACTIVE
-  BANNED
-}
-
-enum UserTier {
-  FREE
-  PREMIUM
-  PRO
-  ENTERPRISE
-}
-
 model User {
   id String @id
 
@@ -51,24 +38,24 @@ model User {
   userBits                    UserBit[]
   wasmPackageAccess           WasmPackageUser[]
   wasmPackageReviews          WasmPackageReview[]
-  wasmInvitesSent             WasmPackageInvitation[] @relation("WasmInviter")
-  wasmInvitesReceived         WasmPackageInvitation[] @relation("WasmInvitee")
+  wasmInvitesSent             WasmPackageInvitation[]  @relation("WasmInviter")
+  wasmInvitesReceived         WasmPackageInvitation[]  @relation("WasmInvitee")
   wasmPackageJoinQueue        WasmPackageJoinQueue[]
   wasmPackagePurchases        WasmPackagePurchase[]
   wasmPackagesAuthored        WasmPackageAuthor[]
   purchases                   AppPurchase[]
-  technicalUsersCreated       TechnicalUser[] @relation("TechnicalUserCreator")
+  technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
 
-  status UserStatus @default(ACTIVE)
-  tier   UserTier   @default(FREE)
+  status String @default("ACTIVE")
+  tier   String @default("FREE")
 
   totalSize             BigInt  @default(0)
   totalLLMPrice         BigInt  @default(0)
   totalEmbeddingPrice   BigInt  @default(0)
   llmPriceTrackingMonth String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   // User search resolves a pasted address exactly before it falls back to a scan.
   @@index([email])
@@ -81,8 +68,8 @@ model Profile {
   thumbnail   String?
   icon        String?
   description String?
-  interests   String[]
-  tags        String[]
+  interests   Json?
+  tags        Json?
 
   theme    Json?
   settings Json?
@@ -90,16 +77,16 @@ model Profile {
   // JSON with the apps that are part of the profile. Contains the app ID, if it is favorite, pinned and position of the two
   apps      Json?
   shortcuts Json?
-  bitIds    String[]
+  bitIds    Json?
   hub       String
-  hubs      String[]
+  hubs      Json?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   @@id([userId, id])
   @@index([userId])
@@ -112,7 +99,7 @@ model UserBit {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  type BitType
+  type String
 
   repository   String?
   downloadLink String?
@@ -121,7 +108,7 @@ model UserBit {
   size         BigInt?
 
   // LLMParameters/VLMParameters shape WITHOUT secret provider params
-  parameters Json?
+  parameters       Json?
   // AES-256-GCM encrypted JSON map of secret provider params (api_key, ...)
   secretsEncrypted String?
 
@@ -131,8 +118,8 @@ model UserBit {
   version String?
   license String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([userId, type])
@@ -148,9 +135,9 @@ model PAT {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  validUntil DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  validUntil DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -163,8 +150,8 @@ model Transaction {
 
   stripeId String @unique
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
 }
@@ -172,30 +159,30 @@ model Transaction {
 model LLMUsageTracking {
   id String @id
 
-  modelId  String
-  provider String?
-  endpoint String?
-  invocationId String?
+  modelId           String
+  provider          String?
+  endpoint          String?
+  invocationId      String?
   providerRequestId String?
-  rawUsage Json?
-  tokenIn  BigInt
-  tokenOut BigInt
+  rawUsage          Json?
+  tokenIn           BigInt
+  tokenOut          BigInt
 
   latency Float?
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId String?
 
-  technicalUserId   String?
-  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -209,14 +196,14 @@ model LLMUsageTracking {
 model EmbeddingUsageTracking {
   id String @id
 
-  modelId    String
-  provider   String?
-  endpoint   String?
-  invocationId String?
+  modelId           String
+  provider          String?
+  endpoint          String?
+  invocationId      String?
   providerRequestId String?
-  rawUsage Json?
-  tokenCount BigInt
-  latency    Float?
+  rawUsage          Json?
+  tokenCount        BigInt
+  latency           Float?
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId String?
@@ -224,13 +211,13 @@ model EmbeddingUsageTracking {
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
-  technicalUserId   String?
-  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   price BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -239,14 +226,6 @@ model EmbeddingUsageTracking {
   @@index([provider, createdAt])
   @@index([invocationId])
   @@index([technicalUserId, createdAt])
-}
-
-enum ExecutionStatus {
-  DEBUG
-  INFO
-  WARN
-  ERROR
-  FATAL
 }
 
 model ExecutionUsageTracking {
@@ -259,7 +238,7 @@ model ExecutionUsageTracking {
   version String
 
   microseconds BigInt
-  status       ExecutionStatus
+  status       String
 
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId String?
@@ -267,11 +246,11 @@ model ExecutionUsageTracking {
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
-  technicalUserId   String?
-  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -284,34 +263,34 @@ model UsageInvocation {
   id String @id
 
   /// llm, embedding, execution, etc.
-  kind String
+  kind   String
   /// pending, completed, failed, cancelled, unknown_usage.
   status String
 
-  userId String?
+  userId          String?
   technicalUserId String?
-  appId  String?
+  appId           String?
 
-  provider String?
-  endpoint String?
-  modelId  String?
+  provider          String?
+  endpoint          String?
+  modelId           String?
   providerRequestId String?
 
-  estimatedTokens BigInt @default(0)
+  estimatedTokens           BigInt @default(0)
   estimatedCostMicroDollars BigInt @default(0)
-  inputTokens BigInt @default(0)
-  outputTokens BigInt @default(0)
-  embeddingTokens BigInt @default(0)
-  costMicroDollars BigInt @default(0)
+  inputTokens               BigInt @default(0)
+  outputTokens              BigInt @default(0)
+  embeddingTokens           BigInt @default(0)
+  costMicroDollars          BigInt @default(0)
 
-  latency Float?
+  latency  Float?
   rawUsage Json?
-  error String?
+  error    String?
 
-  startedAt DateTime @default(now())
-  completedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([status, createdAt])
@@ -326,23 +305,23 @@ model UsageInvocation {
 model UsageAlert {
   id String @id
 
-  kind String
+  kind     String
   severity String
-  period String?
-  message String
+  period   String?
+  message  String
 
-  appId String?
+  appId  String?
   userId String?
 
-  thresholdPercent Int?
+  thresholdPercent        Int?
   currentCostMicroDollars BigInt?
-  currentTokens BigInt?
+  currentTokens           BigInt?
 
-  acknowledgedAt DateTime?
+  acknowledgedAt       DateTime? @db.Timestamptz(3)
   acknowledgedByUserId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
@@ -354,45 +333,19 @@ model UsageAlert {
 model UsageLimitAuditLog {
   id String @id
 
-  appId String?
-  userId String?
+  appId       String?
+  userId      String?
   actorUserId String?
-  action String
-  before Json?
-  after  Json?
+  action      String
+  before      Json?
+  after       Json?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([appId, createdAt])
   @@index([userId, createdAt])
   @@index([actorUserId, createdAt])
-}
-
-enum RunStatus {
-  PENDING
-  RUNNING
-  COMPLETED
-  FAILED
-  CANCELLED
-  TIMEOUT
-}
-
-enum RunMode {
-  LOCAL
-  HTTP /// Direct HTTP executor (K8s pool, Docker Compose, Azure Functions, GCP)
-  LAMBDA /// AWS Lambda
-  KUBERNETES_ISOLATED /// Isolated K8s job
-  KUBERNETES_POOL /// Warm K8s executor pool (legacy)
-  FUNCTION /// Generic function (legacy)
-  QUEUE /// Queue-based dispatch (Redis, SQS, Kafka)
-}
-
-enum RunVariant {
-  PRIMARY /// Regular production run
-  CANARY /// Run routed to a live event variant
-  SHADOW /// Mirrored run alongside a PRIMARY run; excluded from cases/stats
-  REGRESSION /// Replay run scheduled by a regression suite
 }
 
 /// Streaming events from execution environments
@@ -415,9 +368,13 @@ model ExecutionEvent {
   delivered Boolean @default(false)
 
   /// Auto-cleanup after TTL
-  expiresAt DateTime
+  expiresAt DateTime @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Object-store reference ("store://<path>") when the payload was too large
+  /// to keep in the row; `payload` then holds a marked placeholder
+  payloadRef String?
 
   @@index([runId, delivered, sequence])
   @@index([expiresAt])
@@ -437,11 +394,11 @@ model ExecutionRun {
   nodeId  String?
 
   /// Execution status
-  status   RunStatus @default(PENDING)
+  status   String @default("PENDING")
   /// Execution mode (local, k8s isolated, k8s pool, function)
-  mode     RunMode   @default(LOCAL)
+  mode     String @default("LOCAL")
   /// Highest log level encountered during execution (0=Debug, 1=Info, 2=Warn, 3=Error, 4=Fatal)
-  logLevel Int       @default(0)
+  logLevel Int    @default(0)
 
   /// Length of input payload in bytes (for tracking only)
   inputPayloadLen  BigInt  @default(0)
@@ -458,11 +415,11 @@ model ExecutionRun {
   currentStep String?
 
   /// When execution started
-  startedAt   DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
   /// When execution completed
-  completedAt DateTime?
+  completedAt DateTime? @db.Timestamptz(3)
   /// TTL - auto-cleanup streaming events after this time
-  expiresAt   DateTime?
+  expiresAt   DateTime? @db.Timestamptz(3)
 
   /// User who initiated the run
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -472,14 +429,15 @@ model ExecutionRun {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  technicalUserId   String?
-  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// If the run was triggered through an app connection: the chain of apps
-  /// that led to this run (first = original caller). Used for analytics
-  /// ("called by app" in addition to "called by user"). The Gin (inverted)
-  /// index backs the process-graph "chains containing app X" aggregation.
-  callerAppChain String[]
+  /// that led to this run (first = original caller), stored as a JSON string
+  /// array. Membership queries ("chains containing app X") go through the
+  /// indexed `ExecutionRunCallerApp` rows written alongside this column.
+  callerAppChain Json?
+  callerApps     ExecutionRunCallerApp[]
 
   /// Process-mining correlation. `parentRunId` is the run that directly
   /// triggered this one (null = root); walking it reconstructs an end-to-end
@@ -492,7 +450,7 @@ model ExecutionRun {
 
   /// Which release lane produced this run. Non-PRIMARY runs are excluded
   /// from business cases and per-event stats.
-  runVariant      RunVariant @default(PRIMARY)
+  runVariant      String  @default("PRIMARY")
   /// The EventVariant.name that produced this run (non-PRIMARY only)
   variantName     String?
   /// SHADOW runs only: the PRIMARY run being mirrored
@@ -503,15 +461,27 @@ model ExecutionRun {
   /// Streaming events for this run
   events ExecutionEvent[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, status])
   @@index([userId, status])
   @@index([boardId])
   @@index([expiresAt])
-  @@index([callerAppChain], type: Gin)
   @@index([parentRunId])
   @@index([traceId])
   @@index([eventId, runVariant, createdAt])
+}
+
+/// One row per app in `ExecutionRun.callerAppChain` (`position` = index in the chain).
+/// Gives the process graph a btree-indexed membership lookup without array or GIN support.
+model ExecutionRunCallerApp {
+  runId    String
+  appId    String
+  position Int
+
+  run ExecutionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@id([runId, position])
+  @@index([appId, runId])
 }

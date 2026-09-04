@@ -89,9 +89,9 @@ pub async fn list_tokens(
             sink_type: t.sink_type,
             name: t.name,
             revoked: t.revoked,
-            revoked_at: t.revoked_at.map(|dt| dt.to_string()),
+            revoked_at: t.revoked_at.map(|dt| dt.to_rfc3339()),
             revoked_by: t.revoked_by,
-            created_at: t.created_at.to_string(),
+            created_at: t.created_at.to_rfc3339(),
         })
         .collect();
 

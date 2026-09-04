@@ -97,16 +97,16 @@ pub async fn upsert_profile(
             active_model.description = Set(Some(description));
         }
         if let Some(interests) = profile_body.interests {
-            active_model.interests = Set(Some(interests));
+            active_model.interests = Set(Some(interests.into()));
         }
         if let Some(tags) = profile_body.tags {
-            active_model.tags = Set(Some(tags));
+            active_model.tags = Set(Some(tags.into()));
         }
         if let Some(theme) = profile_body.theme {
             active_model.theme = Set(Some(theme));
         }
         if let Some(bit_ids) = profile_body.bit_ids {
-            active_model.bit_ids = Set(Some(bit_ids));
+            active_model.bit_ids = Set(Some(bit_ids.into()));
         }
         if let Some(apps) = profile_body.apps {
             let apps: Vec<Value> = apps.iter().map(to_value).collect::<Result<_, _>>()?;
@@ -123,7 +123,7 @@ pub async fn upsert_profile(
             active_model.settings = Set(Some(settings));
         }
         if let Some(hubs) = profile_body.hubs {
-            active_model.hubs = Set(Some(hubs));
+            active_model.hubs = Set(Some(hubs.into()));
         }
 
         // Handle icon upload request
@@ -150,7 +150,7 @@ pub async fn upsert_profile(
             None
         };
 
-        active_model.updated_at = Set(chrono::Utc::now().naive_utc());
+        active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
         let updated_profile = active_model.update(&state.db).await?;
         return Ok(Json(UpsertProfileResponse {
@@ -216,7 +216,7 @@ pub async fn upsert_profile(
     };
 
     let make_new_profile = |id: String| {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         profile::ActiveModel {
             id: Set(id),
             user_id: Set(sub.clone()),
@@ -224,15 +224,15 @@ pub async fn upsert_profile(
             description: Set(description.clone()),
             icon: Set(icon_id.clone()),
             thumbnail: Set(thumbnail_id.clone()),
-            interests: Set(interests.clone()),
-            tags: Set(tags.clone()),
+            interests: Set(interests.clone().map(Into::into)),
+            tags: Set(tags.clone().map(Into::into)),
             theme: Set(theme.clone()),
-            bit_ids: Set(bit_ids.clone()),
+            bit_ids: Set(bit_ids.clone().map(Into::into)),
             apps: Set(apps.clone()),
             shortcuts: Set(shortcuts.clone()),
             settings: Set(settings.clone()),
             hub: Set(hub.clone()),
-            hubs: Set(hubs.clone()),
+            hubs: Set(hubs.clone().map(Into::into)),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()

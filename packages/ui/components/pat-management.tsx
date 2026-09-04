@@ -14,6 +14,7 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../hooks/use-invoke";
+import { parseDateValue } from "../lib/date";
 import { cn } from "../lib/utils";
 import { useBackend } from "../state/backend-state";
 import { Badge } from "./ui/badge";
@@ -50,13 +51,16 @@ interface PAT {
 }
 
 function isExpired(validUntil: string | null): boolean {
-	if (!validUntil) return false;
-	return new Date(validUntil) < new Date();
+	const parsed = parseDateValue(validUntil);
+	if (!parsed) return false;
+	return parsed.getTime() < Date.now();
 }
 
 function formatDate(value: Date | string, language: string): string {
+	const parsed = parseDateValue(value);
+	if (!parsed) return "";
 	return new Intl.DateTimeFormat(language, { dateStyle: "medium" }).format(
-		new Date(value),
+		parsed,
 	);
 }
 
@@ -483,7 +487,8 @@ export function PatManagement() {
 			const bExpired = isExpired(b.valid_until);
 			if (aExpired !== bExpired) return aExpired ? 1 : -1;
 			return (
-				new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+				(parseDateValue(b.created_at)?.getTime() ?? 0) -
+				(parseDateValue(a.created_at)?.getTime() ?? 0)
 			);
 		});
 	}, [pats.data]);

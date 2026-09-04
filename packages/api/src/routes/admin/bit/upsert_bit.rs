@@ -261,7 +261,7 @@ pub async fn upsert_bit(
                 }
                 updated_bit.hub = Set(state_cloned.platform_config.domain.clone());
                 updated_bit.authors = Set(model.authors);
-                updated_bit.updated_at = Set(chrono::Utc::now().naive_utc());
+                updated_bit.updated_at = Set(chrono::Utc::now().fixed_offset());
                 updated_bit.dependencies = Set(model.dependencies);
                 updated_bit.file_name = Set(model.file_name);
                 updated_bit.hub = Set(model.hub);
@@ -325,8 +325,8 @@ pub async fn upsert_bit(
                 let mut new_bit: bit::ActiveModel = model.into();
                 new_bit.id = Set(create_id());
                 new_bit.hub = Set(state_cloned.platform_config.domain.clone());
-                new_bit.created_at = Set(chrono::Utc::now().naive_utc());
-                new_bit.updated_at = Set(chrono::Utc::now().naive_utc());
+                new_bit.created_at = Set(chrono::Utc::now().fixed_offset());
+                new_bit.updated_at = Set(chrono::Utc::now().fixed_offset());
                 match new_bit.insert(&state_cloned.db).await {
                     Ok(inserted) => {
                         let _ = tx
@@ -824,7 +824,7 @@ mod tests {
         assert!(bit_identity_changed(&existing, &retyped));
 
         let mut rewired = existing.clone();
-        rewired.dependencies = Some(vec!["hub:other-dependency".to_string()]);
+        rewired.dependencies = Some(vec!["hub:other-dependency".to_string()].into());
         assert!(bit_identity_changed(&existing, &rewired));
     }
 

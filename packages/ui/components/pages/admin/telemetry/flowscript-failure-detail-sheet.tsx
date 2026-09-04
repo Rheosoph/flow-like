@@ -7,6 +7,7 @@ import { CheckCircle2, CopyIcon, FileCode2, Waypoints } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../../../lib/monaco-key-guard";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
 import { useBackend } from "../../../../state/backend-state";
 import {
@@ -65,6 +66,7 @@ function RedactedSource({ source }: { readonly source: string }) {
 
 	return (
 		<Editor
+			className={FLOW_KEY_OPT_OUT_CLASS}
 			height="46dvh"
 			language={FLOWSCRIPT_LANGUAGE_ID}
 			value={source}

@@ -19,7 +19,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, TransactionTrait,
+    QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -86,7 +86,7 @@ pub async fn upsert_request(
         ));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let approver_id = user.sub().ok();
 
     let new_status = match body.action.to_lowercase().as_str() {
@@ -149,40 +149,49 @@ pub async fn upsert_request(
     // The status flip and the visibility write must not be able to diverge —
     // an accepted request whose target never became public is invisible to
     // everyone but the database.
-    let txn = state.db.begin().await?;
+    let updated = state
+        .transaction(|txn| {
+            let request = request.clone();
+            let new_status = new_status.clone();
+            let approver_id = approver_id.clone();
+            let target = target.clone();
+            Box::pin(async move {
+                let mut active: publication_request::ActiveModel =
+                    request.clone().into_active_model();
+                active.status = Set(new_status.clone());
+                active.approver_id = Set(approver_id);
+                active.updated_at = Set(now);
+                let updated = active.update(txn).await?;
 
-    let mut active: publication_request::ActiveModel = request.clone().into_active_model();
-    active.status = Set(new_status.clone());
-    active.approver_id = Set(approver_id.clone());
-    active.updated_at = Set(now);
-    let updated = active.update(&txn).await?;
-
-    if new_status == PublicationRequestStatus::Accepted {
-        match &target {
-            PublicationTarget::App(app_id) => {
-                app::ActiveModel {
-                    id: Set(app_id.clone()),
-                    visibility: Set(request.target_visibility.clone()),
-                    updated_at: Set(now),
-                    ..Default::default()
+                if new_status == PublicationRequestStatus::Accepted {
+                    match target {
+                        PublicationTarget::App(app_id) => {
+                            app::ActiveModel {
+                                id: Set(app_id),
+                                visibility: Set(request.target_visibility),
+                                updated_at: Set(now),
+                                ..Default::default()
+                            }
+                            .update(txn)
+                            .await?;
+                        }
+                        PublicationTarget::Group(group_id) => {
+                            app_group::ActiveModel {
+                                id: Set(group_id),
+                                visibility: Set(request.target_visibility),
+                                updated_at: Set(now),
+                                ..Default::default()
+                            }
+                            .update(txn)
+                            .await?;
+                        }
+                    }
                 }
-                .update(&txn)
-                .await?;
-            }
-            PublicationTarget::Group(group_id) => {
-                app_group::ActiveModel {
-                    id: Set(group_id.clone()),
-                    visibility: Set(request.target_visibility.clone()),
-                    updated_at: Set(now),
-                    ..Default::default()
-                }
-                .update(&txn)
-                .await?;
-            }
-        }
-    }
 
-    txn.commit().await?;
+                Ok::<_, ApiError>(updated)
+            })
+        })
+        .await?;
 
     // Resolve a bound EU AI Act assessment alongside the publication decision.
     if let Some(assessment_id) = &request.ai_act_assessment_id {

@@ -1,0 +1,14 @@
+[package]
+name = "flow-like-db"
+version = "0.1.0"
+edition = "2024"
+description = "Engine portability for the Flow-Like relational store: dialect detection, conflict classification, retried transactions and bounded batch writes on PostgreSQL, CockroachDB and Aurora DSQL"
+
+[dependencies]
+sea-orm.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -22,11 +22,13 @@ pub struct StackFrame {
     pub in_app: Option<bool>,
 }
 
-/// A stored source map, keyed by the minified file it belongs to.
+/// A stored source map, keyed by the minified file it belongs to. The map is
+/// held as bytes: most come straight off the object store, and validating tens
+/// of megabytes as UTF-8 only to hand `decode_slice` a slice again buys nothing.
 #[derive(Clone, Debug)]
 pub struct SourceMapEntry {
     pub file_name: String,
-    pub map: String,
+    pub map: Vec<u8>,
 }
 
 /// Last path segment of a URL or path, without query string or fragment.
@@ -56,7 +58,7 @@ pub fn symbolicate_frames(
 
     let decoded: Vec<(&str, DecodedMap)> = maps
         .iter()
-        .filter_map(|entry| match decode_slice(entry.map.as_bytes()) {
+        .filter_map(|entry| match decode_slice(&entry.map) {
             Ok(map) => Some((basename(&entry.file_name), map)),
             Err(err) => {
                 tracing::debug!(
@@ -130,7 +132,7 @@ mod tests {
     fn entry(file_name: &str, map: String) -> SourceMapEntry {
         SourceMapEntry {
             file_name: file_name.to_string(),
-            map,
+            map: map.into_bytes(),
         }
     }
 

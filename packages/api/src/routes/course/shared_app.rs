@@ -65,7 +65,7 @@ pub async fn open_shared_app(
     Query(q): Query<OpenSharedAppQuery>,
 ) -> Result<Json<OpenSharedAppResponse>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
     let refork = q.refork.unwrap_or(false);
     ensure_course_readable(&state, &user, &course_id).await?;
@@ -125,7 +125,9 @@ pub async fn open_shared_app(
                 "course app fork did not carry everything"
             );
         }
-        (new_app_id, Some(report.id_map), true)
+        // Node / pin / layer maps run to thousands of pairs and are derivable
+        // from the top-level ids; only those are persisted on the enrollment.
+        (new_app_id, Some(report.id_map.top_level()), true)
     } else {
         (
             existing_link.clone().unwrap_or_else(|| link.app_id.clone()),

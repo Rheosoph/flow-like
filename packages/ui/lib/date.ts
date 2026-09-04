@@ -4,10 +4,21 @@ import { splitNameSegments } from "./utils";
 
 export type DateValue = Date | IDate | number | string | null | undefined;
 
+/**
+ * Matches a date-time written in any of the shapes chrono can emit: zone-less,
+ * explicitly UTC, or offset-bearing, with either `T` or a space as the
+ * separator and an optional space before the offset.
+ *
+ * The space-separated forms are what chrono's `Display` produces
+ * (`2026-09-04 08:18:44 +00:00`). V8 happens to parse that; JavaScriptCore —
+ * the engine behind the Tauri desktop app on macOS and Linux, and Safari —
+ * returns `Invalid Date`, so it cannot be left to the platform parser. Every
+ * shape is normalised here to strict RFC3339 before `new Date()` sees it.
+ */
 function parseChronoDateString(value: string): Date | null {
 	const trimmed = value.trim();
 	const chronoMatch = trimmed.match(
-		/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(?:\s*(UTC|Z))?$/,
+		/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(?:\s*(UTC|Z|[+-]\d{2}:?\d{2}))?$/,
 	);
 
 	if (!chronoMatch) {
@@ -18,7 +29,15 @@ function parseChronoDateString(value: string): Date | null {
 	const milliseconds = fractionalPart
 		? `.${fractionalPart.padEnd(3, "0").slice(0, 3)}`
 		: "";
-	const normalized = `${datePart}T${timePart}${milliseconds}${zonePart ? "Z" : "Z"}`;
+	// A zone-less string has always been read as UTC. An explicit offset is
+	// honoured, respelled as `+HH:MM` so a `+0000` spelling parses too.
+	const zone =
+		!zonePart || zonePart === "UTC" || zonePart === "Z"
+			? "Z"
+			: zonePart.length === 5
+				? `${zonePart.slice(0, 3)}:${zonePart.slice(3)}`
+				: zonePart;
+	const normalized = `${datePart}T${timePart}${milliseconds}${zone}`;
 	const parsed = new Date(normalized);
 
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -51,9 +70,12 @@ export function parseDateValue(value: DateValue): Date | null {
 	}
 
 	if (typeof value === "string") {
-		// Backend timestamps are naive UTC (chrono NaiveDateTime, no zone suffix).
-		// new Date() parses an offset-less date-time as LOCAL time, so resolve the
-		// UTC-aware form first and only fall back for formats it doesn't recognize.
+		// The API now sends offset-bearing instants, but naive UTC strings (chrono
+		// NaiveDateTime, no zone) still reach us from older caches and from local
+		// backends. new Date() reads an offset-less date-time as LOCAL time, and
+		// JavaScriptCore rejects chrono's space-separated Display form outright, so
+		// every chrono spelling is normalised here first; anything else (an ISO
+		// date, an RFC 2822 string) goes to new Date().
 		const chrono = parseChronoDateString(value);
 		if (chrono) {
 			return chrono;

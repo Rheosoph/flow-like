@@ -32,7 +32,9 @@ pub mod channel;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
+pub mod db;
 mod db_backfills;
+pub mod deletion;
 pub mod error;
 pub mod mail;
 pub mod model_tier;

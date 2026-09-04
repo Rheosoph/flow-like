@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     entity::meta,
@@ -12,7 +12,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use utoipa::ToSchema;
 
 #[derive(Debug, serde::Serialize, ToSchema)]
@@ -56,54 +56,64 @@ pub async fn push_media(
 ) -> Result<Json<PushMediaResponse>, ApiError> {
     let mode = MetaMode::from_media_query(&query, &app_id);
     mode.ensure_write_permission(&user, &app_id, &state).await?;
-    let language = query.language.as_deref().unwrap_or("en");
+    let language = query.language.clone().unwrap_or_else(|| "en".to_string());
     let media_prefix = mode.media_prefix(&app_id);
-
-    let txn = state.db.begin().await?;
-
-    let existing_meta = mode
-        .find_existing_meta(language, &txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let mut existing_preview = existing_meta.preview_media.clone().unwrap_or_default();
-
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
     let item_id = create_id();
     let item_name = format!("{}.{}", item_id, query.extension);
+    let mode = Arc::new(mode);
+    let query = Arc::new(query);
+
+    // The row points at the new media id once this commits; the old file is
+    // removed and the upload URL signed only afterwards, so no S3 round trip
+    // ever runs inside the transaction.
+    let replaced = state
+        .transaction(|txn| {
+            let mode = mode.clone();
+            let query = query.clone();
+            let language = language.clone();
+            let item_id = item_id.clone();
+            Box::pin(async move {
+                let existing_meta = mode
+                    .find_existing_meta(&language, txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
+
+                let replaced = match &query.item {
+                    MediaItem::Icon => {
+                        model.icon = Set(Some(item_id));
+                        existing_meta.icon
+                    }
+                    MediaItem::Thumbnail => {
+                        model.thumbnail = Set(Some(item_id));
+                        existing_meta.thumbnail
+                    }
+                    MediaItem::Preview => {
+                        let mut existing_preview = existing_meta.preview_media.unwrap_or_default();
+                        existing_preview.push(item_id);
+                        model.preview_media = Set(Some(existing_preview));
+                        None
+                    }
+                };
+
+                model.update(txn).await?;
+                Ok::<_, ApiError>(replaced)
+            })
+        })
+        .await?;
 
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
 
-    match &query.item {
-        MediaItem::Icon => {
-            if let Some(icon) = &existing_meta.icon {
-                let file_name = format!("{}.webp", icon);
-                let path = media_prefix.child(file_name);
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!("Failed to delete existing icon at {}: {:?}", path, err);
-                }
-            }
-            model.icon = Set(Some(item_id));
-        }
-        MediaItem::Thumbnail => {
-            if let Some(thumbnail) = &existing_meta.thumbnail {
-                let file_name = format!("{}.webp", thumbnail);
-                let path = media_prefix.child(file_name);
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!("Failed to delete existing thumbnail at {}: {:?}", path, err);
-                }
-            }
-            model.thumbnail = Set(Some(item_id));
-        }
-        MediaItem::Preview => {
-            existing_preview.push(item_id.clone());
-            model.preview_media = Set(Some(existing_preview));
+    if let Some(replaced) = replaced {
+        let path = media_prefix.child(format!("{}.webp", replaced));
+        if let Err(err) = master_store.as_generic().delete(&path).await {
+            tracing::error!("Failed to delete replaced media at {}: {:?}", path, err);
         }
     }
 
-    model.update(&txn).await?;
     let path = media_prefix.child(item_name.clone());
     let signed_url = master_store
         .sign("PUT", &path, Duration::from_secs(60 * 60 * 24))
@@ -119,7 +129,6 @@ pub async fn push_media(
             ApiError::internal_error(anyhow!("Failed to create signed URL, reference ID: {}", id))
         })?;
 
-    txn.commit().await?;
     Ok(Json(PushMediaResponse {
         signed_url: signed_url.to_string(),
     }))

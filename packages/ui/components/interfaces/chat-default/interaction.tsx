@@ -13,6 +13,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib";
+import {
+	fromDateTimeInputValue,
+	parseDateValue,
+	toDateTimeInputValue,
+} from "../../../lib/date";
 import type {
 	IFormField,
 	IFormInteraction,
@@ -551,6 +556,12 @@ function getInitialValuesFromSchema(schema: IJsonSchema): Record<string, any> {
 	return initial;
 }
 
+/**
+ * A `datetime-local` input hands back wall-clock time in the viewer's zone, so
+ * it is read through the local parser before being stored as an instant. Going
+ * through new Date() worked only because the display side made the mirror-image
+ * mistake, and the pair shifted the value by the offset on every round trip.
+ */
 function normalizeDateInput(value: string, format?: string): string {
 	if (!value) {
 		return "";
@@ -560,12 +571,12 @@ function normalizeDateInput(value: string, format?: string): string {
 		return value;
 	}
 
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) {
-		return value;
-	}
+	return fromDateTimeInputValue(value)?.toISOString() ?? value;
+}
 
-	return date.toISOString();
+function dateTimeInputValue(value: string): string | undefined {
+	const parsed = parseDateValue(value);
+	return parsed ? toDateTimeInputValue(parsed, "minute") : undefined;
 }
 
 function getNestedValue(input: Record<string, any>, path: string[]): any {
@@ -1000,7 +1011,7 @@ function renderSchemaField({
 				type={isDate ? "date" : isDateTime ? "datetime-local" : "text"}
 				value={
 					isDateTime && typeof value === "string" && value
-						? new Date(value).toISOString().slice(0, 16)
+						? (dateTimeInputValue(value) ?? value)
 						: (value ?? "")
 				}
 				onChange={(event) => {

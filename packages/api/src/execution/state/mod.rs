@@ -65,7 +65,7 @@
 //! EXECUTION_PAYLOAD_BUCKET=flow-like-execution-payloads
 //! ```
 //!
-//! ## Large Payload Handling (DynamoDB)
+//! ## Large Payload Handling
 //!
 //! DynamoDB has a 400KB item limit. Payloads larger than 100KB are automatically
 //! stored via FlowLikeStore under `polling/{run_id}/{event_id}.json` and referenced in DynamoDB.
@@ -74,6 +74,14 @@
 //! Cosmos DB (2 MB documents) and Firestore (1 MiB documents) offload at the same 100KB
 //! threshold under the same `polling/` prefix, so the boundary between an inline payload and
 //! a stored one does not move when a deployment changes cloud.
+//!
+//! PostgreSQL offloads at the same threshold under `tmp/polling/`, referenced by
+//! `ExecutionEvent.payloadRef`: Aurora DSQL rejects any text or jsonb value over
+//! 1 MiB, and it is the only backend that also has to delete the staged objects
+//! itself. Its TTL sweep drains them row by row, and
+//! [`ExecutionStateStore::sweep_staged_payloads`] reclaims by age the ones whose
+//! row was never committed — the object is written before the insert, so a
+//! failed write leaves it with no pointer at all.
 
 mod postgres;
 mod types;
@@ -96,6 +104,10 @@ mod object_storage;
 pub use postgres::PostgresStateStore;
 pub use types::*;
 
+/// The staged-payload delete, for the app-deletion step that has to run it
+/// before the rows carrying the references drain.
+pub(crate) use postgres::delete_staged_payload;
+
 #[cfg(feature = "redis")]
 pub use redis::RedisStateStore;
 
@@ -116,12 +128,6 @@ use std::sync::Arc;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 
-#[cfg(any(
-    feature = "dynamodb",
-    feature = "cosmos",
-    feature = "firestore",
-    feature = "s3"
-))]
 use flow_like_storage::files::store::FlowLikeStore;
 
 /// Backend type for execution state storage
@@ -167,9 +173,13 @@ impl StateBackend {
 #[derive(Default)]
 pub struct StateStoreConfig {
     pub db: Option<Arc<sea_orm::DatabaseConnection>>,
+    /// The engine behind `db`; missing means the default dialect, which only
+    /// changes how a lost commit race is logged.
+    pub dialect: Option<crate::db::DbDialect>,
     #[cfg(feature = "aws")]
     pub aws_config: Option<Arc<SdkConfig>>,
-    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
+    /// Carries event payloads that are too large for the state backend itself.
+    /// Every backend offloads at [`PAYLOAD_OFFLOAD_BYTES`], Postgres included.
     pub content_store: Option<Arc<FlowLikeStore>>,
     #[cfg(feature = "s3")]
     pub meta_store: Option<Arc<FlowLikeStore>>,
@@ -181,13 +191,17 @@ impl StateStoreConfig {
         self
     }
 
+    pub fn with_dialect(mut self, dialect: crate::db::DbDialect) -> Self {
+        self.dialect = Some(dialect);
+        self
+    }
+
     #[cfg(feature = "aws")]
     pub fn with_aws_config(mut self, config: Arc<SdkConfig>) -> Self {
         self.aws_config = Some(config);
         self
     }
 
-    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
     pub fn with_content_store(mut self, store: Arc<FlowLikeStore>) -> Self {
         self.content_store = Some(store);
         self
@@ -213,7 +227,11 @@ pub async fn create_state_store(
                     "Database connection required for Postgres backend".into(),
                 )
             })?;
-            Ok(Arc::new(PostgresStateStore::new(db)))
+            let store = PostgresStateStore::with_dialect(db, config.dialect.unwrap_or_default());
+            Ok(Arc::new(match config.content_store {
+                Some(content_store) => store.with_content_store(content_store),
+                None => store,
+            }))
         }
 
         #[cfg(feature = "redis")]

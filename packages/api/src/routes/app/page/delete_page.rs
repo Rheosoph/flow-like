@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_types::anyhow;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -29,7 +29,8 @@ pub struct PageBoardQuery {
     responses(
         (status = 200, description = "Page deleted"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(name = "DELETE /apps/{app_id}/pages/{page_id}", skip(state, user))]
@@ -54,7 +55,7 @@ pub async fn delete_page(
         .await?;
 
     // Match upsert's lock order: global page id first, then the owning board discovered below.
-    // The guard stays live through storage cleanup and DB deletion so a concurrent upsert cannot
+    // The lease stays held through storage cleanup and DB deletion so a concurrent upsert cannot
     // recreate or move the id between those two operations.
     let mut page_id_guard = super::page_id_mutation_guard(&state, &page_id).await?;
 
@@ -66,7 +67,7 @@ pub async fn delete_page(
     // remove the row.
     let row = page::Entity::find_by_id(&page_id)
         .filter(page::Column::AppId.eq(&app_id))
-        .one(page_id_guard.connection())
+        .one(&state.db)
         .await?;
     let board_id = row.and_then(|row| row.board_id);
     if let Some(requested_board_id) = params.board_id.filter(|id| !id.trim().is_empty())
@@ -82,6 +83,7 @@ pub async fn delete_page(
 
     if let Some(board_id) = board_id {
         if let Ok(board) = app.open_board(board_id.clone(), None, None).await {
+            page_id_guard.ensure_held()?;
             let mut board_guard = board.lock().await;
             if let Err(e) = board_guard.delete_page(&page_id, None).await {
                 tracing::warn!(
@@ -89,6 +91,7 @@ pub async fn delete_page(
                     board_id
                 );
             }
+            page_id_guard.ensure_held()?;
             if let Err(e) = board_guard.save(None).await {
                 tracing::warn!("delete_page board save failed for {}: {e}", board_id);
             }
@@ -106,17 +109,25 @@ pub async fn delete_page(
         );
     }
 
-    page::Entity::delete_many()
-        .filter(
-            page::Column::AppId
-                .eq(app_id.clone())
-                .and(page::Column::Id.eq(page_id.clone())),
-        )
-        .exec(page_id_guard.connection())
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("delete page row: {e}")))?;
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let page_id = page_id.clone();
+            Box::pin(async move {
+                page::Entity::delete_many()
+                    .filter(
+                        page::Column::AppId
+                            .eq(app_id)
+                            .and(page::Column::Id.eq(page_id)),
+                    )
+                    .exec(txn)
+                    .await?;
+                Ok::<(), ApiError>(())
+            })
+        })
+        .await?;
 
-    page_id_guard.release().await?;
+    page_id_guard.release().await;
 
     audit_branch!(
         state,

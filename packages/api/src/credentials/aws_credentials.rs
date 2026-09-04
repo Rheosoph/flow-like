@@ -1914,8 +1914,10 @@ mod tests {
         );
 
         let resources = statement["Resource"].to_string();
-        assert!(resources.contains("key/11111111"), "{resources}");
+        assert!(resources.contains("key/22222222"), "{resources}");
         assert!(resources.contains("key/33333333"), "{resources}");
+        // The executor never opens the meta bucket, so its key stays unnamed.
+        assert!(!resources.contains("key/11111111"), "{resources}");
         let via_service = statement["Condition"]["StringEquals"]["kms:ViaService"].to_string();
         assert!(
             via_service.contains("s3.eu-west-1.amazonaws.com"),
@@ -1947,9 +1949,11 @@ mod tests {
             .expect("the logs bucket is pinned");
         assert_eq!(read_logs, vec![logs_key.as_str()]);
 
+        // The executor reads content and writes logs; boards arrive as presigned
+        // artifacts, so the meta bucket and its key stay out of reach.
         let executor = scoped_kms_resources(keys, &CredentialsAccess::ServerExecute)
-            .expect("all three buckets are pinned");
-        assert!(executor.contains(&meta_key.as_str()));
+            .expect("the content and logs buckets are pinned");
+        assert!(!executor.contains(&meta_key.as_str()));
         assert!(executor.contains(&content_key.as_str()));
         assert!(executor.contains(&logs_key.as_str()));
     }
@@ -1993,7 +1997,7 @@ mod tests {
                     } else {
                         shadow_execute_policy
                     };
-                    let mut policy = build(&creds, app, user, runs, tmp_user, tmp_global, express);
+                    let mut policy = build(&creds, app, user, runs, tmp_user, tmp_global);
                     policy["Statement"]
                         .as_array_mut()
                         .expect("statements")

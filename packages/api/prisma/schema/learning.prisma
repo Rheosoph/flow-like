@@ -1,28 +1,28 @@
 model Course {
   id String @id
 
-  language       String
-  slug           String?
-  difficulty     CourseDifficulty @default(BEGINNER)
-  category       CourseCategory   @default(GENERAL)
-  estimatedMinutes Int            @default(0)
-  isPublished    Boolean          @default(false)
-  authorId       String?
-  iconUrl        String?
-  bannerUrl      String?
-  tags           String[]
-  position       Int?
+  language         String
+  slug             String?
+  difficulty       String  @default("BEGINNER")
+  category         String  @default("GENERAL")
+  estimatedMinutes Int     @default(0)
+  isPublished      Boolean @default(false)
+  authorId         String?
+  iconUrl          String?
+  bannerUrl        String?
+  tags             Json?
+  position         Int?
 
-  meta        Meta[]
-  modules     CourseModule[]
-  appLinks    CourseAppLink[]
-  assets      CourseAsset[]
-  enrollments UserCourseEnrollment[]
+  meta         Meta[]
+  modules      CourseModule[]
+  appLinks     CourseAppLink[]
+  assets       CourseAsset[]
+  enrollments  UserCourseEnrollment[]
   certificates Certificate[]
-  pathSteps   LearningPathCourse[]
+  pathSteps    LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([language])
   @@index([category])
@@ -41,8 +41,8 @@ model LearningPath {
 
   steps LearningPathCourse[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([isPublished])
   @@index([slug])
@@ -73,32 +73,32 @@ model CourseModule {
 
   lessons Lesson[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([courseId])
   @@index([courseId, position])
 }
 
 model Lesson {
-  id       String @id
+  id       String       @id
   moduleId String
   module   CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
 
-  title       String
-  position    Int    @default(0)
-  language    String @default("en")
-  content     String
-  videoUrl    String?
-  estimatedMinutes Int @default(5)
-  isOptional  Boolean @default(false)
+  title            String
+  position         Int     @default(0)
+  language         String  @default("en")
+  content          String
+  videoUrl         String?
+  estimatedMinutes Int     @default(5)
+  isOptional       Boolean @default(false)
 
   challenges Challenge[]
   appRefs    LessonAppRef[]
   progress   UserLessonProgress[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([moduleId])
   @@index([moduleId, position])
@@ -109,18 +109,18 @@ model Challenge {
   lessonId String
   lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
-  position    Int           @default(0)
-  kind        ChallengeKind
+  position    Int     @default(0)
+  kind        String
   prompt      String
   explanation String?
   payload     Json
-  points      Int           @default(10)
+  points      Int     @default(10)
 
-  attempts UserChallengeAttempt[]
+  attempts         UserChallengeAttempt[]
   weeklyChallenges WeeklyChallenge[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -131,12 +131,12 @@ model CourseAppLink {
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
   appId   String
-  app     App    @relation(fields: [appId], references: [id], onDelete: Cascade)
-  purpose CourseAppPurpose @default(SHARED_TEMPLATE)
+  app     App     @relation(fields: [appId], references: [id], onDelete: Cascade)
+  purpose String  @default("SHARED_TEMPLATE")
   alias   String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, appId])
   @@index([appId])
@@ -148,15 +148,15 @@ model CourseAsset {
   courseId String
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  name        String
-  storageKey  String
-  filename    String
-  mimeType    String
-  size        Int
-  kind        AssetKind @default(DOCUMENT)
+  name       String
+  storageKey String
+  filename   String
+  mimeType   String
+  size       Int
+  kind       String @default("DOCUMENT")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([courseId, name])
   @@index([courseId])
@@ -170,13 +170,13 @@ model LessonAppRef {
   appAlias String?
   appId    String?
 
-  kind   LessonAppRefKind
+  kind   String
   target Json
 
   label String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([lessonId])
 }
@@ -197,9 +197,9 @@ model UserCourseEnrollment {
   // payloads/refs) into the user-specific ones at validation/navigation time.
   idMaps Json @default("{}")
 
-  startedAt    DateTime  @default(now())
-  lastSeenAt   DateTime  @default(now())
-  completedAt  DateTime?
+  startedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt  DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
 
   @@unique([userId, courseId])
   @@index([userId])
@@ -212,11 +212,11 @@ model UserLessonProgress {
   lessonId String
   lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
-  status      LessonStatus @default(IN_PROGRESS)
-  completedAt DateTime?
+  status      String    @default("IN_PROGRESS")
+  completedAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, lessonId])
   @@index([userId])
@@ -224,15 +224,15 @@ model UserLessonProgress {
 }
 
 model UserChallengeAttempt {
-  id          String @id
+  id          String    @id
   userId      String
   challengeId String
   challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
 
-  submission Json
-  isCorrect  Boolean
-  pointsAwarded Int @default(0)
-  attemptedAt DateTime @default(now())
+  submission    Json
+  isCorrect     Boolean
+  pointsAwarded Int      @default(0)
+  attemptedAt   DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([userId])
   @@index([challengeId])
@@ -245,7 +245,7 @@ model Certificate {
   courseId String
   course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  issuedAt DateTime @default(now())
+  issuedAt DateTime @default(now()) @db.Timestamptz(3)
   hash     String
   pdfUrl   String?
 
@@ -258,73 +258,18 @@ model LeaderboardOptIn {
   displayName String
   isOptedIn   Boolean  @default(true)
   totalPoints Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model WeeklyChallenge {
-  id          String   @id
+  id          String    @id
   weekIso     String
   challengeId String
   challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  expiresAt   DateTime  @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@unique([weekIso])
   @@index([expiresAt])
   @@index([challengeId])
-}
-
-enum CourseDifficulty {
-  BEGINNER
-  INTERMEDIATE
-  ADVANCED
-  EXPERT
-}
-
-enum CourseCategory {
-  GENERAL
-  GETTING_STARTED
-  FLOWS
-  PAGES
-  EVENTS
-  DATA
-  AI
-  INTEGRATIONS
-  DEPLOYMENT
-  ADVANCED
-  EXPERT
-}
-
-enum CourseAppPurpose {
-  SHARED_TEMPLATE
-  REFERENCE
-  PLAYGROUND
-}
-
-enum LessonAppRefKind {
-  NAVIGATE
-  FOCUS_NODE
-  ADD_NODE
-  CREATE_EVENT
-  OPEN_OR_CLONE_APP
-}
-
-enum ChallengeKind {
-  SINGLE_CHOICE
-  MULTIPLE_CHOICE
-  BOARD_RIDDLE
-  EXECUTE_NODE
-}
-
-enum LessonStatus {
-  NOT_STARTED
-  IN_PROGRESS
-  COMPLETED
-}
-
-enum AssetKind {
-  IMAGE
-  VIDEO
-  AUDIO
-  DOCUMENT
 }

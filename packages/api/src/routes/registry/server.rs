@@ -7,6 +7,7 @@ use super::types::{
     MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
     RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
+use crate::deletion::{DeletionRoot, job};
 use crate::entity::sea_orm_active_enums::{
     WasmCompilationStatus, WasmPackageCategory, WasmPackageVisibility,
 };
@@ -23,9 +24,11 @@ use flow_like_wasm_schema::manifest::{
     PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
 };
 use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
+    sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -452,7 +455,7 @@ fn package_version_from_model(v: wasm_package_version::Model) -> PackageVersion 
         wasm_size: v.wasm_size as u64,
         status: status_to_package_status(&v.status),
         download_url: None,
-        published_at: chrono::DateTime::from_naive_utc_and_offset(v.published_at, chrono::Utc),
+        published_at: v.published_at.to_utc(),
         min_flow_like_version: v.min_flow_like_version,
         release_notes: v.release_notes,
         yanked: v.yanked,
@@ -793,7 +796,7 @@ impl ServerRegistry {
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
                     status: PackageStatus::Active,
-                    keywords: pkg.keywords.unwrap_or_default(),
+                    keywords: pkg.keywords.unwrap_or_default().into(),
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
@@ -1008,10 +1011,7 @@ impl ServerRegistry {
                 version.widgets,
                 version.widget_bundle_hash.filter(|h| !h.is_empty()),
                 version.widget_bundle_size.map(|s| s as u64),
-                Some(chrono::DateTime::from_naive_utc_and_offset(
-                    version.published_at,
-                    chrono::Utc,
-                )),
+                Some(version.published_at.to_utc()),
             )
         } else {
             (
@@ -1022,8 +1022,7 @@ impl ServerRegistry {
                 pkg.widgets.clone(),
                 pkg.widget_bundle_hash.clone().filter(|h| !h.is_empty()),
                 pkg.widget_bundle_size.map(|s| s as u64),
-                pkg.published_at
-                    .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
+                pkg.published_at.map(|dt| dt.to_utc()),
             )
         };
 
@@ -1036,7 +1035,7 @@ impl ServerRegistry {
             license: pkg.license,
             homepage: pkg.homepage,
             repository: pkg.repository,
-            keywords: pkg.keywords.unwrap_or_default(),
+            keywords: pkg.keywords.unwrap_or_default().into(),
             status,
             verified: pkg.verified,
             download_count: pkg.download_count as u64,
@@ -1050,8 +1049,8 @@ impl ServerRegistry {
             visibility: visibility_to_string(&pkg.visibility),
             primary_category: pkg.primary_category.as_ref().map(db_cat_to_string),
             secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_string),
-            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
-            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
+            created_at: pkg.created_at.to_utc(),
+            updated_at: pkg.updated_at.to_utc(),
             published_at,
         })
     }
@@ -1174,7 +1173,7 @@ impl ServerRegistry {
             license: pkg.license.clone(),
             homepage: pkg.homepage.clone(),
             repository: pkg.repository.clone(),
-            keywords: pkg.keywords.unwrap_or_default(),
+            keywords: pkg.keywords.unwrap_or_default().into(),
             permissions: serde_json::from_value(pkg.permissions.clone()).unwrap_or_default(),
             primary_category: pkg.primary_category.as_ref().map(db_cat_to_manifest),
             secondary_category: pkg.secondary_category.as_ref().map(db_cat_to_manifest),
@@ -1215,8 +1214,8 @@ impl ServerRegistry {
             versions: package_versions,
             status: status_to_package_status(&pkg.status),
             download_count: pkg.download_count as u64,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(pkg.created_at, chrono::Utc),
-            updated_at: chrono::DateTime::from_naive_utc_and_offset(pkg.updated_at, chrono::Utc),
+            created_at: pkg.created_at.to_utc(),
+            updated_at: pkg.updated_at.to_utc(),
             source: PackageSource::Remote {
                 registry_url: String::new(),
                 download_url: String::new(),
@@ -1348,7 +1347,7 @@ impl ServerRegistry {
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
                     status: status_to_package_status(&pkg.status),
-                    keywords: pkg.keywords.unwrap_or_default(),
+                    keywords: pkg.keywords.unwrap_or_default().into(),
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
@@ -1560,7 +1559,7 @@ impl ServerRegistry {
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
                     status: status_to_package_status(&pkg.status),
-                    keywords: pkg.keywords.unwrap_or_default(),
+                    keywords: pkg.keywords.unwrap_or_default().into(),
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,
@@ -1694,7 +1693,7 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<PublishResponse> {
         use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         let existing_version = wasm_package_version::Entity::find()
             .filter(wasm_package_version::Column::PackageId.eq(&manifest.id))
@@ -1853,7 +1852,14 @@ impl ServerRegistry {
             .map(|p| p.visibility == WasmPackageVisibility::Private)
             .unwrap_or(true);
 
-        if let Some(_existing) = existing_package {
+        // `DELETE /admin/packages/{id}` answers `202` with this row still
+        // present and only disabled, so a re-publish under the same manifest
+        // id reaches either branch below while the drain is still pending.
+        // Cancelling in the transaction that writes the row is what stops the
+        // worker from later deleting the package that was just republished.
+        let package_write = self.db.begin().await?;
+        job::cancel(&package_write, DeletionRoot::WasmPackage, &manifest.id).await?;
+        if existing_package.is_some() {
             // Existing package: only bump updated_at.
             // Version-specific fields (version, wasm_path, wasm_hash, nodes, etc.)
             // are NOT updated on the parent package until this version is approved.
@@ -1862,7 +1868,7 @@ impl ServerRegistry {
                 updated_at: Set(now),
                 ..Default::default()
             };
-            update_model.update(&self.db).await?;
+            update_model.update(&package_write).await?;
         } else {
             let package_model = wasm_package::ActiveModel {
                 id: Set(manifest.id.clone()),
@@ -1872,7 +1878,7 @@ impl ServerRegistry {
                 license: Set(manifest.license.clone()),
                 homepage: Set(manifest.homepage.clone()),
                 repository: Set(manifest.repository.clone()),
-                keywords: Set(Some(manifest.keywords.clone())),
+                keywords: Set(Some(manifest.keywords.clone().into())),
                 primary_category: Set(manifest.primary_category.as_ref().map(manifest_cat_to_db)),
                 secondary_category: Set(manifest
                     .secondary_category
@@ -1899,7 +1905,7 @@ impl ServerRegistry {
                 rating_count: Set(0),
                 avg_rating: Set(None),
             };
-            package_model.insert(&self.db).await?;
+            package_model.insert(&package_write).await?;
 
             let user_model = wasm_package_user::ActiveModel {
                 id: Set(create_id()),
@@ -1911,7 +1917,7 @@ impl ServerRegistry {
                 granted_by: Set(None),
                 granted_at: Set(now),
             };
-            user_model.insert(&self.db).await?;
+            user_model.insert(&package_write).await?;
 
             // Auto-create default English meta from manifest
             let meta_model = meta::ActiveModel {
@@ -1923,7 +1929,7 @@ impl ServerRegistry {
                 tags: Set(if manifest.keywords.is_empty() {
                     None
                 } else {
-                    Some(manifest.keywords.clone())
+                    Some(manifest.keywords.clone().into())
                 }),
                 icon: Set(None),
                 thumbnail: Set(None),
@@ -1945,8 +1951,9 @@ impl ServerRegistry {
                 created_at: Set(now),
                 updated_at: Set(now),
             };
-            meta_model.insert(&self.db).await?;
+            meta_model.insert(&package_write).await?;
         }
+        package_write.commit().await?;
 
         let version_id = create_id();
         let compile_hash = hash.clone();
@@ -1971,8 +1978,8 @@ impl ServerRegistry {
             } else {
                 WasmCompilationStatus::Compiled
             }),
-            compiled_platforms: Set(Some(vec![])),
-            supported_wasmtime_versions: Set(Some(vec![])),
+            compiled_platforms: Set(Some(Default::default())),
+            supported_wasmtime_versions: Set(Some(Default::default())),
             compilation_error: Set(None),
             duplicate_of_package_id: Set(dup_pkg_id),
             duplicate_of_version: Set(dup_version),
@@ -2004,7 +2011,7 @@ impl ServerRegistry {
             // Widgets-only package: nothing to compile. Auto-approve private
             // packages immediately (mirrors the inline compilation auto-approval).
             if is_private_package {
-                let now_approve = chrono::Utc::now().naive_utc();
+                let now_approve = chrono::Utc::now().fixed_offset();
                 let _ = wasm_package_version::ActiveModel {
                     id: Set(version_id.clone()),
                     status: Set(WasmPackageStatus::Active),
@@ -2101,17 +2108,27 @@ impl ServerRegistry {
     }
 
     /// Increment download count for a package (fire and forget)
-    pub async fn increment_downloads(&self, package_id: &str) -> flow_like_types::Result<()> {
-        // Use raw SQL for atomic increment
-        sea_orm::ConnectionTrait::execute(
-            &self.db,
-            sea_orm::Statement::from_sql_and_values(
-                sea_orm::DatabaseBackend::Postgres,
-                r#"UPDATE "WasmPackage" SET "downloadCount" = "downloadCount" + 1 WHERE id = $1"#,
-                [package_id.into()],
-            ),
-        )
-        .await?;
+    pub async fn increment_downloads(
+        &self,
+        state: &crate::state::State,
+        package_id: &str,
+    ) -> flow_like_types::Result<()> {
+        state
+            .transaction(|txn| {
+                let package_id = package_id.to_string();
+                Box::pin(async move {
+                    wasm_package::Entity::update_many()
+                        .col_expr(
+                            wasm_package::Column::DownloadCount,
+                            Expr::col(wasm_package::Column::DownloadCount).add(1),
+                        )
+                        .filter(wasm_package::Column::Id.eq(package_id))
+                        .exec(txn)
+                        .await?;
+                    Ok::<_, sea_orm::DbErr>(())
+                })
+            })
+            .await?;
         Ok(())
     }
 
@@ -2215,7 +2232,7 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<PackageReview> {
         use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmReviewAction};
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         // Verify package exists
         let Some(pkg) = wasm_package::Entity::find_by_id(package_id)
@@ -2339,7 +2356,7 @@ impl ServerRegistry {
             security_score: review.security_score,
             code_quality_score: review.code_quality_score,
             documentation_score: review.documentation_score,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(now, chrono::Utc),
+            created_at: now.to_utc(),
         })
     }
 
@@ -2378,10 +2395,7 @@ impl ServerRegistry {
                 security_score: review.security_score,
                 code_quality_score: review.code_quality_score,
                 documentation_score: review.documentation_score,
-                created_at: chrono::DateTime::from_naive_utc_and_offset(
-                    review.created_at,
-                    chrono::Utc,
-                ),
+                created_at: review.created_at.to_utc(),
             });
         }
 
@@ -2395,7 +2409,7 @@ impl ServerRegistry {
         status: &str,
         verified: Option<bool>,
     ) -> flow_like_types::Result<()> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let new_status = status_to_enum(status);
 
         let mut update_model = wasm_package::ActiveModel {
@@ -2417,57 +2431,6 @@ impl ServerRegistry {
         Ok(())
     }
 
-    /// Delete a package (admin)
-    pub async fn delete_package(&self, package_id: &str) -> flow_like_types::Result<()> {
-        let versions = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(package_id))
-            .all(&self.db)
-            .await?;
-
-        for version in versions {
-            let wasm_path = Self::wasm_path(package_id, &version.version);
-            let _ = self.content_bucket.as_generic().delete(&wasm_path).await;
-
-            if version
-                .widget_bundle_hash
-                .as_deref()
-                .is_some_and(|h| !h.is_empty())
-            {
-                let bundle_path = Self::widget_bundle_path(package_id, &version.version);
-                let _ = self.content_bucket.as_generic().delete(&bundle_path).await;
-
-                let assets_prefix = Path::from(WIDGET_ASSETS_PATH)
-                    .child(package_id)
-                    .child(version.version.as_str());
-                let store = self.content_bucket.as_generic();
-                if let Ok(objects) =
-                    futures::TryStreamExt::try_collect::<Vec<_>>(store.list(Some(&assets_prefix)))
-                        .await
-                {
-                    for object in objects {
-                        let _ = store.delete(&object.location).await;
-                    }
-                }
-            }
-
-            let compiled_base = Path::from(WASM_COMPILED_PATH)
-                .child(package_id)
-                .child(version.version.as_str());
-            for platform in version.compiled_platforms.as_deref().unwrap_or_default() {
-                let cwasm_path = compiled_base.child(format!("{}.cwasm", platform));
-                let hash_path = compiled_base.child(format!("{}.cwasm.b3", platform));
-                let _ = self.meta_bucket.as_generic().delete(&cwasm_path).await;
-                let _ = self.meta_bucket.as_generic().delete(&hash_path).await;
-            }
-        }
-
-        wasm_package::Entity::delete_by_id(package_id)
-            .exec(&self.db)
-            .await?;
-
-        Ok(())
-    }
-
     // ==================== AUTHOR MANAGEMENT ====================
 
     /// Add an author to a package
@@ -2477,7 +2440,7 @@ impl ServerRegistry {
         user_id: &str,
         role: Option<String>,
     ) -> flow_like_types::Result<AuthorInfo> {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
 
         // Verify package exists
         let Some(_pkg) = wasm_package::Entity::find_by_id(package_id)
@@ -2579,7 +2542,7 @@ impl ServerRegistry {
                     latest_version: pkg.version,
                     download_count: pkg.download_count as u64,
                     status: status_to_package_status(&pkg.status),
-                    keywords: pkg.keywords.unwrap_or_default(),
+                    keywords: pkg.keywords.unwrap_or_default().into(),
                     verified: pkg.verified,
                     price: pkg.price,
                     visibility: vis,

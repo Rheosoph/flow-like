@@ -164,8 +164,7 @@ impl DiscordClientManager {
             let mut bot = bot_instance.lock().await;
             bot.handlers.insert(registration.event_id.clone(), handler);
             println!(
-                "Updated Discord bot {} with new handler for event {}",
-                token[..8].to_string() + "...",
+                "Updated Discord bot handler for event {}",
                 registration.event_id
             );
         } else {
@@ -273,7 +272,7 @@ impl DiscordClientManager {
         // Stop the running client
         if let Some(handle) = self.running_clients.remove(token) {
             handle.abort();
-            tracing::info!("Stopped Discord bot: {}", &token[..8]);
+            tracing::info!("Stopped Discord bot client");
         }
 
         Ok(())

@@ -15,6 +15,7 @@ use flow_like_types::{
     create_id,
     rand::{TryRngCore, rngs::OsRng},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -100,11 +101,11 @@ pub async fn create_api_key(
     let valid_until = match input.valid_until {
         Some(ts) => Some(
             chrono::DateTime::from_timestamp(ts, 0)
-                .ok_or_else(|| ApiError::bad_request("Invalid valid_until timestamp"))?,
+                .ok_or_else(|| ApiError::bad_request("Invalid valid_until timestamp"))?
+                .fixed_offset(),
         ),
         None => None,
     };
-    let naive_datetime = valid_until.map(|dt| dt.naive_utc());
 
     // Generate secure random key
     let mut secret_bytes = [0u8; 32];
@@ -129,9 +130,9 @@ pub async fn create_api_key(
         app_id: Set(app_id.clone()),
         creator_user_id: Set(Some(creator_user_id)),
         creator_membership_id: Set(Some(creator_membership.id)),
-        valid_until: Set(naive_datetime),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        valid_until: Set(valid_until),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     technical_user.insert(&state.db).await?;

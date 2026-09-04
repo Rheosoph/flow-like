@@ -3,6 +3,7 @@ use crate::{
     routes::profile::sign_profile_image, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -33,13 +34,13 @@ pub struct ProfileResponse {
     pub hub: String,
     pub hubs: Option<Vec<String>>,
     #[schema(value_type = String)]
-    pub created_at: chrono::NaiveDateTime,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
     #[schema(value_type = String)]
-    pub updated_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::DateTime<chrono::FixedOffset>,
     /// Set for soft-deleted profiles (tombstones). Clients should delete these locally.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
-    pub deleted_at: Option<chrono::NaiveDateTime>,
+    pub deleted_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 /// Get all profiles for the authenticated user.
@@ -62,7 +63,7 @@ pub async fn get_profiles(
     let sub = user.sub()?;
 
     // Purge tombstones older than 30 days
-    let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(30);
+    let cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
     profile::Entity::delete_many()
         .filter(
             profile::Column::UserId
@@ -107,15 +108,15 @@ pub async fn get_profiles(
             description: p.description,
             icon,
             thumbnail,
-            interests: p.interests,
-            tags: p.tags,
+            interests: p.interests.map(Into::into),
+            tags: p.tags.map(Into::into),
             theme: p.theme,
-            bit_ids: p.bit_ids,
+            bit_ids: p.bit_ids.map(Into::into),
             apps: p.apps,
             shortcuts: p.shortcuts,
             settings: p.settings,
             hub: p.hub,
-            hubs: p.hubs,
+            hubs: p.hubs.map(Into::into),
             created_at: p.created_at,
             updated_at: p.updated_at,
             deleted_at: p.deleted_at,

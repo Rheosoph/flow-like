@@ -2284,7 +2284,7 @@ async fn dispatch_event_collect(
         artifact: None,
     };
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
         board_id: Set(board_id),
@@ -2309,7 +2309,7 @@ async fn dispatch_event_collect(
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
         user_id: Set(actor_user_id),
         technical_user_id: Set(None),
-        caller_app_chain: Set(caller.app_chain.clone()),
+        caller_app_chain: Set(caller.app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation.keys_json()),
@@ -2317,7 +2317,7 @@ async fn dispatch_event_collect(
         created_at: Set(now),
         updated_at: Set(now),
     };
-    run.insert(&state.db)
+    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 

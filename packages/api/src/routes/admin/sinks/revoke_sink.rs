@@ -69,7 +69,7 @@ pub async fn revoke_sink(
     let revoked_by = user.sub().ok();
 
     // Update to revoked
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let mut active_model: sink_token::ActiveModel = token.into();
     active_model.revoked = Set(true);
     active_model.revoked_at = Set(Some(now));

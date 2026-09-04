@@ -10,9 +10,10 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
-    QueryFilter, TransactionTrait,
+    QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -67,46 +68,53 @@ pub async fn upsert_comment(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let txn = state.db.begin().await?;
-
-    let existing = comment::Entity::find()
-        .filter(comment::Column::UserId.eq(&sub))
-        .filter(comment::Column::PackageId.eq(&package_id))
-        .one(&txn)
-        .await?;
-
     let new_rating = body.rating.clamp(1, 5);
 
-    let comment_id = if let Some(existing) = existing {
-        let id = existing.id.clone();
-        let old_rating = existing.rating;
-        let mut active = existing.into_active_model();
-        active.text = Set(body.text);
-        active.rating = Set(new_rating);
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
-        active.update(&txn).await?;
-        adjust_package_ratings(&txn, &package_id, new_rating - old_rating, 0).await?;
-        id
-    } else {
-        let id = create_id();
-        let model = comment::Model {
-            id: id.clone(),
-            text: body.text,
-            rating: new_rating,
-            user_id: sub,
-            app_id: None,
-            template_id: None,
-            package_id: Some(package_id.clone()),
-            created_at: chrono::Utc::now().naive_utc(),
-            updated_at: chrono::Utc::now().naive_utc(),
-        };
-        let mut active = comment::ActiveModel::from(model);
-        active = active.reset_all();
-        active.insert(&txn).await?;
-        adjust_package_ratings(&txn, &package_id, new_rating, 1).await?;
-        id
-    };
-    txn.commit().await?;
+    let comment_id = state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let package_id = package_id.clone();
+            let text = body.text.clone();
+            Box::pin(async move {
+                let existing = comment::Entity::find()
+                    .filter(comment::Column::UserId.eq(&sub))
+                    .filter(comment::Column::PackageId.eq(&package_id))
+                    .one(txn)
+                    .await?;
+
+                let comment_id = if let Some(existing) = existing {
+                    let id = existing.id.clone();
+                    let old_rating = existing.rating;
+                    let mut active = existing.into_active_model();
+                    active.text = Set(text);
+                    active.rating = Set(new_rating);
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
+                    active.update(txn).await?;
+                    adjust_package_ratings(txn, &package_id, new_rating - old_rating, 0).await?;
+                    id
+                } else {
+                    let id = create_id();
+                    let model = comment::Model {
+                        id: id.clone(),
+                        text,
+                        rating: new_rating,
+                        user_id: sub,
+                        app_id: None,
+                        template_id: None,
+                        package_id: Some(package_id.clone()),
+                        created_at: chrono::Utc::now().fixed_offset(),
+                        updated_at: chrono::Utc::now().fixed_offset(),
+                    };
+                    let mut active = comment::ActiveModel::from(model);
+                    active = active.reset_all();
+                    active.insert(txn).await?;
+                    adjust_package_ratings(txn, &package_id, new_rating, 1).await?;
+                    id
+                };
+                Ok::<_, ApiError>(comment_id)
+            })
+        })
+        .await?;
 
     Ok(Json(CommentResponse { comment_id }))
 }

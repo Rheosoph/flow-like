@@ -62,6 +62,13 @@ RUN sed -i '/^datasource[[:space:]]/,/^}/ s/^\([[:space:]]*provider[[:space:]]*=
     && awk '/^datasource[[:space:]]/,/^}/' prisma/schema/*.prisma | grep -q 'provider = "postgresql"' \
     && ! awk '/^datasource[[:space:]]/,/^}/' prisma/schema/*.prisma | grep -q '"cockroachdb"'
 
+# Column type changes `db push` cannot emit correctly on an existing database
+# (enum -> TEXT, array -> JSONB need a USING clause). migrate.ts runs the
+# runner, idempotent and guarded per statement, with the same token before it
+# spawns Prisma; pg and dotenv in package.json are its imports.
+COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
+COPY packages/api/prisma/pre-push ./prisma/pre-push
+
 COPY apps/backend/azure/migration/prisma.config.ts apps/backend/azure/migration/migrate.ts ./
 
 ENV NODE_ENV=production \

@@ -79,7 +79,7 @@ pub struct TelemetrySessionIngestResponse {
 struct ValidatedSession {
     session_id: String,
     status: String,
-    started_at: chrono::NaiveDateTime,
+    started_at: chrono::DateTime<chrono::FixedOffset>,
     duration_ms: Option<i32>,
 }
 
@@ -121,14 +121,17 @@ fn merge_status<'a>(stored: &'a str, incoming: &'a str) -> &'a str {
 /// queries can still reach: a session is never swept and every window filters
 /// with an open upper bound, so one future-dated row would depress crash-free
 /// rates for every window, permanently.
-fn started_at_in_range(started_at: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> bool {
+fn started_at_in_range(
+    started_at: chrono::DateTime<chrono::FixedOffset>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> bool {
     started_at <= now + chrono::Duration::minutes(MAX_CLOCK_SKEW_MINUTES)
         && started_at >= now - chrono::Duration::days(MAX_SESSION_AGE_DAYS)
 }
 
 fn validate_session(
     session: TelemetrySessionPayload,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Option<ValidatedSession> {
     let session_id = session.session_id.trim();
     if session_id.is_empty() || session_id.len() > MAX_SESSION_ID_LEN {
@@ -167,7 +170,7 @@ struct ValidatedBatch {
 /// carries the most severe status the client reported.
 fn validate_sessions(
     sessions: Vec<TelemetrySessionPayload>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> ValidatedBatch {
     let mut merged: BTreeMap<String, ValidatedSession> = BTreeMap::new();
     let mut skipped = 0;
@@ -200,10 +203,12 @@ fn stored_col(column: telemetry_session::Column) -> SimpleExpr {
 }
 
 fn status_rank_expr(column: SimpleExpr) -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
     SESSION_STATUS_PRECEDENCE
         .iter()
         .fold(CaseStatement::new(), |case, (status, rank)| {
-            case.case(column.clone().eq(*status), *rank)
+            case.case(column.clone().eq(Expr::value(*status)), *rank)
         })
         .finally(0)
         .into()
@@ -214,6 +219,8 @@ fn status_rank_expr(column: SimpleExpr) -> SimpleExpr {
 /// by the same install. `GREATEST` ignores NULL operands on Postgres and
 /// CockroachDB, so a session without a duration keeps the stored one.
 fn session_on_conflict() -> OnConflict {
+    use sea_orm::sea_query::ExprTrait;
+
     let incoming = status_rank_expr(excluded_col(telemetry_session::Column::Status));
     let stored = status_rank_expr(stored_col(telemetry_session::Column::Status));
     let status: SimpleExpr = Expr::case(
@@ -254,7 +261,7 @@ async fn persist_sessions<C: ConnectionTrait>(
     db: &C,
     payload: &TelemetrySessionIngestPayload,
     sessions: Vec<ValidatedSession>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<usize, DbErr> {
     if let Some(release) = payload.release.as_deref() {
         upsert_release(db, release, &payload.source, now).await?;
@@ -321,7 +328,7 @@ pub async fn ingest_sessions(
     payload.release = optional_string(payload.release.take(), MAX_RELEASE_LEN);
     payload.platform = optional_string(payload.platform.take(), MAX_SHORT_STRING_LEN);
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let ValidatedBatch {
         sessions: validated,
         skipped,
@@ -397,13 +404,13 @@ mod tests {
     const START: &str = "2026-07-26T10:00:00Z";
     const NOW: &str = "2026-07-26T12:00:00Z";
 
-    fn now() -> chrono::NaiveDateTime {
+    fn now() -> chrono::DateTime<chrono::FixedOffset> {
         parse_client_ts(Some(NOW)).unwrap()
     }
 
     /// An RFC 3339 start `offset` away from the fixed test clock.
     fn offset_start(offset: chrono::Duration) -> String {
-        (now() + offset).and_utc().to_rfc3339()
+        (now() + offset).to_rfc3339()
     }
 
     fn validated(session: TelemetrySessionPayload) -> Option<ValidatedSession> {

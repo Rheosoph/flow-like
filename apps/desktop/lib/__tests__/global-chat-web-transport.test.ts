@@ -322,9 +322,9 @@ describe("browser global-chat transport", () => {
 			"https://edge.example/push",
 			fallbackUrl,
 		]);
-		expect(
-			(fetchMock.mock.calls[2][1] as RequestInit).headers,
-		).toMatchObject({ authorization: "Bearer fallback-token" });
+		expect((fetchMock.mock.calls[2][1] as RequestInit).headers).toMatchObject({
+			authorization: "Bearer fallback-token",
+		});
 	});
 
 	test("bounds a hanging tool-result delivery", async () => {
@@ -395,8 +395,9 @@ describe("browser global-chat transport", () => {
 
 		expect(result).toEqual({ status: "ok" });
 		expect(onToolCancel).toHaveBeenCalledTimes(1);
-		const delivered = pushBody(fetchMock.mock.calls[1]?.[1] as RequestInit)
-			.value;
+		const delivered = pushBody(
+			fetchMock.mock.calls[1]?.[1] as RequestInit,
+		).value;
 		expect(delivered).toMatchObject({
 			requestId: "hung-tool",
 			approved: true,
@@ -414,19 +415,17 @@ describe("browser global-chat transport", () => {
 
 	test("surfaces malformed protocol frames and missing terminal frames", async () => {
 		const malformedLifecycle: IAgentDebugEvent[] = [];
-		const malformedFetch = vi
-			.fn()
-			.mockResolvedValueOnce(
-				sseResponse(
-					runFrame("run-5"),
-					frame("tool_request", {
-						toolName: "database_tool",
-						arguments: {},
-						channel: httpHandle("run-5", "x"),
-					}),
-					frame("final", { status: "ok" }),
-				),
-			);
+		const malformedFetch = vi.fn().mockResolvedValueOnce(
+			sseResponse(
+				runFrame("run-5"),
+				frame("tool_request", {
+					toolName: "database_tool",
+					arguments: {},
+					channel: httpHandle("run-5", "x"),
+				}),
+				frame("final", { status: "ok" }),
+			),
+		);
 		vi.stubGlobal("fetch", malformedFetch);
 		await expect(
 			webGlobalChatStart({
@@ -441,19 +440,17 @@ describe("browser global-chat transport", () => {
 			),
 		).toBe(true);
 
-		const channelLessToolFetch = vi
-			.fn()
-			.mockResolvedValueOnce(
-				sseResponse(
-					runFrame("run-5b"),
-					frame("tool_request", {
-						requestId: "tool-5b",
-						toolName: "database_tool",
-						arguments: {},
-					}),
-					frame("final", { status: "ok" }),
-				),
-			);
+		const channelLessToolFetch = vi.fn().mockResolvedValueOnce(
+			sseResponse(
+				runFrame("run-5b"),
+				frame("tool_request", {
+					requestId: "tool-5b",
+					toolName: "database_tool",
+					arguments: {},
+				}),
+				frame("final", { status: "ok" }),
+			),
+		);
 		vi.stubGlobal("fetch", channelLessToolFetch);
 		await expect(
 			webGlobalChatStart({
@@ -579,7 +576,11 @@ describe("browser global-chat transport", () => {
 			.slice(1)
 			.map((call) => pushBody(call[1] as RequestInit));
 		expect(bodies).toEqual([
-			{ channel_id: "server-run-ctl", kind: "inbound", value: "focus on tests" },
+			{
+				channel_id: "server-run-ctl",
+				kind: "inbound",
+				value: "focus on tests",
+			},
 			{ channel_id: "server-run-ctl", kind: "cancel", value: null },
 		]);
 		expect(getGlobalChatRunControl("client-run-ctl")).toBeUndefined();

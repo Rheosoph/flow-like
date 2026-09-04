@@ -10,8 +10,8 @@ use axum::{
     extract::{Path, Query, State},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -141,7 +141,7 @@ pub async fn mark_notification_read(
 
     let mut active: notification::ActiveModel = notification.into();
     active.read = Set(true);
-    active.read_at = Set(Some(chrono::Utc::now().naive_utc()));
+    active.read_at = Set(Some(chrono::Utc::now().fixed_offset()));
     active.update(&state.db).await?;
 
     Ok(Json(()))
@@ -202,21 +202,24 @@ pub async fn mark_all_read(
 ) -> Result<Json<u64>, ApiError> {
     let sub = user.sub()?;
 
-    let result = notification::Entity::update_many()
-        .col_expr(
-            notification::Column::Read,
-            sea_orm::sea_query::Expr::value(true),
-        )
-        .col_expr(
-            notification::Column::ReadAt,
-            sea_orm::sea_query::Expr::value(chrono::Utc::now().naive_utc()),
-        )
-        .filter(notification::Column::UserId.eq(sub))
-        .filter(notification::Column::Read.eq(false))
-        .exec(&state.db)
-        .await?;
+    let updated = crate::db::update_in_batches::<notification::Entity>(
+        &state.db,
+        state.db_dialect,
+        Condition::all()
+            .add(notification::Column::UserId.eq(sub))
+            .add(notification::Column::Read.eq(false)),
+        vec![
+            (notification::Column::Read, Expr::value(true)),
+            (
+                notification::Column::ReadAt,
+                Expr::value(chrono::Utc::now().fixed_offset()),
+            ),
+        ],
+        crate::db::DEFAULT_WRITE_CHUNK,
+    )
+    .await?;
 
-    Ok(Json(result.rows_affected))
+    Ok(Json(updated))
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]

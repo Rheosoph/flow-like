@@ -6,6 +6,7 @@ import {
 	type Lookup,
 	databaseUrl,
 	normalizePem,
+	prePushDatabaseUrl,
 	readConfig,
 	tlsPosture,
 } from "../migrate";
@@ -194,5 +195,39 @@ describe("databaseUrl", () => {
 		const url = databaseUrl(readConfig(settings()), "token", undefined);
 		expect(url).not.toContain("verify-ca");
 		expect(url).not.toContain("sslrootcert");
+	});
+});
+
+describe("prePushDatabaseUrl", () => {
+	test("against an address: same identity, libpq semantics, no chain check", () => {
+		const config = readConfig(settings());
+		const url = new URL(prePushDatabaseUrl(config, "ya29.a/b+c=d", undefined));
+		const prisma = new URL(databaseUrl(config, "ya29.a/b+c=d", undefined));
+		expect(url.host).toBe(prisma.host);
+		expect(url.pathname).toBe(prisma.pathname);
+		expect(url.username).toBe(prisma.username);
+		expect(url.password).toBe(prisma.password);
+		expect(url.searchParams.get("uselibpqcompat")).toBe("true");
+		expect(url.searchParams.get("sslmode")).toBe("require");
+		expect(url.searchParams.has("sslrootcert")).toBe(false);
+		expect(url.searchParams.has("sslaccept")).toBe(false);
+		expect(url.searchParams.get("application_name")).toBe(
+			"flow-like-gcp-migration",
+		);
+	});
+
+	test("against a DNS name: pinned CA as sslrootcert, verify-full", () => {
+		const config = readConfig(
+			settings({ GCP_POSTGRES_HOST: "abcdef123.p-1234.europe-west1.sql.goog" }),
+		);
+		expect(() => prePushDatabaseUrl(config, "token", undefined)).toThrow(
+			/server CA/,
+		);
+		const url = new URL(
+			prePushDatabaseUrl(config, "token", "/tmp/x/server-ca.pem"),
+		);
+		expect(url.searchParams.get("sslmode")).toBe("verify-full");
+		expect(url.searchParams.get("sslrootcert")).toBe("/tmp/x/server-ca.pem");
+		expect(url.searchParams.has("sslcert")).toBe(false);
 	});
 });

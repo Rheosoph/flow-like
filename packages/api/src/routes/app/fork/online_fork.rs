@@ -4,13 +4,18 @@ use crate::{
     permission::fork_permission::{ForkTargetKind, check_can_fork},
     state::AppState,
     utils::fork::{
-        ForkOptions, ForkPolicy, ForkReport, ForkTarget, fork_with_options,
-        preview::{detect_remote_token_sites, ensure_fork_within_limits},
+        ForkPolicy, ForkReport,
+        job::{self, ForkJobSpec, ForkJobView},
+        preview::{
+            compute_fork_size_breakdown, detect_remote_token_sites, ensure_breakdown_within_limits,
+        },
     },
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -45,6 +50,12 @@ pub struct OnlineForkResponse {
 /// granted Owner membership, and every event / page / widget / template
 /// row is mirrored from the source.
 ///
+/// Small forks (at most one write chunk of rows and 64 MiB of storage)
+/// complete inside the request and answer `200`. Larger ones are staged
+/// as a fork job: the response is `202` with the job id, the destination
+/// app exists hidden from the start, and the caller polls
+/// `GET /apps/fork/jobs/{job_id}` until `status` is `DONE`.
+///
 /// This is the same code path the course flow uses internally
 /// (`shared_app.rs`); the difference is that this endpoint enforces the
 /// project-level `allow_forking` opt-in and read-permission gate.
@@ -59,6 +70,7 @@ pub struct OnlineForkResponse {
     request_body = OnlineForkBody,
     responses(
         (status = 200, description = "Fork materialized; the destination is ready to load", body = OnlineForkResponse),
+        (status = 202, description = "Fork staged as a job; poll `GET /apps/fork/jobs/{job_id}`", body = ForkJobView),
         (status = 400, description = "Source app exceeds size cap, or remote tokens detected without `remote_event_token`"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — caller lacks read perms or the source has not opted in to forking"),
@@ -72,11 +84,12 @@ pub async fn online_fork(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Json(body): Json<OnlineForkBody>,
-) -> Result<Json<OnlineForkResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let src_app = check_can_fork(&user, &app_id, &state, ForkTargetKind::Online).await?;
 
     let policy = ForkPolicy::from_app_row(&src_app);
-    ensure_fork_within_limits(&state, &app_id, &policy).await?;
+    let breakdown = compute_fork_size_breakdown(&state, &app_id).await?;
+    ensure_breakdown_within_limits(&state, &breakdown, &policy)?;
 
     let token_sites = detect_remote_token_sites(&state, &app_id).await?;
     let needs_replaceable_token = token_sites.iter().any(|s| s.is_token_replaceable());
@@ -92,16 +105,28 @@ pub async fn online_fork(
 
     let user_sub = user.sub()?;
     let language = body.language.clone().unwrap_or_else(|| "en".to_string());
+    let spec = ForkJobSpec::online_copy(
+        &state,
+        &src_app,
+        &language,
+        body.remote_event_token.as_deref(),
+        crate::entity::sea_orm_active_enums::Visibility::Private,
+    );
 
-    let options = ForkOptions {
-        source_app_id: &app_id,
-        target_user_sub: Some(&user_sub),
-        target_mode: ForkTarget::OnlineSameStore,
-        language: &language,
-        remote_event_token: body.remote_event_token.as_deref(),
-        requested_visibility: Some(flow_like::app::AppVisibility::Private),
-    };
-    let (new_app_id, report) = fork_with_options(&state, options).await?;
+    let (selected_bytes, _) = breakdown.selected(&policy);
+    let rows = job::count_source_rows(&state, &app_id).await?;
+    let fork_job = job::enqueue(&state, &app_id, &user_sub, spec).await?;
 
-    Ok(Json(OnlineForkResponse { new_app_id, report }))
+    if job::fits_sync(rows, selected_bytes) {
+        let (finished, report) = job::run_inline(&state, fork_job).await?;
+        return Ok(Json(OnlineForkResponse {
+            new_app_id: finished.dest_app_id,
+            report,
+        })
+        .into_response());
+    }
+
+    let view = ForkJobView::from(&fork_job);
+    job::spawn_background(state, fork_job);
+    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }

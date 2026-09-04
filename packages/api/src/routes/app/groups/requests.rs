@@ -92,7 +92,7 @@ pub async fn list_group_requests(
                 .get(&member.group_id)
                 .and_then(|(icon, _)| icon.clone()),
             group_id: member.group_id,
-            created_at: member.created_at.and_utc().timestamp(),
+            created_at: member.created_at.timestamp(),
         })
         .collect();
 
@@ -138,7 +138,7 @@ pub async fn accept_group_request(
     let mut active: app_group_member::ActiveModel = member.into();
     active.status = Set(AppGroupMemberStatus::Active);
     active.approved_by_user_id = Set(permission.effective_user_id().ok());
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     active.update(&state.db).await?;
 
     if let Some(group) = app_group::Entity::find_by_id(&group_id)

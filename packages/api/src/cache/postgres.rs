@@ -12,6 +12,7 @@ use super::types::*;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use flow_like_types::cache::CacheScope;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr,
     EntityTrait, PaginatorTrait, QueryFilter, QueryResult, Set, Statement, TransactionTrait,
@@ -19,17 +20,55 @@ use sea_orm::{
 };
 use std::sync::Arc;
 
+use crate::db::{
+    DEFAULT_WRITE_CHUNK, DbConflict, DbDialect, RetryPolicy, classify_db_err,
+    delete_in_batches_by_tuple, retry_transaction,
+};
 use crate::entity::{app_cache_entry, sea_orm_active_enums::CacheScope as EntityCacheScope};
 
 #[derive(Debug, Clone)]
 pub struct PostgresCacheStore {
     db: Arc<DatabaseConnection>,
+    dialect: DbDialect,
 }
 
 impl PostgresCacheStore {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<DatabaseConnection>, dialect: DbDialect) -> Self {
+        Self { db, dialect }
     }
+
+    /// Delete every row matching `condition` in bounded chunks. The table's
+    /// five-column primary key makes this the tuple variant.
+    async fn delete_where(&self, condition: Condition) -> Result<i64, CacheStoreError> {
+        let outcome = delete_in_batches_by_tuple::<app_cache_entry::Entity>(
+            self.db.as_ref(),
+            self.dialect,
+            condition,
+            DEFAULT_WRITE_CHUNK,
+            None,
+        )
+        .await
+        .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        Ok(outcome.rows as i64)
+    }
+}
+
+fn upsert_target() -> [app_cache_entry::Column; 5] {
+    [
+        app_cache_entry::Column::AppId,
+        app_cache_entry::Column::Scope,
+        app_cache_entry::Column::UserId,
+        app_cache_entry::Column::Namespace,
+        app_cache_entry::Column::Key,
+    ]
+}
+
+fn upsert_columns() -> [app_cache_entry::Column; 3] {
+    [
+        app_cache_entry::Column::Value,
+        app_cache_entry::Column::ExpiresAt,
+        app_cache_entry::Column::UpdatedAt,
+    ]
 }
 
 fn scope_to_entity(scope: CacheScope) -> EntityCacheScope {
@@ -39,15 +78,15 @@ fn scope_to_entity(scope: CacheScope) -> EntityCacheScope {
     }
 }
 
-fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTime {
+fn ts_to_datetime(ts: i64) -> sea_orm::prelude::DateTimeWithTimeZone {
     Utc.timestamp_millis_opt(ts)
         .single()
         .unwrap_or_else(|| Utc.timestamp_nanos(0))
-        .naive_utc()
+        .fixed_offset()
 }
 
-fn datetime_to_ts(dt: sea_orm::prelude::DateTime) -> i64 {
-    dt.and_utc().timestamp_millis()
+fn datetime_to_ts(dt: sea_orm::prelude::DateTimeWithTimeZone) -> i64 {
+    dt.timestamp_millis()
 }
 
 fn model_to_entry(model: app_cache_entry::Model) -> CacheEntry {
@@ -69,7 +108,7 @@ fn key_condition(key: &CacheKey) -> Condition {
 }
 
 /// Matches rows that have not expired: either no TTL at all, or one still in the future.
-fn live_condition(now: sea_orm::prelude::DateTime) -> Condition {
+fn live_condition(now: sea_orm::prelude::DateTimeWithTimeZone) -> Condition {
     Condition::any()
         .add(app_cache_entry::Column::ExpiresAt.is_null())
         .add(app_cache_entry::Column::ExpiresAt.gt(now))
@@ -77,7 +116,7 @@ fn live_condition(now: sea_orm::prelude::DateTime) -> Condition {
 
 fn active_model(
     entry: &SetCacheEntry,
-    now: sea_orm::prelude::DateTime,
+    now: sea_orm::prelude::DateTimeWithTimeZone,
 ) -> app_cache_entry::ActiveModel {
     app_cache_entry::ActiveModel {
         app_id: Set(entry.key.app_id.clone()),
@@ -120,6 +159,15 @@ const TABLE_ESTIMATE_SQL: &str = r#"SELECT
     FROM pg_stat_all_tables stats
     WHERE stats.relid = to_regclass('"AppCacheEntry"')"#;
 
+/// The estimate for engines without `pg_stat_all_tables`: `pg_class.reltuples` is the
+/// only planner count they expose, and it carries no analyze timestamp. A never-analyzed
+/// relation reports `-1`, which reads as zero rather than as a negative cache.
+const RELTUPLES_ESTIMATE_SQL: &str = r#"SELECT
+        CAST(GREATEST(cls.reltuples, 0) AS BIGINT) AS live_rows,
+        CAST(NULL AS BIGINT) AS analyzed_at
+    FROM pg_class cls
+    WHERE cls.relname = 'AppCacheEntry'"#;
+
 /// Heap plus indexes plus TOAST. The size functions carry no privilege check at all, but
 /// they do return NULL for a relation dropped between the catalog scan and the call.
 const TABLE_SIZE_SQL: &str = r#"SELECT pg_total_relation_size(cls.oid)::bigint AS total_bytes
@@ -131,9 +179,9 @@ const TABLE_SIZE_SQL: &str = r#"SELECT pg_total_relation_size(cls.oid)::bigint A
 /// rows actually match — the exact shape of a healthy, well-swept cache. The ordering
 /// makes the index on `expiresAt` the cheaper plan.
 ///
-/// The cutoff is bound as a naive timestamp because `expiresAt` is
-/// `timestamp without time zone`; comparing it against `now()` would silently shift the
-/// boundary by the session's UTC offset.
+/// The cutoff is bound as an instant rather than compared against `now()`, so the
+/// boundary is the one the caller measured and not whatever the database clock reads
+/// when the probe finally runs.
 const EXPIRED_PENDING_SQL: &str = r#"SELECT count(*)::bigint AS expired
     FROM (
         SELECT 1
@@ -147,15 +195,21 @@ const EXPIRED_PENDING_SQL: &str = r#"SELECT count(*)::bigint AS expired
 ///
 /// Each probe gets a transaction of its own because one failed statement poisons the rest
 /// of a Postgres transaction: sharing one would let a lock timeout on the size function
-/// erase the row estimate that had already succeeded.
+/// erase the row estimate that had already succeeded. Engines that reject
+/// `set_config` for timeouts run the statement bare — none of their probes takes a
+/// relation lock, so there is nothing for a timeout to guard.
 async fn probe(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     statement: Statement,
 ) -> Result<Option<QueryResult>, DbErr> {
+    if !dialect.supports_set_config_timeouts() {
+        return db.query_one_raw(statement).await;
+    }
     let timeouts = Statement::from_string(DatabaseBackend::Postgres, PROBE_TIMEOUTS_SQL);
     let txn = db.begin().await?;
-    txn.execute(timeouts).await?;
-    let row = txn.query_one(statement).await?;
+    txn.execute_raw(timeouts).await?;
+    let row = txn.query_one_raw(statement).await?;
     txn.commit().await?;
     Ok(row)
 }
@@ -203,7 +257,7 @@ impl CacheStore for PostgresCacheStore {
         // value ever leaving the database.
         let count = app_cache_entry::Entity::find()
             .filter(key_condition(key))
-            .filter(live_condition(Utc::now().naive_utc()))
+            .filter(live_condition(Utc::now().fixed_offset()))
             .count(self.db.as_ref())
             .await
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
@@ -212,27 +266,33 @@ impl CacheStore for PostgresCacheStore {
     }
 
     async fn set(&self, entry: SetCacheEntry) -> Result<CacheEntry, CacheStoreError> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
 
-        app_cache_entry::Entity::insert(active_model(&entry, now))
-            .on_conflict(
-                OnConflict::columns([
-                    app_cache_entry::Column::AppId,
-                    app_cache_entry::Column::Scope,
-                    app_cache_entry::Column::UserId,
-                    app_cache_entry::Column::Namespace,
-                    app_cache_entry::Column::Key,
-                ])
-                .update_columns([
-                    app_cache_entry::Column::Value,
-                    app_cache_entry::Column::ExpiresAt,
-                    app_cache_entry::Column::UpdatedAt,
-                ])
-                .to_owned(),
-            )
-            .exec_without_returning(self.db.as_ref())
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        // A hot key is a commit-time conflict on optimistic engines, so the
+        // upsert runs under the retry wrapper; every attempt writes the same row.
+        let model = active_model(&entry, now);
+        retry_transaction::<_, (), DbErr>(
+            self.db.as_ref(),
+            self.dialect,
+            None,
+            &RetryPolicy::idempotent(),
+            move |txn| {
+                let model = model.clone();
+                Box::pin(async move {
+                    app_cache_entry::Entity::insert(model)
+                        .on_conflict(
+                            OnConflict::columns(upsert_target())
+                                .update_columns(upsert_columns())
+                                .to_owned(),
+                        )
+                        .exec_without_returning(txn)
+                        .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 
         Ok(CacheEntry {
             key: entry.key.key,
@@ -246,42 +306,58 @@ impl CacheStore for PostgresCacheStore {
         &self,
         entry: SetCacheEntry,
     ) -> Result<Option<CacheEntry>, CacheStoreError> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
 
         // One statement, so two concurrent callers cannot both decide the key is free.
         // The guard on the DO UPDATE branch is what makes this "insert if absent" rather
         // than a plain upsert: an unqualified column in that clause refers to the row
         // already in the table, so the update only fires when that row has expired.
-        let affected = app_cache_entry::Entity::insert(active_model(&entry, now))
-            .on_conflict(
-                OnConflict::columns([
-                    app_cache_entry::Column::AppId,
-                    app_cache_entry::Column::Scope,
-                    app_cache_entry::Column::UserId,
-                    app_cache_entry::Column::Namespace,
-                    app_cache_entry::Column::Key,
-                ])
-                .update_columns([
-                    app_cache_entry::Column::Value,
-                    app_cache_entry::Column::ExpiresAt,
-                    app_cache_entry::Column::UpdatedAt,
-                ])
-                .action_and_where(
-                    Expr::col((app_cache_entry::Entity, app_cache_entry::Column::ExpiresAt))
-                        .is_not_null()
-                        .and(
-                            Expr::col((
-                                app_cache_entry::Entity,
-                                app_cache_entry::Column::ExpiresAt,
-                            ))
-                            .lt(now),
-                        ),
-                )
-                .to_owned(),
-            )
-            .exec_without_returning(self.db.as_ref())
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        // On optimistic engines the race surfaces as a serialization conflict
+        // instead of a zero-row update; a caller still losing after the retries
+        // is simply the caller that did not claim the key.
+        let model = active_model(&entry, now);
+        let outcome = retry_transaction::<_, u64, DbErr>(
+            self.db.as_ref(),
+            self.dialect,
+            None,
+            &RetryPolicy::idempotent(),
+            move |txn| {
+                let model = model.clone();
+                Box::pin(async move {
+                    app_cache_entry::Entity::insert(model)
+                        .on_conflict(
+                            OnConflict::columns(upsert_target())
+                                .update_columns(upsert_columns())
+                                .action_and_where(
+                                    Expr::col((
+                                        app_cache_entry::Entity,
+                                        app_cache_entry::Column::ExpiresAt,
+                                    ))
+                                    .is_not_null()
+                                    .and(
+                                        Expr::col((
+                                            app_cache_entry::Entity,
+                                            app_cache_entry::Column::ExpiresAt,
+                                        ))
+                                        .lt(now),
+                                    ),
+                                )
+                                .to_owned(),
+                        )
+                        .exec_without_returning(txn)
+                        .await
+                })
+            },
+        )
+        .await;
+
+        let affected = match outcome {
+            Ok(affected) => affected,
+            Err(err) if classify_db_err(&err) == Some(DbConflict::Serialization) => {
+                return Ok(None);
+            }
+            Err(err) => return Err(CacheStoreError::Database(err.to_string())),
+        };
 
         if affected == 0 {
             return Ok(None);
@@ -318,44 +394,29 @@ impl CacheStore for PostgresCacheStore {
             ));
         }
 
-        let result = app_cache_entry::Entity::delete_many()
-            .filter(
-                Condition::all()
-                    .add(app_cache_entry::Column::AppId.eq(app_id))
-                    .add(app_cache_entry::Column::Scope.eq(scope_to_entity(scope)))
-                    .add(app_cache_entry::Column::UserId.eq(user_id))
-                    .add(app_cache_entry::Column::Namespace.eq(namespace)),
-            )
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-
-        Ok(result.rows_affected as i64)
+        self.delete_where(
+            Condition::all()
+                .add(app_cache_entry::Column::AppId.eq(app_id))
+                .add(app_cache_entry::Column::Scope.eq(scope_to_entity(scope)))
+                .add(app_cache_entry::Column::UserId.eq(user_id))
+                .add(app_cache_entry::Column::Namespace.eq(namespace)),
+        )
+        .await
     }
 
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError> {
-        let result = app_cache_entry::Entity::delete_many()
-            .filter(app_cache_entry::Column::AppId.eq(app_id))
-            .exec(self.db.as_ref())
+        self.delete_where(Condition::all().add(app_cache_entry::Column::AppId.eq(app_id)))
             .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-
-        Ok(result.rows_affected as i64)
     }
 
     async fn delete_expired(&self) -> Result<i64, CacheStoreError> {
-        let now = Utc::now().naive_utc();
-        let result = app_cache_entry::Entity::delete_many()
-            .filter(
-                Condition::all()
-                    .add(app_cache_entry::Column::ExpiresAt.is_not_null())
-                    .add(app_cache_entry::Column::ExpiresAt.lt(now)),
-            )
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-
-        Ok(result.rows_affected as i64)
+        let now = Utc::now().fixed_offset();
+        self.delete_where(
+            Condition::all()
+                .add(app_cache_entry::Column::ExpiresAt.is_not_null())
+                .add(app_cache_entry::Column::ExpiresAt.lt(now)),
+        )
+        .await
     }
 
     async fn stats(&self) -> Result<Option<CacheStoreStats>, CacheStoreError> {
@@ -366,30 +427,47 @@ impl CacheStore for PostgresCacheStore {
             return Ok(None);
         }
 
+        let dialect = self.dialect;
+        let estimate_sql = if dialect.has_pg_stat_catalog() {
+            TABLE_ESTIMATE_SQL
+        } else {
+            RELTUPLES_ESTIMATE_SQL
+        };
         let estimates = probe(
             db,
-            Statement::from_string(DatabaseBackend::Postgres, TABLE_ESTIMATE_SQL),
+            dialect,
+            Statement::from_string(DatabaseBackend::Postgres, estimate_sql),
         )
         .await;
-        let size = probe(
-            db,
-            Statement::from_string(DatabaseBackend::Postgres, TABLE_SIZE_SQL),
-        )
-        .await;
+        // Relation sizes are a `pg_stat`-family function; engines without that catalog
+        // report no size rather than an error.
+        let size = if dialect.has_pg_stat_catalog() {
+            probe(
+                db,
+                dialect,
+                Statement::from_string(DatabaseBackend::Postgres, TABLE_SIZE_SQL),
+            )
+            .await
+        } else {
+            Ok(None)
+        };
         let expired = probe(
             db,
+            dialect,
             Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 EXPIRED_PENDING_SQL,
-                [Utc::now().naive_utc().into(), EXPIRED_SCAN_CAP.into()],
+                [Utc::now().fixed_offset().into(), EXPIRED_SCAN_CAP.into()],
             ),
         )
         .await;
 
         // A role missing one privilege, or a lock held over one relation, must cost only
-        // the field it touches. All three failing together points at the connection
+        // the field it touches. Every probe failing together points at the connection
         // instead — reporting a healthy cache with no numbers would hide that entirely.
-        if let (Err(error), Err(_), Err(_)) = (&estimates, &size, &expired) {
+        if let (Err(error), Err(_)) = (&estimates, &expired)
+            && (size.is_err() || !dialect.has_pg_stat_catalog())
+        {
             return Err(CacheStoreError::Database(error.to_string()));
         }
 

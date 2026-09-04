@@ -23,7 +23,6 @@ use std::sync::Arc;
 const DEFAULT_RUNS_CONTAINER: &str = "execution-runs";
 const DEFAULT_EVENTS_CONTAINER: &str = "execution-events";
 const DEFAULT_TTL_SECONDS: i64 = 86_400;
-const PAYLOAD_OFFLOAD_BYTES: usize = 100 * 1024;
 const PAYLOAD_PREFIX: &str = "polling";
 const QUERY_PAGE_SIZE: i32 = 1_000;
 const WRITE_CONCURRENCY: usize = 16;

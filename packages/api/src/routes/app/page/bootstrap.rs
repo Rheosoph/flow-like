@@ -298,7 +298,7 @@ pub async fn bootstrap(
         // mirror is absent, never by scanning boards or unrelated pages.
         let mut events = get_events_for_app(&state.db, &app_id).await?;
         if events.is_empty() {
-            events = get_events_with_fallback(&state.db, &app).await?;
+            events = get_events_with_fallback(&state.db, state.db_dialect, &app).await?;
         }
         events.retain(&is_visible_runtime_event);
         let resolution = resolve_route(&events, route);
@@ -320,7 +320,7 @@ pub async fn bootstrap(
     } else {
         let mut events = get_events_for_app(&state.db, &app_id).await?;
         if events.is_empty() {
-            events = get_events_with_fallback(&state.db, &app).await?;
+            events = get_events_with_fallback(&state.db, state.db_dialect, &app).await?;
         }
         events.retain(&is_visible_runtime_event);
         let resolution = resolve_route(&events, "/");

@@ -18,9 +18,10 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::telemetry::rollup::day_start;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -252,7 +253,7 @@ fn record_from(model: &feedback::Model) -> PromptFeedbackRecord {
             .and_then(|c| c.get("transcript"))
             .and_then(|v| v.as_array())
             .is_some_and(|entries| !entries.is_empty()),
-        created_at: model.created_at.and_utc().to_rfc3339(),
+        created_at: model.created_at.to_rfc3339(),
     }
 }
 
@@ -292,10 +293,6 @@ fn top_facets(counts: BTreeMap<String, (i64, i64)>) -> Vec<PromptFeedbackFacetCo
     facets
 }
 
-fn day_key(created_at: NaiveDateTime) -> NaiveDateTime {
-    created_at.date().and_hms_opt(0, 0, 0).unwrap_or(created_at)
-}
-
 fn summarize(records: &[PromptFeedbackRecord], raw: &[feedback::Model]) -> PromptFeedbackSummary {
     let mut positive = 0i64;
     let mut negative = 0i64;
@@ -305,7 +302,7 @@ fn summarize(records: &[PromptFeedbackRecord], raw: &[feedback::Model]) -> Promp
     let mut by_model: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     let mut by_provider: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     let mut by_outcome: BTreeMap<String, (i64, i64)> = BTreeMap::new();
-    let mut trend: BTreeMap<NaiveDateTime, (i64, i64)> = BTreeMap::new();
+    let mut trend: BTreeMap<DateTime<FixedOffset>, (i64, i64)> = BTreeMap::new();
 
     for (record, model) in records.iter().zip(raw.iter()) {
         let record_negative = is_negative(record.rating);
@@ -336,7 +333,7 @@ fn summarize(records: &[PromptFeedbackRecord], raw: &[feedback::Model]) -> Promp
         bump(&mut by_provider, record.provider.as_deref());
         bump(&mut by_outcome, record.outcome.as_deref());
 
-        let day = trend.entry(day_key(model.created_at)).or_default();
+        let day = trend.entry(day_start(model.created_at)).or_default();
         if is_positive(record.rating) {
             day.0 += 1;
         }
@@ -362,7 +359,7 @@ fn summarize(records: &[PromptFeedbackRecord], raw: &[feedback::Model]) -> Promp
         trend: trend
             .into_iter()
             .map(|(ts, (positive, negative))| PromptFeedbackTrendPoint {
-                ts: ts.and_utc().to_rfc3339(),
+                ts: ts.to_rfc3339(),
                 positive,
                 negative,
             })
@@ -400,7 +397,7 @@ pub async fn list_prompt_feedback(
     let hours = q.hours.unwrap_or(24 * 30).clamp(1, 2160);
     let page = q.page.unwrap_or(0);
     let page_size = q.page_size.unwrap_or(25).clamp(1, 100);
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
 
     let rows = feedback::Entity::find()
         .filter(feedback::Column::AppId.is_null())
@@ -529,6 +526,7 @@ pub async fn get_prompt_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDateTime;
     use sea_orm::{DbBackend, QueryTrait};
     use serde_json::json;
 
@@ -543,9 +541,13 @@ mod tests {
             comment: String::new(),
             rating,
             created_at: NaiveDateTime::parse_from_str("2026-08-17 10:00:00", "%Y-%m-%d %H:%M:%S")
-                .expect("timestamp"),
+                .expect("timestamp")
+                .and_utc()
+                .fixed_offset(),
             updated_at: NaiveDateTime::parse_from_str("2026-08-17 10:00:00", "%Y-%m-%d %H:%M:%S")
-                .expect("timestamp"),
+                .expect("timestamp")
+                .and_utc()
+                .fixed_offset(),
         }
     }
 

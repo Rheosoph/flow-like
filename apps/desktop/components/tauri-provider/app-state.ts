@@ -15,6 +15,10 @@ import {
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
+import {
+	type IForkJobView,
+	resolveOnlineFork,
+} from "@flow-like/flow-like-ui/lib/fork-job";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -975,17 +979,27 @@ export class AppState implements IAppState {
 		appId: string,
 		body: IOnlineForkBody,
 	): Promise<IOnlineForkResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
+		const profile = this.backend.profile;
+		const auth = this.backend.auth;
+		if (!profile || !auth) {
 			throw new Error("not authenticated");
 		}
-		return fetcher<IOnlineForkResponse>(
-			this.backend.profile,
+		const response = await fetcher<IOnlineForkResponse | IForkJobView>(
+			profile,
 			`apps/${appId}/fork`,
 			{
 				method: "POST",
 				body: JSON.stringify(body),
 			},
-			this.backend.auth,
+			auth,
+		);
+		return resolveOnlineFork(response, (jobId) =>
+			fetcher<IForkJobView>(
+				profile,
+				`apps/fork/jobs/${jobId}`,
+				{ method: "GET" },
+				auth,
+			),
 		);
 	}
 

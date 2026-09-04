@@ -12,6 +12,7 @@ use axum::{
     http::StatusCode,
 };
 use flow_like_storage::databases::graph::lancegraph;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub(crate) async fn ensure_remote_ontology_access(

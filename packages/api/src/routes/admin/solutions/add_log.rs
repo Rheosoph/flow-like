@@ -59,7 +59,7 @@ pub async fn add_solution_log(
         action: Set(body.action.clone()),
         details: Set(body.details.clone()),
         actor: Set(actor),
-        created_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     new_log.insert(&state.db).await?;

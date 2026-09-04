@@ -21,7 +21,8 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
@@ -161,7 +162,7 @@ struct ReleaseErrorRow {
 
 #[derive(Debug, FromQueryResult)]
 struct TrendRow {
-    bucket: NaiveDateTime,
+    bucket: DateTime<FixedOffset>,
     sessions: i64,
     crashed_sessions: i64,
 }
@@ -171,7 +172,7 @@ struct ReleaseMeta {
     version: String,
     source: String,
     commit_sha: Option<String>,
-    first_seen_at: NaiveDateTime,
+    first_seen_at: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, Default)]
@@ -182,23 +183,23 @@ struct ReleaseAggregate {
     crashed_installs: i64,
     error_count: i64,
     commit_sha: Option<String>,
-    first_seen_at: Option<NaiveDateTime>,
+    first_seen_at: Option<DateTime<FixedOffset>>,
 }
 
 /// Which store answers a request, resolved once from the requested window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionWindow {
     Raw {
-        cutoff: NaiveDateTime,
+        cutoff: DateTime<FixedOffset>,
     },
     Daily {
-        start: NaiveDateTime,
-        end: NaiveDateTime,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
     },
 }
 
 impl SessionWindow {
-    fn new(now: NaiveDateTime, hours: i64) -> Self {
+    fn new(now: DateTime<FixedOffset>, hours: i64) -> Self {
         if reads_raw(hours) {
             Self::Raw {
                 cutoff: now - Duration::hours(hours),
@@ -210,7 +211,7 @@ impl SessionWindow {
     }
 
     /// Cutoff for the raw error events, which have no rollup of their own.
-    fn error_cutoff(&self) -> NaiveDateTime {
+    fn error_cutoff(&self) -> DateTime<FixedOffset> {
         match self {
             Self::Raw { cutoff } => *cutoff,
             Self::Daily { start, .. } => *start,
@@ -244,7 +245,7 @@ fn crashed_count(column: telemetry_session::Column, distinct: bool) -> SimpleExp
 }
 
 fn session_totals_query(
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_session::Entity> {
     let mut select = telemetry_session::Entity::find()
@@ -271,8 +272,8 @@ fn session_totals_query(
 }
 
 fn daily_session_totals_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_session_daily::Entity> {
     let mut select = telemetry_session_daily::Entity::find()
@@ -323,7 +324,7 @@ async fn session_totals<C: ConnectionTrait>(
 }
 
 fn release_sessions_query(
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_session::Entity> {
     let mut select = telemetry_session::Entity::find()
@@ -355,8 +356,8 @@ fn release_sessions_query(
 }
 
 fn daily_release_sessions_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_session_daily::Entity> {
     let mut select = telemetry_session_daily::Entity::find()
@@ -408,7 +409,7 @@ async fn release_sessions<C: ConnectionTrait>(
 }
 
 fn release_errors_query(
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_error_event::Entity> {
     let mut select = telemetry_error_event::Entity::find()
@@ -429,7 +430,7 @@ fn release_errors_query(
 
 async fn release_errors<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Result<Vec<ReleaseErrorRow>, ApiError> {
     Ok(release_errors_query(cutoff, source)
@@ -466,8 +467,8 @@ async fn release_meta<C: ConnectionTrait>(
 
 async fn raw_trend<C: ConnectionTrait>(
     db: &C,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
     source: Option<&str>,
 ) -> Result<Vec<ReleaseHealthTrendPoint>, ApiError> {
@@ -484,7 +485,7 @@ async fn raw_trend<C: ConnectionTrait>(
                 conditions.push_str(r#" AND "source" = $2"#);
             }
             format!(
-                r#"SELECT date_trunc('{bucket}', "startedAt") AS bucket,
+                r#"SELECT date_trunc('{bucket}', "startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                           COUNT(*) AS sessions,
                           COUNT(*) FILTER (WHERE "status" = '{CRASHED_STATUS}') AS crashed_sessions
                    FROM "TelemetrySession"
@@ -516,8 +517,8 @@ async fn raw_trend<C: ConnectionTrait>(
 }
 
 fn daily_trend_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     source: Option<&str>,
 ) -> Select<telemetry_session_daily::Entity> {
     let mut select = telemetry_session_daily::Entity::find()
@@ -545,7 +546,7 @@ fn daily_trend_query(
 async fn release_trend<C: ConnectionTrait>(
     db: &C,
     window: SessionWindow,
-    now: NaiveDateTime,
+    now: DateTime<FixedOffset>,
     bucket: &str,
     source: Option<&str>,
 ) -> Result<Vec<ReleaseHealthTrendPoint>, ApiError> {
@@ -563,11 +564,11 @@ async fn release_trend<C: ConnectionTrait>(
 
 fn fill_trend(
     rows: Vec<TrendRow>,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Vec<ReleaseHealthTrendPoint> {
-    let counts: BTreeMap<NaiveDateTime, (i64, i64)> = rows
+    let counts: BTreeMap<DateTime<FixedOffset>, (i64, i64)> = rows
         .into_iter()
         .map(|row| (row.bucket, (row.sessions, row.crashed_sessions)))
         .collect();
@@ -576,7 +577,7 @@ fn fill_trend(
         .map(|slot| {
             let (sessions, crashed_sessions) = counts.get(&slot).copied().unwrap_or((0, 0));
             ReleaseHealthTrendPoint {
-                ts: DateTime::<Utc>::from_naive_utc_and_offset(slot, Utc).to_rfc3339(),
+                ts: slot.to_rfc3339(),
                 sessions,
                 crashed_sessions,
                 crash_free_session_rate: crash_free(sessions, crashed_sessions),
@@ -621,14 +622,19 @@ fn build_release_rows(
         entry.first_seen_at = Some(row.first_seen_at);
     }
 
-    let mut rows: Vec<(Option<NaiveDateTime>, i64, String, TelemetryReleaseRow)> = aggregates
+    let mut rows: Vec<(
+        Option<DateTime<FixedOffset>>,
+        i64,
+        String,
+        TelemetryReleaseRow,
+    )> = aggregates
         .into_iter()
         .map(|((version, source), aggregate)| {
             let row = TelemetryReleaseRow {
                 version: version.clone(),
                 source,
                 commit_sha: aggregate.commit_sha,
-                first_seen_at: aggregate.first_seen_at.map(|ts| ts.and_utc().to_rfc3339()),
+                first_seen_at: aggregate.first_seen_at.map(|ts| ts.to_rfc3339()),
                 installs: aggregate.installs,
                 sessions: aggregate.sessions,
                 crashed_sessions: aggregate.crashed_sessions,
@@ -705,7 +711,7 @@ pub async fn list_telemetry_releases(
         .unwrap_or(RELEASES_DEFAULT_LIMIT)
         .clamp(1, RELEASES_MAX_LIMIT) as usize;
     let source = source_filter(&q.source);
-    let window = SessionWindow::new(Utc::now().naive_utc(), RELEASES_WINDOW_HOURS);
+    let window = SessionWindow::new(Utc::now().fixed_offset(), RELEASES_WINDOW_HOURS);
 
     let totals = session_totals(&state.db, window, source).await?;
     let releases = release_rows(&state.db, window, source, totals.installs, limit).await?;
@@ -740,7 +746,7 @@ pub async fn telemetry_release_health(
     let hours = q.hours.unwrap_or(168).clamp(1, 24 * 90);
     let bucket = window_bucket(hours, None);
     let source = source_filter(&q.source);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let window = SessionWindow::new(now, hours);
 
     let totals = session_totals(&state.db, window, source).await?;
@@ -774,11 +780,13 @@ mod tests {
     use chrono::NaiveDate;
     use sea_orm::QueryTrait;
 
-    fn ts(y: i32, m: u32, d: u32, h: u32) -> NaiveDateTime {
+    fn ts(y: i32, m: u32, d: u32, h: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(h, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn session_row(

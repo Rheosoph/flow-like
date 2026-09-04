@@ -30,6 +30,7 @@ pub struct ApiError {
     report_policy: ReportPolicy,
     report_summary: Option<String>,
     report_details: Option<String>,
+    db_conflict: Option<crate::db::DbConflict>,
 }
 
 // Associated constants for enum-like usage without parentheses
@@ -41,6 +42,7 @@ impl ApiError {
         report_policy: ReportPolicy::Ignore,
         report_summary: None,
         report_details: None,
+        db_conflict: None,
     };
 
     pub const FORBIDDEN: ApiError = ApiError {
@@ -50,6 +52,7 @@ impl ApiError {
         report_policy: ReportPolicy::Ignore,
         report_summary: None,
         report_details: None,
+        db_conflict: None,
     };
 
     pub const UNAUTHORIZED: ApiError = ApiError {
@@ -59,6 +62,7 @@ impl ApiError {
         report_policy: ReportPolicy::Ignore,
         report_summary: None,
         report_details: None,
+        db_conflict: None,
     };
 
     pub fn internal_error(err: flow_like_types::Error) -> Self {
@@ -73,6 +77,11 @@ impl ApiError {
 
     pub fn status(&self) -> StatusCode {
         self.status
+    }
+
+    /// The stable machine-readable code clients branch on.
+    pub fn public_code(&self) -> &str {
+        &self.public_code
     }
 }
 
@@ -90,6 +99,7 @@ impl ApiError {
             report_policy,
             report_summary: None,
             report_details: None,
+            db_conflict: None,
         }
     }
 
@@ -164,6 +174,15 @@ impl ApiError {
             Some(msg),
             ReportPolicy::Ignore,
         )
+    }
+
+    /// A named resource is held by another writer for a bounded time. Distinct from
+    /// [`Self::conflict`] on purpose: 409 says "your write lost a race, resubmit", 423 says
+    /// "nothing was attempted, wait and retry the same request".
+    pub fn locked(code: impl Into<String>, msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::debug!("Locked: {}", msg);
+        Self::new(StatusCode::LOCKED, code, Some(msg), ReportPolicy::Ignore)
     }
 
     pub fn payment_required(msg: impl Into<String>) -> Self {
@@ -341,14 +360,111 @@ impl From<flow_like_types::Error> for ApiError {
 // Implement From for sea_orm::DbErr
 impl From<sea_orm::DbErr> for ApiError {
     fn from(err: sea_orm::DbErr) -> Self {
-        tracing::error!("Database error: {:?}", err);
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DATABASE_ERROR",
-            None,
-            ReportPolicy::Report,
-        )
-        .with_report(format!("{:?}", err), Some(err.to_string()))
+        let conflict = crate::db::classify_db_err(&err);
+        // A lost commit race is the engine asking for a retry, not a fault:
+        // `State::transaction` retries it, and a caller outside that wrapper
+        // gets a 409 the client may repeat instead of a reported 500. A lost
+        // connection is likewise transient, but reads as 503 so clients back
+        // off instead of hammering a pool that is reconnecting.
+        let mut error = match conflict {
+            Some(crate::db::DbConflict::ConnectionLost) if is_pool_exhaustion(&err) => {
+                // Exhaustion is a capacity fault, not a transient hiccup:
+                // report it and still tell clients to back off.
+                tracing::error!("database pool exhausted: {err}");
+                Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DATABASE_UNAVAILABLE",
+                    Some("The database is busy; retry shortly.".to_owned()),
+                    ReportPolicy::Report,
+                )
+                .with_report(format!("{:?}", err), Some(err.to_string()))
+            }
+            Some(crate::db::DbConflict::AmbiguousCommit) => commit_unknown(&err),
+            Some(crate::db::DbConflict::ConnectionLost) => {
+                tracing::warn!("database connection lost: {err}");
+                Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DATABASE_UNAVAILABLE",
+                    Some("The database connection was lost; retry shortly.".to_owned()),
+                    ReportPolicy::Ignore,
+                )
+            }
+            Some(kind) => {
+                tracing::debug!(
+                    conflict = kind.as_str(),
+                    "database conflict surfaced to caller"
+                );
+                Self::new(
+                    StatusCode::CONFLICT,
+                    "DATABASE_CONFLICT",
+                    Some("The request lost a race with a concurrent change; retry it.".to_owned()),
+                    ReportPolicy::Ignore,
+                )
+            }
+            None => {
+                tracing::error!("Database error: {:?}", err);
+                Self::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DATABASE_ERROR",
+                    None,
+                    ReportPolicy::Report,
+                )
+                .with_report(format!("{:?}", err), Some(err.to_string()))
+            }
+        };
+        error.db_conflict = conflict;
+        error
+    }
+}
+
+impl crate::db::AsDbConflict for ApiError {
+    fn db_conflict(&self) -> Option<crate::db::DbConflict> {
+        self.db_conflict
+    }
+
+    fn with_conflict(mut self, conflict: crate::db::DbConflict) -> Self {
+        if conflict.is_ambiguous() {
+            let details = self
+                .report_details
+                .take()
+                .or_else(|| self.public_message.take());
+            self = Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_COMMIT_UNKNOWN",
+                Some(COMMIT_UNKNOWN_MESSAGE.to_owned()),
+                ReportPolicy::Report,
+            )
+            .with_report("commit outcome unknown", details);
+        }
+        self.db_conflict = Some(conflict);
+        self
+    }
+}
+
+const COMMIT_UNKNOWN_MESSAGE: &str =
+    "The database did not confirm the commit; check the result before repeating this request.";
+
+/// A commit whose outcome is unknown must never invite a blind retry.
+fn commit_unknown(err: &sea_orm::DbErr) -> ApiError {
+    tracing::error!("database commit outcome unknown: {err}");
+    ApiError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "DATABASE_COMMIT_UNKNOWN",
+        Some(COMMIT_UNKNOWN_MESSAGE.to_owned()),
+        ReportPolicy::Report,
+    )
+    .with_report(format!("{:?}", err), Some(err.to_string()))
+}
+
+fn is_pool_exhaustion(err: &sea_orm::DbErr) -> bool {
+    match err {
+        sea_orm::DbErr::ConnectionAcquire(_) => true,
+        sea_orm::DbErr::Conn(sea_orm::RuntimeErr::SqlxError(inner))
+        | sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(inner))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(inner)) => {
+            matches!(inner.as_ref(), sea_orm::sqlx::Error::PoolTimedOut)
+        }
+        _ => false,
     }
 }
 

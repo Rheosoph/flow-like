@@ -25,12 +25,13 @@ use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use crate::telemetry::llm::LLM_STATUS_ERROR;
+use crate::telemetry::percentiles_in_sql;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,
 };
 use serde::{Deserialize, Serialize};
@@ -166,7 +167,7 @@ struct LlmSampleRow {
     prompt_tokens: Option<i32>,
     completion_tokens: Option<i32>,
     total_tokens: Option<i32>,
-    created_at: NaiveDateTime,
+    created_at: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -219,7 +220,7 @@ struct ErrorKindRow {
 
 #[derive(Debug, FromQueryResult)]
 struct LlmTrendRow {
-    bucket: NaiveDateTime,
+    bucket: DateTime<FixedOffset>,
     calls: i64,
     errors: i64,
     p95_duration_ms: f64,
@@ -397,9 +398,9 @@ fn rank_error_kinds(mut rows: Vec<LlmErrorKindStats>) -> Vec<LlmErrorKindStats> 
 }
 
 fn fill_trend(
-    buckets: BTreeMap<NaiveDateTime, TrendBucket>,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    buckets: BTreeMap<DateTime<FixedOffset>, TrendBucket>,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
     empty: TrendBucket,
 ) -> Vec<LlmTrendPoint> {
@@ -408,7 +409,7 @@ fn fill_trend(
         .map(|slot| {
             let point = buckets.get(&slot).copied().unwrap_or(empty);
             LlmTrendPoint {
-                ts: DateTime::<Utc>::from_naive_utc_and_offset(slot, Utc).to_rfc3339(),
+                ts: slot.to_rfc3339(),
                 calls: point.calls,
                 errors: point.errors,
                 p95_duration_ms: point.p95_duration_ms,
@@ -429,8 +430,8 @@ fn empty_raw_bucket() -> TrendBucket {
 
 fn fold_llm_samples(
     rows: Vec<LlmSampleRow>,
-    cutoff: NaiveDateTime,
-    now: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> LlmFold {
     let mut totals = LlmAccumulator::default();
@@ -438,7 +439,7 @@ fn fold_llm_samples(
     let mut per_provider: BTreeMap<String, LlmAccumulator> = BTreeMap::new();
     let mut per_operation: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     let mut per_error: BTreeMap<String, i64> = BTreeMap::new();
-    let mut per_bucket: BTreeMap<NaiveDateTime, LlmAccumulator> = BTreeMap::new();
+    let mut per_bucket: BTreeMap<DateTime<FixedOffset>, LlmAccumulator> = BTreeMap::new();
 
     for row in &rows {
         totals.push(row);
@@ -547,13 +548,13 @@ fn fold_llm_samples(
 /// is deliberately no p95: daily percentiles cannot be recombined.
 fn fold_llm_daily(
     rows: &[telemetry_llm_daily::Model],
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
 ) -> LlmFold {
     let mut totals = DailyAccumulator::default();
     let mut per_model: BTreeMap<(&str, &str), DailyAccumulator> = BTreeMap::new();
     let mut per_provider: BTreeMap<&str, DailyAccumulator> = BTreeMap::new();
-    let mut per_day: BTreeMap<NaiveDateTime, DailyAccumulator> = BTreeMap::new();
+    let mut per_day: BTreeMap<DateTime<FixedOffset>, DailyAccumulator> = BTreeMap::new();
 
     for row in rows {
         totals.push(row);
@@ -633,14 +634,14 @@ fn fold_llm_daily(
 }
 
 struct LlmFilters {
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     provider: Option<String>,
     model: Option<String>,
     source: Option<String>,
 }
 
 impl LlmFilters {
-    fn new(q: &TelemetryLlmQuery, cutoff: NaiveDateTime) -> Self {
+    fn new(q: &TelemetryLlmQuery, cutoff: DateTime<FixedOffset>) -> Self {
         Self {
             cutoff,
             provider: q
@@ -656,7 +657,11 @@ impl LlmFilters {
 
 /// Raw calls only exist for as long as the sweeper keeps them, so a raw read is
 /// clipped to that retention and reports the hours it really covers.
-fn raw_window(now: NaiveDateTime, hours: i64, retention_hours: i64) -> (NaiveDateTime, i64) {
+fn raw_window(
+    now: DateTime<FixedOffset>,
+    hours: i64,
+    retention_hours: i64,
+) -> (DateTime<FixedOffset>, i64) {
     let effective = hours.min(retention_hours);
     (now - Duration::hours(effective), effective)
 }
@@ -697,7 +702,7 @@ const TOTAL_TOKENS_SQL: &str =
 async fn llm_from_sql<C: ConnectionTrait>(
     db: &C,
     filters: &LlmFilters,
-    now: NaiveDateTime,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Result<LlmFold, ApiError> {
     let backend = db.get_database_backend();
@@ -773,7 +778,7 @@ async fn llm_from_sql<C: ConnectionTrait>(
     .await?;
 
     let trend_sql = format!(
-        r#"SELECT date_trunc('{bucket}', "createdAt") AS bucket,
+        r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                   CAST(COUNT(*) AS BIGINT) AS calls,
                   CAST({errors} AS BIGINT) AS errors,
                   {p95} AS p95_duration_ms,
@@ -859,7 +864,7 @@ async fn llm_from_sql<C: ConnectionTrait>(
 async fn llm_from_fold<C: ConnectionTrait>(
     db: &C,
     filters: &LlmFilters,
-    now: NaiveDateTime,
+    now: DateTime<FixedOffset>,
     bucket: &str,
 ) -> Result<LlmFold, ApiError> {
     let rows = llm_samples_query(filters)
@@ -910,6 +915,7 @@ fn llm_samples_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity>
 
 /// `COUNT(CASE WHEN status = 'error' THEN id END)`, portable across backends.
 fn error_count() -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
     Expr::expr(
         Expr::case(
             Expr::col(telemetry_llm_call::Column::Status).eq(LLM_STATUS_ERROR),
@@ -938,6 +944,7 @@ fn apply_llm_filters(
 }
 
 fn operation_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity> {
+    use sea_orm::sea_query::ExprTrait;
     apply_llm_filters(
         telemetry_llm_call::Entity::find()
             .select_only()
@@ -952,6 +959,7 @@ fn operation_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Ent
 }
 
 fn error_kind_stats_query(filters: &LlmFilters) -> Select<telemetry_llm_call::Entity> {
+    use sea_orm::sea_query::ExprTrait;
     apply_llm_filters(
         telemetry_llm_call::Entity::find()
             .select_only()
@@ -1000,8 +1008,8 @@ async fn raw_breakdowns<C: ConnectionTrait>(
 }
 
 fn daily_llm_query(
-    start: NaiveDateTime,
-    end: NaiveDateTime,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
     filters: &LlmFilters,
 ) -> Select<telemetry_llm_daily::Entity> {
     let mut select = telemetry_llm_daily::Entity::find()
@@ -1044,20 +1052,19 @@ pub async fn telemetry_llm(
 
     let hours = q.hours.unwrap_or(DEFAULT_LLM_HOURS).clamp(1, MAX_LLM_HOURS);
     let bucket = window_bucket(hours, None);
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let (raw_cutoff, breakdown_window_hours) = raw_window(now, hours, llm_retention_hours());
     let filters = LlmFilters::new(&q, raw_cutoff);
 
     if reads_raw(hours) {
-        let fold = match state.db.get_database_backend() {
-            DbBackend::Postgres => {
-                let mut fold = llm_from_sql(&state.db, &filters, now, bucket).await?;
-                let (by_operation, top_errors) = raw_breakdowns(&state.db, &filters).await?;
-                fold.by_operation = by_operation;
-                fold.top_errors = top_errors;
-                fold
-            }
-            _ => llm_from_fold(&state.db, &filters, now, bucket).await?,
+        let fold = if percentiles_in_sql(state.db.get_database_backend(), state.db_dialect) {
+            let mut fold = llm_from_sql(&state.db, &filters, now, bucket).await?;
+            let (by_operation, top_errors) = raw_breakdowns(&state.db, &filters).await?;
+            fold.by_operation = by_operation;
+            fold.top_errors = top_errors;
+            fold
+        } else {
+            llm_from_fold(&state.db, &filters, now, bucket).await?
         };
 
         return Ok(Json(TelemetryLlmResponse {
@@ -1095,20 +1102,24 @@ pub async fn telemetry_llm(
 mod tests {
     use super::*;
     use chrono::NaiveDate;
-    use sea_orm::QueryTrait;
+    use sea_orm::{DbBackend, QueryTrait};
 
-    fn ts(hour: u32, minute: u32) -> NaiveDateTime {
+    fn ts(hour: u32, minute: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, 26)
             .unwrap()
             .and_hms_opt(hour, minute, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
-    fn day(y: i32, m: u32, d: u32) -> NaiveDateTime {
+    fn day(y: i32, m: u32, d: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn sample(model: &str, duration_ms: i32, status: &str, hour: u32) -> LlmSampleRow {

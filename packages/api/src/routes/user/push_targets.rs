@@ -137,7 +137,7 @@ pub async fn register_push_target(
         ));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let token_encrypted = encrypt_token(&body.token, &state.encryption_key);
 
     // Disable targets on the same device+provider owned by a different user.
@@ -320,7 +320,7 @@ pub async fn update_push_target_status(
         ));
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let mut update = push_notification_target::Entity::update_many()
         .col_expr(
             push_notification_target::Column::PushEnabled,
@@ -346,7 +346,7 @@ pub async fn update_push_target_status(
             )
             .col_expr(
                 push_notification_target::Column::InvalidatedAt,
-                Expr::value(None::<chrono::NaiveDateTime>),
+                Expr::value(None::<chrono::DateTime<chrono::FixedOffset>>),
             )
             .col_expr(
                 push_notification_target::Column::InvalidationReason,
@@ -396,7 +396,7 @@ pub async fn unregister_push_target(
     Query(query): Query<UnregisterPushTargetQuery>,
 ) -> Result<Json<UnregisterPushTargetResponse>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let reason = unregister_reason(query.reason.as_deref());
 
     push_notification_target::Entity::update_many()
@@ -466,8 +466,8 @@ fn platform_name(platform: &PushNotificationTargetPlatform) -> &'static str {
     }
 }
 
-fn utc(dt: chrono::NaiveDateTime) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)
+fn utc(dt: chrono::DateTime<chrono::FixedOffset>) -> chrono::DateTime<chrono::Utc> {
+    dt.to_utc()
 }
 
 fn target_status_response(
@@ -596,7 +596,7 @@ mod tests {
         push_enabled: bool,
         invalidation_reason: Option<&str>,
     ) -> push_notification_target::Model {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         push_notification_target::Model {
             id: id.to_string(),
             user_id: "user-1".to_string(),

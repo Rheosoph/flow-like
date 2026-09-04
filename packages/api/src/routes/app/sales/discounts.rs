@@ -8,7 +8,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
@@ -17,6 +17,21 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::overview::verify_sales_access;
+
+/// Discount windows arrive as RFC3339 (including the API's own `to_rfc3339()`
+/// output round-tripped back by the dashboard), as `…Z`, or with no zone at
+/// all. Zone-less strings have always been read as UTC; anchoring the parse
+/// keeps that, since a bare string is ambiguous once the column carries an
+/// offset. Everything is normalised to UTC so the stored instant is stable.
+fn parse_client_timestamp(value: &str) -> Option<DateTime<FixedOffset>> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.to_utc().fixed_offset());
+    }
+    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.fZ")
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"))
+        .ok()
+        .map(|stamp| stamp.and_utc().fixed_offset())
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListDiscountsQuery {
@@ -47,7 +62,7 @@ pub struct DiscountResponse {
 
 impl From<app_discount::Model> for DiscountResponse {
     fn from(d: app_discount::Model) -> Self {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
         let is_valid = d.is_active
             && d.starts_at <= now
             && d.expires_at.map(|e| e > now).unwrap_or(true)
@@ -64,11 +79,11 @@ impl From<app_discount::Model> for DiscountResponse {
             max_uses: d.max_uses,
             used_count: d.used_count,
             min_purchase_amount: d.min_purchase_amount,
-            starts_at: d.starts_at.to_string(),
-            expires_at: d.expires_at.map(|e| e.to_string()),
+            starts_at: d.starts_at.to_rfc3339(),
+            expires_at: d.expires_at.map(|e| e.to_rfc3339()),
             is_active: d.is_active,
             is_valid,
-            created_at: d.created_at.to_string(),
+            created_at: d.created_at.to_rfc3339(),
         }
     }
 }
@@ -270,24 +285,15 @@ pub async fn create_discount(
         ));
     }
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     let starts_at = body
         .starts_at
-        .as_ref()
-        .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ").ok())
-        .or_else(|| {
-            body.starts_at
-                .as_ref()
-                .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
-        })
+        .as_deref()
+        .and_then(parse_client_timestamp)
         .unwrap_or(now);
 
-    let expires_at = body.expires_at.as_ref().and_then(|s| {
-        NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ")
-            .ok()
-            .or_else(|| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
-    });
+    let expires_at = body.expires_at.as_deref().and_then(parse_client_timestamp);
 
     let id = create_id();
 
@@ -424,16 +430,14 @@ pub async fn update_discount(
     }
 
     if let Some(starts_at_str) = body.starts_at {
-        let starts_at = NaiveDateTime::parse_from_str(&starts_at_str, "%Y-%m-%dT%H:%M:%S%.fZ")
-            .or_else(|_| NaiveDateTime::parse_from_str(&starts_at_str, "%Y-%m-%dT%H:%M:%S"))
-            .map_err(|_| ApiError::bad_request("Invalid starts_at date format".to_string()))?;
+        let starts_at = parse_client_timestamp(&starts_at_str)
+            .ok_or_else(|| ApiError::bad_request("Invalid starts_at date format".to_string()))?;
         active.starts_at = Set(starts_at);
     }
 
     if let Some(expires_at_str) = body.expires_at {
-        let expires_at = NaiveDateTime::parse_from_str(&expires_at_str, "%Y-%m-%dT%H:%M:%S%.fZ")
-            .or_else(|_| NaiveDateTime::parse_from_str(&expires_at_str, "%Y-%m-%dT%H:%M:%S"))
-            .map_err(|_| ApiError::bad_request("Invalid expires_at date format".to_string()))?;
+        let expires_at = parse_client_timestamp(&expires_at_str)
+            .ok_or_else(|| ApiError::bad_request("Invalid expires_at date format".to_string()))?;
         active.expires_at = Set(Some(expires_at));
     }
 
@@ -441,7 +445,7 @@ pub async fn update_discount(
         active.is_active = Set(is_active);
     }
 
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
 
     let updated = active.update(&state.db).await?;
 
@@ -553,7 +557,7 @@ pub async fn toggle_discount(
 
     let mut active: app_discount::ActiveModel = existing.into();
     active.is_active = Set(new_active);
-    active.updated_at = Set(Utc::now().naive_utc());
+    active.updated_at = Set(Utc::now().fixed_offset());
 
     let updated = active.update(&state.db).await?;
 
@@ -565,4 +569,41 @@ pub async fn toggle_discount(
     );
 
     Ok(Json(updated.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dashboard's edit form seeds `startsAt` from the value this module
+    /// serialised, so whatever `DiscountResponse` emits has to parse back here.
+    /// It emits `to_rfc3339()`; before that arm existed the round-trip 400'd.
+    #[test]
+    fn accepts_the_string_the_api_itself_emits() {
+        let stored = Utc::now().fixed_offset();
+        let round_tripped =
+            parse_client_timestamp(&stored.to_rfc3339()).expect("own output must parse back");
+        assert_eq!(round_tripped, stored.to_utc().fixed_offset());
+    }
+
+    #[test]
+    fn accepts_every_client_spelling_as_the_same_instant() {
+        let expected = NaiveDateTime::parse_from_str("2026-09-04T08:18:44", "%Y-%m-%dT%H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
+
+        for raw in [
+            "2026-09-04T08:18:44",
+            "2026-09-04T08:18:44Z",
+            "2026-09-04T08:18:44.000Z",
+            "2026-09-04T08:18:44+00:00",
+            // An offset is honoured, not read as UTC.
+            "2026-09-04T10:18:44+02:00",
+        ] {
+            assert_eq!(parse_client_timestamp(raw), Some(expected), "{raw}");
+        }
+
+        assert_eq!(parse_client_timestamp("not a date"), None);
+    }
 }

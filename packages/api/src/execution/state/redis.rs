@@ -549,7 +549,7 @@ mod stateless_import_tests {
 
     #[test]
     fn stateless_lambda_redis_constructor_accepts_sql_source() {
-        assert!(postgres_source(Some(Arc::new(DatabaseConnection::Disconnected))).is_some());
+        assert!(postgres_source(Some(Arc::new(DatabaseConnection::default()))).is_some());
     }
 
     #[test]

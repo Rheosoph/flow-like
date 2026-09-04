@@ -61,10 +61,12 @@ pub async fn sweep_telemetry(
         .await?;
 
     let config = TelemetrySweeperConfig::from_env();
-    let result = sweep_once(&state.db, &config).await.map_err(|e| {
-        tracing::error!(error = %e, "Admin telemetry sweep failed");
-        ApiError::internal_error(flow_like_types::anyhow!("Telemetry sweep failed: {}", e))
-    })?;
+    let result = sweep_once(&state.db, state.db_dialect, &config)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Admin telemetry sweep failed");
+            ApiError::internal_error(flow_like_types::anyhow!("Telemetry sweep failed: {}", e))
+        })?;
 
     if !result.is_empty() {
         tracing::info!(

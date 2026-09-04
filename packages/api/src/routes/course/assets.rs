@@ -77,8 +77,8 @@ impl From<course_asset::Model> for CourseAssetView {
             mime_type: value.mime_type,
             size: value.size,
             kind: value.kind.into(),
-            created_at: value.created_at.and_utc().to_rfc3339(),
-            updated_at: value.updated_at.and_utc().to_rfc3339(),
+            created_at: value.created_at.to_rfc3339(),
+            updated_at: value.updated_at.to_rfc3339(),
         }
     }
 }
@@ -242,7 +242,7 @@ pub async fn create_course_asset(
 
     let asset_id = create_id();
     let storage_key = format!("{asset_id}.{extension}");
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let active = course_asset::ActiveModel {
         id: Set(asset_id.clone()),
@@ -339,7 +339,7 @@ pub async fn update_course_asset(
 
     let mut active = asset.into_active_model();
     active.name = Set(new_name);
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     let saved = active.update(&state.db).await?;
     Ok(Json(saved.into()))
 }
@@ -442,7 +442,7 @@ pub async fn optimize_course_asset(
     active.filename = Set(new_filename);
     active.mime_type = Set("image/webp".to_string());
     active.size = Set(new_size as i32);
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     let saved = match active.update(&state.db).await {
         Ok(saved) => saved,
         Err(err) => {

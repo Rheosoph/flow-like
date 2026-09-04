@@ -7,13 +7,13 @@ model Meta {
   description     String?
   longDescription String?
   releaseNotes    String?
-  tags            String[]
+  tags            Json?
 
   useCase String?
 
   icon         String?
   thumbnail    String?
-  previewMedia String[]
+  previewMedia Json?
 
   ageRating BigInt?
 
@@ -43,8 +43,8 @@ model Meta {
   group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   groupId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([appId, lang])
@@ -55,5 +55,4 @@ model Meta {
   @@index([wasmPackageId, lang])
   @@index([groupId, lang])
   @@index([lang])
-  @@index([tags])
 }

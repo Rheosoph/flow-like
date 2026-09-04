@@ -1,0 +1,28 @@
+{
+	"name": "flow-like-aws-migration",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"description": "One-shot Aurora DSQL migration job: applies packages/api/prisma/migrations-dsql statement by statement as the DSQL admin role using an IAM token.",
+	"scripts": {
+		"migrate": "bun run migrate.ts",
+		"typecheck": "bunx tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@aws-sdk/client-s3": "3.1126.0",
+		"@aws-sdk/dsql-signer": "3.1126.0",
+		"@noble/hashes": "2.4.0",
+		"pg": "8.23.0",
+		"prisma": "7.3.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/pg": "8.23.1",
+		"typescript": "^5.9.3"
+	},
+	"trustedDependencies": [
+		"@prisma/engines",
+		"prisma"
+	]
+}

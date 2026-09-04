@@ -6,11 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection};
 
+use crate::db::{DEFAULT_WRITE_CHUNK, DbDialect, delete_in_batches};
 use crate::entity::{channel, prelude::Channel};
 
 const DEFAULT_INTERVAL_SECS: u64 = 900;
+/// Transactions one pass may spend; a larger backlog is finished by the next pass.
+const MAX_CHUNKS_PER_SWEEP: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct ChannelSweeperConfig {
@@ -34,6 +37,7 @@ impl ChannelSweeperConfig {
 /// Returns `None` when `CHANNEL_SWEEPER_DISABLED=1` is set.
 pub fn spawn_channel_sweeper(
     db: Arc<DatabaseConnection>,
+    dialect: DbDialect,
     config: ChannelSweeperConfig,
 ) -> Option<JoinHandle<()>> {
     if std::env::var("CHANNEL_SWEEPER_DISABLED")
@@ -56,7 +60,7 @@ pub fn spawn_channel_sweeper(
 
         loop {
             ticker.tick().await;
-            match sweep_expired(db.as_ref()).await {
+            match sweep_expired(db.as_ref(), dialect).await {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(deleted = n, "Channel sweeper removed expired rows"),
                 Err(e) => tracing::error!(error = %e, "Channel sweeper iteration failed"),
@@ -67,20 +71,36 @@ pub fn spawn_channel_sweeper(
     Some(handle)
 }
 
-/// `DELETE FROM "Channel" WHERE "expiresAt" < now`. Returns the number of rows removed.
-pub async fn sweep_expired(db: &DatabaseConnection) -> Result<u64, sea_orm::DbErr> {
+/// Delete every `Channel` row whose `expiresAt` lies before now, in primary-key
+/// chunks of [`DEFAULT_WRITE_CHUNK`] rows so a bounded engine never sees an
+/// oversized transaction. Returns the number of rows removed.
+pub async fn sweep_expired(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+) -> Result<u64, sea_orm::DbErr> {
     let now = chrono::Utc::now().timestamp();
-    let result = Channel::delete_many()
-        .filter(channel::Column::ExpiresAt.lt(now))
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected)
+    let outcome = delete_in_batches::<Channel>(
+        db,
+        dialect,
+        Condition::all().add(channel::Column::ExpiresAt.lt(now)),
+        DEFAULT_WRITE_CHUNK,
+        Some(MAX_CHUNKS_PER_SWEEP),
+    )
+    .await?;
+    if outcome.stopped_early {
+        tracing::warn!(
+            deleted = outcome.rows,
+            max_chunks = MAX_CHUNKS_PER_SWEEP,
+            "Channel sweep hit its budget; the rest is swept next pass"
+        );
+    }
+    Ok(outcome.rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{DatabaseBackend, QueryTrait};
+    use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
     #[test]
     fn sweep_deletes_strictly_expired_rows() {

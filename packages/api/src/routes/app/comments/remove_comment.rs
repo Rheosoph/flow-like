@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter};
 
 use super::upsert_comment::adjust_app_ratings;
 
@@ -42,27 +42,32 @@ pub async fn remove_comment(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_in_project!(user, &app_id, &state);
     let sub = permission.sub()?;
-
-    let txn = state.db.begin().await?;
-
-    let comment = comment::Entity::find_by_id(&comment_id)
-        .filter(comment::Column::AppId.eq(&app_id))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let is_owner = comment.user_id == sub;
     let is_admin = permission.has_permission(RolePermissions::Admin)
         || permission.has_permission(RolePermissions::Owner);
 
-    if !is_owner && !is_admin {
-        return Err(ApiError::FORBIDDEN);
-    }
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let comment_id = comment_id.clone();
+            let sub = sub.clone();
+            Box::pin(async move {
+                let comment = comment::Entity::find_by_id(&comment_id)
+                    .filter(comment::Column::AppId.eq(&app_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let rating = comment.rating;
-    comment.delete(&txn).await?;
-    adjust_app_ratings(&txn, &app_id, -rating, -1).await?;
-    txn.commit().await?;
+                if comment.user_id != sub && !is_admin {
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                let rating = comment.rating;
+                comment.delete(txn).await?;
+                adjust_app_ratings(txn, &app_id, -rating, -1).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     Ok(Json(()))
 }

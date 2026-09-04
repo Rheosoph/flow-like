@@ -1,3 +1,4 @@
+use crate::utils::time::{utc_day_end, utc_midnight};
 use crate::{
     entity::{
         app_analytics_daily, embedding_usage_tracking, execution_usage_tracking, feedback,
@@ -54,8 +55,8 @@ pub async fn update_analytics_daily(
     app_id: &str,
     date: NaiveDate,
 ) -> Result<(), ApiError> {
-    let start_of_day = date.and_hms_opt(0, 0, 0).unwrap();
-    let end_of_day = date.and_hms_opt(23, 59, 59).unwrap();
+    let start_of_day = utc_midnight(date);
+    let end_of_day = utc_day_end(date);
 
     let executions = execution_usage_tracking::Entity::find()
         .filter(execution_usage_tracking::Column::AppId.eq(app_id))
@@ -133,7 +134,7 @@ pub async fn update_analytics_daily(
     let total_embedding_tokens: i64 = embedding_records.iter().map(|r| r.token_count).sum();
     let total_embedding_cost: i64 = embedding_records.iter().map(|r| r.price).sum();
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     app_analytics_daily::Entity::insert(app_analytics_daily::ActiveModel {
         id: Set(create_id()),

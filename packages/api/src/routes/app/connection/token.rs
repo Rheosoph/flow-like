@@ -12,6 +12,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -140,7 +141,7 @@ pub async fn create_app_connection_token(
                 };
                 (
                     Some(run.id),
-                    run.caller_app_chain.unwrap_or_default(),
+                    run.caller_app_chain.unwrap_or_default().into(),
                     Some(correlation),
                 )
             }

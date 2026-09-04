@@ -56,6 +56,9 @@ spec:
               done
 
               echo "Database is ready!"
+              echo "Applying pre-push SQL..."
+              bun prisma/pre-push.ts
+
               echo "Applying database schema..."
 
               # Run prisma db push to create/update schema

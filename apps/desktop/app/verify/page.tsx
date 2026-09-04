@@ -3,6 +3,7 @@ import {
 	Button,
 	type CertificateView,
 	Input,
+	parseDateValue,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
@@ -88,9 +89,10 @@ function VerifiedScreen({
 	readonly origin: string;
 }) {
 	const { t } = useTranslation("common");
-	const issued = new Date(cert.issued_at).toLocaleDateString(undefined, {
-		dateStyle: "long",
-	});
+	const issued =
+		parseDateValue(cert.issued_at)?.toLocaleDateString(undefined, {
+			dateStyle: "long",
+		}) ?? "";
 	const recipient =
 		cert.recipient_name?.trim() || t("anonymousLearner", "Anonymous learner");
 	const courseTitle =

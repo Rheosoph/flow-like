@@ -45,17 +45,17 @@ pub async fn upsert_profile_template(
         updated_profile.name = Set(profile_data.name.clone());
         updated_profile.description = Set(profile_data.description.clone());
         updated_profile.icon = Set(profile_data.icon.clone());
-        updated_profile.bit_ids = Set(Some(profile_data.bits.clone()));
+        updated_profile.bit_ids = Set(Some(profile_data.bits.clone().into()));
         updated_profile.hub = Set(profile_data.hub.clone());
-        updated_profile.hubs = Set(Some(profile_data.hubs.clone()));
-        updated_profile.interests = Set(Some(profile_data.interests.clone()));
-        updated_profile.tags = Set(Some(profile_data.tags.clone()));
+        updated_profile.hubs = Set(Some(profile_data.hubs.clone().into()));
+        updated_profile.interests = Set(Some(profile_data.interests.clone().into()));
+        updated_profile.tags = Set(Some(profile_data.tags.clone().into()));
         updated_profile.theme = Set(profile_data.theme.clone());
         updated_profile.apps = Set(apps.clone());
         updated_profile.thumbnail = Set(profile_data.thumbnail.clone());
         updated_profile.settings = Set(Some(settings.clone()));
         updated_profile.secure = Set(profile_data.secure);
-        updated_profile.updated_at = Set(chrono::Utc::now().naive_utc());
+        updated_profile.updated_at = Set(chrono::Utc::now().fixed_offset());
         let updated_profile = updated_profile.update(&state.db).await?;
         return Ok(Json(Profile::from(updated_profile)));
     }
@@ -67,17 +67,17 @@ pub async fn upsert_profile_template(
         description: Set(profile_data.description),
         icon: Set(profile_data.icon),
         secure: Set(profile_data.secure),
-        bit_ids: Set(Some(profile_data.bits)),
+        bit_ids: Set(Some(profile_data.bits.into())),
         hub: Set(profile_data.hub),
-        hubs: Set(Some(profile_data.hubs)),
-        interests: Set(Some(profile_data.interests)),
+        hubs: Set(Some(profile_data.hubs.into())),
+        interests: Set(Some(profile_data.interests.into())),
         settings: Set(Some(settings)),
-        tags: Set(Some(profile_data.tags)),
+        tags: Set(Some(profile_data.tags.into())),
         thumbnail: Set(profile_data.thumbnail),
         apps: Set(apps),
         theme: Set(profile_data.theme),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     let new_profile = new_profile.insert(&state.db).await?;

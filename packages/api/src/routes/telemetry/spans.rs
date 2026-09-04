@@ -76,7 +76,7 @@ struct ValidatedSpan {
     parent_span_id: Option<String>,
     name: String,
     kind: String,
-    started_at: chrono::NaiveDateTime,
+    started_at: chrono::DateTime<chrono::FixedOffset>,
     duration_ms: i32,
     status: String,
     attributes: Option<Value>,
@@ -142,7 +142,7 @@ async fn persist_spans<C: ConnectionTrait>(
     payload: &TelemetrySpanIngestPayload,
     spans: Vec<ValidatedSpan>,
 ) -> Result<usize, DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let accepted = spans.len();
     let models: Vec<telemetry_span::ActiveModel> = spans
         .into_iter()

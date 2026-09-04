@@ -82,6 +82,7 @@ fn resolve_compilation(
             let compiled = v.compilation_status == WasmCompilationStatus::Compiled
                 && v.compiled_platforms
                     .as_deref()
+                    .map(Vec::as_slice)
                     .unwrap_or_default()
                     .iter()
                     .any(|k| k == platform_key);

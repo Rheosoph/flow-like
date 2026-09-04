@@ -1,10 +1,3 @@
-enum PublicationRequestStatus {
-  PENDING
-  ON_HOLD
-  ACCEPTED
-  REJECTED
-}
-
 /// A review of a visibility change. Targets exactly one of an App or an
 /// AppGroup ("suite") — the XOR cannot be expressed as a Prisma constraint and
 /// is enforced in Rust by `routes::publication::PublicationTarget`, which is
@@ -12,7 +5,7 @@ enum PublicationRequestStatus {
 model PublicationRequest {
   id String @id
 
-  targetVisibility Visibility
+  targetVisibility String
 
   approver   User?   @relation(fields: [approverId], references: [id], onDelete: SetNull)
   approverId String?
@@ -23,7 +16,7 @@ model PublicationRequest {
   group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   groupId String?
 
-  status PublicationRequestStatus
+  status String
 
   /// Binds the submitted AI Act assessment to this review (record-keeping).
   /// Always null for suite targets — a suite is gated on the aggregate of its
@@ -32,8 +25,8 @@ model PublicationRequest {
 
   logs PublicationLog[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([status])
   @@index([appId])
@@ -52,10 +45,10 @@ model PublicationLog {
   authorId String?
 
   message    String?
-  visibility Visibility?
+  visibility String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([requestId])
 }

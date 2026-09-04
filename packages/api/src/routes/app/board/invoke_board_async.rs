@@ -135,7 +135,7 @@ pub async fn invoke_board_async(
     }
 
     let run_id = create_id();
-    let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
+    let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
 
     let input_payload_len = params
         .payload
@@ -201,13 +201,13 @@ pub async fn invoke_board_async(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
-        caller_app_chain: Set(caller_app_chain.clone()),
+        caller_app_chain: Set(caller_app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
         parent_run_id: Set(parent_run_id.clone()),
         correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),
@@ -223,10 +223,12 @@ pub async fn invoke_board_async(
         technical_user_id: technical_user_id.clone(),
     };
 
-    run.insert(&state.db).await.map_err(|e| {
-        tracing::error!(error = %e, "Failed to create run record");
-        ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-    })?;
+    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to create run record");
+            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
+        })?;
     crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
     let poll_token = sign_execution_jwt(ExecutionJwtParams {

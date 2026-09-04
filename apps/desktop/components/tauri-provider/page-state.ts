@@ -5,6 +5,7 @@ import {
 	type IPageState,
 	type PageListItem,
 	normalizePageForPersistence,
+	parseDateValue,
 } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher, fetcherConditional } from "../../lib/api";
@@ -76,9 +77,11 @@ export function isCachedPageOutdated(
 	if (!remote.updatedAt) return false;
 	if (!cached.updatedAt) return true;
 
-	const remoteUpdated = new Date(remote.updatedAt).getTime();
-	const cachedUpdated = new Date(cached.updatedAt).getTime();
-	if (Number.isNaN(remoteUpdated) || Number.isNaN(cachedUpdated)) return false;
+	// A cached value may predate the API's move to offset-bearing timestamps, so
+	// both sides go through the parser that reads a zone-less string as UTC.
+	const remoteUpdated = parseDateValue(remote.updatedAt)?.getTime();
+	const cachedUpdated = parseDateValue(cached.updatedAt)?.getTime();
+	if (remoteUpdated === undefined || cachedUpdated === undefined) return false;
 
 	return remoteUpdated > cachedUpdated;
 }
@@ -295,11 +298,11 @@ export class PageState implements IPageState {
 
 		writePageEtag(etagKey, remotePage.updatedAt, result.etag);
 
-		const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
-		const localUpdated = new Date(localPage.updatedAt ?? 0).getTime();
+		const remoteUpdated = parseDateValue(remotePage.updatedAt ?? 0)?.getTime();
+		const localUpdated = parseDateValue(localPage.updatedAt ?? 0)?.getTime();
 		const shouldUseRemote =
-			Number.isNaN(localUpdated) ||
-			Number.isNaN(remoteUpdated) ||
+			localUpdated === undefined ||
+			remoteUpdated === undefined ||
 			remoteUpdated >= localUpdated;
 
 		if (!shouldUseRemote) return null;

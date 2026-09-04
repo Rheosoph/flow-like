@@ -1,27 +1,31 @@
 //! Orphan-fork cleanup primitive.
 //!
-//! Cross-mode forks (online↔offline) materialize destination apps in
-//! object storage *before* every DB row is committed. If a flow is
-//! interrupted — desktop crashes mid-upload, finalize call never
-//! arrives, fork session expires — the storage prefix `apps/{id}/...`
-//! can outlive any matching DB row. Without a janitor, those orphans
-//! accumulate forever.
+//! Forks materialize a destination in object storage while a `ForkJob`
+//! row tracks them; the App row exists from the job's `allocate` step on.
+//! If a job is torn out from under its driver in a way the job sweeper
+//! cannot repair, or a pre-job fork session was interrupted, the storage
+//! prefix `apps/{id}/...` (and `media/apps/{id}/...`) can outlive every
+//! matching row. Without a janitor those orphans accumulate forever.
 //!
-//! `find_orphan_app_prefixes` walks `apps/` on the master store and
-//! lists every top-level app id that has no row in the `App` table.
-//! `delete_orphan_app_prefix` deletes one such prefix.
+//! `find_orphan_app_prefixes` walks `apps/` on the meta and content stores
+//! plus `media/apps/` and lists every app id that has neither an `App`
+//! row nor a live `ForkJob`. `delete_orphan_app_prefix` deletes one such
+//! id from all three places.
 //!
 //! Callers (admin endpoint, scheduled task, deployment one-shot) are
 //! responsible for wiring this in; this module only provides the
 //! primitive so all paths share the same definition of "orphan".
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::{entity::app, error::ApiError, state::AppState};
 use flow_like_storage::Path;
 use flow_like_types::anyhow;
 use futures_util::TryStreamExt;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+use super::job;
 
 #[derive(Debug, Clone)]
 pub struct OrphanPrefix {
@@ -30,44 +34,31 @@ pub struct OrphanPrefix {
     pub total_size_bytes: u64,
 }
 
-/// Lists every `apps/{id}/...` prefix on the master store that has no
-/// matching row in the `App` table. Pure read; no mutation.
+/// Lists every app id with objects under `apps/{id}/...` on either store
+/// or under `media/apps/{id}/...` that has neither an `App` row nor a
+/// fork job that is still running. Pure read; no mutation.
 pub async fn find_orphan_app_prefixes(state: &AppState) -> Result<Vec<OrphanPrefix>, ApiError> {
     let credentials = state
         .master_credentials()
         .await
         .map_err(ApiError::internal_error)?;
-    let store = credentials
+    let meta_store = credentials
         .to_store(true)
         .await
         .map_err(ApiError::internal_error)?
         .as_generic();
-
-    // Collect every distinct top-level segment under `apps/` along
-    // with running size + count totals — we surface these so callers
-    // can preview before deleting.
-    let prefix = Path::from("apps");
-    let mut counters: std::collections::HashMap<String, (u64, u64)> =
-        std::collections::HashMap::new();
-    let mut listing = store.list(Some(&prefix));
-    while let Some(item) = listing
-        .try_next()
+    let content_store = credentials
+        .to_store(false)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list apps prefix: {e}")))?
-    {
-        let path_str = item.location.as_ref().to_string();
-        let suffix = match path_str.strip_prefix("apps/") {
-            Some(s) => s,
-            None => continue,
-        };
-        let app_id = match suffix.split('/').next() {
-            Some(id) if !id.is_empty() => id.to_string(),
-            _ => continue,
-        };
-        let entry = counters.entry(app_id).or_insert((0, 0));
-        entry.0 = entry.0.saturating_add(1);
-        entry.1 = entry.1.saturating_add(item.size);
-    }
+        .map_err(ApiError::internal_error)?
+        .as_generic();
+
+    let apps_prefix = Path::from("apps");
+    let media_prefix = Path::from("media").child("apps");
+    let mut counters: HashMap<String, (u64, u64)> = HashMap::new();
+    tally_prefix(&meta_store, &apps_prefix, &mut counters).await?;
+    tally_prefix(&content_store, &apps_prefix, &mut counters).await?;
+    tally_prefix(&content_store, &media_prefix, &mut counters).await?;
 
     if counters.is_empty() {
         return Ok(Vec::new());
@@ -78,25 +69,54 @@ pub async fn find_orphan_app_prefixes(state: &AppState) -> Result<Vec<OrphanPref
         .filter(app::Column::Id.is_in(storage_app_ids))
         .all(&state.db)
         .await?;
-    let known: HashSet<String> = known_rows.into_iter().map(|r| r.id).collect();
+    let mut known: HashSet<String> = known_rows.into_iter().map(|r| r.id).collect();
+    known.extend(job::live_dest_app_ids(state).await?);
 
-    let mut orphans = Vec::new();
-    for (app_id, (count, size)) in counters {
-        if known.contains(&app_id) {
-            continue;
-        }
-        orphans.push(OrphanPrefix {
+    let mut orphans: Vec<OrphanPrefix> = counters
+        .into_iter()
+        .filter(|(app_id, _)| !known.contains(app_id))
+        .map(|(app_id, (count, size))| OrphanPrefix {
             app_id,
             object_count: count,
             total_size_bytes: size,
-        });
-    }
+        })
+        .collect();
     orphans.sort_by(|a, b| a.app_id.cmp(&b.app_id));
     Ok(orphans)
 }
 
-/// Deletes every object under `apps/{app_id}/...` on the master store.
-/// The caller MUST have already verified this is an orphan via
+/// Adds every object below `prefix` to the counter of the app id that is
+/// its first path segment after the prefix.
+async fn tally_prefix(
+    store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    prefix: &Path,
+    counters: &mut HashMap<String, (u64, u64)>,
+) -> Result<(), ApiError> {
+    let prefix_str = format!("{}/", prefix.as_ref());
+    let mut listing = store.list(Some(prefix));
+    while let Some(item) = listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list {}: {e}", prefix.as_ref())))?
+    {
+        let path_str = item.location.as_ref().to_string();
+        let Some(suffix) = path_str.strip_prefix(&prefix_str) else {
+            continue;
+        };
+        let app_id = match suffix.split('/').next() {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => continue,
+        };
+        let entry = counters.entry(app_id).or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = entry.1.saturating_add(item.size);
+    }
+    Ok(())
+}
+
+/// Deletes every object under `apps/{app_id}/...` on both stores and
+/// under `media/apps/{app_id}/...`, with bounded concurrency. The caller
+/// MUST have already verified this is an orphan via
 /// `find_orphan_app_prefixes`; this function does not re-check the DB
 /// (its concurrent-DB-write defence is the caller's responsibility).
 pub async fn delete_orphan_app_prefix(state: &AppState, app_id: &str) -> Result<u64, ApiError> {
@@ -104,26 +124,45 @@ pub async fn delete_orphan_app_prefix(state: &AppState, app_id: &str) -> Result<
         .master_credentials()
         .await
         .map_err(ApiError::internal_error)?;
-    let store = credentials
+    let meta_store = credentials
         .to_store(true)
         .await
         .map_err(ApiError::internal_error)?
         .as_generic();
-
-    let prefix = Path::from("apps").child(app_id.to_string());
-    let mut deleted = 0u64;
-    let locations: Vec<Path> = store
-        .list(Some(&prefix))
-        .map_ok(|m| m.location)
-        .try_collect()
+    let content_store = credentials
+        .to_store(false)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list orphan prefix: {e}")))?;
-    for loc in locations {
-        store
-            .delete(&loc)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("delete orphan object: {e}")))?;
-        deleted = deleted.saturating_add(1);
+        .map_err(ApiError::internal_error)?
+        .as_generic();
+
+    let app_prefix = Path::from("apps").child(app_id.to_string());
+    let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
+    let mut deleted = 0u64;
+    for (store, prefix, label) in [
+        (&meta_store, &app_prefix, "orphan meta prefix"),
+        (&content_store, &app_prefix, "orphan content prefix"),
+        (&content_store, &media_prefix, "orphan media prefix"),
+    ] {
+        deleted = deleted.saturating_add(count_prefix(store, prefix, label).await?);
+        super::delete_object_prefix(store, prefix, label).await?;
     }
     Ok(deleted)
+}
+
+async fn count_prefix(
+    store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    prefix: &Path,
+    label: &str,
+) -> Result<u64, ApiError> {
+    let mut count = 0u64;
+    let mut listing = store.list(Some(prefix));
+    while listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
+        .is_some()
+    {
+        count = count.saturating_add(1);
+    }
+    Ok(count)
 }

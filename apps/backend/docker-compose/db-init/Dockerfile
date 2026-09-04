@@ -14,8 +14,11 @@ COPY --from=seaorm_builder /usr/local/cargo/bin/sea-orm-cli /usr/local/bin/sea-o
 
 WORKDIR /workspace
 COPY scripts/wait-for-postgres.sh /usr/local/bin/wait-for-postgres.sh
+COPY scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
 COPY scripts/make-postgres-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh
 COPY scripts/export-database-url.sh /usr/local/bin/export-database-url.sh
-RUN chmod +x /usr/local/bin/wait-for-postgres.sh /usr/local/bin/make-postgres-prisma-mirror.sh /usr/local/bin/export-database-url.sh
+RUN chmod +x /usr/local/bin/wait-for-postgres.sh /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh /usr/local/bin/export-database-url.sh
 
+# Brings prisma/pre-push.ts and prisma/pre-push/ along; the compose command runs
+# the runner (pg and dotenv come from `bun install`) before `prisma db push`.
 COPY . /workspace

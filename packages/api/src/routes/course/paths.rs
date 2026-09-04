@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job},
     entity::{course, learning_path, learning_path_course, meta},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -10,6 +11,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder,
@@ -107,7 +109,7 @@ async fn course_list_items_by_id(
                 is_published: c.is_published,
                 icon_url: c.icon_url,
                 banner_url: c.banner_url,
-                tags: c.tags.unwrap_or_default(),
+                tags: c.tags.unwrap_or_default().into(),
                 position: c.position,
                 name: chosen.map(|m| m.name.clone()),
                 description: chosen.and_then(|m| m.description.clone()),
@@ -271,37 +273,52 @@ pub async fn upsert_learning_path(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = learning_path::Entity::find_by_id(&path_id)
         .one(&state.db)
         .await?;
 
-    let saved = if let Some(existing) = existing {
-        let mut active = existing.into_active_model();
-        active.title = Set(body.title.clone());
-        active.slug = Set(body.slug.clone());
-        active.description = Set(body.description.clone());
-        if let Some(position) = body.position {
-            active.position = Set(position);
-        }
-        if let Some(is_published) = body.is_published {
-            active.is_published = Set(is_published);
-        }
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
-    } else {
-        let active = learning_path::ActiveModel {
-            id: Set(path_id.clone()),
-            title: Set(body.title.clone()),
-            slug: Set(body.slug.clone()),
-            description: Set(body.description.clone()),
-            position: Set(body.position.unwrap_or(0)),
-            is_published: Set(body.is_published.unwrap_or(false)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
-    };
+    let saved = state
+        .transaction(|txn| {
+            let path_id = path_id.clone();
+            let body = body.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the path row present until the
+                // drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::LearningPath, &path_id).await?;
+                let saved = if let Some(existing) = existing {
+                    let mut active = existing.into_active_model();
+                    active.title = Set(body.title);
+                    active.slug = Set(body.slug);
+                    active.description = Set(body.description);
+                    if let Some(position) = body.position {
+                        active.position = Set(position);
+                    }
+                    if let Some(is_published) = body.is_published {
+                        active.is_published = Set(is_published);
+                    }
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    learning_path::ActiveModel {
+                        id: Set(path_id),
+                        title: Set(body.title),
+                        slug: Set(body.slug),
+                        description: Set(body.description),
+                        position: Set(body.position.unwrap_or(0)),
+                        is_published: Set(body.is_published.unwrap_or(false)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
+            })
+        })
+        .await?;
 
     let steps = learning_path_course::Entity::find()
         .filter(learning_path_course::Column::PathId.eq(&saved.id))
@@ -318,7 +335,8 @@ pub async fn upsert_learning_path(
     tag = "courses",
     params(("path_id" = String, Path, description = "Learning path identifier")),
     responses(
-        (status = 204, description = "Deleted the learning path"),
+        (status = 200, description = "Deleted the learning path"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden — requires WriteCourses permission")
     )
 )]
@@ -327,13 +345,25 @@ pub async fn delete_learning_path(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(path_id): Path<String>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
-    learning_path::Entity::delete_by_id(path_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    if learning_path::Entity::find_by_id(&path_id)
+        .one(&state.db)
+        .await?
+        .is_none()
+    {
+        return Ok(Deleted::Completed(()));
+    }
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::LearningPath,
+        &path_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }
 
 #[utoipa::path(

@@ -1,4 +1,8 @@
 use crate::{
+    deletion::{
+        self, AcceptedDeletion, Deleted, DeletionRoot,
+        job::{self, not_pending_deletion},
+    },
     entity::{
         challenge, course_asset, course_module, lesson, lesson_app_ref, user_challenge_attempt,
     },
@@ -102,6 +106,10 @@ pub async fn get_lesson(
     let module_fut = course_module::Entity::find_by_id(&module_id).one(&state.db);
     let lesson_fut = lesson::Entity::find_by_id(&lesson_id).one(&state.db);
     let challenges_fut = challenge::Entity::find()
+        .filter(not_pending_deletion(
+            DeletionRoot::Challenge,
+            (challenge::Entity, challenge::Column::Id),
+        ))
         .filter(challenge::Column::LessonId.eq(&lesson_id))
         .order_by_asc(challenge::Column::Position)
         .all(&state.db);
@@ -215,40 +223,60 @@ pub async fn upsert_lesson(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = lesson::Entity::find_by_id(&lesson_id)
         .one(&state.db)
         .await?;
 
-    let saved = if let Some(m) = existing {
+    if existing.is_some() {
         ensure_lesson_in_module(&state, &course_id, &module_id, &lesson_id).await?;
-        let mut active = m.into_active_model();
-        active.title = Set(body.title);
-        active.language = Set(body.language.unwrap_or_else(|| "en".to_string()));
-        active.content = Set(body.content);
-        active.video_url = Set(body.video_url);
-        active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(5));
-        active.position = Set(body.position.unwrap_or(0));
-        active.is_optional = Set(body.is_optional.unwrap_or(false));
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
     } else {
         ensure_module_in_course(&state, &course_id, &module_id).await?;
-        let active = lesson::ActiveModel {
-            id: Set(lesson_id),
-            module_id: Set(module_id),
-            title: Set(body.title),
-            language: Set(body.language.unwrap_or_else(|| "en".to_string())),
-            content: Set(body.content),
-            video_url: Set(body.video_url),
-            estimated_minutes: Set(body.estimated_minutes.unwrap_or(5)),
-            position: Set(body.position.unwrap_or(0)),
-            is_optional: Set(body.is_optional.unwrap_or(false)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
-    };
+    }
+
+    let saved = state
+        .transaction(|txn| {
+            let lesson_id = lesson_id.clone();
+            let module_id = module_id.clone();
+            let body = body.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the lesson row present until
+                // the drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::Lesson, &lesson_id).await?;
+                let saved = if let Some(m) = existing {
+                    let mut active = m.into_active_model();
+                    active.title = Set(body.title);
+                    active.language = Set(body.language.unwrap_or_else(|| "en".to_string()));
+                    active.content = Set(body.content);
+                    active.video_url = Set(body.video_url);
+                    active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(5));
+                    active.position = Set(body.position.unwrap_or(0));
+                    active.is_optional = Set(body.is_optional.unwrap_or(false));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    lesson::ActiveModel {
+                        id: Set(lesson_id),
+                        module_id: Set(module_id),
+                        title: Set(body.title),
+                        language: Set(body.language.unwrap_or_else(|| "en".to_string())),
+                        content: Set(body.content),
+                        video_url: Set(body.video_url),
+                        estimated_minutes: Set(body.estimated_minutes.unwrap_or(5)),
+                        position: Set(body.position.unwrap_or(0)),
+                        is_optional: Set(body.is_optional.unwrap_or(false)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
+            })
+        })
+        .await?;
 
     Ok(Json(saved))
 }
@@ -264,6 +292,7 @@ pub async fn upsert_lesson(
     ),
     responses(
         (status = 200, description = "Lesson deleted"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -275,12 +304,17 @@ pub async fn delete_lesson(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((course_id, module_id, lesson_id)): Path<(String, String, String)>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
     ensure_lesson_in_module(&state, &course_id, &module_id, &lesson_id).await?;
-    lesson::Entity::delete_by_id(lesson_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::Lesson,
+        &lesson_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }

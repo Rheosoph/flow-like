@@ -562,6 +562,11 @@ pub async fn poll_status(
         let is_terminal = run.status.is_terminal();
         if is_terminal || !events.is_empty() || std::time::Instant::now() >= deadline {
             // Legacy clients have no cursor, so retain their delivery marker.
+            // Marking one delivered retires it for good, which is only safe
+            // because `get_events` fails the poll rather than handing back an
+            // event whose staged payload it could not read for a transient
+            // reason. Only a payload the store reports as gone comes through,
+            // marked, and it would not come back on a retry either.
             if !events.is_empty() && !cursor_manages_delivery {
                 let event_ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
                 let _ = store
@@ -706,7 +711,7 @@ async fn track_execution_usage(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let instance = std::env::var("INSTANCE_ID").ok();
     let record = execution_usage_tracking::ActiveModel {
         id: Set(create_id()),
@@ -1087,10 +1092,7 @@ pub(crate) async fn get_state_store(
         config = config.with_aws_config(state.aws_client.clone());
     }
 
-    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
-    {
-        config = config.with_content_store(state.content_bucket.clone());
-    }
+    config = config.with_content_store(state.content_bucket.clone());
 
     #[cfg(feature = "s3")]
     {

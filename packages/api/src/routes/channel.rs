@@ -593,7 +593,7 @@ mod tests {
             status,
             expires_at,
             value: None,
-            created_at: chrono::Utc::now().naive_utc(),
+            created_at: chrono::Utc::now().fixed_offset(),
         }
     }
 

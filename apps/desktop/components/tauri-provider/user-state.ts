@@ -6,6 +6,7 @@ import type {
 	ISettingsProfile,
 	IUserState,
 } from "@flow-like/flow-like-ui";
+import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -63,9 +64,12 @@ function localToINotification(local: ILocalNotification): INotification {
 function sortNotificationsByCreatedAtDesc(
 	notifications: INotification[],
 ): INotification[] {
+	// Local rows carry an explicit-UTC instant while hub rows may not, so both
+	// sides go through the parser rather than through new Date().
 	return notifications.sort(
 		(a, b) =>
-			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+			(parseDateValue(b.created_at)?.getTime() ?? 0) -
+			(parseDateValue(a.created_at)?.getTime() ?? 0),
 	);
 }
 

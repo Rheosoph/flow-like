@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     entity::meta,
     error::ApiError,
@@ -10,7 +12,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 
 #[utoipa::path(
     delete,
@@ -52,50 +54,63 @@ pub async fn remove_media(
 ) -> Result<Json<()>, ApiError> {
     let mode = MetaMode::from_media_query(&query, &app_id);
     mode.ensure_write_permission(&user, &app_id, &state).await?;
-    let language = query.language.as_deref().unwrap_or("en");
+    let language = query.language.clone().unwrap_or_else(|| "en".to_string());
+    let media_path = mode
+        .media_prefix(&app_id)
+        .child(format!("{}.webp", media_id));
+    let mode = Arc::new(mode);
+    let query = Arc::new(query);
 
-    let txn = state.db.begin().await?;
+    // The reference is dropped first; the file goes once the row no longer
+    // points at it, so the S3 call never runs inside the transaction.
+    state
+        .transaction(|txn| {
+            let mode = mode.clone();
+            let query = query.clone();
+            let language = language.clone();
+            let media_id = media_id.clone();
+            Box::pin(async move {
+                let existing_meta = mode
+                    .find_existing_meta(&language, txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let existing_meta = mode
-        .find_existing_meta(language, &txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
+                match &query.item {
+                    MediaItem::Icon => {
+                        if existing_meta.icon == Some(media_id) {
+                            model.icon = Set(None);
+                        }
+                    }
+                    MediaItem::Thumbnail => {
+                        if existing_meta.thumbnail == Some(media_id) {
+                            model.thumbnail = Set(None);
+                        }
+                    }
+                    MediaItem::Preview => {
+                        let mut existing_preview = existing_meta.preview_media.unwrap_or_default();
+                        existing_preview.retain(|id| id != &media_id);
+                        model.preview_media = Set(Some(existing_preview));
+                    }
+                }
 
-    match &query.item {
-        MediaItem::Icon => {
-            if existing_meta.icon.clone() == Some(media_id.clone()) {
-                model.icon = Set(None);
-            }
-        }
-        MediaItem::Thumbnail => {
-            if existing_meta.thumbnail.clone() == Some(media_id.clone()) {
-                model.thumbnail = Set(None);
-            }
-        }
-        MediaItem::Preview => {
-            let mut existing_preview = existing_meta.preview_media.clone().unwrap_or_default();
-            existing_preview.retain(|id| id != &media_id);
-            model.preview_media = Set(Some(existing_preview));
-        }
-    }
+                model.update(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
-    model.update(&txn).await?;
-
-    let item_name = format!("{}.webp", media_id);
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
-    let path = mode.media_prefix(&app_id).child(item_name.clone());
-    if let Err(e) = master_store.as_generic().delete(&path).await {
-        tracing::error!("Failed to delete media file at {}: {:?}", path, e);
+    if let Err(e) = master_store.as_generic().delete(&media_path).await {
+        tracing::error!("Failed to delete media file at {}: {:?}", media_path, e);
         return Err(ApiError::internal_error(anyhow!(
             "Failed to delete media file, reference ID: {}",
             create_id()
         )));
     }
-    txn.commit().await?;
 
     Ok(Json(()))
 }

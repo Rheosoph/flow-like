@@ -53,11 +53,11 @@ pub async fn create_pat(
     let valid_until = match input.valid_until {
         Some(ts) => Some(
             chrono::DateTime::from_timestamp(ts, 0)
-                .ok_or_else(|| ApiError::bad_request("Invalid valid_until timestamp"))?,
+                .ok_or_else(|| ApiError::bad_request("Invalid valid_until timestamp"))?
+                .fixed_offset(),
         ),
         None => None,
     };
-    let naive_datetime = valid_until.map(|dt| dt.naive_utc());
 
     let mut secret_bytes = [0u8; 32];
     OsRng
@@ -74,10 +74,10 @@ pub async fn create_pat(
         key: Set(secret_hash),
         name: Set(input.name),
         user_id: Set(sub.to_string()),
-        valid_until: Set(naive_datetime),
+        valid_until: Set(valid_until),
         permissions: Set(permissions),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     };
 
     let pat = pat.insert(&state.db).await?;

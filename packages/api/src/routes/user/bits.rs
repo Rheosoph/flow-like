@@ -1,3 +1,4 @@
+use sea_orm::sea_query::ExprTrait;
 use std::collections::HashMap;
 
 use crate::{
@@ -252,7 +253,7 @@ pub async fn upsert_user_bit(
         Some(encrypt_secret(&json, &state.encryption_key))
     };
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let model = user_bit::ActiveModel {
         id: Set(bit_id.clone()),
         user_id: Set(sub.clone()),
@@ -591,8 +592,8 @@ pub(crate) fn user_bit_to_core(
         license: model.license,
         dependencies: vec![],
         dependency_tree_hash: model.id,
-        created: model.created_at.and_utc().to_rfc3339(),
-        updated: model.updated_at.and_utc().to_rfc3339(),
+        created: model.created_at.to_rfc3339(),
+        updated: model.updated_at.to_rfc3339(),
         model_slug: None,
         model_evaluation: None,
     };

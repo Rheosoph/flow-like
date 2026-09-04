@@ -154,14 +154,18 @@ export function isAbortError(error: unknown): boolean {
  * Retry transport faults and the server's own "try again" signals, never a
  * refusal. A 403 is included because an expired signature presents as one, and
  * `refreshTargetOnRetry` mints a fresh destination before the next attempt; a
- * genuine permission failure simply exhausts its attempts.
+ * genuine permission failure simply exhausts its attempts. A 409 is the
+ * serialized-write engine losing a race while minting the upload target — the
+ * same request succeeds on the next attempt.
  */
 export function isRetryableUploadError(error: unknown): boolean {
 	if (isAbortError(error)) return false;
 	if (error instanceof BulkUploadHttpError) {
 		const { status } = error;
 		if (status === 0) return true;
-		if (status === 403 || status === 408 || status === 429) return true;
+		if (status === 403 || status === 408 || status === 409 || status === 429) {
+			return true;
+		}
 		return status >= 500;
 	}
 	return true;

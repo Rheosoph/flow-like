@@ -1,5 +1,6 @@
 use crate::{
     credentials::CredentialsAccess,
+    db::lease::touch_lock_row,
     entity::{
         challenge, course_module, leaderboard_opt_in, lesson, sea_orm_active_enums::ChallengeKind,
         user_challenge_attempt, user_course_enrollment,
@@ -47,7 +48,7 @@ pub struct ChallengeAttemptView {
     pub submission: Value,
     pub is_correct: bool,
     pub points_awarded: i32,
-    pub attempted_at: chrono::NaiveDateTime,
+    pub attempted_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 impl From<user_challenge_attempt::Model> for ChallengeAttemptView {
@@ -664,15 +665,9 @@ pub async fn submit_attempt(
     Json(body): Json<AttemptSubmission>,
 ) -> Result<Json<AttemptResult>, ApiError> {
     let sub = user.sub()?;
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let challenge = ensure_challenge_course_readable(&state, &user, &challenge_id).await?;
     let course_id = course_id_for_challenge(&state, &challenge).await?;
-    // Score calculation must be serialized per learner. Duplicate submissions for one challenge
-    // can otherwise both observe zero prior points, while submissions for different challenges can
-    // race the learner's aggregate leaderboard total.
-    let txn = state
-        .mutation_transaction(course_attempt_lock_id(&sub))
-        .await?;
 
     let (is_correct, explanation_override) = match challenge.kind {
         ChallengeKind::SingleChoice | ChallengeKind::MultipleChoice => {
@@ -695,49 +690,67 @@ pub async fn submit_attempt(
 
     let max_points = challenge.points.max(0);
     let current_score = if is_correct { max_points } else { 0 };
-    let previously_awarded = user_challenge_attempt::Entity::find()
-        .filter(user_challenge_attempt::Column::UserId.eq(&sub))
-        .filter(user_challenge_attempt::Column::ChallengeId.eq(&challenge_id))
-        .all(&txn)
-        .await?
-        .into_iter()
-        .map(|attempt| attempt.points_awarded.max(0))
-        .sum::<i32>()
-        .min(max_points);
-    let points_awarded = (current_score - previously_awarded).max(0);
-
     let attempt_id = create_id();
-    let active = user_challenge_attempt::ActiveModel {
-        id: Set(attempt_id.clone()),
-        user_id: Set(sub.clone()),
-        challenge_id: Set(challenge_id),
-        submission: Set(body.submission),
-        is_correct: Set(is_correct),
-        points_awarded: Set(points_awarded),
-        attempted_at: Set(now),
-    };
-    active.insert(&txn).await?;
+    let submission = body.submission;
+    // Score calculation must be serialized per learner. Duplicate submissions for one challenge
+    // can otherwise both observe zero prior points, while submissions for different challenges can
+    // race the learner's aggregate leaderboard total. Writing the learner's lock row inside this
+    // short transaction makes racing submissions block (PostgreSQL) or lose at commit and retry
+    // (CockroachDB, DSQL), so the later one re-reads the earlier attempt.
+    let lock_id = course_attempt_lock_id(&sub);
+    let points_awarded = state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let challenge_id = challenge_id.clone();
+            let attempt_id = attempt_id.clone();
+            let submission = submission.clone();
+            Box::pin(async move {
+                touch_lock_row(txn, lock_id).await?;
+                let previously_awarded = user_challenge_attempt::Entity::find()
+                    .filter(user_challenge_attempt::Column::UserId.eq(&sub))
+                    .filter(user_challenge_attempt::Column::ChallengeId.eq(&challenge_id))
+                    .all(txn)
+                    .await?
+                    .into_iter()
+                    .map(|attempt| attempt.points_awarded.max(0))
+                    .sum::<i32>()
+                    .min(max_points);
+                let points_awarded = (current_score - previously_awarded).max(0);
 
-    if is_correct && points_awarded > 0 {
-        let opt_in = leaderboard_opt_in::Entity::find_by_id(&sub)
-            .one(&txn)
-            .await?;
-        if let Some(o) = opt_in
-            && o.is_opted_in
-        {
-            let mut active = o.into_active_model();
-            let current = match active.total_points {
-                sea_orm::ActiveValue::Set(v) => v,
-                sea_orm::ActiveValue::Unchanged(v) => v,
-                _ => 0,
-            };
-            active.total_points = Set(current + points_awarded);
-            active.updated_at = Set(now);
-            active.update(&txn).await?;
-        }
-    }
+                user_challenge_attempt::ActiveModel {
+                    id: Set(attempt_id),
+                    user_id: Set(sub.clone()),
+                    challenge_id: Set(challenge_id),
+                    submission: Set(submission),
+                    is_correct: Set(is_correct),
+                    points_awarded: Set(points_awarded),
+                    attempted_at: Set(now),
+                }
+                .insert(txn)
+                .await?;
 
-    txn.commit().await?;
+                if is_correct && points_awarded > 0 {
+                    let opt_in = leaderboard_opt_in::Entity::find_by_id(&sub)
+                        .one(txn)
+                        .await?;
+                    if let Some(o) = opt_in
+                        && o.is_opted_in
+                    {
+                        let mut active = o.into_active_model();
+                        let current = match active.total_points {
+                            sea_orm::ActiveValue::Set(v) => v,
+                            sea_orm::ActiveValue::Unchanged(v) => v,
+                            _ => 0,
+                        };
+                        active.total_points = Set(current + points_awarded);
+                        active.updated_at = Set(now);
+                        active.update(txn).await?;
+                    }
+                }
+                Ok::<i32, ApiError>(points_awarded)
+            })
+        })
+        .await?;
 
     Ok(Json(AttemptResult {
         is_correct,

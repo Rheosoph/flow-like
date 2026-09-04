@@ -1,9 +1,12 @@
 use crate::{
-    audit_branch, ensure_permission,
-    entity::{app_package, membership, role},
+    audit_branch,
+    db::{DEFAULT_WRITE_CHUNK, delete_in_batches, update_in_batches},
+    ensure_permission,
+    entity::{app_package, invitation, membership, role, technical_user},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::app::api::delete_api_key::delete_technical_users_where,
     state::AppState,
 };
 use axum::{
@@ -11,9 +14,8 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::hub::MemberLeavePolicy;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::sea_query::{Expr, ExprTrait};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 
 /// Users are allowed to remove other users if they are admin. If the remove themselfes they are allowed to do so regardless of their role
 #[utoipa::path(
@@ -49,8 +51,6 @@ pub async fn remove_user(
         ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
     }
 
-    let txn = state.db.begin().await?;
-
     let (membership, role) = membership::Entity::find()
         .filter(
             membership::Column::AppId
@@ -58,7 +58,7 @@ pub async fn remove_user(
                 .and(membership::Column::UserId.eq(sub.clone())),
         )
         .find_also_related(role::Entity)
-        .one(&txn)
+        .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
@@ -77,33 +77,19 @@ pub async fn remove_user(
     }
 
     let membership_id = membership.id.clone();
+    detach_membership_children(&state, &membership_id).await?;
 
-    match state.platform_config.wasm_registry_config.on_member_leave {
-        MemberLeavePolicy::Stale => {
-            let packages = app_package::Entity::find()
-                .filter(app_package::Column::MembershipId.eq(membership_id.clone()))
-                .all(&txn)
-                .await?;
-
-            for pkg in packages {
-                let mut active: app_package::ActiveModel = pkg.into();
-                active.stale = Set(true);
-                active.membership_id = Set(None);
-                active.update(&txn).await?;
-            }
-        }
-        MemberLeavePolicy::Remove => {
-            app_package::Entity::delete_many()
-                .filter(app_package::Column::MembershipId.eq(membership_id.clone()))
-                .exec(&txn)
-                .await?;
-        }
-    }
-
-    let membership: membership::ActiveModel = membership.into();
-    membership.delete(&txn).await?;
-
-    txn.commit().await?;
+    state
+        .transaction(|txn| {
+            let membership_id = membership_id.clone();
+            Box::pin(async move {
+                membership::Entity::delete_by_id(membership_id)
+                    .exec(txn)
+                    .await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     audit_branch!(
         state,
@@ -115,4 +101,59 @@ pub async fn remove_user(
         "User removed from team"
     );
     Ok(Json(()))
+}
+
+/// Drain everything that hangs off the membership row in bounded batches
+/// before the row itself goes: packages per the leave policy, the API keys
+/// the member created (with their usage rows detached first), and the
+/// invitations they sent.
+pub(crate) async fn detach_membership_children(
+    state: &AppState,
+    membership_id: &str,
+) -> Result<(), sea_orm::DbErr> {
+    let packages = Condition::all().add(app_package::Column::MembershipId.eq(membership_id));
+    match state.platform_config.wasm_registry_config.on_member_leave {
+        MemberLeavePolicy::Stale => {
+            update_in_batches::<app_package::Entity>(
+                &state.db,
+                state.db_dialect,
+                packages,
+                vec![
+                    (app_package::Column::Stale, Expr::value(true)),
+                    (
+                        app_package::Column::MembershipId,
+                        Expr::value(Option::<String>::None),
+                    ),
+                ],
+                DEFAULT_WRITE_CHUNK,
+            )
+            .await?;
+        }
+        MemberLeavePolicy::Remove => {
+            delete_in_batches::<app_package::Entity>(
+                &state.db,
+                state.db_dialect,
+                packages,
+                DEFAULT_WRITE_CHUNK,
+                None,
+            )
+            .await?;
+        }
+    }
+
+    delete_technical_users_where(
+        state,
+        Condition::all().add(technical_user::Column::CreatorMembershipId.eq(membership_id)),
+    )
+    .await?;
+
+    delete_in_batches::<invitation::Entity>(
+        &state.db,
+        state.db_dialect,
+        Condition::all().add(invitation::Column::ByMemberId.eq(membership_id)),
+        DEFAULT_WRITE_CHUNK,
+        None,
+    )
+    .await?;
+    Ok(())
 }

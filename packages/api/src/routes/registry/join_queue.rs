@@ -15,9 +15,7 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use flow_like_types::create_id;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -33,6 +31,13 @@ pub struct RequestAccessResponse {
     pub queued: bool,
     pub requires_purchase: bool,
     pub package_id: String,
+}
+
+enum AccessOutcome {
+    AlreadyGranted,
+    Granted,
+    RequiresPurchase,
+    Queued,
 }
 
 /// PUT /registry/package/{package_id}/access
@@ -63,100 +68,110 @@ pub async fn request_access(
     Json(params): Json<RequestAccessParams>,
 ) -> Result<Json<RequestAccessResponse>, ApiError> {
     let sub = user.sub()?;
-    let txn = state.db.begin().await?;
 
-    let existing = wasm_package_user::Entity::find()
-        .filter(wasm_package_user::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_user::Column::UserId.eq(&sub))
-        .one(&txn)
+    let outcome = state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let package_id = package_id.clone();
+            let comment = params.comment.clone();
+            Box::pin(async move {
+                let existing = wasm_package_user::Entity::find()
+                    .filter(wasm_package_user::Column::PackageId.eq(&package_id))
+                    .filter(wasm_package_user::Column::UserId.eq(&sub))
+                    .one(txn)
+                    .await?;
+
+                if existing.is_some() {
+                    return Ok(AccessOutcome::AlreadyGranted);
+                }
+
+                let package = wasm_package::Entity::find_by_id(&package_id)
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                if package.visibility == WasmPackageVisibility::Private {
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                if package.visibility == WasmPackageVisibility::Public && package.price <= 0 {
+                    wasm_package_user::ActiveModel {
+                        id: Set(create_id()),
+                        package_id: Set(package_id),
+                        user_id: Set(sub),
+                        permission: Set(WasmPackagePermission::User.bits()),
+                        granted_by: Set(None),
+                        granted_at: Set(chrono::Utc::now().fixed_offset()),
+                    }
+                    .insert(txn)
+                    .await?;
+                    return Ok(AccessOutcome::Granted);
+                }
+
+                if package.visibility == WasmPackageVisibility::Public && package.price > 0 {
+                    return Ok(AccessOutcome::RequiresPurchase);
+                }
+
+                let existing_request = wasm_package_join_queue::Entity::find()
+                    .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
+                    .filter(wasm_package_join_queue::Column::UserId.eq(&sub))
+                    .one(txn)
+                    .await?;
+
+                if let Some(existing_request) = existing_request {
+                    let mut active: wasm_package_join_queue::ActiveModel = existing_request.into();
+                    active.comment = Set(comment);
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
+                    active.update(txn).await?;
+                } else {
+                    wasm_package_join_queue::ActiveModel {
+                        id: Set(create_id()),
+                        user_id: Set(sub),
+                        package_id: Set(package_id),
+                        comment: Set(comment),
+                        created_at: Set(chrono::Utc::now().fixed_offset()),
+                        updated_at: Set(chrono::Utc::now().fixed_offset()),
+                    }
+                    .insert(txn)
+                    .await?;
+                }
+
+                Ok::<_, ApiError>(AccessOutcome::Queued)
+            })
+        })
         .await?;
 
-    if existing.is_some() {
-        return Ok(Json(RequestAccessResponse {
+    let response = match outcome {
+        AccessOutcome::AlreadyGranted => RequestAccessResponse {
             granted: true,
             queued: false,
             requires_purchase: false,
             package_id,
-        }));
-    }
-
-    let package = wasm_package::Entity::find_by_id(&package_id)
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    if package.visibility == WasmPackageVisibility::Private {
-        return Err(ApiError::FORBIDDEN);
-    }
-
-    // Public + free → instant grant
-    if package.visibility == WasmPackageVisibility::Public && package.price <= 0 {
-        let now = chrono::Utc::now().naive_utc();
-        wasm_package_user::ActiveModel {
-            id: Set(create_id()),
-            package_id: Set(package_id.clone()),
-            user_id: Set(sub),
-            permission: Set(WasmPackagePermission::User.bits()),
-            granted_by: Set(None),
-            granted_at: Set(now),
+        },
+        AccessOutcome::Granted => {
+            state.invalidate_wasm_permission(&sub, &package_id);
+            RequestAccessResponse {
+                granted: true,
+                queued: false,
+                requires_purchase: false,
+                package_id,
+            }
         }
-        .insert(&txn)
-        .await?;
-
-        txn.commit().await?;
-        state.invalidate_wasm_permission(&user.sub()?, &package_id);
-
-        return Ok(Json(RequestAccessResponse {
-            granted: true,
-            queued: false,
-            requires_purchase: false,
-            package_id,
-        }));
-    }
-
-    // Public + paid → needs purchase
-    if package.visibility == WasmPackageVisibility::Public && package.price > 0 {
-        return Ok(Json(RequestAccessResponse {
+        AccessOutcome::RequiresPurchase => RequestAccessResponse {
             granted: false,
             queued: false,
             requires_purchase: true,
             package_id,
-        }));
-    }
+        },
+        AccessOutcome::Queued => RequestAccessResponse {
+            granted: false,
+            queued: true,
+            requires_purchase: false,
+            package_id,
+        },
+    };
 
-    // PublicRequestAccess → join queue
-    let existing_request = wasm_package_join_queue::Entity::find()
-        .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_join_queue::Column::UserId.eq(&sub))
-        .one(&txn)
-        .await?;
-
-    if let Some(existing_request) = existing_request {
-        let mut active: wasm_package_join_queue::ActiveModel = existing_request.into();
-        active.comment = Set(params.comment);
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
-        active.update(&txn).await?;
-    } else {
-        wasm_package_join_queue::ActiveModel {
-            id: Set(create_id()),
-            user_id: Set(sub),
-            package_id: Set(package_id.clone()),
-            comment: Set(params.comment),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
-        }
-        .insert(&txn)
-        .await?;
-    }
-
-    txn.commit().await?;
-
-    Ok(Json(RequestAccessResponse {
-        granted: false,
-        queued: true,
-        requires_purchase: false,
-        package_id,
-    }))
+    Ok(Json(response))
 }
 
 /// POST /registry/package/{package_id}/access/{request_id}
@@ -186,43 +201,44 @@ pub async fn accept_access_request(
     let sub = user.sub()?;
     crate::ensure_wasm_permission!(state, &sub, &package_id, WasmPackagePermission::Maintainer);
 
-    let txn = state.db.begin().await?;
+    state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let package_id = package_id.clone();
+            let request_id = request_id.clone();
+            Box::pin(async move {
+                let request = wasm_package_join_queue::Entity::find()
+                    .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
+                    .filter(wasm_package_join_queue::Column::Id.eq(&request_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let request = wasm_package_join_queue::Entity::find()
-        .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_join_queue::Column::Id.eq(&request_id))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+                let already = wasm_package_user::Entity::find()
+                    .filter(wasm_package_user::Column::PackageId.eq(&package_id))
+                    .filter(wasm_package_user::Column::UserId.eq(&request.user_id))
+                    .one(txn)
+                    .await?;
 
-    let already = wasm_package_user::Entity::find()
-        .filter(wasm_package_user::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_user::Column::UserId.eq(&request.user_id))
-        .one(&txn)
+                if already.is_none() {
+                    wasm_package_user::ActiveModel {
+                        id: Set(create_id()),
+                        package_id: Set(package_id),
+                        user_id: Set(request.user_id.clone()),
+                        permission: Set(WasmPackagePermission::User.bits()),
+                        granted_by: Set(Some(sub)),
+                        granted_at: Set(chrono::Utc::now().fixed_offset()),
+                    }
+                    .insert(txn)
+                    .await?;
+                }
+
+                let active: wasm_package_join_queue::ActiveModel = request.into();
+                active.delete(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    if already.is_some() {
-        let active: wasm_package_join_queue::ActiveModel = request.into();
-        active.delete(&txn).await?;
-        txn.commit().await?;
-        return Ok(Json(()));
-    }
-
-    let now = chrono::Utc::now().naive_utc();
-    wasm_package_user::ActiveModel {
-        id: Set(create_id()),
-        package_id: Set(package_id.clone()),
-        user_id: Set(request.user_id.clone()),
-        permission: Set(WasmPackagePermission::User.bits()),
-        granted_by: Set(Some(sub)),
-        granted_at: Set(now),
-    }
-    .insert(&txn)
-    .await?;
-
-    let active: wasm_package_join_queue::ActiveModel = request.into();
-    active.delete(&txn).await?;
-    txn.commit().await?;
 
     Ok(Json(()))
 }
@@ -254,18 +270,24 @@ pub async fn reject_access_request(
     let sub = user.sub()?;
     crate::ensure_wasm_permission!(state, &sub, &package_id, WasmPackagePermission::Maintainer);
 
-    let txn = state.db.begin().await?;
+    state
+        .transaction(|txn| {
+            let package_id = package_id.clone();
+            let request_id = request_id.clone();
+            Box::pin(async move {
+                let request = wasm_package_join_queue::Entity::find()
+                    .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
+                    .filter(wasm_package_join_queue::Column::Id.eq(&request_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let request = wasm_package_join_queue::Entity::find()
-        .filter(wasm_package_join_queue::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_join_queue::Column::Id.eq(&request_id))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let active: wasm_package_join_queue::ActiveModel = request.into();
-    active.delete(&txn).await?;
-    txn.commit().await?;
+                let active: wasm_package_join_queue::ActiveModel = request.into();
+                active.delete(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     Ok(Json(()))
 }
@@ -306,7 +328,7 @@ pub async fn list_access_requests(
             user_id: r.user_id,
             package_id: r.package_id,
             comment: r.comment,
-            created_at: chrono::DateTime::from_naive_utc_and_offset(r.created_at, chrono::Utc),
+            created_at: r.created_at.to_utc(),
         })
         .collect();
 

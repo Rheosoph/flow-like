@@ -160,7 +160,7 @@ pub async fn error_reporting_middleware(
         Some(sea_orm::JsonValue::String(details))
     };
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let model = error_report::ActiveModel {
         id: Set(report.id),

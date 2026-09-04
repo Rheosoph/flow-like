@@ -99,6 +99,8 @@ pub async fn list_users(
     if let Some(q) = &query.query
         && !q.is_empty()
     {
+        use sea_orm::sea_query::ExprTrait;
+
         let pattern = format!("%{}%", q);
         select = select.filter(
             user::Column::Email
@@ -159,8 +161,8 @@ pub async fn list_users(
             total_size: u.total_size,
             total_llm_price: u.total_llm_price,
             total_embedding_price: u.total_embedding_price,
-            created_at: u.created_at.to_string(),
-            updated_at: u.updated_at.to_string(),
+            created_at: u.created_at.to_rfc3339(),
+            updated_at: u.updated_at.to_rfc3339(),
         })
         .collect();
 

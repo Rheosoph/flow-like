@@ -1,63 +1,8 @@
-enum Category {
-  OTHER
-  PRODUCTIVITY
-  SOCIAL
-  ENTERTAINMENT
-  EDUCATION
-  HEALTH
-  FINANCE
-  LIFESTYLE
-  TRAVEL
-  NEWS
-  SPORTS
-  SHOPPING
-  FOOD_AND_DRINK
-  MUSIC
-  PHOTOGRAPHY
-  UTILITIES
-  WEATHER
-  GAMES
-  BUSINESS
-  COMMUNICATION
-  ANIME
-}
-
-/// What kind of thing the app is, structurally. Orthogonal to Category, which
-/// describes the topic. Null means the owner has not classified it yet.
-enum AppType {
-  AGENT
-  CUSTOM_INTERFACE
-  DATA_FOCUS
-  DATA_PIPELINE
-  ANALYTICS
-  FORM
-}
-
-enum Status {
-  ACTIVE
-  INACTIVE
-  ARCHIVED
-}
-
-enum ExecutionMode {
-  ANY
-  LOCAL
-  REMOTE
-}
-
-enum Visibility {
-  PUBLIC
-  PUBLIC_REQUEST_ACCESS
-  PRIVATE
-  PROTOTYPE
-  OFFLINE
-}
-
 model App {
   id String @id
 
-  status     Status     @default(ACTIVE)
-  visibility Visibility @default(PRIVATE)
+  status     String @default("ACTIVE")
+  visibility String @default("PRIVATE")
 
   meta Meta[]
 
@@ -83,9 +28,11 @@ model App {
   ownerRoleId   String? @unique
   roles         Role[]
 
-  primaryCategory   Category?
-  secondaryCategory Category?
-  appType           AppType?
+  primaryCategory   String?
+  secondaryCategory String?
+  /// What kind of thing the app is, structurally. Orthogonal to the categories, which
+  /// describe the topic. Null means the owner has not classified it yet.
+  appType           String?
 
   ratingSum         BigInt @default(0)
   ratingCount       BigInt @default(0)
@@ -103,7 +50,7 @@ model App {
 
   /// Project owner opts in to the Fork-an-app feature. Apps default to
   /// false; without this flag the fork endpoints reject the request.
-  allowForking Boolean @default(false)
+  allowForking Boolean   @default(false)
   /// Owner-defined fork policy: which asset categories a fork of this app
   /// copies, and how the project database is handled. NULL = platform
   /// default (copy everything), which preserves pre-#756 behavior for
@@ -113,12 +60,12 @@ model App {
   /// fork survives even if the source app is later deleted.
   forkedFrom   String?
   /// For forked apps: when the fork happened.
-  forkedAt     DateTime?
+  forkedAt     DateTime? @db.Timestamptz(3)
 
   technicalUsers TechnicalUser[]
 
-  outgoingAppConnections AppConnection[] @relation("outgoingAppConnections")
-  incomingAppConnections AppConnection[] @relation("incomingAppConnections")
+  outgoingAppConnections AppConnection[]  @relation("outgoingAppConnections")
+  incomingAppConnections AppConnection[]  @relation("incomingAppConnections")
   processNotes           AppProcessNote[]
 
   ownedGroups      AppGroup[]       @relation("ownedGroups")
@@ -128,13 +75,13 @@ model App {
   usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]
   executionRuns  ExecutionRun[]
-  executionMode  ExecutionMode            @default(ANY)
+  executionMode  String                   @default("ANY")
 
-  syncs  BoardSync[]
+  syncs       BoardSync[]
   boardScores AppBoardScore[]
-  bits   String[]    @default([])
-  events Event[]
-  sinks  EventSink[]
+  bits        Json?           @default("[]")
+  events      Event[]
+  sinks       EventSink[]
 
   eventRemoteAuths         EventRemoteAuth[]
   eventRemoteRegistrations EventRemoteRegistration[]
@@ -144,18 +91,17 @@ model App {
   regressionSuites    RegressionSuite[]
   regressionSuiteRuns RegressionSuiteRun[]
 
-  packages   AppPackage[]
-  purchases  AppPurchase[]
-  discounts  AppDiscount[]
+  packages       AppPackage[]
+  purchases      AppPurchase[]
+  discounts      AppDiscount[]
   salesDaily     AppSalesDaily[]
   analyticsDaily AppAnalyticsDaily[]
 
   aiActAssessments       AiActAssessment[]
   aiActModelObservations AiActModelObservation[]
 
-
-  createdAt               DateTime                 @default(now())
-  updatedAt               DateTime                 @updatedAt
+  createdAt               DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime                 @updatedAt @db.Timestamptz(3)
   embeddingUsageTrackings EmbeddingUsageTracking[]
 
   @@index([createdAt])
@@ -169,31 +115,26 @@ model App {
 model AppUsageLimit {
   id String @id
 
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
-  appId String
+  app    App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId  String
   /// Empty string means app-wide. A user id means per-user limit within the app.
   /// Technical-user scoped limits use the technical user's id in the same column.
   userId String @default("")
 
   /// Valid values are weekly, monthly, yearly.
-  period           String
-  costMicroDollars BigInt?
-  tokenLimit       BigInt?
-  enabled Boolean @default(true)
-  hard Boolean @default(true)
+  period                  String
+  costMicroDollars        BigInt?
+  tokenLimit              BigInt?
+  enabled                 Boolean @default(true)
+  hard                    Boolean @default(true)
   warningThresholdPercent Int?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, userId, period])
   @@index([appId])
   @@index([userId])
-}
-
-enum CacheScope {
-  APP
-  USER
 }
 
 /// Key/value cache entries written by flows, plus the API's own coordination state
@@ -206,9 +147,9 @@ enum CacheScope {
 model AppCacheEntry {
   appId String
 
-  scope CacheScope
+  scope     String
   /// Empty string for app-scoped entries. A user id for user-scoped entries.
-  userId String @default("")
+  userId    String @default("")
   /// Optional grouping for bulk invalidation; empty for unnamespaced entries.
   namespace String @default("")
   key       String
@@ -217,10 +158,10 @@ model AppCacheEntry {
 
   /// Null means the entry persists until it is explicitly deleted. Postgres has no
   /// native TTL, so expired rows are removed by the cache sweeper.
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@id([appId, scope, userId, namespace, key])
   @@index([expiresAt])
@@ -240,19 +181,19 @@ model TechnicalUser {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  creatorUser   User?   @relation("TechnicalUserCreator", fields: [creatorUserId], references: [id], onDelete: Cascade)
-  creatorUserId String?
+  creatorUser         User?       @relation("TechnicalUserCreator", fields: [creatorUserId], references: [id], onDelete: Cascade)
+  creatorUserId       String?
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
 
-  llmUsage                    LLMUsageTracking[]
-  embeddingUsage              EmbeddingUsageTracking[]
-  executionUsage              ExecutionUsageTracking[]
-  executionRuns               ExecutionRun[]
+  llmUsage       LLMUsageTracking[]
+  embeddingUsage EmbeddingUsageTracking[]
+  executionUsage ExecutionUsageTracking[]
+  executionRuns  ExecutionRun[]
 
-  validUntil DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  validUntil DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([creatorUserId])
@@ -276,8 +217,8 @@ model Feedback {
   comment String
   rating  BigInt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId])
   @@index([appId])
@@ -303,8 +244,8 @@ model Comment {
   package   WasmPackage? @relation(fields: [packageId], references: [id], onDelete: Cascade)
   packageId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([userId, appId])
   @@unique([userId, packageId])
@@ -331,8 +272,8 @@ model Template {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
 }
@@ -347,8 +288,8 @@ model Widget {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
 }
@@ -366,8 +307,8 @@ model Page {
 
   version String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId])
   @@index([boardId])
@@ -380,12 +321,12 @@ model BoardSync {
   appId String
 
   boardId      String
-  lastSyncedAt DateTime
+  lastSyncedAt DateTime @db.Timestamptz(3)
 
   syncEncryptionKey String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, boardId])
 }
@@ -411,9 +352,9 @@ model AppBoardScore {
   /// Minimum across all six categories - single sortable "how bad" value.
   worstScore Int
 
-  nodeCount        Int @default(0)
-  scoredNodeCount  Int @default(0)
-  connectionCount  Int @default(0)
+  nodeCount       Int @default(0)
+  scoredNodeCount Int @default(0)
+  connectionCount Int @default(0)
 
   /// Nodes dragging scores down: [{ node, category, score, count? }]
   flaggedPatterns Json?
@@ -422,8 +363,8 @@ model AppBoardScore {
   /// to serve board summaries without reading every board from object storage.
   summary Json?
 
-  computedAt DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  computedAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, boardId])
   @@index([appId])
@@ -513,7 +454,7 @@ model Event {
   setupStatus String?
 
   /// Timestamp of the last setup run completion.
-  lastSetupAt DateTime?
+  lastSetupAt DateTime? @db.Timestamptz(3)
 
   /// Event version that was active during the last successful setup. Used to
   /// match `EventRemoteRegistration` rows when serving inbound requests.
@@ -529,8 +470,8 @@ model Event {
   aliases             EventAlias[]
   setups              EventSetup[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, route])
   @@index([appId])
@@ -569,13 +510,13 @@ model EventSetup {
   setupStatus String?
 
   /// Timestamp of the last setup run completion.
-  lastSetupAt DateTime?
+  lastSetupAt DateTime? @db.Timestamptz(3)
 
   /// Last setup error message (truncated), populated only when setupStatus = "error".
   lastSetupError String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([eventId, variant])
   @@index([appId, eventId])
@@ -610,8 +551,8 @@ model EventRemoteAuth {
 
   registrations EventRemoteRegistration[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, nodeId, kind])
@@ -664,7 +605,7 @@ model EventRemoteRegistration {
   auth   EventRemoteAuth? @relation(fields: [authId], references: [id], onDelete: SetNull)
   authId String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, kind])
@@ -690,8 +631,8 @@ model EventAlias {
 
   createdBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, eventId])
   @@index([appId])
@@ -746,8 +687,8 @@ model EventSink {
   /// Snapshot of the last updater's profile JSON (bits, hubs) for trigger execution
   profileJson Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, path, method])
   @@index([appId])
@@ -772,13 +713,13 @@ model SinkToken {
   revoked Boolean @default(false)
 
   /// When the token was revoked (if applicable)
-  revokedAt DateTime?
+  revokedAt DateTime? @db.Timestamptz(3)
 
   /// Who/what revoked the token
   revokedBy String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([sinkType])
   @@index([revoked])
@@ -786,19 +727,6 @@ model SinkToken {
 }
 
 // ================== Sales & Purchases ==================
-
-enum PurchaseStatus {
-  PENDING
-  COMPLETED
-  REFUNDED
-  PARTIALLY_REFUNDED
-  FAILED
-}
-
-enum DiscountType {
-  PERCENTAGE
-  FIXED_AMOUNT
-}
 
 /// Tracks individual app purchases
 model AppPurchase {
@@ -828,17 +756,17 @@ model AppPurchase {
   /// Stripe payment intent ID
   stripePaymentIntentId String?
 
-  status PurchaseStatus @default(PENDING)
+  status String @default("PENDING")
 
   /// When purchase was completed
-  completedAt  DateTime?
+  completedAt  DateTime? @db.Timestamptz(3)
   /// When refunded (if applicable)
-  refundedAt   DateTime?
+  refundedAt   DateTime? @db.Timestamptz(3)
   /// Refund reason if refunded
   refundReason String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@index([appId])
@@ -861,7 +789,7 @@ model AppDiscount {
   /// Description of the discount
   description String?
 
-  discountType  DiscountType
+  discountType  String
   /// Discount value (percentage 0-100 or fixed amount in cents)
   discountValue BigInt
 
@@ -873,16 +801,16 @@ model AppDiscount {
   minPurchaseAmount BigInt?
 
   /// When the discount becomes active
-  startsAt  DateTime  @default(now())
+  startsAt  DateTime  @default(now()) @db.Timestamptz(3)
   /// When the discount expires (null = never)
-  expiresAt DateTime?
+  expiresAt DateTime? @db.Timestamptz(3)
   /// Whether the discount is currently active
   isActive  Boolean   @default(true)
 
   purchases AppPurchase[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, code])
   @@index([appId])
@@ -918,8 +846,8 @@ model AppAnalyticsDaily {
   totalEmbeddingTokens BigInt @default(0)
   totalEmbeddingCost   BigInt @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, date])
   @@index([appId])
@@ -955,8 +883,8 @@ model AppSalesDaily {
   /// Number of discount codes used
   discountCodesUsed BigInt @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, date])
   @@index([appId])
@@ -976,7 +904,7 @@ model AppPackage {
   packageId String
   version   String
 
-  addedAt    DateTime @default(now())
+  addedAt    DateTime @default(now()) @db.Timestamptz(3)
   autoUpdate Boolean  @default(false)
 
   /// When true the package is frozen: can’t be updated, version-changed, or placed on new boards

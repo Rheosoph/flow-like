@@ -15,6 +15,7 @@ use flow_like::{
     app::{App, AppSearchQuery, AppSearchSort},
     bit::Metadata,
 };
+use sea_orm::sea_query::{Expr, ExprTrait, extension::postgres::PgExpr};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 /// Search hits paired with their localized metadata, when any exists.
@@ -104,7 +105,11 @@ pub async fn search_apps(
     }
 
     if let Some(tag) = query.tag {
-        qb = qb.filter(meta::Column::Tags.contains(&tag));
+        qb = qb.filter(
+            meta::Column::Tags
+                .into_expr()
+                .contains(Expr::val(serde_json::json!([tag]))),
+        );
     }
 
     qb = qb.filter(

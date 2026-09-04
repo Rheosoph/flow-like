@@ -18,7 +18,7 @@ import { LadderKey, RoleRow } from "./role-row";
 import { TemplatePicker } from "./role-templates";
 
 function emptyRole(appId: string, template: RoleTemplate): IBackendRole {
-	const now = new Date().toISOString().replace("Z", "");
+	const now = new Date().toISOString();
 	return {
 		id: createId(),
 		app_id: appId,

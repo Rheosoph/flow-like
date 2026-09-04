@@ -73,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::new(cdn_store),
             Some(config.secret_store_config()),
             managed_database.connection.clone(),
+            None,
         )
         .await,
     );
@@ -81,8 +82,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _run_sweeper = spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
     let _regression_suites = spawn_regression_suites_worker(state.clone());
-    let _channel_sweeper =
-        spawn_channel_sweeper(Arc::new(state.db.clone()), ChannelSweeperConfig::from_env());
+    let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
+        state.clone(),
+        flow_like_api::deletion::DeletionWorkerConfig::from_env(),
+    );
+    let _channel_sweeper = spawn_channel_sweeper(
+        Arc::new(state.db.clone()),
+        state.db_dialect,
+        ChannelSweeperConfig::from_env(),
+    );
     let _cache_sweeper =
         spawn_cache_sweeper_for(&state.cache, CacheSweeperConfig::from_env()).await;
     let _telemetry_rollup = spawn_telemetry_rollup(
@@ -91,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let _telemetry_sweeper = spawn_telemetry_sweeper(
         Arc::new(state.db.clone()),
+        state.db_dialect,
         TelemetrySweeperConfig::from_env(),
     );
     let _telemetry_alerts =

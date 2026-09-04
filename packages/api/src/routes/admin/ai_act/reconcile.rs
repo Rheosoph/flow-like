@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, FixedOffset};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QuerySelect,
 };
@@ -65,7 +65,7 @@ pub async fn reconcile_app_models(
     app_id: &str,
     signals: &Signals,
 ) -> Result<usize, ApiError> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let mut discovered: BTreeMap<String, (String, DiscoveredModel)> = BTreeMap::new();
 
     // 1. Monitoring: distinct LLM models used by this app.
@@ -221,6 +221,6 @@ async fn resolve_posture(
 
 /// Convenience for callers that only have the last-seen timestamp.
 #[allow(dead_code)]
-pub fn naive_now() -> NaiveDateTime {
-    chrono::Utc::now().naive_utc()
+pub fn naive_now() -> DateTime<FixedOffset> {
+    chrono::Utc::now().fixed_offset()
 }

@@ -1,30 +1,19 @@
-/// Kind of a channel coordination row: a pending server→client request, an unsolicited
-/// client→server message (e.g. steering text) or a cancel tombstone.
-enum ChannelMessageKind {
-  REQUEST
-  INBOUND
-  CANCEL
-}
-
-enum ChannelMessageStatus {
-  PENDING
-  RESPONDED
-}
-
 /// One flat coordination table for the HTTP channel transport. A row is one pending server→client
 /// request (REQUEST), one unsolicited client→server message (INBOUND, e.g. steering text) or a
 /// cancel tombstone (CANCEL). Request details never live here — they ride the run's event stream.
 /// Rows are deleted by the waiter on every exit path and swept by `expiresAt` otherwise.
 model Channel {
-  id        String @id            // request id / message id
-  channelId String                // run id (or chat run id)
+  id        String   @id // request id / message id
+  channelId String // run id (or chat run id)
   sub       String
   appId     String?
-  kind      ChannelMessageKind @default(REQUEST)
-  status    ChannelMessageStatus @default(PENDING)
+  /// REQUEST (pending server→client request), INBOUND (unsolicited client→server message,
+  /// e.g. steering text) or CANCEL (tombstone).
+  kind      String   @default("REQUEST")
+  status    String   @default("PENDING")
   expiresAt BigInt
-  value     String?               // reply / inbound body, JSON text
-  createdAt DateTime @default(now())
+  value     String? // reply / inbound body, JSON text
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([channelId, kind])
   @@index([sub, expiresAt])

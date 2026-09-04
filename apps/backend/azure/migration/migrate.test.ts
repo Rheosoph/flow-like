@@ -3,6 +3,7 @@ import {
 	ConfigError,
 	type Environment,
 	composeDatabaseUrl,
+	composePrePushDatabaseUrl,
 	parseConfig,
 } from "./migrate";
 
@@ -102,5 +103,24 @@ describe("composeDatabaseUrl", () => {
 		expect(url.searchParams.get("sslmode")).toBe("require");
 		expect(url.searchParams.get("sslaccept")).toBe("strict");
 		expect(url.searchParams.get("connect_timeout")).toBe("15");
+	});
+});
+
+describe("composePrePushDatabaseUrl", () => {
+	test("same identity as the Prisma URL, verify-full in node-postgres' libpq spelling", () => {
+		const config = parseConfig(validSettings());
+		const token = "eyJ.header/payload+sig=";
+		const url = new URL(composePrePushDatabaseUrl(config, token));
+		const prisma = new URL(composeDatabaseUrl(config, token));
+
+		expect(url.protocol).toBe("postgresql:");
+		expect(url.username).toBe(prisma.username);
+		expect(url.password).toBe(prisma.password);
+		expect(url.host).toBe(prisma.host);
+		expect(url.pathname).toBe(prisma.pathname);
+		expect(url.searchParams.get("uselibpqcompat")).toBe("true");
+		expect(url.searchParams.get("sslmode")).toBe("verify-full");
+		expect(url.searchParams.has("sslaccept")).toBe(false);
+		expect(url.searchParams.has("sslcert")).toBe(false);
 	});
 });

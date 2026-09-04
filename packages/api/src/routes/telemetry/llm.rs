@@ -175,7 +175,7 @@ async fn persist_calls<C: ConnectionTrait>(
     payload: &TelemetryLlmIngestPayload,
     records: Vec<LlmCallRecord>,
 ) -> Result<usize, DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let accepted = records.len();
     let models: Vec<telemetry_llm_call::ActiveModel> = records
         .into_iter()

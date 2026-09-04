@@ -87,7 +87,7 @@ pub async fn upsert_app_link(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let purpose = parse_purpose(body.purpose.as_deref().unwrap_or("SHARED_TEMPLATE"));
     let existing = course_app_link::Entity::find_by_id(&link_id)
         .one(&state.db)

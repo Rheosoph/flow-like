@@ -15,7 +15,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    TransactionTrait, sea_query::OnConflict,
+    sea_query::OnConflict,
 };
 
 #[utoipa::path(
@@ -77,86 +77,89 @@ pub async fn accept_invite(
 
     let max_prototype = state.platform_config.max_users_prototype.unwrap_or(-1);
 
-    let txn = state.db.begin().await?;
+    state
+        .transaction(|txn| {
+            let sub = sub.clone();
+            let invite_id = invite_id.clone();
+            Box::pin(async move {
+                let (invite, app) = invitation::Entity::find_by_id(invite_id)
+                    .filter(invitation::Column::UserId.eq(sub.clone()))
+                    .find_also_related(app::Entity)
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let (invite, app) = invitation::Entity::find_by_id(invite_id.clone())
-        .filter(invitation::Column::UserId.eq(sub.clone()))
-        .find_also_related(app::Entity)
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+                let app = app.ok_or(ApiError::NOT_FOUND)?;
+                let default_role = app.default_role_id.ok_or(ApiError::NOT_FOUND)?;
 
-    let app = app.ok_or(ApiError::NOT_FOUND)?;
-    let default_role = app.default_role_id.ok_or(ApiError::NOT_FOUND)?;
+                if matches!(app.visibility, Visibility::Offline | Visibility::Private) {
+                    tracing::warn!(
+                        "User {} is trying to accept an invite to app {} but the app is private or offline",
+                        sub,
+                        app.id
+                    );
+                    return Err(ApiError::FORBIDDEN);
+                }
 
-    if matches!(app.visibility, Visibility::Offline | Visibility::Private) {
-        tracing::warn!(
-            "User {} is trying to accept an invite to app {} but the app is private or offline",
-            sub,
-            app.id
-        );
-        return Err(ApiError::FORBIDDEN);
-    }
+                if max_prototype > 0 && app.visibility == Visibility::Prototype {
+                    let user_count = membership::Entity::find()
+                        .filter(membership::Column::AppId.eq(app.id.clone()))
+                        .count(txn)
+                        .await?;
 
-    if max_prototype > 0 && app.visibility == Visibility::Prototype {
-        let user_count = membership::Entity::find()
-            .filter(membership::Column::AppId.eq(app.id.clone()))
-            .count(&txn)
-            .await?;
+                    if user_count >= max_prototype as u64 {
+                        tracing::warn!(
+                            "User {} is trying to accept an invite to app {} but the user limit has been reached",
+                            sub,
+                            app.id
+                        );
+                        return Err(ApiError::FORBIDDEN);
+                    }
+                }
 
-        if user_count >= max_prototype as u64 {
-            tracing::warn!(
-                "User {} is trying to accept an invite to app {} but the user limit has been reached",
-                sub,
-                app.id
-            );
-            return Err(ApiError::FORBIDDEN);
-        }
-    }
+                // The user may already be a member via an invite link or approved join
+                // request while a stale invitation lingers. Inserting again would hit the
+                // (userId, appId) unique constraint and 500; instead, clear the invite and
+                // report success so the pending card disappears and the counts settle.
+                let already_member = membership::Entity::find()
+                    .filter(membership::Column::AppId.eq(app.id.clone()))
+                    .filter(membership::Column::UserId.eq(sub.clone()))
+                    .one(txn)
+                    .await?
+                    .is_some();
 
-    // The user may already be a member via an invite link or approved join
-    // request while a stale invitation lingers. Inserting again would hit the
-    // (userId, appId) unique constraint and 500; instead, clear the invite and
-    // report success so the pending card disappears and the counts settle.
-    let already_member = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(app.id.clone()))
-        .filter(membership::Column::UserId.eq(sub.clone()))
-        .one(&txn)
-        .await?
-        .is_some();
+                if !already_member {
+                    let membership = membership::ActiveModel {
+                        id: Set(create_id()),
+                        user_id: Set(sub),
+                        app_id: Set(app.id),
+                        role_id: Set(default_role),
+                        created_at: Set(chrono::Utc::now().fixed_offset()),
+                        updated_at: Set(chrono::Utc::now().fixed_offset()),
+                        joined_via: Set(Some("invite".to_string())),
+                    };
 
-    if already_member {
-        let invite: invitation::ActiveModel = invite.into();
-        invite.delete(&txn).await?;
-        txn.commit().await?;
-        return Ok(Json(()));
-    }
+                    // do_nothing guards the residual race with a concurrent join on the same
+                    // (userId, appId); either way the invite is consumed below.
+                    membership::Entity::insert(membership)
+                        .on_conflict(
+                            OnConflict::columns([
+                                membership::Column::UserId,
+                                membership::Column::AppId,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec_without_returning(txn)
+                        .await?;
+                }
 
-    let membership = membership::ActiveModel {
-        id: Set(create_id()),
-        user_id: Set(sub),
-        app_id: Set(app.id),
-        role_id: Set(default_role),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        joined_via: Set(Some("invite".to_string())),
-    };
-
-    // do_nothing guards the residual race with a concurrent join on the same
-    // (userId, appId); either way the invite is consumed below.
-    membership::Entity::insert(membership)
-        .on_conflict(
-            OnConflict::columns([membership::Column::UserId, membership::Column::AppId])
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec_without_returning(&txn)
+                let invite: invitation::ActiveModel = invite.into();
+                invite.delete(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    let invite: invitation::ActiveModel = invite.into();
-    invite.delete(&txn).await?;
-
-    txn.commit().await?;
 
     Ok(Json(()))
 }

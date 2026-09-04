@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { parseDateValue } from "../../../../lib/date";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
 import { useBackend } from "../../../../state/backend-state";
 import {
@@ -230,7 +231,8 @@ function ReleasesTable({
 		() =>
 			[...releases].sort(
 				(a, b) =>
-					new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime(),
+					(parseDateValue(b.firstSeenAt)?.getTime() ?? 0) -
+					(parseDateValue(a.firstSeenAt)?.getTime() ?? 0),
 			),
 		[releases],
 	);

@@ -21,21 +21,21 @@ model RegressionSuite {
   nodeId  String
 
   /// Run the suite automatically when a new board version is published.
-  triggerOnPublish Boolean @default(false)
+  triggerOnPublish     Boolean @default(false)
   /// Cron expression for scheduled runs. NULL = not scheduled.
-  schedule         String?
+  schedule             String?
   /// Publish/promote gate behavior: "Off", "Warn", "Block".
-  gateMode         String  @default("Off")
+  gateMode             String  @default("Off")
   /// The owner acknowledged that replays execute live side effects
   /// (outbound HTTP from native nodes is not suppressible). Runs are
   /// refused while false.
   allowLiveSideEffects Boolean @default(false)
 
   /// Next scheduled run, maintained by the RegressionSuites maintenance job.
-  nextRunAt DateTime?
+  nextRunAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([appId, eventId])
   @@index([appId, boardId])
@@ -74,14 +74,14 @@ model RegressionSuiteRun {
   ok           Int @default(0)
   skipped      Int @default(0)
 
-  startedAt   DateTime?
-  completedAt DateTime?
+  startedAt   DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
   /// Suite-level failure message when status = "errored".
   error       String?
 
   caseResults RegressionCaseResult[]
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([appId, boardId, boardVersion, createdAt])
   @@index([suiteId, createdAt])
@@ -97,9 +97,9 @@ model RegressionCaseResult {
   suiteRunId String
 
   /// "recorded_fixture" or "authored_test".
-  caseKind String
+  caseKind    String
   /// Fixture id (recorded) or start node id (authored).
-  caseRef  String
+  caseRef     String
   /// ExecutionRun.id of the replay dispatch. NULL when the case was skipped
   /// before dispatch (e.g. start node absent from the candidate version).
   replayRunId String?
@@ -115,7 +115,7 @@ model RegressionCaseResult {
 
   durationMs Int?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([suiteRunId])
 }

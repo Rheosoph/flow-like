@@ -5,10 +5,12 @@
  * There is no database password anywhere in the GCP installation (D4): the
  * migration service account is a `CLOUD_IAM_SERVICE_ACCOUNT` Postgres role and
  * authenticates with a Google access token. This process mints that token from
- * the instance metadata server, composes a connection URL in memory, hands it
- * to exactly one child process (`prisma db push`) as `DATABASE_URL`, and exits
- * with that child's exit code. The URL is never printed and never written to
- * disk. Every environment variable that would let a static password, a
+ * the instance metadata server, composes connection URLs in memory, hands them
+ * as `DATABASE_URL` to exactly two child processes in turn - the pre-push SQL
+ * runner (`packages/api/prisma/pre-push.ts`: column type changes Prisma emits
+ * without the USING clause they need) and `prisma db push` - and exits with
+ * the first non-zero exit code. The URLs are never printed and never written
+ * to disk. Every environment variable that would let a static password, a
  * connection string, a key file or a proxy back in is refused before anything
  * else happens, so a mis-set job surfaces as a one-line configuration error
  * rather than as a silently different identity.
@@ -376,6 +378,39 @@ export function databaseUrl(
 	return `postgresql://${user}:${password}@${config.host}:${POSTGRES_PORT}/${database}?${params.toString()}`;
 }
 
+// The same two postures for the pre-push runner, which connects with
+// node-postgres. Its URL parser is not quaint's either: `sslaccept` is unknown
+// and `sslcert` names a *client* certificate, so the Prisma URL cannot be
+// reused. `uselibpqcompat=true` gives it libpq semantics, where
+// `sslmode=verify-full&sslrootcert=<pinned CA>` verifies chain and hostname
+// and a bare `sslmode=require` is TLS without chain verification. Same rule
+// as databaseUrl: callers must not log the return value.
+export function prePushDatabaseUrl(
+	config: MigrationConfig,
+	token: string,
+	serverCaPath: string | undefined,
+): string {
+	const params = new URLSearchParams();
+	params.set("uselibpqcompat", "true");
+	if (tlsPosture(config) === "verify-full") {
+		if (serverCaPath === undefined) {
+			throw new Error(
+				"verify-full posture requires the server CA to be written to disk first",
+			);
+		}
+		params.set("sslmode", "verify-full");
+		params.set("sslrootcert", serverCaPath);
+	} else {
+		params.set("sslmode", "require");
+	}
+	params.set("application_name", APPLICATION_NAME);
+
+	const user = encodeURIComponent(config.user);
+	const password = encodeURIComponent(token);
+	const database = encodeURIComponent(config.database);
+	return `postgresql://${user}:${password}@${config.host}:${POSTGRES_PORT}/${database}?${params.toString()}`;
+}
+
 // Application Default Credentials with every file-, token- and proxy-based
 // source refused above resolve to exactly one thing on Cloud Run: the metadata
 // server, asked for a token carrying only the SQL login scope.
@@ -401,18 +436,25 @@ const PRISMA_ARGS = [
 	"push",
 	"--schema=prisma/schema",
 ];
+// Guarded, idempotent statements `db push` cannot emit correctly against an
+// existing database (enum -> TEXT, array -> JSONB); a no-op on a fresh one.
+const PRE_PUSH_ARGS = ["run", "prisma/pre-push.ts"];
 
-async function runPrisma(url: string): Promise<number> {
-	const child = Bun.spawn([process.execPath, ...PRISMA_ARGS], {
+async function runChild(
+	name: string,
+	args: readonly string[],
+	url: string,
+): Promise<number> {
+	const child = Bun.spawn([process.execPath, ...args], {
 		cwd: import.meta.dir,
 		env: { ...process.env, DATABASE_URL: url },
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
 	});
-	// Cloud Run cancels a job with SIGTERM; a schema push interrupted mid-flight
-	// must see the same signal rather than being orphaned behind an exiting
-	// parent.
+	// Cloud Run cancels a job with SIGTERM; a schema change interrupted
+	// mid-flight must see the same signal rather than being orphaned behind an
+	// exiting parent.
 	const forward = (signal: NodeJS.Signals) => child.kill(signal);
 	process.once("SIGTERM", forward);
 	process.once("SIGINT", forward);
@@ -424,7 +466,7 @@ async function runPrisma(url: string): Promise<number> {
 					child.signalCode as keyof typeof osConstants.signals
 				] ?? 0;
 			console.error(
-				`[migration] prisma db push was terminated by ${child.signalCode}`,
+				`[migration] ${name} was terminated by ${child.signalCode}`,
 			);
 			return 128 + number;
 		}
@@ -463,7 +505,22 @@ export async function main(): Promise<number> {
 			serverCaPath = join(scratch, "server-ca.pem");
 			writeFileSync(serverCaPath, `${config.serverCaPem}\n`, { mode: 0o600 });
 		}
-		return await runPrisma(databaseUrl(config, token, serverCaPath));
+		const prePush = await runChild(
+			"pre-push",
+			PRE_PUSH_ARGS,
+			prePushDatabaseUrl(config, token, serverCaPath),
+		);
+		if (prePush !== 0) {
+			console.error(
+				`[migration] pre-push exited with code ${prePush}; prisma db push was not attempted`,
+			);
+			return prePush;
+		}
+		return await runChild(
+			"prisma db push",
+			PRISMA_ARGS,
+			databaseUrl(config, token, serverCaPath),
+		);
 	} finally {
 		if (scratch !== undefined) {
 			rmSync(scratch, { recursive: true, force: true });

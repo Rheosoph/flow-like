@@ -6,7 +6,6 @@
 mod channel_jwt;
 pub mod compiled_artifacts;
 mod dispatch;
-pub mod wasm_node_stubs;
 mod jwt;
 mod page_action_jwt;
 mod page_action_sealer;
@@ -18,6 +17,7 @@ pub mod run_sweeper;
 mod sse_proxy;
 pub mod state;
 pub mod variant;
+pub mod wasm_node_stubs;
 pub mod wasm_resolve;
 
 pub use crate::backend_jwt::TokenType;

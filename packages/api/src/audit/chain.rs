@@ -1,5 +1,5 @@
 use blake3::Hasher;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, FixedOffset};
 use flow_like_types::Value;
 use std::collections::BTreeMap;
 
@@ -40,7 +40,7 @@ fn canonical_json(value: &Value) -> String {
 #[allow(clippy::too_many_arguments)]
 pub fn compute_entry_hash(
     sequence: i64,
-    timestamp: &NaiveDateTime,
+    timestamp: &DateTime<FixedOffset>,
     actor_id: &str,
     action: &str,
     resource_type: &str,
@@ -51,13 +51,7 @@ pub fn compute_entry_hash(
 ) -> String {
     let mut hasher = Hasher::new();
     hasher.update(&sequence.to_le_bytes());
-    hasher.update(
-        timestamp
-            .and_utc()
-            .timestamp_millis()
-            .to_le_bytes()
-            .as_ref(),
-    );
+    hasher.update(timestamp.timestamp_millis().to_le_bytes().as_ref());
     hasher.update(actor_id.as_bytes());
     hasher.update(action.as_bytes());
     hasher.update(resource_type.as_bytes());
@@ -84,7 +78,7 @@ pub fn compute_entry_hash(
 /// (seq, ts, actor, action, resource_type, resource_id, details, prev_hash, entry_hash, prev_signature)
 pub type ChainEntryRow = (
     i64,
-    NaiveDateTime,
+    DateTime<FixedOffset>,
     String,
     String,
     String,
@@ -133,7 +127,10 @@ mod tests {
 
     #[test]
     fn test_genesis_chain() {
-        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
         let hash1 = compute_entry_hash(
             1,
             &ts,
@@ -164,7 +161,10 @@ mod tests {
 
     #[test]
     fn test_chain_verification() {
-        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
 
         let h1 = compute_entry_hash(
             1,
@@ -221,7 +221,10 @@ mod tests {
 
     #[test]
     fn test_tampered_chain() {
-        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2026-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .fixed_offset();
 
         let h1 = compute_entry_hash(
             1,

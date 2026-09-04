@@ -142,8 +142,8 @@ pub async fn get_api_keys(
                 role_id: tu.role_id,
                 role_name: role.map(|r| r.name.clone()),
                 role_permissions: role.map(|r| r.permissions),
-                valid_until: tu.valid_until.map(|dt| dt.and_utc().timestamp()),
-                created_at: tu.created_at.and_utc().timestamp(),
+                valid_until: tu.valid_until.map(|dt| dt.timestamp()),
+                created_at: tu.created_at.timestamp(),
             }
         })
         .collect();

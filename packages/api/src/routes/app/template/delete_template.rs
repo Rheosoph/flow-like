@@ -1,24 +1,32 @@
 use crate::{
-    audit_branch, ensure_permission, entity::template, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    audit_branch,
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot},
+    ensure_permission,
+    entity::template,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    state::AppState,
 };
 use axum::{
-    Extension, Json,
+    Extension,
     extract::{Path, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 #[utoipa::path(
     delete,
     path = "/apps/{app_id}/templates/{template_id}",
     tag = "templates",
-    description = "Delete a template.",
+    description = "Delete a template together with its metadata, comments and feedback.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("template_id" = String, Path, description = "Template ID")
     ),
     responses(
         (status = 200, description = "Template deleted", body = String, content_type = "application/json"),
+        (status = 202, description = "Template queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -36,28 +44,44 @@ pub async fn delete_template(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, template_id)): Path<(String, String)>,
-) -> Result<Json<Vec<template::Model>>, ApiError> {
+) -> Result<Deleted<Vec<template::Model>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::WriteTemplates);
+    let sub = user.sub()?;
 
-    let templates = template::Entity::delete_many()
+    let templates = template::Entity::find()
         .filter(
             template::Column::AppId
                 .eq(app_id.clone())
                 .and(template::Column::Id.eq(template_id.clone())),
         )
-        .exec_with_returning(&state.db)
+        .all(&state.db)
         .await?;
+    if templates.is_empty() {
+        return Ok(Deleted::Completed(templates));
+    }
 
+    // Only the app's own template list is updated here. The board, its
+    // versions and the page payloads are swept by
+    // `ExternalStep::TemplateStorage` after the last child row drains, so the
+    // objects never die ahead of the row a `202` leaves visible.
     let mut app = state
         .scoped_app(
-            &user.sub()?,
+            &sub,
             &app_id,
             &state,
             crate::credentials::CredentialsAccess::EditApp,
         )
         .await?;
+    app.detach_template(&template_id).await?;
 
-    app.delete_template(&template_id).await?;
+    let deleted = deletion::delete_now(
+        &state,
+        DeletionRoot::Template,
+        &template_id,
+        Some(&sub),
+        templates,
+    )
+    .await?;
 
     audit_branch!(
         state,
@@ -68,5 +92,5 @@ pub async fn delete_template(
         template_id,
         "Template deleted"
     );
-    Ok(Json(templates))
+    Ok(deleted)
 }

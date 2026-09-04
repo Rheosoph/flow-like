@@ -22,6 +22,7 @@ image.workspace = true
 imageproc = { workspace = true, optional = true }
 webp.workspace = true
 base64.workspace=true
+constant_time_eq.workspace = true
 mime_guess = "2.0.5"
 reqwest-eventsource = "0.6.0"
 minijinja = "2.9.0"

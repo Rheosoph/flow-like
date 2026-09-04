@@ -668,7 +668,7 @@ mod stateless_import_tests {
 
     #[test]
     fn stateless_lambda_object_store_constructor_retains_sql_source() {
-        let store = memory_store(Some(Arc::new(DatabaseConnection::Disconnected)));
+        let store = memory_store(Some(Arc::new(DatabaseConnection::default())));
         assert!(store.source_run_store.is_some());
     }
 

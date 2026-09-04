@@ -1,4 +1,5 @@
 use crate::{
+    deletion::{self, AcceptedDeletion, Deleted, DeletionRoot, job},
     entity::{challenge, sea_orm_active_enums::ChallengeKind},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -128,39 +129,60 @@ pub async fn upsert_challenge(
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = challenge::Entity::find_by_id(&challenge_id)
         .one(&state.db)
         .await?;
     let kind = parse_kind(&body.kind);
 
-    let saved = if let Some(c) = existing {
+    if existing.is_some() {
         ensure_challenge_in_lesson(&state, &course_id, &lesson_id, &challenge_id).await?;
-        let mut active = c.into_active_model();
-        active.kind = Set(kind);
-        active.prompt = Set(body.prompt);
-        active.explanation = Set(body.explanation);
-        active.payload = Set(body.payload);
-        active.points = Set(body.points.unwrap_or(10));
-        active.position = Set(body.position.unwrap_or(0));
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
     } else {
         ensure_lesson_in_course(&state, &course_id, &lesson_id).await?;
-        let active = challenge::ActiveModel {
-            id: Set(challenge_id),
-            lesson_id: Set(lesson_id),
-            kind: Set(kind),
-            prompt: Set(body.prompt),
-            explanation: Set(body.explanation),
-            payload: Set(body.payload),
-            points: Set(body.points.unwrap_or(10)),
-            position: Set(body.position.unwrap_or(0)),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
-    };
+    }
+
+    let saved = state
+        .transaction(|txn| {
+            let challenge_id = challenge_id.clone();
+            let lesson_id = lesson_id.clone();
+            let body = body.clone();
+            let kind = kind.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // Both branches: a `202` leaves the challenge row present until
+                // the drain reaches `DeleteRoot`, so re-authoring its id is an
+                // update as often as an insert.
+                job::cancel(txn, DeletionRoot::Challenge, &challenge_id).await?;
+                let saved = if let Some(c) = existing {
+                    let mut active = c.into_active_model();
+                    active.kind = Set(kind);
+                    active.prompt = Set(body.prompt);
+                    active.explanation = Set(body.explanation);
+                    active.payload = Set(body.payload);
+                    active.points = Set(body.points.unwrap_or(10));
+                    active.position = Set(body.position.unwrap_or(0));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    challenge::ActiveModel {
+                        id: Set(challenge_id),
+                        lesson_id: Set(lesson_id),
+                        kind: Set(kind),
+                        prompt: Set(body.prompt),
+                        explanation: Set(body.explanation),
+                        payload: Set(body.payload),
+                        points: Set(body.points.unwrap_or(10)),
+                        position: Set(body.position.unwrap_or(0)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
+            })
+        })
+        .await?;
 
     Ok(Json(saved.into()))
 }
@@ -176,6 +198,7 @@ pub async fn upsert_challenge(
     ),
     responses(
         (status = 200, description = "Challenge deleted"),
+        (status = 202, description = "Queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -187,12 +210,17 @@ pub async fn delete_challenge(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((course_id, lesson_id, challenge_id)): Path<(String, String, String)>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
     ensure_challenge_in_lesson(&state, &course_id, &lesson_id, &challenge_id).await?;
-    challenge::Entity::delete_by_id(challenge_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::Challenge,
+        &challenge_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
 }

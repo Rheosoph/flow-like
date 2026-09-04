@@ -95,6 +95,19 @@ export interface IDatabaseRates {
 	readonly blocksRead: number;
 }
 
+/** Asynchronous schema jobs on engines that build indexes out of band. */
+export interface IDatabaseJobs {
+	readonly pending: number;
+	readonly failed: number;
+	readonly completed: number;
+}
+
+/** An index the planner ignores because its build failed or has not finished. */
+export interface IInvalidIndex {
+	readonly table: string;
+	readonly name: string;
+}
+
 export interface IDatabaseDetail {
 	readonly version?: string;
 	readonly databaseName?: string;
@@ -103,6 +116,30 @@ export interface IDatabaseDetail {
 	readonly counters?: IDatabaseCounters;
 	readonly rates?: IDatabaseRates;
 	readonly statsResetAt?: string;
+	/**
+	 * Statistics this engine cannot provide at all (e.g. `size on disk`). The
+	 * sections they feed come back empty, and without this the page shows them
+	 * as blank cards that read like a failed query.
+	 */
+	readonly unsupported?: readonly string[];
+	readonly jobs?: IDatabaseJobs;
+	readonly invalidIndexes?: readonly IInvalidIndex[];
+}
+
+/** Server-side wording of {@link IDatabaseDetail.unsupported} entries. */
+export const UNSUPPORTED_SIZE_ON_DISK = "size on disk";
+export const UNSUPPORTED_TABLE_SIZES = "table sizes";
+export const UNSUPPORTED_CONNECTION_STATES = "connection states";
+export const UNSUPPORTED_ACTIVITY_COUNTERS = "activity counters";
+export const UNSUPPORTED_DEAD_ROWS = "dead rows";
+
+export function isUnsupported(
+	detail: Pick<IDatabaseDetail, "unsupported">,
+	...statistics: readonly string[]
+): boolean {
+	const reported = detail.unsupported;
+	if (!reported || reported.length === 0) return false;
+	return statistics.some((statistic) => reported.includes(statistic));
 }
 
 export interface IAdminResourcesResponse {

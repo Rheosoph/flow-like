@@ -11,8 +11,11 @@
 //! "unknown" nodes instead of leaking raw app ids.
 
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::connection::graph::mask_app_id,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::connection::graph::{json_text_column, mask_app_id},
     state::AppState,
 };
 use axum::{
@@ -108,8 +111,8 @@ struct RawCase {
     failed_count: i64,
     running_count: i64,
     correlation_keys: Option<serde_json::Value>,
-    started_at: Option<chrono::NaiveDateTime>,
-    last_activity_at: chrono::NaiveDateTime,
+    started_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    last_activity_at: chrono::DateTime<chrono::FixedOffset>,
     duration_ms: Option<f64>,
 }
 
@@ -143,7 +146,7 @@ pub async fn list_process_cases(
     let viewer_sub = permission.effective_user_id().ok();
 
     let days = query.days.unwrap_or(30).clamp(1, 365);
-    let since = chrono::Utc::now().naive_utc() - chrono::Duration::days(days);
+    let since = chrono::Utc::now().fixed_offset() - chrono::Duration::days(days);
 
     // Roots are runs the app started (no parent) in the window; the recursive
     // arm walks parent_run_id down through every app the case reached. `depth`
@@ -166,11 +169,11 @@ pub async fn list_process_cases(
                root."appId" AS root_app_id,
                e.name AS root_event_name,
                e."eventType" AS root_event_type,
-               root."correlationKeys" AS correlation_keys,
+               root."correlationKeys"::text AS correlation_keys,
                COUNT(*)::BIGINT AS run_count,
                COUNT(*) FILTER (WHERE r.status IN ('FAILED', 'CANCELLED', 'TIMEOUT') AND r."runVariant" = 'PRIMARY')::BIGINT AS failed_count,
                COUNT(*) FILTER (WHERE r.status IN ('PENDING', 'RUNNING') AND r."runVariant" = 'PRIMARY')::BIGINT AS running_count,
-               ARRAY_AGG(r."appId" ORDER BY t.depth, r."createdAt") AS apps,
+               jsonb_agg(r."appId" ORDER BY t.depth, r."createdAt")::text AS apps,
                MIN(r."startedAt") AS started_at,
                MAX(GREATEST(r."completedAt", r."updatedAt")) AS last_activity_at,
                (EXTRACT(EPOCH FROM (MAX(r."completedAt") - MIN(r."startedAt"))) * 1000.0)::double precision AS duration_ms
@@ -178,7 +181,7 @@ pub async fn list_process_cases(
            JOIN "public"."ExecutionRun" r ON r.id = t.run_id
            JOIN "public"."ExecutionRun" root ON root.id = t.root_id
            LEFT JOIN "public"."Event" e ON e.id = root."eventId"
-           GROUP BY t.root_id, root."appId", root."correlationKeys", e.name, e."eventType"
+           GROUP BY t.root_id, root."appId", root."correlationKeys"::text, e.name, e."eventType"
            ORDER BY last_activity_at DESC
            LIMIT $4"#,
         [
@@ -189,11 +192,11 @@ pub async fn list_process_cases(
         ],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     let mut raw_cases = Vec::with_capacity(rows.len());
     let mut all_app_ids: HashSet<String> = HashSet::new();
     for row in &rows {
-        let apps: Vec<String> = row.try_get("", "apps")?;
+        let apps: Vec<String> = json_text_column(row, "apps")?.unwrap_or_default();
         all_app_ids.extend(apps.iter().cloned());
         raw_cases.push(RawCase {
             case_id: row.try_get("", "case_id")?,
@@ -204,7 +207,7 @@ pub async fn list_process_cases(
             run_count: row.try_get("", "run_count")?,
             failed_count: row.try_get("", "failed_count")?,
             running_count: row.try_get("", "running_count")?,
-            correlation_keys: row.try_get("", "correlation_keys")?,
+            correlation_keys: json_text_column(row, "correlation_keys")?,
             started_at: row.try_get("", "started_at")?,
             last_activity_at: row.try_get("", "last_activity_at")?,
             duration_ms: row.try_get("", "duration_ms")?,
@@ -266,8 +269,8 @@ pub async fn list_process_cases(
                 failed_count: raw.failed_count,
                 correlation_keys: raw.correlation_keys,
                 status: status.to_string(),
-                started_at: raw.started_at.map(|dt| dt.and_utc().timestamp()),
-                last_activity_at: raw.last_activity_at.and_utc().timestamp(),
+                started_at: raw.started_at.map(|dt| dt.timestamp()),
+                last_activity_at: raw.last_activity_at.timestamp(),
                 duration_ms: raw.duration_ms,
             }
         })
@@ -340,7 +343,7 @@ pub async fn get_process_case(
         [app_id.clone().into(), case_id.into(), MAX_CASE_DEPTH.into()],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     if rows.is_empty() {
         return Err(ApiError::not_found("Case not found"));
     }
@@ -353,9 +356,9 @@ pub async fn get_process_case(
         status: String,
         event_name: Option<String>,
         event_type: Option<String>,
-        started_at: chrono::NaiveDateTime,
-        completed_at: Option<chrono::NaiveDateTime>,
-        updated_at: chrono::NaiveDateTime,
+        started_at: chrono::DateTime<chrono::FixedOffset>,
+        completed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+        updated_at: chrono::DateTime<chrono::FixedOffset>,
         duration_ms: Option<f64>,
     }
 
@@ -412,9 +415,9 @@ pub async fn get_process_case(
             status: raw.status,
             event_name: raw.event_name,
             event_type: raw.event_type,
-            started_at: raw.started_at.and_utc().timestamp(),
-            completed_at: raw.completed_at.map(|dt| dt.and_utc().timestamp()),
-            updated_at: raw.updated_at.and_utc().timestamp(),
+            started_at: raw.started_at.timestamp(),
+            completed_at: raw.completed_at.map(|dt| dt.timestamp()),
+            updated_at: raw.updated_at.timestamp(),
             duration_ms: raw.duration_ms,
         })
         .collect();

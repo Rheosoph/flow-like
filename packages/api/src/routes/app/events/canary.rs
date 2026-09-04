@@ -196,7 +196,7 @@ pub async fn canary_stats(
             )));
         }
     };
-    let since = chrono::Utc::now().naive_utc()
+    let since = chrono::Utc::now().fixed_offset()
         - match window {
             "7d" => chrono::Duration::days(7),
             _ => chrono::Duration::hours(24),
@@ -206,8 +206,8 @@ pub async fn canary_stats(
         RunVariant,
         Option<String>,
         RunStatus,
-        Option<chrono::NaiveDateTime>,
-        Option<chrono::NaiveDateTime>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
     )> = execution_run::Entity::find()
         .select_only()
         .column_as(execution_run::Column::RunVariant, "run_variant")
@@ -618,28 +618,36 @@ async fn delete_variant_setup_rows(
     variant: &str,
 ) -> Result<(), sea_orm::DbErr> {
     use crate::entity::{event_remote_auth, event_remote_registration, event_setup};
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    let txn = state.db.begin().await?;
-    event_setup::Entity::delete_many()
-        .filter(event_setup::Column::AppId.eq(app_id))
-        .filter(event_setup::Column::EventId.eq(event_id))
-        .filter(event_setup::Column::Variant.eq(variant))
-        .exec(&txn)
-        .await?;
-    event_remote_registration::Entity::delete_many()
-        .filter(event_remote_registration::Column::AppId.eq(app_id))
-        .filter(event_remote_registration::Column::EventId.eq(event_id))
-        .filter(event_remote_registration::Column::Variant.eq(variant))
-        .exec(&txn)
-        .await?;
-    event_remote_auth::Entity::delete_many()
-        .filter(event_remote_auth::Column::AppId.eq(app_id))
-        .filter(event_remote_auth::Column::EventId.eq(event_id))
-        .filter(event_remote_auth::Column::Variant.eq(variant))
-        .exec(&txn)
-        .await?;
-    txn.commit().await
+    state
+        .transaction(|txn| {
+            let app_id = app_id.to_string();
+            let event_id = event_id.to_string();
+            let variant = variant.to_string();
+            Box::pin(async move {
+                event_setup::Entity::delete_many()
+                    .filter(event_setup::Column::AppId.eq(&app_id))
+                    .filter(event_setup::Column::EventId.eq(&event_id))
+                    .filter(event_setup::Column::Variant.eq(&variant))
+                    .exec(txn)
+                    .await?;
+                event_remote_registration::Entity::delete_many()
+                    .filter(event_remote_registration::Column::AppId.eq(&app_id))
+                    .filter(event_remote_registration::Column::EventId.eq(&event_id))
+                    .filter(event_remote_registration::Column::Variant.eq(&variant))
+                    .exec(txn)
+                    .await?;
+                event_remote_auth::Entity::delete_many()
+                    .filter(event_remote_auth::Column::AppId.eq(&app_id))
+                    .filter(event_remote_auth::Column::EventId.eq(&event_id))
+                    .filter(event_remote_auth::Column::Variant.eq(&variant))
+                    .exec(txn)
+                    .await?;
+                Ok::<_, sea_orm::DbErr>(())
+            })
+        })
+        .await
 }
 
 /// Non-fatal stable setup re-run after a promote of a rest/mcp event. It
@@ -1053,7 +1061,7 @@ pub struct EventSetupInfo {
     /// `ok`, `running` or `error`
     pub setup_status: Option<String>,
     #[schema(value_type = Option<String>)]
-    pub last_setup_at: Option<chrono::NaiveDateTime>,
+    pub last_setup_at: Option<chrono::DateTime<chrono::FixedOffset>>,
     pub last_setup_error: Option<String>,
 }
 

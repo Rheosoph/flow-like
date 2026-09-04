@@ -73,6 +73,16 @@ Create a daily schedule for expired-state cleanup with the same envelope and
 `"job": "state_cleanup"`. It calls the state store's expired-run and
 expired-event deletion; the operation is idempotent and safe to repeat.
 
+The same job then sweeps the staged event payloads on the content store by
+age. Event payloads over 100 KiB are written there before the row that
+references them, so a write that fails leaves an object no row can name, and
+age is the only property it still carries. `EXECUTION_STAGED_PAYLOAD_MIN_AGE_SECS`
+on the API sets how old an object must be before the sweep may delete it
+(default 172800, two event lifetimes; values below one lifetime are ignored).
+The sweep never deletes an object young enough to belong to a live row or to
+an insert in flight, and reports `scanned`, `deleted` and `stopped_early` in
+the API log rather than in the response body.
+
 Set Lambda reserved concurrency to `1`; the API's transactional alert updates
 and conditional sweeps remain the final correctness boundary.
 

@@ -376,6 +376,38 @@ run = "bun run --cwd packages/api db:view"
 description = "Push and sync database schema"
 run = "bun run --cwd packages/api db:push:sync"
 
+[tasks."db:dsql:diff"]
+description = "Generate a committed Aurora DSQL migration from the Prisma schema"
+run = """
+set -eu
+# Prisma needs node_modules; it hoists to the workspace root, and the compose
+# tooling removes it again.
+[ -d node_modules/prisma ] || bun install
+bun run --cwd packages/api db:dsql:diff -- {{arg(name="name")}} {{arg(name="flags", var=true, required=false)}}
+"""
+
+[tasks."db:dsql:migrate"]
+description = "Apply the committed DSQL migrations to a cluster (DSQL_CLUSTER_ENDPOINT required)"
+run = """
+set -eu
+: "${DSQL_CLUSTER_ENDPOINT:?set DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws}"
+
+# The runner refuses to start when any static credential or libpq connection
+# source is present, so that nothing can redirect it or replace its IAM token
+# with a password. On a workstation DATABASE_URL is the API's own source URL:
+# drop the whole forbidden list from the child rather than making every caller
+# remember to.
+bun run --cwd packages/api db:mirror:dsql
+cd apps/backend/aws/migration
+[ -d node_modules ] || bun install
+exec env -u DATABASE_URL -u PGPASSWORD -u PGPASSFILE -u PGSERVICE -u PGSERVICEFILE \
+         -u PGHOST -u PGHOSTADDR -u PGPORT -u PGUSER -u PGDATABASE -u PGSSLMODE \
+         -u PGSSLROOTCERT -u PGSSLCERT -u PGSSLKEY -u PGOPTIONS \
+  DSQL_MIGRATIONS_DIR=../../../../packages/api/prisma/migrations-dsql \
+  DSQL_SCHEMA_DIR=../../../../packages/api/prisma-dsql-mirror/schema \
+  bun run migrate.ts
+"""
+
 # ── Quality ──────────────────────────────────
 
 [tasks.fix]
@@ -385,6 +417,10 @@ run = "cargo clippy --fix && cargo fmt && bunx biome check --write"
 [tasks.check]
 description = "Run all checks without fixing"
 run = "cargo clippy && cargo fmt --check && bunx biome check"
+
+[tasks."lint:db"]
+description = "Enforce the database portability rules (transaction bodies, dialect branches)"
+run = "./tools/check-transaction-bodies.sh && ./tools/check-db-dialect-branches.sh"
 
 [tasks.bench]
 description = "Run all benchmarks"

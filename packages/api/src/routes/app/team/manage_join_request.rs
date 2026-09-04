@@ -13,7 +13,6 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    TransactionTrait,
 };
 
 #[utoipa::path(
@@ -49,84 +48,92 @@ pub async fn accept_join_request(
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
 
     let max_prototypes = state.platform_config.max_users_prototype.unwrap_or(-1);
+    let caller_sub = user.sub().ok();
+    let membership_id = create_id();
 
-    let txn = state.db.begin().await?;
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let request_id = request_id.clone();
+            let caller_sub = caller_sub.clone();
+            let membership_id = membership_id.clone();
+            Box::pin(async move {
+                let request = join_queue::Entity::find()
+                    .filter(join_queue::Column::AppId.eq(app_id.clone()))
+                    .filter(join_queue::Column::Id.eq(request_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let request = join_queue::Entity::find()
-        .filter(join_queue::Column::AppId.eq(app_id.clone()))
-        .filter(join_queue::Column::Id.eq(request_id.clone()))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+                let already_member = membership::Entity::find()
+                    .filter(membership::Column::AppId.eq(app_id.clone()))
+                    .filter(membership::Column::UserId.eq(request.user_id.clone()))
+                    .one(txn)
+                    .await?;
 
-    let already_member = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(app_id.clone()))
-        .filter(membership::Column::UserId.eq(request.user_id.clone()))
-        .one(&txn)
+                if already_member.is_some() {
+                    tracing::warn!(
+                        "User {} is trying to join app {} but is already a member",
+                        request.user_id,
+                        app_id
+                    );
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                let app = app::Entity::find_by_id(app_id.clone())
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                if matches!(app.visibility, Visibility::Private | Visibility::Offline) {
+                    tracing::warn!(
+                        "User {} is trying let a user join to app {} but the app is not public",
+                        caller_sub.as_deref().unwrap_or("unknown"),
+                        app_id
+                    );
+                    return Err(ApiError::FORBIDDEN);
+                }
+
+                if max_prototypes > 0
+                    && !matches!(
+                        app.visibility,
+                        Visibility::Public | Visibility::PublicRequestAccess
+                    )
+                {
+                    let current_members_count = membership::Entity::find()
+                        .filter(membership::Column::AppId.eq(app_id.clone()))
+                        .count(txn)
+                        .await?;
+
+                    if current_members_count >= max_prototypes as u64 {
+                        tracing::warn!(
+                            "User {} is trying to join app {} but the app has reached its maximum members",
+                            request.user_id,
+                            app_id
+                        );
+                        return Err(ApiError::FORBIDDEN);
+                    }
+                }
+
+                let default_role_id = app.default_role_id.clone().ok_or(ApiError::NOT_FOUND)?;
+
+                let membership = membership::ActiveModel {
+                    id: Set(membership_id),
+                    user_id: Set(request.user_id.clone()),
+                    app_id: Set(app_id),
+                    role_id: Set(default_role_id),
+                    created_at: Set(chrono::Utc::now().fixed_offset()),
+                    joined_via: Set(Some("accept_join_request".to_string())),
+                    updated_at: Set(chrono::Utc::now().fixed_offset()),
+                };
+
+                let request: join_queue::ActiveModel = request.into();
+                request.delete(txn).await?;
+                membership.insert(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    if already_member.is_some() {
-        tracing::warn!(
-            "User {} is trying to join app {} but is already a member",
-            request.user_id,
-            app_id
-        );
-        return Err(ApiError::FORBIDDEN);
-    }
-
-    let app = app::Entity::find_by_id(app_id.clone())
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    if matches!(app.visibility, Visibility::Private | Visibility::Offline) {
-        tracing::warn!(
-            "User {} is trying let a user join to app {} but the app is not public",
-            user.sub()?,
-            app_id
-        );
-        return Err(ApiError::FORBIDDEN);
-    }
-
-    if max_prototypes > 0
-        && !matches!(
-            app.visibility,
-            Visibility::Public | Visibility::PublicRequestAccess
-        )
-    {
-        let current_members_count = membership::Entity::find()
-            .filter(membership::Column::AppId.eq(app_id.clone()))
-            .count(&txn)
-            .await?;
-
-        if current_members_count >= max_prototypes as u64 {
-            tracing::warn!(
-                "User {} is trying to join app {} but the app has reached its maximum members",
-                request.user_id,
-                app_id
-            );
-            return Err(ApiError::FORBIDDEN);
-        }
-    }
-
-    let default_role_id = app.default_role_id.clone().ok_or(ApiError::NOT_FOUND)?;
-
-    let membership = membership::ActiveModel {
-        id: Set(create_id()),
-        user_id: Set(request.user_id.clone()),
-        app_id: Set(app_id.clone()),
-        role_id: Set(default_role_id),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        joined_via: Set(Some("accept_join_request".to_string())),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-    };
-
-    let request: join_queue::ActiveModel = request.into();
-
-    request.delete(&txn).await?;
-    membership.insert(&txn).await?;
-
-    txn.commit().await?;
 
     tracing::info!(
         "Join request {} for app {} has been accepted by user {}",
@@ -179,17 +186,25 @@ pub async fn reject_join_request(
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
 
-    let txn = state.db.begin().await?;
-    let request = join_queue::Entity::find()
-        .filter(join_queue::Column::AppId.eq(app_id.clone()))
-        .filter(join_queue::Column::Id.eq(request_id.clone()))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+    state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let request_id = request_id.clone();
+            Box::pin(async move {
+                let request = join_queue::Entity::find()
+                    .filter(join_queue::Column::AppId.eq(app_id))
+                    .filter(join_queue::Column::Id.eq(request_id))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
 
-    let request: join_queue::ActiveModel = request.into();
-    request.delete(&txn).await?;
-    txn.commit().await?;
+                let request: join_queue::ActiveModel = request.into();
+                request.delete(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
+
     tracing::info!(
         "Join request {} for app {} has been declined by user {}",
         request_id,

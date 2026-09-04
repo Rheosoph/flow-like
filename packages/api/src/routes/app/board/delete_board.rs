@@ -19,7 +19,8 @@ use axum::{
         (status = 200, description = "Board deleted"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Board not found")
+        (status = 404, description = "Board not found"),
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(name = "DELETE /apps/{app_id}/board/{board_id}", skip(state, user))]
@@ -30,7 +31,7 @@ pub async fn delete_board(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut app = state
         .scoped_app(
@@ -46,6 +47,7 @@ pub async fn delete_board(
     let _ = state
         .prerun_manifest_cache
         .invalidate_entries_if(move |key, _| key.starts_with(&manifest_prefix));
+    mutation_guard.ensure_held()?;
     app.save().await?;
 
     if let Err(err) =

@@ -18,9 +18,10 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
+use crate::utils::time::utc_midnight;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect,
@@ -104,7 +105,7 @@ pub struct TelemetryEngagementResponse {
 #[derive(Debug, FromQueryResult)]
 struct InstallDayRow {
     anon_id: String,
-    day: NaiveDateTime,
+    day: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -127,7 +128,7 @@ struct EngagementFold {
 }
 
 fn day_ts(day: NaiveDate) -> String {
-    DateTime::<Utc>::from_naive_utc_and_offset(day.and_time(NaiveTime::MIN), Utc).to_rfc3339()
+    utc_midnight(day).to_rfc3339()
 }
 
 fn week_start(day: NaiveDate) -> NaiveDate {
@@ -142,11 +143,11 @@ fn drop_off_window(
     days: i64,
     horizon_days: i64,
     retention_days: i64,
-) -> Option<(NaiveDateTime, NaiveDateTime)> {
-    let end = (today - Duration::days(days - 1)).and_time(NaiveTime::MIN);
+) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
+    let end = utc_midnight(today - Duration::days(days - 1));
     let horizon = today - Duration::days(horizon_days - 1);
     let retained = today - Duration::days(retention_days - 1);
-    let start = horizon.max(retained).and_time(NaiveTime::MIN);
+    let start = utc_midnight(horizon.max(retained));
     (start < end).then_some((start, end))
 }
 
@@ -314,7 +315,7 @@ fn fold_drop_off_paths(rows: &[PageViewRow], churned: &BTreeSet<String>) -> Vec<
 /// Distinct `(install, day)` pairs straight out of the rollup.
 async fn install_days<C: ConnectionTrait>(
     db: &C,
-    horizon_start: NaiveDateTime,
+    horizon_start: DateTime<FixedOffset>,
 ) -> Result<Vec<(String, NaiveDate)>, ApiError> {
     let rows = telemetry_install_daily::Entity::find()
         .select_only()
@@ -330,7 +331,7 @@ async fn install_days<C: ConnectionTrait>(
 
     Ok(rows
         .into_iter()
-        .map(|row| (row.anon_id, row.day.date()))
+        .map(|row| (row.anon_id, row.day.date_naive()))
         .collect())
 }
 
@@ -358,7 +359,7 @@ pub async fn telemetry_engagement(
     let days = q.days.unwrap_or(30).clamp(7, 90);
     let today = Utc::now().date_naive();
     let horizon_days = (days * 2).max(FIRST_SEEN_HORIZON_DAYS);
-    let horizon_start = (today - Duration::days(horizon_days - 1)).and_time(NaiveTime::MIN);
+    let horizon_start = utc_midnight(today - Duration::days(horizon_days - 1));
 
     let pairs = install_days(&state.db, horizon_start).await?;
     let fold = fold_engagement(&pairs, today, days);
@@ -447,9 +448,7 @@ mod tests {
             .select_only()
             .column_as(telemetry_install_daily::Column::AnonId, "anon_id")
             .column_as(telemetry_install_daily::Column::Day, "day")
-            .filter(
-                telemetry_install_daily::Column::Day.gte(day(2026, 4, 28).and_time(NaiveTime::MIN)),
-            )
+            .filter(telemetry_install_daily::Column::Day.gte(utc_midnight(day(2026, 4, 28))))
             .filter(telemetry_install_daily::Column::AnonId.ne(BACKEND_ANON_ID))
             .filter(telemetry_install_daily::Column::Source.ne(BACKEND_SOURCE))
             .distinct()
@@ -466,12 +465,12 @@ mod tests {
         let today = day(2026, 7, 26);
 
         let (start, end) = drop_off_window(today, 7, 90, 30).unwrap();
-        assert_eq!(start, day(2026, 6, 27).and_time(NaiveTime::MIN));
-        assert_eq!(end, day(2026, 7, 20).and_time(NaiveTime::MIN));
+        assert_eq!(start, utc_midnight(day(2026, 6, 27)));
+        assert_eq!(end, utc_midnight(day(2026, 7, 20)));
         assert_eq!((end - start).num_days(), 23);
 
         let (start, _) = drop_off_window(today, 7, 90, 400).unwrap();
-        assert_eq!(start, day(2026, 4, 28).and_time(NaiveTime::MIN));
+        assert_eq!(start, utc_midnight(day(2026, 4, 28)));
     }
 
     #[test]

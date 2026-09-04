@@ -7,6 +7,7 @@ use axum::{
 pub mod begin_offline;
 pub mod begin_online;
 pub mod finalize_online;
+pub mod jobs;
 pub mod online_fork;
 pub mod preview;
 
@@ -26,5 +27,7 @@ pub fn routes() -> Router<AppState> {
 /// source app — i.e. offline → online forks where the source lives on
 /// the desktop.
 pub fn root_routes() -> Router<AppState> {
-    Router::new().route("/fork/online/begin", post(begin_online::begin_online_fork))
+    Router::new()
+        .route("/fork/online/begin", post(begin_online::begin_online_fork))
+        .route("/fork/jobs/{job_id}", get(jobs::get_fork_job))
 }

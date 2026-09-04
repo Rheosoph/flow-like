@@ -162,7 +162,7 @@ pub(crate) async fn app_meta_lookup(
                             banner: m.thumbnail,
                             website: m.website,
                             docs_url: m.docs_url,
-                            tags: m.tags.unwrap_or_default(),
+                            tags: m.tags.unwrap_or_default().into(),
                         },
                         is_english,
                     ),
@@ -241,8 +241,8 @@ pub(crate) fn to_connection_info(
         app_name,
         app_description,
         app_icon,
-        created_at: model.created_at.and_utc().timestamp(),
-        updated_at: model.updated_at.and_utc().timestamp(),
+        created_at: model.created_at.timestamp(),
+        updated_at: model.updated_at.timestamp(),
     }
 }
 

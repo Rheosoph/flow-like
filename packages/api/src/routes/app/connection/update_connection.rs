@@ -11,6 +11,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -72,7 +73,7 @@ pub async fn update_connection(
     let source_app_id = connection.source_app_id.clone();
     let mut active: app_connection::ActiveModel = connection.into();
     active.role_id = Set(Some(payload.role_id.clone()));
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     active.update(&state.db).await?;
 
     state.invalidate_permission(&app_connection_cache_sub(&source_app_id), &app_id);

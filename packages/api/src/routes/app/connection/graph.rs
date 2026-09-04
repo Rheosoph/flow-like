@@ -27,6 +27,8 @@ use axum::{
 };
 use flow_like::bit::Metadata;
 use flow_like_storage::Path as FlowPath;
+use flow_like_types::anyhow;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Statement, sea_query::Expr,
@@ -55,8 +57,8 @@ impl From<app_process_note::Model> for ProcessNoteInfo {
             id: model.id,
             author_user_id: model.author_user_id,
             content: model.content,
-            created_at: model.created_at.and_utc().timestamp(),
-            updated_at: model.updated_at.and_utc().timestamp(),
+            created_at: model.created_at.timestamp(),
+            updated_at: model.updated_at.timestamp(),
         }
     }
 }
@@ -149,9 +151,9 @@ pub struct ProcessGraphQuery {
     pub days: Option<i64>,
 }
 
-pub(crate) fn flow_window(query: &ProcessGraphQuery) -> chrono::NaiveDateTime {
+pub(crate) fn flow_window(query: &ProcessGraphQuery) -> chrono::DateTime<chrono::FixedOffset> {
     let days = query.days.unwrap_or(30).clamp(1, 365);
-    chrono::Utc::now().naive_utc() - chrono::Duration::days(days)
+    chrono::Utc::now().fixed_offset() - chrono::Duration::days(days)
 }
 
 /// BFS over the connection topology in both directions, starting at `seed`.
@@ -209,13 +211,25 @@ pub(crate) struct ObservedFlow {
     pub event_type: Option<String>,
 }
 
+/// Decodes a JSON column the query rendered as text (`col::text`), which keeps
+/// `GROUP BY` and the result column engine-independent.
+pub(crate) fn json_text_column<T: serde::de::DeserializeOwned>(
+    row: &sea_orm::QueryResult,
+    column: &str,
+) -> Result<Option<T>, ApiError> {
+    let text: Option<String> = row.try_get("", column)?;
+    text.map(|text| serde_json::from_str::<T>(&text))
+        .transpose()
+        .map_err(|e| ApiError::internal_error(anyhow!("column {column} is not valid JSON: {e}")))
+}
+
 fn flow_from_row(row: &sea_orm::QueryResult) -> Result<ObservedFlow, ApiError> {
-    let chain: Vec<String> = row.try_get("", "callerAppChain")?;
+    let chain: Vec<String> = json_text_column(row, "callerAppChain")?.unwrap_or_default();
     let app_id: String = row.try_get("", "appId")?;
     let run_count: i64 = row.try_get("", "run_count")?;
     let failed_count: i64 = row.try_get("", "failed_count")?;
     let avg_duration_ms: Option<f64> = row.try_get("", "avg_duration_ms")?;
-    let last_run: chrono::NaiveDateTime = row.try_get("", "last_run")?;
+    let last_run: chrono::DateTime<chrono::FixedOffset> = row.try_get("", "last_run")?;
     let event_name: Option<String> = row.try_get("", "event_name")?;
     let event_type: Option<String> = row.try_get("", "event_type")?;
     let mut path = chain;
@@ -225,16 +239,16 @@ fn flow_from_row(row: &sea_orm::QueryResult) -> Result<ObservedFlow, ApiError> {
         run_count,
         failed_count,
         avg_duration_ms,
-        last_run_at: last_run.and_utc().timestamp(),
+        last_run_at: last_run.timestamp(),
         event_name,
         event_type,
     })
 }
 
 /// The `SELECT`/`GROUP BY` shared by both observed-flow queries. Groups by the
-/// executed event so each row names the event, and casts the `status` enum to
-/// text to count failures.
-const OBSERVED_FLOW_SELECT: &str = r#"SELECT r."callerAppChain", r."appId", e.name AS event_name, e."eventType" AS event_type,
+/// executed event so each row names the event. The JSON chain is grouped and
+/// returned as text so jsonb equality is never required of the engine.
+const OBSERVED_FLOW_SELECT: &str = r#"SELECT r."callerAppChain"::text AS "callerAppChain", r."appId", e.name AS event_name, e."eventType" AS event_type,
               COUNT(*)::BIGINT AS run_count,
               COUNT(*) FILTER (WHERE r.status IN ('FAILED', 'CANCELLED', 'TIMEOUT'))::BIGINT AS failed_count,
               AVG((EXTRACT(EPOCH FROM (r."completedAt" - r."startedAt")) * 1000.0)::double precision)
@@ -243,18 +257,20 @@ const OBSERVED_FLOW_SELECT: &str = r#"SELECT r."callerAppChain", r."appId", e.na
        FROM "public"."ExecutionRun" r
        LEFT JOIN "public"."Event" e ON e.id = r."eventId""#;
 const OBSERVED_FLOW_GROUP: &str =
-    r#"GROUP BY r."callerAppChain", r."appId", e.name, e."eventType""#;
+    r#"GROUP BY r."callerAppChain"::text, r."appId", e.name, e."eventType""#;
 
 /// Observed chains an app participates in — as terminal app or anywhere in
-/// the recorded chain.
+/// the recorded chain. Chain membership goes through the indexed
+/// `ExecutionRunCallerApp` mirror rows.
 pub(crate) async fn observed_flows_for_app(
     state: &AppState,
     app_id: &str,
-    since: chrono::NaiveDateTime,
+    since: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
     let sql = format!(
         r#"{OBSERVED_FLOW_SELECT}
-           WHERE (r."callerAppChain" @> $1 OR (r."appId" = $2 AND array_length(r."callerAppChain", 1) > 0))
+           WHERE (EXISTS (SELECT 1 FROM "public"."ExecutionRunCallerApp" c WHERE c."runId" = r.id AND c."appId" = $1)
+                  OR (r."appId" = $2 AND jsonb_array_length(r."callerAppChain") > 0))
              AND r."updatedAt" >= $3
            {OBSERVED_FLOW_GROUP}
            ORDER BY run_count DESC
@@ -264,25 +280,25 @@ pub(crate) async fn observed_flows_for_app(
         DatabaseBackend::Postgres,
         sql,
         [
-            vec![app_id.to_string()].into(),
+            app_id.into(),
             app_id.into(),
             since.into(),
             (MAX_FLOWS as i64).into(),
         ],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     rows.iter().map(flow_from_row).collect()
 }
 
 /// All observed chains platform-wide.
 pub(crate) async fn observed_flows_global(
     state: &AppState,
-    since: chrono::NaiveDateTime,
+    since: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
     let sql = format!(
         r#"{OBSERVED_FLOW_SELECT}
-           WHERE array_length(r."callerAppChain", 1) > 0
+           WHERE jsonb_array_length(r."callerAppChain") > 0
              AND r."updatedAt" >= $1
            {OBSERVED_FLOW_GROUP}
            ORDER BY run_count DESC
@@ -294,7 +310,7 @@ pub(crate) async fn observed_flows_global(
         [since.into(), (MAX_FLOWS as i64).into()],
     );
 
-    let rows = state.db.query_all(stmt).await?;
+    let rows = state.db.query_all_raw(stmt).await?;
     rows.iter().map(flow_from_row).collect()
 }
 

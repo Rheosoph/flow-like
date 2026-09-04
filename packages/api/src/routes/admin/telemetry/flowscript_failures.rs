@@ -18,7 +18,7 @@ use crate::routes::user::identity::escape_like_pattern;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::sea_query::{Alias, Expr, LikeExpr, extension::postgres::PgExpr};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder,
@@ -88,7 +88,7 @@ struct FailureRow {
     app_version: Option<String>,
     platform: Option<String>,
     trace_id: Option<String>,
-    created_at: NaiveDateTime,
+    created_at: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -220,14 +220,14 @@ fn record_from(row: FailureRow, names: &HashMap<String, String>) -> FlowScriptFa
         app_version: row.app_version,
         platform: row.platform,
         trace_id: row.trace_id,
-        created_at: row.created_at.and_utc().to_rfc3339(),
+        created_at: row.created_at.to_rfc3339(),
     }
 }
 
 /// The filtered window every read on this page shares.
 fn filtered(
     q: &ListFlowScriptFailuresQuery,
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
 ) -> Select<flow_script_apply_failure::Entity> {
     use flow_script_apply_failure::Column;
 
@@ -351,7 +351,7 @@ pub async fn list_flowscript_failures(
         .page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
 
     let total = filtered(&q, cutoff).count(&state.db).await?;
 

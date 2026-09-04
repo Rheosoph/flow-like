@@ -11,9 +11,10 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
-    QueryFilter, TransactionTrait,
+    QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -58,47 +59,53 @@ pub async fn upsert_comment(
 ) -> Result<Json<CommentResponse>, ApiError> {
     let permission = ensure_in_project!(user, &app_id, &state);
     let sub = permission.sub()?;
-
-    let txn = state.db.begin().await?;
-
-    let existing = comment::Entity::find()
-        .filter(comment::Column::UserId.eq(&sub))
-        .filter(comment::Column::AppId.eq(&app_id))
-        .one(&txn)
-        .await?;
-
     let new_rating = body.rating.clamp(1, 5);
+    let new_comment_id = create_id();
 
-    let comment_id = if let Some(existing) = existing {
-        let id = existing.id.clone();
-        let old_rating = existing.rating;
-        let mut active = existing.into_active_model();
-        active.text = Set(body.text);
-        active.rating = Set(new_rating);
-        active.updated_at = Set(chrono::Utc::now().naive_utc());
-        active.update(&txn).await?;
-        adjust_app_ratings(&txn, &app_id, new_rating - old_rating, 0).await?;
-        id
-    } else {
-        let id = create_id();
-        let model = comment::Model {
-            id: id.clone(),
-            text: body.text,
-            rating: new_rating,
-            user_id: sub,
-            app_id: Some(app_id.clone()),
-            template_id: None,
-            package_id: None,
-            created_at: chrono::Utc::now().naive_utc(),
-            updated_at: chrono::Utc::now().naive_utc(),
-        };
-        let mut active = comment::ActiveModel::from(model);
-        active = active.reset_all();
-        active.insert(&txn).await?;
-        adjust_app_ratings(&txn, &app_id, new_rating, 1).await?;
-        id
-    };
-    txn.commit().await?;
+    let comment_id = state
+        .transaction(|txn| {
+            let app_id = app_id.clone();
+            let sub = sub.clone();
+            let text = body.text.clone();
+            let new_comment_id = new_comment_id.clone();
+            Box::pin(async move {
+                let existing = comment::Entity::find()
+                    .filter(comment::Column::UserId.eq(&sub))
+                    .filter(comment::Column::AppId.eq(&app_id))
+                    .one(txn)
+                    .await?;
+
+                let comment_id = if let Some(existing) = existing {
+                    let id = existing.id.clone();
+                    let old_rating = existing.rating;
+                    let mut active = existing.into_active_model();
+                    active.text = Set(text);
+                    active.rating = Set(new_rating);
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
+                    active.update(txn).await?;
+                    adjust_app_ratings(txn, &app_id, new_rating - old_rating, 0).await?;
+                    id
+                } else {
+                    let model = comment::Model {
+                        id: new_comment_id.clone(),
+                        text,
+                        rating: new_rating,
+                        user_id: sub,
+                        app_id: Some(app_id.clone()),
+                        template_id: None,
+                        package_id: None,
+                        created_at: chrono::Utc::now().fixed_offset(),
+                        updated_at: chrono::Utc::now().fixed_offset(),
+                    };
+                    let active = comment::ActiveModel::from(model).reset_all();
+                    active.insert(txn).await?;
+                    adjust_app_ratings(txn, &app_id, new_rating, 1).await?;
+                    new_comment_id
+                };
+                Ok::<_, ApiError>(comment_id)
+            })
+        })
+        .await?;
 
     Ok(Json(CommentResponse { comment_id }))
 }

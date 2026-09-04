@@ -13,6 +13,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{CacheKey, CacheStore, CacheStoreConfig, CacheStoreError, SetCacheEntry};
+use crate::db::DbDialect;
 use crate::error::ApiError;
 
 /// Partition holding platform-owned entries. Not a valid app id anywhere else.
@@ -30,6 +31,7 @@ pub fn is_platform_app_id(app_id: &str) -> bool {
 /// instead of pinning the process to a dead backend.
 pub struct CacheBackendHandle {
     db: Arc<DatabaseConnection>,
+    dialect: Option<DbDialect>,
     #[cfg(feature = "aws")]
     aws_config: Option<Arc<aws_config::SdkConfig>>,
     store: OnceCell<Arc<dyn CacheStore>>,
@@ -50,10 +52,18 @@ impl CacheBackendHandle {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
             db,
+            dialect: None,
             #[cfg(feature = "aws")]
             aws_config: None,
             store: OnceCell::new(),
         }
+    }
+
+    /// The engine behind the connection, so the Postgres backend need not
+    /// probe it again on first use.
+    pub fn with_dialect(mut self, dialect: DbDialect) -> Self {
+        self.dialect = Some(dialect);
+        self
     }
 
     #[cfg(feature = "aws")]
@@ -66,7 +76,11 @@ impl CacheBackendHandle {
     pub async fn store(&self) -> Result<Arc<dyn CacheStore>, CacheStoreError> {
         self.store
             .get_or_try_init(|| async {
-                let config = CacheStoreConfig::default().with_db(self.db.clone());
+                let config = CacheStoreConfig {
+                    dialect: self.dialect,
+                    ..CacheStoreConfig::default()
+                }
+                .with_db(self.db.clone());
                 #[cfg(feature = "aws")]
                 let config = match &self.aws_config {
                     Some(aws_config) => config.with_aws_config(aws_config.clone()),

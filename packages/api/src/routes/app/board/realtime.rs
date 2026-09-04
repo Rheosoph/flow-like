@@ -206,8 +206,8 @@ async fn get_or_rotate_room_key(
     app_id: &str,
     board_id: &str,
 ) -> Result<(String, String), ApiError> {
-    let now = chrono::Utc::now().naive_utc();
-    let today = now.date(); // NaiveDate
+    let now = chrono::Utc::now().fixed_offset();
+    let today = now.date_naive();
     let key_id = today.format("%Y-%m-%d").to_string();
 
     let txn = state.db.begin().await?;
@@ -222,7 +222,7 @@ async fn get_or_rotate_room_key(
     let encryption_key = match existing {
         Some(sync) => {
             // Rotate if last_synced_at is from a previous day
-            if sync.last_synced_at.date() < today {
+            if sync.last_synced_at.date_naive() < today {
                 let new_key = generate_encryption_key();
                 let mut active_sync: board_sync::ActiveModel = sync.into();
                 active_sync.sync_encryption_key = Set(new_key.clone());

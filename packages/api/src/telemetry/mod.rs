@@ -9,7 +9,7 @@ pub mod spans;
 pub mod sweeper;
 
 use flow_like_types::Value;
-use sea_orm::{EntityTrait, Set};
+use sea_orm::{DbBackend, EntityTrait, Set};
 
 pub use crate::middleware::trace_context::{TraceContext, trace_context_middleware};
 pub use alerts::{
@@ -26,6 +26,14 @@ pub use sweeper::{TelemetrySweepResult, TelemetrySweeperConfig, spawn_telemetry_
 use crate::{entity::telemetry_event, state::AppState};
 
 const DEFAULT_TRACE_SAMPLE_RATE: f64 = 0.05;
+
+/// Whether percentiles may be computed with `percentile_cont(…) WITHIN GROUP`
+/// in SQL. The hand-written statements use `$n` placeholders, so they need the
+/// Postgres wire builder as well as an engine that has ordered-set aggregates;
+/// everywhere else the callers fold a capped sample in Rust.
+pub(crate) fn percentiles_in_sql(backend: DbBackend, dialect: crate::db::DbDialect) -> bool {
+    backend == DbBackend::Postgres && dialect.supports_ordered_set_aggregates()
+}
 
 pub(crate) fn sink_from_env() -> String {
     std::env::var("FLOW_LIKE_TELEMETRY_SINK")
@@ -82,7 +90,7 @@ pub fn record_backend_event(state: &AppState, name: impl Into<String>, props: Op
             platform: Set(None),
             country: Set(None),
             client_ts: Set(None),
-            created_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
         };
         if let Err(e) = telemetry_event::Entity::insert(model).exec(&db).await {
             tracing::error!("Failed to persist backend telemetry event: {}", e);

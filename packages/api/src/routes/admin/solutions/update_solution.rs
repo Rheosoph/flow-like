@@ -73,7 +73,7 @@ pub async fn update_solution(
         new_status_value = Some(new_status.clone());
 
         if new_status == SolutionStatus::Delivered {
-            active.delivered_at = Set(Some(chrono::Utc::now().naive_utc()));
+            active.delivered_at = Set(Some(chrono::Utc::now().fixed_offset()));
         }
     }
 
@@ -89,7 +89,7 @@ pub async fn update_solution(
         active.priority = Set(priority);
     }
 
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
 
     let updated = active.update(&state.db).await?;
 

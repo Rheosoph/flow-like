@@ -1,4 +1,8 @@
 use crate::{
+    deletion::{
+        self, AcceptedDeletion, Deleted, DeletionRoot,
+        job::{self, not_pending_deletion},
+    },
     entity::{
         course, course_module, lesson, meta,
         sea_orm_active_enums::{CourseCategory, CourseDifficulty},
@@ -17,7 +21,7 @@ use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, TransactionTrait,
+    QueryOrder, QuerySelect, Select,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -187,6 +191,15 @@ async fn resolve_course_media_url(
     }
 }
 
+/// Courses whose deletion job has not finished yet are already losing their
+/// modules, lessons and media, so every listing reads through this.
+fn courses_not_deleting() -> Select<course::Entity> {
+    course::Entity::find().filter(not_pending_deletion(
+        DeletionRoot::Course,
+        (course::Entity, course::Column::Id),
+    ))
+}
+
 async fn check_course_read_access(
     state: &AppState,
     user: &AppUser,
@@ -224,10 +237,11 @@ pub async fn list_courses(
     Extension(user): Extension<AppUser>,
     Query(q): Query<ListCoursesQuery>,
 ) -> Result<Json<Vec<CourseListItem>>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
-    let limit = q.limit.unwrap_or(100).min(100);
+    let limit = Ord::min(q.limit.unwrap_or(100), 100);
 
-    let mut query = course::Entity::find()
+    let mut query = courses_not_deleting()
         .order_by_asc(course::Column::Position)
         .order_by_desc(course::Column::UpdatedAt);
 
@@ -288,7 +302,7 @@ pub async fn list_courses(
             is_published: c.is_published,
             icon_url,
             banner_url,
-            tags: c.tags.unwrap_or_default(),
+            tags: c.tags.unwrap_or_default().into(),
             position: c.position,
             name: chosen.map(|m| m.name.clone()),
             description: chosen.and_then(|m| m.description.clone()),
@@ -352,6 +366,7 @@ pub async fn get_course(
     Path(course_id): Path<String>,
     Query(q): Query<LanguageParams>,
 ) -> Result<Json<CourseDetail>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
     let (c, metas) = course::Entity::find_by_id(&course_id)
@@ -400,7 +415,7 @@ pub async fn get_course(
         is_published: c.is_published,
         icon_url,
         banner_url,
-        tags: c.tags.unwrap_or_default(),
+        tags: c.tags.unwrap_or_default().into(),
         position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
@@ -430,7 +445,7 @@ pub async fn upsert_course(
         .await?;
     let sub = user.sub()?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = course::Entity::find_by_id(&course_id)
         .one(&state.db)
         .await?;
@@ -446,37 +461,56 @@ pub async fn upsert_course(
         .map(parse_category)
         .unwrap_or(CourseCategory::General);
 
-    let saved = if let Some(existing) = existing {
-        let mut active = existing.into_active_model();
-        active.language = Set(body.language.clone());
-        active.slug = Set(body.slug.clone());
-        active.difficulty = Set(difficulty);
-        active.category = Set(category);
-        active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
-        active.is_published = Set(body.is_published.unwrap_or(false));
-        active.tags = Set(body.tags.clone());
-        active.position = Set(body.position);
-        active.updated_at = Set(now);
-        active.update(&state.db).await?
-    } else {
-        let active = course::ActiveModel {
-            id: Set(course_id.clone()),
-            language: Set(body.language.clone()),
-            slug: Set(body.slug.clone()),
-            difficulty: Set(difficulty),
-            category: Set(category),
-            estimated_minutes: Set(body.estimated_minutes.unwrap_or(0)),
-            is_published: Set(body.is_published.unwrap_or(false)),
-            author_id: Set(Some(sub.clone())),
-            icon_url: Set(None),
-            banner_url: Set(None),
-            tags: Set(body.tags.clone()),
-            position: Set(body.position),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        active.insert(&state.db).await?
-    };
+    let saved = state
+        .transaction(|txn| {
+            let course_id = course_id.clone();
+            let body = body.clone();
+            let sub = sub.clone();
+            let difficulty = difficulty.clone();
+            let category = category.clone();
+            let existing = existing.clone();
+            Box::pin(async move {
+                // A `202` only tombstones the root; the row stays until the
+                // drain reaches `DeleteRoot`, so re-authoring a course under
+                // its old id lands in the update branch. Both branches cancel,
+                // in the transaction that writes the row.
+                job::cancel(txn, DeletionRoot::Course, &course_id).await?;
+                let saved = if let Some(existing) = existing {
+                    let mut active = existing.into_active_model();
+                    active.language = Set(body.language);
+                    active.slug = Set(body.slug);
+                    active.difficulty = Set(difficulty);
+                    active.category = Set(category);
+                    active.estimated_minutes = Set(body.estimated_minutes.unwrap_or(0));
+                    active.is_published = Set(body.is_published.unwrap_or(false));
+                    active.tags = Set(body.tags.map(Into::into));
+                    active.position = Set(body.position);
+                    active.updated_at = Set(now);
+                    active.update(txn).await?
+                } else {
+                    course::ActiveModel {
+                        id: Set(course_id),
+                        language: Set(body.language),
+                        slug: Set(body.slug),
+                        difficulty: Set(difficulty),
+                        category: Set(category),
+                        estimated_minutes: Set(body.estimated_minutes.unwrap_or(0)),
+                        is_published: Set(body.is_published.unwrap_or(false)),
+                        author_id: Set(Some(sub)),
+                        icon_url: Set(None),
+                        banner_url: Set(None),
+                        tags: Set(body.tags.map(Into::into)),
+                        position: Set(body.position),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                    }
+                    .insert(txn)
+                    .await?
+                };
+                Ok::<_, ApiError>(saved)
+            })
+        })
+        .await?;
 
     let existing_meta = meta::Entity::find()
         .filter(meta::Column::CourseId.eq(&course_id))
@@ -536,7 +570,7 @@ pub async fn upsert_course(
         is_published: saved.is_published,
         icon_url,
         banner_url,
-        tags: saved.tags.unwrap_or_default(),
+        tags: saved.tags.unwrap_or_default().into(),
         position: saved.position,
         name: Some(body.name),
         description: body.description,
@@ -591,9 +625,11 @@ pub async fn get_course_structure(
     Path(course_id): Path<String>,
     Query(q): Query<LanguageParams>,
 ) -> Result<Json<CourseStructure>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
 
-    let (c, metas) = course::Entity::find_by_id(&course_id)
+    let (c, metas) = courses_not_deleting()
+        .filter(course::Column::Id.eq(&course_id))
         .find_with_related(meta::Entity)
         .filter(
             meta::Column::Lang
@@ -639,7 +675,7 @@ pub async fn get_course_structure(
         is_published: c.is_published,
         icon_url,
         banner_url,
-        tags: c.tags.clone().unwrap_or_default(),
+        tags: c.tags.clone().unwrap_or_default().into(),
         position: c.position,
         name: chosen.map(|m| m.name.clone()),
         description: chosen.and_then(|m| m.description.clone()),
@@ -647,6 +683,10 @@ pub async fn get_course_structure(
     };
 
     let modules = course_module::Entity::find()
+        .filter(not_pending_deletion(
+            DeletionRoot::CourseModule,
+            (course_module::Entity, course_module::Column::Id),
+        ))
         .filter(course_module::Column::CourseId.eq(&course_id))
         .order_by_asc(course_module::Column::Position)
         .all(&state.db)
@@ -657,6 +697,10 @@ pub async fn get_course_structure(
         Vec::new()
     } else {
         lesson::Entity::find()
+            .filter(not_pending_deletion(
+                DeletionRoot::Lesson,
+                (lesson::Entity, lesson::Column::Id),
+            ))
             .filter(lesson::Column::ModuleId.is_in(module_ids))
             .order_by_asc(lesson::Column::Position)
             .all(&state.db)
@@ -748,65 +792,62 @@ pub async fn push_course_media(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let txn = state.db.begin().await?;
-    let existing_meta = meta::Entity::find()
-        .filter(meta::Column::CourseId.eq(&course_id))
-        .filter(meta::Column::Lang.eq(&query.language))
-        .one(&txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let mut model: meta::ActiveModel = existing_meta.clone().into();
-    model.updated_at = Set(chrono::Utc::now().naive_utc());
     let item_id = create_id();
     let extension = normalize_media_extension(&query.extension)?;
     let item_name = format!("{item_id}.{extension}");
+    let item = query.item;
+    let language = query.language.clone();
+
+    let replaced_media = state
+        .transaction(|txn| {
+            let course_id = course_id.clone();
+            let language = language.clone();
+            let item_id = item_id.clone();
+            Box::pin(async move {
+                let existing_meta = meta::Entity::find()
+                    .filter(meta::Column::CourseId.eq(&course_id))
+                    .filter(meta::Column::Lang.eq(&language))
+                    .one(txn)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+
+                let mut model: meta::ActiveModel = existing_meta.clone().into();
+                model.updated_at = Set(chrono::Utc::now().fixed_offset());
+
+                let replaced = match item {
+                    CourseMediaItem::Icon => {
+                        model.icon = Set(Some(item_id));
+                        existing_meta.icon
+                    }
+                    CourseMediaItem::Thumbnail => {
+                        model.thumbnail = Set(Some(item_id));
+                        existing_meta.thumbnail
+                    }
+                };
+
+                model.update(txn).await?;
+                Ok::<_, ApiError>(replaced)
+            })
+        })
+        .await?;
 
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
 
-    match query.item {
-        CourseMediaItem::Icon => {
-            if let Some(icon) = &existing_meta.icon
-                && !icon.starts_with("http://")
-                && !icon.starts_with("https://")
-            {
-                let path = course_media_storage_path(
-                    &course_id,
-                    &transformed_course_media_file_name(icon),
-                );
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!(
-                        "Failed to delete existing course icon at {}: {:?}",
-                        path,
-                        err
-                    );
-                }
-            }
-            model.icon = Set(Some(item_id.clone()));
-        }
-        CourseMediaItem::Thumbnail => {
-            if let Some(thumbnail) = &existing_meta.thumbnail
-                && !thumbnail.starts_with("http://")
-                && !thumbnail.starts_with("https://")
-            {
-                let path = course_media_storage_path(
-                    &course_id,
-                    &transformed_course_media_file_name(thumbnail),
-                );
-                if let Err(err) = master_store.as_generic().delete(&path).await {
-                    tracing::error!(
-                        "Failed to delete existing course thumbnail at {}: {:?}",
-                        path,
-                        err
-                    );
-                }
-            }
-            model.thumbnail = Set(Some(item_id.clone()));
+    if let Some(replaced) = replaced_media
+        && !replaced.starts_with("http://")
+        && !replaced.starts_with("https://")
+    {
+        let path =
+            course_media_storage_path(&course_id, &transformed_course_media_file_name(&replaced));
+        if let Err(err) = master_store.as_generic().delete(&path).await {
+            tracing::error!(
+                "Failed to delete replaced course media at {}: {:?}",
+                path,
+                err
+            );
         }
     }
-
-    model.update(&txn).await?;
 
     let path = course_media_storage_path(&course_id, &item_name);
     let signed_url = master_store
@@ -823,7 +864,6 @@ pub async fn push_course_media(
             ApiError::internal_error(anyhow!("Failed to create signed URL, reference ID: {}", id))
         })?;
 
-    txn.commit().await?;
     Ok(Json(PushCourseMediaResponse {
         signed_url: signed_url.to_string(),
     }))
@@ -836,6 +876,7 @@ pub async fn push_course_media(
     params(("course_id" = String, Path, description = "Course identifier")),
     responses(
         (status = 200, description = "Course deleted"),
+        (status = 202, description = "Course queued for deletion; follow the job on `GET /admin/deletions/{job_id}`", body = AcceptedDeletion),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -844,11 +885,47 @@ pub async fn delete_course(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(course_id): Path<String>,
-) -> Result<Json<()>, ApiError> {
+) -> Result<Deleted<()>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteCourses)
         .await?;
-    course::Entity::delete_by_id(course_id)
-        .exec(&state.db)
-        .await?;
-    Ok(Json(()))
+    if course::Entity::find_by_id(&course_id)
+        .one(&state.db)
+        .await?
+        .is_none()
+    {
+        return Ok(Deleted::Completed(()));
+    }
+    let requested_by = user.sub().ok();
+    deletion::delete_now(
+        &state,
+        DeletionRoot::Course,
+        &course_id,
+        requested_by.as_deref(),
+        (),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::QueryTrait;
+    use sea_orm::sea_query::PostgresQueryBuilder;
+
+    #[test]
+    fn course_reads_skip_roots_with_an_unfinished_deletion_job() {
+        let sql = courses_not_deleting()
+            .into_query()
+            .to_string(PostgresQueryBuilder);
+
+        assert!(
+            sql.contains("NOT EXISTS(SELECT 1 FROM \"DeletionJob\""),
+            "{sql}"
+        );
+        assert!(
+            sql.contains(r#""DeletionJob"."rootId" = "Course"."id""#),
+            "{sql}"
+        );
+        assert!(sql.contains(r#""DeletionJob"."status" <> 'DONE'"#), "{sql}");
+    }
 }

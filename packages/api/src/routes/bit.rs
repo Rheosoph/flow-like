@@ -14,7 +14,7 @@ pub(crate) fn llm_model_to_evaluation(model: llm_model::Model) -> LlmModelEvalua
     LlmModelEvaluation {
         slug: model.slug,
         name: model.name,
-        release_date: model.release_date.map(|date| date.to_string()),
+        release_date: model.release_date.map(|date| date.to_rfc3339()),
         creator_name: model.creator_name,
         creator_slug: model.creator_slug,
         evaluations: model.evaluations,

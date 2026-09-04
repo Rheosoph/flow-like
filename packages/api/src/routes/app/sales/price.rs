@@ -69,7 +69,7 @@ pub async fn update_price(
 
     let mut active: app::ActiveModel = existing.into();
     active.price = Set(body.price);
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
 
     active.update(&state.db).await?;
 

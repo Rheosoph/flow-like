@@ -235,45 +235,45 @@ impl MetaMode {
         }
     }
 
-    pub async fn find_existing_meta(
+    pub async fn find_existing_meta<C: sea_orm::ConnectionTrait>(
         &self,
         language: &str,
-        txn: &sea_orm::DatabaseTransaction,
+        db: &C,
     ) -> Result<Option<meta::Model>, sea_orm::DbErr> {
         match self {
             MetaMode::Template(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::TemplateId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
-                    .one(txn)
+                    .one(db)
                     .await
             }
             MetaMode::App(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::AppId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
-                    .one(txn)
+                    .one(db)
                     .await
             }
             MetaMode::Course(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::CourseId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
-                    .one(txn)
+                    .one(db)
                     .await
             }
             MetaMode::Widget(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::WidgetId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
-                    .one(txn)
+                    .one(db)
                     .await
             }
             MetaMode::Group(id) => {
                 meta::Entity::find()
                     .filter(meta::Column::GroupId.eq(id))
                     .filter(meta::Column::Lang.eq(language))
-                    .one(txn)
+                    .one(db)
                     .await
             }
         }

@@ -50,7 +50,7 @@ pub async fn get_events(
     if events.is_empty() {
         let principal_id = permission.identifier();
         let app = state.master_app(&principal_id, &app_id, &state).await?;
-        events = get_events_with_fallback(&state.db, &app).await?;
+        events = get_events_with_fallback(&state.db, state.db_dialect, &app).await?;
     }
 
     // Filter out secret variable values from all events

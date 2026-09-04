@@ -7,9 +7,11 @@
 // and queue workers (packages/azure-data/src/postgres.rs), so a job revision
 // cannot be configured in a way its siblings would refuse. There is no
 // password anywhere: one Entra token for the ossrdbms scope becomes the
-// PostgreSQL password of a single connection URL that exists only in this
-// process and in the environment of the Prisma child process. It is never
-// logged and never written to disk.
+// PostgreSQL password of connection URLs that exist only in this process and
+// in the environment of the two child processes it spawns in turn: the
+// pre-push SQL runner (packages/api/prisma/pre-push.ts - column type changes
+// Prisma emits without the USING clause they need) and `prisma db push`. They
+// are never logged and never written to disk.
 //
 // `--accept-data-loss` is intentionally not passed. See the Dockerfile header
 // for what Prisma does instead and what the operator does then.
@@ -20,6 +22,7 @@ const POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default";
 const AZURE_POSTGRES_SUFFIX = ".postgres.database.azure.com";
 const APPLICATION_NAME = "flow-like-azure-migration";
 const SCHEMA_DIR = "prisma/schema";
+const PRE_PUSH_SCRIPT = "prisma/pre-push.ts";
 const LOG_PREFIX = "[azure-migration]";
 
 const REQUIRED_SETTINGS = [
@@ -244,6 +247,28 @@ export function composeDatabaseUrl(
 	);
 }
 
+// The pre-push runner connects with node-postgres, whose URL parser is not
+// libpq's either: `sslaccept` is unknown, `sslcert` would be read as a client
+// certificate, and a bare `sslmode=require` means "verify against the root
+// store" only in its legacy mode. `uselibpqcompat=true` switches it to libpq
+// semantics, where `sslmode=verify-full` is the same posture composeDatabaseUrl
+// spells for Prisma: TLS mandatory, chain verified against the bundled root
+// store, hostname verified against AZURE_POSTGRES_HOST.
+export function composePrePushDatabaseUrl(
+	config: MigrationConfig,
+	token: string,
+): string {
+	const params = new URLSearchParams({
+		uselibpqcompat: "true",
+		sslmode: "verify-full",
+		application_name: APPLICATION_NAME,
+	});
+	return (
+		`postgresql://${encodeURIComponent(config.user)}:${encodeURIComponent(token)}` +
+		`@${config.host}:5432/${encodeURIComponent(config.database)}?${params}`
+	);
+}
+
 function log(message: string): void {
 	console.log(`${LOG_PREFIX} ${message}`);
 }
@@ -274,22 +299,23 @@ async function acquireToken(config: MigrationConfig): Promise<string> {
 	return accessToken.token;
 }
 
-async function runPrismaDbPush(databaseUrl: string): Promise<number> {
-	const proc = Bun.spawn(
-		["bunx", "--bun", "prisma", "db", "push", `--schema=${SCHEMA_DIR}`],
-		{
-			cwd: import.meta.dir,
-			env: { ...process.env, DATABASE_URL: databaseUrl },
-			// No stdin: with data-loss warnings Prisma must hit its non-interactive
-			// path and refuse ("Use the --accept-data-loss flag ..."), never a prompt.
-			stdin: "ignore",
-			stdout: "inherit",
-			stderr: "inherit",
-		},
-	);
+async function runChild(
+	name: string,
+	argv: string[],
+	databaseUrl: string,
+): Promise<number> {
+	const proc = Bun.spawn(argv, {
+		cwd: import.meta.dir,
+		env: { ...process.env, DATABASE_URL: databaseUrl },
+		// No stdin: with data-loss warnings Prisma must hit its non-interactive
+		// path and refuse ("Use the --accept-data-loss flag ..."), never a prompt.
+		stdin: "ignore",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
 
 	// Container Apps stops a timed-out or cancelled execution with SIGTERM
-	// (STOPSIGNAL); hand it on so Prisma releases its connection instead of
+	// (STOPSIGNAL); hand it on so the child releases its connection instead of
 	// being orphaned mid-statement.
 	const forward = (signal: NodeJS.Signals) => () => proc.kill(signal);
 	const onTerm = forward("SIGTERM");
@@ -299,7 +325,7 @@ async function runPrismaDbPush(databaseUrl: string): Promise<number> {
 	try {
 		const exitCode = await proc.exited;
 		if (proc.signalCode) {
-			logError(`prisma db push was terminated by ${proc.signalCode}`);
+			logError(`${name} was terminated by ${proc.signalCode}`);
 			return 1;
 		}
 		return exitCode;
@@ -336,9 +362,28 @@ async function main(): Promise<number> {
 	}
 
 	log(
+		`running: bun run ${PRE_PUSH_SCRIPT} (type changes that must precede db push on an existing database)`,
+	);
+	const prePushExitCode = await runChild(
+		"pre-push",
+		["bun", "run", PRE_PUSH_SCRIPT],
+		composePrePushDatabaseUrl(config, token),
+	);
+	if (prePushExitCode !== 0) {
+		logError(
+			`pre-push exited with code ${prePushExitCode}; prisma db push was not attempted.`,
+		);
+		return prePushExitCode;
+	}
+
+	log(
 		`running: bunx --bun prisma db push --schema=${SCHEMA_DIR} (without --accept-data-loss)`,
 	);
-	const exitCode = await runPrismaDbPush(composeDatabaseUrl(config, token));
+	const exitCode = await runChild(
+		"prisma db push",
+		["bunx", "--bun", "prisma", "db", "push", `--schema=${SCHEMA_DIR}`],
+		composeDatabaseUrl(config, token),
+	);
 	if (exitCode === 0) {
 		log("schema push complete");
 	} else {

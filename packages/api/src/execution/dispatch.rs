@@ -3010,6 +3010,7 @@ pub async fn fetch_profile_for_dispatch(
     include_secrets: bool,
 ) -> Option<serde_json::Value> {
     use crate::entity::profile;
+    use sea_orm::sea_query::ExprTrait;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     let db = &state.db;

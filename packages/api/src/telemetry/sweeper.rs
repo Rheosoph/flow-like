@@ -31,9 +31,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, PrimaryKeyTrait, TryGetable,
+    Value,
+};
+
+use crate::db::{DEFAULT_WRITE_CHUNK, DbDialect, delete_in_batches};
 
 use crate::entity::prelude::{
     FlowScriptApplyFailure, TelemetryAlertEvent, TelemetryDimensionDaily, TelemetryErrorEvent,
@@ -62,6 +67,9 @@ const DEFAULT_FLOWSCRIPT_FAILURE_RETENTION_DAYS: i64 = 90;
 const DEFAULT_ROLLUP_RETENTION_DAYS: i64 = 400;
 const MIN_RETENTION_DAYS: i64 = 1;
 const MIN_INTERVAL_SECS: u64 = 1;
+/// Transactions one table may consume per pass. A backlog larger than this
+/// is finished by the following passes rather than by one unbounded run.
+const MAX_CHUNKS_PER_TABLE: usize = 100;
 
 /// Number of rows removed by a single sweep, per table.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -193,7 +201,7 @@ impl TelemetrySweeperConfig {
 pub enum RollupFloor {
     /// Rollups exist through this day; raw rows are safe to delete up to the
     /// start of it, i.e. through the end of the previous day.
-    UpTo(NaiveDateTime),
+    UpTo(DateTime<FixedOffset>),
     /// The rollup job is enabled but has never produced a day. Hold everything.
     Pending,
     /// The rollup job is switched off, so retention is the operator's call.
@@ -207,6 +215,7 @@ pub enum RollupFloor {
 /// to be aborted on process shutdown.
 pub fn spawn_telemetry_sweeper(
     db: Arc<DatabaseConnection>,
+    dialect: DbDialect,
     config: TelemetrySweeperConfig,
 ) -> Option<JoinHandle<()>> {
     if sweeper_disabled() {
@@ -236,7 +245,7 @@ pub fn spawn_telemetry_sweeper(
 
         loop {
             ticker.tick().await;
-            match sweep_once(db.as_ref(), &config).await {
+            match sweep_once(db.as_ref(), dialect, &config).await {
                 Ok(result) if result.is_empty() => {}
                 Ok(result) => tracing::info!(
                     events_deleted = result.events_deleted,
@@ -260,99 +269,149 @@ pub fn spawn_telemetry_sweeper(
 
 /// Run one retention sweep. Returns the number of rows deleted per table.
 ///
+/// Every table is drained in primary-key chunks of [`DEFAULT_WRITE_CHUNK`]
+/// rows, each chunk its own retried transaction, so no statement ever exceeds
+/// the row budget of a bounded engine. A table whose backlog outruns
+/// [`MAX_CHUNKS_PER_TABLE`] is logged and picked up again next pass.
+///
 /// Exposed for tests, for the spawned task, and for the Admin-gated
 /// `POST /admin/telemetry/sweep` endpoint used by serverless deployments.
 pub async fn sweep_once(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     config: &TelemetrySweeperConfig,
 ) -> Result<TelemetrySweepResult, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let floor = rollup_floor(db).await?;
     let mut result = TelemetrySweepResult::default();
 
     // Raw tables that feed a rollup: cutoff clamped to the rollup watermark.
     if let Some(cutoff) = clamp_cutoff(retention_cutoff(now, config.event_retention_days), floor) {
-        result.events_deleted = TelemetryEvent::delete_many()
-            .filter(telemetry_event::Column::CreatedAt.lt(cutoff))
-            .exec(db)
-            .await?
-            .rows_affected;
+        result.events_deleted = delete_before::<TelemetryEvent>(
+            db,
+            dialect,
+            telemetry_event::Column::CreatedAt,
+            cutoff,
+        )
+        .await?;
     }
 
     if let Some(cutoff) = clamp_cutoff(retention_cutoff(now, config.error_retention_days), floor) {
-        result.errors_deleted = TelemetryErrorEvent::delete_many()
-            .filter(telemetry_error_event::Column::CreatedAt.lt(cutoff))
-            .exec(db)
-            .await?
-            .rows_affected;
+        result.errors_deleted = delete_before::<TelemetryErrorEvent>(
+            db,
+            dialect,
+            telemetry_error_event::Column::CreatedAt,
+            cutoff,
+        )
+        .await?;
     }
 
     if let Some(cutoff) = clamp_cutoff(retention_cutoff(now, config.session_retention_days), floor)
     {
-        result.sessions_deleted = TelemetrySession::delete_many()
-            .filter(telemetry_session::Column::CreatedAt.lt(cutoff))
-            .exec(db)
-            .await?
-            .rows_affected;
+        result.sessions_deleted = delete_before::<TelemetrySession>(
+            db,
+            dialect,
+            telemetry_session::Column::CreatedAt,
+            cutoff,
+        )
+        .await?;
     }
 
     if let Some(cutoff) = clamp_cutoff(retention_cutoff(now, config.llm_retention_days), floor) {
-        result.llm_deleted = TelemetryLlmCall::delete_many()
-            .filter(telemetry_llm_call::Column::CreatedAt.lt(cutoff))
-            .exec(db)
-            .await?
-            .rows_affected;
+        result.llm_deleted = delete_before::<TelemetryLlmCall>(
+            db,
+            dialect,
+            telemetry_llm_call::Column::CreatedAt,
+            cutoff,
+        )
+        .await?;
     }
 
     if let Some(cutoff) = clamp_cutoff(retention_cutoff(now, config.perf_retention_days), floor) {
-        result.perf_deleted = TelemetryPerfMetric::delete_many()
-            .filter(telemetry_perf_metric::Column::CreatedAt.lt(cutoff))
-            .exec(db)
-            .await?
-            .rows_affected;
+        result.perf_deleted = delete_before::<TelemetryPerfMetric>(
+            db,
+            dialect,
+            telemetry_perf_metric::Column::CreatedAt,
+            cutoff,
+        )
+        .await?;
     }
 
     // Spans and alert inbox rows feed no rollup, so nothing can be lost by
     // deleting them on their own schedule.
     let span_cutoff = retention_cutoff(now, config.trace_retention_days);
-    result.spans_deleted = TelemetrySpan::delete_many()
-        .filter(telemetry_span::Column::CreatedAt.lt(span_cutoff))
-        .exec(db)
-        .await?
-        .rows_affected;
+    result.spans_deleted =
+        delete_before::<TelemetrySpan>(db, dialect, telemetry_span::Column::CreatedAt, span_cutoff)
+            .await?;
 
     let alert_cutoff = retention_cutoff(now, config.alert_event_retention_days);
-    result.alert_events_deleted = TelemetryAlertEvent::delete_many()
-        .filter(telemetry_alert_event::Column::CreatedAt.lt(alert_cutoff))
-        .exec(db)
-        .await?
-        .rows_affected;
+    result.alert_events_deleted = delete_before::<TelemetryAlertEvent>(
+        db,
+        dialect,
+        telemetry_alert_event::Column::CreatedAt,
+        alert_cutoff,
+    )
+    .await?;
 
     let flowscript_cutoff = retention_cutoff(now, config.flowscript_failure_retention_days);
-    result.flowscript_failures_deleted = FlowScriptApplyFailure::delete_many()
-        .filter(flow_script_apply_failure::Column::CreatedAt.lt(flowscript_cutoff))
-        .exec(db)
-        .await?
-        .rows_affected;
+    result.flowscript_failures_deleted = delete_before::<FlowScriptApplyFailure>(
+        db,
+        dialect,
+        flow_script_apply_failure::Column::CreatedAt,
+        flowscript_cutoff,
+    )
+    .await?;
 
     let rollup_cutoff = retention_cutoff(now, config.rollup_retention_days);
-    result.rollups_deleted = sweep_rollups(db, rollup_cutoff).await?;
+    result.rollups_deleted = sweep_rollups(db, dialect, rollup_cutoff).await?;
 
     Ok(result)
 }
 
+/// Delete the rows of `E` whose `column` lies before `cutoff`, bounded per
+/// pass by [`MAX_CHUNKS_PER_TABLE`].
+async fn delete_before<E>(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    column: E::Column,
+    cutoff: DateTime<FixedOffset>,
+) -> Result<u64, DbErr>
+where
+    E: EntityTrait,
+    <E::PrimaryKey as PrimaryKeyTrait>::ValueType:
+        Into<Value> + TryGetable + Clone + Send + Sync + 'static,
+{
+    let outcome = delete_in_batches::<E>(
+        db,
+        dialect,
+        Condition::all().add(column.lt(cutoff)),
+        DEFAULT_WRITE_CHUNK,
+        Some(MAX_CHUNKS_PER_TABLE),
+    )
+    .await?;
+    if outcome.stopped_early {
+        tracing::warn!(
+            table = E::default().table_name(),
+            deleted = outcome.rows,
+            max_chunks = MAX_CHUNKS_PER_TABLE,
+            "Telemetry sweep hit its per-table budget; the rest is swept next pass"
+        );
+    }
+    Ok(outcome.rows)
+}
+
 /// Rollups are keyed and swept by their `day`, not by insert time, so a day
 /// leaves every rollup table at the same moment.
-async fn sweep_rollups(db: &DatabaseConnection, cutoff: NaiveDateTime) -> Result<u64, DbErr> {
+async fn sweep_rollups(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    cutoff: DateTime<FixedOffset>,
+) -> Result<u64, DbErr> {
     macro_rules! delete_days_before {
         ($($entity:ty => $column:expr),+ $(,)?) => {{
             let mut deleted = 0u64;
             $(
-                deleted += <$entity>::delete_many()
-                    .filter($column.lt(cutoff))
-                    .exec(db)
-                    .await?
-                    .rows_affected;
+                deleted += delete_before::<$entity>(db, dialect, $column, cutoff).await?;
             )+
             deleted
         }};
@@ -391,7 +450,10 @@ fn sweeper_disabled() -> bool {
 /// Returns `None` when the table must not be swept at all this pass. The clamp
 /// only ever pulls the cutoff *back*, so the failure mode of a lagging rollup
 /// job is keeping data longer than configured — never losing it.
-pub(crate) fn clamp_cutoff(cutoff: NaiveDateTime, floor: RollupFloor) -> Option<NaiveDateTime> {
+pub(crate) fn clamp_cutoff(
+    cutoff: DateTime<FixedOffset>,
+    floor: RollupFloor,
+) -> Option<DateTime<FixedOffset>> {
     match floor {
         RollupFloor::Disabled => Some(cutoff),
         RollupFloor::Pending => None,
@@ -399,7 +461,7 @@ pub(crate) fn clamp_cutoff(cutoff: NaiveDateTime, floor: RollupFloor) -> Option<
     }
 }
 
-pub(crate) fn retention_cutoff(now: NaiveDateTime, days: i64) -> NaiveDateTime {
+pub(crate) fn retention_cutoff(now: DateTime<FixedOffset>, days: i64) -> DateTime<FixedOffset> {
     now - chrono::Duration::days(days.max(MIN_RETENTION_DAYS))
 }
 
@@ -426,14 +488,16 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
-    fn ts(day: u32, hour: u32) -> NaiveDateTime {
+    fn ts(day: u32, hour: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, day)
             .unwrap()
             .and_hms_opt(hour, 0, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
-    fn midnight(day: u32) -> NaiveDateTime {
+    fn midnight(day: u32) -> DateTime<FixedOffset> {
         ts(day, 0)
     }
 

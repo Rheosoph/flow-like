@@ -114,7 +114,7 @@ pub async fn handle_compilation_callback(
     let mut update = wasm_package_version::ActiveModel {
         id: Set(version_record.id),
         compilation_status: Set(compilation_status),
-        compiled_platforms: Set(platforms),
+        compiled_platforms: Set(platforms.map(Into::into)),
         compilation_error: Set(error),
         ..Default::default()
     };
@@ -124,9 +124,9 @@ pub async fn handle_compilation_callback(
     }
 
     if compiled_ok {
-        update.supported_wasmtime_versions = Set(Some(with_current_wasmtime_version(
-            supported_wasmtime_versions,
-        )));
+        update.supported_wasmtime_versions = Set(Some(
+            with_current_wasmtime_version(supported_wasmtime_versions.map(Into::into)).into(),
+        ));
     }
 
     // Auto-approve private packages on successful compilation
@@ -149,7 +149,7 @@ pub async fn handle_compilation_callback(
             .is_some_and(|p| p.visibility == WasmPackageVisibility::Private);
 
     if auto_approve {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         update.status = Set(WasmPackageStatus::Active);
         update.approved_at = Set(Some(now));
     }
@@ -166,7 +166,7 @@ pub async fn handle_compilation_callback(
 
     // Promote version data to parent package for private auto-approved packages
     if auto_approve && let Some(pkg) = &package {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let mut pkg_update = wasm_package::ActiveModel {
             id: Set(pkg.id.clone()),
             version: Set(result.version.clone()),

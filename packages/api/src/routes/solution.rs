@@ -280,8 +280,8 @@ pub async fn submit_solution(
         assigned_to: Set(None),
         delivered_at: Set(None),
         tracking_token: Set(tracking_token.clone()),
-        created_at: Set(now_utc.naive_utc()),
-        updated_at: Set(now_utc.naive_utc()),
+        created_at: Set(now_utc.fixed_offset()),
+        updated_at: Set(now_utc.fixed_offset()),
     };
 
     new_solution.insert(&state.db).await?;
@@ -546,7 +546,7 @@ pub async fn track_solution(
         .into_iter()
         .map(|log| PublicSolutionLog {
             action: log.action,
-            created_at: log.created_at.to_string(),
+            created_at: log.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -566,9 +566,9 @@ pub async fn track_solution(
         remainder_cents: solution.remainder_cents,
         delivered_at: solution
             .delivered_at
-            .map(|d: chrono::NaiveDateTime| d.to_string()),
-        created_at: solution.created_at.to_string(),
-        updated_at: solution.updated_at.to_string(),
+            .map(|d: chrono::DateTime<chrono::FixedOffset>| d.to_rfc3339()),
+        created_at: solution.created_at.to_rfc3339(),
+        updated_at: solution.updated_at.to_rfc3339(),
         logs,
     }))
 }

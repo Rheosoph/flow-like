@@ -85,7 +85,7 @@ pub async fn get_solution(
             action: log.action,
             details: log.details,
             actor: log.actor,
-            created_at: log.created_at.to_string(),
+            created_at: log.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -118,11 +118,11 @@ pub async fn get_solution(
         priority: solution.priority,
         admin_notes: solution.admin_notes,
         assigned_to: solution.assigned_to,
-        delivered_at: solution.delivered_at.map(|d| d.to_string()),
+        delivered_at: solution.delivered_at.map(|d| d.to_rfc3339()),
         tracking_token: solution.tracking_token,
         logs,
-        created_at: solution.created_at.to_string(),
-        updated_at: solution.updated_at.to_string(),
+        created_at: solution.created_at.to_rfc3339(),
+        updated_at: solution.updated_at.to_rfc3339(),
     };
 
     Ok(Json(detail))

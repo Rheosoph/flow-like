@@ -7,6 +7,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

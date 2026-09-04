@@ -11,7 +11,7 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
     QueryOrder, QuerySelect, Statement,
@@ -110,7 +110,7 @@ pub struct TelemetryTraceDetailResponse {
 #[derive(Debug, FromQueryResult)]
 struct TraceAggregateRow {
     trace_id: String,
-    started_at: NaiveDateTime,
+    started_at: DateTime<FixedOffset>,
     span_count: i64,
     duration_ms: i64,
     error_flag: i64,
@@ -128,11 +128,11 @@ struct RootSpanRow {
     parent_span_id: Option<String>,
     name: String,
     source: String,
-    started_at: NaiveDateTime,
+    started_at: DateTime<FixedOffset>,
 }
 
 struct TraceFilters {
-    cutoff: NaiveDateTime,
+    cutoff: DateTime<FixedOffset>,
     name: Option<String>,
     source: Option<String>,
     status: Option<String>,
@@ -150,17 +150,17 @@ fn validate_status(status: &str) -> Result<(), ApiError> {
     )))
 }
 
-fn iso(ts: NaiveDateTime) -> String {
-    DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc).to_rfc3339()
+fn iso(ts: DateTime<FixedOffset>) -> String {
+    ts.to_rfc3339()
 }
 
 /// Ranks candidates for the trace root: a span without a parent wins, otherwise
 /// the earliest span does, with the span id as a stable tiebreak.
 fn root_rank(
     parent_span_id: Option<&str>,
-    started_at: NaiveDateTime,
+    started_at: DateTime<FixedOffset>,
     span_id: &str,
-) -> (u8, NaiveDateTime, String) {
+) -> (u8, DateTime<FixedOffset>, String) {
     (
         u8::from(parent_span_id.is_some()),
         started_at,
@@ -354,7 +354,7 @@ pub async fn list_telemetry_traces(
     let page = q.page.unwrap_or(0);
     let page_size = q.page_size.unwrap_or(25).clamp(1, 100);
     let filters = TraceFilters {
-        cutoff: Utc::now().naive_utc() - Duration::hours(hours),
+        cutoff: Utc::now().fixed_offset() - Duration::hours(hours),
         name: q.name.clone(),
         source: q.source.clone(),
         status: q.status.clone(),
@@ -499,11 +499,13 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
-    fn ts(minute: u32) -> NaiveDateTime {
+    fn ts(minute: u32) -> DateTime<FixedOffset> {
         NaiveDate::from_ymd_opt(2026, 7, 26)
             .unwrap()
             .and_hms_opt(10, minute, 0)
             .unwrap()
+            .and_utc()
+            .fixed_offset()
     }
 
     fn candidate(

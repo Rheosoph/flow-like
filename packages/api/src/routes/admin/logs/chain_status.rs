@@ -9,7 +9,7 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -70,7 +70,7 @@ async fn build_summary(
     let (last_sequence, last_entry_at, last_entry_hash, signed, kid) = match tail {
         Some(e) => (
             Some(e.sequence),
-            Some(DateTime::<Utc>::from_naive_utc_and_offset(e.timestamp, Utc).to_rfc3339()),
+            Some(e.timestamp.to_rfc3339()),
             Some(e.entry_hash),
             e.signature.is_some(),
             e.kid,
@@ -133,7 +133,7 @@ pub async fn chain_status(
         .count(&state.db)
         .await? as i64;
 
-    let last_24h_cutoff = Utc::now().naive_utc() - Duration::hours(24);
+    let last_24h_cutoff = Utc::now().fixed_offset() - Duration::hours(24);
     let last_24h_entries = audit_entry::Entity::find()
         .filter(audit_entry::Column::Timestamp.gte(last_24h_cutoff))
         .count(&state.db)

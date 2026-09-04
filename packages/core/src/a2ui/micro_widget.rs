@@ -514,8 +514,12 @@ mod app_widget_source_tests {
         });
         state.register_app_widget_source(source.clone()).await;
 
-        load_app_widgets("app-1", state.clone()).await.expect("served by the source");
-        load_app_widgets("app-1", state.clone()).await.expect("served by the source");
+        load_app_widgets("app-1", state.clone())
+            .await
+            .expect("served by the source");
+        load_app_widgets("app-1", state.clone())
+            .await
+            .expect("served by the source");
         assert_eq!(
             source.calls.load(Ordering::SeqCst),
             2,

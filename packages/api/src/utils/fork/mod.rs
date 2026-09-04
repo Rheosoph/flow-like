@@ -1,6 +1,6 @@
 use crate::{
     entity::{
-        app, app_package, event, event_sink, membership, meta, page, role,
+        app, app_package, event, event_sink, meta, page, role,
         sea_orm_active_enums::{Status, Visibility, WasmPackageVisibility},
         template, wasm_package, wasm_package_author, wasm_package_purchase, wasm_package_user,
         widget,
@@ -12,6 +12,8 @@ use crate::{
 
 pub mod cleanup;
 pub mod db_schema;
+pub mod ids;
+pub mod job;
 pub mod policy;
 pub mod preview;
 use flow_like::a2ui::{
@@ -22,13 +24,13 @@ use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
 };
 use flow_like_storage::Path;
-use flow_like_types::{anyhow, create_id, dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL, proto};
+use flow_like_types::{anyhow, dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL, proto};
 use futures_util::TryStreamExt;
 pub use policy::{ForkDatabaseMode, ForkPolicy};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
+    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -174,9 +176,31 @@ pub struct ForkIdMap {
     /// (Owner / Admin / Member) and any custom roles copied from source.
     #[serde(default)]
     pub roles: HashMap<String, String>,
+    /// Seed every destination id in this map is derived from
+    /// ([`ids::derive_id`]). Never leaves the process.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub seed: String,
 }
 
 impl ForkIdMap {
+    /// The destination id for `src` in this fork.
+    pub fn mint(&self, src: &str) -> String {
+        ids::derive_id(&self.seed, src)
+    }
+
+    /// The map without its node / pin / layer / variable entries, which run
+    /// to thousands of pairs and are derivable from the top-level ids.
+    pub fn top_level(&self) -> Self {
+        Self {
+            nodes: HashMap::new(),
+            pins: HashMap::new(),
+            layers: HashMap::new(),
+            variables: HashMap::new(),
+            ..self.clone()
+        }
+    }
+
     pub fn translate_board(&self, src: &str) -> String {
         self.boards
             .get(src)
@@ -290,7 +314,7 @@ pub async fn compute_offline_fork_bundle(
     let src_content_store = credentials.to_store(false).await?.as_generic();
 
     let src_prefix = Path::from("apps").child(src_app_id.to_string());
-    let new_app_id = create_id();
+    let new_app_id = ids::fresh_seed();
 
     // ---- 1. Load manifest from storage, overlay DB row -------------
     // The manifest.app file on disk reflects state from the last time
@@ -354,28 +378,33 @@ pub async fn compute_offline_fork_bundle(
     let mut maps = ForkIdMap {
         source_app_id: src_app_id.to_string(),
         app_id: new_app_id.clone(),
+        seed: new_app_id.clone(),
         ..Default::default()
     };
     for b in &manifest_proto.boards {
         // Boards have no DB row — manifest is the only source of
         // truth.
-        maps.boards.insert(b.clone(), create_id());
+        maps.boards.insert(b.clone(), maps.mint(b));
     }
     for e in manifest_proto.events.iter().chain(event_id_set.iter()) {
-        maps.events.entry(e.clone()).or_insert_with(create_id);
+        let id = maps.mint(e);
+        maps.events.entry(e.clone()).or_insert(id);
     }
     for p in manifest_proto.page_ids.iter().chain(page_id_set.iter()) {
-        maps.pages.entry(p.clone()).or_insert_with(create_id);
+        let id = maps.mint(p);
+        maps.pages.entry(p.clone()).or_insert(id);
     }
     for w in manifest_proto.widget_ids.iter().chain(widget_id_set.iter()) {
-        maps.widgets.entry(w.clone()).or_insert_with(create_id);
+        let id = maps.mint(w);
+        maps.widgets.entry(w.clone()).or_insert(id);
     }
     for t in manifest_proto
         .templates
         .iter()
         .chain(template_id_set.iter())
     {
-        maps.templates.entry(t.clone()).or_insert_with(create_id);
+        let id = maps.mint(t);
+        maps.templates.entry(t.clone()).or_insert(id);
     }
 
     let mut blobs: Vec<MetaBlob> = Vec::new();
@@ -820,9 +849,8 @@ pub async fn compute_offline_fork_bundle(
             list_template_page_ids(&src_meta_store, &src_prefix, &src_template_id, &mut skipped)
                 .await;
         for src_page_id in &template_page_ids {
-            maps.pages
-                .entry(src_page_id.clone())
-                .or_insert_with(create_id);
+            let page_id = maps.mint(src_page_id);
+            maps.pages.entry(src_page_id.clone()).or_insert(page_id);
         }
         let src_path = src_prefix.child(format!("{}.template", src_template_id));
         let board_proto: proto::Board =
@@ -1041,13 +1069,13 @@ async fn overlay_app_row_into_manifest(
         }
     });
     if let Some(bits) = row.bits {
-        manifest.bits = bits;
+        manifest.bits = bits.into();
     }
     manifest.allow_forking = Some(row.allow_forking);
     manifest.forked_from = row.forked_from.clone();
     manifest.forked_at = row.forked_at.map(|dt| {
         flow_like_types::Timestamp::from(
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.and_utc().timestamp() as u64),
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.timestamp() as u64),
         )
     });
     if let Some(cat) = row.primary_category.as_ref() {
@@ -1441,15 +1469,20 @@ pub async fn fork_with_options(
                 .requested_visibility
                 .clone()
                 .unwrap_or(flow_like::app::AppVisibility::Private);
-            fork_app_with_visibility(
+            let src_app_row = app::Entity::find_by_id(options.source_app_id)
+                .one(&state.db)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            let spec = job::ForkJobSpec::online_copy(
                 state,
-                user_sub,
-                options.source_app_id,
+                &src_app_row,
                 options.language,
                 options.remote_event_token,
-                visibility,
-            )
-            .await
+                app_visibility_to_db(&visibility),
+            );
+            let fork_job = job::enqueue(state, options.source_app_id, user_sub, spec).await?;
+            let (finished, report) = job::run_inline(state, fork_job).await?;
+            Ok((finished.dest_app_id, report))
         }
         ForkTarget::OfflineBundle => Err(ApiError::bad_request(
             "offline-bundle forks are not materialized via fork_with_options — call compute_offline_fork_bundle directly",
@@ -1460,65 +1493,219 @@ pub async fn fork_with_options(
     }
 }
 
-/// Forks a source app into a new user-owned copy with **all internal IDs
-/// remapped** (boards, layers, nodes, pins, events, pages, widgets,
-/// templates). Returns the destination app id, the mapping table, and a
-/// list of items that were intentionally skipped (e.g. inaccessible
-/// packages, OAuth-bound events that need re-auth) so the caller can
-/// surface them to the end user.
+/// Everything an online → online fork step needs, loaded once per pass
+/// from the job row and the source app. Two physical stores per side:
+/// meta (manifest, boards, events, widgets, templates, pages, versioned
+/// forms) and content (metadata/, upload/, storage/). Some deployments
+/// alias them to one bucket, others split them, so every resource picks
+/// its side explicitly.
 ///
-/// `remote_event_token`, when supplied, is reused at every detected
-/// remote-token site (HTTP `auth_token` in event config, `pat_encrypted`
-/// on event sinks). OAuth tokens are always cleared and reported because
-/// they cannot be substituted with a single PAT.
+/// The DB is authoritative for app/meta/event/page/widget/template/role
+/// rows — endpoints that flip a single field write only the DB row and
+/// leave the manifest / `.event` / `.template` / `.widget` storage files
+/// stale — so every row is read here and the storage stage works from
+/// these rows rather than from drift-prone files.
 ///
-/// `dst_visibility` controls the destination app's visibility (defaults
-/// to `Private` for online forks, `Offline` for offline-bundle forks
-/// that the desktop will pick up via signed URL).
-///
-/// Online → online fork. Materializes the destination on the
-/// server's storage (meta + content) and inserts every destination
-/// DB row (App, roles, membership, events, pages, widgets,
-/// templates, sinks, packages) inside one transaction. Used by the
-/// course flow and by `POST /apps/{id}/fork`.
-///
-/// Offline-bundle forks **don't** go through this function —
-/// they call `compute_offline_fork_bundle` directly, which doesn't
-/// write a destination prefix or a DB row at all.
-pub async fn fork_app_with_visibility(
+/// Intentionally NOT copied (that data must come from a fresh authoring
+/// action on the destination): comments / ratings, rating and download
+/// counters, per-day analytics, sales / purchases / discounts, publication
+/// requests, invite links, invitations, notifications and memberships
+/// (only the caller becomes a member, on the owner role).
+pub(crate) struct ForkContext {
+    pub seed: String,
+    pub src_app_id: String,
+    pub dest_app_id: String,
+    pub user_sub: String,
+    pub language: String,
+    pub remote_event_token: Option<String>,
+    pub dst_visibility: Visibility,
+    pub now: chrono::DateTime<chrono::FixedOffset>,
+    pub src_meta_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    pub src_content_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    pub dst_meta_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    pub dst_content_store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    pub src_prefix: Path,
+    pub dst_prefix: Path,
+    pub src_app_row: app::Model,
+    pub policy: ForkPolicy,
+    pub src_meta_rows: Vec<meta::Model>,
+    pub src_event_rows: Vec<event::Model>,
+    pub src_page_rows: Vec<page::Model>,
+    pub src_package_rows: Vec<app_package::Model>,
+    pub src_role_rows: Vec<role::Model>,
+    pub src_widget_rows: Vec<widget::Model>,
+    pub src_template_rows: Vec<template::Model>,
+    pub src_widget_meta_rows: Vec<meta::Model>,
+    pub src_template_meta_rows: Vec<meta::Model>,
+    pub src_sink_rows: Vec<event_sink::Model>,
+}
+
+impl ForkContext {
+    pub(crate) async fn load(
+        state: &AppState,
+        fork_job: &crate::entity::fork_job::Model,
+        spec: &job::ForkJobSpec,
+    ) -> Result<Self, ApiError> {
+        let src_app_id = fork_job.source_app_id.clone();
+        let credentials = state.master_credentials().await?;
+        let src_meta_store = credentials.to_store(true).await?.as_generic();
+        let src_content_store = credentials.to_store(false).await?.as_generic();
+        let dst_meta_store = credentials.to_store(true).await?.as_generic();
+        let dst_content_store = credentials.to_store(false).await?.as_generic();
+
+        let src_app_row = app::Entity::find_by_id(src_app_id.as_str())
+            .one(&state.db)
+            .await?
+            .ok_or_else(|| {
+                ApiError::bad_request(format!("fork source app {src_app_id} no longer exists"))
+            })?;
+
+        let src_widget_rows = widget::Entity::find()
+            .filter(widget::Column::AppId.eq(src_app_id.as_str()))
+            .all(&state.db)
+            .await?;
+        let src_template_rows = template::Entity::find()
+            .filter(template::Column::AppId.eq(src_app_id.as_str()))
+            .all(&state.db)
+            .await?;
+        let src_widget_id_list: Vec<String> =
+            src_widget_rows.iter().map(|r| r.id.clone()).collect();
+        let src_widget_meta_rows = if src_widget_id_list.is_empty() {
+            Vec::new()
+        } else {
+            meta::Entity::find()
+                .filter(meta::Column::WidgetId.is_in(src_widget_id_list))
+                .all(&state.db)
+                .await?
+        };
+        let src_template_id_list: Vec<String> =
+            src_template_rows.iter().map(|r| r.id.clone()).collect();
+        let src_template_meta_rows = if src_template_id_list.is_empty() {
+            Vec::new()
+        } else {
+            meta::Entity::find()
+                .filter(meta::Column::TemplateId.is_in(src_template_id_list))
+                .all(&state.db)
+                .await?
+        };
+
+        Ok(Self {
+            seed: fork_job.id.clone(),
+            dest_app_id: fork_job.dest_app_id.clone(),
+            user_sub: fork_job.user_id.clone(),
+            language: spec.language.clone(),
+            remote_event_token: spec.remote_event_token(state),
+            dst_visibility: spec.visibility.clone(),
+            now: chrono::Utc::now().fixed_offset(),
+            src_prefix: Path::from("apps").child(src_app_id.clone()),
+            dst_prefix: Path::from("apps").child(fork_job.dest_app_id.clone()),
+            policy: spec.policy.clone(),
+            src_meta_rows: meta::Entity::find()
+                .filter(meta::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_event_rows: event::Entity::find()
+                .filter(event::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_page_rows: page::Entity::find()
+                .filter(page::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_package_rows: app_package::Entity::find()
+                .filter(app_package::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_role_rows: role::Entity::find()
+                .filter(role::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_sink_rows: event_sink::Entity::find()
+                .filter(event_sink::Column::AppId.eq(src_app_id.as_str()))
+                .all(&state.db)
+                .await?,
+            src_app_row,
+            src_widget_rows,
+            src_template_rows,
+            src_widget_meta_rows,
+            src_template_meta_rows,
+            src_meta_store,
+            src_content_store,
+            dst_meta_store,
+            dst_content_store,
+            src_app_id,
+        })
+    }
+
+    pub(crate) fn src_media_prefix(&self) -> Path {
+        Path::from("media")
+            .child("apps")
+            .child(self.src_app_id.clone())
+    }
+
+    pub(crate) fn dst_media_prefix(&self) -> Path {
+        Path::from("media")
+            .child("apps")
+            .child(self.dest_app_id.clone())
+    }
+}
+
+/// What the meta stage decided: the id map, the events as they will be
+/// stored, which artifacts actually shipped, and the destination rows the
+/// DB stage inserts. A pure function of the job and the source, so a pass
+/// that lost it can rebuild it by re-running the (idempotent) meta stage.
+pub(crate) struct ForkPlan {
+    pub maps: ForkIdMap,
+    pub rewritten_events: Vec<flow_like::flow::event::Event>,
+    pub shipped_pages: HashSet<String>,
+    pub shipped_widgets: HashSet<String>,
+    pub shipped_templates: HashSet<String>,
+    pub roles_to_copy: Vec<role::Model>,
+    pub allowed_packages: Vec<app_package::Model>,
+    pub sinks_to_insert: Vec<event_sink::ActiveModel>,
+    pub skipped: Vec<SkippedItem>,
+    pub warnings: Vec<String>,
+}
+
+/// The meta stage of an online → online fork: remaps boards, pages,
+/// events, pinned board versions, widgets and templates in memory and
+/// writes them plus the translated `metadata/` tree and the manifest to
+/// the destination. Every id comes from [`ids::derive_id`] and every
+/// write is a PUT, so running it twice is harmless.
+pub(crate) async fn materialize_meta(
     state: &AppState,
-    user_sub: &str,
-    src_app_id: &str,
-    language: &str,
-    remote_event_token: Option<&str>,
-    dst_visibility: flow_like::app::AppVisibility,
-) -> Result<(String, ForkReport), ApiError> {
-    use crate::routes::app::events::db::{db_model_to_event, event_to_db_model};
+    ctx: &ForkContext,
+) -> Result<ForkPlan, ApiError> {
+    use crate::routes::app::events::db::db_model_to_event;
     use flow_like_types::{FromProto, ToProto};
 
-    let new_app_id = create_id();
-    let now = chrono::Utc::now().naive_utc();
-
-    // Two physical stores per side:
-    //   - meta: code-like state (manifest, boards, events, widgets,
-    //     templates, pages, versioned forms)
-    //   - content: user-controlled artifacts (metadata/, upload/, storage/)
-    //
-    // In some deployments these alias to the same bucket via
-    // `with_default_store()`; in others they're separate buckets with
-    // separate credentials. The fork must pick the right side per
-    // resource — copying upload/ from `to_store(true)` (meta) silently
-    // drops data when the stores are physically split.
-    let src_credentials = state.master_credentials().await?;
-    let src_meta_store = src_credentials.to_store(true).await?.as_generic();
-    let src_content_store = src_credentials.to_store(false).await?.as_generic();
-
-    let dst_credentials = state.master_credentials().await?;
-    let dst_meta_store = dst_credentials.to_store(true).await?.as_generic();
-    let dst_content_store = dst_credentials.to_store(false).await?.as_generic();
-
-    let src_prefix = Path::from("apps").child(src_app_id.to_string());
-    let dst_prefix = Path::from("apps").child(new_app_id.clone());
+    let ForkContext {
+        seed,
+        src_app_id,
+        dest_app_id,
+        user_sub,
+        remote_event_token,
+        dst_visibility,
+        now,
+        src_meta_store,
+        src_content_store,
+        dst_meta_store,
+        dst_content_store,
+        src_prefix,
+        dst_prefix,
+        policy,
+        src_event_rows,
+        src_page_rows,
+        src_package_rows,
+        src_role_rows,
+        src_widget_rows,
+        src_template_rows,
+        src_sink_rows,
+        ..
+    } = ctx;
+    let new_app_id = dest_app_id.clone();
+    let now = *now;
+    let remote_event_token = remote_event_token.as_deref();
 
     // ---- 1. Load the source manifest, overlay DB row -------------------
     // The manifest.app file on disk reflects state from the last
@@ -1534,163 +1721,64 @@ pub async fn fork_app_with_visibility(
             .map_err(|e| ApiError::internal_error(anyhow!("read source manifest: {e}")))?;
     overlay_app_row_into_manifest(state, src_app_id, &mut src_app_proto).await?;
 
-    // Aggregate of items the caller chose / had to drop. Populated in
-    // multiple stages (events, sinks, packages) and returned alongside
-    // the id map. Pre-allocated so every detection site can `.push`.
     let mut skipped: Vec<SkippedItem> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    // ---- 2. Read DB rows up front --------------------------------------
-    // The DB is authoritative for app/meta/event/page/widget/template/role
-    // rows — endpoints that flip a single field write only the DB row and
-    // leave the manifest / `.event` / `.template` / `.widget` storage
-    // files stale. Pull every row now so:
-    //   1. ID allocation can union(manifest, DB) — a row that exists only
-    //      in the DB still gets a fresh translated id and ships.
-    //   2. Storage writes can use DB-derived data (events) instead of
-    //      reading drift-prone storage files.
-    //   3. The destination DB transaction has everything it needs without
-    //      a second round of queries.
-    //
-    // Intentionally NOT copied (eligible callers for that data must come
-    // from a fresh authoring action on the destination):
-    //   - comments / ratings (Comment table cascades from App)
-    //   - rating_sum / rating_count / avg_rating / relevance_score
-    //   - download_count / interactions_count
-    //   - per-day analytics rows (AppAnalyticsDaily)
-    //   - sales / purchases / discounts (AppPurchase, AppSalesDaily, AppDiscount)
-    //   - publication requests, invite links, invitations, notifications
-    //   - role memberships (only the caller becomes a member, on owner role)
-    let src_app_row = app::Entity::find_by_id(src_app_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    // The source owner decides what a fork of their app contains. Loaded
-    // here rather than taken from the caller so it cannot be supplied and
-    // then silently ignored. ID allocation below stays exhaustive: a
-    // reference to an excluded artifact resolves to a destination id with
-    // nothing behind it (a local dangling ref) rather than falling back to
-    // the source id and pointing into someone else's app.
-    let policy = ForkPolicy::from_app_row(&src_app_row);
-
-    let src_meta_rows = meta::Entity::find()
-        .filter(meta::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    let src_event_rows = event::Entity::find()
-        .filter(event::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    let src_page_rows = page::Entity::find()
-        .filter(page::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    let src_package_rows = app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    // All roles defined on the source app — both the system roles
-    // (Owner/Admin/the default member role) and any custom roles the
-    // source-owner created. Copied faithfully (name, description,
-    // permission bits, attributes) so workflows that branch on role
-    // attributes keep working in the fork. Memberships are NOT copied
-    // — only the caller becomes a member, on the destination's owner
-    // role.
-    let src_role_rows = role::Entity::find()
-        .filter(role::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    let src_widget_rows = widget::Entity::find()
-        .filter(widget::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    let src_template_rows = template::Entity::find()
-        .filter(template::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
-    // Widgets and templates each have their own polymorphic Meta rows
-    // (`Meta.widgetId` / `Meta.templateId`) — these rows have
-    // `appId = NULL`, so the app-scoped query above misses them. The
-    // widget listing endpoint (`GET /apps/{id}/widgets`) inner-joins
-    // Meta and silently drops widgets without a Meta row, which means
-    // copied widgets disappear from the destination's UI even though
-    // their `.widget` blob and `Widget` row exist. Pull them now and
-    // mirror them into the destination's id space inside the txn.
-    let src_widget_id_list: Vec<String> = src_widget_rows.iter().map(|r| r.id.clone()).collect();
-    let src_widget_meta_rows = if src_widget_id_list.is_empty() {
-        Vec::new()
-    } else {
-        meta::Entity::find()
-            .filter(meta::Column::WidgetId.is_in(src_widget_id_list.clone()))
-            .all(&state.db)
-            .await?
-    };
-    let src_template_id_list: Vec<String> =
-        src_template_rows.iter().map(|r| r.id.clone()).collect();
-    let src_template_meta_rows = if src_template_id_list.is_empty() {
-        Vec::new()
-    } else {
-        meta::Entity::find()
-            .filter(meta::Column::TemplateId.is_in(src_template_id_list.clone()))
-            .all(&state.db)
-            .await?
-    };
-
-    let src_sink_rows = event_sink::Entity::find()
-        .filter(event_sink::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
-
     // ---- 3. Pre-allocate top-level ID mappings ------------------------
     // Allocate from union(manifest, DB) so a row that exists only in
-    // the DB still gets a fresh translated id. Boards have no DB row,
-    // so they stay manifest-driven.
+    // the DB still gets a translated id. Boards have no DB row, so they
+    // stay manifest-driven. The map stays exhaustive under the policy: a
+    // reference to an excluded artifact resolves to a destination id
+    // with nothing behind it rather than pointing into the source app.
     let mut maps = ForkIdMap {
         source_app_id: src_app_id.to_string(),
         app_id: new_app_id.clone(),
+        seed: seed.clone(),
         ..Default::default()
     };
     for b in &src_app_proto.boards {
-        maps.boards.insert(b.clone(), create_id());
+        maps.boards.insert(b.clone(), ids::derive_id(seed, b));
     }
     for e in src_app_proto
         .events
         .iter()
         .chain(src_event_rows.iter().map(|r| &r.id))
     {
-        maps.events.entry(e.clone()).or_insert_with(create_id);
+        maps.events
+            .entry(e.clone())
+            .or_insert_with(|| ids::derive_id(seed, e));
     }
     for p in src_app_proto
         .page_ids
         .iter()
         .chain(src_page_rows.iter().map(|r| &r.id))
     {
-        maps.pages.entry(p.clone()).or_insert_with(create_id);
+        maps.pages
+            .entry(p.clone())
+            .or_insert_with(|| ids::derive_id(seed, p));
     }
     for w in src_app_proto
         .widget_ids
         .iter()
         .chain(src_widget_rows.iter().map(|r| &r.id))
     {
-        maps.widgets.entry(w.clone()).or_insert_with(create_id);
+        maps.widgets
+            .entry(w.clone())
+            .or_insert_with(|| ids::derive_id(seed, w));
     }
     for t in src_app_proto
         .templates
         .iter()
         .chain(src_template_rows.iter().map(|r| &r.id))
     {
-        maps.templates.entry(t.clone()).or_insert_with(create_id);
+        maps.templates
+            .entry(t.clone())
+            .or_insert_with(|| ids::derive_id(seed, t));
     }
-    for r in &src_role_rows {
-        maps.roles.entry(r.id.clone()).or_insert_with(create_id);
+    for r in src_role_rows {
+        maps.roles
+            .entry(r.id.clone())
+            .or_insert_with(|| ids::derive_id(seed, &r.id));
     }
 
     // ---- 3. Load + remap boards in memory ---------------------------
@@ -1795,7 +1883,7 @@ pub async fn fork_app_with_visibility(
     let mut pointed_board_versions: std::collections::HashSet<(String, (u32, u32, u32))> =
         std::collections::HashSet::new();
     let mut rewritten_events: HashMap<String, flow_like::flow::event::Event> = HashMap::new();
-    for row in &src_event_rows {
+    for row in src_event_rows {
         let src_event_id = row.id.clone();
         let core_event = match db_model_to_event(row.clone()) {
             Ok(e) => e,
@@ -2058,20 +2146,10 @@ pub async fn fork_app_with_visibility(
     )
     .await?;
 
-    let mut copy_tally = CopyTally::default();
-    if policy.files {
-        copy_tally.add(
-            copy_object_prefix(
-                &src_content_store,
-                &dst_content_store,
-                &src_prefix.child("upload"),
-                &dst_prefix.child("upload"),
-                "upload storage",
-                None,
-            )
-            .await?,
-        );
-    } else {
+    // The bulk mirrors (`upload/`, `storage/`, app media, the schema-only
+    // database) run in the job's `copy_storage` stage with a resumable
+    // cursor; only the policy verdicts are recorded here.
+    if !policy.files {
         skipped.push(SkippedItem {
             kind: SkippedKind::Policy,
             source_id: "upload/".to_string(),
@@ -2082,41 +2160,6 @@ pub async fn fork_app_with_visibility(
                 .to_string(),
         );
     }
-
-    // `storage/` is two things: the project LanceDB under `storage/db/**`
-    // and flow-written scratch under `storage/{node_id}/`. Only the former
-    // is policy-gated, so the skip predicate is per-object rather than a
-    // whole-prefix branch.
-    let storage_skip = policy::storage_skip(&policy);
-    copy_tally.add(
-        copy_object_prefix(
-            &src_content_store,
-            &dst_content_store,
-            &src_prefix.child("storage"),
-            &dst_prefix.child("storage"),
-            "app storage",
-            storage_skip.as_deref(),
-        )
-        .await?,
-    );
-
-    // Metadata media is never policy-gated: `Meta.icon` / `thumbnail` /
-    // `preview_media` carry ids verbatim into the destination rows, so
-    // dropping the bytes would leave broken images everywhere.
-    copy_tally.add(
-        copy_object_prefix(
-            &src_content_store,
-            &dst_content_store,
-            &Path::from("media")
-                .child("apps")
-                .child(src_app_id.to_string()),
-            &Path::from("media").child("apps").child(new_app_id.clone()),
-            "app metadata media",
-            None,
-        )
-        .await?,
-    );
-
     match policy.databases {
         ForkDatabaseMode::WithData => {}
         ForkDatabaseMode::None => skipped.push(SkippedItem {
@@ -2124,24 +2167,13 @@ pub async fn fork_app_with_visibility(
             source_id: "storage/db".to_string(),
             reason: "the project database is excluded by the source app's fork policy".to_string(),
         }),
-        ForkDatabaseMode::SchemaOnly => {
-            let created =
-                db_schema::copy_project_db_schemas(state, src_app_id, &new_app_id).await?;
-            skipped.push(SkippedItem {
-                kind: SkippedKind::Policy,
-                source_id: "storage/db".to_string(),
-                reason: format!(
-                    "{} table(s) were recreated empty — the source app's fork policy excludes database rows",
-                    created.len()
-                ),
-            });
-            if !created.is_empty() {
-                warnings.push(format!(
-                    "{} database table(s) were recreated empty. Indices were not copied — rebuild them in Data Studio.",
-                    created.len()
-                ));
-            }
-        }
+        ForkDatabaseMode::SchemaOnly => skipped.push(SkippedItem {
+            kind: SkippedKind::Policy,
+            source_id: "storage/db".to_string(),
+            reason:
+                "tables were recreated empty — the source app's fork policy excludes database rows"
+                    .to_string(),
+        }),
     }
 
     // ---- 7. Rewrite the manifest --------------------------------------
@@ -2214,7 +2246,7 @@ pub async fn fork_app_with_visibility(
         }
     }
     src_app_proto.route_mappings = new_routes;
-    src_app_proto.visibility = app_visibility_to_proto(&dst_visibility);
+    src_app_proto.visibility = db_visibility_to_proto(dst_visibility);
     src_app_proto.status = proto::AppStatus::Active as i32;
     // Lineage — every fork carries the source app id so the UI can show
     // "forked from" and so we can later compute fork trees.
@@ -2242,21 +2274,16 @@ pub async fn fork_app_with_visibility(
     .await
     .map_err(|e| ApiError::internal_error(anyhow!("write manifest: {e}")))?;
 
-    // ---- 8. DB transaction: app row, meta, roles, membership, events --
-    // All source rows were fetched at the top of the function so
-    // ID allocation and storage writes could use them. The txn below
-    // just inserts the destination versions.
-    let src_owner_role_id = src_app_row.owner_role_id.clone();
-    let src_default_role_id = src_app_row.default_role_id.clone();
+    // ---- 8. Destination rows -----------------------------------------
     // Excluding roles never means "no roles": an app is unusable without an
     // owner role (Membership.role_id is NOT NULL) and a NULL default role
     // breaks every join / invite / purchase path. The destination gets a
     // freshly minted Owner / Admin / User set instead, matching a
     // newly created app.
     let roles_to_copy: Vec<role::Model> = if policy.roles {
-        src_role_rows
+        src_role_rows.clone()
     } else {
-        for r in &src_role_rows {
+        for r in src_role_rows {
             skipped.push(SkippedItem {
                 kind: SkippedKind::Policy,
                 source_id: r.id.clone(),
@@ -2292,7 +2319,8 @@ pub async fn fork_app_with_visibility(
         .map(|(src_id, dst_id)| (src_id.clone(), dst_id.clone()))
         .collect();
     let (sinks_to_insert, sink_skips) = prepare_dst_sinks(
-        &src_sink_rows,
+        seed,
+        src_sink_rows,
         &shipped_event_id_map,
         remote_event_token,
         &state.encryption_key,
@@ -2300,420 +2328,315 @@ pub async fn fork_app_with_visibility(
         now,
     );
 
-    let new_app_id_db = new_app_id.clone();
-    let user_sub_owned = user_sub.to_string();
-    let language_owned = language.to_string();
-    let maps_arc = Arc::new(maps.clone());
-    let dst_visibility_db = app_visibility_to_db(&dst_visibility);
-    let events_to_insert: Vec<flow_like::flow::event::Event> =
-        rewritten_events.values().cloned().collect();
-    let shipped_pages_for_txn = shipped_pages.clone();
-    let shipped_widgets_for_txn = shipped_widgets.clone();
-    let shipped_templates_for_txn = shipped_templates.clone();
-
-    state
-        .db
-        .transaction::<_, (), DbErr>(|txn| {
-            Box::pin(async move {
-                let new_app_model = app::ActiveModel {
-                    id: Set(new_app_id_db.clone()),
-                    status: Set(Status::Active),
-                    visibility: Set(dst_visibility_db),
-                    changelog: Set(src_app_row.changelog.clone()),
-                    default_role_id: NotSet,
-                    owner_role_id: NotSet,
-                    primary_category: Set(src_app_row.primary_category.clone()),
-                    secondary_category: Set(src_app_row.secondary_category.clone()),
-                    // A fork of an agent is still an agent.
-                    app_type: Set(src_app_row.app_type.clone()),
-                    rating_sum: Set(0),
-                    rating_count: Set(0),
-                    download_count: Set(0),
-                    interactions_count: Set(0),
-                    avg_rating: Set(None),
-                    relevance_score: Set(None),
-                    total_size: Set(0),
-                    price: Set(0),
-                    version: Set(src_app_row.version.clone()),
-                    execution_mode: Set(src_app_row.execution_mode.clone()),
-                    bits: Set(src_app_row.bits.clone()),
-                    allow_forking: Set(false),
-                    // A fork does not inherit the source's fork policy — the
-                    // new owner opts in and picks their own.
-                    fork_policy: Set(None),
-                    forked_from: Set(Some(src_app_row.id.clone())),
-                    forked_at: Set(Some(now)),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                let inserted_app = new_app_model.insert(txn).await?;
-
-                let mut have_lang = false;
-                for m in &src_meta_rows {
-                    if m.lang == language_owned {
-                        have_lang = true;
-                    }
-                    let new_meta = meta::ActiveModel {
-                        id: Set(create_id()),
-                        lang: Set(m.lang.clone()),
-                        name: Set(m.name.clone()),
-                        description: Set(m.description.clone()),
-                        long_description: Set(m.long_description.clone()),
-                        release_notes: Set(m.release_notes.clone()),
-                        tags: Set(m.tags.clone()),
-                        use_case: Set(m.use_case.clone()),
-                        icon: Set(m.icon.clone()),
-                        thumbnail: Set(m.thumbnail.clone()),
-                        preview_media: Set(m.preview_media.clone()),
-                        age_rating: Set(m.age_rating),
-                        website: Set(m.website.clone()),
-                        support_url: Set(m.support_url.clone()),
-                        docs_url: Set(m.docs_url.clone()),
-                        organization_specific_values: Set(m.organization_specific_values.clone()),
-                        app_id: Set(Some(new_app_id_db.clone())),
-                        bit_id: Set(None),
-                        course_id: Set(None),
-                        template_id: Set(None),
-                        widget_id: Set(None),
-                        wasm_package_id: Set(None),
-                        group_id: Set(None),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_meta.insert(txn).await?;
-                }
-                if !have_lang && src_meta_rows.is_empty() {
-                    let fallback = meta::ActiveModel {
-                        id: Set(create_id()),
-                        lang: Set(language_owned.clone()),
-                        name: Set("My copy".to_string()),
-                        app_id: Set(Some(new_app_id_db.clone())),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                        ..Default::default()
-                    };
-                    fallback.insert(txn).await?;
-                }
-
-                // Faithfully copy every source role, preserving name,
-                // description, permission bits, and attributes. IDs are
-                // remapped via `maps_arc.roles` (pre-allocated outside
-                // the txn).
-                // The role map is pre-allocated for every source role
-                // regardless of the fork policy, so a mapped id is only
-                // safe to point `App.ownerRoleId` / `defaultRoleId` at
-                // once the row behind it exists.
-                let mut inserted_role_ids: HashSet<String> = HashSet::new();
-                for r in &roles_to_copy {
-                    let new_role_id = maps_arc.roles.get(&r.id).cloned().unwrap_or_else(create_id);
-                    let new_role = role::ActiveModel {
-                        id: Set(new_role_id.clone()),
-                        name: Set(r.name.clone()),
-                        description: Set(r.description.clone()),
-                        permissions: Set(r.permissions),
-                        app_id: Set(Some(new_app_id_db.clone())),
-                        attributes: Set(r.attributes.clone()),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_role.insert(txn).await?;
-                    inserted_role_ids.insert(new_role_id);
-                }
-
-                // Resolve the destination's owner + default-member
-                // role ids by translating the source's pointers
-                // through the role map. We only trust the map when
-                // the corresponding role was actually inserted above;
-                // a fresh id pointing at nothing would FK-violate the
-                // App.ownerRoleId / App.defaultRoleId constraints.
-                let dst_owner_role_id = match src_owner_role_id
-                    .as_deref()
-                    .and_then(|src_id| maps_arc.roles.get(src_id).cloned())
-                    .filter(|id| inserted_role_ids.contains(id))
-                {
-                    Some(id) => id,
-                    None => {
-                        // Source had no owner role recorded, its pointer
-                        // was stale, or the fork policy excluded roles.
-                        // Invent one so the destination is at least valid;
-                        // caller becomes the owner regardless.
-                        let synthetic_id = create_id();
-                        let synthetic = role::ActiveModel {
-                            id: Set(synthetic_id.clone()),
-                            name: Set("Owner".to_string()),
-                            description: Set(Some("Owner role".to_string())),
-                            permissions: Set(RolePermissions::Owner.bits()),
-                            app_id: Set(Some(new_app_id_db.clone())),
-                            attributes: NotSet,
-                            created_at: Set(now),
-                            updated_at: Set(now),
-                        };
-                        synthetic.insert(txn).await?;
-                        synthetic_id
-                    }
-                };
-                // A NULL default role is a live footgun: it hard-fails
-                // every join-request, invite, purchase and role-delete
-                // path. When the source pointer doesn't resolve to an
-                // inserted row, mint the same Admin + User pair a newly
-                // created app gets and make User the default.
-                let dst_default_role_id = match src_default_role_id
-                    .as_deref()
-                    .and_then(|src_id| maps_arc.roles.get(src_id).cloned())
-                    .filter(|id| inserted_role_ids.contains(id))
-                {
-                    Some(id) => Some(id),
-                    None => {
-                        let admin_role = role::ActiveModel {
-                            id: Set(create_id()),
-                            name: Set("Admin".to_string()),
-                            description: Set(Some("Admin role".to_string())),
-                            permissions: Set(RolePermissions::Admin.bits()),
-                            app_id: Set(Some(new_app_id_db.clone())),
-                            attributes: NotSet,
-                            created_at: Set(now),
-                            updated_at: Set(now),
-                        };
-                        admin_role.insert(txn).await?;
-
-                        let mut user_permission = RolePermissions::ReadTemplates;
-                        user_permission.insert(RolePermissions::ExecuteEvents);
-                        user_permission.insert(RolePermissions::ListEvents);
-                        let user_role_id = create_id();
-                        let user_role = role::ActiveModel {
-                            id: Set(user_role_id.clone()),
-                            name: Set("User".to_string()),
-                            description: Set(Some("User role".to_string())),
-                            permissions: Set(user_permission.bits()),
-                            app_id: Set(Some(new_app_id_db.clone())),
-                            attributes: NotSet,
-                            created_at: Set(now),
-                            updated_at: Set(now),
-                        };
-                        user_role.insert(txn).await?;
-                        Some(user_role_id)
-                    }
-                };
-
-                let mut app_active = inserted_app.into_active_model();
-                app_active.owner_role_id = Set(Some(dst_owner_role_id.clone()));
-                app_active.default_role_id = Set(dst_default_role_id);
-                app_active.update(txn).await?;
-
-                let owner_membership_id = create_id();
-                let mship = membership::ActiveModel {
-                    id: Set(owner_membership_id.clone()),
-                    user_id: Set(user_sub_owned.clone()),
-                    app_id: Set(new_app_id_db.clone()),
-                    role_id: Set(dst_owner_role_id),
-                    joined_via: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                mship.insert(txn).await?;
-
-                for pkg in &allowed_packages {
-                    let new_package = app_package::ActiveModel {
-                        id: Set(create_id()),
-                        app_id: Set(new_app_id_db.clone()),
-                        membership_id: Set(Some(owner_membership_id.clone())),
-                        package_id: Set(pkg.package_id.clone()),
-                        version: Set(pkg.version.clone()),
-                        added_at: Set(now),
-                        auto_update: Set(pkg.auto_update),
-                        stale: Set(pkg.stale),
-                    };
-                    new_package.insert(txn).await?;
-                }
-
-                for e in &events_to_insert {
-                    let mut new_event = event_to_db_model(&new_app_id_db, e);
-                    new_event.created_at = Set(now);
-                    new_event.updated_at = Set(now);
-                    new_event.insert(txn).await?;
-                }
-
-                for p in src_page_rows
-                    .iter()
-                    .filter(|p| shipped_pages_for_txn.contains(&p.id))
-                {
-                    let new_page_id = maps_arc.pages.get(&p.id).cloned().unwrap_or_else(create_id);
-                    let new_board_id = p.board_id.as_ref().map(|b| maps_arc.translate_board(b));
-                    let new_page = page::ActiveModel {
-                        id: Set(new_page_id),
-                        name: Set(p.name.clone()),
-                        description: Set(p.description.clone()),
-                        app_id: Set(new_app_id_db.clone()),
-                        board_id: Set(new_board_id),
-                        version: Set(p.version.clone()),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_page.insert(txn).await?;
-                }
-
-                for w in src_widget_rows
-                    .iter()
-                    .filter(|w| shipped_widgets_for_txn.contains(&w.id))
-                {
-                    let new_widget_id = maps_arc
-                        .widgets
-                        .get(&w.id)
-                        .cloned()
-                        .unwrap_or_else(create_id);
-                    let new_widget = widget::ActiveModel {
-                        id: Set(new_widget_id),
-                        app_id: Set(new_app_id_db.clone()),
-                        version: Set(w.version.clone()),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_widget.insert(txn).await?;
-                }
-
-                // Widget Meta rows: remap `widget_id`, keep payload.
-                // Without these, `GET /apps/{id}/widgets` returns an
-                // empty list because the join on Meta drops widgets
-                // without a row.
-                for m in &src_widget_meta_rows {
-                    let Some(src_widget_id) = m.widget_id.as_ref() else {
-                        continue;
-                    };
-                    if !shipped_widgets_for_txn.contains(src_widget_id) {
-                        continue;
-                    }
-                    let dst_widget_id = m
-                        .widget_id
-                        .as_ref()
-                        .and_then(|src_id| maps_arc.widgets.get(src_id).cloned());
-                    if dst_widget_id.is_none() {
-                        continue;
-                    }
-                    let new_meta = meta::ActiveModel {
-                        id: Set(create_id()),
-                        lang: Set(m.lang.clone()),
-                        name: Set(m.name.clone()),
-                        description: Set(m.description.clone()),
-                        long_description: Set(m.long_description.clone()),
-                        release_notes: Set(m.release_notes.clone()),
-                        tags: Set(m.tags.clone()),
-                        use_case: Set(m.use_case.clone()),
-                        icon: Set(m.icon.clone()),
-                        thumbnail: Set(m.thumbnail.clone()),
-                        preview_media: Set(m.preview_media.clone()),
-                        age_rating: Set(m.age_rating),
-                        website: Set(m.website.clone()),
-                        support_url: Set(m.support_url.clone()),
-                        docs_url: Set(m.docs_url.clone()),
-                        organization_specific_values: Set(m.organization_specific_values.clone()),
-                        app_id: Set(None),
-                        bit_id: Set(None),
-                        course_id: Set(None),
-                        template_id: Set(None),
-                        widget_id: Set(dst_widget_id),
-                        wasm_package_id: Set(None),
-                        group_id: Set(None),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_meta.insert(txn).await?;
-                }
-
-                for t in src_template_rows
-                    .iter()
-                    .filter(|t| shipped_templates_for_txn.contains(&t.id))
-                {
-                    let new_template_id = maps_arc
-                        .templates
-                        .get(&t.id)
-                        .cloned()
-                        .unwrap_or_else(create_id);
-                    let new_template = template::ActiveModel {
-                        id: Set(new_template_id),
-                        app_id: Set(new_app_id_db.clone()),
-                        changelog: Set(t.changelog.clone()),
-                        rating_sum: Set(0),
-                        rating_count: Set(0),
-                        version: Set(t.version.clone()),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_template.insert(txn).await?;
-                }
-
-                // Template Meta rows: same shape as widget meta — Meta
-                // is keyed off `templateId` with `appId = NULL`, so the
-                // app-scoped query couldn't see them. Without these,
-                // `GET /apps/{id}/templates` returns an empty list.
-                for m in &src_template_meta_rows {
-                    let Some(src_template_id) = m.template_id.as_ref() else {
-                        continue;
-                    };
-                    if !shipped_templates_for_txn.contains(src_template_id) {
-                        continue;
-                    }
-                    let dst_template_id = m
-                        .template_id
-                        .as_ref()
-                        .and_then(|src_id| maps_arc.templates.get(src_id).cloned());
-                    if dst_template_id.is_none() {
-                        continue;
-                    }
-                    let new_meta = meta::ActiveModel {
-                        id: Set(create_id()),
-                        lang: Set(m.lang.clone()),
-                        name: Set(m.name.clone()),
-                        description: Set(m.description.clone()),
-                        long_description: Set(m.long_description.clone()),
-                        release_notes: Set(m.release_notes.clone()),
-                        tags: Set(m.tags.clone()),
-                        use_case: Set(m.use_case.clone()),
-                        icon: Set(m.icon.clone()),
-                        thumbnail: Set(m.thumbnail.clone()),
-                        preview_media: Set(m.preview_media.clone()),
-                        age_rating: Set(m.age_rating),
-                        website: Set(m.website.clone()),
-                        support_url: Set(m.support_url.clone()),
-                        docs_url: Set(m.docs_url.clone()),
-                        organization_specific_values: Set(m.organization_specific_values.clone()),
-                        app_id: Set(None),
-                        bit_id: Set(None),
-                        course_id: Set(None),
-                        template_id: Set(dst_template_id),
-                        widget_id: Set(None),
-                        wasm_package_id: Set(None),
-                        group_id: Set(None),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                    };
-                    new_meta.insert(txn).await?;
-                }
-
-                for sink in sinks_to_insert {
-                    sink.insert(txn).await?;
-                }
-
-                Ok(())
-            })
-        })
-        .await
-        .map_err(|e| match e {
-            sea_orm::TransactionError::Connection(err) => ApiError::from(err),
-            sea_orm::TransactionError::Transaction(err) => ApiError::from(err),
-        })?;
-
     skipped.extend(package_skips);
     skipped.extend(sink_skips);
-    Ok((
-        new_app_id,
-        ForkReport {
-            id_map: maps,
-            skipped,
-            warnings,
-            bytes_copied: copy_tally.bytes,
-            objects_copied: copy_tally.objects,
-        },
-    ))
+    Ok(ForkPlan {
+        maps,
+        rewritten_events: rewritten_events.into_values().collect(),
+        shipped_pages,
+        shipped_widgets,
+        shipped_templates,
+        roles_to_copy,
+        allowed_packages,
+        sinks_to_insert,
+        skipped,
+        warnings,
+    })
+}
+
+/// Destination rows for one DB sub-step of the fork, in the order the
+/// foreign keys need: app meta → roles (+ App pointers + membership) →
+/// packages → events → pages → widgets → widget meta → templates →
+/// template meta → sinks. Every id is derived, so a sub-step that runs
+/// twice inserts nothing the second time.
+pub(crate) fn plan_meta_rows(ctx: &ForkContext) -> Vec<meta::ActiveModel> {
+    let mut rows: Vec<meta::ActiveModel> = ctx
+        .src_meta_rows
+        .iter()
+        .map(|m| {
+            copy_meta_row(
+                m,
+                ids::derive_id(&ctx.seed, &format!("meta:{}", m.id)),
+                MetaOwner::App(ctx.dest_app_id.clone()),
+                ctx.now,
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(meta::ActiveModel {
+            id: Set(ids::derive_id(&ctx.seed, "meta:fallback")),
+            lang: Set(ctx.language.clone()),
+            name: Set("My copy".to_string()),
+            app_id: Set(Some(ctx.dest_app_id.clone())),
+            created_at: Set(ctx.now),
+            updated_at: Set(ctx.now),
+            ..Default::default()
+        });
+    }
+    rows
+}
+
+pub(crate) fn plan_package_rows(
+    ctx: &ForkContext,
+    plan: &ForkPlan,
+) -> Vec<app_package::ActiveModel> {
+    let membership_id = owner_membership_id(&ctx.seed);
+    plan.allowed_packages
+        .iter()
+        .map(|pkg| app_package::ActiveModel {
+            id: Set(ids::derive_id(&ctx.seed, &format!("package:{}", pkg.id))),
+            app_id: Set(ctx.dest_app_id.clone()),
+            membership_id: Set(Some(membership_id.clone())),
+            package_id: Set(pkg.package_id.clone()),
+            version: Set(pkg.version.clone()),
+            added_at: Set(ctx.now),
+            auto_update: Set(pkg.auto_update),
+            stale: Set(pkg.stale),
+        })
+        .collect()
+}
+
+pub(crate) fn plan_event_rows(ctx: &ForkContext, plan: &ForkPlan) -> Vec<event::ActiveModel> {
+    use crate::routes::app::events::db::event_to_db_model;
+    plan.rewritten_events
+        .iter()
+        .map(|e| {
+            let mut new_event = event_to_db_model(&ctx.dest_app_id, e);
+            new_event.created_at = Set(ctx.now);
+            new_event.updated_at = Set(ctx.now);
+            new_event
+        })
+        .collect()
+}
+
+pub(crate) fn plan_page_rows(ctx: &ForkContext, plan: &ForkPlan) -> Vec<page::ActiveModel> {
+    ctx.src_page_rows
+        .iter()
+        .filter(|p| plan.shipped_pages.contains(&p.id))
+        .map(|p| page::ActiveModel {
+            id: Set(plan.maps.translate_page(&p.id)),
+            name: Set(p.name.clone()),
+            description: Set(p.description.clone()),
+            app_id: Set(ctx.dest_app_id.clone()),
+            board_id: Set(p.board_id.as_ref().map(|b| plan.maps.translate_board(b))),
+            version: Set(p.version.clone()),
+            created_at: Set(ctx.now),
+            updated_at: Set(ctx.now),
+        })
+        .collect()
+}
+
+pub(crate) fn plan_widget_rows(ctx: &ForkContext, plan: &ForkPlan) -> Vec<widget::ActiveModel> {
+    ctx.src_widget_rows
+        .iter()
+        .filter(|w| plan.shipped_widgets.contains(&w.id))
+        .map(|w| widget::ActiveModel {
+            id: Set(translate_in_map(&plan.maps.widgets, &w.id)),
+            app_id: Set(ctx.dest_app_id.clone()),
+            version: Set(w.version.clone()),
+            created_at: Set(ctx.now),
+            updated_at: Set(ctx.now),
+        })
+        .collect()
+}
+
+/// Widget Meta rows are keyed off `widgetId` with `appId = NULL`. Without
+/// them `GET /apps/{id}/widgets` inner-joins Meta and drops the widget.
+pub(crate) fn plan_widget_meta_rows(ctx: &ForkContext, plan: &ForkPlan) -> Vec<meta::ActiveModel> {
+    ctx.src_widget_meta_rows
+        .iter()
+        .filter_map(|m| {
+            let src_widget_id = m.widget_id.as_ref()?;
+            if !plan.shipped_widgets.contains(src_widget_id) {
+                return None;
+            }
+            let dst_widget_id = plan.maps.widgets.get(src_widget_id)?.clone();
+            Some(copy_meta_row(
+                m,
+                ids::derive_id(&ctx.seed, &format!("meta:{}", m.id)),
+                MetaOwner::Widget(dst_widget_id),
+                ctx.now,
+            ))
+        })
+        .collect()
+}
+
+pub(crate) fn plan_template_rows(ctx: &ForkContext, plan: &ForkPlan) -> Vec<template::ActiveModel> {
+    ctx.src_template_rows
+        .iter()
+        .filter(|t| plan.shipped_templates.contains(&t.id))
+        .map(|t| template::ActiveModel {
+            id: Set(translate_in_map(&plan.maps.templates, &t.id)),
+            app_id: Set(ctx.dest_app_id.clone()),
+            changelog: Set(t.changelog.clone()),
+            rating_sum: Set(0),
+            rating_count: Set(0),
+            version: Set(t.version.clone()),
+            created_at: Set(ctx.now),
+            updated_at: Set(ctx.now),
+        })
+        .collect()
+}
+
+/// Same shape as widget meta: keyed off `templateId`, `appId = NULL`.
+pub(crate) fn plan_template_meta_rows(
+    ctx: &ForkContext,
+    plan: &ForkPlan,
+) -> Vec<meta::ActiveModel> {
+    ctx.src_template_meta_rows
+        .iter()
+        .filter_map(|m| {
+            let src_template_id = m.template_id.as_ref()?;
+            if !plan.shipped_templates.contains(src_template_id) {
+                return None;
+            }
+            let dst_template_id = plan.maps.templates.get(src_template_id)?.clone();
+            Some(copy_meta_row(
+                m,
+                ids::derive_id(&ctx.seed, &format!("meta:{}", m.id)),
+                MetaOwner::Template(dst_template_id),
+                ctx.now,
+            ))
+        })
+        .collect()
+}
+
+pub(crate) fn owner_membership_id(seed: &str) -> String {
+    ids::derive_id(seed, "membership:owner")
+}
+
+enum MetaOwner {
+    App(String),
+    Widget(String),
+    Template(String),
+}
+
+fn copy_meta_row(
+    m: &meta::Model,
+    id: String,
+    owner: MetaOwner,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> meta::ActiveModel {
+    let (app_id, widget_id, template_id) = match owner {
+        MetaOwner::App(id) => (Some(id), None, None),
+        MetaOwner::Widget(id) => (None, Some(id), None),
+        MetaOwner::Template(id) => (None, None, Some(id)),
+    };
+    meta::ActiveModel {
+        id: Set(id),
+        lang: Set(m.lang.clone()),
+        name: Set(m.name.clone()),
+        description: Set(m.description.clone()),
+        long_description: Set(m.long_description.clone()),
+        release_notes: Set(m.release_notes.clone()),
+        tags: Set(m.tags.clone()),
+        use_case: Set(m.use_case.clone()),
+        icon: Set(m.icon.clone()),
+        thumbnail: Set(m.thumbnail.clone()),
+        preview_media: Set(m.preview_media.clone()),
+        age_rating: Set(m.age_rating),
+        website: Set(m.website.clone()),
+        support_url: Set(m.support_url.clone()),
+        docs_url: Set(m.docs_url.clone()),
+        organization_specific_values: Set(m.organization_specific_values.clone()),
+        app_id: Set(app_id),
+        bit_id: Set(None),
+        course_id: Set(None),
+        template_id: Set(template_id),
+        widget_id: Set(widget_id),
+        wasm_package_id: Set(None),
+        group_id: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+}
+
+/// The role set a destination app gets, plus which of them become the
+/// App's owner / default pointers. Source roles are copied faithfully
+/// (name, description, permission bits, attributes) when the policy allows
+/// it; the pointers are only trusted when the row behind them ships, and a
+/// missing owner or default role is replaced by the same Owner / Admin /
+/// User trio a newly created app gets — a NULL default role hard-fails
+/// every join, invite, purchase and role-delete path.
+pub(crate) struct RolePlan {
+    pub roles: Vec<role::ActiveModel>,
+    pub owner_role_id: String,
+    pub default_role_id: String,
+}
+
+pub(crate) fn plan_roles(
+    seed: &str,
+    dest_app_id: &str,
+    roles_to_copy: &[role::Model],
+    role_map: &HashMap<String, String>,
+    src_owner_role_id: Option<&str>,
+    src_default_role_id: Option<&str>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> RolePlan {
+    let mut roles: Vec<role::ActiveModel> = roles_to_copy
+        .iter()
+        .map(|r| role::ActiveModel {
+            id: Set(role_map
+                .get(&r.id)
+                .cloned()
+                .unwrap_or_else(|| ids::derive_id(seed, &r.id))),
+            name: Set(r.name.clone()),
+            description: Set(r.description.clone()),
+            permissions: Set(r.permissions),
+            app_id: Set(Some(dest_app_id.to_string())),
+            attributes: Set(r.attributes.clone()),
+            created_at: Set(now),
+            updated_at: Set(now),
+        })
+        .collect();
+    let copied: HashSet<String> = roles
+        .iter()
+        .filter_map(|r| match &r.id {
+            Set(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let resolve = |src: Option<&str>| {
+        src.and_then(|src_id| role_map.get(src_id).cloned())
+            .filter(|id| copied.contains(id))
+    };
+
+    let synthetic = |label: &str, name: &str, permissions: RolePermissions| role::ActiveModel {
+        id: Set(ids::derive_id(seed, &format!("role:{label}"))),
+        name: Set(name.to_string()),
+        description: Set(Some(format!("{name} role"))),
+        permissions: Set(permissions.bits()),
+        app_id: Set(Some(dest_app_id.to_string())),
+        attributes: NotSet,
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+
+    let owner_role_id = match resolve(src_owner_role_id) {
+        Some(id) => id,
+        None => {
+            let owner = synthetic("owner", "Owner", RolePermissions::Owner);
+            let id = ids::derive_id(seed, "role:owner");
+            roles.push(owner);
+            id
+        }
+    };
+    let default_role_id = match resolve(src_default_role_id) {
+        Some(id) => id,
+        None => {
+            let mut user_permission = RolePermissions::ReadTemplates;
+            user_permission.insert(RolePermissions::ExecuteEvents);
+            user_permission.insert(RolePermissions::ListEvents);
+            roles.push(synthetic("admin", "Admin", RolePermissions::Admin));
+            roles.push(synthetic("user", "User", user_permission));
+            ids::derive_id(seed, "role:user")
+        }
+    };
+    RolePlan {
+        roles,
+        owner_role_id,
+        default_role_id,
+    }
 }
 
 /// Offline → online uploads come from the desktop content layout, where
@@ -2767,7 +2690,7 @@ pub async fn sync_uploaded_metadata_media_to_db(
     let metadata_dir_str = metadata_dir.as_ref().to_string();
 
     let mut listing = content_store.list(Some(&metadata_dir));
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     while let Some(item) = listing
         .try_next()
         .await
@@ -2811,7 +2734,7 @@ fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
         .boards
         .get(&board.id)
         .cloned()
-        .unwrap_or_else(create_id);
+        .unwrap_or_else(|| maps.mint(&board.id));
     maps.boards
         .entry(board.id.clone())
         .or_insert_with(|| new_board_id.clone());
@@ -2825,11 +2748,11 @@ fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
     // when the desktop reconstructs `layer.nodes` from `node.layer`.
     register_node_pin_ids(&board.nodes, maps);
     for layer in board.layers.values() {
-        maps.layers
-            .entry(layer.id.clone())
-            .or_insert_with(create_id);
+        let layer_id = maps.mint(&layer.id);
+        maps.layers.entry(layer.id.clone()).or_insert(layer_id);
         if let Some(parent) = layer.parent_id.as_ref() {
-            maps.layers.entry(parent.clone()).or_insert_with(create_id);
+            let parent_id = maps.mint(parent);
+            maps.layers.entry(parent.clone()).or_insert(parent_id);
         }
         register_node_pin_ids(&layer.nodes, maps);
         register_pin_ids(&layer.pins, maps);
@@ -2849,7 +2772,7 @@ fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
             .layers
             .get(&layer.id)
             .cloned()
-            .unwrap_or_else(create_id);
+            .unwrap_or_else(|| maps.mint(&layer.id));
         layer.id = new_layer_id.clone();
         if let Some(parent) = layer.parent_id.as_ref() {
             layer.parent_id = maps.layers.get(parent).cloned();
@@ -2904,14 +2827,16 @@ fn strip_board_secrets(board: &mut proto::Board) {
 
 fn register_node_pin_ids(nodes: &HashMap<String, proto::Node>, maps: &mut ForkIdMap) {
     for node in nodes.values() {
-        maps.nodes.entry(node.id.clone()).or_insert_with(create_id);
+        let node_id = maps.mint(&node.id);
+        maps.nodes.entry(node.id.clone()).or_insert(node_id);
         register_pin_ids(&node.pins, maps);
     }
 }
 
 fn register_pin_ids(pins: &HashMap<String, proto::Pin>, maps: &mut ForkIdMap) {
     for pin in pins.values() {
-        maps.pins.entry(pin.id.clone()).or_insert_with(create_id);
+        let pin_id = maps.mint(&pin.id);
+        maps.pins.entry(pin.id.clone()).or_insert(pin_id);
     }
 }
 
@@ -3080,7 +3005,7 @@ fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
         .events
         .get(&event.id)
         .cloned()
-        .unwrap_or_else(create_id);
+        .unwrap_or_else(|| maps.mint(&event.id));
     event.board_id = maps.translate_board(&event.board_id);
     event.node_id = maps.translate_node(&event.node_id);
     if let Some(default_page) = event.default_page_id.as_ref() {
@@ -3215,6 +3140,17 @@ impl CopyTally {
     }
 }
 
+/// Objects copied between two cursor commits of a resumable mirror.
+pub(crate) const COPY_PAGE: usize = 256;
+
+/// Where a resumable mirror writes its progress: the job's cursor, saved
+/// after every page so a restarted pass continues from the last key.
+pub(crate) struct CopyCheckpoint<'a> {
+    pub state: &'a AppState,
+    pub job_id: &'a str,
+    pub cursor: &'a mut job::ForkJobCursor,
+}
+
 /// Mirrors `src_prefix` onto `dst_prefix`.
 ///
 /// `skip_relative` is evaluated against the source-relative suffix (e.g.
@@ -3230,74 +3166,145 @@ async fn copy_object_prefix(
     label: &str,
     skip_relative: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
 ) -> Result<CopyTally, ApiError> {
+    copy_object_prefix_resumable(
+        src_store,
+        dst_store,
+        src_prefix,
+        dst_prefix,
+        label,
+        skip_relative,
+        None,
+    )
+    .await
+}
+
+/// [`copy_object_prefix`] that walks the listing in key order and, when a
+/// checkpoint is given, resumes after the checkpoint's last key for this
+/// `label` and saves the cursor after every [`COPY_PAGE`] objects. Objects
+/// are PUT under a deterministic key, so a page that ran twice after a
+/// crash overwrites itself.
+pub(crate) async fn copy_object_prefix_resumable(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_prefix: &Path,
+    dst_prefix: &Path,
+    label: &str,
+    skip_relative: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
+    mut checkpoint: Option<CopyCheckpoint<'_>>,
+) -> Result<CopyTally, ApiError> {
     use futures::StreamExt;
 
-    let mut listing = src_store.list(Some(src_prefix));
-    let mut entries: Vec<(Path, Path)> = Vec::new();
+    let start_after: Option<Path> = checkpoint
+        .as_ref()
+        .filter(|c| c.cursor.prefix.as_deref() == Some(label))
+        .and_then(|c| c.cursor.last_key.as_deref().map(Path::from));
+    let mut listing = match start_after.as_ref() {
+        Some(offset) => src_store.list_with_offset(Some(src_prefix), offset),
+        None => src_store.list(Some(src_prefix)),
+    };
+    let mut page: Vec<(Path, Path, u64)> = Vec::with_capacity(COPY_PAGE);
     let mut tally = CopyTally::default();
-    while let Some(item) = listing
-        .try_next()
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
-    {
-        let path_str = item.location.as_ref().to_string();
-        let suffix = match path_str.strip_prefix(src_prefix.as_ref()) {
-            Some(s) if s.is_empty() || s.starts_with('/') => s.trim_start_matches('/'),
-            Some(_) => continue,
-            None => continue,
-        };
-        if skip_relative.is_some_and(|skip| skip(suffix)) {
+    loop {
+        let next = listing
+            .try_next()
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?;
+        let exhausted = next.is_none();
+        if let Some(item) = next
+            && let Some(entry) = plan_copy_entry(src_prefix, dst_prefix, &item, skip_relative)
+        {
+            page.push(entry);
+        }
+        if !exhausted && page.len() < COPY_PAGE {
             continue;
         }
-        let dst_path = join_relative(dst_prefix, suffix);
-        tally.bytes = tally.bytes.saturating_add(item.size);
-        entries.push((item.location, dst_path));
-    }
+        if page.is_empty() {
+            break;
+        }
 
-    let results: Vec<Result<(), ApiError>> =
-        futures::stream::iter(entries.into_iter().map(|(src_path, dst_path)| async move {
-            copy_one(src_store, dst_store, &src_path, &dst_path, label).await
-        }))
+        // Sorting only the page keeps the peak allocation at COPY_PAGE
+        // entries. Resuming already depends on the listing arriving in key
+        // order (`list_with_offset` returns keys greater than the cursor),
+        // so the page's last key is still the high-water mark.
+        page.sort_by(|a, b| a.0.cmp(&b.0));
+        let results: Vec<Result<u64, ApiError>> = futures::stream::iter(page.iter().cloned().map(
+            |(src_path, dst_path, size)| async move {
+                copy_one(src_store, dst_store, &src_path, &dst_path, label).await?;
+                Ok(size)
+            },
+        ))
         .buffer_unordered(COPY_CONCURRENCY)
         .collect()
         .await;
-    for r in results {
-        r?;
-        tally.objects = tally.objects.saturating_add(1);
+        let mut page_tally = CopyTally::default();
+        for r in results {
+            page_tally.bytes = page_tally.bytes.saturating_add(r?);
+            page_tally.objects = page_tally.objects.saturating_add(1);
+        }
+        tally.add(page_tally);
+        if let Some(checkpoint) = checkpoint.as_mut()
+            && let Some((last, _, _)) = page.last()
+        {
+            checkpoint.cursor.prefix = Some(label.to_string());
+            checkpoint.cursor.last_key = Some(last.as_ref().to_string());
+            checkpoint.cursor.bytes_copied = checkpoint
+                .cursor
+                .bytes_copied
+                .saturating_add(page_tally.bytes);
+            checkpoint.cursor.objects_copied = checkpoint
+                .cursor
+                .objects_copied
+                .saturating_add(page_tally.objects);
+            job::persist_cursor(checkpoint.state, checkpoint.job_id, checkpoint.cursor).await?;
+        }
+        page.clear();
+        if exhausted {
+            break;
+        }
     }
     Ok(tally)
 }
 
-async fn delete_object_prefix(
+/// The source/destination pair one listed object contributes, or `None` when
+/// the object is outside `src_prefix` or excluded by the fork policy.
+fn plan_copy_entry(
+    src_prefix: &Path,
+    dst_prefix: &Path,
+    item: &flow_like_storage::object_store::ObjectMeta,
+    skip_relative: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
+) -> Option<(Path, Path, u64)> {
+    let suffix = match item.location.as_ref().strip_prefix(src_prefix.as_ref()) {
+        Some(s) if s.is_empty() || s.starts_with('/') => s.trim_start_matches('/'),
+        _ => return None,
+    };
+    if skip_relative.is_some_and(|skip| skip(suffix)) {
+        return None;
+    }
+    Some((
+        item.location.clone(),
+        join_relative(dst_prefix, suffix),
+        item.size,
+    ))
+}
+
+/// Delete every object under `prefix`, streaming the listing straight into
+/// the store's bulk delete so neither side is held in memory at once.
+pub(crate) async fn delete_object_prefix(
     store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     prefix: &Path,
     label: &str,
 ) -> Result<(), ApiError> {
     use futures::StreamExt;
 
-    let mut listing = store.list(Some(prefix));
-    let mut paths: Vec<Path> = Vec::new();
-    while let Some(item) = listing
-        .try_next()
+    let locations = store
+        .list(Some(prefix))
+        .map_ok(|meta| meta.location)
+        .boxed();
+    store
+        .delete_stream(locations)
+        .try_fold(0u64, |count, _| async move { Ok(count + 1) })
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("list {label}: {e}")))?
-    {
-        paths.push(item.location);
-    }
-
-    let results: Vec<Result<(), ApiError>> =
-        futures::stream::iter(paths.into_iter().map(|path| async move {
-            store
-                .delete(&path)
-                .await
-                .map_err(|e| ApiError::internal_error(anyhow!("delete {label}: {e}")))
-        }))
-        .buffer_unordered(COPY_CONCURRENCY)
-        .collect()
-        .await;
-    for result in results {
-        result?;
-    }
+        .map_err(|e| ApiError::internal_error(anyhow!("delete {label} prefix {prefix}: {e}")))?;
     Ok(())
 }
 
@@ -3343,7 +3350,7 @@ async fn update_meta_media_fields(
     app_id: &str,
     target: UploadedMetadataTarget,
     uploaded: proto::Metadata,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), ApiError> {
     let row = match &target {
         UploadedMetadataTarget::App { lang } => {
@@ -3386,7 +3393,7 @@ async fn update_meta_media_fields(
     let mut active = row.into_active_model();
     active.icon = Set(uploaded.icon);
     active.thumbnail = Set(uploaded.thumbnail);
-    active.preview_media = Set(preview_media);
+    active.preview_media = Set(preview_media.map(Into::into));
     active.updated_at = Set(now);
     active.update(&state.db).await?;
     Ok(())
@@ -3734,6 +3741,16 @@ fn app_visibility_to_db(v: &flow_like::app::AppVisibility) -> Visibility {
     }
 }
 
+fn db_visibility_to_proto(v: &Visibility) -> i32 {
+    match v {
+        Visibility::Public => proto::AppVisibility::Public as i32,
+        Visibility::PublicRequestAccess => proto::AppVisibility::PublicRequestAccess as i32,
+        Visibility::Private => proto::AppVisibility::Private as i32,
+        Visibility::Prototype => proto::AppVisibility::Prototype as i32,
+        Visibility::Offline => proto::AppVisibility::Offline as i32,
+    }
+}
+
 /// Loads each widget JSON listed at the source app prefix and writes it
 /// under the destination prefix with a fresh top-level id. Widget bodies
 /// can contain the same action/reference JSON shape as pages, so those
@@ -3817,9 +3834,8 @@ async fn fork_templates(
         let template_page_ids =
             list_template_page_ids(src_store, src_prefix, &src_template_id, skipped).await;
         for src_page_id in &template_page_ids {
-            maps.pages
-                .entry(src_page_id.clone())
-                .or_insert_with(create_id);
+            let page_id = maps.mint(src_page_id);
+            maps.pages.entry(src_page_id.clone()).or_insert(page_id);
         }
         let src_path = src_prefix.child(format!("{}.template", src_template_id));
         let board_proto: proto::Board =
@@ -4124,12 +4140,13 @@ fn rewrite_auth_token_in_config(
 /// what couldn't be carried as-is (PATs without a replacement token,
 /// OAuth bindings that need re-auth).
 fn prepare_dst_sinks(
+    seed: &str,
     src_sinks: &[event_sink::Model],
     event_id_map: &HashMap<String, String>,
     remote_event_token: Option<&str>,
     encryption_key: &[u8; 32],
     new_app_id: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> (Vec<event_sink::ActiveModel>, Vec<SkippedItem>) {
     use crate::routes::app::events::db::encrypt_token;
 
@@ -4191,7 +4208,7 @@ fn prepare_dst_sinks(
         }
 
         to_insert.push(event_sink::ActiveModel {
-            id: Set(create_id()),
+            id: Set(ids::derive_id(seed, &format!("sink:{}", src.id))),
             event_id: Set(new_event_id),
             app_id: Set(new_app_id.to_string()),
             sink_type: Set(src.sink_type.clone()),
@@ -4230,101 +4247,92 @@ async fn filter_accessible_packages(
     user_sub: &str,
     src_packages: &[app_package::Model],
 ) -> Result<(Vec<app_package::Model>, Vec<SkippedItem>), ApiError> {
+    use crate::entity::sea_orm_active_enums::PurchaseStatus;
+
+    let package_ids: Vec<String> = src_packages
+        .iter()
+        .map(|p| p.package_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if package_ids.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let packages: HashMap<String, wasm_package::Model> = wasm_package::Entity::find()
+        .filter(wasm_package::Column::Id.is_in(package_ids.clone()))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+    let authored: HashSet<String> = wasm_package_author::Entity::find()
+        .filter(wasm_package_author::Column::PackageId.is_in(package_ids.clone()))
+        .filter(wasm_package_author::Column::UserId.eq(user_sub))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|row| row.package_id)
+        .collect();
+    let granted: HashSet<String> = wasm_package_user::Entity::find()
+        .filter(wasm_package_user::Column::PackageId.is_in(package_ids.clone()))
+        .filter(wasm_package_user::Column::UserId.eq(user_sub))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|row| row.package_id)
+        .collect();
+    let purchased: HashSet<String> = wasm_package_purchase::Entity::find()
+        .filter(wasm_package_purchase::Column::PackageId.is_in(package_ids))
+        .filter(wasm_package_purchase::Column::UserId.eq(user_sub))
+        .filter(wasm_package_purchase::Column::Status.eq(PurchaseStatus::Completed))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|row| row.package_id)
+        .collect();
+
     let mut allowed = Vec::with_capacity(src_packages.len());
     let mut skipped = Vec::new();
     for pkg in src_packages {
-        match is_package_accessible(state, user_sub, &pkg.package_id).await? {
-            PackageAccess::PublicFree | PackageAccess::Granted => {
-                allowed.push(pkg.clone());
-            }
-            PackageAccess::Denied(reason) => {
-                skipped.push(SkippedItem {
-                    kind: SkippedKind::Package,
-                    source_id: pkg.package_id.clone(),
-                    reason,
-                });
-            }
+        let package_id = pkg.package_id.as_str();
+        let Some(registry_row) = packages.get(package_id) else {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Package,
+                source_id: pkg.package_id.clone(),
+                reason: format!("package {package_id} no longer exists in the registry"),
+            });
+            continue;
+        };
+        let public_free = matches!(registry_row.visibility, WasmPackageVisibility::Public)
+            && registry_row.price <= 0;
+        if public_free
+            || authored.contains(package_id)
+            || granted.contains(package_id)
+            || purchased.contains(package_id)
+        {
+            allowed.push(pkg.clone());
+            continue;
         }
+        let is_public = matches!(
+            registry_row.visibility,
+            WasmPackageVisibility::Public | WasmPackageVisibility::PublicRequestAccess
+        );
+        let reason = if is_public {
+            format!(
+                "package {package_id} is paid (price {} cents) and you don't have a purchase on file",
+                registry_row.price
+            )
+        } else {
+            format!("package {package_id} is private and you are not a member or author")
+        };
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Package,
+            source_id: pkg.package_id.clone(),
+            reason,
+        });
     }
     Ok((allowed, skipped))
-}
-
-enum PackageAccess {
-    PublicFree,
-    Granted,
-    Denied(String),
-}
-
-async fn is_package_accessible(
-    state: &AppState,
-    user_sub: &str,
-    package_id: &str,
-) -> Result<PackageAccess, ApiError> {
-    let Some(pkg) = wasm_package::Entity::find_by_id(package_id)
-        .one(&state.db)
-        .await?
-    else {
-        return Ok(PackageAccess::Denied(format!(
-            "package {} no longer exists in the registry",
-            package_id
-        )));
-    };
-
-    let is_public = matches!(
-        pkg.visibility,
-        WasmPackageVisibility::Public | WasmPackageVisibility::PublicRequestAccess
-    );
-    if matches!(pkg.visibility, WasmPackageVisibility::Public) && pkg.price <= 0 {
-        return Ok(PackageAccess::PublicFree);
-    }
-
-    // Author?
-    if wasm_package_author::Entity::find()
-        .filter(wasm_package_author::Column::PackageId.eq(package_id))
-        .filter(wasm_package_author::Column::UserId.eq(user_sub))
-        .one(&state.db)
-        .await?
-        .is_some()
-    {
-        return Ok(PackageAccess::Granted);
-    }
-
-    // Granted member?
-    if wasm_package_user::Entity::find()
-        .filter(wasm_package_user::Column::PackageId.eq(package_id))
-        .filter(wasm_package_user::Column::UserId.eq(user_sub))
-        .one(&state.db)
-        .await?
-        .is_some()
-    {
-        return Ok(PackageAccess::Granted);
-    }
-
-    // Completed purchase?
-    use crate::entity::sea_orm_active_enums::PurchaseStatus;
-    if wasm_package_purchase::Entity::find()
-        .filter(wasm_package_purchase::Column::PackageId.eq(package_id))
-        .filter(wasm_package_purchase::Column::UserId.eq(user_sub))
-        .filter(wasm_package_purchase::Column::Status.eq(PurchaseStatus::Completed))
-        .one(&state.db)
-        .await?
-        .is_some()
-    {
-        return Ok(PackageAccess::Granted);
-    }
-
-    let reason = if is_public {
-        format!(
-            "package {} is paid (price {} cents) and you don't have a purchase on file",
-            package_id, pkg.price
-        )
-    } else {
-        format!(
-            "package {} is private and you are not a member or author",
-            package_id
-        )
-    };
-    Ok(PackageAccess::Denied(reason))
 }
 
 #[cfg(test)]
@@ -4332,7 +4340,7 @@ mod tests {
     use super::*;
 
     fn page_row(id: &str, board_id: Option<&str>) -> page::Model {
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         page::Model {
             id: id.to_string(),
             name: id.to_string(),
@@ -5390,5 +5398,133 @@ mod tests {
             "the reason names the component: {}",
             issues.reason("page")
         );
+    }
+
+    fn memory_store() -> Arc<dyn flow_like_storage::object_store::ObjectStore> {
+        Arc::new(flow_like_storage::object_store::memory::InMemory::new())
+    }
+
+    async fn seed(store: &Arc<dyn flow_like_storage::object_store::ObjectStore>, keys: &[String]) {
+        for key in keys {
+            store
+                .put(&Path::from(key.as_str()), key.as_bytes().to_vec().into())
+                .await
+                .expect("seed object");
+        }
+    }
+
+    async fn listed(
+        store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+        prefix: Option<&Path>,
+    ) -> Vec<String> {
+        let mut keys: Vec<String> = store
+            .list(prefix)
+            .map_ok(|meta| meta.location.as_ref().to_string())
+            .try_collect()
+            .await
+            .expect("list");
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn a_listed_object_maps_onto_the_destination_only_inside_its_own_prefix() {
+        let src = Path::from("apps/a");
+        let dst = Path::from("apps/b");
+        let meta = |key: &str| flow_like_storage::object_store::ObjectMeta {
+            location: Path::from(key),
+            last_modified: chrono::Utc::now(),
+            size: 7,
+            e_tag: None,
+            version: None,
+        };
+
+        let (from, to, size) =
+            plan_copy_entry(&src, &dst, &meta("apps/a/storage/x.lance"), None).expect("in prefix");
+        assert_eq!(from.as_ref(), "apps/a/storage/x.lance");
+        assert_eq!(to.as_ref(), "apps/b/storage/x.lance");
+        assert_eq!(size, 7);
+
+        // "apps/ab" shares the textual prefix but is a different app.
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/ab/storage/x"), None).is_none());
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/c/x"), None).is_none());
+
+        let skip: &(dyn Fn(&str) -> bool + Send + Sync) = &|rel: &str| rel.starts_with("db/");
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/a/db/t.lance"), Some(skip)).is_none());
+        assert!(plan_copy_entry(&src, &dst, &meta("apps/a/upload/f"), Some(skip)).is_some());
+    }
+
+    /// The listing is consumed page by page instead of being materialized and
+    /// sorted up front, so a prefix far larger than one page must still copy
+    /// exactly once and nothing outside the prefix may follow along.
+    #[tokio::test]
+    async fn a_prefix_larger_than_one_page_is_copied_page_by_page() {
+        // Same-deployment forks read and write through one store, which is
+        // also what makes `copy_one` take its native-copy path.
+        let src_store = memory_store();
+        let dst_store = src_store.clone();
+        let count = COPY_PAGE * 2 + 7;
+        let mut keys: Vec<String> = (0..count)
+            .map(|i| format!("apps/src/storage/{i:06}.bin"))
+            .collect();
+        keys.push("apps/src/db/skipped.lance".to_string());
+        seed(&src_store, &keys).await;
+
+        let skip: &(dyn Fn(&str) -> bool + Send + Sync) = &|rel: &str| rel.starts_with("db/");
+        let tally = copy_object_prefix_resumable(
+            &src_store,
+            &dst_store,
+            &Path::from("apps/src"),
+            &Path::from("apps/dst"),
+            "storage",
+            Some(skip),
+            None,
+        )
+        .await
+        .expect("copy");
+
+        assert_eq!(tally.objects, count as u64);
+        let copied = listed(&dst_store, Some(&Path::from("apps/dst"))).await;
+        assert_eq!(copied.len(), count);
+        assert_eq!(copied[0], "apps/dst/storage/000000.bin");
+        assert_eq!(
+            copied.last().map(String::as_str),
+            Some(format!("apps/dst/storage/{:06}.bin", count - 1).as_str())
+        );
+    }
+
+    /// The deletion streams the listing into the store's bulk delete rather
+    /// than collecting every path first; a sibling prefix must survive.
+    #[tokio::test]
+    async fn deleting_a_prefix_streams_the_listing_and_spares_its_siblings() {
+        let store = memory_store();
+        let mut keys: Vec<String> = (0..COPY_PAGE + 3)
+            .map(|i| format!("apps/doomed/storage/{i:06}.bin"))
+            .collect();
+        keys.push("apps/keep/storage/0.bin".to_string());
+        keys.push("apps/doomedtwin/storage/0.bin".to_string());
+        seed(&store, &keys).await;
+
+        delete_object_prefix(&store, &Path::from("apps/doomed"), "test")
+            .await
+            .expect("delete");
+
+        assert_eq!(
+            listed(&store, None).await,
+            vec![
+                "apps/doomedtwin/storage/0.bin".to_string(),
+                "apps/keep/storage/0.bin".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_empty_prefix_is_a_no_op() {
+        let store = memory_store();
+        seed(&store, &["apps/keep/x".to_string()]).await;
+        delete_object_prefix(&store, &Path::from("apps/gone"), "test")
+            .await
+            .expect("delete");
+        assert_eq!(listed(&store, None).await, vec!["apps/keep/x".to_string()]);
     }
 }

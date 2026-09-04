@@ -7,7 +7,7 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect,
@@ -83,18 +83,18 @@ impl From<error_report::Model> for ErrorReportRecord {
             public_code: m.public_code,
             summary: m.summary,
             details: m.details,
-            created_at: m.created_at.and_utc().to_rfc3339(),
-            updated_at: m.updated_at.and_utc().to_rfc3339(),
+            created_at: m.created_at.to_rfc3339(),
+            updated_at: m.updated_at.to_rfc3339(),
         }
     }
 }
 
-fn cutoff(hours: Option<i64>) -> Option<NaiveDateTime> {
+fn cutoff(hours: Option<i64>) -> Option<DateTime<FixedOffset>> {
     let h = hours.unwrap_or(24).max(0);
     if h == 0 {
         None
     } else {
-        Some((Utc::now() - Duration::hours(h)).naive_utc())
+        Some((Utc::now() - Duration::hours(h)).fixed_offset())
     }
 }
 
@@ -115,11 +115,12 @@ pub async fn list_errors(
     Extension(user): Extension<AppUser>,
     Query(q): Query<ListErrorsQuery>,
 ) -> Result<Json<ListErrorsResponse>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
     user.check_global_permission(&state, GlobalPermission::ReadLogs)
         .await?;
 
     let offset = q.offset.unwrap_or(0);
-    let limit = q.limit.unwrap_or(50).min(200);
+    let limit = Ord::min(q.limit.unwrap_or(50), 200);
 
     let mut select = error_report::Entity::find();
 

@@ -123,7 +123,7 @@ pub async fn sweep_once(
     grace: Duration,
     batch_size: u64,
 ) -> Result<u64, sea_orm::DbErr> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let threshold =
         now - chrono::Duration::from_std(grace).unwrap_or_else(|_| chrono::Duration::seconds(3600));
     let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);

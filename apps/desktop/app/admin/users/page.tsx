@@ -33,6 +33,7 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
+	formatRelativeDateValue,
 	useBackend,
 	useInvoke,
 	useQuery,
@@ -42,7 +43,6 @@ import {
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
-import { formatDistanceToNow } from "date-fns";
 import {
 	AlertTriangle,
 	CheckCircle,
@@ -243,9 +243,7 @@ function UserRow({
 
 	const displayName = userDisplayName(user, "—");
 	const initials = userInitials(user, "—");
-	const relativeDate = user.created_at
-		? formatDistanceToNow(new Date(user.created_at), { addSuffix: true })
-		: "—";
+	const relativeDate = formatRelativeDateValue(user.created_at, "—");
 
 	const handleToggleBan = async () => {
 		setStatusLoading(true);

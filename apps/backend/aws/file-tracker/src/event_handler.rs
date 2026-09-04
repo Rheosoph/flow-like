@@ -4,10 +4,12 @@ use aws_lambda_events::event::sqs::SqsEvent;
 use aws_lambda_events::s3::S3Event;
 use aws_lambda_events::sqs::SqsBatchResponse;
 use aws_sdk_dynamodb::Client as DynamoClient;
+use flow_like_db::{retry_transaction, DbDialect, RetryPolicy};
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use sea_orm::prelude::*;
 use sea_orm::sea_query::Expr;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::sea_query::ExprTrait;
+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 
 fn decode(key: &str) -> Result<String, Error> {
     let key = key.replace("+", " ");
@@ -20,6 +22,7 @@ pub(crate) async fn function_handler(
     event: LambdaEvent<SqsEvent>,
     dynamo: DynamoClient,
     db: DatabaseConnection,
+    dialect: DbDialect,
 ) -> Result<SqsBatchResponse, Error> {
     let mut batch_item_failures = Vec::new();
 
@@ -36,7 +39,7 @@ pub(crate) async fn function_handler(
 
         // Process each S3 record in the event
         for s3_record in s3_event.records {
-            if let Err(err) = process_s3_event(&s3_record, &dynamo, &db).await {
+            if let Err(err) = process_s3_event(&s3_record, &dynamo, &db, dialect).await {
                 tracing::error!("Error processing S3 event: {}", err);
                 successful = false;
             }
@@ -61,6 +64,7 @@ async fn process_s3_event(
     s3_record: &S3EventRecord,
     dynamo: &DynamoClient,
     db: &DatabaseConnection,
+    dialect: DbDialect,
 ) -> Result<(), Error> {
     let event_name = s3_record
         .event_name
@@ -110,7 +114,7 @@ async fn process_s3_event(
     };
 
     // Update Postgres totals
-    if let Err(err) = update_postgres_usage(db, user_id.as_deref(), &app_id, delta).await {
+    if let Err(err) = update_postgres_usage(db, dialect, user_id.as_deref(), &app_id, delta).await {
         tracing::error!("Failed to update Postgres usage for key {}: {}", key, err);
         // NOTE: We intentionally do NOT delete the S3 object here.
         // Doing so would trigger another S3 event notification, causing Lambda recursion.
@@ -207,52 +211,54 @@ async fn upsert_dynamo(
     Ok(0)
 }
 
+/// `totalSize` is a hot row per app and per user: concurrent object events
+/// race on it, and on an optimistic engine the loser is told at commit time.
+/// The increment is relative, so a re-run after a lost race stays correct,
+/// while an unknown commit outcome is not retried (the default policy) because
+/// applying a delta twice would over-count.
 async fn update_postgres_usage(
     db: &DatabaseConnection,
+    dialect: DbDialect,
     user_id: Option<&str>,
     app_id: &str,
     delta: i64,
 ) -> Result<(), Error> {
-    let txn = db
-        .begin()
-        .await
-        .map_err(|e| Error::from(format!("Failed to start transaction: {}", e)))?;
+    let app_id = app_id.to_owned();
+    let user_id = user_id.map(str::to_owned);
+    retry_transaction::<_, (), DbErr>(db, dialect, None, &RetryPolicy::default(), move |txn| {
+        let app_id = app_id.clone();
+        let user_id = user_id.clone();
+        Box::pin(async move {
+            let updated = app::Entity::update_many()
+                .col_expr(
+                    app::Column::TotalSize,
+                    Expr::col(app::Column::TotalSize).add(delta),
+                )
+                .filter(app::Column::Id.eq(app_id))
+                .exec(txn)
+                .await?;
+            if updated.rows_affected == 0 {
+                return Err(DbErr::Custom("app not found".into()));
+            }
 
-    let update = app::Entity::update_many()
-        .col_expr(
-            app::Column::TotalSize,
-            Expr::col(app::Column::TotalSize).add(delta),
-        )
-        .filter(app::Column::Id.eq(app_id))
-        .exec_with_returning(&txn)
-        .await
-        .map_err(|e| Error::from(format!("Failed to update usage: {}", e)))?;
-
-    if update.is_empty() {
-        return Err(Error::from("Failed to update app usage, app not found"));
-    }
-
-    if let Some(user_id) = user_id {
-        let update_user = user::Entity::update_many()
-            .col_expr(
-                user::Column::TotalSize,
-                Expr::col(user::Column::TotalSize).add(delta),
-            )
-            .filter(user::Column::Id.eq(user_id))
-            .exec_with_returning(&txn)
-            .await
-            .map_err(|e| Error::from(format!("Failed to update user usage: {}", e)))?;
-
-        if update_user.is_empty() {
-            return Err(Error::from("Failed to update user usage, user not found"));
-        }
-    }
-
-    txn.commit()
-        .await
-        .map_err(|e| Error::from(format!("Failed to commit transaction: {}", e)))?;
-
-    Ok(())
+            if let Some(user_id) = user_id {
+                let updated_user = user::Entity::update_many()
+                    .col_expr(
+                        user::Column::TotalSize,
+                        Expr::col(user::Column::TotalSize).add(delta),
+                    )
+                    .filter(user::Column::Id.eq(user_id))
+                    .exec(txn)
+                    .await?;
+                if updated_user.rows_affected == 0 {
+                    return Err(DbErr::Custom("user not found".into()));
+                }
+            }
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| Error::from(format!("Failed to update usage: {}", e)))
 }
 
 fn parse_key_identity(key: &str) -> Result<(Option<String>, String), Error> {

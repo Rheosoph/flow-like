@@ -12,7 +12,8 @@
 
 use crate::blob_events::BlobEvent;
 use flow_like_azure_data::cosmos::{CosmosClient, CosmosError, MutationOutcome};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
+use flow_like_db::{AsDbConflict, DbConflict, DbDialect, RetryPolicy, retry_transaction};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_FILES_CONTAINER: &str = "files";
@@ -22,6 +23,7 @@ pub struct FileTrackingContext {
     pub files_container: String,
     pub content_container: String,
     pub database: DatabaseConnection,
+    pub dialect: DbDialect,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -124,6 +126,7 @@ pub async fn process(
     }
     apply_usage_delta(
         &ctx.database,
+        ctx.dialect,
         identity.user_id.as_deref(),
         &identity.app_id,
         delta,
@@ -235,58 +238,99 @@ async fn record_deletion(
 }
 
 /// `UPDATE "App" SET "totalSize" = "totalSize" + delta` (and the same for
-/// `"User"` when the key is user-scoped) in one transaction; a missing row is a
-/// permanent failure like on AWS. Relative increments keep concurrent events
-/// safe without a read-modify-write.
+/// `"User"` when the key is user-scoped) in one retried transaction; a missing
+/// row is a permanent failure like on AWS. Relative increments keep concurrent
+/// events safe without a read-modify-write, and a lost commit race on this hot
+/// row is re-run by `retry_transaction`; an unknown commit outcome is not,
+/// because applying the delta twice would over-count.
 async fn apply_usage_delta(
     database: &DatabaseConnection,
+    dialect: DbDialect,
     user_id: Option<&str>,
     app_id: &str,
     delta: i64,
 ) -> Result<(), FileTrackingError> {
-    let txn = database.begin().await.map_err(|error| {
-        tracing::warn!(error = %error, "usage transaction could not start");
-        FileTrackingError::Retryable("usage_database_unavailable")
-    })?;
+    let app_key = app_id.to_owned();
+    let user_key = user_id.map(str::to_owned);
+    retry_transaction::<_, (), UsageError>(
+        database,
+        dialect,
+        None,
+        &RetryPolicy::default(),
+        move |txn| {
+            let app_id = app_key.clone();
+            let user_id = user_key.clone();
+            Box::pin(async move {
+                let app_rows = txn
+                    .execute_raw(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
+                        [delta.into(), app_id.into()],
+                    ))
+                    .await?
+                    .rows_affected();
+                if app_rows == 0 {
+                    return Err(UsageError::AppNotFound);
+                }
 
-    let app_rows = txn
-        .execute(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-            [delta.into(), app_id.into()],
-        ))
-        .await
-        .map_err(|error| {
-            tracing::warn!(error = %error, app_id, "app usage update failed");
+                if let Some(user_id) = user_id {
+                    let user_rows = txn
+                        .execute_raw(Statement::from_sql_and_values(
+                            DatabaseBackend::Postgres,
+                            r#"UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
+                            [delta.into(), user_id.into()],
+                        ))
+                        .await?
+                        .rows_affected();
+                    if user_rows == 0 {
+                        return Err(UsageError::UserNotFound);
+                    }
+                }
+                Ok(())
+            })
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        UsageError::AppNotFound => FileTrackingError::Permanent("usage_app_not_found"),
+        UsageError::UserNotFound => FileTrackingError::Permanent("usage_user_not_found"),
+        UsageError::Db(error) => {
+            tracing::warn!(error = %error, app_id, "usage update failed");
             FileTrackingError::Retryable("usage_database_unavailable")
-        })?
-        .rows_affected();
-    if app_rows == 0 {
-        return Err(FileTrackingError::Permanent("usage_app_not_found"));
-    }
+        }
+    })
+}
 
-    if let Some(user_id) = user_id {
-        let user_rows = txn
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-                [delta.into(), user_id.into()],
-            ))
-            .await
-            .map_err(|error| {
-                tracing::warn!(error = %error, "user usage update failed");
-                FileTrackingError::Retryable("usage_database_unavailable")
-            })?
-            .rows_affected();
-        if user_rows == 0 {
-            return Err(FileTrackingError::Permanent("usage_user_not_found"));
+#[derive(Debug)]
+enum UsageError {
+    Db(DbErr),
+    AppNotFound,
+    UserNotFound,
+}
+
+impl From<DbErr> for UsageError {
+    fn from(error: DbErr) -> Self {
+        Self::Db(error)
+    }
+}
+
+impl AsDbConflict for UsageError {
+    fn db_conflict(&self) -> Option<DbConflict> {
+        match self {
+            Self::Db(error) => error.db_conflict(),
+            Self::AppNotFound | Self::UserNotFound => None,
         }
     }
+}
 
-    txn.commit().await.map_err(|error| {
-        tracing::warn!(error = %error, "usage transaction commit failed");
-        FileTrackingError::Retryable("usage_database_unavailable")
-    })
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(error) => write!(f, "{error}"),
+            Self::AppNotFound => f.write_str("app not found"),
+            Self::UserNotFound => f.write_str("user not found"),
+        }
+    }
 }
 
 #[cfg(test)]

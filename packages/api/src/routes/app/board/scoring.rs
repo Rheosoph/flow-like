@@ -282,7 +282,7 @@ pub async fn persist_board_score_with<C: ConnectionTrait>(
     board: &Board,
     computation: &BoardScoreComputation,
 ) -> flow_like_types::Result<()> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let scores = computation.scores.clone().unwrap_or(BoardScores {
         security: 10,

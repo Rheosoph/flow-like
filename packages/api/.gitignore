@@ -4,3 +4,4 @@
 api.config.json
 jwks.json
 prisma-postgres-mirror
+prisma-dsql-mirror

@@ -5,8 +5,12 @@
 	"type": "module",
 	"scripts": {
 		"db:push:sync": "bun run db:push && bun run db:sync",
-		"db:sync": "docker compose up postgres tools && cd ../.. && cargo fmt --all",
+		"db:sync": "docker compose up --build postgres tools && cd ../.. && cargo fmt --all",
 		"db:push": "tsx prisma/db-push.ts",
+		"db:retype": "bun scripts/retype-entities.ts",
+		"db:mirror:dsql": "scripts/make-prisma-mirror.sh --target dsql",
+		"db:dsql:lint": "scripts/make-prisma-mirror.sh --target dsql && bunx prisma migrate diff --from-empty --to-schema prisma-dsql-mirror/schema --script | dsql-lint -",
+		"db:dsql:diff": "bun scripts/dsql-migration.ts",
 		"db:migration:create": "bunx prisma migrate dev --name",
 		"db:migration:deploy": "bunx prisma migrate deploy",
 		"db:view": "bunx drizzle-kit studio"

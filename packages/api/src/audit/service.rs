@@ -1,12 +1,13 @@
 use chrono::Utc;
 use flow_like_types::{Value, create_id};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, Order,
-    QueryFilter, QueryOrder, QuerySelect, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DatabaseTransaction,
+    DbErr, EntityTrait, Order, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::db::{DbDialect, RetryPolicy, retry_transaction};
 use crate::entity::{audit_entry, sea_orm_active_enums::AuditActorType};
 
 use super::chain::{ChainEntryRow, GENESIS_HASH, compute_entry_hash};
@@ -53,7 +54,7 @@ impl From<audit_entry::Model> for AuditEntryOutput {
         Self {
             id: m.id,
             sequence: m.sequence,
-            timestamp: m.timestamp.and_utc().to_rfc3339(),
+            timestamp: m.timestamp.to_rfc3339(),
             actor_id: m.actor_id,
             actor_type: format!("{:?}", m.actor_type),
             action: m.action,
@@ -92,27 +93,46 @@ pub struct AuditService;
 
 impl AuditService {
     /// Record a new audit entry, computing the hash chain and signing it.
-    /// Uses a serializable transaction to prevent race conditions on sequence numbering.
+    ///
+    /// The chain tail is read `FOR UPDATE` inside a retried transaction: on
+    /// blocking engines the lock serializes writers, on optimistic ones it is
+    /// the write intent that makes the losing writer retry from a fresh tail.
     pub async fn record(
         db: &DatabaseConnection,
+        dialect: DbDialect,
         input: AuditEntryInput,
     ) -> flow_like_types::Result<audit_entry::Model> {
-        let now = Utc::now().naive_utc();
+        let now = Utc::now().fixed_offset();
+        let entry = retry_transaction::<_, audit_entry::Model, DbErr>(
+            db,
+            dialect,
+            None,
+            &RetryPolicy::default(),
+            move |txn| {
+                let input = input.clone();
+                Box::pin(async move { Self::append_entry(txn, input, now).await })
+            },
+        )
+        .await?;
+        Ok(entry)
+    }
 
-        let txn = db.begin().await?;
+    async fn append_entry(
+        txn: &DatabaseTransaction,
+        input: AuditEntryInput,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<audit_entry::Model, DbErr> {
+        use sea_orm::sea_query::ExprTrait;
 
-        // SELECT ... FOR UPDATE equivalent: lock the chain tail row to serialize concurrent writers.
-        // CockroachDB serializable isolation handles this, but the explicit order_by + limit ensures
-        // we always read the latest committed entry before inserting.
         let last_entry = audit_entry::Entity::find()
             .filter(if let Some(ref cid) = input.chain_id {
-                Expr::col(audit_entry::Column::ChainId).eq(cid.clone())
+                Expr::col(audit_entry::Column::ChainId).eq(Expr::value(cid.clone()))
             } else {
                 Expr::col(audit_entry::Column::ChainId).is_null()
             })
             .order_by(audit_entry::Column::Sequence, Order::Desc)
             .lock_exclusive()
-            .one(&txn)
+            .one(txn)
             .await?;
 
         let (prev_hash, prev_signature, next_seq) = match last_entry {
@@ -129,7 +149,7 @@ impl AuditService {
                     let root_tail = audit_entry::Entity::find()
                         .filter(Expr::col(audit_entry::Column::ChainId).is_null())
                         .order_by(audit_entry::Column::Sequence, Order::Desc)
-                        .one(&txn)
+                        .one(txn)
                         .await?;
                     match root_tail {
                         Some(entry) => (entry.entry_hash.clone(), entry.signature.clone(), 1),
@@ -183,9 +203,7 @@ impl AuditService {
             kid: Set(kid),
         };
 
-        let result = model.insert(&txn).await?;
-        txn.commit().await?;
-        Ok(result)
+        model.insert(txn).await
     }
 
     /// Verify the integrity of a hash chain.

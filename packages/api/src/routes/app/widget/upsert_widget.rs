@@ -36,7 +36,7 @@ async fn upsert_widget_meta(
     name: &str,
     seed_description: Option<&str>,
 ) -> Result<(), ApiError> {
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let existing = meta::Entity::find()
         .filter(meta::Column::WidgetId.eq(widget_id))
         .filter(meta::Column::Lang.eq("en"))
@@ -133,8 +133,8 @@ pub async fn upsert_widget(
             id: Set(widget_id.clone()),
             app_id: Set(app_id.to_string()),
             version: Set(widget.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
         };
 
         widget::Entity::insert(new_widget)
@@ -159,7 +159,7 @@ pub async fn upsert_widget(
             id: Set(widget_id.clone()),
             app_id: Set(app_id.to_string()),
             version: Set(widget.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(chrono::Utc::now().fixed_offset()),
             ..Default::default()
         };
 

@@ -132,7 +132,7 @@ pub(crate) fn active_model(
     source: &str,
     anon_id: Option<&str>,
     release: Option<&str>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> telemetry_llm_call::ActiveModel {
     telemetry_llm_call::ActiveModel {
         id: Set(flow_like_types::create_id()),
@@ -196,7 +196,7 @@ pub fn record_llm_call(state: &AppState, record: LlmCallRecord) {
             LLM_SOURCE_BACKEND,
             None,
             None,
-            chrono::Utc::now().naive_utc(),
+            chrono::Utc::now().fixed_offset(),
         );
         if let Err(e) = telemetry_llm_call::Entity::insert(model).exec(&db).await {
             tracing::error!("Failed to persist backend LLM telemetry call: {}", e);

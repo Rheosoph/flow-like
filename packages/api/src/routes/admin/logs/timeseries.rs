@@ -6,8 +6,8 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use chrono::{DateTime, Duration, Utc};
-use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement};
+use chrono::{Duration, Utc};
+use sea_orm::{DbBackend, FromQueryResult, Statement};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -39,7 +39,7 @@ pub struct TimeseriesResponse {
 
 #[derive(Debug, FromQueryResult)]
 struct Row {
-    bucket: chrono::NaiveDateTime,
+    bucket: chrono::DateTime<chrono::FixedOffset>,
     total: i64,
     server: i64,
     client: i64,
@@ -85,12 +85,12 @@ pub async fn error_timeseries(
 
     let hours = q.hours.unwrap_or(24).clamp(1, 24 * 90);
     let bucket = bucket_for(hours, q.bucket.as_deref());
-    let cutoff = Utc::now().naive_utc() - Duration::hours(hours);
+    let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
 
     let backend = state.db.get_database_backend();
     let sql = match backend {
         DbBackend::Postgres => format!(
-            r#"SELECT date_trunc('{bucket}', "createdAt") AS bucket,
+            r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
                       COUNT(*) AS total,
                       COUNT(*) FILTER (WHERE "statusCode" >= 500) AS server,
                       COUNT(*) FILTER (WHERE "statusCode" >= 400 AND "statusCode" < 500) AS client
@@ -117,7 +117,7 @@ pub async fn error_timeseries(
     let points = rows
         .into_iter()
         .map(|r| TimeseriesPoint {
-            bucket: DateTime::<Utc>::from_naive_utc_and_offset(r.bucket, Utc).to_rfc3339(),
+            bucket: r.bucket.to_rfc3339(),
             total: r.total,
             server: r.server,
             client: r.client,

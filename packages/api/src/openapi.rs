@@ -191,8 +191,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::fork::begin_online::begin_online_fork,
         crate::routes::app::fork::finalize_online::finalize_online_fork,
         crate::routes::app::fork::online_fork::online_fork,
+        crate::routes::app::fork::jobs::get_fork_job,
         crate::routes::admin::forks::list_orphan_forks,
         crate::routes::admin::forks::delete_orphan_fork,
+        crate::routes::admin::deletions::list_deletion_jobs,
+        crate::routes::admin::deletions::get_deletion_job,
+        crate::routes::admin::deletions::retry_deletion_job,
+        crate::routes::admin::deletions::run_deletion_queue,
         crate::routes::admin::governance::list_scores::list_scores,
         crate::routes::admin::governance::get_scores_summary::get_scores_summary,
         crate::routes::admin::governance::get_app_scores::get_app_scores,
@@ -1094,6 +1099,14 @@ impl Modify for SecurityAddon {
         crate::utils::fork::preview::ForkSizeBreakdown,
         crate::routes::app::internal::change_forking::ForkSettingsResponse,
         crate::routes::app::fork::preview::ForkPreviewTarget,
+        crate::utils::fork::job::ForkJobView,
+        // Deletion schemas
+        crate::deletion::AcceptedDeletion,
+        crate::deletion::QueueReport,
+        crate::routes::admin::deletions::DeletionJobView,
+        crate::routes::admin::deletions::DeletionJobDetail,
+        crate::routes::admin::deletions::DeletionStepView,
+        crate::routes::admin::deletions::ListDeletionJobsResponse,
     ))
 )]
 pub struct ApiDoc;
@@ -1224,6 +1237,34 @@ mod tests {
             "/admin/telemetry/dashboards/{dashboard_id}",
         ] {
             assert!(paths.contains_key(path), "missing OpenAPI path '{}'", path);
+        }
+    }
+
+    /// Nine `202` bodies tell callers to follow the job on these endpoints; an
+    /// endpoint missing here is missing from every generated SDK.
+    #[test]
+    fn deletion_and_fork_job_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let paths = spec
+            .get("paths")
+            .and_then(|p| p.as_object())
+            .expect("spec exposes paths");
+
+        for (path, method) in [
+            ("/admin/deletions", "get"),
+            ("/admin/deletions/run", "post"),
+            ("/admin/deletions/{job_id}", "get"),
+            ("/admin/deletions/{job_id}/retry", "post"),
+            ("/apps/fork/jobs/{job_id}", "get"),
+        ] {
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing OpenAPI path '{path}'"));
+            assert!(
+                entry.contains_key(method),
+                "OpenAPI path '{path}' has no '{method}' operation"
+            );
         }
     }
 }

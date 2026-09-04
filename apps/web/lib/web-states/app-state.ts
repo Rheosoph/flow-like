@@ -16,6 +16,10 @@ import {
 	isAzureBlobStorageUrl,
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
+import {
+	type IForkJobView,
+	resolveOnlineFork,
+} from "@flow-like/flow-like-ui/lib/fork-job";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -326,10 +330,13 @@ export class WebAppState implements IAppState {
 		appId: string,
 		body: IOnlineForkBody,
 	): Promise<IOnlineForkResponse> {
-		return apiPost<IOnlineForkResponse>(
+		const response = await apiPost<IOnlineForkResponse | IForkJobView>(
 			`apps/${appId}/fork`,
 			body,
 			this.backend.auth,
+		);
+		return resolveOnlineFork(response, (jobId) =>
+			apiGet<IForkJobView>(`apps/fork/jobs/${jobId}`, this.backend.auth),
 		);
 	}
 

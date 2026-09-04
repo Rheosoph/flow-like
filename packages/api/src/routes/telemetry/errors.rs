@@ -7,8 +7,9 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use flow_like_types::Value;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set,
     sea_query::{Expr, OnConflict},
 };
 use serde::{Deserialize, Serialize};
@@ -156,6 +157,7 @@ struct ValidatedBreadcrumb {
     level: Option<String>,
 }
 
+#[derive(Clone)]
 struct ValidatedError {
     fingerprint: String,
     kind: String,
@@ -165,7 +167,7 @@ struct ValidatedError {
     stacktrace: Option<Value>,
     breadcrumbs: Option<Value>,
     context: Option<Value>,
-    client_ts: Option<chrono::NaiveDateTime>,
+    client_ts: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 struct IssueGroup {
@@ -362,13 +364,25 @@ fn group_issues(errors: &[ValidatedError]) -> BTreeMap<String, IssueGroup> {
     groups
 }
 
+/// The batch-level columns every stored row carries, owned so a retried
+/// transaction can rebuild its rows from scratch.
+#[derive(Clone)]
+struct BatchContext {
+    anon_id: String,
+    source: String,
+    platform: Option<String>,
+    app_version: Option<String>,
+    release: Option<String>,
+    country: Option<String>,
+}
+
 /// Records a release the first time it reports in. Shared with the session
 /// ingest so release health works without any error report.
 pub(super) async fn upsert_release<C: ConnectionTrait>(
     db: &C,
     version: &str,
     source: &str,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), DbErr> {
     telemetry_release::Entity::insert(telemetry_release::ActiveModel {
         id: Set(flow_like_types::create_id()),
@@ -395,8 +409,8 @@ fn new_issue(
     id: &str,
     fingerprint: &str,
     group: &IssueGroup,
-    payload: &TelemetryErrorIngestPayload,
-    now: chrono::NaiveDateTime,
+    payload: &BatchContext,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> telemetry_issue::ActiveModel {
     telemetry_issue::ActiveModel {
         id: Set(id.to_string()),
@@ -427,7 +441,7 @@ async fn bump_issue<C: ConnectionTrait>(
     issue_id: &str,
     count: i32,
     release: Option<&str>,
-    now: chrono::NaiveDateTime,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), DbErr> {
     let mut update = telemetry_issue::Entity::update_many()
         .col_expr(
@@ -451,8 +465,8 @@ async fn bump_issue<C: ConnectionTrait>(
 async fn resolve_issues<C: ConnectionTrait>(
     db: &C,
     groups: &BTreeMap<String, IssueGroup>,
-    payload: &TelemetryErrorIngestPayload,
-    now: chrono::NaiveDateTime,
+    payload: &BatchContext,
+    now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<HashMap<String, String>, DbErr> {
     let fingerprints: Vec<String> = groups.keys().cloned().collect();
     let existing = telemetry_issue::Entity::find()
@@ -516,22 +530,53 @@ async fn resolve_issues<C: ConnectionTrait>(
 /// The release upsert, the issue counters and the events land in one
 /// transaction: `eventCount` is a stored counter that can not be recomputed
 /// from the surviving rows, so a partial write would inflate it permanently
-/// while `installCount` — derived on read — kept telling the truth.
+/// while `installCount` — derived on read — kept telling the truth. The
+/// counter bump is also what makes a crash storm contend, so the whole batch
+/// is retried on a lost commit race with fresh ids.
 async fn persist_errors(
     state: &AppState,
     payload: &TelemetryErrorIngestPayload,
     errors: Vec<ValidatedError>,
     country: Option<String>,
 ) -> Result<TelemetryErrorIngestResponse, DbErr> {
-    let now = chrono::Utc::now().naive_utc();
-    let txn = state.db.begin().await?;
+    if errors.is_empty() {
+        return Ok(TelemetryErrorIngestResponse {
+            accepted: 0,
+            issues: 0,
+        });
+    }
 
-    if let Some(release) = payload.release.as_deref() {
-        upsert_release(&txn, release, &payload.source, now).await?;
+    let context = BatchContext {
+        anon_id: payload.anon_id.clone(),
+        source: payload.source.clone(),
+        platform: payload.platform.clone(),
+        app_version: payload.app_version.clone(),
+        release: payload.release.clone(),
+        country,
+    };
+    let now = chrono::Utc::now().fixed_offset();
+
+    state
+        .transaction(|txn| {
+            let context = context.clone();
+            let errors = errors.clone();
+            Box::pin(async move { persist_batch(txn, &context, errors, now).await })
+        })
+        .await
+}
+
+async fn persist_batch<C: ConnectionTrait>(
+    txn: &C,
+    context: &BatchContext,
+    errors: Vec<ValidatedError>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<TelemetryErrorIngestResponse, DbErr> {
+    if let Some(release) = context.release.as_deref() {
+        upsert_release(txn, release, &context.source, now).await?;
     }
 
     let groups = group_issues(&errors);
-    let ids = resolve_issues(&txn, &groups, payload, now).await?;
+    let ids = resolve_issues(txn, &groups, context, now).await?;
 
     let models: Vec<telemetry_error_event::ActiveModel> = errors
         .into_iter()
@@ -540,11 +585,11 @@ async fn persist_errors(
             Some(telemetry_error_event::ActiveModel {
                 id: Set(flow_like_types::create_id()),
                 issue_id: Set(issue_id.clone()),
-                anon_id: Set(payload.anon_id.clone()),
-                source: Set(payload.source.clone()),
-                platform: Set(payload.platform.clone()),
-                app_version: Set(payload.app_version.clone()),
-                release: Set(payload.release.clone()),
+                anon_id: Set(context.anon_id.clone()),
+                source: Set(context.source.clone()),
+                platform: Set(context.platform.clone()),
+                app_version: Set(context.app_version.clone()),
+                release: Set(context.release.clone()),
                 kind: Set(error.kind),
                 title: Set(error.title),
                 culprit: Set(error.culprit),
@@ -552,7 +597,7 @@ async fn persist_errors(
                 stacktrace: Set(error.stacktrace),
                 breadcrumbs: Set(error.breadcrumbs),
                 context: Set(error.context),
-                country: Set(country.clone()),
+                country: Set(context.country.clone()),
                 client_ts: Set(error.client_ts),
                 created_at: Set(now),
             })
@@ -560,18 +605,9 @@ async fn persist_errors(
         .collect();
 
     let accepted = models.len();
-    if models.is_empty() {
-        txn.rollback().await?;
-        return Ok(TelemetryErrorIngestResponse {
-            accepted: 0,
-            issues: 0,
-        });
-    }
-
     telemetry_error_event::Entity::insert_many(models)
-        .exec(&txn)
+        .exec_without_returning(txn)
         .await?;
-    txn.commit().await?;
 
     Ok(TelemetryErrorIngestResponse {
         accepted,

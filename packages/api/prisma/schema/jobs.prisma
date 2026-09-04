@@ -1,0 +1,42 @@
+/// Resumable, chunked deletion of a root row and its dependents (children first, bounded
+/// transactions). `@@unique([rootKind, rootId])` makes enqueueing idempotent.
+model DeletionJob {
+  id          String    @id
+  rootKind    String
+  rootId      String
+  status      String    @default("QUEUED")
+  phase       Int       @default(0)
+  cursor      Json?
+  attempts    Int       @default(0)
+  leaseUntil  DateTime? @db.Timestamptz(3)
+  lastError   String?
+  requestedBy String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([rootKind, rootId])
+  @@index([status, leaseUntil])
+}
+
+/// Staged, resumable app fork. The single "fork in progress" marker for every fork flow;
+/// `step`/`cursor` let a worker resume after a failure without duplicating rows or objects.
+model ForkJob {
+  id          String  @id
+  sourceAppId String
+  destAppId   String
+  userId      String
+  status      String  @default("QUEUED")
+  step        String  @default("allocate")
+  cursor      Json?
+  policy      Json
+  report      Json?
+  lastError   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+
+  @@index([status, updatedAt])
+  @@index([destAppId])
+}

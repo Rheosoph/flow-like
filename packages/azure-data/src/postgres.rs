@@ -1,6 +1,6 @@
 //! Passwordless Azure PostgreSQL connectivity.
 //!
-//! SQLx 0.8 stores one password in `PgConnectOptions`; it does not expose an
+//! SQLx 0.9 stores one password in `PgConnectOptions`; it does not expose an
 //! asynchronous credential callback when the pool opens a new connection.
 //! An Entra access token therefore cannot be refreshed safely inside an
 //! existing SeaORM pool. This module obtains a managed-identity token at

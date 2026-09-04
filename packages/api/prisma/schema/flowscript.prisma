@@ -19,10 +19,10 @@ model FlowScriptApplyFailure {
   layerId String?
 
   /// Where the apply ran: "desktop" (local Tauri apply) or "web" (the apply endpoint).
-  source String
+  source  String
   /// Who authored the source: "editor" (a person in the FlowScript panel) or "agent" (FlowPilot).
   /// Both go through the same board pipeline, so without this the panel could not tell them apart.
-  origin String
+  origin  String
   /// "error" — the apply threw; "blocked" — no commands, diagnostics only; "partial" — commands
   /// were applied alongside diagnostics.
   outcome String
@@ -47,9 +47,9 @@ model FlowScriptApplyFailure {
   appVersion String?
   platform   String?
   /// Trace the apply request belonged to, when it carried one, so a row opens in the trace explorer.
-  traceId String?
+  traceId    String?
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([outcome, createdAt])

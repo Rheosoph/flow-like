@@ -43,6 +43,7 @@ use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 use super::{parse_sample_rate, sink_from_env, trace_sample_rate_from_env};
+use crate::db::DEFAULT_WRITE_CHUNK;
 use crate::entity::telemetry_span;
 use crate::state::AppState;
 
@@ -117,7 +118,7 @@ pub struct FinishedSpan {
     pub parent_span_id: Option<String>,
     pub name: String,
     pub kind: String,
-    pub started_at: chrono::NaiveDateTime,
+    pub started_at: chrono::DateTime<chrono::FixedOffset>,
     pub duration_ms: i32,
     pub status: String,
     pub attributes: Option<Value>,
@@ -138,6 +139,8 @@ pub struct SpanExportConfig {
     /// An empty value falls back to the default prefix.
     pub target_prefix: String,
     pub queue_capacity: usize,
+    /// Spans per `INSERT`; clamped to [`DEFAULT_WRITE_CHUNK`] so one flush
+    /// always fits a single bounded transaction.
     pub max_batch: usize,
     pub flush_interval: Duration,
 }
@@ -271,7 +274,7 @@ struct SpanState {
     kind: String,
     status: String,
     started: Instant,
-    started_at: chrono::NaiveDateTime,
+    started_at: chrono::DateTime<chrono::FixedOffset>,
     attributes: Map<String, Value>,
 }
 
@@ -335,7 +338,7 @@ where
                 .take()
                 .unwrap_or_else(|| STATUS_OK.to_string()),
             started: Instant::now(),
-            started_at: chrono::Utc::now().naive_utc(),
+            started_at: chrono::Utc::now().fixed_offset(),
             attributes: if sampled {
                 std::mem::take(&mut visitor.attributes)
             } else {
@@ -510,7 +513,7 @@ impl TelemetrySpanExporter {
             return;
         }
 
-        let now = chrono::Utc::now().naive_utc();
+        let now = chrono::Utc::now().fixed_offset();
         let models: Vec<telemetry_span::ActiveModel> = spans
             .into_iter()
             .map(|span| telemetry_span::ActiveModel {
@@ -554,8 +557,9 @@ impl TelemetrySpanExporter {
 /// registry at startup, then call [`TelemetrySpanExporter::spawn`] once the
 /// database connection is available.
 pub fn telemetry_span_layer(
-    config: SpanExportConfig,
+    mut config: SpanExportConfig,
 ) -> (TelemetrySpanLayer, TelemetrySpanExporter) {
+    config.max_batch = config.max_batch.clamp(1, DEFAULT_WRITE_CHUNK);
     let (tx, rx) = mpsc::channel(config.queue_capacity.max(1));
     let sink = SpanSink {
         tx,
@@ -1271,6 +1275,21 @@ mod tests {
         assert_eq!(config.source, "backend");
         assert_eq!(config.sample_rate, 0.05);
         assert_eq!(config.target_prefix, "flow_like");
+    }
+
+    #[test]
+    fn batches_never_exceed_the_write_chunk() {
+        let (_layer, exporter) = telemetry_span_layer(SpanExportConfig {
+            max_batch: DEFAULT_WRITE_CHUNK * 4,
+            ..config(1.0)
+        });
+        assert_eq!(exporter.config.max_batch, DEFAULT_WRITE_CHUNK);
+
+        let (_layer, exporter) = telemetry_span_layer(SpanExportConfig {
+            max_batch: 0,
+            ..config(1.0)
+        });
+        assert_eq!(exporter.config.max_batch, 1);
     }
 
     #[test]

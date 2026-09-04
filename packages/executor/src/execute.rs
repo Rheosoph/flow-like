@@ -9,7 +9,7 @@ use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
-use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
+use flow_like::flow::compiled::{template_from_bytes, CompiledRunTemplate, TemplateCache};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
@@ -138,9 +138,10 @@ pub(crate) fn template_from_fetched(
     request: &ExecutionRequest,
 ) -> Result<Arc<CompiledRunTemplate>, ExecutorError> {
     let storage_root = Path::from("apps").child(request.app_id.clone());
-    let template = template_from_bytes(bytes, fingerprint, registry, &storage_root).map_err(|e| {
-        let ours = blake3::Hash::from_bytes(*fingerprint).to_hex();
-        ExecutorError::BoardLoad(format!(
+    let template =
+        template_from_bytes(bytes, fingerprint, registry, &storage_root).map_err(|e| {
+            let ours = blake3::Hash::from_bytes(*fingerprint).to_hex();
+            ExecutorError::BoardLoad(format!(
             "compiled artifact {} rejected: {e} (API compiled against {}, this executor runs {})",
             request.artifact.path,
             request
@@ -150,7 +151,7 @@ pub(crate) fn template_from_fetched(
                 .unwrap_or(&request.artifact.registry_fingerprint),
             &ours.as_str()[..16]
         ))
-    })?;
+        })?;
     if template.board.id != request.board_id {
         return Err(ExecutorError::BoardLoad(format!(
             "compiled artifact {} is for board {}, expected {}",
@@ -321,10 +322,7 @@ pub(crate) async fn build_flow_state(
     state.execution_environment = ExecutionEnvironment::server_default();
     if let Some(hub) = hub {
         state
-            .register_app_widget_source(Arc::new(HubWidgetSource::new(
-                &hub.callback_url,
-                hub.jwt,
-            )))
+            .register_app_widget_source(Arc::new(HubWidgetSource::new(&hub.callback_url, hub.jwt)))
             .await;
     }
     Ok(state)
@@ -1633,19 +1631,33 @@ mod shadow_claim_binding_tests {
         let fingerprint = registry.fingerprint();
         let request = request(false);
 
-        let template =
-            template_from_fetched(&artifact_bytes_for("board-1", &fingerprint), &fingerprint, registry.as_ref(), &request)
-                .expect("an artifact for this board and registry is accepted");
+        let template = template_from_fetched(
+            &artifact_bytes_for("board-1", &fingerprint),
+            &fingerprint,
+            registry.as_ref(),
+            &request,
+        )
+        .expect("an artifact for this board and registry is accepted");
         assert_eq!(template.board.id, "board-1");
 
-        let error = template_from_fetched(&artifact_bytes_for("board-9", &fingerprint), &fingerprint, registry.as_ref(), &request)
-            .err()
-            .expect("an artifact for another board is refused");
+        let error = template_from_fetched(
+            &artifact_bytes_for("board-9", &fingerprint),
+            &fingerprint,
+            registry.as_ref(),
+            &request,
+        )
+        .err()
+        .expect("an artifact for another board is refused");
         assert!(error.to_string().contains("board-9"), "{error}");
 
-        let error = template_from_fetched(&artifact_bytes_for("board-1", &[9u8; 32]), &fingerprint, registry.as_ref(), &request)
-            .err()
-            .expect("an artifact for another registry is refused");
+        let error = template_from_fetched(
+            &artifact_bytes_for("board-1", &[9u8; 32]),
+            &fingerprint,
+            registry.as_ref(),
+            &request,
+        )
+        .err()
+        .expect("an artifact for another registry is refused");
         assert!(error.to_string().contains("this executor runs"), "{error}");
     }
 
@@ -1668,7 +1680,10 @@ mod shadow_claim_binding_tests {
 
         request.board_version = None;
         request.artifact.source_etag = None;
-        assert!(artifact_version_key(&request).is_err(), "no identity, no key");
+        assert!(
+            artifact_version_key(&request).is_err(),
+            "no identity, no key"
+        );
     }
 
     /// The in-process isolation is driven by the signed claim, never by the

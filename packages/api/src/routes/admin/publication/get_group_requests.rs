@@ -258,7 +258,7 @@ pub async fn get_group_requests(
             author,
             message: log.message,
             visibility: log.visibility.map(|v| format!("{:?}", v).to_uppercase()),
-            created_at: log.created_at.to_string(),
+            created_at: log.created_at.to_rfc3339(),
         });
     }
 
@@ -301,8 +301,8 @@ pub async fn get_group_requests(
             target_visibility: visibility_to_string(&r.target_visibility),
             status: format!("{:?}", r.status).to_uppercase(),
             approver_id: r.approver_id,
-            created_at: r.created_at.to_string(),
-            updated_at: r.updated_at.to_string(),
+            created_at: r.created_at.to_rfc3339(),
+            updated_at: r.updated_at.to_rfc3339(),
             suite_name: preview.and_then(|p| p.name.clone()),
             suite_description: preview.and_then(|p| p.description.clone()),
             suite_use_case: preview.and_then(|p| p.use_case.clone()),

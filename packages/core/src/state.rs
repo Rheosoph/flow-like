@@ -508,8 +508,7 @@ pub struct FlowLikeState {
     /// Host-registered source of an app's declarative widgets (see
     /// `a2ui::micro_widget::load_app_widgets`). Server executors register a
     /// hub-API client here so runs never read widgets from the meta store.
-    pub app_widget_source:
-        Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::AppWidgetSource>>>>,
+    pub app_widget_source: Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::AppWidgetSource>>>>,
 
     /// Where this state's process runs. Server-side entry points set
     /// [`ExecutionEnvironment::Server`] so process-level services without a

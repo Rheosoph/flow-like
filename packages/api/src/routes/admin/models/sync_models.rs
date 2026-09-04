@@ -1,9 +1,9 @@
 use crate::{
-    entity::llm_model, error::ApiError, middleware::jwt::AppUser,
+    db::insert_in_chunks, entity::llm_model, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ActiveValue::Set, EntityTrait, sea_query::OnConflict};
+use sea_orm::{ActiveValue::Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -32,6 +32,27 @@ pub struct SyncModelsRequest {
     pub data: Vec<SyncModelEntry>,
 }
 
+/// Rows per upsert transaction; the evaluation and pricing JSON keep a chunk
+/// well inside the per-transaction size budget.
+const SYNC_CHUNK: usize = 500;
+
+fn upsert_by_slug() -> OnConflict {
+    OnConflict::column(llm_model::Column::Slug)
+        .update_columns([
+            llm_model::Column::Name,
+            llm_model::Column::ReleaseDate,
+            llm_model::Column::CreatorName,
+            llm_model::Column::CreatorSlug,
+            llm_model::Column::Evaluations,
+            llm_model::Column::Pricing,
+            llm_model::Column::MedianOutputTokensPerSecond,
+            llm_model::Column::MedianTimeToFirstTokenSeconds,
+            llm_model::Column::MedianTimeToFirstAnswerToken,
+            llm_model::Column::UpdatedAt,
+        ])
+        .to_owned()
+}
+
 #[utoipa::path(
     post,
     path = "/admin/models/sync",
@@ -52,7 +73,7 @@ pub async fn sync_models(
     user.check_global_permission(&state, GlobalPermission::WriteBits)
         .await?;
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
 
     let models: Vec<llm_model::ActiveModel> = body
         .data
@@ -62,7 +83,7 @@ pub async fn sync_models(
                 .release_date
                 .as_deref()
                 .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default());
+                .map(|d| d.and_time(chrono::NaiveTime::MIN).and_utc().fixed_offset());
 
             llm_model::ActiveModel {
                 slug: Set(entry.slug),
@@ -83,25 +104,14 @@ pub async fn sync_models(
 
     let count = models.len();
 
-    llm_model::Entity::insert_many(models)
-        .on_conflict(
-            OnConflict::column(llm_model::Column::Slug)
-                .update_columns([
-                    llm_model::Column::Name,
-                    llm_model::Column::ReleaseDate,
-                    llm_model::Column::CreatorName,
-                    llm_model::Column::CreatorSlug,
-                    llm_model::Column::Evaluations,
-                    llm_model::Column::Pricing,
-                    llm_model::Column::MedianOutputTokensPerSecond,
-                    llm_model::Column::MedianTimeToFirstTokenSeconds,
-                    llm_model::Column::MedianTimeToFirstAnswerToken,
-                    llm_model::Column::UpdatedAt,
-                ])
-                .to_owned(),
-        )
-        .exec(&state.db)
-        .await?;
+    insert_in_chunks(
+        &state.db,
+        state.db_dialect,
+        models,
+        SYNC_CHUNK,
+        Some(upsert_by_slug()),
+    )
+    .await?;
 
     Ok(Json(count))
 }

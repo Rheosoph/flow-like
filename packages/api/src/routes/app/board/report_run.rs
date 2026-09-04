@@ -51,9 +51,9 @@ fn timestamp_micros(ts: u64) -> Option<i64> {
     i64::try_from(micros).ok()
 }
 
-fn timestamp_datetime(ts: u64) -> Option<chrono::NaiveDateTime> {
+fn timestamp_datetime(ts: u64) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     let micros = timestamp_micros(ts)?;
-    chrono::DateTime::from_timestamp_micros(micros).map(|dt| dt.naive_utc())
+    chrono::DateTime::from_timestamp_micros(micros).map(|dt| dt.fixed_offset())
 }
 
 fn reported_duration_us(start: u64, end: u64) -> i64 {
@@ -83,7 +83,7 @@ async fn track_reported_execution_usage(
     status: ExecutionStatus,
     user_id: Option<&str>,
     app_id: &str,
-    created_at: chrono::NaiveDateTime,
+    created_at: chrono::DateTime<chrono::FixedOffset>,
 ) -> flow_like_types::Result<()> {
     let existing = execution_usage_tracking::Entity::find()
         .filter(execution_usage_tracking::Column::Version.eq(run_id))
@@ -108,7 +108,7 @@ async fn track_reported_execution_usage(
         technical_user_id: Set(None),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(created_at),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
     }
     .insert(&state.db)
     .await
@@ -159,7 +159,7 @@ pub async fn report_run(
     let completed_at = timestamp_datetime(body.end);
     let duration_us = reported_duration_us(body.start, body.end);
 
-    let now = chrono::Utc::now().naive_utc();
+    let now = chrono::Utc::now().fixed_offset();
     let expires_at = now + chrono::Duration::hours(24);
 
     let existing = execution_run::Entity::find_by_id(&body.run_id)

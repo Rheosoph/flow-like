@@ -136,7 +136,7 @@ pub async fn change_forking(
         detail.push(format!("fork_policy = {encoded}"));
         active.fork_policy = Set(Some(encoded));
     }
-    active.updated_at = Set(chrono::Utc::now().naive_utc());
+    active.updated_at = Set(chrono::Utc::now().fixed_offset());
     active.update(&state.db).await?;
 
     audit_branch!(

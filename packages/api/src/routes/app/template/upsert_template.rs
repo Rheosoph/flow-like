@@ -1,5 +1,7 @@
 use crate::{
-    audit_branch, ensure_permission,
+    audit_branch,
+    deletion::{DeletionRoot, job},
+    ensure_permission,
     entity::{meta, template},
     error::ApiError,
     middleware::jwt::{AppPermissionResponse, AppUser},
@@ -12,6 +14,7 @@ use axum::{
 };
 use flow_like::flow::board::VersionType;
 use flow_like_types::create_id;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -65,31 +68,45 @@ async fn create_template(
             template_data.board_version,
         )
         .await?;
-    let new_template = template::ActiveModel {
-        id: Set(template_id.clone()),
-        app_id: Set(app_id.to_string()),
-        version: Set(Some(format!("{}.{}.{}", version.0, version.1, version.2))),
-        changelog: Set(template_data.changelog.clone()),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    };
+    let now = chrono::Utc::now().fixed_offset();
+    let meta_id = create_id();
+    let version_label = format!("{}.{}.{}", version.0, version.1, version.2);
 
-    template::Entity::insert(new_template)
-        .exec_with_returning(&state.db)
+    state
+        .transaction(|txn| {
+            let template_id = template_id.clone();
+            let app_id = app_id.to_string();
+            let version_label = version_label.clone();
+            let changelog = template_data.changelog.clone();
+            let meta_id = meta_id.clone();
+            Box::pin(async move {
+                job::cancel(txn, DeletionRoot::Template, &template_id).await?;
+                template::Entity::insert(template::ActiveModel {
+                    id: Set(template_id.clone()),
+                    app_id: Set(app_id),
+                    version: Set(Some(version_label)),
+                    changelog: Set(changelog),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .exec_without_returning(txn)
+                .await?;
+                meta::Entity::insert(meta::ActiveModel {
+                    id: Set(meta_id),
+                    lang: Set("en".to_string()),
+                    name: Set("New Template".to_string()),
+                    template_id: Set(Some(template_id)),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                })
+                .exec_without_returning(txn)
+                .await?;
+                Ok::<_, ApiError>(())
+            })
+        })
         .await?;
-
-    let meta = meta::ActiveModel {
-        id: Set(create_id()),
-        lang: Set("en".to_string()),
-        name: Set("New Template".to_string()),
-        template_id: Set(Some(template_id.clone())),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    };
-
-    meta::Entity::insert(meta).exec(&state.db).await?;
     Ok((template_id, version))
 }
 
@@ -189,8 +206,22 @@ pub async fn upsert_template(
         app_upsert.1.0, app_upsert.1.1, app_upsert.1.2
     )));
 
-    template.updated_at = Set(chrono::Utc::now().naive_utc());
-    template.update(&state.db).await?;
+    template.updated_at = Set(chrono::Utc::now().fixed_offset());
+    let cancelled_id = app_upsert.0.clone();
+    state
+        .transaction(|txn| {
+            let template = template.clone();
+            let cancelled_id = cancelled_id.clone();
+            Box::pin(async move {
+                // The create branch cancels too, but a `202` leaves the
+                // template row present until the drain reaches `DeleteRoot`,
+                // so re-publishing its id lands here rather than there.
+                job::cancel(txn, DeletionRoot::Template, &cancelled_id).await?;
+                template.update(txn).await?;
+                Ok::<_, ApiError>(())
+            })
+        })
+        .await?;
 
     audit_branch!(
         state,

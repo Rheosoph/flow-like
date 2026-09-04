@@ -24,6 +24,8 @@ members = [
     "apps/backend/aws/executor-ecs",
     "apps/backend/azure/api",
     "apps/backend/azure/queue-worker",
+    "packages/aws-data",
+    "packages/db",
     "packages/azure-data",
     "apps/backend/gcp/api",
     "apps/backend/gcp/queue-worker",
@@ -120,6 +122,8 @@ flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = false }
 flow-like-secrets = { path = "packages/secrets" }
+flow-like-aws-data = { path = "packages/aws-data" }
+flow-like-db = { path = "packages/db" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }
 flow-like-scheduler-tick = { path = "packages/scheduler-tick" }
@@ -136,7 +140,7 @@ icalendar = "0.17.4"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 iana-time-zone = "0.1.64"
 axum = {version="0.8.4", features=["http2", "multipart"]}
-sea-orm = { version = "1.1.17", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json", "seaography" ] }
+sea-orm = { version = "2.0.2", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json"] }
 tower = "0.5.2"
 tracing-subscriber = "0.3.22"
 dotenv = "0.15.0"
@@ -153,8 +157,10 @@ futures-util = "0.3.31"
 moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
+constant_time_eq = "0.4.2"
 lambda_runtime = "0.14.2"
 aws-config = "1.11.0"
+aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 aws-sdk-cloudwatch = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1.120", default-features = false, features = ["default-https-client", "rt-tokio"] }

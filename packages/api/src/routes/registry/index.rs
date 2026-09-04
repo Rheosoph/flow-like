@@ -212,7 +212,7 @@ pub async fn delete_package(
     let model = wasm_package::ActiveModel {
         id: Set(id.clone()),
         status: Set(WasmPackageStatus::Disabled),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
     model
@@ -263,7 +263,7 @@ pub async fn restore_package(
     let model = wasm_package::ActiveModel {
         id: Set(id.clone()),
         status: Set(WasmPackageStatus::Active),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
     model

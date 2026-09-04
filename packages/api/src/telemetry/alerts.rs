@@ -13,21 +13,23 @@
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::sea_query::{Expr, IntoColumnRef, NullOrdering, SimpleExpr};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, FromQueryResult,
-    IntoActiveModel, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait,
+    FromQueryResult, IntoActiveModel, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    Set, Statement,
 };
 
+use crate::db::DbDialect;
 use crate::entity::{
     telemetry_alert_event, telemetry_alert_rule, telemetry_error_event, telemetry_event,
     telemetry_llm_call, telemetry_session, telemetry_span,
 };
 use crate::state::AppState;
 use crate::telemetry::notify::notify_alert_transition;
+use crate::telemetry::percentiles_in_sql;
 
 /// Metrics a rule may watch.
 pub const ALERT_METRICS: [&str; 6] = [
@@ -191,11 +193,13 @@ pub fn spawn_telemetry_alert_evaluator(
 ///
 /// Exposed for tests, for the spawned task, and for the service-authenticated
 /// maintenance endpoint used by serverless deployments. A process mutex avoids
-/// redundant local passes, while each rule is evaluated inside a transaction
-/// holding a row lock. The row lock serializes that rule across API replicas
-/// without relying on database-specific advisory locks. A rule that fails to
-/// evaluate is logged and skipped so one bad rule cannot stop the pass, and a
-/// transition is only notified once its transaction commits.
+/// redundant local passes, while each rule is evaluated inside a retried
+/// transaction that locks its row. On blocking engines the lock serializes the
+/// rule across API replicas; on optimistic ones both replicas evaluate and the
+/// loser re-runs, sees `lastEvaluatedAt` advanced by the winner and skips, so a
+/// transition is never produced twice. A rule that fails to evaluate is logged
+/// and skipped so one bad rule cannot stop the pass, and a transition is only
+/// notified once its transaction commits.
 pub async fn evaluate_once(
     state: &AppState,
     config: &TelemetryAlertConfig,
@@ -218,40 +222,24 @@ pub async fn evaluate_once(
         .all(&state.db)
         .await?;
 
+    let dialect = state.db_dialect;
     let mut result = AlertEvaluationResult::default();
     for listed_rule in rules {
-        let transaction = state.db.begin().await?;
-        let Some(rule) = telemetry_alert_rule::Entity::find_by_id(&listed_rule.id)
-            .lock_exclusive()
-            .one(&transaction)
-            .await?
-        else {
-            transaction.commit().await?;
-            continue;
-        };
+        let outcome = state
+            .transaction(|txn| {
+                let listed_rule = listed_rule.clone();
+                Box::pin(async move { evaluate_listed_rule(txn, dialect, listed_rule).await })
+            })
+            .await;
 
-        // A rule can be disabled after the initial bounded list but before its
-        // row lock is acquired.
-        if !rule.enabled {
-            transaction.commit().await?;
-            continue;
-        }
-
-        result.evaluated += 1;
-        let evaluation = match evaluate_rule(&transaction, &rule).await {
-            Ok(evaluation) => {
-                match evaluation.transition {
-                    AlertTransition::Trigger => result.triggered += 1,
-                    AlertTransition::Resolve => result.resolved += 1,
-                    AlertTransition::None => {}
-                }
-                evaluation
-            }
+        let (rule, evaluation) = match outcome {
+            Ok(RuleOutcome::Evaluated { rule, evaluation }) => (rule, evaluation),
+            Ok(RuleOutcome::Skipped) => continue,
             Err(error) => {
-                let _ = transaction.rollback().await;
+                result.evaluated += 1;
                 tracing::error!(
-                    rule_id = %rule.id,
-                    metric = %rule.metric,
+                    rule_id = %listed_rule.id,
+                    metric = %listed_rule.metric,
                     error = %error,
                     "Telemetry alert rule evaluation failed"
                 );
@@ -259,13 +247,53 @@ pub async fn evaluate_once(
             }
         };
 
-        transaction.commit().await?;
+        result.evaluated += 1;
+        match evaluation.transition {
+            AlertTransition::Trigger => result.triggered += 1,
+            AlertTransition::Resolve => result.resolved += 1,
+            AlertTransition::None => {}
+        }
         if let Some(event) = evaluation.event {
             notify_alert_transition(state, &rule, &event).await;
         }
     }
 
     Ok(result)
+}
+
+/// What one transaction attempt did with a listed rule.
+enum RuleOutcome {
+    /// The rule vanished, was disabled, or another replica evaluated it since
+    /// the pass listed it.
+    Skipped,
+    Evaluated {
+        rule: telemetry_alert_rule::Model,
+        evaluation: RuleEvaluation,
+    },
+}
+
+async fn evaluate_listed_rule(
+    txn: &DatabaseTransaction,
+    dialect: DbDialect,
+    listed_rule: telemetry_alert_rule::Model,
+) -> Result<RuleOutcome, DbErr> {
+    let Some(rule) = telemetry_alert_rule::Entity::find_by_id(&listed_rule.id)
+        .lock_exclusive()
+        .one(txn)
+        .await?
+    else {
+        return Ok(RuleOutcome::Skipped);
+    };
+
+    // A rule can be disabled after the initial bounded list but before its
+    // row lock is acquired, and a replica that lost the commit race re-reads
+    // the winner's evaluation stamp here.
+    if !rule.enabled || rule.last_evaluated_at > listed_rule.last_evaluated_at {
+        return Ok(RuleOutcome::Skipped);
+    }
+
+    let evaluation = evaluate_rule(txn, dialect, &rule).await?;
+    Ok(RuleOutcome::Evaluated { rule, evaluation })
 }
 
 /// What a single rule evaluation changed: the transition and, when there was
@@ -278,15 +306,16 @@ struct RuleEvaluation {
 
 async fn evaluate_rule<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     rule: &telemetry_alert_rule::Model,
 ) -> Result<RuleEvaluation, DbErr> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
     let window_minutes = rule
         .window_minutes
         .clamp(MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES);
     let window = ChronoDuration::minutes(window_minutes as i64);
     let source = rule.source.as_deref().filter(|value| !value.is_empty());
-    let value = metric_value(db, &rule.metric, source, now - window, now).await?;
+    let value = metric_value(db, dialect, &rule.metric, source, now - window, now).await?;
 
     let mut baseline = BaselineStats::default();
     let sensitivity = rule.sensitivity.unwrap_or(DEFAULT_SENSITIVITY);
@@ -296,7 +325,8 @@ async fn evaluate_rule<C: ConnectionTrait>(
         None => false,
         Some(value) if rule.mode == ALERT_MODE_ANOMALY => {
             let samples =
-                baseline_samples(db, &rule.metric, source, now, window, min_samples).await?;
+                baseline_samples(db, dialect, &rule.metric, source, now, window, min_samples)
+                    .await?;
             baseline = baseline_stats(&samples);
             anomaly_fires(value, &samples, sensitivity, min_samples)
         }
@@ -378,16 +408,17 @@ async fn evaluate_rule<C: ConnectionTrait>(
 /// producing a baseline the rule could fire against.
 async fn baseline_samples<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     metric: &str,
     source: Option<&str>,
-    now: NaiveDateTime,
+    now: DateTime<FixedOffset>,
     window: ChronoDuration,
     min_samples: usize,
 ) -> Result<Vec<f64>, DbErr> {
     let mut samples = Vec::with_capacity(min_samples);
     for step in 1..=min_samples {
         let to = now - window * step as i32;
-        if let Some(value) = metric_value(db, metric, source, to - window, to).await? {
+        if let Some(value) = metric_value(db, dialect, metric, source, to - window, to).await? {
             samples.push(value);
         }
     }
@@ -398,10 +429,11 @@ async fn baseline_samples<C: ConnectionTrait>(
 /// samples at all. A metric without data never fires a rule.
 async fn metric_value<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     metric: &str,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<Option<f64>, DbErr> {
     match metric {
         "event_count" => Ok(Some(event_count(db, source, from, to).await? as f64)),
@@ -425,7 +457,7 @@ async fn metric_value<C: ConnectionTrait>(
             let pair = llm_pair(db, source, from, to).await?;
             Ok(rate(pair.matched, pair.total))
         }
-        "latency_p95" => span_p95(db, source, from, to).await,
+        "latency_p95" => span_p95(db, dialect, source, from, to).await,
         _ => Ok(None),
     }
 }
@@ -454,6 +486,8 @@ where
     S: IntoColumnRef,
     I: IntoColumnRef,
 {
+    use sea_orm::sea_query::ExprTrait;
+
     let case = Expr::case(Expr::col(status_column).eq(status), Expr::col(id_column))
         .finally(sea_orm::Value::String(None));
     Expr::expr(case).count()
@@ -462,8 +496,8 @@ where
 async fn event_count<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<i64, DbErr> {
     let mut select = telemetry_event::Entity::find()
         .filter(telemetry_event::Column::CreatedAt.gte(from))
@@ -477,8 +511,8 @@ async fn event_count<C: ConnectionTrait>(
 async fn error_event_count<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<i64, DbErr> {
     let mut select = telemetry_error_event::Entity::find()
         .filter(telemetry_error_event::Column::CreatedAt.gte(from))
@@ -492,9 +526,11 @@ async fn error_event_count<C: ConnectionTrait>(
 async fn session_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_session::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_session::Column::Id).count(), "total")
@@ -521,9 +557,11 @@ async fn session_pair<C: ConnectionTrait>(
 async fn span_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_span::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_span::Column::Id).count(), "total")
@@ -550,9 +588,11 @@ async fn span_pair<C: ConnectionTrait>(
 async fn llm_pair<C: ConnectionTrait>(
     db: &C,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<PairRow, DbErr> {
+    use sea_orm::sea_query::ExprTrait;
+
     let mut select = telemetry_llm_call::Entity::find()
         .select_only()
         .column_as(Expr::col(telemetry_llm_call::Column::Id).count(), "total")
@@ -576,16 +616,17 @@ async fn llm_pair<C: ConnectionTrait>(
         .unwrap_or_default())
 }
 
-/// p95 span duration in the window: `percentile_cont` on Postgres, a capped
-/// fold in Rust everywhere else.
+/// p95 span duration in the window: `percentile_cont` where the engine has
+/// ordered-set aggregates, a capped fold in Rust everywhere else.
 async fn span_p95<C: ConnectionTrait>(
     db: &C,
+    dialect: DbDialect,
     source: Option<&str>,
-    from: NaiveDateTime,
-    to: NaiveDateTime,
+    from: DateTime<FixedOffset>,
+    to: DateTime<FixedOffset>,
 ) -> Result<Option<f64>, DbErr> {
     let backend = db.get_database_backend();
-    if backend != DbBackend::Postgres {
+    if !percentiles_in_sql(backend, dialect) {
         let mut select = telemetry_span::Entity::find()
             .select_only()
             .column_as(telemetry_span::Column::DurationMs, "duration_ms")

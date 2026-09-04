@@ -24,18 +24,18 @@ pub async fn create_default_profile(
         user_id: Set(user_id.to_string()),
         name: Set("Default Profile".to_string()),
         description: Set(Some("Your default profile".to_string())),
-        interests: Set(Some(vec![])),
-        tags: Set(Some(vec![])),
+        interests: Set(Some(Default::default())),
+        tags: Set(Some(Default::default())),
         theme: Set(None),
-        bit_ids: Set(Some(vec![])),
+        bit_ids: Set(Some(Default::default())),
         apps: Set(Some(Value::Array(vec![]))),
         settings: Set(Some(json!({
             "connection_mode": "simplebezier"
         }))),
         hub: Set(default_hub.clone()),
-        hubs: Set(Some(vec![default_hub])),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        updated_at: Set(chrono::Utc::now().naive_utc()),
+        hubs: Set(Some(vec![default_hub].into())),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
         ..Default::default()
     };
 

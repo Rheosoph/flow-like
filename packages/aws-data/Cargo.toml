@@ -1,0 +1,17 @@
+[package]
+name = "flow-like-aws-data"
+version = "0.1.0"
+edition = "2024"
+description = "IAM-only AWS data-plane connectivity shared by the AWS API and workers: Aurora DSQL through short-lived IAM tokens"
+
+[dependencies]
+aurora-dsql-sqlx-connector = { workspace = true }
+sea-orm.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+flow-like-db = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

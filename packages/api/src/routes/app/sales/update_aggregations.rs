@@ -14,6 +14,7 @@
 //! A day is always recomputed from raw rows and upserted, so running the
 //! backfill twice can never double-count.
 
+use crate::utils::time::utc_midnight;
 use crate::{
     entity::{app_purchase, app_sales_daily, sea_orm_active_enums::PurchaseStatus},
     error::ApiError,
@@ -90,7 +91,7 @@ pub async fn update_daily_aggregation(
     app_id: &str,
     date: NaiveDate,
 ) -> Result<(), ApiError> {
-    let start_of_day = date.and_hms_opt(0, 0, 0).unwrap();
+    let start_of_day = utc_midnight(date);
     let start_of_next_day = start_of_day + Duration::days(1);
 
     let purchases = app_purchase::Entity::find()
@@ -129,7 +130,7 @@ pub async fn update_daily_aggregation(
         total_revenue / completed.len() as i64
     };
 
-    let now = Utc::now().naive_utc();
+    let now = Utc::now().fixed_offset();
 
     app_sales_daily::Entity::insert(app_sales_daily::ActiveModel {
         id: Set(create_id()),

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { parseDateValue } from "../../lib/date";
 import {
 	type WidgetActionIdIssue,
 	checkWidgetActionId,
@@ -789,11 +790,17 @@ function WidgetSettingsPanel({
 				</div>
 				<div className="space-y-2">
 					<Label>{t("created", "Created")}</Label>
-					<Input value={new Date(widget.createdAt).toLocaleString()} disabled />
+					<Input
+						value={parseDateValue(widget.createdAt)?.toLocaleString() ?? "—"}
+						disabled
+					/>
 				</div>
 				<div className="space-y-2">
 					<Label>{t("lastUpdated", "Last Updated")}</Label>
-					<Input value={new Date(widget.updatedAt).toLocaleString()} disabled />
+					<Input
+						value={parseDateValue(widget.updatedAt)?.toLocaleString() ?? "—"}
+						disabled
+					/>
 				</div>
 				<Separator />
 				<div className="space-y-2">
