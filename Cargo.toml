@@ -85,9 +85,27 @@ members = [
     "apps/utils/board-decoder",
     "apps/utils/flowscript-render-data",
     "packages/dexie-tauri-adapter/backend",
+    "packages/catalog/embedding",
+    "packages/core/a2ui-schema",
 ]
 
 [workspace.dependencies]
+flow-like-catalog-data-linkedin = { path = "packages/catalog/data/linkedin", default-features = false }
+flow-like-catalog-data-databricks = { path = "packages/catalog/data/databricks", default-features = false }
+flow-like-catalog-data-notion = { path = "packages/catalog/data/notion", default-features = false }
+flow-like-catalog-data-atlassian = { path = "packages/catalog/data/atlassian", default-features = false }
+flow-like-catalog-data-microsoft = { path = "packages/catalog/data/microsoft", default-features = false }
+flow-like-catalog-data-google = { path = "packages/catalog/data/google", default-features = false }
+flow-like-catalog-data-github = { path = "packages/catalog/data/github", default-features = false }
+flow-like-catalog-data-support = { path = "packages/catalog/data/support", default-features = false }
+flow-like-catalog-std-support = { path = "packages/catalog/std-support", default-features = false }
+flow-like-catalog-std-runtime = { path = "packages/catalog/std-runtime", default-features = false }
+flow-like-catalog-std-text = { path = "packages/catalog/std-text", default-features = false }
+flow-like-catalog-std-numbers = { path = "packages/catalog/std-numbers", default-features = false }
+flow-like-catalog-std-values = { path = "packages/catalog/std-values", default-features = false }
+flow-like-catalog-std-ui = { path = "packages/catalog/std-ui", default-features = false }
+flow-like-a2ui-schema = { path = "packages/core/a2ui-schema", default-features = false }
+flow-like-catalog-embedding = { path = "packages/catalog/embedding", default-features = false }
 flow-like = { path = "packages/core", default-features = false, features = ["flow-metadata"] }
 flow-like-ast = { path = "packages/ast" }
 flow-like-types = { path = "packages/types", default-features = false }

@@ -8196,6 +8196,7 @@ dependencies = [
  "chrono",
  "dirs-next",
  "flate2",
+ "flow-like-a2ui-schema",
  "flow-like-ast",
  "flow-like-core-contracts",
  "flow-like-model-provider",
@@ -8234,6 +8235,19 @@ dependencies = [
  "zeroize",
  "zip 8.5.1",
  "zstd",
+]
+
+[[package]]
+name = "flow-like-a2ui-schema"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-types-contracts",
+ "flow-like-types-proto",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -8547,6 +8561,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-catalog-embedding"
+version = "0.1.0"
+dependencies = [
+ "flow-like",
+ "flow-like-model-provider",
+ "flow-like-types",
+]
+
+[[package]]
 name = "flow-like-catalog-geo"
 version = "0.1.0"
 dependencies = [
@@ -8579,6 +8602,7 @@ dependencies = [
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-data",
+ "flow-like-catalog-embedding",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
  "flow-like-storage",
@@ -9323,7 +9347,7 @@ dependencies = [
  "dirs-next",
  "flow-like",
  "flow-like-catalog-core",
- "flow-like-catalog-llm",
+ "flow-like-catalog-embedding",
  "flow-like-model-provider",
  "flow-like-storage",
  "flow-like-types",

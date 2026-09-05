@@ -39,7 +39,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
     export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
 fi
 
-log_info "Database URL: ${DATABASE_URL%:*}:****@${DATABASE_URL#*@}"
+log_info "Database connection configured"
 
 # Check for required tools
 check_tools() {
