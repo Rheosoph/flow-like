@@ -11,6 +11,7 @@ export default defineConfig({
 		react(),
 		{
 			name: "next-fixture-exports",
+			enforce: "pre",
 			resolveId(id, importer) {
 				if (importer?.endsWith("/apps/desktop/app/store/packages/page.tsx")) {
 					if (id === "../../../lib/api" || id === "@tauri-apps/api/core")

@@ -1,0 +1,3 @@
+@import "../../packages/ui/global.css";
+@source "../../apps/desktop/app/store/packages/page.tsx";
+@source "../../apps/desktop/app/store/explore/apps/page.tsx";

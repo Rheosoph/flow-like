@@ -14,7 +14,7 @@ import {
 	useBackend,
 	useBackendStore,
 } from "../../packages/ui/state/backend-state";
-import "../../packages/ui/global.css";
+import "./fixture.css";
 import { apps, groups, packages } from "./data";
 import { configureDesktopBoundaries } from "./desktop-boundaries";
 import { desktopNativeResponse } from "./desktop-installed";

@@ -145,8 +145,8 @@ function InstalledPackageCard({
 			{/* Content */}
 			<div className="flex-1 min-w-0 px-3.5 py-3 flex flex-col gap-1">
 				{/* Top row: name + badges */}
-				<div className="flex items-center gap-1.5 min-w-0">
-					<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
+				<div className="flex flex-wrap items-center gap-1.5 min-w-0">
+					<h3 className="w-full min-w-0 text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors sm:w-auto sm:flex-1">
 						{displayName}
 					</h3>
 					<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">

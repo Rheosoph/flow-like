@@ -13,8 +13,13 @@ const errors = [];
 const loadErrors = [];
 const measurements = [];
 page.on("pageerror", (error) => errors.push(error.message));
-page.on("console", (message) => { if (message.type() === "error") loadErrors.push(message.text()); });
-page.on("response", (response) => { if (response.status() >= 400) loadErrors.push(`${response.status()} ${response.url()}`); });
+page.on("console", (message) => {
+	if (message.type() === "error") loadErrors.push(message.text());
+});
+page.on("response", (response) => {
+	if (response.status() >= 400)
+		loadErrors.push(`${response.status()} ${response.url()}`);
+});
 await page.route("**/*", (route) => {
 	const url = new URL(route.request().url());
 	return url.hostname === "127.0.0.1" ||
@@ -127,6 +132,7 @@ try {
 				.getAttribute("aria-selected"),
 			"true",
 		);
+		await page.getByText("3 installed", { exact: true }).waitFor();
 		await page
 			.getByRole("heading", { name: "Document Toolkit", exact: true })
 			.waitFor();
