@@ -76,9 +76,17 @@ The native thread-local registry is a test stub; a different `run_id` in a
 native `Context` does not create a new registry. Guest object preservation
 requires reusable exports and is unavailable across `wasi:cli/run` commands.
 
-The [WebSocket example](src/websocket_server.rs) passes a listener and
-accepted connection between nodes using host-owned handles. Every node that
-operates on those handles declares `NodePermission::NetworkWebsocket`.
+The [cursor example](src/resource_cursor.rs) retains an owned iterator and uses
+`resources::remove` to consume its remaining items. The
+[TCP example](src/resource_tcp.rs) stores a standard-library `TcpListener` and
+a custom object containing a `TcpStream` plus pending bytes. Every TCP node
+declares `NodePermission::NetworkTcp` so operations share one permission domain.
+Numeric bind addresses avoid a DNS dependency. Accept, send, and poll are
+nonblocking; route retries through a delay and check `ready` or `drained` before
+continuing. Repeating Queue TCP Text appends more bytes, while Poll TCP Send
+resumes existing queued bytes. Keep accepted connections and listener cleanup
+separate. New resource types belong in package code and use the existing
+registry rather than adding host imports for each type.
 
 ## Pin System
 
@@ -630,6 +638,9 @@ mod tests {
 ├── flow-like.toml         # Package manifest (metadata, memory, timeout tiers)
 ├── mise.toml              # Task runner config
 ├── src/
-│   └── lib.rs             # Node implementations
+│   ├── lib.rs             # Entry point and basic node examples
+│   ├── package_objects.rs # Custom text buffer resources
+│   ├── resource_cursor.rs # Owned iterator and remove() handoff
+│   └── resource_tcp.rs    # WASI sockets and queued partial writes
 └── AGENT.md               # This file
 ```

@@ -69,16 +69,18 @@ cannot gain this export through a runtime update and can keep accumulating ABI
 allocations within the run. Guest heap allocations remain subject to the memory
 budget, including Grain builds that disable garbage collection.
 
-The Rust SDK wraps the host WebSocket listener and connection APIs. The
-[Rust template example](wasm-node-rust/src/websocket_server.rs) passes handles
-through Start Server, Accept Connection and Send Text nodes. Each node declares
-`NetworkWebsocket`, and the runtime's network policy applies. Other SDKs do not
-yet wrap these WebSocket APIs; custom component bindings can use the shared WIT
-interface. Core-module users need the corresponding `flowlike_ws` host imports.
-String connection handles use `connect_ref`, `send_ref`, `receive_ref` and
-`close_ref`; listener handles use `listen`, `accept` and `local_address`.
-The original connection imports use numeric handles and are separate from this
-string-handle API.
+The Rust SDK's `resources` registry retains arbitrary guest objects behind
+string handles. The [Rust template](wasm-node-rust/) uses it for buffers,
+iterators, and WASI TCP listeners and connections. A cursor node advances a
+retained iterator; another removes it and collects the remaining items. TCP
+nodes share guest networking objects and declare `NetworkTcp`. Accept and send
+operations report readiness or pending bytes so later calls can retry without
+blocking the package's other nodes. The runtime's address policy also applies.
+
+The existing host WebSocket client API remains available through the Rust SDK
+and custom component WIT bindings. Core modules can use the `flowlike_ws`
+imports. String connection handles use `connect_ref`, `send_ref`, `receive_ref`
+and `close_ref`; the original connection imports use separate numeric handles.
 
 ## Notes
 

@@ -27,7 +27,7 @@ This means you can write custom nodes in virtually any language that compiles to
 |---|---|---|
 | [TypeScript](./wasm-sdk-typescript/) | `@flow-like/wasm-sdk-typescript` on npm | ✅ Published |
 | [AssemblyScript](./wasm-sdk-assemblyscript/) | `@flow-like/wasm-sdk-assemblyscript` on npm | ✅ Published |
-| [Rust](./wasm-sdk-rust/) | `flow-like-wasm-sdk` on crates.io (planned) | 🚧 In progress |
+| [Rust](./wasm-sdk-rust/) | [`flow-like-wasm-sdk`](https://crates.io/crates/flow-like-wasm-sdk) on crates.io | Published: 0.3.7; [0.4.0 in preparation](wasm-sdk-rust/CHANGELOG.md) |
 | [Python](./wasm-sdk-python/) | `flow-like-wasm-sdk` on PyPI (planned) | 🚧 In progress |
 | [Go](./wasm-sdk-go/) | Module import (planned) | 🚧 In progress |
 | [Zig](./wasm-sdk-zig/) | Build dep (planned) | 🚧 In progress |
@@ -102,7 +102,9 @@ released. A later run always starts with fresh live state. Persist application
 data through storage if needed; stored pointer values and socket handles cannot
 restore a client or connection.
 
-The Rust SDK provides a typed `resources` registry for arbitrary guest objects.
+Rust SDK 0.4.0, currently in preparation, provides a typed `resources` registry
+for arbitrary guest objects. It requires the updated runtime's package ownership
+and resource-handle imports.
 One node calls `resources::insert(value)` and outputs the returned string
 handle. Another calls `resources::with::<T, _>` or `with_mut::<T, _>` to access
 the object, while `remove::<T>` returns ownership and `close::<T>` drops it.
@@ -125,11 +127,17 @@ execution because its separate process cannot access these resources. Do not
 infer guest-state persistence from the source language alone. It depends on the
 compiled artifact's exports and execution path.
 
-The Rust SDK exposes WebSocket listen, accept, connect, send, receive and close
-methods. Other SDKs do not currently provide equivalent WebSocket convenience
-methods. Their component bindings can import the shared WIT interface directly.
-See the [Rust server example](../../templates/wasm-node-rust/src/websocket_server.rs)
-and [template lifecycle matrix](../../templates/wasm-capability-matrix.md#state-and-resource-lifetime).
+The [Rust template](../../templates/wasm-node-rust/) also stores an iterator and
+WASI TCP listeners and connections through this registry. Cursor nodes advance
+the iterator across calls. TCP nodes accept connections and send queued bytes
+across calls, subject to `NetworkTcp` and the runtime's address policy. These
+examples use guest objects with their own state and cleanup. See the
+[template lifecycle matrix](../../templates/wasm-capability-matrix.md#state-and-resource-lifetime)
+for the supported execution paths.
+
+The Rust SDK also wraps the existing host WebSocket client operations: connect,
+send, receive, and close. Other SDKs can use the shared WIT client interface or
+the corresponding core-module host imports.
 
 ## Memory ABI
 

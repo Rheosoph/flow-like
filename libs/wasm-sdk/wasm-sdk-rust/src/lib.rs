@@ -322,8 +322,5 @@ pub mod db_ns {
 }
 
 pub mod ws_ns {
-    pub use crate::host::{
-        ws_accept, ws_close, ws_connect, ws_listen, ws_local_address, ws_receive, ws_send,
-        ws_send_text,
-    };
+    pub use crate::host::{ws_close, ws_connect, ws_receive, ws_send, ws_send_text};
 }

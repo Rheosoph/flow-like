@@ -1,17 +1,16 @@
-//! WebSocket connections and listeners owned by one package instance in one run.
+//! WebSocket client connections owned by one package instance in one run.
 //!
 //! Guests hold opaque references. Background I/O keeps making progress between
 //! node calls, and run cleanup cancels every task even if a guest retains a handle.
 
 use flow_like::flow::execution::{egress, ExecutionEnvironment};
-use futures::{stream::FuturesUnordered, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{
@@ -21,7 +20,6 @@ use tokio_tungstenite::WebSocketStream;
 
 const MAX_RESOURCES: usize = 128;
 const QUEUE_CAPACITY: usize = 32;
-const MAX_HANDSHAKES: usize = 4;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -62,36 +60,13 @@ struct SendCommand {
 struct WsConnection {
     outgoing: mpsc::Sender<SendCommand>,
     incoming: tokio::sync::Mutex<mpsc::Receiver<Message>>,
-    parent: Option<String>,
     task: OwnedTask,
-}
-
-#[derive(Debug)]
-struct WsListener {
-    address: SocketAddr,
-    accepted: tokio::sync::Mutex<mpsc::Receiver<String>>,
-    task: OwnedTask,
-}
-
-#[derive(Clone, Debug)]
-enum Resource {
-    Connection(Arc<WsConnection>),
-    Listener(Arc<WsListener>),
-}
-
-impl Resource {
-    fn task(&self) -> &OwnedTask {
-        match self {
-            Self::Connection(connection) => &connection.task,
-            Self::Listener(listener) => &listener.task,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
 struct ResourceState {
     closed: bool,
-    resources: HashMap<String, Resource>,
+    resources: HashMap<String, Arc<WsConnection>>,
     legacy_handles: HashMap<i32, String>,
 }
 
@@ -107,7 +82,7 @@ impl WebSocketResources {
         let mut state = self.state.lock();
         state.closed = true;
         for resource in state.resources.values() {
-            resource.task().abort();
+            resource.task.abort();
         }
     }
 
@@ -120,14 +95,14 @@ impl WebSocketResources {
             std::mem::take(&mut state.resources)
         };
         for resource in resources.values() {
-            resource.task().abort();
+            resource.task.abort();
         }
         for resource in resources.values() {
-            resource.task().shutdown().await;
+            resource.task.shutdown().await;
         }
     }
 
-    fn get(&self, id: &str) -> Option<Resource> {
+    fn get(&self, id: &str) -> Option<Arc<WsConnection>> {
         let state = self.state.lock();
         if state.closed {
             return None;
@@ -135,21 +110,12 @@ impl WebSocketResources {
         state.resources.get(id).cloned()
     }
 
-    fn insert_connection<S>(
-        &self,
-        socket: WebSocketStream<S>,
-        parent: Option<String>,
-    ) -> Option<String>
+    fn insert_connection<S>(&self, socket: WebSocketStream<S>) -> Option<String>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let mut state = self.state.lock();
-        if state.closed
-            || state.resources.len() >= MAX_RESOURCES
-            || parent
-                .as_ref()
-                .is_some_and(|id| !matches!(state.resources.get(id), Some(Resource::Listener(_))))
-        {
+        if state.closed || state.resources.len() >= MAX_RESOURCES {
             return None;
         }
         let id = new_reference("ws")?;
@@ -182,12 +148,11 @@ impl WebSocketResources {
         });
         state.resources.insert(
             id.clone(),
-            Resource::Connection(Arc::new(WsConnection {
+            Arc::new(WsConnection {
                 outgoing,
                 incoming: tokio::sync::Mutex::new(incoming),
-                parent,
                 task: OwnedTask(Mutex::new(Some(task))),
-            })),
+            }),
         );
         Some(id)
     }
@@ -245,90 +210,14 @@ impl WebSocketResources {
         })
         .await
         .ok()??;
-        self.insert_connection(socket, None)
-    }
-
-    /// Start accepting in the background and return without occupying a guest call.
-    pub async fn listen(
-        self: &Arc<Self>,
-        environment: ExecutionEnvironment,
-        allowed_hosts: Option<&[String]>,
-        bind_address: &str,
-    ) -> Option<String> {
-        let address: SocketAddr = bind_address.parse().ok()?;
-        if !bind_allowed(environment, allowed_hosts, address) {
-            return None;
-        }
-        let listener = TcpListener::bind(address).await.ok()?;
-        let address = listener.local_addr().ok()?;
-        let mut state = self.state.lock();
-        if state.closed || state.resources.len() >= MAX_RESOURCES {
-            return None;
-        }
-        let id = new_reference("ws_listener")?;
-        let listener_id = id.clone();
-        let registry = Arc::downgrade(self);
-        let (accepted_tx, accepted) = mpsc::channel(QUEUE_CAPACITY);
-        let task = tokio::spawn(async move {
-            // Handshake futures belong to this task, so stopping the listener
-            // synchronously drops every unfinished handshake socket.
-            let mut handshakes = FuturesUnordered::new();
-            loop {
-                tokio::select! {
-                    incoming = listener.accept(), if handshakes.len() < MAX_HANDSHAKES => {
-                        let Ok((tcp, _)) = incoming else { break };
-                        handshakes.push(async move {
-                            tokio::time::timeout(IO_TIMEOUT,
-                                tokio_tungstenite::accept_async_with_config(tcp, Some(socket_config()))
-                            ).await.ok()?.ok()
-                        });
-                    }
-                    completed = handshakes.next(), if !handshakes.is_empty() => {
-                        let Some(Some(socket)) = completed else { continue };
-                        let Some(registry) = registry.upgrade() else { break };
-                        let Some(connection_id) = registry.insert_connection(socket, Some(listener_id.clone())) else { continue };
-                        if accepted_tx.try_send(connection_id.clone()).is_err() {
-                            registry.close(&connection_id).await;
-                        }
-                    }
-                }
-            }
-        });
-        state.resources.insert(
-            id.clone(),
-            Resource::Listener(Arc::new(WsListener {
-                address,
-                accepted: tokio::sync::Mutex::new(accepted),
-                task: OwnedTask(Mutex::new(Some(task))),
-            })),
-        );
-        Some(id)
-    }
-
-    pub fn local_address(&self, listener_id: &str) -> Option<String> {
-        match self.get(listener_id)? {
-            Resource::Listener(listener) => Some(listener.address.to_string()),
-            Resource::Connection(_) => None,
-        }
-    }
-
-    pub async fn accept(&self, listener_id: &str, timeout_ms: u32) -> Option<String> {
-        let Resource::Listener(listener) = self.get(listener_id)? else {
-            return None;
-        };
-        tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
-            listener.accepted.lock().await.recv().await
-        })
-        .await
-        .ok()
-        .flatten()
+        self.insert_connection(socket)
     }
 
     pub async fn send(&self, connection_id: &str, bytes: Vec<u8>, binary: bool) -> bool {
         if bytes.len() > MAX_MESSAGE_BYTES {
             return false;
         }
-        let Some(Resource::Connection(connection)) = self.get(connection_id) else {
+        let Some(connection) = self.get(connection_id) else {
             return false;
         };
         let message = if binary {
@@ -358,9 +247,7 @@ impl WebSocketResources {
     }
 
     pub async fn receive(&self, connection_id: &str, timeout_ms: u32) -> Option<String> {
-        let Resource::Connection(connection) = self.get(connection_id)? else {
-            return None;
-        };
+        let connection = self.get(connection_id)?;
         let message = tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
             connection.incoming.lock().await.recv().await
         })
@@ -383,7 +270,6 @@ impl WebSocketResources {
         Some(serde_json::json!({ "type": kind, "data": data }).to_string())
     }
 
-    /// Closing a listener also closes every connection accepted by that listener.
     pub async fn close(&self, id: &str) -> bool {
         let removed = {
             let mut state = self.state.lock();
@@ -393,35 +279,10 @@ impl WebSocketResources {
             let Some(resource) = state.resources.remove(id) else {
                 return false;
             };
-            let mut removed = vec![resource];
-            let children: Vec<String> = state
-                .resources
-                .iter()
-                .filter_map(|(key, value)| match value {
-                    Resource::Connection(connection)
-                        if connection.parent.as_deref() == Some(id) =>
-                    {
-                        Some(key.clone())
-                    }
-                    _ => None,
-                })
-                .collect();
-            for child in &children {
-                if let Some(resource) = state.resources.remove(child) {
-                    removed.push(resource);
-                }
-            }
-            state
-                .legacy_handles
-                .retain(|_, value| value != id && !children.contains(value));
-            removed
+            state.legacy_handles.retain(|_, value| value != id);
+            resource
         };
-        for resource in &removed {
-            resource.task().abort();
-        }
-        for resource in removed {
-            resource.task().shutdown().await;
-        }
+        removed.task.shutdown().await;
         true
     }
 
@@ -484,68 +345,52 @@ fn host_allowed(allowed_hosts: Option<&[String]>, host: &str) -> bool {
     })
 }
 
-fn bind_allowed(
-    environment: ExecutionEnvironment,
-    allowed_hosts: Option<&[String]>,
-    address: SocketAddr,
-) -> bool {
-    host_allowed(allowed_hosts, &address.ip().to_string())
-        && !(environment == ExecutionEnvironment::Server && egress::is_blocked_ip(address.ip()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
 
-    async fn connected_pair(
-        registry: &Arc<WebSocketResources>,
-    ) -> (
-        String,
-        String,
-        WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
-    ) {
-        let listener = registry
-            .listen(ExecutionEnvironment::Local, None, "127.0.0.1:0")
-            .await
-            .expect("listen");
-        let address = registry.local_address(&listener).expect("bound address");
-        let (client, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
-            .await
-            .expect("client handshake");
-        let connection = registry
-            .accept(&listener, 1_000)
-            .await
-            .expect("accepted connection");
-        (listener, connection, client)
+    async fn connected_pair(registry: &WebSocketResources) -> (String, WebSocketStream<TcpStream>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (connection, peer) = tokio::join!(
+                registry.connect(ExecutionEnvironment::Local, None, &url, "{}"),
+                async {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    tokio_tungstenite::accept_async(stream).await.unwrap()
+                }
+            );
+            (connection.expect("client connection"), peer)
+        })
+        .await
+        .expect("local WebSocket handshake")
     }
 
     #[tokio::test]
-    async fn listener_and_connection_survive_individual_calls_then_shutdown() {
-        let registry = Arc::new(WebSocketResources::default());
-        let (listener, connection, mut client) = connected_pair(&registry).await;
-        let address = registry.local_address(&listener).unwrap();
+    async fn connection_survives_individual_calls_then_shutdown() {
+        let registry = WebSocketResources::default();
+        let (connection, mut peer) = connected_pair(&registry).await;
         assert!(
             registry
                 .send(&connection, b"from another node".to_vec(), false)
                 .await
         );
         assert_eq!(
-            client.next().await.unwrap().unwrap().into_text().unwrap(),
+            peer.next().await.unwrap().unwrap().into_text().unwrap(),
             "from another node"
         );
-        client.send(Message::Text("reply".into())).await.unwrap();
+        peer.send(Message::Text("reply".into())).await.unwrap();
         let reply: serde_json::Value =
             serde_json::from_str(&registry.receive(&connection, 1_000).await.unwrap()).unwrap();
         assert_eq!(reply["data"], "reply");
         registry.shutdown().await;
-        assert!(registry.local_address(&listener).is_none());
         assert!(!registry.send(&connection, vec![1], true).await);
-        assert!(TcpStream::connect(&address).await.is_err());
         assert!(registry
-            .listen(ExecutionEnvironment::Local, None, "127.0.0.1:0")
+            .connect(ExecutionEnvironment::Local, None, "ws://127.0.0.1:1", "{}")
             .await
             .is_none());
-        let closed = tokio::time::timeout(Duration::from_secs(1), client.next())
+        let closed = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
             .expect("peer socket closed");
         assert!(!matches!(
@@ -557,7 +402,7 @@ mod tests {
     #[tokio::test]
     async fn pending_receive_does_not_block_send_or_another_connection() {
         let registry = Arc::new(WebSocketResources::default());
-        let (_, connection, mut client) = connected_pair(&registry).await;
+        let (connection, mut peer) = connected_pair(&registry).await;
         let receiving_registry = registry.clone();
         let receiving_connection = connection.clone();
         let receive = tokio::spawn(async move {
@@ -566,6 +411,22 @@ mod tests {
                 .await
         });
         tokio::task::yield_now().await;
+        let (other_connection, mut other_peer) = connected_pair(&registry).await;
+        assert!(
+            registry
+                .send(&other_connection, b"independent".to_vec(), false)
+                .await
+        );
+        assert_eq!(
+            other_peer
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap(),
+            "independent"
+        );
         assert!(tokio::time::timeout(
             Duration::from_secs(1),
             registry.send(&connection, b"request".to_vec(), false)
@@ -573,87 +434,58 @@ mod tests {
         .await
         .unwrap());
         assert_eq!(
-            client.next().await.unwrap().unwrap().into_text().unwrap(),
+            peer.next().await.unwrap().unwrap().into_text().unwrap(),
             "request"
         );
-        client.send(Message::Text("response".into())).await.unwrap();
+        peer.send(Message::Text("response".into())).await.unwrap();
         assert!(receive.await.unwrap().unwrap().contains("response"));
         registry.shutdown().await;
     }
 
     #[tokio::test]
-    async fn references_cannot_cross_registries_and_listener_close_closes_children() {
-        let first = Arc::new(WebSocketResources::default());
-        let second = Arc::new(WebSocketResources::default());
-        let (listener, connection, mut client) = connected_pair(&first).await;
+    async fn references_cannot_cross_registries_and_close_invalidates_handles() {
+        let first = WebSocketResources::default();
+        let second = WebSocketResources::default();
+        let (connection, mut peer) = connected_pair(&first).await;
         let legacy = first.legacy_handle(&connection).unwrap();
         assert!(!second.send(&connection, vec![1], true).await);
         assert!(second.legacy_reference(legacy).is_none());
-        assert!(first.close(&listener).await);
+        assert!(first.close(&connection).await);
         assert!(!first.send(&connection, vec![1], true).await);
         assert!(first.legacy_reference(legacy).is_none());
-        tokio::time::timeout(Duration::from_secs(1), client.next())
+        tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
-            .expect("accepted socket closed");
+            .expect("peer socket closed");
     }
 
     #[tokio::test]
-    async fn cancel_and_drop_stop_listeners_even_with_leaked_references() {
-        let registry = Arc::new(WebSocketResources::default());
-        let (listener, connection, mut client) = connected_pair(&registry).await;
-        let address = registry.local_address(&listener).unwrap();
+    async fn cancel_and_drop_stop_connections_even_with_leaked_references() {
+        let registry = WebSocketResources::default();
+        let (connection, mut peer) = connected_pair(&registry).await;
+        let retained_connection = registry.get(&connection).unwrap();
         registry.cancel();
         assert!(registry.get(&connection).is_none());
         registry.shutdown().await;
-        assert!(TcpStream::connect(&address).await.is_err());
-        tokio::time::timeout(Duration::from_secs(1), client.next())
+        tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
             .expect("cancelled peer closed");
+        drop(retained_connection);
 
-        let registry = Arc::new(WebSocketResources::default());
-        let listener = registry
-            .listen(ExecutionEnvironment::Local, None, "127.0.0.1:0")
-            .await
-            .unwrap();
-        let address = registry.local_address(&listener).unwrap();
+        let registry = WebSocketResources::default();
+        let (connection, mut peer) = connected_pair(&registry).await;
+        let retained_connection = registry.get(&connection).unwrap();
         drop(registry);
-        // The aborted listener releases its socket when the executor polls it.
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while TcpStream::connect(&address).await.is_ok() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("dropped registry releases listener");
-    }
-
-    #[tokio::test]
-    async fn shutdown_drops_unfinished_handshakes() {
-        use tokio::io::AsyncReadExt;
-        let registry = Arc::new(WebSocketResources::default());
-        let listener = registry
-            .listen(ExecutionEnvironment::Local, None, "127.0.0.1:0")
+        tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
-            .unwrap();
-        let address = registry.local_address(&listener).unwrap();
-        let mut pending = TcpStream::connect(&address).await.unwrap();
-        tokio::task::yield_now().await;
-        registry.shutdown().await;
-        let mut byte = [0u8; 1];
-        let result = tokio::time::timeout(Duration::from_secs(1), pending.read(&mut byte))
-            .await
-            .expect("handshake socket released with listener");
-        assert!(!matches!(result, Ok(1..)));
+            .expect("dropped registry releases connection");
+        drop(retained_connection);
     }
 
     #[tokio::test]
     async fn connect_rejects_disallowed_hosts_and_reserved_headers() {
-        let registry = Arc::new(WebSocketResources::default());
-        let listener = registry
-            .listen(ExecutionEnvironment::Local, None, "127.0.0.1:0")
-            .await
-            .unwrap();
-        let url = format!("ws://{}", registry.local_address(&listener).unwrap());
+        let registry = WebSocketResources::default();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
         assert!(registry
             .connect(ExecutionEnvironment::Server, None, &url, "{}")
             .await
@@ -676,44 +508,33 @@ mod tests {
             .await
             .is_none());
         let allowlist = vec!["127.0.0.1".to_owned()];
-        let connection = registry
-            .connect(ExecutionEnvironment::Local, Some(&allowlist), &url, "{}")
+        let (connection, mut peer) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                registry.connect(ExecutionEnvironment::Local, Some(&allowlist), &url, "{}"),
+                async {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    tokio_tungstenite::accept_async(stream).await.unwrap()
+                }
+            )
+        })
+        .await
+        .expect("allowlisted handshake");
+        assert!(
+            registry
+                .close(&connection.expect("allowlisted connection"))
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
-            .expect("allowlisted connection");
-        assert!(registry.close(&connection).await);
+            .expect("closed client released socket");
         registry.shutdown().await;
     }
 
     #[test]
-    fn network_policy_checks_host_allowlist_and_server_bind_addresses() {
+    fn network_policy_checks_host_allowlist() {
         let allowlist = vec!["example.com".to_string()];
         assert!(host_allowed(Some(&allowlist), "EXAMPLE.com"));
         assert!(!host_allowed(Some(&allowlist), "other.example.com"));
         assert!(!host_allowed(Some(&[]), "example.com"));
-        assert!(!bind_allowed(
-            ExecutionEnvironment::Server,
-            None,
-            "0.0.0.0:8000".parse().unwrap()
-        ));
-        assert!(!bind_allowed(
-            ExecutionEnvironment::Server,
-            None,
-            "127.0.0.1:8000".parse().unwrap()
-        ));
-        assert!(bind_allowed(
-            ExecutionEnvironment::Server,
-            None,
-            "10.0.0.2:8000".parse().unwrap()
-        ));
-        assert!(bind_allowed(
-            ExecutionEnvironment::Local,
-            None,
-            "127.0.0.1:0".parse().unwrap()
-        ));
-        assert!(!bind_allowed(
-            ExecutionEnvironment::Local,
-            Some(&allowlist),
-            "127.0.0.1:0".parse().unwrap()
-        ));
     }
 }

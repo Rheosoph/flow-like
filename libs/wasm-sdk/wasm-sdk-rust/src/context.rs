@@ -449,29 +449,6 @@ impl Context {
     // WebSocket
     // ========================================================================
 
-    /// Start a WebSocket listener, for example at `127.0.0.1:8080` on desktop.
-    ///
-    /// The returned handle is valid only in this package and run. The host keeps
-    /// accepting connections between node calls and closes the listener at run end.
-    /// Requires `NodePermission::NetworkWebsocket`; the execution environment's
-    /// network policy also applies to the bind address.
-    pub fn ws_listen(&self, bind_address: &str) -> Option<String> {
-        crate::host::ws_listen(bind_address)
-    }
-
-    /// Take an accepted connection from this package's listener.
-    ///
-    /// Returns `None` if the wait expires, the handle is unavailable, or permission
-    /// is denied. Pass the connection handle to later nodes within the same run.
-    pub fn ws_accept(&self, listener_id: &str, timeout_ms: u32) -> Option<String> {
-        crate::host::ws_accept(listener_id, timeout_ms)
-    }
-
-    /// Read the listener's bound address. Port 0 asks the host to choose a free port.
-    pub fn ws_local_address(&self, listener_id: &str) -> Option<String> {
-        crate::host::ws_local_address(listener_id)
-    }
-
     /// Open a WebSocket connection owned by this package and run.
     pub fn ws_connect(&self, url: &str, headers: &Value) -> Option<String> {
         let headers_json = serde_json::to_string(headers).ok()?;
@@ -493,7 +470,7 @@ impl Context {
         crate::host::ws_receive(session_id, timeout_ms)
     }
 
-    /// Close a connection, or a listener and all connections it accepted.
+    /// Close a WebSocket connection.
     pub fn ws_close(&self, session_id: &str) -> bool {
         crate::host::ws_close(session_id)
     }

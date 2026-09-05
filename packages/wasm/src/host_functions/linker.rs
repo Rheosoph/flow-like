@@ -1204,70 +1204,6 @@ fn register_websocket_functions(linker: &mut Linker<StoreData>) -> WasmResult<()
     linker
         .func_wrap_async(
             "flowlike_ws",
-            "listen",
-            |caller: Caller<'_, StoreData>, (ptr, len): (u32, u32)| {
-                Box::new(async move {
-                    let host = &caller.data().host_state;
-                    if !host.has_capability(WasmCapabilities::WEBSOCKET) || !host.run_scoped {
-                        return 0u64;
-                    }
-                    let Ok(address) = read_string_from_caller(&caller, ptr, len) else {
-                        return 0;
-                    };
-                    let reference = host
-                        .websocket
-                        .listen(
-                            host.execution_environment,
-                            host.allowed_hosts.as_deref(),
-                            &address,
-                        )
-                        .await;
-                    websocket_result(&caller, reference)
-                })
-            },
-        )
-        .map_err(websocket_registration_error)?;
-
-    linker
-        .func_wrap_async(
-            "flowlike_ws",
-            "accept",
-            |caller: Caller<'_, StoreData>, (ptr, len, timeout_ms): (u32, u32, u32)| {
-                Box::new(async move {
-                    let Some(reference) = websocket_reference(&caller, ptr, len) else {
-                        return 0u64;
-                    };
-                    let host = &caller.data().host_state;
-                    websocket_result(
-                        &caller,
-                        host.websocket
-                            .accept(&reference, websocket_timeout(host, timeout_ms))
-                            .await,
-                    )
-                })
-            },
-        )
-        .map_err(websocket_registration_error)?;
-
-    linker
-        .func_wrap(
-            "flowlike_ws",
-            "local_address",
-            |caller: Caller<'_, StoreData>, ptr: u32, len: u32| -> u64 {
-                let Some(reference) = websocket_reference(&caller, ptr, len) else {
-                    return 0;
-                };
-                websocket_result(
-                    &caller,
-                    caller.data().host_state.websocket.local_address(&reference),
-                )
-            },
-        )
-        .map_err(websocket_registration_error)?;
-
-    linker
-        .func_wrap_async(
-            "flowlike_ws",
             "send_ref",
             |caller: Caller<'_, StoreData>,
              (ptr, len, msg_ptr, msg_len, binary): (u32, u32, u32, u32, i32)| {
@@ -3064,9 +3000,7 @@ mod websocket_tests {
         let engine = Engine::default();
         let module = Module::new(&engine, wat::parse_str(r#"
             (module
-                (import "flowlike_ws" "listen" (func $listen (param i32 i32) (result i64)))
-                (import "flowlike_ws" "accept" (func $accept (param i32 i32 i32) (result i64)))
-                (import "flowlike_ws" "local_address" (func $address (param i32 i32) (result i64)))
+                (import "flowlike_ws" "connect_ref" (func $connect (param i32 i32 i32 i32) (result i64)))
                 (import "flowlike_ws" "send_ref" (func $send (param i32 i32 i32 i32 i32) (result i32)))
                 (import "flowlike_ws" "receive_ref" (func $receive (param i32 i32 i32) (result i64)))
                 (import "flowlike_ws" "close_ref" (func $close (param i32 i32) (result i32)))
@@ -3075,9 +3009,7 @@ mod websocket_tests {
                 (import "flowlike_ws" "receive" (func $legacy_receive (param i32 i32) (result i32)))
                 (import "flowlike_ws" "close" (func $legacy_close (param i32) (result i32)))
                 (memory (export "memory") 1)
-                (export "listen" (func $listen))
-                (export "accept" (func $accept))
-                (export "address" (func $address))
+                (export "connect" (func $connect))
                 (export "send" (func $send))
                 (export "receive" (func $receive))
                 (export "close" (func $close))
@@ -3107,17 +3039,24 @@ mod websocket_tests {
         .unwrap()
     }
 
+    async fn server() -> (
+        String,
+        tokio::task::JoinHandle<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let handshake = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        });
+        (url, handshake)
+    }
+
     #[tokio::test]
-    async fn core_websocket_reference_abi_shares_server_between_calls() {
+    async fn core_websocket_reference_abi_shares_connection_between_calls() {
         let (mut store, instance, memory) = guest().await;
-        let listen = instance
-            .get_typed_func::<(u32, u32), u64>(&mut store, "listen")
-            .unwrap();
-        let address = instance
-            .get_typed_func::<(u32, u32), u64>(&mut store, "address")
-            .unwrap();
-        let accept = instance
-            .get_typed_func::<(u32, u32, u32), u64>(&mut store, "accept")
+        let connect = instance
+            .get_typed_func::<(u32, u32, u32, u32), u64>(&mut store, "connect")
             .unwrap();
         let send = instance
             .get_typed_func::<(u32, u32, u32, u32, i32), i32>(&mut store, "send")
@@ -3128,45 +3067,24 @@ mod websocket_tests {
         let close = instance
             .get_typed_func::<(u32, u32), i32>(&mut store, "close")
             .unwrap();
-        let bind = b"127.0.0.1:0";
-        memory.write(&mut store, 0, bind).unwrap();
-        store.data_mut().host_state.run_scoped = false;
-        assert_eq!(
-            listen
-                .call_async(&mut store, (0, bind.len() as u32))
-                .await
-                .unwrap(),
-            0
-        );
-        store.data_mut().host_state.run_scoped = true;
+        let (url, handshake) = server().await;
+        memory.write(&mut store, 0, url.as_bytes()).unwrap();
+        memory.write(&mut store, 128, b"{}").unwrap();
         store.data_mut().host_state.capabilities = WasmCapabilities::empty();
         assert_eq!(
-            listen
-                .call_async(&mut store, (0, bind.len() as u32))
+            connect
+                .call_async(&mut store, (0, url.len() as u32, 128, 2))
                 .await
                 .unwrap(),
             0
         );
         store.data_mut().host_state.capabilities = WasmCapabilities::WEBSOCKET;
-        let packed = listen
-            .call_async(&mut store, (0, bind.len() as u32))
-            .await
-            .unwrap();
-        let listener = result(&store, packed);
-        memory.write(&mut store, 128, listener.as_bytes()).unwrap();
-        let packed = address
-            .call_async(&mut store, (128, listener.len() as u32))
-            .await
-            .unwrap();
-        let bound = result(&store, packed);
-        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{bound}"))
-            .await
-            .unwrap();
-        let packed = accept
-            .call_async(&mut store, (128, listener.len() as u32, 1_000))
+        let packed = connect
+            .call_async(&mut store, (0, url.len() as u32, 128, 2))
             .await
             .unwrap();
         let connection = result(&store, packed);
+        let mut peer = handshake.await.unwrap();
         memory
             .write(&mut store, 256, connection.as_bytes())
             .unwrap();
@@ -3177,10 +3095,10 @@ mod websocket_tests {
         store.data_mut().host_state.capabilities = WasmCapabilities::WEBSOCKET;
         assert_eq!(send.call_async(&mut store, args).await.unwrap(), 1);
         assert_eq!(
-            client.next().await.unwrap().unwrap().into_text().unwrap(),
+            peer.next().await.unwrap().unwrap().into_text().unwrap(),
             "hello"
         );
-        client.send(Message::Text("reply".into())).await.unwrap();
+        peer.send(Message::Text("reply".into())).await.unwrap();
         let packed = receive
             .call_async(&mut store, (256, connection.len() as u32, 1_000))
             .await
@@ -3191,12 +3109,18 @@ mod websocket_tests {
         assert_eq!(send.call_async(&mut store, args).await.unwrap(), 0);
         assert_eq!(
             close
-                .call_async(&mut store, (128, listener.len() as u32))
+                .call_async(&mut store, (256, connection.len() as u32))
                 .await
                 .unwrap(),
             0
         );
-        assert!(tokio::net::TcpStream::connect(bound).await.is_err());
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(1), peer.next())
+            .await
+            .expect("run shutdown closes client socket");
+        assert!(!matches!(
+            closed,
+            Some(Ok(Message::Text(_) | Message::Binary(_)))
+        ));
     }
 
     #[tokio::test]
@@ -3215,15 +3139,7 @@ mod websocket_tests {
             .get_typed_func::<i32, i32>(&mut store, "legacy_close")
             .unwrap();
         let registry = store.data().host_state.websocket.clone();
-        let listener = registry
-            .listen(
-                flow_like::flow::execution::ExecutionEnvironment::Local,
-                None,
-                "127.0.0.1:0",
-            )
-            .await
-            .unwrap();
-        let url = format!("ws://{}", registry.local_address(&listener).unwrap());
+        let (url, handshake) = server().await;
         memory.write(&mut store, 0, url.as_bytes()).unwrap();
         memory.write(&mut store, 128, b"{}").unwrap();
         let handle = connect
@@ -3231,7 +3147,7 @@ mod websocket_tests {
             .await
             .unwrap();
         assert!(handle > 0);
-        let accepted = registry.accept(&listener, 1_000).await.unwrap();
+        let mut peer = handshake.await.unwrap();
         memory.write(&mut store, 256, b"legacy").unwrap();
         assert_eq!(
             send.call_async(&mut store, (handle, 256, 6, 0))
@@ -3239,12 +3155,11 @@ mod websocket_tests {
                 .unwrap(),
             0
         );
-        assert!(registry
-            .receive(&accepted, 1_000)
-            .await
-            .unwrap()
-            .contains("legacy"));
-        assert!(registry.send(&accepted, b"reply".to_vec(), false).await);
+        assert_eq!(
+            peer.next().await.unwrap().unwrap().into_text().unwrap(),
+            "legacy"
+        );
+        peer.send(Message::Text("reply".into())).await.unwrap();
         let offset = receive
             .call_async(&mut store, (handle, 1_000))
             .await

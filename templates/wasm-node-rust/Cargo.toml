@@ -11,9 +11,8 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The object registry and listener examples need this SDK and a matching runtime.
-# When copying the template, keep this dependency pointed at that SDK source.
-flow-like-wasm-sdk = { version = "0.3.7", path = "../../libs/wasm-sdk/wasm-sdk-rust", features = ["rig"] }
+# Remove the local path after SDK 0.4.0 is published to crates.io.
+flow-like-wasm-sdk = { version = "0.4.0", path = "../../libs/wasm-sdk/wasm-sdk-rust", features = ["rig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

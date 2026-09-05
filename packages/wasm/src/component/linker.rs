@@ -1898,57 +1898,6 @@ fn register_websocket(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()>
     .map_err(map_err)?;
 
     ws.func_wrap_async(
-        "listen",
-        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (address,): (String,)| {
-            Box::new(async move {
-                let host = &store.data().host_state;
-                if !host.has_capability(WasmCapabilities::WEBSOCKET) || !host.run_scoped {
-                    return Ok((None::<String>,));
-                }
-                Ok((host
-                    .websocket
-                    .listen(
-                        store.data().environment,
-                        host.allowed_hosts.as_deref(),
-                        &address,
-                    )
-                    .await,))
-            })
-        },
-    )
-    .map_err(map_err)?;
-
-    ws.func_wrap_async(
-        "accept",
-        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-         (reference, timeout_ms): (String, u32)| {
-            Box::new(async move {
-                let host = &store.data().host_state;
-                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
-                    return Ok((None::<String>,));
-                }
-                Ok((host
-                    .websocket
-                    .accept(&reference, websocket_timeout(host, timeout_ms))
-                    .await,))
-            })
-        },
-    )
-    .map_err(map_err)?;
-
-    ws.func_wrap(
-        "local-address",
-        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (reference,): (String,)| {
-            let host = &store.data().host_state;
-            if !host.has_capability(WasmCapabilities::WEBSOCKET) {
-                return Ok((None::<String>,));
-            }
-            Ok((host.websocket.local_address(&reference),))
-        },
-    )
-    .map_err(map_err)?;
-
-    ws.func_wrap_async(
         "send",
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
          (reference, message, is_binary): (String, Vec<u8>, bool)| {

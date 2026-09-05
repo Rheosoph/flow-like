@@ -115,19 +115,24 @@ async fn test_rust_sdk_get_nodes_returns_template_nodes() {
         "file_writer",
         "file_reader",
         "weather_agent",
-        "ws_start_server",
-        "ws_accept_connection",
-        "ws_send_text",
-        "ws_close",
         "object_create_buffer",
         "object_append_buffer",
         "object_read_buffer",
         "object_close_buffer",
+        "object_create_cursor",
+        "object_next_item",
+        "object_finish_cursor",
+        "tcp_start_listener",
+        "tcp_accept_connection",
+        "tcp_send_text",
+        "tcp_poll_send",
+        "tcp_close_listener",
+        "tcp_close_connection",
     ];
     assert_eq!(
         nodes.len(),
         expected_names.len(),
-        "Template should expose all 14 example nodes"
+        "Template should expose all example nodes"
     );
     let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
     for expected_name in expected_names {
