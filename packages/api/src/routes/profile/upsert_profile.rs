@@ -4,8 +4,11 @@ use crate::{
     middleware::jwt::AppUser,
     routes::{
         profile::{
-            delete_old_image, find_profile_for_user, generate_upload_url,
-            is_profile_unique_violation,
+            find_profile_for_user, is_profile_unique_violation,
+            media::{
+                cleanup_upload, finalize_upload, mutation_matches, normalize_image_extension,
+                prepare_upload,
+            },
         },
         user::ensure_user_exists,
     },
@@ -17,7 +20,7 @@ use axum::{
 };
 use flow_like::profile::{ProfileApp, ProfileShortcut, Settings};
 use flow_like_types::{Value, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use utoipa::ToSchema;
@@ -30,10 +33,18 @@ pub struct ProfileBody {
     pub icon_upload_ext: Option<String>,
     /// File extension for thumbnail upload (e.g., "png", "jpg"). If set, server will generate a signed URL.
     pub thumbnail_upload_ext: Option<String>,
+    /// Complete an image allocated by a previous upload request.
+    pub icon_upload_id: Option<String>,
+    pub thumbnail_upload_id: Option<String>,
     pub interests: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::deserialize_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[schema(value_type = Option<Object>)]
-    pub theme: Option<Value>,
+    pub theme: Option<Option<Value>>,
     pub bit_ids: Option<Vec<String>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub apps: Option<Vec<ProfileApp>>,
@@ -66,6 +77,9 @@ pub struct UpsertProfileResponse {
     pub icon_upload_url: Option<String>,
     /// Signed URL for uploading thumbnail (if requested)
     pub thumbnail_upload_url: Option<String>,
+    pub icon_upload_id: Option<String>,
+    pub thumbnail_upload_id: Option<String>,
+    pub upload_pending: bool,
 }
 
 #[utoipa::path(
@@ -86,9 +100,30 @@ pub async fn upsert_profile(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(profile_id): Path<String>,
-    Json(profile_body): Json<ProfileBody>,
+    Json(mut profile_body): Json<ProfileBody>,
 ) -> Result<Json<UpsertProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    if let Some(name) = &profile_body.name {
+        profile_body.name = Some(super::validate_profile_name(name)?);
+    }
+    if (profile_body.icon_upload_ext.is_some() && profile_body.icon_upload_id.is_some())
+        || (profile_body.thumbnail_upload_ext.is_some()
+            && profile_body.thumbnail_upload_id.is_some())
+    {
+        return Err(ApiError::bad_request(
+            "Prepare and complete an image upload in separate requests",
+        ));
+    }
+
+    for extension in [
+        &profile_body.icon_upload_ext,
+        &profile_body.thumbnail_upload_ext,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        normalize_image_extension(extension)?;
+    }
     super::validate_home_patch(&profile_body.home_layout, &profile_body.home_default_id)?;
     if profile_id.trim().is_empty() {
         return Err(ApiError::bad_request("Profile ID is required"));
@@ -102,7 +137,48 @@ pub async fn upsert_profile(
             return Err(ApiError::gone("Profile has been deleted"));
         }
 
+        let mut published_icon = None;
+        let mut published_thumbnail = None;
+        let mut upload_pending = false;
+        if let Some(upload_id) = &profile_body.icon_upload_id {
+            published_icon = finalize_upload(
+                &state,
+                &sub,
+                upload_id,
+                &format!("profile:{profile_id}:icon"),
+                found_profile.icon.as_deref(),
+            )
+            .await?;
+            upload_pending |= published_icon.is_none();
+        }
+        if let Some(upload_id) = &profile_body.thumbnail_upload_id {
+            published_thumbnail = finalize_upload(
+                &state,
+                &sub,
+                upload_id,
+                &format!("profile:{profile_id}:thumbnail"),
+                found_profile.thumbnail.as_deref(),
+            )
+            .await?;
+            upload_pending |= published_thumbnail.is_none();
+        }
+        if upload_pending {
+            return Ok(Json(UpsertProfileResponse {
+                profile: found_profile,
+                icon_upload_url: None,
+                thumbnail_upload_url: None,
+                icon_upload_id: None,
+                thumbnail_upload_id: None,
+                upload_pending: true,
+            }));
+        }
         let mut active_model: profile::ActiveModel = found_profile.clone().into();
+        if let Some(icon) = published_icon {
+            active_model.icon = Set(Some(icon));
+        }
+        if let Some(thumbnail) = published_thumbnail {
+            active_model.thumbnail = Set(Some(thumbnail));
+        }
 
         if let Some(name) = profile_body.name {
             active_model.name = Set(name);
@@ -117,7 +193,7 @@ pub async fn upsert_profile(
             active_model.tags = Set(Some(tags.into()));
         }
         if let Some(theme) = profile_body.theme {
-            active_model.theme = Set(Some(theme));
+            active_model.theme = Set(theme);
         }
         if let Some(bit_ids) = profile_body.bit_ids {
             active_model.bit_ids = Set(Some(bit_ids.into()));
@@ -146,38 +222,97 @@ pub async fn upsert_profile(
             active_model.hubs = Set(Some(hubs.into()));
         }
 
-        // Handle icon upload request
-        let icon_upload_url = if let Some(ext) = &profile_body.icon_upload_ext {
-            if let Some(old_icon_id) = &found_profile.icon {
-                delete_old_image(&state, &sub, old_icon_id).await?;
-            }
-            let (upload_url, image_id) = generate_upload_url(&state, &sub, ext).await?;
-            active_model.icon = Set(Some(image_id));
-            Some(upload_url)
+        let (icon_upload_url, icon_upload_id) = if let Some(ext) = &profile_body.icon_upload_ext {
+            let (url, id) = prepare_upload(
+                &state,
+                &sub,
+                ext,
+                &format!("profile:{profile_id}:icon"),
+                found_profile.icon.as_deref(),
+            )
+            .await?;
+            (Some(url), Some(id))
         } else {
-            None
+            (None, None)
         };
-
-        // Handle thumbnail upload request
-        let thumbnail_upload_url = if let Some(ext) = &profile_body.thumbnail_upload_ext {
-            if let Some(old_thumb_id) = &found_profile.thumbnail {
-                delete_old_image(&state, &sub, old_thumb_id).await?;
-            }
-            let (upload_url, image_id) = generate_upload_url(&state, &sub, ext).await?;
-            active_model.thumbnail = Set(Some(image_id));
-            Some(upload_url)
-        } else {
-            None
-        };
+        let (thumbnail_upload_url, thumbnail_upload_id) =
+            if let Some(ext) = &profile_body.thumbnail_upload_ext {
+                let (url, id) = prepare_upload(
+                    &state,
+                    &sub,
+                    ext,
+                    &format!("profile:{profile_id}:thumbnail"),
+                    found_profile.thumbnail.as_deref(),
+                )
+                .await?;
+                (Some(url), Some(id))
+            } else {
+                (None, None)
+            };
 
         active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
-        let updated_profile = active_model.update(&state.db).await?;
+        let updated_profile = if profile_body.icon_upload_id.is_some()
+            || profile_body.thumbnail_upload_id.is_some()
+        {
+            let intended = active_model.clone();
+            let mut update = profile::Entity::update_many()
+                .set(active_model)
+                .filter(profile::Column::Id.eq(&profile_id))
+                .filter(profile::Column::UserId.eq(&sub))
+                .filter(profile::Column::DeletedAt.is_null());
+            if profile_body.icon_upload_id.is_some() {
+                update = update.filter(match &found_profile.icon {
+                    Some(icon) => profile::Column::Icon.eq(icon),
+                    None => profile::Column::Icon.is_null(),
+                });
+            }
+            if profile_body.thumbnail_upload_id.is_some() {
+                update = update.filter(match &found_profile.thumbnail {
+                    Some(thumbnail) => profile::Column::Thumbnail.eq(thumbnail),
+                    None => profile::Column::Thumbnail.is_null(),
+                });
+            }
+            let result = update.exec(&state.db).await?;
+            let latest = find_profile_for_user(&state.db, &sub, &profile_id)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            if latest.deleted_at.is_some() {
+                return Err(ApiError::gone("Profile has been deleted"));
+            }
+            if result.rows_affected != 1
+                && !mutation_matches(
+                    &intended,
+                    &latest.clone().into(),
+                    profile::Column::UpdatedAt,
+                )
+            {
+                return Err(ApiError::conflict(
+                    "The profile image changed during upload. Please try again",
+                ));
+            }
+            latest
+        } else {
+            active_model.update(&state.db).await?
+        };
+        if let Some(upload_id) = &profile_body.icon_upload_id {
+            cleanup_upload(&state, &sub, upload_id, found_profile.icon.as_deref()).await;
+        }
+        if let Some(upload_id) = &profile_body.thumbnail_upload_id {
+            cleanup_upload(&state, &sub, upload_id, found_profile.thumbnail.as_deref()).await;
+        }
         return Ok(Json(UpsertProfileResponse {
             profile: updated_profile,
             icon_upload_url,
             thumbnail_upload_url,
+            icon_upload_id,
+            thumbnail_upload_id,
+            upload_pending: false,
         }));
+    }
+
+    if profile_body.icon_upload_id.is_some() || profile_body.thumbnail_upload_id.is_some() {
+        return Err(ApiError::NOT_FOUND);
     }
 
     let ProfileBody {
@@ -185,6 +320,8 @@ pub async fn upsert_profile(
         description,
         icon_upload_ext,
         thumbnail_upload_ext,
+        icon_upload_id: _,
+        thumbnail_upload_id: _,
         interests,
         tags,
         theme,
@@ -222,33 +359,18 @@ pub async fn upsert_profile(
         .or_else(|| hubs.as_ref().and_then(|h| h.first().cloned()))
         .unwrap_or_else(|| "https://api.flow-like.com".to_string());
 
-    // Generate upload URLs for the new profile
-    let (mut icon_upload_url, icon_id) = if let Some(ext) = &icon_upload_ext {
-        let (url, img_id) = generate_upload_url(&state, &sub, ext).await?;
-        (Some(url), Some(img_id))
-    } else {
-        (None, None)
-    };
-
-    let (mut thumbnail_upload_url, thumbnail_id) = if let Some(ext) = &thumbnail_upload_ext {
-        let (url, img_id) = generate_upload_url(&state, &sub, ext).await?;
-        (Some(url), Some(img_id))
-    } else {
-        (None, None)
-    };
-
     let make_new_profile = |id: String| {
         let now = chrono::Utc::now().fixed_offset();
         profile::ActiveModel {
             id: Set(id),
             user_id: Set(sub.clone()),
-            name: Set(name.clone().unwrap_or_default()),
+            name: Set(name.clone().unwrap_or_else(|| "New Profile".to_string())),
             description: Set(description.clone()),
-            icon: Set(icon_id.clone()),
-            thumbnail: Set(thumbnail_id.clone()),
+            icon: Set(None),
+            thumbnail: Set(None),
             interests: Set(interests.clone().map(Into::into)),
             tags: Set(tags.clone().map(Into::into)),
-            theme: Set(theme.clone()),
+            theme: Set(theme.clone().flatten()),
             bit_ids: Set(bit_ids.clone().map(Into::into)),
             apps: Set(apps.clone()),
             shortcuts: Set(shortcuts.clone()),
@@ -267,8 +389,6 @@ pub async fn upsert_profile(
         Ok(created_profile) => created_profile,
         Err(e) if is_profile_unique_violation(&e) => {
             if let Some(existing) = find_profile_for_user(&state.db, &sub, &profile_id).await? {
-                icon_upload_url = None;
-                thumbnail_upload_url = None;
                 existing
             } else {
                 let fallback_profile_id = create_id();
@@ -290,9 +410,39 @@ pub async fn upsert_profile(
         return Err(ApiError::gone("Profile has been deleted"));
     }
 
+    let (icon_upload_url, icon_upload_id) = if let Some(ext) = &icon_upload_ext {
+        let (url, id) = prepare_upload(
+            &state,
+            &sub,
+            ext,
+            &format!("profile:{}:icon", created_profile.id),
+            created_profile.icon.as_deref(),
+        )
+        .await?;
+        (Some(url), Some(id))
+    } else {
+        (None, None)
+    };
+    let (thumbnail_upload_url, thumbnail_upload_id) = if let Some(ext) = &thumbnail_upload_ext {
+        let (url, id) = prepare_upload(
+            &state,
+            &sub,
+            ext,
+            &format!("profile:{}:thumbnail", created_profile.id),
+            created_profile.thumbnail.as_deref(),
+        )
+        .await?;
+        (Some(url), Some(id))
+    } else {
+        (None, None)
+    };
+
     Ok(Json(UpsertProfileResponse {
         profile: created_profile,
         icon_upload_url,
         thumbnail_upload_url,
+        icon_upload_id,
+        thumbnail_upload_id,
+        upload_pending: false,
     }))
 }

@@ -13,9 +13,11 @@ import { useHomeLibrary } from "./home-content/collections";
 import {
 	HOME_APP_RENDERINGS,
 	HOME_MODEL_RENDERINGS,
+	HOME_PACKAGE_RENDERINGS,
 	homeAppRendering,
 	homeLinksRendering,
 	homeModelRendering,
+	homePackageRendering,
 	numberConfig,
 	stringList,
 	textConfig,
@@ -447,6 +449,17 @@ function InformationSettings({ widget, onChange }: SettingsProps) {
 					["facts", "Facts and highlights"],
 				]}
 			/>
+			{mode === "resources" && (
+				<Choice
+					label="Resource layout"
+					value={textConfig(config, "layout", "cards")}
+					onChange={(value) => update("layout", value)}
+					choices={[
+						["cards", "Cards"],
+						["list", "Compact list"],
+					]}
+				/>
+			)}
 			{mode === "countdown" && (
 				<Field label="Milestone date">
 					{(id) => (
@@ -639,11 +652,262 @@ function InformationSettings({ widget, onChange }: SettingsProps) {
 	);
 }
 
+function DiscoverySettings({ widget, onChange }: SettingsProps) {
+	const config = widget.config;
+	const update = (key: string, value: unknown) =>
+		onChange({ ...config, [key]: value });
+	const categoryLabel = useAppCategoryLabel();
+	const model = widget.type === "model-spotlight";
+	const feature = widget.type === "app-collection-feature";
+	const spotlight = widget.type === "app-spotlight";
+	const source = textConfig(
+		config,
+		"source",
+		model ? "explore" : widget.type === "app-ranking" ? "popular" : "new",
+	);
+	return (
+		<div className="space-y-4">
+			{spotlight && (
+				<Choice
+					label="Feature size"
+					value={textConfig(config, "mode", "hero")}
+					onChange={(value) => update("mode", value)}
+					choices={[
+						["hero", "Large spotlight"],
+						["compact", "Compact feature"],
+					]}
+				/>
+			)}
+			<Choice
+				label={model ? "Model source" : "Apps to feature"}
+				value={source}
+				onChange={(value) => update("source", value)}
+				choices={
+					model
+						? [
+								["explore", "Explore models"],
+								["profile", "Models in this profile"],
+							]
+						: [
+								["new", "Latest apps"],
+								["popular", "Community favorites"],
+								["library", "This profile's library"],
+								["manual", "Choose apps"],
+							]
+				}
+			/>
+			{source === "manual" && (
+				<HomeAppPicker
+					multiple={!spotlight}
+					label={spotlight ? "Featured app" : "Featured collection"}
+					value={
+						spotlight
+							? [textConfig(config, "appId")].filter(Boolean)
+							: stringList(config, "appIds")
+					}
+					onChange={(ids) =>
+						update(
+							spotlight ? "appId" : "appIds",
+							spotlight ? (ids[0] ?? "") : ids,
+						)
+					}
+				/>
+			)}
+			{source !== "manual" && (
+				<Field
+					label={model ? "Find a model" : "Search filter"}
+					hint={
+						model
+							? "Feature the first matching model, or leave blank to discover one."
+							: "Leave blank to include all matching apps."
+					}
+				>
+					{(id) => (
+						<Input
+							id={id}
+							value={textConfig(config, "query")}
+							onChange={(event) => update("query", event.target.value)}
+							placeholder={
+								model ? "Model name or keyword" : "App name or keyword"
+							}
+						/>
+					)}
+				</Field>
+			)}
+			{!model && (
+				<Choice
+					label="Category"
+					value={textConfig(config, "category")}
+					onChange={(value) => update("category", value)}
+					choices={[
+						["", "All categories"],
+						...APP_CATEGORY_ORDER.map(
+							(category) =>
+								[category, categoryLabel(category)] as [string, string],
+						),
+					]}
+				/>
+			)}
+			<Field label="Eyebrow" hint="The short label above the heading.">
+				{(id) => (
+					<Input
+						id={id}
+						value={textConfig(config, "eyebrow")}
+						onChange={(event) => update("eyebrow", event.target.value)}
+						placeholder={model ? "MODEL SPOTLIGHT" : "IN THE SPOTLIGHT"}
+					/>
+				)}
+			</Field>
+			{feature && (
+				<>
+					<Field label="Feature headline">
+						{(id) => (
+							<Textarea
+								id={id}
+								rows={2}
+								value={textConfig(config, "headline")}
+								onChange={(event) => update("headline", event.target.value)}
+							/>
+						)}
+					</Field>
+					<Field label="Feature description">
+						{(id) => (
+							<Textarea
+								id={id}
+								rows={2}
+								value={textConfig(config, "description")}
+								onChange={(event) => update("description", event.target.value)}
+							/>
+						)}
+					</Field>
+				</>
+			)}
+			{!spotlight && !model && (
+				<Field label="Number of apps">
+					{(id) => (
+						<Input
+							id={id}
+							type="number"
+							min={1}
+							max={feature ? 6 : 10}
+							value={numberConfig(config, "limit", feature ? 3 : 6)}
+							onChange={(event) => update("limit", Number(event.target.value))}
+						/>
+					)}
+				</Field>
+			)}
+			{model && (
+				<details className="rounded-lg border border-border/60 p-3 text-xs">
+					<summary className="cursor-pointer font-medium">
+						Choose an exact model
+					</summary>
+					<div className="mt-3 space-y-3">
+						<Field
+							label="Model ID"
+							hint="Optional. Leave blank to follow the source and search above."
+						>
+							{(id) => (
+								<Input
+									id={id}
+									value={textConfig(config, "modelId")}
+									onChange={(event) => update("modelId", event.target.value)}
+								/>
+							)}
+						</Field>
+						<Field label="Model hub">
+							{(id) => (
+								<Input
+									id={id}
+									value={textConfig(config, "modelHub")}
+									onChange={(event) => update("modelHub", event.target.value)}
+									placeholder="Optional hub"
+								/>
+							)}
+						</Field>
+					</div>
+				</details>
+			)}
+		</div>
+	);
+}
+
 export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	const config = widget.config;
 	const update = (key: string, value: unknown) =>
 		onChange({ ...config, [key]: value });
 	const categoryLabel = useAppCategoryLabel();
+	if (widget.type === "section-heading")
+		return (
+			<div className="space-y-4">
+				<Field label="Link label">
+					{(id) => (
+						<Input
+							id={id}
+							value={textConfig(config, "linkLabel")}
+							onChange={(event) => update("linkLabel", event.target.value)}
+							placeholder="Explore all"
+						/>
+					)}
+				</Field>
+				<Field label="Link destination" hint="An app route or an HTTPS link.">
+					{(id) => (
+						<Input
+							id={id}
+							value={textConfig(config, "href")}
+							onChange={(event) => update("href", event.target.value)}
+							placeholder="/library"
+						/>
+					)}
+				</Field>
+			</div>
+		);
+	if (
+		[
+			"app-spotlight",
+			"app-ranking",
+			"app-collection-feature",
+			"model-spotlight",
+		].includes(widget.type)
+	)
+		return <DiscoverySettings widget={widget} onChange={onChange} />;
+	if (widget.type === "workspace-pulse")
+		return (
+			<div className="space-y-4">
+				<Choice
+					label="Workspace presentation"
+					value={textConfig(config, "mode", "card")}
+					onChange={(value) => update("mode", value)}
+					choices={[
+						["card", "Overview card"],
+						["strip", "Compact summary"],
+						["attention", "Needs attention"],
+					]}
+				/>
+				<Choice
+					label="Activity period"
+					value={String(numberConfig(config, "days", 7))}
+					onChange={(value) => update("days", Number(value))}
+					choices={[
+						["1", "Today"],
+						["7", "Last 7 days"],
+						["30", "Last 30 days"],
+					]}
+				/>
+				<label className="flex items-center gap-2 text-xs">
+					<input
+						type="checkbox"
+						className="accent-primary"
+						checked={config.showAttention !== false}
+						onChange={(event) => update("showAttention", event.target.checked)}
+					/>
+					Include records that need attention
+				</label>
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					Shows your profile's apps and your account's recorded activity. Local
+					and new profiles get useful starting points.
+				</p>
+			</div>
+		);
 	if (widget.type === "app-embed")
 		return <EmbedSettings widget={widget} onChange={onChange} />;
 	if (widget.type === "information")
@@ -662,6 +926,15 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 						["hero", "Full animated hero"],
 					]}
 				/>
+				<label className="flex items-center gap-2 text-xs">
+					<input
+						type="checkbox"
+						className="accent-primary"
+						checked={config.suggestions === true}
+						onChange={(event) => update("suggestions", event.target.checked)}
+					/>
+					Show prompt suggestions below the bar
+				</label>
 				<Field label="Prompt placeholder">
 					{(id) => (
 						<Input
@@ -677,6 +950,15 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	if (widget.type === "greeting")
 		return (
 			<div className="space-y-4">
+				<Choice
+					label="Greeting style"
+					value={textConfig(config, "mode", "standard")}
+					onChange={(value) => update("mode", value)}
+					choices={[
+						["standard", "Large greeting"],
+						["masthead", "Compact masthead"],
+					]}
+				/>
 				<Field
 					label="Name"
 					hint="Leave blank to use your account's first name."
@@ -704,6 +986,19 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	if (widget.type === "app-collection")
 		return (
 			<div className="space-y-4">
+				{!["editorial", "icons"].includes(
+					homeAppRendering(config, widget.appearance.variant),
+				) && (
+					<label className="flex items-center gap-2 text-xs">
+						<input
+							type="checkbox"
+							className="accent-primary"
+							checked={config.showUpdated === true}
+							onChange={(event) => update("showUpdated", event.target.checked)}
+						/>
+						Show update dates below cards
+					</label>
+				)}
 				<Choice
 					label="Card style"
 					value={homeAppRendering(config, widget.appearance.variant)}
@@ -711,6 +1006,24 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 					choices={HOME_APP_RENDERINGS}
 					hint="Standard uses the same cards as your library. Cards adapt to this widget's width."
 				/>
+				{["standard", "compact"].includes(
+					homeAppRendering(config, widget.appearance.variant),
+				) && (
+					<Choice
+						label="Maximum columns"
+						value={String(config.maxColumns ?? 0)}
+						onChange={(value) => update("maxColumns", Number(value))}
+						choices={[
+							["0", "Automatic"],
+							["1", "One"],
+							["2", "Two"],
+							["3", "Three"],
+							["4", "Four"],
+							["6", "Six"],
+						]}
+						hint="Cards stack into fewer columns when the widget gets narrower."
+					/>
+				)}
 				<Choice
 					label="Apps to show"
 					value={textConfig(config, "source", "library")}
@@ -817,18 +1130,11 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 			<div className="space-y-4">
 				{widget.type === "packages" && (
 					<Choice
-						label="Package layout"
-						value={
-							textConfig(config, "rendering", widget.appearance.variant) ===
-							"grid"
-								? "grid"
-								: "list"
-						}
+						label="Package card style"
+						value={homePackageRendering(config, widget.appearance.variant)}
 						onChange={(value) => update("rendering", value)}
-						choices={[
-							["list", "Package list"],
-							["grid", "Package cards"],
-						]}
+						choices={HOME_PACKAGE_RENDERINGS}
+						hint="The same cards as Explore packages, with artwork, permissions, and package details."
 					/>
 				)}
 				{widget.type === "models" && (
@@ -882,6 +1188,15 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	if (widget.type === "quick-actions")
 		return (
 			<div className="space-y-2">
+				<Choice
+					label="Action layout"
+					value={textConfig(config, "layout", "cards")}
+					onChange={(value) => update("layout", value)}
+					choices={[
+						["cards", "Cards with descriptions"],
+						["toolbar", "Compact action bar"],
+					]}
+				/>
 				{Object.entries(HOME_QUICK_ACTIONS).map(([id, action]) => (
 					<label
 						key={id}

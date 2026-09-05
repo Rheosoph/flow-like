@@ -49,6 +49,7 @@ import type {
 	ICommandSync,
 	ICommandSyncArchive,
 } from "@flow-like/flow-like-ui/lib";
+import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { createId } from "@paralleldrive/cuid2";
@@ -58,7 +59,11 @@ import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
 import { isIOSDevice } from "../lib/platform";
-import { type OnlineProfile, toLocalProfile } from "../lib/profile-sync";
+import {
+	type OnlineProfile,
+	mergeRemoteProfileMetadata,
+	toLocalProfile,
+} from "../lib/profile-sync";
 import { AiState } from "./tauri-provider/ai-state";
 import { AnalyticsState } from "./tauri-provider/analytics-state";
 import { ApiKeyState } from "./tauri-provider/api-key-state";
@@ -920,7 +925,7 @@ export function ProfileSyncer({
 			localPath?: string | null,
 		): boolean => {
 			if (!localPath) return true;
-			if (isAssetProxyPath(localPath)) return true;
+			if (isAssetProxyPath(localPath)) return false;
 			if (isHttpPath(localPath)) return true;
 			return false;
 		};
@@ -929,6 +934,14 @@ export function ProfileSyncer({
 			const ext = path.split(".").pop()?.toLowerCase() ?? "png";
 			if (ext === "jpeg") return "jpg";
 			return ext;
+		};
+
+		const getUploadExtension = (path: string): string | undefined => {
+			const extension = getExtension(path);
+			// Legacy image formats must not block synchronization of profile settings.
+			return ["webp", "png", "jpg", "gif", "avif"].includes(extension)
+				? extension
+				: undefined;
 		};
 
 		const getContentType = (ext: string): string => {
@@ -951,8 +964,13 @@ export function ProfileSyncer({
 			profileId: string,
 			iconField: "icon" | "thumbnail",
 			signedUrl: string,
+			apiBase: string,
+			uploadId?: string | null,
+			serverProfileId = profileId,
 		): Promise<boolean> => {
 			try {
+				if (!uploadId)
+					throw new Error("The server did not provide an image upload ID.");
 				const iconPath = await invoke<string | null>("get_profile_icon_path", {
 					profileId,
 					field: iconField,
@@ -965,14 +983,40 @@ export function ProfileSyncer({
 				const ext = getExtension(iconPath);
 				const bytes = new Uint8Array(fileData);
 
+				const headers: Record<string, string> = {
+					"Content-Type": getContentType(ext),
+				};
+				if (isAzureBlobStorageUrl(signedUrl))
+					headers["x-ms-blob-type"] = "BlockBlob";
 				const uploadResponse = await tauriFetch(signedUrl, {
 					method: "PUT",
-					headers: { "Content-Type": getContentType(ext) },
+					headers,
 					body: bytes,
 				});
-				return uploadResponse.ok;
-			} catch {
-				console.warn(`Failed to upload ${iconField} for ${profileId}`);
+				if (!uploadResponse.ok)
+					throw new Error(`Image upload failed (${uploadResponse.status}).`);
+				await completeMediaUpload(async () => {
+					const response = await tauriFetch(
+						`${apiBase}/api/v1/profile/${encodeURIComponent(serverProfileId)}`,
+						{
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								Authorization: `Bearer ${accessToken}`,
+							},
+							body: JSON.stringify({ [`${iconField}_upload_id`]: uploadId }),
+						},
+					);
+					if (!response.ok)
+						throw new Error(`Image confirmation failed (${response.status}).`);
+					const result = (await response.json()) as {
+						upload_pending?: boolean;
+					};
+					return result;
+				});
+				return true;
+			} catch (error) {
+				console.warn(`Failed to upload ${iconField} for ${profileId}`, error);
 				return false;
 			}
 		};
@@ -985,6 +1029,8 @@ export function ProfileSyncer({
 		): Promise<{
 			icon_upload_url?: string | null;
 			thumbnail_upload_url?: string | null;
+			icon_upload_id?: string | null;
+			thumbnail_upload_id?: string | null;
 		} | null> => {
 			if (!iconExt && !thumbnailExt) {
 				return null;
@@ -1020,6 +1066,8 @@ export function ProfileSyncer({
 				const result = (await response.json()) as {
 					icon_upload_url?: string | null;
 					thumbnail_upload_url?: string | null;
+					icon_upload_id?: string | null;
+					thumbnail_upload_id?: string | null;
 				};
 				return result;
 			} catch (error) {
@@ -1235,11 +1283,11 @@ export function ProfileSyncer({
 					const hasLocalThumbnail = isLocalFilePath(hubProfile.thumbnail);
 					const iconExt =
 						hasLocalIcon && hubProfile.icon
-							? getExtension(hubProfile.icon)
+							? getUploadExtension(hubProfile.icon)
 							: undefined;
 					const thumbnailExt =
 						hasLocalThumbnail && hubProfile.thumbnail
-							? getExtension(hubProfile.thumbnail)
+							? getUploadExtension(hubProfile.thumbnail)
 							: undefined;
 
 					if ((hasLocalIcon || hasLocalThumbnail) && hubProfile.id) {
@@ -1311,11 +1359,15 @@ export function ProfileSyncer({
 						server_id: string;
 						icon_upload_url?: string;
 						thumbnail_upload_url?: string;
+						icon_upload_id?: string | null;
+						thumbnail_upload_id?: string | null;
 					}>;
 					updated: Array<{
 						id: string;
 						icon_upload_url?: string;
 						thumbnail_upload_url?: string;
+						icon_upload_id?: string | null;
+						thumbnail_upload_id?: string | null;
 					}>;
 					skipped: string[];
 					deleted: string[];
@@ -1363,6 +1415,8 @@ export function ProfileSyncer({
 					}
 				}
 
+				const failedMediaProfiles = new Set<string>();
+
 				for (const created of result.created) {
 					console.log(
 						"[ProfileSync] Processing created profile:",
@@ -1372,36 +1426,50 @@ export function ProfileSyncer({
 					);
 					const localImages = profilesWithLocalImages.get(created.local_id);
 					if (localImages?.icon && created.icon_upload_url) {
-						await uploadIconByProfileId(
+						const saved = await uploadIconByProfileId(
 							created.local_id,
 							"icon",
 							created.icon_upload_url,
+							apiBase,
+							created.icon_upload_id,
+							created.server_id,
 						);
+						if (!saved) failedMediaProfiles.add(created.server_id);
 					}
 					if (localImages?.thumbnail && created.thumbnail_upload_url) {
-						await uploadIconByProfileId(
+						const saved = await uploadIconByProfileId(
 							created.local_id,
 							"thumbnail",
 							created.thumbnail_upload_url,
+							apiBase,
+							created.thumbnail_upload_id,
+							created.server_id,
 						);
+						if (!saved) failedMediaProfiles.add(created.server_id);
 					}
 				}
 
 				for (const updated of result.updated) {
 					const localImages = profilesWithLocalImages.get(updated.id);
 					if (localImages?.icon && updated.icon_upload_url) {
-						await uploadIconByProfileId(
+						const saved = await uploadIconByProfileId(
 							updated.id,
 							"icon",
 							updated.icon_upload_url,
+							apiBase,
+							updated.icon_upload_id,
 						);
+						if (!saved) failedMediaProfiles.add(updated.id);
 					}
 					if (localImages?.thumbnail && updated.thumbnail_upload_url) {
-						await uploadIconByProfileId(
+						const saved = await uploadIconByProfileId(
 							updated.id,
 							"thumbnail",
 							updated.thumbnail_upload_url,
+							apiBase,
+							updated.thumbnail_upload_id,
 						);
+						if (!saved) failedMediaProfiles.add(updated.id);
 					}
 				}
 
@@ -1416,6 +1484,14 @@ export function ProfileSyncer({
 						localId: local_id,
 						serverId: server_id,
 					});
+					if (local_id !== server_id) {
+						const images = profilesWithLocalImages.get(local_id);
+						const extensions = profileLocalImageExts.get(local_id);
+						if (images) profilesWithLocalImages.set(server_id, images);
+						if (extensions) profileLocalImageExts.set(server_id, extensions);
+						profilesWithLocalImages.delete(local_id);
+						profileLocalImageExts.delete(local_id);
+					}
 					const shortcuts = await appsDB.shortcuts
 						.where("profileId")
 						.equals(local_id)
@@ -1458,20 +1534,22 @@ export function ProfileSyncer({
 
 					const allOnlineProfiles =
 						(await profilesResponse.json()) as OnlineProfile[];
-					const tombstoneIds = new Set(
+					let tombstoneIds = new Set(
 						allOnlineProfiles.filter((p) => p.deleted_at).map((p) => p.id),
 					);
-					const onlineProfiles = allOnlineProfiles.filter((p) => !p.deleted_at);
-					const onlineProfilesById = new Map(
+					let onlineProfiles = allOnlineProfiles.filter((p) => !p.deleted_at);
+					let onlineProfilesById = new Map(
 						onlineProfiles.map((p) => [p.id, p]),
 					);
 
-					const onlineProfileIds = new Set(onlineProfiles.map((p) => p.id));
+					let onlineProfileIds = new Set(onlineProfiles.map((p) => p.id));
 
 					// Fallback media sync path:
 					// if the bulk sync endpoint returns no upload URLs, backfill media for profiles
 					// that still have local files but missing media on the server.
+					let fallbackMediaChanged = false;
 					for (const [profileId, localImages] of profilesWithLocalImages) {
+						if (failedMediaProfiles.has(profileId)) continue;
 						const remoteProfile = onlineProfilesById.get(profileId);
 						if (!remoteProfile) continue;
 
@@ -1503,19 +1581,46 @@ export function ProfileSyncer({
 						if (!fallbackUrls) continue;
 
 						if (needsIconUpload && fallbackUrls.icon_upload_url) {
-							await uploadIconByProfileId(
+							const saved = await uploadIconByProfileId(
 								profileId,
 								"icon",
 								fallbackUrls.icon_upload_url,
+								apiBase,
+								fallbackUrls.icon_upload_id,
 							);
+							fallbackMediaChanged ||= saved;
 						}
 						if (needsThumbnailUpload && fallbackUrls.thumbnail_upload_url) {
-							await uploadIconByProfileId(
+							const saved = await uploadIconByProfileId(
 								profileId,
 								"thumbnail",
 								fallbackUrls.thumbnail_upload_url,
+								apiBase,
+								fallbackUrls.thumbnail_upload_id,
 							);
+							fallbackMediaChanged ||= saved;
 						}
+					}
+
+					if (fallbackMediaChanged) {
+						// Read signed image URLs after confirmation; the mutation returns storage IDs.
+						const refreshed = await tauriFetch(`${apiBase}/api/v1/profile`, {
+							method: "GET",
+							headers: { Authorization: `Bearer ${accessToken}` },
+						});
+						if (!refreshed.ok)
+							throw new Error("Could not refresh uploaded profile images.");
+						const freshProfiles = (await refreshed.json()) as OnlineProfile[];
+						onlineProfiles = freshProfiles.filter((item) => !item.deleted_at);
+						onlineProfilesById = new Map(
+							onlineProfiles.map((item) => [item.id, item]),
+						);
+						onlineProfileIds = new Set(onlineProfiles.map((item) => item.id));
+						tombstoneIds = new Set(
+							freshProfiles
+								.filter((item) => item.deleted_at)
+								.map((item) => item.id),
+						);
 					}
 
 					const currentLocalProfiles =
@@ -1643,24 +1748,11 @@ export function ProfileSyncer({
 									")",
 								);
 
-								localProfile.hub_profile.name = onlineProfile.name;
-								localProfile.hub_profile.description =
-									onlineProfile.description ?? null;
-								localProfile.hub_profile.interests =
-									onlineProfile.interests ?? [];
-								localProfile.hub_profile.tags = onlineProfile.tags ?? [];
-								localProfile.hub_profile.theme = onlineProfile.theme ?? null;
-								localProfile.hub_profile.home_layout =
-									onlineProfile.home_layout ?? null;
-								localProfile.hub_profile.home_default_id =
-									onlineProfile.home_default_id ?? null;
-								localProfile.hub_profile.bits = onlineProfile.bit_ids ?? [];
-								localProfile.hub_profile.apps = onlineProfile.apps ?? [];
-								localProfile.hub_profile.hub = onlineProfile.hub;
-								localProfile.hub_profile.hubs = onlineProfile.hubs ?? [];
-								localProfile.hub_profile.settings =
-									onlineProfile.settings ?? localProfile.hub_profile.settings;
-								localProfile.hub_profile.updated = onlineProfile.updated_at;
+								mergeRemoteProfileMetadata(
+									localProfile,
+									onlineProfile,
+									failedMediaProfiles.has(onlineProfile.id),
+								);
 
 								if (
 									shouldReplaceWithServerImage(localProfile.hub_profile.icon) &&
@@ -1676,8 +1768,6 @@ export function ProfileSyncer({
 								) {
 									localProfile.hub_profile.thumbnail = onlineProfile.thumbnail;
 								}
-
-								localProfile.updated = onlineProfile.updated_at;
 
 								try {
 									await invoke("upsert_profile", {

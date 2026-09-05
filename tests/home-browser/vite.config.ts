@@ -33,12 +33,13 @@ export default defineConfig({
 		],
 		dedupe: ["react", "react-dom", "@tanstack/react-query"],
 	},
-	css: { postcss: { plugins: [tailwind()] } },
+	css: { postcss: { plugins: [tailwind({ base: root })] } },
 	server: {
 		host: "127.0.0.1",
 		port: 4318,
 		strictPort: true,
 		hmr: false,
+		watch: { ignored: ["**/target/**", "**/.next/**", "**/dist/**"] },
 		fs: { allow: [repo] },
 	},
 	optimizeDeps: {

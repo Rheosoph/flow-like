@@ -6,12 +6,16 @@ import type {
 	ISettings,
 	IUserState,
 } from "@flow-like/flow-like-ui";
-import { IAppVisibility, isAzureBlobStorageUrl } from "@flow-like/flow-like-ui";
+import { IAppVisibility } from "@flow-like/flow-like-ui";
 import type {
 	IHomeDefault,
 	IHomeDefaults,
 	IHomeLayout,
 } from "@flow-like/flow-like-ui/components/home/types";
+import {
+	type MediaUploadResponse,
+	updateAccountWithAvatar,
+} from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -536,32 +540,9 @@ export class WebUserState implements IUserState {
 	}
 
 	async updateUser(data: IUserUpdate, avatar?: File): Promise<void> {
-		if (avatar) {
-			data.avatar_extension = avatar.name.split(".").pop() || "";
-		}
-
-		const response = await apiPut<{ signed_url?: string }>(
-			"user/info",
-			data,
-			this.backend.auth,
+		await updateAccountWithAvatar(data, avatar, (body) =>
+			apiPut<MediaUploadResponse>("user/info", body, this.backend.auth),
 		);
-
-		if (response?.signed_url && avatar) {
-			const headers: HeadersInit = {
-				"Content-Type": avatar.type,
-			};
-
-			// Azure Blob Storage requires x-ms-blob-type header
-			if (isAzureBlobStorageUrl(response.signed_url)) {
-				headers["x-ms-blob-type"] = "BlockBlob";
-			}
-
-			await fetch(response.signed_url, {
-				method: "PUT",
-				body: avatar,
-				headers,
-			});
-		}
 	}
 
 	async updateProfileApp(

@@ -282,6 +282,14 @@ pub async fn upsert_profile(
     // Custom bits are managed only through upsert_custom_bit/remove_custom_bit;
     // a client-provided profile copy must never wipe them.
     let mut profile = profile;
+    if let Some(icon) = profile
+        .hub_profile
+        .icon
+        .as_deref()
+        .and_then(decode_asset_proxy_path)
+    {
+        profile.hub_profile.icon = Some(icon);
+    }
     if let Some(existing) = settings.profiles.get(&profile.hub_profile.id) {
         profile.hub_profile.custom_bits = existing.hub_profile.custom_bits.clone();
     }
@@ -296,6 +304,56 @@ pub async fn upsert_profile(
 
     settings.serialize();
     Ok(profile.clone())
+}
+
+fn apply_profile_settings(
+    existing: &mut UserProfile,
+    changes: UserProfile,
+) -> Result<(), TauriFunctionError> {
+    let name = changes.hub_profile.name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err(TauriFunctionError::new(
+            "Enter a profile name with 1 to 100 characters.",
+        ));
+    }
+    if changes.execution_settings.max_context_size > u32::MAX as usize {
+        return Err(TauriFunctionError::new(
+            "The context size must fit within a 32-bit unsigned integer.",
+        ));
+    }
+    let now = now_iso();
+    existing.hub_profile.name = name.to_string();
+    existing.hub_profile.description = changes.hub_profile.description;
+    existing.hub_profile.interests = changes.hub_profile.interests;
+    existing.hub_profile.tags = changes.hub_profile.tags;
+    existing.hub_profile.theme = changes.hub_profile.theme;
+    existing.hub_profile.settings = changes.hub_profile.settings;
+    existing.execution_settings = changes.execution_settings;
+    existing.hub_profile.updated = now.clone();
+    existing.updated = now;
+    Ok(())
+}
+
+/// Edit workspace preferences without overwriting concurrently updated app membership or media.
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn update_profile_settings(
+    app_handle: AppHandle,
+    profile: UserProfile,
+) -> Result<UserProfile, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+    let existing = settings
+        .profiles
+        .get_mut(&profile.hub_profile.id)
+        .ok_or_else(|| TauriFunctionError::new("This profile no longer exists."))?;
+    apply_profile_settings(existing, profile)?;
+    let updated = existing.clone();
+    if settings.current_profile == updated.hub_profile.id {
+        settings.set_current_profile(&updated, &app_handle).await?;
+    }
+    settings.serialize();
+    Ok(updated)
 }
 
 /// Remap a profile's ID from local to server ID after sync
@@ -495,6 +553,35 @@ pub async fn get_custom_bits(app_handle: AppHandle) -> Result<Vec<Bit>, TauriFun
         .collect())
 }
 
+fn validate_profile_image(bytes: &[u8]) -> Result<&'static str, TauriFunctionError> {
+    if bytes.is_empty() || bytes.len() > 10 * 1024 * 1024 {
+        return Err(TauriFunctionError::new(
+            "Choose an image smaller than 10 MB.",
+        ));
+    }
+    let format = image::guess_format(bytes)
+        .map_err(|_| TauriFunctionError::new("Choose a PNG, JPEG or WebP image."))?;
+    let extension = match format {
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::WebP => "webp",
+        _ => return Err(TauriFunctionError::new("Choose a PNG, JPEG or WebP image.")),
+    };
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|_| {
+        TauriFunctionError::new("This image could not be read. Choose a valid image no larger than 8192 pixels on each side.")
+    })?;
+    if decoded.width() == 0 || decoded.height() == 0 {
+        return Err(TauriFunctionError::new("This image could not be read."));
+    }
+    Ok(extension)
+}
+
 #[instrument(skip_all)]
 #[tauri::command(async)]
 pub async fn change_profile_image(
@@ -503,25 +590,32 @@ pub async fn change_profile_image(
 ) -> Result<(), TauriFunctionError> {
     let dir = get_cache_dir();
     let dir = dir.join("icons");
-    let file_path = app_handle
+    let Some(file_path) = app_handle
         .dialog()
         .file()
+        .add_filter("Profile images", &["png", "jpg", "jpeg", "webp"])
         .blocking_pick_file()
-        .ok_or(TauriFunctionError::new("No file selected"))?;
+    else {
+        return Ok(());
+    };
     let file_path = file_path
         .into_path()
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    let metadata =
+        std::fs::metadata(&file_path).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    if metadata.len() == 0 || metadata.len() > 10 * 1024 * 1024 {
+        return Err(TauriFunctionError::new(
+            "Choose an image smaller than 10 MB.",
+        ));
+    }
+    let bytes = std::fs::read(&file_path).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    let extension = validate_profile_image(&bytes)?;
     let hash = hash_file(&file_path);
-    let new_path = dir.join(format!(
-        "{}.{}",
-        hash,
-        file_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("png")
-    ));
+    let new_path = dir.join(format!("{hash}.{extension}"));
     std::fs::create_dir_all(&dir).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
-    std::fs::copy(&file_path, &new_path).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    if file_path != new_path {
+        std::fs::write(&new_path, &bytes).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    }
     let icon = new_path.to_string_lossy().to_string();
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
@@ -552,7 +646,9 @@ pub async fn change_profile_image(
             .filter(|p| p.hub_profile.icon == Some(icon.clone()))
             .count();
         if profiles_using_icon == 0 {
-            std::fs::remove_file(icon).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            if let Err(error) = std::fs::remove_file(&icon) {
+                tracing::warn!(%error, "Could not remove the previous profile image");
+            }
         }
     }
 
@@ -730,5 +826,111 @@ pub async fn get_profile_icon_path(
             Ok(Some(p))
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod profile_settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_patch_preserves_newer_membership_and_media() {
+        let mut existing = UserProfile::new(Profile::default());
+        existing.hub_profile.id = "profile".into();
+        existing.hub_profile.name = "Original".into();
+        existing.hub_profile.icon = Some("/new-icon.webp".into());
+        existing.hub_profile.bits = vec!["hub:new-model".into()];
+        existing.hub_profile.apps = Some(vec![ProfileApp::new("new-app".into())]);
+        existing.hub_profile.home_default_id = Some("new-home".into());
+        existing.hub_profile.theme = Some(flow_like_types::Value::String("old-theme".into()));
+        let mut stale_draft = existing.clone();
+        stale_draft.hub_profile.name = " Renamed ".into();
+        stale_draft.hub_profile.icon = Some("/old-icon.webp".into());
+        stale_draft.hub_profile.bits.clear();
+        stale_draft.hub_profile.apps = Some(vec![]);
+        stale_draft.hub_profile.home_default_id = None;
+        stale_draft.hub_profile.theme = None;
+        stale_draft.execution_settings.gpu_mode = false;
+        stale_draft.execution_settings.max_context_size = 0;
+
+        apply_profile_settings(&mut existing, stale_draft).unwrap();
+
+        assert_eq!(existing.hub_profile.name, "Renamed");
+        assert_eq!(existing.hub_profile.icon.as_deref(), Some("/new-icon.webp"));
+        assert_eq!(existing.hub_profile.bits, vec!["hub:new-model"]);
+        assert_eq!(
+            existing.hub_profile.apps.as_ref().unwrap()[0].app_id,
+            "new-app"
+        );
+        assert_eq!(
+            existing.hub_profile.home_default_id.as_deref(),
+            Some("new-home")
+        );
+        assert!(existing.hub_profile.theme.is_none());
+        assert!(!existing.execution_settings.gpu_mode);
+        assert_eq!(existing.execution_settings.max_context_size, 0);
+    }
+
+    #[test]
+    fn invalid_settings_patch_keeps_existing_values() {
+        let mut existing = UserProfile::new(Profile::default());
+        existing.hub_profile.name = "Original".into();
+        let before = existing.clone();
+        let mut changes = existing.clone();
+        changes.hub_profile.name = " ".into();
+        changes.hub_profile.description = Some("Should not save".into());
+        assert!(apply_profile_settings(&mut existing, changes).is_err());
+        assert_eq!(existing, before);
+    }
+}
+
+#[cfg(test)]
+mod profile_image_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn encoded_image(format: image::ImageFormat, width: u32) -> Vec<u8> {
+        let mut output = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(width, 2)
+            .write_to(&mut output, format)
+            .unwrap();
+        output.into_inner()
+    }
+
+    #[test]
+    fn accepts_complete_supported_images() {
+        for (format, extension) in [
+            (image::ImageFormat::Png, "png"),
+            (image::ImageFormat::Jpeg, "jpg"),
+            (image::ImageFormat::WebP, "webp"),
+        ] {
+            assert_eq!(
+                validate_profile_image(&encoded_image(format, 3)).unwrap(),
+                extension
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_corrupt_pixels_even_when_dimensions_are_readable() {
+        let mut bytes = encoded_image(image::ImageFormat::Png, 3);
+        let idat = bytes
+            .windows(4)
+            .position(|window| window == b"IDAT")
+            .unwrap();
+        bytes[idat + 4] ^= 0xff;
+        let dimensions =
+            image::ImageReader::with_format(Cursor::new(&bytes), image::ImageFormat::Png)
+                .into_dimensions()
+                .unwrap();
+        assert_eq!(dimensions, (3, 2));
+        assert!(validate_profile_image(&bytes).is_err());
+        assert!(validate_profile_image(&bytes[..idat + 4]).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_dimensions_and_invalid_headers() {
+        assert!(validate_profile_image(&encoded_image(image::ImageFormat::Png, 8193)).is_err());
+        assert!(validate_profile_image(b"invalid image").is_err());
     }
 }

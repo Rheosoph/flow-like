@@ -65,6 +65,11 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import {
+	flushCachedProfileDraft,
+	forgetCachedProfileDraft,
+	workspaceProfileDraftScope,
+} from "@flow-like/flow-like-ui/components/settings/profile/profile-draft";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useTranslation } from "@flow-like/locales";
@@ -395,7 +400,7 @@ function InnerSidebar() {
 						<span className="w-full flex flex-row items-center justify-between">
 							{t("toggleSidebar", "Toggle Sidebar")}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
-								{`⌘B`}
+								{"⌘B"}
 							</span>
 						</span>
 					</MotionSidebarMenuButton>
@@ -424,51 +429,62 @@ function Profiles() {
 		[],
 	);
 
+	const handleProfileChange = useCallback(
+		async (id: string) => {
+			if (id !== "")
+				await invoke("set_current_profile", {
+					profileId: id,
+				});
+			await Promise.allSettled([
+				invalidate(backend.userState.getProfile, []),
+				invalidate(backend.userState.getSettingsProfile, []),
+				invalidate(backend.appState.getApps, []),
+				invalidate(backend.bitState.searchBits, [
+					{
+						bit_types: [
+							IBitTypes.Llm,
+							IBitTypes.Vlm,
+							IBitTypes.Tts,
+							IBitTypes.Stt,
+							IBitTypes.Embedding,
+							IBitTypes.ImageEmbedding,
+						],
+					},
+				]),
+				invalidate(backend.bitState.searchBits, [
+					{
+						bit_types: [IBitTypes.Template],
+					},
+				]),
+			]);
+		},
+		[backend, invalidate],
+	);
+
 	const handleCreateProfile = useCallback(
 		async (profile: ISettingsProfile) => {
 			await invoke("upsert_profile", { profile });
 			await profiles.refetch();
 			await invalidate(backend.userState.getProfile, []);
 			await currentProfile.refetch();
-			if (profile.hub_profile.id) handleProfileChange(profile.hub_profile.id);
+			if (profile.hub_profile.id)
+				await handleProfileChange(profile.hub_profile.id);
 		},
-		[setCreateProfile],
+		[
+			backend,
+			invalidate,
+			profiles.refetch,
+			currentProfile.refetch,
+			handleProfileChange,
+		],
 	);
-
-	const handleProfileChange = useCallback(async (id: string) => {
-		if (id !== "")
-			await invoke("set_current_profile", {
-				profileId: id,
-			});
-		await Promise.allSettled([
-			invalidate(backend.userState.getProfile, []),
-			invalidate(backend.userState.getSettingsProfile, []),
-			invalidate(backend.appState.getApps, []),
-			invalidate(backend.bitState.searchBits, [
-				{
-					bit_types: [
-						IBitTypes.Llm,
-						IBitTypes.Vlm,
-						IBitTypes.Tts,
-						IBitTypes.Stt,
-						IBitTypes.Embedding,
-						IBitTypes.ImageEmbedding,
-					],
-				},
-			]),
-			invalidate(backend.bitState.searchBits, [
-				{
-					bit_types: [IBitTypes.Template],
-				},
-			]),
-		]);
-	}, []);
 
 	const [deleteTarget, setDeleteTarget] = useState<{
 		id: string;
 		name: string;
 	} | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
+	const deleteBusy = useRef(false);
 
 	const handleDeleteProfile = useCallback(
 		(profileId: string, profileName: string, e: React.MouseEvent) => {
@@ -485,19 +501,34 @@ function Profiles() {
 	);
 
 	const confirmDeleteProfile = useCallback(async () => {
-		if (!deleteTarget) return;
+		if (!deleteTarget || deleteBusy.current) return;
+		deleteBusy.current = true;
 		setIsDeleting(true);
 		try {
+			const targetProfile = profiles.data?.[deleteTarget.id]?.hub_profile;
+			if (!targetProfile)
+				throw new Error("Profile not found. Reload and try again.");
+			const draftScope = workspaceProfileDraftScope(
+				"desktop",
+				auth.user?.profile.sub,
+				process.env.NEXT_PUBLIC_API_URL ??
+					targetProfile.hub ??
+					auth.user?.profile.iss,
+			);
+			await flushCachedProfileDraft(draftScope, deleteTarget.id);
+			if (auth.isAuthenticated && !auth.user?.access_token)
+				throw new Error("Sign in again before deleting a synced profile.");
 			// Delete from server if authenticated
 			if (auth.isAuthenticated && auth.user?.access_token) {
 				try {
-					const profile = await invoke<{ hub?: string; secure?: boolean }>(
-						"get_current_profile",
-					).catch(() => null);
-					const hubUrl = profile?.hub;
+					const profile = profiles.data?.[deleteTarget.id]?.hub_profile;
+					if (!profile)
+						throw new Error("Profile not found. Reload and try again.");
 					const baseUrl =
-						process.env.NEXT_PUBLIC_API_URL ?? hubUrl ?? "api.flow-like.com";
-					const protocol = profile?.secure === false ? "http" : "https";
+						process.env.NEXT_PUBLIC_API_URL ??
+						profile.hub ??
+						"api.flow-like.com";
+					const protocol = profile.secure === false ? "http" : "https";
 					const apiBase = (
 						baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
 					).replace(/\/+$/, "");
@@ -529,21 +560,27 @@ function Profiles() {
 			}
 
 			await invoke("delete_profile", { profileId: deleteTarget.id });
+			forgetCachedProfileDraft(draftScope, deleteTarget.id);
 			await appsDB.shortcuts
 				.where("profileId")
 				.equals(deleteTarget.id)
 				.delete();
-			toast.success("Profile removed");
+			toast.success(
+				auth.isAuthenticated
+					? "Profile deleted"
+					: "Profile removed from this device",
+			);
+			setDeleteTarget(null);
 			await profiles.refetch();
 			await invalidate(backend.userState.getProfile, []);
 			await invalidate(backend.userState.getSettingsProfile, []);
 		} catch (err) {
 			toast.error(`${err}`);
 		} finally {
+			deleteBusy.current = false;
 			setIsDeleting(false);
-			setDeleteTarget(null);
 		}
-	}, [deleteTarget, profiles, invalidate, backend.userState, auth]);
+	}, [deleteTarget, profiles, invalidate, backend.userState, auth, t]);
 
 	return (
 		<SidebarMenu>
@@ -637,7 +674,7 @@ function Profiles() {
 											Object.keys(profiles.data ?? {}).length > 1 && (
 												<button
 													type="button"
-													aria-label={`Delete ${profile.hub_profile.name ?? "profile"}`}
+													aria-label={`${auth.isAuthenticated ? "Delete" : "Remove"} ${profile.hub_profile.name ?? "profile"}`}
 													className="text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors p-2 rounded shrink-0 extend-touch-target"
 													onClick={(e) =>
 														handleDeleteProfile(
@@ -687,23 +724,20 @@ function Profiles() {
 			<AlertDialog
 				open={!!deleteTarget}
 				onOpenChange={(open) => {
-					if (!open) setDeleteTarget(null);
+					if (!open && !isDeleting) setDeleteTarget(null);
 				}}
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							{t("deleteProfile", "Delete profile")}
+							{auth.isAuthenticated
+								? t("deleteProfile", "Delete profile")
+								: t("removeFromDevice", "Remove from this device")}
 						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t(
-								"areYouSureYouWantToDelete",
-								"Are you sure you want to delete",
-							)}{" "}
-							<span className="font-medium text-foreground">
-								{deleteTarget?.name}
-							</span>
-							{t("thisActionCannotBeUndone", "? This action cannot be undone.")}
+							{auth.isAuthenticated
+								? `Delete ${deleteTarget?.name} from this account and its synced devices? Your apps remain in your library.`
+								: `Remove ${deleteTarget?.name} from this device? Cloud copies remain and may return when you sign in. Sign in first to delete it from synced devices.`}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
@@ -711,11 +745,18 @@ function Profiles() {
 							{t("cancel", "Cancel")}
 						</AlertDialogCancel>
 						<AlertDialogAction
-							onClick={confirmDeleteProfile}
+							onClick={(event) => {
+								event.preventDefault();
+								void confirmDeleteProfile();
+							}}
 							disabled={isDeleting}
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 						>
-							{isDeleting ? "Deleting…" : "Delete"}
+							{isDeleting
+								? "Removing…"
+								: auth.isAuthenticated
+									? "Delete profile"
+									: "Remove from this device"}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

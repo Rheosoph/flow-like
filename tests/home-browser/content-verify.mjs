@@ -205,7 +205,7 @@ try {
 	});
 	await page.getByRole("button", { name: "Customize", exact: true }).waitFor();
 	await page.waitForFunction(
-		() => document.querySelectorAll("[data-home-widget]").length === 11,
+		() => document.querySelectorAll("[data-home-widget]").length === 16,
 	);
 	await page
 		.getByRole("heading", { name: "Community favorites", exact: true })
@@ -231,7 +231,7 @@ try {
 		});
 	}
 	report.passed.push(
-		"Actual default layout renders eleven catalog widgets at 1480px, 768px, and 390px without horizontal page overflow",
+		"Actual default layout renders sixteen catalog widgets at 1480px, 768px, and 390px without horizontal page overflow",
 	);
 	assert.deepEqual(report.errors, []);
 } catch (error) {

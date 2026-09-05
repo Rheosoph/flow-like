@@ -76,6 +76,44 @@ try {
 	report.passed.push(
 		"Greeting resolves Felix from the account response when JWT name claims are absent",
 	);
+	await page.locator('[data-workspace-mode="strip"]').waitFor();
+	await page.locator('[data-workspace-mode="attention"]').waitFor();
+	await page.waitForFunction(() => window.defaultHomeQa.calls.history === 1);
+	assert.equal(await page.locator("[data-home-section-heading]").count(), 3);
+	assert.equal(await widgets().count(), 16);
+	const guides = page.locator('[data-widget-type="information"]');
+	assert.equal(
+		await guides
+			.getByRole("link", { name: "Build your first flow", exact: true })
+			.getAttribute("href"),
+		"/learn",
+	);
+	const guideRows = await guides.locator("article").evaluateAll((elements) =>
+		elements.map((element) => {
+			const rect = element.getBoundingClientRect();
+			return {
+				left: Math.round(rect.left),
+				top: rect.top,
+				bottom: rect.bottom,
+			};
+		}),
+	);
+	assert.equal(guideRows.length, 3);
+	assert.equal(new Set(guideRows.map((row) => row.left)).size, 1);
+	assert.ok(
+		guideRows.every(
+			(row, index) => index === 0 || row.top >= guideRows[index - 1].bottom - 1,
+		),
+		"Useful guides form one readable vertical list",
+	);
+	assert.equal(
+		await page.evaluate(() => window.defaultHomeQa.calls.history),
+		1,
+		"The profile strip and attention panel share one execution history read",
+	);
+	report.passed.push(
+		"The status strip and attention panel share one account history request, with three editable section headings",
+	);
 	for (const scenario of ["returning", "fresh", "offline", "guest"]) {
 		await page
 			.getByLabel("Profile state", { exact: true })
@@ -129,6 +167,82 @@ try {
 				await page.setViewportSize({ width, height: width < 768 ? 844 : 1050 });
 				await top();
 				await fit(`${scenario}/${theme}/${width}`);
+				const geometry = await page.evaluate(() => {
+					const top = document
+						.querySelector("[data-home-canvas]")
+						.getBoundingClientRect().top;
+					const rect = (selector) => {
+						const value = document
+							.querySelector(selector)
+							.getBoundingClientRect();
+						return { y: value.top - top, height: value.height };
+					};
+					return {
+						strip: rect('[data-workspace-mode="strip"]'),
+						apps: rect('[data-widget-type="app-collection"]'),
+						hero: rect('[data-widget-type="app-spotlight"]'),
+						packages: rect('[data-widget-type="packages"]'),
+					};
+				});
+				assert.ok(
+					geometry.strip.y < 200,
+					"Profile context appears immediately after the greeting",
+				);
+				assert.ok(
+					geometry.apps.y < geometry.hero.y,
+					"Personal apps appear before discovery",
+				);
+				if (width === 390) {
+					assert.ok(
+						geometry.apps.y < 1000,
+						"Personal apps are within the first mobile scroll",
+					);
+					assert.ok(
+						geometry.packages.height < 900,
+						"Compact packages avoid a long mobile card wall",
+					);
+					assert.ok(
+						geometry.hero.height < 500,
+						"Compact mobile hero leaves room for other content",
+					);
+				}
+				if (scenario === "returning" && [1480, 390].includes(width)) {
+					const dates = await page
+						.locator("[data-home-app-updated]")
+						.evaluateAll((elements) =>
+							elements.map((element) => {
+								const date = element.getBoundingClientRect();
+								const row = element.parentElement.getBoundingClientRect();
+								const card =
+									element.parentElement.firstElementChild.getBoundingClientRect();
+								const frame = element
+									.closest("[data-home-widget]")
+									.getBoundingClientRect();
+								return {
+									x: Math.round(row.left),
+									dateTop: date.top,
+									dateBottom: date.bottom,
+									cardBottom: card.bottom,
+									rowBottom: row.bottom,
+									frameBottom: frame.bottom,
+								};
+							}),
+						);
+					assert.equal(dates.length, 4);
+					assert.equal(
+						new Set(dates.map((item) => item.x)).size,
+						width === 1480 ? 2 : 1,
+					);
+					assert.ok(
+						dates.every(
+							(item) =>
+								item.dateTop >= item.cardBottom - 1 &&
+								item.dateBottom <= item.rowBottom + 1 &&
+								item.dateBottom <= item.frameBottom + 1,
+						),
+						"App update dates stay below their cards and inside the measured frame",
+					);
+				}
 				await screenshot(`${scenario}-${theme}-${width}-top`);
 				if ([1480, 390].includes(width)) {
 					const count = await widgets().count();
@@ -199,9 +313,30 @@ try {
 		.getByRole("button", { name: /^Configure / })
 		.click();
 	await page.getByLabel("Name", { exact: true }).fill("Sam");
+	await page
+		.locator('[data-home-widget="default-workspace-heading"]')
+		.getByRole("button", { name: /^Configure / })
+		.click();
+	await page.getByLabel("Title", { exact: true }).fill("My studio");
+	await page
+		.getByLabel("Description", { exact: true })
+		.fill("Apps and records for my current projects.");
+	await page
+		.locator('[data-widget-type="app-collection"]')
+		.getByRole("button", { name: /^Configure / })
+		.click();
+	await page.getByLabel("Maximum columns", { exact: true }).selectOption("1");
 	await page.getByRole("button", { name: "Save", exact: true }).click();
 	await page.locator('[data-home-editor][data-editing="false"]').waitFor();
 	assert.match(await greeting().innerText(), /, Sam$/);
+	await page.getByRole("heading", { name: "My studio", exact: true }).waitFor();
+	assert.equal(
+		await page
+			.locator('[data-home-widget="default-workspace-heading"]')
+			.getByRole("link", { name: "Open library", exact: true })
+			.getAttribute("href"),
+		"/library",
+	);
 	assert.equal(
 		await page.evaluate(
 			() =>
@@ -211,8 +346,17 @@ try {
 		),
 		"Sam",
 	);
+	assert.equal(
+		await page.evaluate(
+			() =>
+				window.defaultHomeQa.saved.widgets.find(
+					(item) => item.type === "app-collection",
+				).config.maxColumns,
+		),
+		1,
+	);
 	report.passed.push(
-		"The greeting Name setting overrides the account name and persists through the real editor save callback",
+		"The greeting name and section heading text remain editable and persist through the real editor save callback",
 	);
 	await page.getByRole("button", { name: "Customize", exact: true }).click();
 	await page
@@ -229,7 +373,7 @@ try {
 		.getByRole("menuitem", { name: "Use Flow-Like starter", exact: true })
 		.click();
 	await greeting().filter({ hasText: "Felix" }).waitFor();
-	assert.equal(await widgets().count(), 11);
+	assert.equal(await widgets().count(), 16);
 	assert.equal(
 		await page.evaluate(
 			() =>
@@ -288,7 +432,7 @@ try {
 		.waitFor();
 	assert.equal(
 		await emptyHero
-			.getByRole("link", { name: "Open your library", exact: true })
+			.getByRole("link", { name: "Library", exact: true })
 			.getAttribute("href"),
 		"/library",
 	);
@@ -298,10 +442,14 @@ try {
 	await page.waitForFunction(
 		() => window.defaultHomeQa.flowPilotState() === "overlay",
 	);
-	await top();
+	await emptyHero.evaluate((element) =>
+		element.scrollIntoView({ block: "center" }),
+	);
 	await screenshot("empty-catalog-dark-1480-top");
 	await page.setViewportSize({ width: 390, height: 844 });
-	await top();
+	await emptyHero.evaluate((element) =>
+		element.scrollIntoView({ block: "center" }),
+	);
 	await fit("empty-catalog/390");
 	await screenshot("empty-catalog-dark-390-top");
 	await page.goto(
@@ -316,6 +464,14 @@ try {
 		await unratedHero.locator("dl").count(),
 		0,
 		"Missing rating and download data are not rendered as metrics",
+	);
+	assert.equal(
+		await unratedHero.getByText("Rating", { exact: true }).count(),
+		0,
+	);
+	assert.equal(
+		await unratedHero.getByText("Downloads", { exact: true }).count(),
+		0,
 	);
 	report.passed.push(
 		"Owned apps open their runtime, unowned apps open their store page, and rankings explain their community-rating source",

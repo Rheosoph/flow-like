@@ -1,4 +1,5 @@
 import type { IHomeLayout } from "@flow-like/flow-like-ui/components/home/types";
+import type { IProfile } from "@flow-like/flow-like-ui";
 
 export type OnlineProfile = {
 	id: string;
@@ -68,3 +69,30 @@ export const getDefaultApiBase = () => {
 	const full = baseUrl.startsWith("http") ? baseUrl : `https://${baseUrl}`;
 	return full.endsWith("/") ? full.slice(0, -1) : full;
 };
+
+export function mergeRemoteProfileMetadata(
+	local: { hub_profile: IProfile; updated: string },
+	remote: OnlineProfile,
+	preserveMediaRevision = false,
+) {
+	Object.assign(local.hub_profile, {
+		name: remote.name,
+		description: remote.description ?? null,
+		interests: remote.interests ?? [],
+		tags: remote.tags ?? [],
+		theme: remote.theme ?? null,
+		home_layout: remote.home_layout ?? null,
+		home_default_id: remote.home_default_id ?? null,
+		bits: remote.bit_ids ?? [],
+		apps: remote.apps ?? [],
+		hub: remote.hub,
+		hubs: remote.hubs ?? [],
+		settings: remote.settings ?? local.hub_profile.settings,
+	});
+	// Pending image uploads belong to this local revision. Advancing it would
+	// prevent the server from returning the upload on the next sync attempt.
+	if (!preserveMediaRevision) {
+		local.hub_profile.updated = remote.updated_at;
+		local.updated = remote.updated_at;
+	}
+}

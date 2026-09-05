@@ -41,6 +41,7 @@ import {
 	Search,
 	Settings2,
 	Smartphone,
+	Sparkles,
 	Tablet,
 	Trash2,
 	Undo2,
@@ -84,6 +85,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../ui/sheet";
 import { Textarea } from "../ui/textarea";
 import {
 	HOME_WIDGET_PRESETS,
+	createDefaultHomeLayout,
 	createHomeWidget,
 	getHomeWidgetPreset,
 } from "./catalog";
@@ -748,6 +750,21 @@ export function HomeEditor({
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end">
+									<DropdownMenuItem
+										disabled={saving}
+										onSelect={() => {
+											change(createDefaultHomeLayout());
+											setSelectedId(null);
+											setPanel(null);
+											setAnnouncement(
+												"Flow-Like starter layout loaded. Save to apply it.",
+											);
+										}}
+									>
+										<Sparkles className="h-4 w-4" />
+										Use Flow-Like starter
+									</DropdownMenuItem>
+									<DropdownMenuSeparator />
 									<DropdownMenuItem
 										onSelect={() => setConfirm("reset")}
 										disabled={saving}
@@ -1432,14 +1449,20 @@ function HomeWidgetFrame({
 	};
 	const preset = getHomeWidgetPreset(widget);
 	const ownHeader = [
+		"section-heading",
 		"greeting",
 		"flowpilot",
 		"app-embed",
 		"quick-actions",
+		"app-spotlight",
+		"app-ranking",
+		"app-collection-feature",
+		"model-spotlight",
+		"workspace-pulse",
 	].includes(widget.type);
 	const accent = ACCENTS[widget.appearance.accent] ?? ACCENTS.neutral;
 	const style: CSSProperties = {
-		gridColumn: `span ${homeWidgetSpan(size.columns, columns)}`,
+		gridColumn: `span ${Math.max(columns === 6 && ["app-spotlight", "app-ranking", "app-collection-feature", "model-spotlight", "workspace-pulse"].includes(widget.type) ? 3 : 1, homeWidgetSpan(size.columns, columns))}`,
 		gridRow: `span ${homeGridRowSpan(height)}`,
 		height: autoHeight ? undefined : height,
 		position: "relative",
@@ -1567,8 +1590,8 @@ function HomeWidgetFrame({
 				style={{ height: embedHeight }}
 			>
 				{!ownHeader && (widget.title || widget.description) && (
-					<header className="shrink-0 px-4 pt-4 pb-3">
-						<h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+					<header className="shrink-0 px-5 pt-5 pb-3">
+						<h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
 							<HomeWidgetIcon
 								name={preset?.icon}
 								className="h-4 w-4 shrink-0 text-[var(--home-accent)]"
@@ -1586,8 +1609,8 @@ function HomeWidgetFrame({
 					className={cn(
 						"relative min-h-0 min-w-0",
 						(!autoHeight || embedHeight) && "flex-1 overflow-auto",
-						!ownHeader && "px-4 pb-4",
-						!ownHeader && !widget.title && !widget.description && "pt-4",
+						!ownHeader && "px-5 pb-5",
+						!ownHeader && !widget.title && !widget.description && "pt-5",
 						ownHeader && autoHeight && !embedHeight && "overflow-hidden",
 					)}
 				>
@@ -1848,6 +1871,9 @@ function WidgetInspector({
 	onRemove: () => void;
 }) {
 	const preset = getHomeWidgetPreset(widget);
+	const contentSuppliesTitle = ["app-spotlight", "model-spotlight"].includes(
+		widget.type,
+	);
 	return (
 		<div className="min-h-0 flex-1 overflow-y-auto">
 			<div className="space-y-5 p-5">
@@ -1866,12 +1892,20 @@ function WidgetInspector({
 					</div>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="home-widget-title">Title</Label>
+					<Label htmlFor="home-widget-title">
+						{contentSuppliesTitle ? "Widget label" : "Title"}
+					</Label>
 					<Input
 						id="home-widget-title"
 						value={widget.title ?? ""}
 						onChange={(event) => onChange({ title: event.target.value })}
 					/>
+					{contentSuppliesTitle && (
+						<p className="text-[11px] leading-relaxed text-muted-foreground">
+							Used to identify this widget in the editor. Its visible headline
+							comes from the selected app or model.
+						</p>
+					)}
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="home-widget-description">Description</Label>

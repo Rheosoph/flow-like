@@ -1018,6 +1018,7 @@ pub fn run() {
             functions::settings::profiles::get_current_profile_id,
             functions::settings::profiles::set_current_profile,
             functions::settings::profiles::upsert_profile,
+            functions::settings::profiles::update_profile_settings,
             functions::settings::profiles::remap_profile_id,
             functions::settings::profiles::delete_profile,
             functions::settings::profiles::add_bit,

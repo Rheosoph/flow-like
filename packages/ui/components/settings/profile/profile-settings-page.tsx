@@ -1,34 +1,29 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	AlertTriangle,
-	Calendar,
-	Camera,
-	Cpu,
-	GitBranch,
-	Loader2,
-	Save,
-	Settings,
-	Trash2,
-	Upload,
-	User,
-	X,
-	Zap,
-} from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Camera, Check, Loader2, Trash2, Upload, X } from "lucide-react";
+import Link from "next/link";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { apiErrorMessage } from "../../../lib/api-error";
 import { parseDateValue } from "../../../lib/date";
-import type { ISettingsProfile } from "../../../types";
-import { IConnectionMode, IThemes } from "../../../types";
+import {
+	IConnectionMode,
+	type ISettingsProfile,
+	IThemes,
+} from "../../../types";
+import {
+	AlertDialog,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+	AlertDialogTrigger,
+} from "../../ui/alert-dialog";
+import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "../../ui/card";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import {
@@ -40,558 +35,535 @@ import {
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import type { ProfileSaveStatus } from "./profile-draft";
+import {
+	parseProfileTheme,
+	profileThemeCss,
+	themeSelection,
+} from "./profile-theme";
 
 export interface ProfileSettingsPageProps {
 	profile: ISettingsProfile;
 	isCustomTheme: boolean;
 	hasChanges: boolean;
+	saveStatus?: ProfileSaveStatus;
+	saveError?: string | null;
+	onRetrySave?: () => void;
 	themeTranslation: Record<IThemes, unknown>;
 	onProfileUpdate: (updates: Partial<ISettingsProfile>) => void;
 	onProfileImageChange?: () => Promise<void>;
 	onProfileDelete?: () => Promise<void>;
 	canDeleteProfile?: boolean;
+	deleteScope?: "cloud" | "local";
+	supportsExecutionSettings?: boolean;
 }
 
 export function ProfileSettingsPage({
 	profile,
 	isCustomTheme,
 	hasChanges,
+	saveStatus = hasChanges ? "pending" : "saved",
+	saveError,
+	onRetrySave,
 	themeTranslation,
 	onProfileUpdate,
 	onProfileImageChange,
 	onProfileDelete,
 	canDeleteProfile = false,
+	deleteScope = "cloud",
+	supportsExecutionSettings = true,
 }: ProfileSettingsPageProps) {
 	const { t } = useTranslation("settings");
-	const [themeSelectValue, setThemeSelectValue] = useState<string>(
-		profile.hub_profile.theme?.id ?? IThemes.FLOW_LIKE,
+	const theme = profile.hub_profile.theme;
+	const [selectedTheme, setSelectedTheme] = useState(() =>
+		themeSelection(theme),
 	);
-	const [customCss, setCustomCss] = useState("");
-	const [customThemeName, setCustomThemeName] = useState("Custom Theme");
+	const [customCss, setCustomCss] = useState(() =>
+		isCustomTheme ? profileThemeCss(theme) : "",
+	);
+	const [customName, setCustomName] = useState(() =>
+		isCustomTheme ? theme.id : "My theme",
+	);
 	const [importError, setImportError] = useState<string | null>(null);
+	const [imageError, setImageError] = useState<string | null>(null);
+	const [changingImage, setChangingImage] = useState(false);
+	const imageBusy = useRef(false);
+	const themeId = theme?.id;
+	useEffect(() => {
+		setSelectedTheme(themeSelection({ id: themeId }));
+	}, [themeId]);
 
-	const parseTweakcnTheme = useCallback(
-		(
-			input: string,
-			id = "Custom Theme",
-		): {
-			id: string;
-			light: Record<string, string>;
-			dark: Record<string, string>;
-		} => {
-			const toCamel = (name: string) =>
-				name
-					.replace(/^-+/, "")
-					.replace(/-([a-z0-9])/gi, (_, c) => c.toUpperCase());
-
-			const extractBlock = (source: string, selector: string) => {
-				const re = new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`, "m");
-				const m = source.match(re);
-				return m?.[1] ?? "";
-			};
-
-			const parseVars = (block: string) => {
-				const out: Record<string, string> = {};
-				const re = /--([a-z0-9-]+)\s*:\s*([^;]+);/gi;
-				let m: RegExpExecArray | null;
-				while ((m = re.exec(block))) {
-					const key = toCamel(m[1]);
-					const val = m[2].trim();
-					out[key] = val;
-				}
-				return out;
-			};
-
-			const root = extractBlock(input, ":root");
-			const dark = extractBlock(input, "\\.dark");
-			const lightVars = parseVars(root);
-			const darkVars = parseVars(dark);
-			return { id, light: lightVars, dark: darkVars };
-		},
-		[],
-	);
-
-	const handleThemeChange = useCallback(
-		(value: string) => {
-			setThemeSelectValue(value);
-			setImportError(null);
-			if (Object.values(IThemes).includes(value as IThemes)) {
-				onProfileUpdate({
-					hub_profile: {
-						...profile.hub_profile,
-						theme:
-							themeTranslation[value as IThemes] ??
-							themeTranslation[IThemes.FLOW_LIKE],
-					},
-				});
-			}
-		},
-		[profile, themeTranslation, onProfileUpdate],
-	);
-
-	const handleImportTheme = useCallback(() => {
+	const updateHub = (updates: Partial<ISettingsProfile["hub_profile"]>) =>
+		onProfileUpdate({ hub_profile: { ...profile.hub_profile, ...updates } });
+	const changeImage = async () => {
+		if (!onProfileImageChange || imageBusy.current) return;
+		imageBusy.current = true;
+		setChangingImage(true);
+		setImageError(null);
 		try {
-			const parsed = parseTweakcnTheme(
-				customCss,
-				customThemeName || "Custom Theme",
+			await onProfileImageChange();
+		} catch (error) {
+			setImageError(
+				apiErrorMessage(
+					error,
+					error instanceof Error
+						? error.message
+						: "Could not update the image. Try again.",
+				),
 			);
-			if (!parsed.light?.background && !parsed.dark?.background) {
-				throw new Error("No valid variables found.");
-			}
-			onProfileUpdate({
-				hub_profile: {
-					...profile.hub_profile,
-					theme: parsed as unknown as typeof profile.hub_profile.theme,
-				},
-			});
-			setThemeSelectValue("CUSTOM");
-			setImportError(null);
-		} catch (err: unknown) {
-			setImportError((err as Error)?.message ?? "Failed to import theme.");
+		} finally {
+			imageBusy.current = false;
+			setChangingImage(false);
 		}
-	}, [customCss, customThemeName, profile, onProfileUpdate, parseTweakcnTheme]);
+	};
+	const nameInvalid =
+		!profile.hub_profile.name.trim() || profile.hub_profile.name.length > 100;
+	const context = profile.execution_settings.max_context_size;
+	const contextInvalid =
+		!Number.isInteger(context) || context < 0 || context > 4294967295;
 
 	return (
-		<main className="bg-gradient-to-br from-background via-background to-muted/20 p-4 sm:p-6 flex-1 min-h-0 overflow-y-auto pb-10">
-			<div className="mx-auto max-w-6xl space-y-6">
-				{/* Header */}
-				<div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
-					<div className="space-y-1 min-w-0">
-						<h1 className="text-3xl sm:text-4xl font-bold tracking-tight flex items-center gap-3 break-words">
-							<User className="h-8 w-8 text-primary shrink-0" />
-							{profile.hub_profile.name || "Profile Settings"}
-							{isCustomTheme && (
-								<Badge variant="secondary" className="ml-2">
-									{t("customTheme", "Custom theme")}
-								</Badge>
-							)}
-						</h1>
-						<p className="text-muted-foreground">
-							{t(
-								"manageYourProfileSettingsAndPreferences",
-								"Manage your profile settings and preferences",
-							)}
-						</p>
+		<main className="flex-1 min-h-0 overflow-y-auto bg-background">
+			<div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+				<header className="space-y-4 border-b pb-6">
+					<div className="flex items-start justify-between gap-4 flex-wrap">
+						<div className="min-w-0 space-y-2">
+							<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+								{t("settings", "Settings")}
+							</p>
+							<h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+								{t("workspaceProfile", "Workspace profile")}
+							</h1>
+							<p className="max-w-xl text-sm leading-6 text-muted-foreground">
+								{t(
+									"workspaceProfileDescription",
+									"Organize your apps and personalize this workspace. Changes save automatically.",
+								)}
+							</p>
+						</div>
+						<output
+							aria-live="polite"
+							className="flex min-h-9 items-center gap-2 text-sm text-muted-foreground"
+						>
+							{saveStatus === "saved" ? (
+								<Check className="h-4 w-4" aria-hidden="true" />
+							) : saveStatus === "saving" ? (
+								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+							) : null}
+							{saveStatus === "saved"
+								? t("allChangesSaved", "All changes saved")
+								: saveStatus === "saving"
+									? t("savingChanges", "Saving changes…")
+									: saveStatus === "error"
+										? t("changesNotSaved", "Changes not saved")
+										: t("unsavedChanges", "Unsaved changes")}
+						</output>
 					</div>
-					{hasChanges && (
-						<div className="flex items-center gap-2 text-sm text-muted-foreground shrink-0">
-							<Save className="h-4 w-4" />
-							{t("savingChanges", "Saving changes...")}
+					<p className="text-sm text-muted-foreground">
+						{t(
+							"accountDetailsSeparate",
+							"Your public name, email and password are in",
+						)}{" "}
+						<Link
+							className="font-medium text-foreground underline underline-offset-4"
+							href="/account"
+						>
+							{t("accountSettings", "account settings")}
+						</Link>
+						.
+					</p>
+					{saveError && (
+						<div
+							role="alert"
+							className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+						>
+							<p className="min-w-0 break-words">
+								{saveError} {t("draftRetained", "Your changes are still here.")}
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={onRetrySave}
+								disabled={nameInvalid || contextInvalid}
+							>
+								{t("retrySave", "Retry save")}
+							</Button>
 						</div>
 					)}
-				</div>
+				</header>
 
-				<div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-					{/* Profile Information */}
-					<Card className="md:col-span-2">
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<User className="h-5 w-5" />
-								{t("profileInformation", "Profile Information")}
-							</CardTitle>
-							<CardDescription>
-								{t(
-									"basicInformationAboutYourProfile",
-									"Basic information about your profile",
-								)}
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="space-y-6">
-							<div className="flex flex-col md:flex-row gap-4 md:gap-6">
-								<div className="flex-shrink-0">
-									<button
-										className="relative group"
-										onClick={onProfileImageChange}
-										disabled={!onProfileImageChange}
+				<fieldset disabled={changingImage} className="min-w-0">
+					<SettingsSection
+						title={t("profileDetails", "Profile details")}
+						description={t(
+							"profileDetailsDescription",
+							"A name and image to recognize this workspace in the profile switcher.",
+						)}
+					>
+						<div className="flex flex-wrap items-center gap-4">
+							<Avatar className="h-20 w-20 rounded-xl border">
+								<AvatarImage
+									className="object-cover"
+									src={profile.hub_profile.icon ?? undefined}
+									alt={profile.hub_profile.name || "Workspace profile"}
+								/>
+								<AvatarFallback className="rounded-xl text-xl">
+									{profile.hub_profile.name.trim().slice(0, 2).toUpperCase() ||
+										"WP"}
+								</AvatarFallback>
+							</Avatar>
+							{onProfileImageChange && (
+								<div className="space-y-2">
+									<Button
+										variant="outline"
+										onClick={changeImage}
+										disabled={changingImage}
 									>
-										<img
-											title={profile.hub_profile.icon ?? ""}
-											className="rounded-lg border-2 border-border hover:border-primary transition-colors w-28 sm:w-40 md:w-56 h-auto aspect-square object-cover"
-											width={224}
-											height={224}
-											src={
-												profile.hub_profile.icon ??
-												"/placeholder-thumbnail.webp"
-											}
-											alt={t("profileThumbnail", "Profile thumbnail")}
-										/>
-										{onProfileImageChange && (
-											<div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
-												<Camera className="h-8 w-8 text-white" />
-											</div>
+										{changingImage ? (
+											<Loader2 className="h-4 w-4 animate-spin" />
+										) : (
+											<Camera className="h-4 w-4" />
 										)}
-									</button>
-								</div>
-								<div className="flex-1 space-y-4">
-									<div className="space-y-2">
-										<Label htmlFor="name">
-											{t("profileName", "Profile Name")}
-										</Label>
-										<Input
-											id="name"
-											placeholder={t("enterProfileName", "Enter profile name")}
-											value={profile.hub_profile.name}
-											onChange={(e) =>
-												onProfileUpdate({
-													hub_profile: {
-														...profile.hub_profile,
-														name: e.target.value,
-													},
-												})
-											}
-										/>
-									</div>
-									<div className="space-y-2">
-										<Label htmlFor="description">
-											{t("description", "Description")}
-										</Label>
-										<Textarea
-											id="description"
-											placeholder={t(
-												"describeYourProfile",
-												"Describe your profile...",
-											)}
-											value={profile.hub_profile.description ?? ""}
-											onChange={(e) =>
-												onProfileUpdate({
-													hub_profile: {
-														...profile.hub_profile,
-														description: e.target.value,
-													},
-												})
-											}
-											rows={3}
-										/>
-									</div>
-									<div className="space-y-2">
-										<Label htmlFor="hub">
-											{t("currentHub", "Current Hub")}
-										</Label>
-										<Input
-											disabled
-											id="hub"
-											placeholder={t("hubNameOrId", "Hub name or ID")}
-											value={profile.hub_profile.hub ?? ""}
-										/>
-									</div>
-								</div>
-							</div>
-
-							{/* Tags Section */}
-							<TagsInput
-								label="Tags"
-								placeholder={t(
-									"addTagAndPressEnter",
-									"Add tag and press Enter",
-								)}
-								tags={profile.hub_profile.tags ?? []}
-								onTagsChange={(tags) =>
-									onProfileUpdate({
-										hub_profile: { ...profile.hub_profile, tags },
-									})
-								}
-							/>
-
-							{/* Interests Section */}
-							<TagsInput
-								label="Interests"
-								placeholder={t(
-									"addInterestAndPressEnter",
-									"Add interest and press Enter",
-								)}
-								tags={profile.hub_profile.interests ?? []}
-								variant="outline"
-								onTagsChange={(interests) =>
-									onProfileUpdate({
-										hub_profile: { ...profile.hub_profile, interests },
-									})
-								}
-							/>
-						</CardContent>
-					</Card>
-
-					{/* Profile Stats */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<Calendar className="h-5 w-5" />
-								{t("profileStats", "Profile Stats")}
-							</CardTitle>
-						</CardHeader>
-						<CardContent className="space-y-4">
-							<div className="space-y-2">
-								<ProfileStat
-									label={t("created", "Created")}
-									value={
-										parseDateValue(profile.created)?.toLocaleDateString() ?? "—"
-									}
-								/>
-								<ProfileStat
-									label={t("updated", "Updated")}
-									value={
-										parseDateValue(profile.updated)?.toLocaleDateString() ?? "—"
-									}
-								/>
-								<ProfileStat
-									label={t("apps", "Apps")}
-									value={profile.hub_profile.apps?.length ?? 0}
-									bold
-								/>
-								<ProfileStat
-									label="Hubs"
-									value={profile.hub_profile.hubs?.length ?? 0}
-									bold
-								/>
-								<ProfileStat
-									label="Tags"
-									value={profile.hub_profile.tags?.length ?? 0}
-									bold
-								/>
-								<ProfileStat
-									label="Interests"
-									value={profile.hub_profile.interests?.length ?? 0}
-									bold
-								/>
-							</div>
-						</CardContent>
-					</Card>
-
-					{/* Execution Settings */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<Cpu className="h-5 w-5" />
-								{t("executionSettings", "Execution Settings")}
-							</CardTitle>
-							<CardDescription>
-								{t(
-									"configurePerformanceAndExecutionOptions",
-									"Configure performance and execution options",
-								)}
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="space-y-4">
-							<div className="space-y-2">
-								<Label htmlFor="context_size">
-									{t("maxContextSize", "Max Context Size")}
-								</Label>
-								<Input
-									id="context_size"
-									placeholder="32000"
-									value={profile.execution_settings?.max_context_size || ""}
-									type="number"
-									onChange={(e) =>
-										onProfileUpdate({
-											execution_settings: {
-												...profile.execution_settings,
-												max_context_size: Number.parseInt(e.target.value) || 0,
-											},
-										})
-									}
-								/>
-							</div>
-							<div className="flex items-center justify-between">
-								<div className="space-y-0.5">
-									<Label htmlFor="gpu" className="flex items-center gap-2">
-										<Zap className="h-4 w-4" />
-										{t("gpuMode", "GPU Mode")}
-									</Label>
-									<p className="text-sm text-muted-foreground">
-										{t("enableGpuAcceleration", "Enable GPU acceleration")}
+										{changingImage
+											? t("updatingImage", "Updating image…")
+											: t("changeImage", "Change image")}
+									</Button>
+									<p className="text-xs text-muted-foreground">
+										{t(
+											"profileImageHelp",
+											"Choose a PNG, JPEG or WebP image up to 10 MB.",
+										)}
 									</p>
 								</div>
-								<Switch
-									id="gpu"
-									checked={profile.execution_settings?.gpu_mode ?? true}
-									onCheckedChange={(checked) =>
-										onProfileUpdate({
-											execution_settings: {
-												...profile.execution_settings,
-												gpu_mode: checked,
-											},
-										})
-									}
-								/>
-							</div>
-						</CardContent>
-					</Card>
-
-					{/* Theme Settings */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<Settings className="h-5 w-5" />
-								{t("themeSettings", "Theme Settings")}
-								{isCustomTheme && (
-									<Badge className="ml-2">{t("custom", "Custom")}</Badge>
-								)}
-							</CardTitle>
-							<CardDescription>
-								{t(
-									"customizeYourVisualExperience",
-									"Customize your visual experience",
-								)}
-							</CardDescription>
-						</CardHeader>
-						<CardContent>
-							<div className="space-y-3">
-								<Label htmlFor="theme">{t("themeLabel", "Theme")}</Label>
-								<Select
-									value={themeSelectValue}
-									onValueChange={handleThemeChange}
+							)}
+						</div>
+						{imageError && (
+							<p role="alert" className="text-sm text-destructive">
+								{imageError}
+							</p>
+						)}
+						<div className="space-y-2">
+							<Label htmlFor="workspace-profile-name">
+								{t("profileName", "Profile name")}
+							</Label>
+							<Input
+								id="workspace-profile-name"
+								value={profile.hub_profile.name}
+								maxLength={100}
+								aria-invalid={nameInvalid}
+								aria-describedby={
+									nameInvalid ? "workspace-profile-name-error" : undefined
+								}
+								onChange={(event) => updateHub({ name: event.target.value })}
+							/>
+							{nameInvalid && (
+								<p
+									id="workspace-profile-name-error"
+									className="text-sm text-destructive"
 								>
-									<SelectTrigger>
-										<SelectValue
-											placeholder={t("selectTheme", "Select theme")}
-										/>
-									</SelectTrigger>
-									<SelectContent className="max-h-60">
-										{Object.values(IThemes).map((theme) => (
-											<SelectItem key={theme} value={theme}>
-												{theme}
-											</SelectItem>
-										))}
-										<SelectItem value="CUSTOM">
-											{t("customImport", "Custom (import)")}
+									{t(
+										"profileNameRequired",
+										"Enter a name with 1 to 100 characters.",
+									)}
+								</p>
+							)}
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="workspace-profile-description">
+								{t("description", "Description")}
+							</Label>
+							<Textarea
+								id="workspace-profile-description"
+								value={profile.hub_profile.description ?? ""}
+								placeholder={t(
+									"profileDescriptionExample",
+									"What do you use this workspace for?",
+								)}
+								rows={3}
+								onChange={(event) =>
+									updateHub({ description: event.target.value })
+								}
+							/>
+						</div>
+						<div className="grid gap-5 sm:grid-cols-2">
+							<TagsInput
+								id="workspace-tags"
+								label={t("tags", "Tags")}
+								tags={profile.hub_profile.tags ?? []}
+								onChange={(tags) => updateHub({ tags })}
+							/>
+							<TagsInput
+								id="workspace-interests"
+								label={t("interests", "Interests")}
+								tags={profile.hub_profile.interests ?? []}
+								onChange={(interests) => updateHub({ interests })}
+							/>
+						</div>
+					</SettingsSection>
+
+					<SettingsSection
+						title={t("appearance", "Appearance")}
+						description={t(
+							"profileAppearanceDescription",
+							"Choose the colors used when this workspace is active.",
+						)}
+					>
+						<div className="space-y-2">
+							<Label htmlFor="workspace-theme">
+								{t("themeLabel", "Theme")}
+							</Label>
+							<Select
+								value={selectedTheme}
+								onValueChange={(value) => {
+									setSelectedTheme(value);
+									setImportError(null);
+									if (value !== "CUSTOM")
+										updateHub({
+											theme: themeTranslation[value as IThemes] ?? null,
+										});
+								}}
+							>
+								<SelectTrigger id="workspace-theme">
+									<SelectValue placeholder={t("selectTheme", "Select theme")} />
+								</SelectTrigger>
+								<SelectContent className="max-h-64">
+									{Object.values(IThemes).map((value) => (
+										<SelectItem key={value} value={value}>
+											{value}
 										</SelectItem>
-									</SelectContent>
-								</Select>
+									))}
+									<SelectItem value="CUSTOM">
+										{isCustomTheme
+											? theme.id
+											: t("customImport", "Custom (import)")}
+									</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+						{selectedTheme === "CUSTOM" && (
+							<div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+								<div className="space-y-2">
+									<Label htmlFor="custom-theme-name">
+										{t("themeName", "Theme name")}
+									</Label>
+									<Input
+										id="custom-theme-name"
+										value={customName}
+										onChange={(event) => setCustomName(event.target.value)}
+									/>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="custom-theme-css">
+										{t("themeCss", "Theme CSS")}
+									</Label>
+									<Textarea
+										id="custom-theme-css"
+										className="font-mono text-xs"
+										rows={8}
+										value={customCss}
+										onChange={(event) => setCustomCss(event.target.value)}
+										aria-describedby="custom-theme-help"
+									/>
+									<p
+										id="custom-theme-help"
+										className="text-xs text-muted-foreground"
+									>
+										{t(
+											"customThemeHelp",
+											"Paste a tweakcn export with both :root and .dark blocks.",
+										)}
+									</p>
+								</div>
+								{importError && (
+									<p role="alert" className="text-sm text-destructive">
+										{importError}
+									</p>
+								)}
+								<Button
+									variant="outline"
+									onClick={() => {
+										try {
+											updateHub({
+												theme: parseProfileTheme(customCss, customName),
+											});
+											setImportError(null);
+										} catch (error) {
+											setImportError(
+												error instanceof Error
+													? error.message
+													: "Could not import theme.",
+											);
+										}
+									}}
+								>
+									<Upload className="h-4 w-4" />
+									{t("applyTheme", "Apply theme")}
+								</Button>
+							</div>
+						)}
+					</SettingsSection>
 
-								{themeSelectValue === "CUSTOM" && (
-									<div className="mt-3 space-y-3">
-										<div className="grid gap-2">
-											<Label htmlFor="customThemeName">
-												{t("themeName", "Theme Name")}
-											</Label>
-											<Input
-												id="customThemeName"
-												placeholder={t("customTheme2", "Custom Theme")}
-												value={customThemeName}
-												onChange={(e) => setCustomThemeName(e.target.value)}
-											/>
-										</div>
+					<SettingsSection
+						title={t("flowEditor", "Flow editor")}
+						description={t(
+							"flowEditorDescription",
+							"Set how connections appear between nodes.",
+						)}
+					>
+						<div className="space-y-2">
+							<Label htmlFor="workspace-connection-mode">
+								{t("connectionStyle", "Connection style")}
+							</Label>
+							<Select
+								value={
+									profile.hub_profile.settings?.connection_mode ??
+									IConnectionMode.Simplebezier
+								}
+								onValueChange={(value: IConnectionMode) =>
+									updateHub({
+										settings: {
+											...profile.hub_profile.settings,
+											connection_mode: value,
+										},
+									})
+								}
+							>
+								<SelectTrigger id="workspace-connection-mode">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={IConnectionMode.Default}>
+										{t("default", "Default")}
+									</SelectItem>
+									<SelectItem value={IConnectionMode.Straight}>
+										{t("straight", "Straight")}
+									</SelectItem>
+									<SelectItem value={IConnectionMode.Step}>
+										{t("step", "Step")}
+									</SelectItem>
+									<SelectItem value={IConnectionMode.Smoothstep}>
+										{t("smoothStep", "Smooth step")}
+									</SelectItem>
+									<SelectItem value={IConnectionMode.Simplebezier}>
+										{t("simpleBezier", "Simple Bézier")}
+									</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					</SettingsSection>
 
-										<div className="grid gap-2">
-											<Label htmlFor="customTheme">
-												{t("pasteTweakcnExport", "Paste tweakcn export")}
-											</Label>
-											<Textarea
-												id="customTheme"
-												placeholder={`Paste the CSS export from tweakcn here`}
-												rows={10}
-												value={customCss}
-												onChange={(e) => setCustomCss(e.target.value)}
-											/>
-										</div>
-
-										<div className="flex items-center gap-2">
-											<Button
-												variant="default"
-												onClick={handleImportTheme}
-												className="flex items-center gap-2"
-											>
-												<Upload className="h-4 w-4" />
-												{t("importApply", "Import & Apply")}
-											</Button>
-											{importError && (
-												<span className="text-sm text-destructive">
-													{importError}
-												</span>
+					<SettingsSection
+						title={t("localExecution", "Local execution")}
+						description={t(
+							"localExecutionDescription",
+							"Model performance preferences are stored on each desktop device.",
+						)}
+					>
+						{supportsExecutionSettings ? (
+							<>
+								<div className="space-y-2">
+									<Label htmlFor="workspace-context-size">
+										{t("maxContextSize", "Maximum context size")}
+									</Label>
+									<Input
+										id="workspace-context-size"
+										type="number"
+										min={0}
+										max={4294967295}
+										step={1}
+										value={Number.isFinite(context) ? context : ""}
+										aria-invalid={contextInvalid}
+										aria-describedby="workspace-context-help"
+										onChange={(event) =>
+											onProfileUpdate({
+												execution_settings: {
+													...profile.execution_settings,
+													max_context_size:
+														event.target.value === ""
+															? 0
+															: Number(event.target.value),
+												},
+											})
+										}
+									/>
+									<p
+										id="workspace-context-help"
+										className={`text-xs ${contextInvalid ? "text-destructive" : "text-muted-foreground"}`}
+									>
+										{contextInvalid
+											? t(
+													"contextSizeInvalid",
+													"Enter a whole number of zero or more.",
+												)
+											: t(
+													"contextSizeHelp",
+													"0 uses the default limit of 32,000 tokens. Higher limits use more memory.",
+												)}
+									</p>
+								</div>
+								<div className="flex items-center justify-between gap-4">
+									<div className="space-y-1">
+										<Label htmlFor="workspace-gpu">
+											{t("gpuAcceleration", "GPU acceleration")}
+										</Label>
+										<p
+											id="workspace-gpu-help"
+											className="text-xs text-muted-foreground"
+										>
+											{t(
+												"gpuHelp",
+												"Use a supported GPU for local models when available.",
 											)}
-										</div>
-										<p className="text-xs text-muted-foreground">
-											{`Paste the full CSS including :root and .dark blocks from tweakcn.com.`}
 										</p>
 									</div>
-								)}
-
-								<p className="text-xs text-muted-foreground">
-									{t("creditsTo", "Credits to")}{" "}
-									<a
-										href="https://tweakcn.com/"
-										target="_blank"
-										className="underline font-bold"
-										rel="noreferrer"
-									>
-										tweakcn.com
-									</a>
-								</p>
-							</div>
-						</CardContent>
-					</Card>
-
-					{/* Flow Settings */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<GitBranch className="h-5 w-5" />
-								{t("flowSettings", "Flow Settings")}
-							</CardTitle>
-							<CardDescription>
-								{t(
-									"configureFlowVisualizationPreferences",
-									"Configure flow visualization preferences",
-								)}
-							</CardDescription>
-						</CardHeader>
-						<CardContent>
-							<div className="space-y-2">
-								<Label htmlFor="connection_mode">
-									{t("connectionMode", "Connection Mode")}
-								</Label>
-								<Select
-									value={
-										profile.hub_profile.settings?.connection_mode ??
-										IConnectionMode.Default
-									}
-									onValueChange={(value: IConnectionMode) =>
-										onProfileUpdate({
-											hub_profile: {
-												...profile.hub_profile,
-												settings: {
-													...profile.hub_profile.settings,
-													connection_mode: value,
+									<Switch
+										id="workspace-gpu"
+										aria-describedby="workspace-gpu-help"
+										checked={profile.execution_settings.gpu_mode}
+										onCheckedChange={(gpu_mode) =>
+											onProfileUpdate({
+												execution_settings: {
+													...profile.execution_settings,
+													gpu_mode,
 												},
-											},
-										})
-									}
-								>
-									<SelectTrigger>
-										<SelectValue
-											placeholder={t(
-												"selectConnectionMode",
-												"Select connection mode",
-											)}
-										/>
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value={IConnectionMode.Default}>
-											{t("default", "Default")}
-										</SelectItem>
-										<SelectItem value={IConnectionMode.Straight}>
-											{t("straight", "Straight")}
-										</SelectItem>
-										<SelectItem value={IConnectionMode.Step}>
-											{t("step", "Step")}
-										</SelectItem>
-										<SelectItem value={IConnectionMode.Smoothstep}>
-											{t("smoothStep", "Smooth Step")}
-										</SelectItem>
-										<SelectItem value={IConnectionMode.Simplebezier}>
-											{t("simpleBezier", "Simple Bezier")}
-										</SelectItem>
-									</SelectContent>
-								</Select>
-							</div>
-						</CardContent>
-					</Card>
+											})
+										}
+									/>
+								</div>
+							</>
+						) : (
+							<p className="text-sm leading-6 text-muted-foreground">
+								{t(
+									"desktopExecutionOnly",
+									"Open this profile in the desktop app to adjust GPU acceleration and context size. These preferences do not change cloud execution.",
+								)}
+							</p>
+						)}
+					</SettingsSection>
+				</fieldset>
+				<div className="flex flex-wrap gap-x-6 gap-y-2 py-5 text-xs text-muted-foreground">
+					{profile.hub_profile.hub && (
+						<span className="break-all">
+							{t("hub", "Hub")}: {profile.hub_profile.hub}
+						</span>
+					)}
+					<span>
+						{t("created", "Created")}:{" "}
+						{parseDateValue(profile.created)?.toLocaleDateString() ??
+							t("unknown", "Unknown")}
+					</span>
+					<span>
+						{t("updated", "Updated")}:{" "}
+						{parseDateValue(profile.updated)?.toLocaleDateString() ??
+							t("unknown", "Unknown")}
+					</span>
 				</div>
-
 				{onProfileDelete && (
 					<DeleteProfileCard
 						profileName={profile.hub_profile.name}
 						onDelete={onProfileDelete}
-						canDelete={canDeleteProfile}
+						canDelete={canDeleteProfile && !changingImage}
+						scope={deleteScope}
 					/>
 				)}
 			</div>
@@ -599,237 +571,222 @@ export function ProfileSettingsPage({
 	);
 }
 
-function DeleteProfileCard({
-	profileName,
-	onDelete,
-	canDelete,
-}: {
-	profileName: string;
-	onDelete: () => Promise<void>;
-	canDelete: boolean;
-}) {
-	const { t } = useTranslation("settings");
-	const [confirmName, setConfirmName] = useState("");
-	const [isDeleting, setIsDeleting] = useState(false);
-	const [isOpen, setIsOpen] = useState(false);
-	const inputRef = useRef<HTMLInputElement>(null);
-
-	const isConfirmed = confirmName === profileName;
-
-	const handleDelete = useCallback(async () => {
-		if (!isConfirmed || isDeleting) return;
-		setIsDeleting(true);
-		try {
-			await onDelete();
-		} finally {
-			setIsDeleting(false);
-			setIsOpen(false);
-			setConfirmName("");
-		}
-	}, [isConfirmed, isDeleting, onDelete]);
-
+function SettingsSection({
+	title,
+	description,
+	children,
+}: { title: string; description: string; children: ReactNode }) {
 	return (
-		<Card className="border-destructive/30">
-			<CardHeader>
-				<CardTitle className="flex items-center gap-2 text-destructive">
-					<AlertTriangle className="h-5 w-5" />
-					{t("dangerZone2", "Danger Zone")}
-				</CardTitle>
-				<CardDescription>
-					{t(
-						"irreversibleActionsThatAffectYourProfile",
-						"Irreversible actions that affect your profile",
-					)}
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-					<div className="space-y-1 min-w-0">
-						<p className="text-sm font-medium">
-							{t("deleteThisProfile", "Delete this profile")}
-						</p>
-						<p className="text-sm text-muted-foreground">
-							{canDelete
-								? `Permanently delete this profile and all its data. If synced online, it will be removed from all devices.`
-								: t(
-										"youCannotDeleteYourOnlyProfileCreateAnotherProfileFirst",
-										"You cannot delete your only profile. Create another profile first.",
-									)}
-						</p>
-					</div>
-					{canDelete ? (
-						<>
-							<Button
-								variant="destructive"
-								className="shrink-0"
-								onClick={() => {
-									setIsOpen(true);
-									setConfirmName("");
-									setTimeout(() => inputRef.current?.focus(), 100);
-								}}
-							>
-								<Trash2 className="h-4 w-4 mr-2" />
-								{t("deleteProfile", "Delete Profile")}
-							</Button>
-							{isOpen && (
-								<div className="fixed inset-0 z-50 flex items-center justify-center">
-									<div
-										className="fixed inset-0 bg-black/50"
-										onClick={() => {
-											setIsOpen(false);
-											setConfirmName("");
-										}}
-										onKeyDown={() => {}}
-									/>
-									<div className="relative z-50 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
-										<div className="space-y-4">
-											<div className="space-y-2">
-												<h3 className="text-lg font-semibold">
-													{t("deleteProfile2", "Delete profile")}
-												</h3>
-												<p className="text-sm text-muted-foreground">
-													{t(
-														"thisWillPermanentlyDelete",
-														"This will permanently delete",
-													)}{" "}
-													<span className="font-semibold text-foreground">
-														{profileName}
-													</span>{" "}
-													{`and remove it from all synced devices. This action cannot be undone.`}
-												</p>
-											</div>
-											<div className="space-y-2">
-												<Label htmlFor="confirm-delete">
-													Type{" "}
-													<span className="font-mono font-semibold text-destructive">
-														{profileName}
-													</span>{" "}
-													{t("toConfirm", "to confirm")}
-												</Label>
-												<Input
-													ref={inputRef}
-													id="confirm-delete"
-													placeholder={profileName}
-													value={confirmName}
-													onChange={(e) => setConfirmName(e.target.value)}
-													onKeyDown={(e) => {
-														if (e.key === "Enter" && isConfirmed)
-															handleDelete();
-														if (e.key === "Escape") {
-															setIsOpen(false);
-															setConfirmName("");
-														}
-													}}
-												/>
-											</div>
-											<div className="flex justify-end gap-2">
-												<Button
-													variant="outline"
-													onClick={() => {
-														setIsOpen(false);
-														setConfirmName("");
-													}}
-												>
-													{t("cancel", "Cancel")}
-												</Button>
-												<Button
-													variant="destructive"
-													disabled={!isConfirmed || isDeleting}
-													onClick={handleDelete}
-												>
-													{isDeleting ? (
-														<Loader2 className="h-4 w-4 animate-spin mr-2" />
-													) : (
-														<Trash2 className="h-4 w-4 mr-2" />
-													)}
-													{t("deletePermanently", "Delete permanently")}
-												</Button>
-											</div>
-										</div>
-									</div>
-								</div>
-							)}
-						</>
-					) : (
-						<Button variant="destructive" className="shrink-0" disabled>
-							<Trash2 className="h-4 w-4 mr-2" />
-							{t("deleteProfile", "Delete Profile")}
-						</Button>
-					)}
-				</div>
-			</CardContent>
-		</Card>
+		<section className="grid gap-5 border-b py-7 md:grid-cols-[210px_minmax(0,1fr)] md:gap-10">
+			<div className="space-y-2">
+				<h2 className="text-base font-semibold">{title}</h2>
+				<p className="text-sm leading-6 text-muted-foreground">{description}</p>
+			</div>
+			<div className="min-w-0 space-y-5">{children}</div>
+		</section>
 	);
 }
 
-interface TagsInputProps {
-	label: string;
-	placeholder: string;
-	tags: string[];
-	variant?: "secondary" | "outline";
-	onTagsChange: (tags: string[]) => void;
-}
-
 function TagsInput({
+	id,
 	label,
-	placeholder,
 	tags,
-	variant = "secondary",
-	onTagsChange,
-}: TagsInputProps) {
+	onChange,
+}: {
+	id: string;
+	label: string;
+	tags: string[];
+	onChange: (tags: string[]) => void;
+}) {
 	const { t } = useTranslation("settings");
+	const [value, setValue] = useState("");
+	const add = () => {
+		const tag = value.trim();
+		if (tag && !tags.includes(tag)) onChange([...tags, tag]);
+		setValue("");
+	};
 	return (
-		<div className="space-y-2">
-			<Label htmlFor={label.toLowerCase()}>{label}</Label>
-			<div className="space-y-2">
+		<div className="min-w-0 space-y-2">
+			<Label htmlFor={id}>{label}</Label>
+			<div className="flex gap-2">
 				<Input
-					id={label.toLowerCase()}
-					placeholder={placeholder}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							const value = e.currentTarget.value.trim();
-							if (value && !tags.includes(value)) {
-								onTagsChange([...tags, value]);
-								e.currentTarget.value = "";
-							}
+					id={id}
+					value={value}
+					onChange={(event) => setValue(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter") {
+							event.preventDefault();
+							add();
 						}
 					}}
+					placeholder={t("addEntry", "Add an entry")}
 				/>
-				<div className="flex flex-wrap gap-2">
-					{tags.map((tag, index) => (
-						<Badge
-							key={index}
-							variant={variant}
-							className="flex items-center gap-1 max-w-full break-words"
+				<Button
+					variant="outline"
+					onClick={add}
+					disabled={!value.trim()}
+					aria-label={t("addToField", "Add to {{label}}", { label })}
+				>
+					{t("add", "Add")}
+				</Button>
+			</div>
+			<div className="flex flex-wrap gap-2">
+				{tags.map((tag) => (
+					<Badge
+						key={tag}
+						variant="secondary"
+						className="max-w-full gap-1 whitespace-normal break-all"
+					>
+						{tag}
+						<button
+							type="button"
+							className="shrink-0 rounded p-1.5 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label={t("removeTag", "Remove {{tag}}", { tag })}
+							onClick={() => onChange(tags.filter((item) => item !== tag))}
 						>
-							{tag}
-							<button
-								type="button"
-								aria-label={t("removeTag", "Remove {{tag}}", { tag })}
-								className="-mr-1 ml-0.5 rounded p-1.5 extend-touch-target hover:text-destructive"
-								onClick={() => onTagsChange(tags.filter((_, i) => i !== index))}
-							>
-								<X className="h-3 w-3" />
-							</button>
-						</Badge>
-					))}
-				</div>
+							<X className="h-3 w-3" />
+						</button>
+					</Badge>
+				))}
 			</div>
 		</div>
 	);
 }
 
-interface ProfileStatProps {
-	label: string;
-	value: string | number;
-	bold?: boolean;
-}
-
-function ProfileStat({ label, value, bold = false }: ProfileStatProps) {
+function DeleteProfileCard({
+	profileName,
+	onDelete,
+	canDelete,
+	scope,
+}: {
+	profileName: string;
+	onDelete: () => Promise<void>;
+	canDelete: boolean;
+	scope: "cloud" | "local";
+}) {
+	const { t } = useTranslation("settings");
+	const [open, setOpen] = useState(false);
+	const [confirmName, setConfirmName] = useState("");
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const busy = useRef(false);
+	const isConfirmed = !!profileName.trim() && confirmName === profileName;
+	const action =
+		scope === "local"
+			? t("removeFromDevice", "Remove from this device")
+			: t("deleteProfile", "Delete profile");
+	const explanation =
+		scope === "local"
+			? t(
+					"localProfileRemoval",
+					"This removes the local profile. Cloud copies remain and may return when you sign in. Sign in first to delete it from synced devices.",
+				)
+			: t(
+					"cloudProfileRemoval",
+					"This deletes the profile from this account and its synced devices. Your apps remain in your library.",
+				);
+	const remove = async () => {
+		if (!isConfirmed || busy.current) return;
+		busy.current = true;
+		setDeleting(true);
+		setError(null);
+		try {
+			await onDelete();
+			setOpen(false);
+			setConfirmName("");
+		} catch (error) {
+			setError(
+				apiErrorMessage(
+					error,
+					error instanceof Error
+						? error.message
+						: "Could not remove the profile. Try again.",
+				),
+			);
+		} finally {
+			busy.current = false;
+			setDeleting(false);
+		}
+	};
 	return (
-		<div className="flex justify-between text-sm">
-			<span className="text-muted-foreground">{label}</span>
-			<span className={bold ? "font-medium" : ""}>{value}</span>
-		</div>
+		<section className="mt-2 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/25 p-5">
+			<div className="max-w-xl space-y-1">
+				<h2 className="text-sm font-semibold">{action}</h2>
+				<p className="text-sm leading-6 text-muted-foreground">
+					{canDelete
+						? explanation
+						: t(
+								"onlyProfileRemoval",
+								"Create another profile before removing this one.",
+							)}
+				</p>
+			</div>
+			<AlertDialog
+				open={open}
+				onOpenChange={(value) => {
+					if (!busy.current) {
+						setOpen(value);
+						setConfirmName("");
+						setError(null);
+					}
+				}}
+			>
+				<AlertDialogTrigger asChild>
+					<Button
+						variant="destructive"
+						className="bg-[color-mix(in_oklch,var(--destructive)_85%,black)] hover:bg-[color-mix(in_oklch,var(--destructive)_75%,black)]"
+						disabled={!canDelete}
+					>
+						<Trash2 className="h-4 w-4" />
+						{action}
+					</Button>
+				</AlertDialogTrigger>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>{action}</AlertDialogTitle>
+						<AlertDialogDescription>{explanation}</AlertDialogDescription>
+					</AlertDialogHeader>
+					<div className="space-y-2">
+						<Label htmlFor="confirm-profile-removal">
+							{t("typeProfileNameToConfirm", "Type {{name}} to confirm", {
+								name: profileName,
+							})}
+						</Label>
+						<Input
+							id="confirm-profile-removal"
+							value={confirmName}
+							disabled={deleting}
+							autoComplete="off"
+							onChange={(event) => setConfirmName(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									void remove();
+								}
+							}}
+						/>
+					</div>
+					{error && (
+						<p role="alert" className="text-sm text-destructive">
+							{error}
+						</p>
+					)}
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={deleting}>
+							{t("cancel", "Cancel")}
+						</AlertDialogCancel>
+						<Button
+							variant="destructive"
+							className="bg-[color-mix(in_oklch,var(--destructive)_85%,black)] hover:bg-[color-mix(in_oklch,var(--destructive)_75%,black)]"
+							disabled={!isConfirmed || deleting}
+							onClick={remove}
+						>
+							{deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+							{deleting ? t("removing", "Removing…") : action}
+						</Button>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</section>
 	);
 }

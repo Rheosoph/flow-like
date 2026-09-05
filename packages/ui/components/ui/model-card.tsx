@@ -343,6 +343,8 @@ export function ModelCard({
 				onToggleDownload={toggleDownload}
 				onToggleProfile={toggleProfile}
 				onOpenRepository={openRepository}
+				onEdit={onEdit ? () => onEdit(bit) : undefined}
+				onDelete={onDelete ? () => onDelete(bit) : undefined}
 			/>
 		);
 	}
@@ -484,6 +486,20 @@ function ModelCardGridVariant({
 						)}
 					</div>
 				</div>
+				{onEdit && (
+					<Button
+						variant="ghost"
+						size="sm"
+						aria-label={`Edit ${meta.name}`}
+						onClick={(event) => {
+							event.stopPropagation();
+							onEdit();
+						}}
+					>
+						<PencilIcon className="size-3.5" />
+						{t("edit", "Edit")}
+					</Button>
+				)}
 				<ModelCardDropdown
 					canDownload={!isVirtualBit}
 					isInstalled={isInstalled}
@@ -586,6 +602,8 @@ function ModelCardListVariant({
 	onToggleDownload,
 	onToggleProfile,
 	onOpenRepository,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardVariantProps>) {
 	const { t } = useTranslation("common");
 	const meta = bit.meta.en;
@@ -693,6 +711,20 @@ function ModelCardListVariant({
 			</div>
 
 			{/* Menu */}
+			{onEdit && (
+				<Button
+					variant="ghost"
+					size="sm"
+					aria-label={`Edit ${meta.name}`}
+					onClick={(event) => {
+						event.stopPropagation();
+						onEdit();
+					}}
+				>
+					<PencilIcon className="size-3.5" />
+					{t("edit", "Edit")}
+				</Button>
+			)}
 			<ModelCardDropdown
 				canDownload={!isVirtualBit}
 				isInstalled={isInstalled}
@@ -702,6 +734,8 @@ function ModelCardListVariant({
 				onToggleDownload={onToggleDownload}
 				onToggleProfile={onToggleProfile}
 				onOpenRepository={onOpenRepository}
+				onEdit={onEdit}
+				onDelete={onDelete}
 			/>
 		</div>
 	);

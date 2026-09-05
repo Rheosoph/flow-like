@@ -4,8 +4,8 @@ use crate::{
     middleware::jwt::AppUser,
     routes::{
         profile::{
-            delete_old_image, find_profile_for_user, generate_upload_url,
-            is_profile_unique_violation,
+            find_profile_for_user, is_profile_unique_violation,
+            media::{normalize_image_extension, prepare_sync_upload, retry_sync_upload},
         },
         user::ensure_user_exists,
     },
@@ -78,6 +78,8 @@ pub struct SyncedProfile {
     pub icon_upload_url: Option<String>,
     /// Signed URL for uploading thumbnail (if requested)
     pub thumbnail_upload_url: Option<String>,
+    pub icon_upload_id: Option<String>,
+    pub thumbnail_upload_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -87,6 +89,8 @@ pub struct UpdatedProfile {
     pub icon_upload_url: Option<String>,
     /// Signed URL for uploading thumbnail (if requested)
     pub thumbnail_upload_url: Option<String>,
+    pub icon_upload_id: Option<String>,
+    pub thumbnail_upload_id: Option<String>,
 }
 
 /// Sync multiple profiles from desktop to server
@@ -128,7 +132,18 @@ pub async fn sync_profiles(
     let mut skipped: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
 
-    for profile_req in profiles {
+    for mut profile_req in profiles {
+        profile_req.name = super::validate_profile_name(&profile_req.name)?;
+        for extension in [
+            &profile_req.icon_upload_ext,
+            &profile_req.thumbnail_upload_ext,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            normalize_image_extension(extension)?;
+        }
+
         super::validate_home_patch(&profile_req.home_layout, &profile_req.home_default_id)?;
         if profile_req.id.trim().is_empty() {
             return Err(ApiError::bad_request("Profile ID is required"));
@@ -194,31 +209,36 @@ pub async fn sync_profiles(
 
                 active_model.hubs = Set(profile_req.hubs.clone().map(Into::into));
 
-                // Handle icon upload request
-                let icon_upload_url = if let Some(ext) = &profile_req.icon_upload_ext {
-                    // Delete old icon if exists
-                    if let Some(old_icon_id) = &existing.icon {
-                        delete_old_image(&state, &sub, old_icon_id).await?;
-                    }
-                    let (upload_url, image_id) = generate_upload_url(&state, &sub, ext).await?;
-                    active_model.icon = Set(Some(image_id));
-                    Some(upload_url)
-                } else {
-                    None
-                };
-
-                // Handle thumbnail upload request
-                let thumbnail_upload_url = if let Some(ext) = &profile_req.thumbnail_upload_ext {
-                    // Delete old thumbnail if exists
-                    if let Some(old_thumb_id) = &existing.thumbnail {
-                        delete_old_image(&state, &sub, old_thumb_id).await?;
-                    }
-                    let (upload_url, image_id) = generate_upload_url(&state, &sub, ext).await?;
-                    active_model.thumbnail = Set(Some(image_id));
-                    Some(upload_url)
-                } else {
-                    None
-                };
+                let (icon_upload_url, icon_upload_id) =
+                    if let Some(ext) = &profile_req.icon_upload_ext {
+                        let (url, id) = prepare_sync_upload(
+                            &state,
+                            &sub,
+                            ext,
+                            &format!("profile:{}:icon", profile_req.id),
+                            existing.icon.as_deref(),
+                            profile_req.updated_at.as_deref(),
+                        )
+                        .await?;
+                        (Some(url), Some(id))
+                    } else {
+                        (None, None)
+                    };
+                let (thumbnail_upload_url, thumbnail_upload_id) =
+                    if let Some(ext) = &profile_req.thumbnail_upload_ext {
+                        let (url, id) = prepare_sync_upload(
+                            &state,
+                            &sub,
+                            ext,
+                            &format!("profile:{}:thumbnail", profile_req.id),
+                            existing.thumbnail.as_deref(),
+                            profile_req.updated_at.as_deref(),
+                        )
+                        .await?;
+                        (Some(url), Some(id))
+                    } else {
+                        (None, None)
+                    };
 
                 active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
                 active_model.update(&state.db).await?;
@@ -227,56 +247,94 @@ pub async fn sync_profiles(
                     id: profile_req.id.clone(),
                     icon_upload_url,
                     thumbnail_upload_url,
+                    icon_upload_id,
+                    thumbnail_upload_id,
                 });
             } else {
                 // Timestamp says "do not update", but we may still need a one-time media backfill.
                 // This happens when local profile points to a local image path while DB has no media id.
+                let icon_retry = if let Some(ext) = profile_req.icon_upload_ext.as_deref() {
+                    retry_sync_upload(
+                        &state,
+                        &sub,
+                        ext,
+                        &format!("profile:{}:icon", profile_req.id),
+                        existing.icon.as_deref(),
+                        profile_req.updated_at.as_deref(),
+                    )
+                    .await?
+                } else {
+                    None
+                };
+                let thumbnail_retry = if let Some(ext) = profile_req.thumbnail_upload_ext.as_deref()
+                {
+                    retry_sync_upload(
+                        &state,
+                        &sub,
+                        ext,
+                        &format!("profile:{}:thumbnail", profile_req.id),
+                        existing.thumbnail.as_deref(),
+                        profile_req.updated_at.as_deref(),
+                    )
+                    .await?
+                } else {
+                    None
+                };
                 let needs_icon_backfill =
                     profile_req.icon_upload_ext.is_some() && existing.icon.is_none();
                 let needs_thumbnail_backfill =
                     profile_req.thumbnail_upload_ext.is_some() && existing.thumbnail.is_none();
 
-                if needs_icon_backfill || needs_thumbnail_backfill {
+                if needs_icon_backfill
+                    || needs_thumbnail_backfill
+                    || icon_retry.is_some()
+                    || thumbnail_retry.is_some()
+                {
                     println!(
                         "[ProfileSync] Backfilling media for profile {} (icon_missing={}, thumbnail_missing={})",
                         profile_req.id, needs_icon_backfill, needs_thumbnail_backfill
                     );
 
-                    let mut active_model: profile::ActiveModel = existing.clone().into();
-
-                    let icon_upload_url = if needs_icon_backfill {
-                        if let Some(ext) = &profile_req.icon_upload_ext {
-                            let (upload_url, image_id) =
-                                generate_upload_url(&state, &sub, ext).await?;
-                            active_model.icon = Set(Some(image_id));
-                            Some(upload_url)
-                        } else {
-                            None
-                        }
+                    let (icon_upload_url, icon_upload_id) = if let Some((url, id)) = icon_retry {
+                        (Some(url), Some(id))
+                    } else if needs_icon_backfill {
+                        let (url, id) = prepare_sync_upload(
+                            &state,
+                            &sub,
+                            profile_req.icon_upload_ext.as_deref().unwrap(),
+                            &format!("profile:{}:icon", profile_req.id),
+                            existing.icon.as_deref(),
+                            profile_req.updated_at.as_deref(),
+                        )
+                        .await?;
+                        (Some(url), Some(id))
                     } else {
-                        None
+                        (None, None)
                     };
-
-                    let thumbnail_upload_url = if needs_thumbnail_backfill {
-                        if let Some(ext) = &profile_req.thumbnail_upload_ext {
-                            let (upload_url, image_id) =
-                                generate_upload_url(&state, &sub, ext).await?;
-                            active_model.thumbnail = Set(Some(image_id));
-                            Some(upload_url)
+                    let (thumbnail_upload_url, thumbnail_upload_id) =
+                        if let Some((url, id)) = thumbnail_retry {
+                            (Some(url), Some(id))
+                        } else if needs_thumbnail_backfill {
+                            let (url, id) = prepare_sync_upload(
+                                &state,
+                                &sub,
+                                profile_req.thumbnail_upload_ext.as_deref().unwrap(),
+                                &format!("profile:{}:thumbnail", profile_req.id),
+                                existing.thumbnail.as_deref(),
+                                profile_req.updated_at.as_deref(),
+                            )
+                            .await?;
+                            (Some(url), Some(id))
                         } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
-                    active_model.update(&state.db).await?;
+                            (None, None)
+                        };
 
                     updated.push(UpdatedProfile {
                         id: profile_req.id.clone(),
                         icon_upload_url,
                         thumbnail_upload_url,
+                        icon_upload_id,
+                        thumbnail_upload_id,
                     });
                 } else {
                     skipped.push(profile_req.id.clone());
@@ -316,22 +374,6 @@ pub async fn sync_profiles(
                 state.platform_config.domain.clone()
             };
 
-            // Generate upload URLs for the new profile
-            let (icon_upload_url, icon_id) = if let Some(ext) = &profile_req.icon_upload_ext {
-                let (url, id) = generate_upload_url(&state, &sub, ext).await?;
-                (Some(url), Some(id))
-            } else {
-                (None, None)
-            };
-
-            let (thumbnail_upload_url, thumbnail_id) =
-                if let Some(ext) = &profile_req.thumbnail_upload_ext {
-                    let (url, id) = generate_upload_url(&state, &sub, ext).await?;
-                    (Some(url), Some(id))
-                } else {
-                    (None, None)
-                };
-
             let mut created_server_id: Option<String> = None;
             let mut skipped_existing_local = false;
 
@@ -342,8 +384,8 @@ pub async fn sync_profiles(
                     user_id: Set(sub.clone()),
                     name: Set(profile_req.name.clone()),
                     description: Set(profile_req.description.clone()),
-                    icon: Set(icon_id.clone()),
-                    thumbnail: Set(thumbnail_id.clone()),
+                    icon: Set(None),
+                    thumbnail: Set(None),
                     interests: Set(profile_req.interests.clone().map(Into::into)),
                     tags: Set(profile_req.tags.clone().map(Into::into)),
                     theme: Set(profile_req.theme.clone()),
@@ -404,11 +446,44 @@ pub async fn sync_profiles(
             }
 
             if let Some(server_id) = created_server_id {
+                let (icon_upload_url, icon_upload_id) =
+                    if let Some(ext) = &profile_req.icon_upload_ext {
+                        let (url, id) = prepare_sync_upload(
+                            &state,
+                            &sub,
+                            ext,
+                            &format!("profile:{server_id}:icon"),
+                            None,
+                            profile_req.updated_at.as_deref(),
+                        )
+                        .await?;
+                        (Some(url), Some(id))
+                    } else {
+                        (None, None)
+                    };
+                let (thumbnail_upload_url, thumbnail_upload_id) =
+                    if let Some(ext) = &profile_req.thumbnail_upload_ext {
+                        let (url, id) = prepare_sync_upload(
+                            &state,
+                            &sub,
+                            ext,
+                            &format!("profile:{server_id}:thumbnail"),
+                            None,
+                            profile_req.updated_at.as_deref(),
+                        )
+                        .await?;
+                        (Some(url), Some(id))
+                    } else {
+                        (None, None)
+                    };
+
                 created.push(SyncedProfile {
                     local_id: profile_req.id.clone(),
                     server_id,
                     icon_upload_url,
                     thumbnail_upload_url,
+                    icon_upload_id,
+                    thumbnail_upload_id,
                 });
             } else if !skipped_existing_local {
                 return Err(ApiError::conflict("Could not allocate a unique profile ID"));

@@ -32,6 +32,7 @@ import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters"
 import { humanFileSize } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useDownloadManager } from "../../../state/download-manager";
+import { BitEditorDialog } from "../../bits/bit-editor-dialog";
 import {
 	Avatar,
 	AvatarFallback,
@@ -606,7 +607,23 @@ export interface AddCustomModelDialogProps {
 	webMode?: boolean;
 }
 
-export function AddCustomModelDialog({
+export function AddCustomModelDialog(
+	props: Readonly<AddCustomModelDialogProps>,
+) {
+	if (props.existingBit) {
+		return (
+			<BitEditorDialog
+				bit={props.existingBit}
+				open={props.open}
+				onOpenChange={props.onOpenChange}
+				scope="custom"
+			/>
+		);
+	}
+	return <AddCustomModelWizard {...props} />;
+}
+
+function AddCustomModelWizard({
 	open,
 	onOpenChange,
 	existingBit,

@@ -6,6 +6,7 @@ import {
 	ClockIcon,
 	DownloadCloudIcon,
 	ExternalLinkIcon,
+	PencilIcon,
 	PlusIcon,
 	SparklesIcon,
 	TrashIcon,
@@ -58,6 +59,7 @@ export interface ModelDetailSheetProps {
 	/** Isolates profile and hub queries for embedded collections. */
 	queryScope?: string[];
 	onProfileChange?: () => void | Promise<void>;
+	onEdit?: (bit: IBit) => void;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	webMode?: boolean;
@@ -67,6 +69,7 @@ export function ModelDetailSheet({
 	bit,
 	queryScope = [],
 	onProfileChange,
+	onEdit,
 	open,
 	onOpenChange,
 	webMode = false,
@@ -464,6 +467,12 @@ export function ModelDetailSheet({
 
 					{/* Actions */}
 					<div className="flex flex-col gap-2 pt-2">
+						{onEdit && bit && (
+							<Button variant="outline" onClick={() => onEdit(bit)}>
+								<PencilIcon className="size-4" />
+								{t("editModel", "Edit model")}
+							</Button>
+						)}
 						{!webMode && !isHosted && (
 							<Button
 								onClick={handleDownload}

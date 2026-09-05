@@ -7,13 +7,15 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { workspaceProfileDraftScope } from "@flow-like/flow-like-ui/components/settings/profile/profile-draft";
+import { ProfileSettingsLoadState } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-load-state";
 import { ProfileSettingsPage } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-page";
-import { useTranslation } from "@flow-like/locales";
+import { useProfileDraft } from "@flow-like/flow-like-ui/components/settings/profile/use-profile-draft";
+import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { useDebounce } from "@uidotdev/usehooks";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useTauriInvoke } from "../../../components/useInvoke";
@@ -94,7 +96,6 @@ const THEME_TRANSLATION: Record<IThemes, unknown> = {
 };
 
 export default function SettingsProfilesPage() {
-	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const auth = useAuth();
@@ -110,123 +111,80 @@ export default function SettingsProfilesPage() {
 		[],
 	);
 
-	const [localProfile, setLocalProfile] = useState<ISettingsProfile | null>(
-		null,
+	const upsertProfile = useCallback(
+		async (profile: ISettingsProfile) => {
+			await invoke("update_profile_settings", { profile });
+			await Promise.all([
+				profiles.refetch(),
+				invalidate(backend.userState.getProfile, []),
+				currentProfile.refetch(),
+			]);
+		},
+		[backend.userState, invalidate, profiles.refetch, currentProfile.refetch],
 	);
-	const debouncedLocalProfile = useDebounce(localProfile, 500);
-	const [hasChanges, setHasChanges] = useState(false);
-	const isSavingRef = useRef(false);
-	const localProfileRef = useRef(localProfile);
-	localProfileRef.current = localProfile;
-
-	useEffect(() => {
-		if (currentProfile.data && !isSavingRef.current) {
-			setLocalProfile(currentProfile.data);
-			setHasChanges(false);
-		}
-	}, [currentProfile.data]);
-
+	const draft = useProfileDraft(
+		currentProfile.data,
+		upsertProfile,
+		workspaceProfileDraftScope(
+			"desktop",
+			auth.user?.profile.sub,
+			process.env.NEXT_PUBLIC_API_URL ??
+				currentProfile.data?.hub_profile.hub ??
+				auth.user?.profile.iss,
+		),
+	);
+	const localProfile = draft.profile;
 	const isCustomTheme = useMemo(() => {
-		const id = localProfile?.hub_profile?.theme?.id;
+		const id = localProfile?.hub_profile.theme?.id;
 		return !!id && !Object.values(IThemes).includes(id as IThemes);
 	}, [localProfile]);
 
-	const upsertProfile = useCallback(
-		async (profile: ISettingsProfile) => {
-			isSavingRef.current = true;
-			try {
-				await invoke("upsert_profile", { profile });
-				await profiles.refetch();
-				await invalidate(backend.userState.getProfile, []);
-				await currentProfile.refetch();
-			} finally {
-				isSavingRef.current = false;
-			}
-		},
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[invalidate],
-	);
-
-	useEffect(() => {
-		if (debouncedLocalProfile && hasChanges) {
-			upsertProfile(debouncedLocalProfile);
-			setHasChanges(false);
-		}
-	}, [debouncedLocalProfile, hasChanges, upsertProfile]);
-
-	const updateProfile = useCallback((updates: Partial<ISettingsProfile>) => {
-		const current = localProfileRef.current;
-		if (!current) return;
-		const now = new Date().toISOString();
-		const hubProfile = updates.hub_profile
-			? { ...current.hub_profile, ...updates.hub_profile, updated: now }
-			: { ...current.hub_profile, updated: now };
-		const newProfile = {
-			...current,
-			...updates,
-			hub_profile: hubProfile,
-			updated: now,
-		};
-		setLocalProfile(newProfile);
-		setHasChanges(true);
-	}, []);
-
 	const handleProfileImageChange = useCallback(async () => {
-		const current = localProfileRef.current;
+		const current = localProfile;
 		if (!current) return;
+		await draft.flush();
 		await invoke("change_profile_image", { profile: current });
 		await profiles.refetch();
 		await invalidate(backend.userState.getProfile, []);
 		await currentProfile.refetch();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [invalidate]);
+	}, [
+		localProfile,
+		draft,
+		profiles,
+		invalidate,
+		backend.userState,
+		currentProfile,
+	]);
 
 	const profileCount = Object.keys(profiles.data ?? {}).length;
 
 	const handleProfileDelete = useCallback(async () => {
-		const current = localProfileRef.current;
+		const current = localProfile;
 		if (!current?.hub_profile.id) return;
 		if (profileCount <= 1) return;
 
 		const profileId = current.hub_profile.id;
 
-		// Delete from server if authenticated
+		await draft.flush();
+		if (auth.isAuthenticated && !auth.user?.access_token)
+			throw new Error("Sign in again before deleting a synced profile.");
 		if (auth.isAuthenticated && auth.user?.access_token) {
-			try {
-				const profile = await invoke<{ hub?: string; secure?: boolean }>(
-					"get_current_profile",
-				).catch(() => null);
-				const hubUrl = profile?.hub;
-				const baseUrl =
-					process.env.NEXT_PUBLIC_API_URL ?? hubUrl ?? "api.flow-like.com";
-				const protocol = profile?.secure === false ? "http" : "https";
-				const apiBase = (
-					baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
-				).replace(/\/+$/, "");
-
-				const response = await tauriFetch(
-					`${apiBase}/api/v1/profile/${encodeURIComponent(profileId)}`,
-					{
-						method: "DELETE",
-						headers: {
-							Authorization: `Bearer ${auth.user.access_token}`,
-						},
-					},
-				);
-				if (!response.ok && response.status !== 404) {
-					const message = await response.text().catch(() => "");
-					console.warn(
-						"[ProfileDelete] Server delete failed:",
-						response.status,
-					);
-					toast.error(message || "Failed to delete profile on the server");
-					return;
-				}
-			} catch (err) {
-				console.warn("[ProfileDelete] Server delete error:", err);
-				toast.error("Failed to delete profile on the server");
-				return;
-			}
+			const hub = current.hub_profile;
+			const baseUrl =
+				process.env.NEXT_PUBLIC_API_URL ?? hub.hub ?? "api.flow-like.com";
+			const protocol = hub.secure === false ? "http" : "https";
+			const apiBase = (
+				baseUrl.startsWith("http") ? baseUrl : `${protocol}://${baseUrl}`
+			).replace(/\/+$/, "");
+			const response = await tauriFetch(
+				`${apiBase}/api/v1/profile/${encodeURIComponent(profileId)}`,
+				{
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${auth.user.access_token}` },
+				},
+			);
+			if (!response.ok && response.status !== 404)
+				throw apiResponseError(response, await response.text().catch(() => ""));
 		}
 
 		// Switch to another profile before deleting
@@ -238,40 +196,53 @@ export default function SettingsProfilesPage() {
 			await invoke("set_current_profile", { profileId: otherProfileId });
 		}
 
-		// Delete locally
-		try {
-			await invoke("delete_profile", { profileId });
-			await appsDB.shortcuts.where("profileId").equals(profileId).delete();
-		} catch (err) {
-			toast.error(`${err}`);
-			return;
-		}
-
-		toast.success("Profile deleted");
+		await invoke("delete_profile", { profileId });
+		draft.forget(profileId);
+		await appsDB.shortcuts.where("profileId").equals(profileId).delete();
+		toast.success(
+			auth.isAuthenticated
+				? "Profile deleted"
+				: "Profile removed from this device",
+		);
 
 		await profiles.refetch();
 		await invalidate(backend.userState.getProfile, []);
 		await invalidate(backend.userState.getSettingsProfile, []);
 		await currentProfile.refetch();
 		router.push("/");
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [profileCount, auth, invalidate, router]);
+	}, [
+		localProfile,
+		draft,
+		profiles,
+		currentProfile,
+		backend.userState,
+		profileCount,
+		auth,
+		invalidate,
+		router,
+	]);
 
 	if (!localProfile) {
 		return (
-			<main className="flex flex-col items-center justify-center w-full flex-1 min-h-0 py-12">
-				<div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary" />
-			</main>
+			<ProfileSettingsLoadState
+				error={currentProfile.error}
+				onRetry={() => void currentProfile.refetch()}
+			/>
 		);
 	}
 
 	return (
 		<ProfileSettingsPage
+			key={localProfile.hub_profile.id}
 			profile={localProfile}
 			isCustomTheme={isCustomTheme}
-			hasChanges={hasChanges}
+			hasChanges={draft.status !== "saved"}
+			saveStatus={draft.status}
+			saveError={draft.error}
+			onRetrySave={draft.retry}
+			deleteScope={auth.isAuthenticated ? "cloud" : "local"}
 			themeTranslation={THEME_TRANSLATION}
-			onProfileUpdate={updateProfile}
+			onProfileUpdate={draft.update}
 			onProfileImageChange={handleProfileImageChange}
 			onProfileDelete={handleProfileDelete}
 			canDeleteProfile={profileCount > 1}

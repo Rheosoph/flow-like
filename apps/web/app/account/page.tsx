@@ -1,255 +1,124 @@
 "use client";
-import { Button, useBackend, useHub, useInvoke } from "@flow-like/flow-like-ui";
+
+import { Button, useBackend, useHub } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
-import { Amplify } from "aws-amplify";
-import {
-	type AuthTokens,
-	type TokenProvider,
-	type UpdateUserAttributesInput,
-	decodeJWT,
-	fetchAuthSession,
-	updatePassword,
-	updateUserAttributes,
-} from "aws-amplify/auth";
+import { updatePassword, updateUserAttributes } from "aws-amplify/auth";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type AuthContextProps, useAuth } from "react-oidc-context";
+import { useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { currentRelativeUrl } from "../../lib/return-url";
 import { type ProfileActions, ProfilePage } from "./account";
 import ChangeEmailDialog from "./change-email";
 import ChangePasswordDialog from "./change-password";
 
-class AuthTokenProvider implements TokenProvider {
-	constructor(private readonly authContext: AuthContextProps) {}
-
-	async getTokens(options?: {
-		forceRefresh?: boolean;
-	}): Promise<AuthTokens | null> {
-		if (!this.authContext.isAuthenticated || !this.authContext.user) {
-			return null;
-		}
-
-		if (
-			!this.authContext.user.access_token ||
-			!this.authContext.user.id_token
-		) {
-			return null;
-		}
-
-		const accessToken = decodeJWT(this.authContext.user?.access_token || "");
-		const idToken = decodeJWT(this.authContext.user?.id_token || "");
-
-		return {
-			accessToken: accessToken,
-			idToken: idToken,
-		};
-	}
-}
-
-const AccountPage: React.FC = () => {
+export default function AccountPage() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const hub = useHub();
 	const auth = useAuth();
 	const router = useRouter();
-	const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-	const [emailDialogOpen, setEmailDialogOpen] = useState(false);
-	const [cognito, setCognito] = useState(false);
-	const [federated, setFederated] = useState(false);
-	const profile = useInvoke(
-		backend.userState.getProfile,
-		backend.userState,
-		[],
-	);
+	const [passwordOpen, setPasswordOpen] = useState(false);
+	const [emailOpen, setEmailOpen] = useState(false);
+	const poolId = hub.hub?.authentication?.openid?.cognito?.user_pool_id;
+	const sub = auth.user?.profile.sub;
+	const identities = auth.user?.profile.identities;
+	const federated = Array.isArray(identities) && identities.length > 0;
+	const ready = Boolean(hub.hub);
+	const canManageCredentials = ready && Boolean(poolId) && !federated;
 
-	const isPremiumEnabled = hub.hub?.features?.premium ?? false;
-
-	const backendRef = useRef(backend);
-	backendRef.current = backend;
-	const authRef = useRef(auth);
-	authRef.current = auth;
-	const hubRef = useRef(hub);
-	hubRef.current = hub;
-
-	const updateUserAttribute = useCallback(
-		async (attributeKey: string, value: string) => {
-			if (!cognito) {
-				console.warn(
-					"Cognito is not enabled, skipping attribute update ",
-					cognito,
-				);
-				return;
-			}
-			try {
-				const updateInput: UpdateUserAttributesInput = {
-					userAttributes: {
-						[attributeKey]: value,
-					},
-				};
-
-				await updateUserAttributes(updateInput);
-			} catch (error) {
-				console.error(`Failed to update ${attributeKey}:`, error);
-				throw error;
-			}
-		},
-		[cognito],
-	);
-
-	const handleChangePassword = useCallback(async () => {
-		setPasswordDialogOpen(true);
-	}, []);
-
-	const handleUpdateEmail = useCallback(async () => {
-		setEmailDialogOpen(true);
-	}, []);
-
-	const configureAmplify = useCallback(async () => {
-		const currentAuth = authRef.current;
-		const currentHub = hubRef.current;
-
-		if (!currentAuth.isAuthenticated || !currentAuth.user?.profile) return;
-		if (currentHub.hub?.authentication?.openid?.cognito?.user_pool_id) {
-			const provider = new AuthTokenProvider(currentAuth);
-			Amplify.configure(
-				{
-					Auth: {
-						Cognito: {
-							userPoolClientId: currentAuth.settings.client_id,
-							userPoolId:
-								currentHub.hub.authentication.openid.cognito.user_pool_id,
-						},
-					},
-				},
-				{
-					Auth: {
-						tokenProvider: provider,
-					},
-				},
-			);
-
-			const authSession = await fetchAuthSession();
-
-			const isFederated = Array.isArray(
-				authSession.tokens?.idToken?.payload?.identities,
-			);
-			setFederated(isFederated);
-			setCognito(true);
-		}
-	}, []);
-
-	useEffect(() => {
-		if (auth.isAuthenticated && hub.hub) {
-			configureAmplify();
-		}
-	}, [auth.isAuthenticated, hub.hub, configureAmplify]);
-
-	const handlePasswordChange = useCallback(
-		async (currentPassword: string, newPassword: string) => {
-			try {
-				await updatePassword({
-					oldPassword: currentPassword,
-					newPassword: newPassword,
-				});
-
-				setPasswordDialogOpen(false);
-				toast.success("Password updated successfully");
-			} catch (error) {
-				console.error("Failed to update password:", error);
-				toast.error("Failed to update password");
-				throw error;
-			}
-		},
-		[],
-	);
-
-	const handleViewBilling = useCallback(async () => {
+	async function viewBilling() {
 		try {
-			const billingSession =
-				await backendRef.current.userState.getBillingSession();
-
-			window.open(billingSession.url, "_blank");
-		} catch (error) {
-			console.error("Failed to get billing session:", error);
-			toast.error("Failed to open billing portal");
+			const popup = window.open("about:blank", "_blank");
+			if (!popup) throw new Error("Allow pop-ups to open the billing portal.");
+			popup.opener = null;
+			try {
+				const session = await backend.userState.getBillingSession();
+				popup.location.href = session.url;
+			} catch (error) {
+				popup.close();
+				throw error;
+			}
+		} catch {
+			toast.error(
+				t(
+					"accountBillingFailed",
+					"The billing portal could not be opened. Allow pop-ups and try again.",
+				),
+			);
 		}
-	}, []);
+	}
 
-	const handlePreviewProfile = useCallback(async () => {
-		router.push(`/profile?sub=${authRef.current.user?.profile?.sub}`);
-	}, [router]);
+	const premium = hub.hub?.features?.premium ?? false;
+	const actions: ProfileActions = {
+		credentialsReady: ready,
+		providerManaged: ready && (!poolId || federated),
+		updateEmail: canManageCredentials
+			? async () => setEmailOpen(true)
+			: undefined,
+		changePassword: canManageCredentials
+			? async () => setPasswordOpen(true)
+			: undefined,
+		handleAttributeUpdate: canManageCredentials
+			? async (attribute, value) => {
+					await updateUserAttributes({
+						userAttributes: { [attribute]: value },
+					});
+				}
+			: undefined,
+		previewProfile: sub
+			? async () => router.push(`/profile?sub=${encodeURIComponent(sub)}`)
+			: undefined,
+		viewBilling: premium ? viewBilling : undefined,
+		viewSubscription: premium
+			? async () => router.push("/subscription")
+			: undefined,
+	};
 
-	const handleViewSubscription = useCallback(async () => {
-		router.push("/subscription");
-	}, [router]);
-
-	const profileActions = useMemo<ProfileActions>(
-		() => ({
-			updateEmail: cognito && !federated ? handleUpdateEmail : undefined,
-			changePassword: cognito && !federated ? handleChangePassword : undefined,
-			viewBilling: isPremiumEnabled ? handleViewBilling : undefined,
-			viewSubscription: isPremiumEnabled ? handleViewSubscription : undefined,
-			previewProfile: handlePreviewProfile,
-			handleAttributeUpdate: cognito ? updateUserAttribute : undefined,
-		}),
-		[
-			cognito,
-			federated,
-			isPremiumEnabled,
-			handleUpdateEmail,
-			handleChangePassword,
-			handleViewBilling,
-			handleViewSubscription,
-			handlePreviewProfile,
-			updateUserAttribute,
-		],
-	);
-
-	if (!auth.isAuthenticated) {
+	if (auth.isLoading)
 		return (
-			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
-				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
-					<h3>
-						{t(
-							"pleaseLogInToViewYourProfile",
-							"Please log in to view your profile.",
-						)}
-					</h3>
+			<main className="p-8" aria-live="polite">
+				{t("accountLoading", "Loading account settings...")}
+			</main>
+		);
+	if (!auth.isAuthenticated)
+		return (
+			<main className="flex flex-1 items-center justify-center p-8">
+				<div className="max-w-sm space-y-4 text-center">
+					<h1 className="text-xl font-semibold">
+						{t("accountSignInRequired", "Sign in to manage your account")}
+					</h1>
 					<Button
 						onClick={() =>
 							auth.signinRedirect({ url_state: currentRelativeUrl() })
 						}
-						className="mt-4"
 					>
-						{t("logIn", "Log In")}
+						{t("logIn", "Log in")}
 					</Button>
 				</div>
 			</main>
 		);
-	}
 
 	return (
 		<>
-			<ProfilePage actions={profileActions} />
-
-			{!federated && (
-				<ChangePasswordDialog
-					key={auth.user?.profile?.sub + "password"}
-					open={passwordDialogOpen}
-					onOpenChange={setPasswordDialogOpen}
-					onPasswordChange={handlePasswordChange}
-				/>
-			)}
-
-			{!federated && (
-				<ChangeEmailDialog
-					open={emailDialogOpen}
-					onOpenChange={setEmailDialogOpen}
-				/>
+			<ProfilePage key={sub} actions={actions} />
+			{canManageCredentials && (
+				<>
+					<ChangePasswordDialog
+						key={`${sub}:password`}
+						open={passwordOpen}
+						onOpenChange={setPasswordOpen}
+						onPasswordChange={(currentPassword, newPassword) =>
+							updatePassword({ oldPassword: currentPassword, newPassword })
+						}
+					/>
+					<ChangeEmailDialog
+						key={`${sub}:email`}
+						open={emailOpen}
+						onOpenChange={setEmailOpen}
+					/>
+				</>
 			)}
 		</>
 	);
-};
-
-export default AccountPage;
+}

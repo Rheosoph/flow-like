@@ -66,6 +66,106 @@ const data = (
 
 export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 	preset(
+		"workspace-strip",
+		"Workspace summary",
+		"Keep your profile and account activity within reach in a compact summary.",
+		"activity",
+		"activity",
+		"workspace-pulse",
+		{ mode: "strip", days: 7, showAttention: true },
+		12,
+		1,
+		"borderless",
+	),
+	preset(
+		"section-heading",
+		"Section heading",
+		"Give a group of widgets a clear introduction and a useful destination.",
+		"content",
+		"panel",
+		"section-heading",
+		{ href: "", linkLabel: "" },
+		12,
+		1,
+		"borderless",
+	),
+	preset(
+		"workspace-attention",
+		"Needs attention",
+		"Review flagged execution records with links back to your apps.",
+		"activity",
+		"activity",
+		"workspace-pulse",
+		{ mode: "attention", days: 7, showAttention: true },
+		4,
+		3,
+	),
+	preset(
+		"app-spotlight",
+		"App spotlight",
+		"Give one app a bold feature with artwork, details, and a clear way in.",
+		"apps",
+		"sparkles",
+		"app-spotlight",
+		{ source: "new", eyebrow: "IN THE SPOTLIGHT" },
+		12,
+		4,
+		"borderless",
+		"violet",
+	),
+	preset(
+		"app-ranking",
+		"Community favorites",
+		"A compact numbered list of apps ranked by community ratings.",
+		"apps",
+		"trending",
+		"app-ranking",
+		{ source: "popular", limit: 6 },
+		4,
+		5,
+	),
+	preset(
+		"app-collection-feature",
+		"A collection worth exploring",
+		"Put a curated group of apps in a bold, colorful feature.",
+		"apps",
+		"layers",
+		"app-collection-feature",
+		{
+			source: "new",
+			category: "Productivity",
+			limit: 3,
+			eyebrow: "THE EVERYDAY, UPGRADED",
+			headline: "Less busywork. More possibility.",
+		},
+		4,
+		3,
+		"borderless",
+		"orange",
+	),
+	preset(
+		"model-spotlight",
+		"Model spotlight",
+		"Put a capable model in focus, with its real details and profile controls.",
+		"apps",
+		"brain",
+		"model-spotlight",
+		{ source: "explore", eyebrow: "MEET YOUR NEXT MODEL" },
+		4,
+		3,
+	),
+	preset(
+		"workspace-pulse",
+		"Your workspace at a glance",
+		"See your apps, recent activity, and what needs a closer look.",
+		"activity",
+		"activity",
+		"workspace-pulse",
+		{ days: 7, showAttention: true },
+		4,
+		4,
+	),
+	preset(
 		"flowpilot-bar",
 		"Ask FlowPilot",
 		"A prompt bar for ideas, questions, and getting work done.",
@@ -277,7 +377,7 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		"apps",
 		"package",
 		"packages",
-		{ query: "", limit: 6 },
+		{ query: "", limit: 6, rendering: "standard" },
 		4,
 		4,
 	),
@@ -940,21 +1040,161 @@ export function createHomeWidget(presetId: string): IHomeWidget {
 }
 
 export function createDefaultHomeLayout(): IHomeLayout {
-	const ids = [
-		"greeting",
-		"flowpilot-bar",
-		"quick-actions",
-		"recent-apps",
-		"categories",
-		"new-apps",
-		"packages",
+	const defaults: {
+		preset: string;
+		id?: string;
+		title?: string;
+		description?: string;
+		config?: Record<string, unknown>;
+		columns?: number;
+		variant?: string;
+	}[] = [
+		{ preset: "greeting", config: { mode: "masthead" } },
+		{
+			preset: "workspace-pulse",
+			config: { mode: "strip" },
+			columns: 12,
+			variant: "borderless",
+		},
+		{
+			preset: "flowpilot-bar",
+			config: {
+				suggestions: true,
+				emphasis: true,
+				placeholder:
+					"Ask FlowPilot to build an app, find a node, or work through an idea…",
+			},
+		},
+		{
+			preset: "section-heading",
+			id: "workspace-heading",
+			title: "Your workspace",
+			description:
+				"Your apps, the latest changes, and what deserves a closer look.",
+			config: { href: "/library", linkLabel: "Open library" },
+		},
+		{
+			preset: "recent-apps",
+			title: "Recently updated apps",
+			config: {
+				rendering: "compact",
+				limit: 4,
+				showUpdated: true,
+				maxColumns: 2,
+			},
+			columns: 8,
+		},
+		{ preset: "workspace-attention" },
+		{
+			preset: "quick-actions",
+			config: {
+				actions: ["create", "import", "library", "learn"],
+				layout: "toolbar",
+			},
+		},
+		{
+			preset: "section-heading",
+			id: "discover-heading",
+			title: "Discover your next possibility",
+			description:
+				"Useful apps, community favorites, and models to build with.",
+			config: { href: "/store/explore/apps", linkLabel: "Explore apps" },
+		},
+		{
+			preset: "categories",
+			title: "",
+			config: {
+				categories: [
+					"Productivity",
+					"Business",
+					"Utilities",
+					"Communication",
+					"Education",
+					"Entertainment",
+					"Games",
+				],
+				rendering: "chips",
+			},
+		},
+		{ preset: "app-spotlight", columns: 8, config: { mode: "compact" } },
+		{
+			preset: "app-collection-feature",
+			config: {
+				category: "Utilities",
+				headline: "Connect the dots",
+				eyebrow: "TOOLS THAT WORK TOGETHER",
+				limit: 3,
+			},
+		},
+		{ preset: "app-ranking", config: { limit: 4 } },
+		{ preset: "model-spotlight" },
+		{
+			preset: "resource-directory",
+			title: "Make more of Flow-Like",
+			columns: 4,
+			config: {
+				layout: "list",
+				items: [
+					{
+						id: "learn",
+						title: "Build your first flow",
+						body: "Follow a course from your first node to a working app.",
+						href: "/learn",
+					},
+					{
+						id: "embed",
+						title: "Bring an app onto your home",
+						body: "Add an App embed widget to use an app page or chat right here, with its own query parameters.",
+						href: "/library",
+					},
+					{
+						id: "data",
+						title: "Let your data tell the story",
+						body: "In Customize, add a data widget. Choose a table or ontology, then set your chart, measures, and filters.",
+					},
+				],
+			},
+		},
+		{
+			preset: "section-heading",
+			id: "packages-heading",
+			title: "Build with better blocks",
+			description:
+				"Packages bring new nodes, tools, and integrations to your flows.",
+			config: { href: "/store/packages", linkLabel: "Explore packages" },
+		},
+		{
+			preset: "packages",
+			title: "",
+			config: { limit: 3, rendering: "compact" },
+			columns: 12,
+			variant: "borderless",
+		},
 	];
 	return {
 		version: 1,
-		widgets: ids.map((id) => ({
-			...createHomeWidget(id),
-			id: `default-${id}`,
-		})),
+		title: "Your workspace, with room for inspiration.",
+		widgets: defaults.map(
+			({ preset, id, title, description, config, columns, variant }) => {
+				const widget = createHomeWidget(preset);
+				return {
+					...widget,
+					id: `default-${id ?? preset}`,
+					title: title ?? widget.title,
+					description: description ?? widget.description,
+					appearance: {
+						...widget.appearance,
+						variant: variant ?? widget.appearance.variant,
+					},
+					config: { ...widget.config, ...config },
+					size: {
+						...widget.size,
+						columns: columns ?? widget.size.columns,
+						heightMode: "auto",
+					},
+				};
+			},
+		),
 	};
 }
 

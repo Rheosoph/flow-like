@@ -22,6 +22,26 @@ export const HOME_MODEL_RENDERINGS: ["standard" | "list", string][] = [
 	["list", "Compact list"],
 ];
 
+export type HomePackageRendering = "standard" | "compact" | "featured";
+
+export const HOME_PACKAGE_RENDERINGS: [HomePackageRendering, string][] = [
+	["standard", "Standard Explore cards"],
+	["compact", "Compact cards"],
+	["featured", "Featured cards"],
+];
+
+export function homePackageRendering(
+	config: Record<string, unknown>,
+	legacyVariant?: string,
+): HomePackageRendering {
+	const requested = config.rendering ?? legacyVariant;
+	if (requested === "list") return "compact";
+	return (
+		HOME_PACKAGE_RENDERINGS.find(([value]) => value === requested)?.[0] ??
+		"standard"
+	);
+}
+
 /** Older layouts stored content rendering in the widget's surface variant. */
 export function homeAppRendering(
 	config: Record<string, unknown>,

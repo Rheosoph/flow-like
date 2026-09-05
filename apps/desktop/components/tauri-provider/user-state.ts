@@ -6,12 +6,16 @@ import type {
 	ISettingsProfile,
 	IUserState,
 } from "@flow-like/flow-like-ui";
-import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
 import type {
 	IHomeDefault,
 	IHomeDefaults,
 	IHomeLayout,
 } from "@flow-like/flow-like-ui/components/home/types";
+import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
+import {
+	type MediaUploadResponse,
+	updateAccountWithAvatar,
+} from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -679,29 +683,15 @@ export class UserState implements IUserState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		if (avatar) {
-			data.avatar_extension = avatar.name.split(".").pop() || "";
-		}
-
-		const response = await fetcher<{ signed_url?: string }>(
-			this.backend.profile,
-			"user/info",
-			{
-				method: "PUT",
-				body: JSON.stringify(data),
-			},
-			this.backend.auth,
+		const profile = this.backend.profile;
+		await updateAccountWithAvatar(data, avatar, (body) =>
+			fetcher<MediaUploadResponse>(
+				profile,
+				"user/info",
+				{ method: "PUT", body: JSON.stringify(body) },
+				this.backend.auth,
+			),
 		);
-
-		if (response.signed_url && avatar) {
-			await fetch(response.signed_url, {
-				method: "PUT",
-				body: avatar,
-				headers: {
-					"Content-Type": avatar.type,
-				},
-			});
-		}
 	}
 
 	async getInfo(): Promise<IUserInfo> {

@@ -27,8 +27,29 @@ import {
 } from "./home-content/personal-content";
 import { HomeEmpty } from "./home-content/shared";
 
+import {
+	HomeAppCollectionFeature,
+	HomeAppRanking,
+	HomeAppSpotlight,
+	HomeModelSpotlight,
+} from "./home-content/discovery";
+import { HomeSectionHeading } from "./home-content/section-heading";
+import { HomeWorkspacePulse } from "./home-content/workspace-overview";
+
 export function HomeWidgetContent(props: HomeContentProps) {
 	switch (props.widget.type) {
+		case "section-heading":
+			return <HomeSectionHeading {...props} />;
+		case "app-spotlight":
+			return <HomeAppSpotlight {...props} />;
+		case "app-ranking":
+			return <HomeAppRanking {...props} />;
+		case "app-collection-feature":
+			return <HomeAppCollectionFeature {...props} />;
+		case "model-spotlight":
+			return <HomeModelSpotlight {...props} />;
+		case "workspace-pulse":
+			return <HomeWorkspacePulse {...props} />;
 		case "flowpilot":
 			return <HomeFlowPilot {...props} />;
 		case "app-embed":

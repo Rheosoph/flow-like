@@ -5,6 +5,7 @@ import {
 	homeEmbedHref,
 	homeLinksRendering,
 	homeModelRendering,
+	homePackageRendering,
 	mergeHomeEmbedNavigation,
 	parseHomeEmbedTarget,
 	safeHomeHref,
@@ -44,6 +45,25 @@ describe("home collection rendering", () => {
 			expect(homeAppRendering({ rendering }, "list")).toBe("standard");
 			expect(homeModelRendering({ rendering }, "list")).toBe("standard");
 		}
+	});
+});
+
+describe("package card rendering migration", () => {
+	it("restores native Explore cards for defaults and older grids", () => {
+		for (const surface of [undefined, "card", "grid", "tinted", "borderless"]) {
+			expect(homePackageRendering({}, surface)).toBe("standard");
+		}
+		expect(homePackageRendering({ rendering: "grid" }, "list")).toBe(
+			"standard",
+		);
+	});
+	it("retains older compact lists and keeps explicit choices independent of the surface", () => {
+		expect(homePackageRendering({}, "list")).toBe("compact");
+		expect(homePackageRendering({ rendering: "list" }, "card")).toBe("compact");
+		for (const rendering of ["standard", "compact", "featured"] as const) {
+			expect(homePackageRendering({ rendering }, "list")).toBe(rendering);
+		}
+		expect(homePackageRendering({ rendering: {} }, "list")).toBe("standard");
 	});
 });
 

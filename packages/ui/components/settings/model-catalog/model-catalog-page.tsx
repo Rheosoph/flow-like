@@ -1239,6 +1239,14 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 			<ModelDetailSheet
 				bit={selectedModel}
+				onEdit={
+					selectedModel && customBitIds.has(selectedModel.id)
+						? (bit) => {
+								setSelectedModel(null);
+								openEditCustomModel(bit);
+							}
+						: undefined
+				}
 				open={selectedModel !== null}
 				onOpenChange={(open) => !open && setSelectedModel(null)}
 				webMode={webMode}

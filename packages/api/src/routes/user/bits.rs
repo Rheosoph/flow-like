@@ -149,8 +149,8 @@ pub struct UpsertUserBitBody {
     /// `parameters.provider.params` OR passed via `secrets`; either way they
     /// are stripped and stored encrypted.
     pub bit: Bit,
-    /// Secret provider params (e.g. `api_key`). On update, omitting this keeps
-    /// the previously stored secrets.
+    /// Secret provider params (e.g. `api_key`). On update, omitted keys keep
+    /// their previously stored values.
     #[serde(default)]
     pub secrets: Option<HashMap<String, Value>>,
 }
@@ -248,7 +248,21 @@ pub async fn upsert_user_bit(
     let secrets_encrypted = if extracted_secrets.is_empty() {
         existing.as_ref().and_then(|e| e.secrets_encrypted.clone())
     } else {
-        let json = flow_like_types::json::to_string(&extracted_secrets)
+        let previous_secrets = existing
+            .as_ref()
+            .and_then(|e| e.secrets_encrypted.as_deref())
+            .map(|encrypted| {
+                let decrypted =
+                    decrypt_secret(encrypted, &state.encryption_key).ok_or_else(|| {
+                        ApiError::bad_request("Could not read existing model credentials")
+                    })?;
+                flow_like_types::json::from_str::<HashMap<String, Value>>(&decrypted)
+                    .map_err(|_| ApiError::bad_request("Could not read existing model credentials"))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let merged_secrets = merge_edited_secrets(previous_secrets, extracted_secrets);
+        let json = flow_like_types::json::to_string(&merged_secrets)
             .map_err(|e| ApiError::bad_request(format!("Invalid secret params: {e}")))?;
         Some(encrypt_secret(&json, &state.encryption_key))
     };
@@ -533,6 +547,15 @@ fn split_secret_params(parameters: Value) -> (Value, HashMap<String, Value>) {
     (parameters, secrets)
 }
 
+// Editing one credential keeps other credentials that the client did not receive.
+fn merge_edited_secrets(
+    mut previous: HashMap<String, Value>,
+    edits: HashMap<String, Value>,
+) -> HashMap<String, Value> {
+    previous.extend(edits);
+    previous
+}
+
 /// Merges decrypted secrets back into `parameters.provider.params`.
 fn merge_secret_params(parameters: &mut Value, secrets: HashMap<String, Value>) {
     if secrets.is_empty() {
@@ -607,6 +630,24 @@ pub(crate) fn user_bit_to_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editing_one_credential_preserves_the_others() {
+        let previous = HashMap::from([
+            ("api_key".into(), Value::String("old-key".into())),
+            (
+                "headers".into(),
+                serde_json::json!({"x-project": "project-id"}),
+            ),
+        ]);
+        let edits = HashMap::from([("api_key".into(), Value::String("new-key".into()))]);
+        let merged = merge_edited_secrets(previous, edits);
+        assert_eq!(merged["api_key"], "new-key");
+        assert_eq!(
+            merged["headers"],
+            serde_json::json!({"x-project": "project-id"})
+        );
+    }
 
     fn model_classification() -> Value {
         flow_like_types::json::json!({

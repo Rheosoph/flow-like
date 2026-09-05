@@ -93,6 +93,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { useAuth } from "react-oidc-context";
@@ -320,7 +321,7 @@ function InnerSidebar() {
 						<span className="w-full flex flex-row items-center justify-between">
 							{t("toggleSidebar", "Toggle Sidebar")}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
-								{`⌘B`}
+								{"⌘B"}
 							</span>
 						</span>
 					</MotionSidebarMenuButton>
@@ -342,6 +343,9 @@ function Profiles() {
 	const [newProfileName, setNewProfileName] = useState("");
 	const [newProfileDescription, setNewProfileDescription] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
+	const [createError, setCreateError] = useState<string | null>(null);
+	const createBusy = useRef(false);
+	const pendingProfileId = useRef<string | null>(null);
 	const currentProfile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -389,11 +393,22 @@ function Profiles() {
 	);
 
 	const handleCreateProfile = useCallback(async () => {
-		if (!newProfileName.trim() || !currentProfile.data) return;
+		if (
+			!newProfileName.trim() ||
+			newProfileName.length > 100 ||
+			!currentProfile.data ||
+			createBusy.current
+		)
+			return;
 
+		createBusy.current = true;
+		setCreateError(null);
 		setIsCreating(true);
 		try {
-			const newProfileId = createId();
+			if (!auth.user?.access_token)
+				throw new Error("Sign in to create a profile.");
+			pendingProfileId.current ??= createId();
+			const newProfileId = pendingProfileId.current;
 			const hubUrl =
 				currentProfile.data.hub_profile.hub ||
 				process.env.NEXT_PUBLIC_API_URL ||
@@ -420,7 +435,11 @@ function Profiles() {
 				},
 			);
 
-			if (response.ok) {
+			if (!response.ok)
+				throw new Error(
+					"Could not create the profile. Check your connection and try again.",
+				);
+			{
 				const createdProfile = await response.json();
 				const createdProfileId =
 					createdProfile?.profile?.id ?? createdProfile?.id ?? newProfileId;
@@ -435,11 +454,19 @@ function Profiles() {
 					invalidate(backend.userState.getAllSettingsProfiles, []),
 				]);
 
+				pendingProfileId.current = null;
 				setCreateDialogOpen(false);
 				setNewProfileName("");
 				setNewProfileDescription("");
 			}
+		} catch (error) {
+			setCreateError(
+				error instanceof Error
+					? error.message
+					: "Could not create the profile. Try again.",
+			);
 		} finally {
+			createBusy.current = false;
 			setIsCreating(false);
 		}
 	}, [
@@ -543,7 +570,12 @@ function Profiles() {
 								);
 							})}
 						<DropdownMenuSeparator />
-						<Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+						<Dialog
+							open={createDialogOpen}
+							onOpenChange={(value) => {
+								if (!createBusy.current) setCreateDialogOpen(value);
+							}}
+						>
 							<DialogTrigger asChild>
 								<DropdownMenuItem
 									className="gap-2 p-2"
@@ -563,7 +595,7 @@ function Profiles() {
 										{t("createNewProfile", "Create New Profile")}
 									</DialogTitle>
 									<DialogDescription>
-										{`Create a new profile to organize your apps and settings.`}
+										{"Create a new profile to organize your apps and settings."}
 									</DialogDescription>
 								</DialogHeader>
 								<div className="grid gap-4 py-4">
@@ -571,6 +603,8 @@ function Profiles() {
 										<Label htmlFor="new-profile-name">Name</Label>
 										<Input
 											id="new-profile-name"
+											maxLength={100}
+											disabled={isCreating}
 											value={newProfileName}
 											onChange={(e) => setNewProfileName(e.target.value)}
 											placeholder={t("profileName", "Profile name")}
@@ -583,6 +617,7 @@ function Profiles() {
 										</Label>
 										<Textarea
 											id="new-profile-description"
+											disabled={isCreating}
 											value={newProfileDescription}
 											onChange={(e) => setNewProfileDescription(e.target.value)}
 											placeholder={t(
@@ -593,13 +628,25 @@ function Profiles() {
 										/>
 									</div>
 								</div>
+								{createError && (
+									<p role="alert" className="text-sm text-destructive">
+										{createError}
+									</p>
+								)}
 								<DialogFooter>
 									<DialogClose asChild>
-										<Button variant="ghost">{t("cancel", "Cancel")}</Button>
+										<Button variant="ghost" disabled={isCreating}>
+											{t("cancel", "Cancel")}
+										</Button>
 									</DialogClose>
 									<Button
 										onClick={handleCreateProfile}
-										disabled={!newProfileName.trim() || isCreating}
+										disabled={
+											!newProfileName.trim() ||
+											newProfileName.length > 100 ||
+											!currentProfile.data ||
+											isCreating
+										}
 									>
 										{isCreating ? "Creating..." : "Create"}
 									</Button>

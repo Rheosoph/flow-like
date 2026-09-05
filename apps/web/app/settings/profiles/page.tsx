@@ -8,11 +8,15 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { workspaceProfileDraftScope } from "@flow-like/flow-like-ui/components/settings/profile/profile-draft";
+import { ProfileSettingsLoadState } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-load-state";
 import { ProfileSettingsPage } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-page";
-import { useTranslation } from "@flow-like/locales";
-import { useDebounce } from "@uidotdev/usehooks";
+import { profileSettingsPatch } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-request";
+import { useProfileDraft } from "@flow-like/flow-like-ui/components/settings/profile/use-profile-draft";
+import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
@@ -93,6 +97,8 @@ const THEME_TRANSLATION: Record<IThemes, unknown> = {
 
 type UpsertProfileResponse = {
 	icon_upload_url?: string | null;
+	icon_upload_id?: string | null;
+	upload_pending?: boolean;
 	thumbnail_upload_url?: string | null;
 };
 
@@ -100,39 +106,23 @@ const IMAGE_MIME_TO_EXT: Record<string, string> = {
 	"image/jpeg": "jpg",
 	"image/png": "png",
 	"image/webp": "webp",
-	"image/gif": "gif",
-	"image/svg+xml": "svg",
 };
-
-function getImageExtension(file: File): string | null {
-	const fromName = file.name.split(".").pop()?.toLowerCase();
-	if (fromName) {
-		if (fromName === "jpeg") return "jpg";
-		return fromName;
-	}
-	return IMAGE_MIME_TO_EXT[file.type] ?? null;
-}
 
 function pickImageFile(): Promise<File | null> {
 	return new Promise((resolve) => {
 		const input = document.createElement("input");
-		let resolved = false;
+		input.type = "file";
+		input.accept = "image/png,image/jpeg,image/webp";
+		input.hidden = true;
 		const finish = (file: File | null) => {
-			if (resolved) return;
-			resolved = true;
-			window.removeEventListener("focus", onFocus, true);
+			input.remove();
 			resolve(file);
 		};
-		const onFocus = () => {
-			window.setTimeout(() => {
-				finish(input.files?.[0] ?? null);
-			}, 0);
-		};
-
-		input.type = "file";
-		input.accept = "image/*";
-		input.onchange = () => finish(input.files?.[0] ?? null);
-		window.addEventListener("focus", onFocus, true);
+		input.addEventListener("change", () => finish(input.files?.[0] ?? null), {
+			once: true,
+		});
+		input.addEventListener("cancel", () => finish(null), { once: true });
+		document.body.appendChild(input);
 		input.click();
 	});
 }
@@ -153,12 +143,13 @@ async function uploadToSignedUrl(url: string, file: File): Promise<void> {
 	});
 
 	if (!response.ok) {
-		throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+		throw new Error(
+			"The image upload failed. Your previous image is still in use. Try again.",
+		);
 	}
 }
 
 export default function SettingsProfilesPage() {
-	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const auth = useAuth();
@@ -170,56 +161,30 @@ export default function SettingsProfilesPage() {
 		[],
 	);
 
-	const [localProfile, setLocalProfile] = useState<ISettingsProfile | null>(
-		null,
-	);
-	const debouncedLocalProfile = useDebounce(localProfile, 500);
-	const [hasChanges, setHasChanges] = useState(false);
-	const isSavingRef = useRef(false);
-	const localProfileRef = useRef(localProfile);
-	localProfileRef.current = localProfile;
-
-	useEffect(() => {
-		if (currentProfile.data && !isSavingRef.current) {
-			setLocalProfile(currentProfile.data);
-			setHasChanges(false);
-		}
-	}, [currentProfile.data]);
-
-	const isCustomTheme = useMemo(() => {
-		const id = localProfile?.hub_profile?.theme?.id;
-		return !!id && !Object.values(IThemes).includes(id as IThemes);
-	}, [localProfile]);
-
-	const updateProfile = useCallback((updates: Partial<ISettingsProfile>) => {
-		const current = localProfileRef.current;
-		if (!current) return;
-		const newProfile = { ...current, ...updates };
-		setLocalProfile(newProfile);
-		setHasChanges(true);
-	}, []);
-
 	const requestProfileUpsert = useCallback(
 		async (
 			profileId: string,
 			body: Record<string, unknown>,
 		): Promise<UpsertProfileResponse> => {
 			if (!auth.user?.access_token) {
-				throw new Error("Missing access token");
+				throw new Error("Sign in again to save your profile.");
 			}
 			const baseUrl =
 				process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
-			const response = await fetch(`${baseUrl}/api/v1/profile/${profileId}`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${auth.user.access_token}`,
+			const response = await fetch(
+				`${baseUrl.replace(/\/+$/, "")}/api/v1/profile/${encodeURIComponent(profileId)}`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${auth.user.access_token}`,
+					},
+					body: JSON.stringify(body),
 				},
-				body: JSON.stringify(body),
-			});
+			);
 			if (!response.ok) {
 				const message = await response.text().catch(() => "");
-				throw new Error(message || `Failed with status ${response.status}`);
+				throw apiResponseError(response, message);
 			}
 			return (await response.json()) as UpsertProfileResponse;
 		},
@@ -228,64 +193,73 @@ export default function SettingsProfilesPage() {
 
 	const upsertProfile = useCallback(
 		async (profile: ISettingsProfile) => {
-			if (!profile.hub_profile.id) return;
-			isSavingRef.current = true;
-			try {
-				await requestProfileUpsert(profile.hub_profile.id, {
-					name: profile.hub_profile.name,
-					description: profile.hub_profile.description,
-					interests: profile.hub_profile.interests,
-					tags: profile.hub_profile.tags,
-					theme: profile.hub_profile.theme,
-					bit_ids: profile.hub_profile.bits,
-					apps: profile.hub_profile.apps,
-					hub: profile.hub_profile.hub,
-					hubs: profile.hub_profile.hubs,
-					settings: profile.execution_settings,
-				});
-				await invalidate(backend.userState.getProfile, []);
-				await invalidate(backend.userState.getAllSettingsProfiles, []);
-				await currentProfile.refetch();
-			} finally {
-				isSavingRef.current = false;
-			}
+			if (!profile.hub_profile.id) throw new Error("Profile ID is missing.");
+			await requestProfileUpsert(
+				profile.hub_profile.id,
+				profileSettingsPatch(profile),
+			);
+			await Promise.all([
+				invalidate(backend.userState.getProfile, []),
+				invalidate(backend.userState.getAllSettingsProfiles, []),
+				currentProfile.refetch(),
+			]);
 		},
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[invalidate, requestProfileUpsert],
+		[
+			requestProfileUpsert,
+			invalidate,
+			backend.userState,
+			currentProfile.refetch,
+		],
 	);
-
-	useEffect(() => {
-		if (!debouncedLocalProfile || !hasChanges) return;
-		void upsertProfile(debouncedLocalProfile)
-			.then(() => setHasChanges(false))
-			.catch((error) => {
-				console.error("Failed to save profile changes:", error);
-			});
-	}, [debouncedLocalProfile, hasChanges, upsertProfile]);
+	const draft = useProfileDraft(
+		currentProfile.data,
+		upsertProfile,
+		workspaceProfileDraftScope(
+			"web",
+			auth.user?.profile.sub,
+			process.env.NEXT_PUBLIC_API_URL ??
+				currentProfile.data?.hub_profile.hub ??
+				auth.user?.profile.iss,
+		),
+	);
+	const localProfile = draft.profile;
+	const isCustomTheme = useMemo(() => {
+		const id = localProfile?.hub_profile.theme?.id;
+		return !!id && !Object.values(IThemes).includes(id as IThemes);
+	}, [localProfile]);
 
 	const handleProfileImageChange = useCallback(async () => {
-		const current = localProfileRef.current;
+		const current = localProfile;
 		if (!current?.hub_profile.id) return;
 
+		const profileId = current.hub_profile.id;
 		const file = await pickImageFile();
 		if (!file) return;
 
-		const extension = getImageExtension(file);
+		const extension = IMAGE_MIME_TO_EXT[file.type];
 		if (!extension) {
-			toast.error("Unsupported image format");
-			return;
+			throw new Error("Choose a PNG, JPEG or WebP image.");
 		}
 
+		if (!file.size || file.size > 10 * 1024 * 1024)
+			throw new Error("Choose an image smaller than 10 MB.");
+
 		try {
+			await draft.flush();
 			const result = await requestProfileUpsert(current.hub_profile.id, {
 				icon_upload_ext: extension,
 			});
 
-			if (!result.icon_upload_url) {
+			if (!result.icon_upload_url || !result.icon_upload_id) {
 				throw new Error("No upload URL returned");
 			}
 
 			await uploadToSignedUrl(result.icon_upload_url, file);
+			await completeMediaUpload(() =>
+				requestProfileUpsert(profileId, {
+					icon_upload_id: result.icon_upload_id,
+				}),
+			);
 
 			await invalidate(backend.userState.getProfile, []);
 			await invalidate(backend.userState.getAllSettingsProfiles, []);
@@ -293,10 +267,16 @@ export default function SettingsProfilesPage() {
 			toast.success("Profile image updated");
 		} catch (error) {
 			console.error("Failed to update profile image:", error);
-			toast.error("Failed to update profile image");
+			throw error;
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [invalidate, requestProfileUpsert]);
+	}, [
+		localProfile,
+		draft,
+		invalidate,
+		requestProfileUpsert,
+		currentProfile,
+		backend.userState,
+	]);
 
 	const allProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
@@ -307,36 +287,27 @@ export default function SettingsProfilesPage() {
 	const profileCount = allProfiles.data?.length ?? 1;
 
 	const handleProfileDelete = useCallback(async () => {
-		const current = localProfileRef.current;
+		const current = localProfile;
 		if (!current?.hub_profile.id) return;
-		if (!auth.user?.access_token) return;
+		if (!auth.user?.access_token)
+			throw new Error("Sign in again before deleting your profile.");
 		if (profileCount <= 1) return;
 
 		const profileId = current.hub_profile.id;
 		const baseUrl =
 			process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
 
-		try {
-			const response = await fetch(
-				`${baseUrl}/api/v1/profile/${encodeURIComponent(profileId)}`,
-				{
-					method: "DELETE",
-					headers: {
-						Authorization: `Bearer ${auth.user.access_token}`,
-					},
-				},
-			);
-
-			if (!response.ok && response.status !== 404) {
-				const message = await response.text().catch(() => "");
-				toast.error(message || `Failed to delete profile: ${response.status}`);
-				return;
-			}
-		} catch (error) {
-			console.error("Failed to delete profile:", error);
-			toast.error("Failed to delete profile");
-			return;
-		}
+		await draft.flush();
+		const response = await fetch(
+			`${baseUrl.replace(/\/+$/, "")}/api/v1/profile/${encodeURIComponent(profileId)}`,
+			{
+				method: "DELETE",
+				headers: { Authorization: `Bearer ${auth.user.access_token}` },
+			},
+		);
+		if (!response.ok && response.status !== 404)
+			throw apiResponseError(response, await response.text().catch(() => ""));
+		draft.forget(profileId);
 
 		if (typeof window !== "undefined") {
 			const remainingProfile = allProfiles.data?.find(
@@ -360,24 +331,39 @@ export default function SettingsProfilesPage() {
 		await invalidate(backend.userState.getAllSettingsProfiles, []);
 		await currentProfile.refetch();
 		router.push("/");
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [profileCount, auth, invalidate, router, allProfiles.data]);
+	}, [
+		localProfile,
+		draft,
+		currentProfile,
+		backend.userState,
+		profileCount,
+		auth,
+		invalidate,
+		router,
+		allProfiles.data,
+	]);
 
 	if (!localProfile) {
 		return (
-			<main className="flex flex-col items-center justify-center w-full flex-1 min-h-0 py-12">
-				<div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary" />
-			</main>
+			<ProfileSettingsLoadState
+				error={currentProfile.error}
+				onRetry={() => void currentProfile.refetch()}
+			/>
 		);
 	}
 
 	return (
 		<ProfileSettingsPage
+			key={localProfile.hub_profile.id}
 			profile={localProfile}
 			isCustomTheme={isCustomTheme}
-			hasChanges={hasChanges}
+			hasChanges={draft.status !== "saved"}
+			saveStatus={draft.status}
+			saveError={draft.error}
+			onRetrySave={draft.retry}
+			supportsExecutionSettings={false}
 			themeTranslation={THEME_TRANSLATION}
-			onProfileUpdate={updateProfile}
+			onProfileUpdate={draft.update}
 			onProfileImageChange={handleProfileImageChange}
 			onProfileDelete={handleProfileDelete}
 			canDeleteProfile={profileCount > 1}

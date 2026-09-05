@@ -1,6 +1,6 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowUp,
 	ArrowUpRight,
@@ -35,6 +35,7 @@ import { useHeroComposer } from "../../global-chat/hero-variants/use-hero-compos
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Textarea } from "../../ui/textarea";
+import { homeGreetingForHour, homeGreetingName } from "../home-greeting";
 import {
 	type HomeContentProps,
 	homeLinksRendering,
@@ -42,7 +43,7 @@ import {
 	stringList,
 	textConfig,
 } from "./config";
-import { HomeEmpty, homeItemClass, homeRowClass } from "./shared";
+import { HomeEmpty, homeItemClass, homeRowClass, useHomeScope } from "./shared";
 
 const Markdown = dynamic(
 	() => import("../../ui/text-editor").then((module) => module.TextEditor),
@@ -55,6 +56,7 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 	const openOverlay = useGlobalChatStore((state) => state.openOverlay);
 	const orbState = useFlowPilotOrbState();
 	const expanded = mode === "card" || mode === "hero";
+	const suggestions = expanded || widget.config.suggestions === true;
 	const heading =
 		widget.title &&
 		!["FlowPilot hero", "FlowPilot composer"].includes(widget.title)
@@ -132,6 +134,8 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 				className={cn(
 					"flex min-w-0 gap-3 rounded-2xl border border-border/70 bg-background/40 p-2.5 transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10",
 					expanded ? "items-end" : "items-center",
+					widget.config.emphasis === true &&
+						"border-violet-400/30 bg-violet-500/[0.04] p-3.5",
 				)}
 			>
 				{!expanded && (
@@ -160,7 +164,7 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 						onChange={(event) => composer.setValue(event.target.value)}
 						placeholder={placeholder}
 						aria-label="Message FlowPilot"
-						className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+						className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground sm:text-base"
 					/>
 				)}
 				<Button
@@ -173,7 +177,7 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 					<ArrowUp className="size-4" />
 				</Button>
 			</div>
-			{expanded && (
+			{suggestions && (
 				<div className="flex flex-wrap gap-2">
 					{["Create an app", "Find a package", "Explain a node"].map(
 						(prompt) => (
@@ -199,6 +203,16 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 
 export function HomeGreeting({ widget }: HomeContentProps) {
 	const auth = useAuth();
+	const backend = useBackend();
+	const scope = useHomeScope();
+	const account = useQuery({
+		queryKey: [backend.userState.getInfo.name, ...scope],
+		queryFn: () => backend.userState.getInfo(),
+		enabled: auth.isAuthenticated && Boolean(auth.user?.access_token),
+		staleTime: 60_000,
+		retry: false,
+	});
+	const compact = textConfig(widget.config, "mode") === "masthead";
 	const [now, setNow] = useState<Date | null>(null);
 	useEffect(() => {
 		setNow(new Date());
@@ -206,14 +220,20 @@ export function HomeGreeting({ widget }: HomeContentProps) {
 		return () => clearInterval(timer);
 	}, []);
 	const hour = now?.getHours() ?? 12;
-	const greeting =
-		hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-	const name =
-		textConfig(widget.config, "name") ||
-		auth.user?.profile.given_name ||
-		auth.user?.profile.name?.split(" ")[0];
+	const greeting = homeGreetingForHour(hour);
+	const name = homeGreetingName(
+		textConfig(widget.config, "name"),
+		account.data,
+		auth.user?.profile,
+	);
 	return (
-		<div className="flex min-h-24 items-center justify-between gap-4 px-1 py-3">
+		<div
+			data-home-greeting
+			className={cn(
+				"flex items-center justify-between gap-4 px-1",
+				compact ? "min-h-14 py-1" : "min-h-24 py-3",
+			)}
+		>
 			<div className="min-w-0">
 				<p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
 					{now?.toLocaleDateString(undefined, {
@@ -222,7 +242,12 @@ export function HomeGreeting({ widget }: HomeContentProps) {
 						month: "long",
 					}) ?? "Welcome"}
 				</p>
-				<h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
+				<h1
+					className={cn(
+						"mt-1 font-semibold tracking-tight",
+						compact ? "text-xl sm:text-2xl" : "text-2xl md:text-3xl",
+					)}
+				>
 					{greeting}
 					{name ? `, ${name}` : ""}
 				</h1>
@@ -288,6 +313,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 	const setDraft = useGlobalChatStore((state) => state.setDraft);
 	const [creating, setCreating] = useState(false);
 	const actions = stringList(widget.config, "actions");
+	const toolbar = textConfig(widget.config, "layout") === "toolbar";
 	const create = async (name: string, online: boolean) => {
 		const [profile, bits] = await Promise.all([
 			backend.userState.getSettingsProfile(),
@@ -315,7 +341,14 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 	};
 	return (
 		<>
-			<div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))] gap-3">
+			<div
+				className={cn(
+					"grid gap-3",
+					toolbar
+						? "grid-cols-2 sm:grid-cols-4"
+						: "grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))]",
+				)}
+			>
 				{actions.map((id) => {
 					const action =
 						HOME_QUICK_ACTIONS[id as keyof typeof HOME_QUICK_ACTIONS];
@@ -323,20 +356,39 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 					const Icon = action.icon;
 					const content = (
 						<Fragment key={id}>
-							<span className="mb-3 flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+							<span
+								className={cn(
+									"flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary",
+									!toolbar && "mb-3",
+								)}
+							>
 								<Icon className="size-4" />
 							</span>
-							<span className="block text-sm font-medium">{action.title}</span>
-							<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-								{action.description}
+							<span
+								className={cn(
+									"block font-medium",
+									toolbar ? "text-xs" : "text-sm",
+								)}
+							>
+								{action.title}
 							</span>
+							{!toolbar && (
+								<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+									{action.description}
+								</span>
+							)}
 						</Fragment>
 					);
 					return action.href ? (
 						<Link
 							key={id}
 							href={action.href}
-							className={cn(homeItemClass, "block h-full p-3.5")}
+							className={cn(
+								homeItemClass,
+								toolbar
+									? "flex items-center gap-2.5 p-2.5"
+									: "block h-full p-3.5",
+							)}
 						>
 							{content}
 						</Link>
@@ -347,7 +399,10 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 							disabled={editing}
 							className={cn(
 								homeItemClass,
-								"block h-full p-3.5 text-left disabled:opacity-60",
+								"text-left disabled:opacity-60",
+								toolbar
+									? "flex items-center gap-2.5 p-2.5"
+									: "block h-full p-3.5",
 							)}
 							onClick={() => {
 								if (id === "create") setCreating(true);
@@ -525,13 +580,15 @@ export function HomeInformation({
 		);
 	}
 	if (["feed", "steps", "resources", "facts"].includes(mode)) {
+		const resourceList =
+			mode === "resources" && widget.config.layout === "list";
 		if (!items.length)
 			return <HomeEmpty>Add items in widget settings.</HomeEmpty>;
 		return (
 			<div
 				className={cn(
 					"min-w-0",
-					["resources", "facts"].includes(mode)
+					["resources", "facts"].includes(mode) && !resourceList
 						? "grid content-start grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-3"
 						: "",
 				)}
@@ -543,7 +600,7 @@ export function HomeInformation({
 							key={item.id}
 							className={cn(
 								"min-w-0",
-								["resources", "facts"].includes(mode)
+								["resources", "facts"].includes(mode) && !resourceList
 									? "rounded-xl bg-muted/35 p-3.5"
 									: "border-b border-border/50 py-3 first:pt-0 last:border-0 last:pb-0",
 								mode === "steps" && "flex items-start gap-3",
@@ -566,14 +623,28 @@ export function HomeInformation({
 										mode === "facts" && "text-2xl tracking-tight",
 									)}
 								>
-									{item.title}
+									{resourceList && href ? (
+										<Link
+											href={href}
+											target={href.startsWith("/") ? undefined : "_blank"}
+											rel={
+												href.startsWith("/") ? undefined : "noopener noreferrer"
+											}
+											className="flex items-center justify-between gap-3 rounded-sm hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+										>
+											{item.title}
+											<ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground" />
+										</Link>
+									) : (
+										item.title
+									)}
 								</h3>
 								{item.body && (
 									<div className="mt-1.5 text-xs leading-relaxed text-muted-foreground [&_p]:text-xs [&_p]:leading-relaxed">
 										<Markdown initialContent={item.body} isMarkdown minimal />
 									</div>
 								)}
-								{href && (
+								{href && !resourceList && (
 									<Link
 										href={href}
 										target={href.startsWith("/") ? undefined : "_blank"}

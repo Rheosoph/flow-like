@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Box, Layers } from "lucide-react";
+import { Layers } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -17,6 +17,7 @@ import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/hub/bit-search-query";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { PackageCard } from "../../store/package-card";
 import { AppCard, SpotlightCard } from "../../ui/app-card";
 import { AppTypeMark } from "../../ui/app-type-mark";
 import { ModelCard } from "../../ui/model-card";
@@ -25,16 +26,12 @@ import {
 	type HomeContentProps,
 	homeAppRendering,
 	homeModelRendering,
+	homePackageRendering,
 	numberConfig,
 	stringList,
 	textConfig,
 } from "./config";
-import {
-	HomeEmpty,
-	HomeQueryState,
-	homeItemClass,
-	useHomeScope,
-} from "./shared";
+import { HomeEmpty, HomeQueryState, useHomeScope } from "./shared";
 
 type AppPair = [IApp, IMetadata | undefined];
 
@@ -192,10 +189,21 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 			</HomeEmpty>
 		);
 	const rendering = homeAppRendering(widget.config, widget.appearance.variant);
+	const maxColumns =
+		Number(widget.config.maxColumns) > 0
+			? Math.min(6, numberConfig(widget.config, "maxColumns", 2))
+			: 0;
 	const owned = new Set((library.data ?? []).map(([app]) => app.id));
 	return (
 		<div
 			data-home-collection-rendering={rendering}
+			style={
+				maxColumns && ["compact", "standard"].includes(rendering)
+					? {
+							gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, max(260px, calc((100% - ${(maxColumns - 1) * 16}px) / ${maxColumns}))), 1fr))`,
+						}
+					: undefined
+			}
 			className={cn(
 				"@container/home-apps min-w-0",
 				rendering === "carousel"
@@ -204,7 +212,9 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 						? "space-y-3"
 						: rendering === "icons"
 							? "grid grid-cols-[repeat(auto-fill,minmax(min(100%,96px),1fr))] gap-x-3 gap-y-4"
-							: "grid auto-rows-max grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-4",
+							: rendering === "compact"
+								? "grid auto-rows-max grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-4"
+								: "grid auto-rows-max grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-4",
 			)}
 		>
 			{rows.map(([app, metadata]) => {
@@ -213,6 +223,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 					? `/use?id=${encodeURIComponent(app.id)}`
 					: `/store?id=${encodeURIComponent(app.id)}`;
 				const title = metadata?.name ?? app.id;
+				const updated = new Date(app.updated_at.secs_since_epoch * 1000);
 				if (rendering === "editorial")
 					return (
 						<SpotlightCard
@@ -251,19 +262,35 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 								"w-[min(100%,264px)] shrink-0 snap-start pt-1",
 						)}
 					>
-						<AppCard
-							app={app}
-							metadata={metadata}
-							isOwned={isOwned}
-							variant={
-								rendering === "compact" || rendering === "list"
-									? "small"
-									: "extended"
-							}
-							href={href}
-							onClick={() => router.push(href)}
-							className="w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-						/>
+						<div className="min-w-0 [&>div]:h-auto">
+							<AppCard
+								app={app}
+								metadata={metadata}
+								isOwned={isOwned}
+								variant={
+									rendering === "compact" || rendering === "list"
+										? "small"
+										: "extended"
+								}
+								href={href}
+								onClick={() => router.push(href)}
+								className="w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+							/>
+						</div>
+						{widget.config.showUpdated === true &&
+							Number.isFinite(updated.getTime()) && (
+								<p
+									data-home-app-updated
+									className="mt-2 px-1 text-[10px] leading-4 text-muted-foreground"
+								>
+									Updated{" "}
+									{updated.toLocaleDateString(undefined, {
+										month: "short",
+										day: "numeric",
+										year: "numeric",
+									})}
+								</p>
+							)}
 					</div>
 				);
 			})}
@@ -338,40 +365,31 @@ export function HomePackages({ widget }: HomeContentProps) {
 			/>
 		);
 	if (!results.data?.packages.length)
-		return <HomeEmpty>No packages match this search.</HomeEmpty>;
+		return (
+			<HomeEmpty
+				action={
+					<Link
+						href="/store/packages"
+						className="text-primary underline underline-offset-4"
+					>
+						Explore all packages
+					</Link>
+				}
+			>
+				No packages match this search.
+			</HomeEmpty>
+		);
+	const rendering = homePackageRendering(
+		widget.config,
+		widget.appearance.variant,
+	);
 	return (
 		<div
-			className={cn(
-				"min-w-0",
-				textConfig(widget.config, "rendering", widget.appearance.variant) ===
-					"grid"
-					? "grid auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))] gap-3"
-					: "space-y-2",
-			)}
+			data-home-package-rendering={rendering}
+			className="grid min-w-0 auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-4"
 		>
 			{results.data.packages.map((pkg) => (
-				<Link
-					key={pkg.id}
-					href={`/store/packages?id=${encodeURIComponent(pkg.id)}`}
-					className={homeItemClass}
-				>
-					<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-						<Box className="size-5" />
-					</span>
-					<div className="min-w-0 flex-1">
-						<div className="truncate text-sm font-semibold">
-							{pkg.metadata?.name ?? pkg.name}
-						</div>
-						<p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-							{pkg.description}
-						</p>
-						<p className="mt-2 text-[11px] text-muted-foreground">
-							v{pkg.latestVersion} · {pkg.downloadCount.toLocaleString()}{" "}
-							downloads{pkg.verified ? " · Verified" : ""}
-						</p>
-					</div>
-					<ArrowUpRight className="size-4 shrink-0 text-muted-foreground" />
-				</Link>
+				<PackageCard key={pkg.id} pkg={pkg} variant={rendering} />
 			))}
 		</div>
 	);
