@@ -3,7 +3,12 @@ import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
-import { ApiResponseError, apiResponseError } from "./api-error";
+import {
+	ApiResponseError,
+	apiErrorDiagnostic,
+	apiResponseError,
+	redactApiPathSecrets,
+} from "./api-error";
 import {
 	DEFAULT_CONNECT_TIMEOUT_MS,
 	STREAM_HEADER_TIMEOUT_MS,
@@ -83,11 +88,11 @@ export function requestSilentRenew(
 	reason: string,
 ): void {
 	try {
-		void Promise.resolve(auth.startSilentRenew()).catch((error) => {
-			console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+		void Promise.resolve(auth.startSilentRenew()).catch(() => {
+			console.warn(`[Auth] Silent renew failed ${reason}`);
 		});
-	} catch (error) {
-		console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+	} catch {
+		console.warn(`[Auth] Silent renew failed ${reason}`);
 	}
 }
 
@@ -103,7 +108,9 @@ export function ensureProtectedAppRouteAuth(
 		requestSilentRenew(auth, "before API request");
 	}
 
-	throw new Error(`Authentication token required for app request: ${path}`);
+	throw new Error(
+		`Authentication token required for app request: ${redactApiPathSecrets(path)}`,
+	);
 }
 
 type SSEMessage = {
@@ -186,7 +193,7 @@ export async function streamFetcher<T>(
 		: {};
 	const url = constructUrl(profile, path);
 
-	console.log("[SSE Debug] Starting stream to:", url);
+	console.log("[SSE Debug] Starting stream to:", redactApiPathSecrets(url));
 	console.log("[SSE Debug] Method:", method);
 	console.log("[SSE Debug] Has body:", !!options?.body);
 	console.log("[SSE Debug] Has auth token:", !!authHeader.Authorization);
@@ -247,7 +254,10 @@ async function streamFetcherRaw<T>(
 		throw new Error("Response body is null - streaming not supported");
 	}
 
-	console.log("[SSE Debug] Connected to SSE stream (raw fetch):", url);
+	console.log(
+		"[SSE Debug] Connected to SSE stream (raw fetch):",
+		redactApiPathSecrets(url),
+	);
 
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
@@ -307,17 +317,16 @@ function processSSEEvent<T>(
 	onMessage?: (data: T) => void,
 ): string {
 	const evt = event.event ?? "message";
-	console.log(
-		"[SSE Debug] Received event:",
-		evt,
-		event.data?.substring(0, 200),
-	);
+	console.log("[SSE Debug] Received event:", evt);
 
 	const parsedData = tryParseJSON<T>(event.data);
 	if (parsedData && onMessage) {
 		onMessage(parsedData);
 	} else if (event.data && !event.data.startsWith("keep-alive")) {
-		console.warn("[SSE Debug] Non-JSON data:", event.data);
+		console.warn("[SSE Debug] Non-JSON event received:", {
+			event: evt,
+			bytes: event.data.length,
+		});
 	}
 
 	// Check SSE event name and JSON data's event_type field for terminal events
@@ -383,17 +392,16 @@ async function streamFetcherEventSource<T>(
 			body: options?.body ? options.body : undefined,
 			signal: options?.signal,
 			onMessage: (message: EventSourceMessage) => {
-				console.log(
-					"[SSE Debug] Received message:",
-					message.event,
-					message.data?.substring(0, 200),
-				);
+				console.log("[SSE Debug] Received message:", message.event);
 				const evt = message?.event ?? "message";
 				const parsedData = tryParseJSON<T>(message.data);
 				if (parsedData && onMessage) {
 					onMessage(parsedData);
 				} else {
-					console.warn("Received non-JSON data:", message.data);
+					console.warn("Received non-JSON SSE data:", {
+						event: evt,
+						bytes: message.data.length,
+					});
 				}
 
 				if (evt === "done" || evt === "completed") {
@@ -404,7 +412,10 @@ async function streamFetcherEventSource<T>(
 				}
 			},
 			onConnect: () => {
-				console.log("[SSE Debug] Connected to SSE stream:", url);
+				console.log(
+					"[SSE Debug] Connected to SSE stream:",
+					redactApiPathSecrets(url),
+				);
 			},
 			onScheduleReconnect: (info) => {
 				console.log(
@@ -415,11 +426,14 @@ async function streamFetcherEventSource<T>(
 				closeAndResolve();
 			},
 			onDisconnect: () => {
-				console.log("[SSE Debug] Disconnected from SSE stream:", url);
+				console.log(
+					"[SSE Debug] Disconnected from SSE stream:",
+					redactApiPathSecrets(url),
+				);
 				closeAndResolve();
 			},
 			onError: (error: unknown) => {
-				console.error("[SSE Debug] Stream error:", error);
+				console.error("[SSE Debug] Stream error");
 				closeAndReject(
 					error instanceof Error ? error : new Error(String(error)),
 				);
@@ -435,8 +449,7 @@ async function streamFetcherEventSource<T>(
 const API_STATS_ENABLED = process.env.NODE_ENV !== "production";
 const __apiCallStats = new Map<string, number>();
 function normalizeApiPath(method: string, path: string): string {
-	const base = path
-		.split("?")[0]
+	const base = (redactApiPathSecrets(path) ?? path)
 		.replace(/[0-9a-f-]{16,}/gi, ":id")
 		.replace(/\/\d+(?=\/|$)/g, "/:n");
 	return `${method} ${base}`;
@@ -509,12 +522,14 @@ async function requestJson<T>(
 
 	// Check network status before attempting request
 	if (typeof navigator !== "undefined" && !navigator.onLine) {
-		console.warn(`Network offline - request will use cache: ${path}`);
-		throw new Error(`Network unavailable: ${path}`);
+		const route = normalizeApiPath(methodOf(options), path);
+		console.warn(`Network offline - request will use cache: ${route}`);
+		throw new Error(`Network unavailable: ${route}`);
 	}
 
 	const url = constructUrl(profile, path);
-	if (API_STATS_ENABLED) console.log("[API DEBUG] Fetching URL:", url);
+	const route = normalizeApiPath(methodOf(options), path);
+	if (API_STATS_ENABLED) console.log("[API DEBUG] Fetching route:", route);
 	try {
 		const response = await tauriFetch(url, {
 			...options,
@@ -548,7 +563,7 @@ async function requestJson<T>(
 			}
 			const errorText = await response.text();
 			const apiError = apiResponseError(response, errorText, path);
-			console.error(`Error fetching ${path}:`, apiError.toJSON());
+			console.error(`Error fetching ${route}:`, apiErrorDiagnostic(apiError));
 			throw apiError;
 		}
 
@@ -558,16 +573,11 @@ async function requestJson<T>(
 		if (json === null) {
 			return { notModified: false, data: text as T, etag: responseEtag };
 		}
-		if (API_STATS_ENABLED) {
-			console.groupCollapsed(`API Request: ${path}`);
-			console.dir(json, { depth: null });
-			console.groupEnd();
-		}
 		return { notModified: false, data: json, etag: responseEtag };
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;
-		console.groupCollapsed(`API Request: ${path}`);
-		console.error(`Error fetching ${path}:`, error);
+		console.groupCollapsed(`API Request: ${route}`);
+		console.error(`Error fetching ${route}`);
 		console.groupEnd();
 
 		// Better error messages for common network issues
@@ -579,12 +589,12 @@ async function requestJson<T>(
 				error.message.includes("Network request failed") ||
 				error.message.includes("fetch failed")
 			) {
-				throw new Error(`Network unavailable: ${path}`);
+				throw new Error(`Network unavailable: ${route}`);
 			}
 			throw error;
 		}
 
-		throw new Error(`Error fetching data: ${error}`);
+		throw new Error(`Error fetching data from ${route}`);
 	}
 }
 

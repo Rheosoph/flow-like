@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, routes::app::db::ScopeParams, state::AppState,
 };
 use axum::{
@@ -71,6 +71,20 @@ pub async fn upsert_nodes(
     let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
 
     let upserted = store.upsert_nodes(&payload.label, payload.rows).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "graph.nodes.upsert",
+        "GraphOverlay",
+        overlay_id,
+        "Saved graph nodes",
+        serde_json::json!({
+            "row_count": upserted,
+            "user_scoped": scope.is_user_scoped(),
+        })
+    );
 
     Ok(Json(UpsertResult { upserted }))
 }

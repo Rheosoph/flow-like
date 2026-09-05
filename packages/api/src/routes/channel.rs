@@ -420,6 +420,12 @@ pub async fn push_channel(
         return Err(ApiError::forbidden("Push body does not match this channel"));
     }
 
+    if matches!(body.kind, ChannelPushKind::Cancel)
+        && crate::routes::execution::cancel::cancel_channel_run(&state, &claims).await?
+    {
+        return Ok(PushResponse::accepted());
+    }
+
     if claims.transport != CHANNEL_TRANSPORT_HTTP {
         return Ok(
             match forward_push(state.channels.forwarder(), &body).await? {

@@ -58,6 +58,9 @@ model Invitation {
 
   @@unique([userId, appId])
   @@index([userId, createdAt])
+
+  @@index([appId])
+  @@index([byMemberId])
 }
 
 model AppConnection {
@@ -85,6 +88,8 @@ model AppConnection {
   @@unique([sourceAppId, targetAppId])
   @@index([targetAppId, status])
   @@index([sourceAppId, status])
+
+  @@index([roleId])
 }
 
 /// Free-form documentation app owners/admins attach to their app for the
@@ -127,6 +132,8 @@ model Membership {
 
   @@unique([userId, appId])
   @@index([appId, roleId])
+
+  @@index([roleId])
 }
 
 model Role {
@@ -150,6 +157,8 @@ model Role {
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([appId])
 }
 
 model Notification {

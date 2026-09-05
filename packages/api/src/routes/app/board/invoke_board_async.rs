@@ -318,10 +318,18 @@ pub async fn invoke_board_async(
         artifact: None,
     };
 
-    let response = state
+    let response = match state
         .dispatcher
         .dispatch_async(request)
-        .await
+        .await {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    if let Err(audit_error) = crate::audit::record_execution_dispatch_failure(&state, &run_id, "dispatcher").await {
+                        tracing::error!(run_id = %run_id, %audit_error, "Failed to record dispatch failure");
+                    }
+                    Err(error)
+                }
+            }
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to dispatch job to queue");
             ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))

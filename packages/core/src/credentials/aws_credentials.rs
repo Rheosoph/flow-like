@@ -22,6 +22,12 @@ pub struct BucketConfig {
     /// Whether this is an S3 Express One Zone bucket
     #[serde(default)]
     pub express: bool,
+    /// Send bucket names in the request path for compatible S3 endpoints.
+    #[serde(default)]
+    pub use_path_style: bool,
+    /// Permit plain HTTP on an explicitly configured private endpoint.
+    #[serde(default)]
+    pub allow_http: bool,
     /// SSE-KMS customer-managed key (ARN, key id or alias) to send with every
     /// write to this bucket.
     ///
@@ -94,6 +100,23 @@ pub fn sse_kms_storage_options(config: Option<&BucketConfig>) -> Vec<(String, St
     ];
     if config.kms_bucket_key {
         options.push(("aws_sse_bucket_key_enabled".to_string(), "true".to_string()));
+    }
+    options
+}
+
+/// Options shared by API-side and execution-side LanceDB connections.
+pub fn s3_storage_options(config: Option<&BucketConfig>) -> Vec<(String, String)> {
+    let mut options = sse_kms_storage_options(config);
+    if let Some(config) = config {
+        if let Some(endpoint) = &config.endpoint {
+            options.push(("aws_endpoint".into(), endpoint.clone()));
+        }
+        if config.use_path_style {
+            options.push(("aws_virtual_hosted_style_request".into(), "false".into()));
+        }
+        if config.allow_http {
+            options.push(("allow_http".into(), "true".into()));
+        }
     }
     options
 }
@@ -195,15 +218,17 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
                         .clone()
                         .ok_or(anyhow!("AWS_SECRET_ACCESS_KEY is not set"))?,
                 )
-                .with_token(
-                    self.session_token
-                        .clone()
-                        .ok_or(anyhow!("SESSION TOKEN is not set"))?,
-                )
                 .with_bucket_name(bucket_name)
                 .with_region(&self.region);
 
+            if let Some(token) = &self.session_token {
+                builder = builder.with_token(token);
+            }
             if let Some(config) = bucket_config {
+                builder = builder.with_allow_http(config.allow_http);
+                if config.use_path_style {
+                    builder = builder.with_virtual_hosted_style_request(false);
+                }
                 if let Some(endpoint) = &config.endpoint {
                     builder = builder.with_endpoint(endpoint);
                 }
@@ -238,6 +263,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
                 .clone()
                 .ok_or(anyhow!("AWS_SECRET_ACCESS_KEY is not set"))?,
             self.session_token.clone(),
+            self.region.clone(),
         );
         let connection = connection(path.clone());
         Ok(connection)
@@ -257,6 +283,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
                 .clone()
                 .ok_or(anyhow!("AWS_SECRET_ACCESS_KEY is not set"))?,
             self.session_token.clone(),
+            self.region.clone(),
         );
         let connection = connection(path.clone());
         Ok(connection)
@@ -286,6 +313,7 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
                 .clone()
                 .ok_or(anyhow!("AWS_SECRET_ACCESS_KEY is not set"))?,
             self.session_token.clone(),
+            self.region.clone(),
         );
         Ok(Arc::new(builder))
     }
@@ -298,25 +326,22 @@ fn make_s3_builder(
     access_key: String,
     secret_key: String,
     session_token: Option<String>,
+    region: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
     let bucket = bucket.to_string();
-    let endpoint = config.and_then(|c| c.endpoint.clone());
-    let sse_options = sse_kms_storage_options(config);
+    let storage_options = s3_storage_options(config);
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
         let mut builder = lancedb::connect(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
-            .storage_option("aws_secret_access_key".to_string(), secret_key.clone());
+            .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
+            .storage_option("aws_region".to_string(), region.clone());
 
         if let Some(ref token) = session_token {
             builder = builder.storage_option("aws_session_token".to_string(), token.clone());
         }
 
-        if let Some(ref ep) = endpoint {
-            builder = builder.storage_option("aws_endpoint".to_string(), ep.clone());
-        }
-
-        for (key, value) in &sse_options {
+        for (key, value) in &storage_options {
             builder = builder.storage_option(key.clone(), value.clone());
         }
         builder
@@ -327,6 +352,40 @@ fn make_s3_builder(
 mod tests {
     use super::*;
     use flow_like_types::json::{from_str, to_string};
+
+    #[flow_like_types::tokio::test]
+    async fn static_credentials_build_without_a_session_token() {
+        let mut credentials = sample_credentials();
+        credentials.session_token = None;
+        credentials.meta_config = Some(BucketConfig {
+            endpoint: Some("http://127.0.0.1:9000".into()),
+            use_path_style: true,
+            allow_http: true,
+            ..Default::default()
+        });
+        credentials
+            .to_store(true)
+            .await
+            .expect("static API credentials should build a store");
+    }
+
+    #[test]
+    fn lance_options_preserve_compatible_s3_transport() {
+        let config = BucketConfig {
+            endpoint: Some("http://object-gateway:9000".into()),
+            use_path_style: true,
+            allow_http: true,
+            ..Default::default()
+        };
+        let options = s3_storage_options(Some(&config));
+        assert!(options.contains(&("aws_endpoint".into(), "http://object-gateway:9000".into())));
+        assert!(options.contains(&("aws_virtual_hosted_style_request".into(), "false".into())));
+        assert!(options.contains(&("allow_http".into(), "true".into())));
+        for (key, _) in options {
+            key.parse::<AmazonS3ConfigKey>()
+                .expect("Lance options must be recognized by object_store");
+        }
+    }
 
     fn sample_credentials() -> AwsSharedCredentials {
         AwsSharedCredentials {
@@ -341,6 +400,7 @@ mod tests {
                 express: true,
                 kms_key_arn: None,
                 kms_bucket_key: false,
+                ..Default::default()
             }),
             content_config: None,
             logs_config: None,
@@ -360,6 +420,7 @@ mod tests {
                     .to_string(),
             ),
             kms_bucket_key: true,
+            ..Default::default()
         }
     }
 

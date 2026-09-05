@@ -590,10 +590,7 @@ impl HttpSink {
             Err((status, message)) => return (status, message).into_response(),
         };
 
-        println!(
-            "[HTTP] Triggering event: {}, with body {:?}",
-            event_id, parsed_payload.payload
-        );
+        println!("[HTTP] Triggering event: {}", event_id);
 
         let response = Arc::new(Mutex::new(None));
         let (tx, rx) = flow_like_types::tokio::sync::oneshot::channel::<()>();
@@ -610,7 +607,7 @@ impl HttpSink {
                     async move {
                         for event in &events {
                             if event.event_type == "generic_result" {
-                                println!("[HTTP] Received generic_result event: {:?}", event);
+                                println!("[HTTP] Received generic_result event");
                                 let mut resp_lock = response.lock().await;
                                 *resp_lock = Some(event.payload.clone());
 
@@ -683,10 +680,7 @@ impl HttpSink {
             Ok(Ok(())) => {
                 // Response received
                 if let Some(resp) = &*response.lock().await {
-                    println!(
-                        "[HTTP] Returning response for event {}: {:?}",
-                        event_id, resp
-                    );
+                    println!("[HTTP] Returning response for event {}", event_id);
                     return (StatusCode::OK, Json(resp.clone())).into_response();
                 }
             }
@@ -745,10 +739,7 @@ mod tests {
             &bearer,
             "Bearer test-http-auth-token"
         ));
-        assert!(http_auth_token_matches(
-            &raw,
-            "Bearer test-http-auth-token"
-        ));
+        assert!(http_auth_token_matches(&raw, "Bearer test-http-auth-token"));
     }
 }
 

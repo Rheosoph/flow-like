@@ -3,7 +3,8 @@
 //! Provides robust SSE parsing using `eventsource-stream` to properly handle
 //! SSE protocol edge cases like multi-line data, reconnection, and buffering.
 
-use crate::entity::sea_orm_active_enums::{ExecutionStatus, RunStatus};
+use crate::audit::{ExecutionAuditContext, record_execution_result};
+use crate::entity::sea_orm_active_enums::{AuditActorType, ExecutionStatus, RunStatus};
 use crate::entity::{execution_run, execution_usage_tracking, prelude::*};
 use crate::execution::dispatch::ByteStream;
 use crate::execution::page_action_sealer::{PageActionSealingContext, PageActionSealingReport};
@@ -40,7 +41,7 @@ pub(crate) fn completed_run_status(status: Option<&str>) -> RunStatus {
 pub fn proxy_sse_response(
     response: reqwest::Response,
     run_id: String,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<ExecutionAuditContext>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     proxy_sse_response_with_page_actions(response, run_id, db, None)
 }
@@ -53,7 +54,7 @@ pub fn proxy_sse_response(
 pub fn proxy_sse_response_with_page_actions(
     response: reqwest::Response,
     run_id: String,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<ExecutionAuditContext>,
     page_actions: Option<Arc<PageActionSealingContext>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = create_sse_stream(response, run_id, db, page_actions);
@@ -68,7 +69,7 @@ pub fn proxy_sse_response_with_page_actions(
 fn create_sse_stream(
     response: reqwest::Response,
     run_id: String,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<ExecutionAuditContext>,
     page_actions: Option<Arc<PageActionSealingContext>>,
 ) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
     let byte_stream = response.bytes_stream();
@@ -131,7 +132,7 @@ fn create_sse_stream(
 
                                     let run_status = completed_run_status(status);
 
-                                    if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                    if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
                                         tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                                     }
                                 }
@@ -145,7 +146,7 @@ fn create_sse_stream(
                 Err(err) => {
                     tracing::warn!(run_id = %run_id, error = %err, "SSE parse error");
                     if let Some(db) = &db
-                        && let Err(e) = update_run_on_completion(db.as_ref(), &run_id, RunStatus::Failed, 0).await {
+                        && let Err(e) = update_run_on_completion(db, &run_id, RunStatus::Failed, 0).await {
                             tracing::error!(run_id = %run_id, error = %e, "Failed to mark run failed after SSE parse error");
                         }
                     let payload = serde_json::json!({ "error": err.to_string() });
@@ -245,7 +246,7 @@ fn seal_page_action_sse_envelope(
 pub async fn collect_generic_result(
     response: reqwest::Response,
     run_id: String,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Option<serde_json::Value> {
     let byte_stream = response.bytes_stream();
@@ -289,7 +290,7 @@ pub async fn collect_generic_result(
                         .and_then(|s| s.as_str());
                     let run_status = completed_run_status(status);
                     if let Err(e) =
-                        update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
+                        update_run_on_completion(db, &run_id, run_status, log_level).await
                     {
                         tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                     }
@@ -320,7 +321,7 @@ pub async fn collect_generic_result(
 pub async fn collect_generic_result_bytes(
     stream: ByteStream,
     run_id: String,
-    db: Option<Arc<DatabaseConnection>>,
+    db: Option<ExecutionAuditContext>,
     timeout: Duration,
 ) -> Option<serde_json::Value> {
     let mut es = stream.eventsource();
@@ -363,7 +364,7 @@ pub async fn collect_generic_result_bytes(
                         .and_then(|s| s.as_str());
                     let run_status = completed_run_status(status);
                     if let Err(e) =
-                        update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
+                        update_run_on_completion(db, &run_id, run_status, log_level).await
                     {
                         tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                     }
@@ -383,13 +384,30 @@ pub async fn collect_generic_result_bytes(
     }
 }
 
+fn completion_update(
+    run_id: &str,
+    model: execution_run::ActiveModel,
+) -> sea_orm::UpdateMany<execution_run::Entity> {
+    ExecutionRun::update_many()
+        .set(model)
+        .filter(execution_run::Column::Id.eq(run_id))
+        .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+}
+
 pub async fn update_run_on_completion(
-    db: &DatabaseConnection,
+    context: &ExecutionAuditContext,
     run_id: &str,
     status: RunStatus,
     log_level: i32,
 ) -> Result<(), sea_orm::DbErr> {
+    let db = context.db.as_ref();
     if let Some(existing) = ExecutionRun::find_by_id(run_id).one(db).await? {
+        if !matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
+            record_execution_result(context, &existing, run_id, AuditActorType::Executor)
+                .await
+                .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+            return Ok(());
+        }
         let now = chrono::Utc::now().fixed_offset();
         let started_at = existing.started_at;
         let created_at = existing.created_at;
@@ -411,7 +429,9 @@ pub async fn update_run_on_completion(
             _ => ExecutionStatus::Info,
         };
 
-        let mut model: execution_run::ActiveModel = existing.into();
+        let mut model = execution_run::ActiveModel {
+            ..Default::default()
+        };
         model.status = Set(status);
         model.log_level = Set(log_level);
         if started_at.is_none() {
@@ -419,7 +439,19 @@ pub async fn update_run_on_completion(
         }
         model.completed_at = Set(Some(now));
         model.updated_at = Set(now);
-        model.update(db).await?;
+        let changed = completion_update(run_id, model).exec(db).await?;
+        let persisted = ExecutionRun::find_by_id(run_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| {
+                sea_orm::DbErr::Custom(format!("Run disappeared after completion: {run_id}"))
+            })?;
+        record_execution_result(context, &persisted, run_id, AuditActorType::Executor)
+            .await
+            .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+        if changed.rows_affected == 0 {
+            return Ok(());
+        }
         track_execution_usage_from_run(
             db,
             run_id,
@@ -527,6 +559,22 @@ mod tests {
             RunStatus::Failed
         ));
         assert!(matches!(completed_run_status(None), RunStatus::Failed));
+    }
+
+    #[test]
+    fn completion_cannot_overwrite_an_existing_terminal_result() {
+        use sea_orm::QueryTrait;
+        let sql = completion_update(
+            "run-1",
+            execution_run::ActiveModel {
+                status: Set(RunStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .build(sea_orm::DatabaseBackend::Postgres)
+        .to_string();
+        assert!(sql.contains("\"ExecutionRun\".\"id\" = 'run-1'"));
+        assert!(sql.contains("\"ExecutionRun\".\"status\" IN ('PENDING', 'RUNNING')"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     middleware::{jwt::AppUser, trace_context::TraceContext},
     permission::role_permission::RolePermissions,
@@ -222,6 +222,20 @@ pub async fn apply_flowscript(
         mutation_guard.ensure_held()?;
         let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
         seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "board.flowscript.apply",
+            "Board",
+            board_id,
+            "Applied FlowScript to a board",
+            serde_json::json!({
+                "command_count": result.commands.len(),
+                "origin": origin,
+                "allow_deletions": params.allow_deletions,
+            })
+        );
     }
 
     Ok(Json(result))

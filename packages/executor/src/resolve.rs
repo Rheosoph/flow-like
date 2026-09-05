@@ -75,7 +75,7 @@ pub async fn fetch_bounded_with(
     let mut response = request
         .send()
         .await
-        .map_err(|e| ResolveError::Fetch(e.to_string()))?;
+        .map_err(|e| ResolveError::Fetch(e.without_url().to_string()))?;
 
     if !response.status().is_success() {
         return Err(ResolveError::Fetch(format!(
@@ -98,7 +98,7 @@ pub async fn fetch_bounded_with(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| ResolveError::Fetch(e.to_string()))?
+        .map_err(|e| ResolveError::Fetch(e.without_url().to_string()))?
     {
         if (body.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
             return Err(ResolveError::Fetch(format!(

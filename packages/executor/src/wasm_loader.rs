@@ -188,7 +188,8 @@ async fn load_single_package(
     let cwasm_resp = http.get(&pkg_ref.cwasm_url).send().await.map_err(|e| {
         ExecutorError::Storage(format!(
             "Failed to download cwasm for {}: {}",
-            package_id, e
+            package_id,
+            e.without_url()
         ))
     })?;
 
@@ -201,10 +202,9 @@ async fn load_single_package(
         )));
     }
 
-    let cwasm_bytes = cwasm_resp
-        .bytes()
-        .await
-        .map_err(|e| ExecutorError::Storage(format!("Failed to read cwasm bytes: {}", e)))?;
+    let cwasm_bytes = cwasm_resp.bytes().await.map_err(|e| {
+        ExecutorError::Storage(format!("Failed to read cwasm bytes: {}", e.without_url()))
+    })?;
 
     let actual = blake3::hash(&cwasm_bytes).to_hex().to_string();
     if actual != pkg_ref.cwasm_checksum {
@@ -320,7 +320,8 @@ async fn download_raw_wasm(
     let wasm_resp = http.get(&pkg_ref.wasm_url).send().await.map_err(|e| {
         ExecutorError::Storage(format!(
             "Failed to download raw wasm for {}: {}",
-            package_id, e
+            package_id,
+            e.without_url()
         ))
     })?;
 
@@ -333,10 +334,12 @@ async fn download_raw_wasm(
         )));
     }
 
-    let wasm_bytes = wasm_resp
-        .bytes()
-        .await
-        .map_err(|e| ExecutorError::Storage(format!("Failed to read raw wasm bytes: {}", e)))?;
+    let wasm_bytes = wasm_resp.bytes().await.map_err(|e| {
+        ExecutorError::Storage(format!(
+            "Failed to read raw wasm bytes: {}",
+            e.without_url()
+        ))
+    })?;
 
     let actual = blake3::hash(&wasm_bytes).to_hex().to_string();
     if actual != pkg_ref.wasm_hash {

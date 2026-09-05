@@ -56,13 +56,6 @@ fn timestamp_datetime(ts: u64) -> Option<chrono::DateTime<chrono::FixedOffset>> 
     chrono::DateTime::from_timestamp_micros(micros).map(|dt| dt.fixed_offset())
 }
 
-fn reported_duration_us(start: u64, end: u64) -> i64 {
-    match (timestamp_micros(start), timestamp_micros(end)) {
-        (Some(start), Some(end)) => end.saturating_sub(start).max(0),
-        _ => 0,
-    }
-}
-
 fn execution_status_from_log_level(log_level: u8) -> ExecutionStatus {
     match log_level {
         0 => ExecutionStatus::Debug,
@@ -154,53 +147,59 @@ pub async fn report_run(
     } else {
         RunStatus::Completed
     };
-    let execution_status = execution_status_from_log_level(body.log_level);
     let started_at = timestamp_datetime(body.start);
     let completed_at = timestamp_datetime(body.end);
-    let duration_us = reported_duration_us(body.start, body.end);
 
     let now = chrono::Utc::now().fixed_offset();
     let expires_at = now + chrono::Duration::hours(24);
 
     let existing = execution_run::Entity::find_by_id(&body.run_id)
         .filter(execution_run::Column::AppId.eq(&app_id))
+        .filter(execution_run::Column::BoardId.eq(&board_id))
+        .filter(execution_run::Column::Mode.eq(RunMode::Local))
+        .filter(execution_run::Column::UserId.eq(&sub))
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to query run: {}", e)))?;
 
-    if let Some(_existing) = existing {
-        let mut update = execution_run::ActiveModel {
-            id: Set(body.run_id.clone()),
-            ..Default::default()
-        };
-        update.status = Set(run_status);
-        update.log_level = Set(body.log_level as i32);
-        update.started_at = Set(started_at);
-        update.completed_at = Set(completed_at);
-        update.progress = Set(100);
-        update.updated_at = Set(now);
-        if let Some(ref error) = body.error_message {
-            update.error_message = Set(Some(error.clone()));
+    let persisted = if let Some(existing) = existing {
+        if matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
+            let mut update = execution_run::ActiveModel {
+                id: Set(body.run_id.clone()),
+                ..Default::default()
+            };
+            update.status = Set(run_status);
+            update.log_level = Set(body.log_level as i32);
+            update.started_at = Set(started_at);
+            update.completed_at = Set(completed_at);
+            update.progress = Set(100);
+            update.updated_at = Set(now);
+            if let Some(ref error) = body.error_message {
+                update.error_message = Set(Some(error.clone()));
+            }
+            execution_run::Entity::update_many()
+                .set(update)
+                .filter(execution_run::Column::Id.eq(&body.run_id))
+                .filter(execution_run::Column::AppId.eq(&app_id))
+                .filter(execution_run::Column::BoardId.eq(&board_id))
+                .filter(execution_run::Column::Mode.eq(RunMode::Local))
+                .filter(execution_run::Column::UserId.eq(&sub))
+                .filter(
+                    execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]),
+                )
+                .exec(&state.db)
+                .await
+                .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
+            execution_run::Entity::find_by_id(&body.run_id)
+                .filter(execution_run::Column::AppId.eq(&app_id))
+                .one(&state.db)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?
+        } else {
+            existing
         }
-        update
-            .update(&state.db)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
     } else {
         let version_label = body.version.as_deref().map(normalize_run_version_label);
-        let execution_audit = crate::audit::ExecutionAudit {
-            run_id: body.run_id.clone(),
-            app_id: app_id.clone(),
-            board_id: board_id.clone(),
-            event_id: body.event_id.clone(),
-            node_id: Some(body.node_id.clone()),
-            version: version_label.clone(),
-            board_etag: None,
-            mode: RunMode::Local,
-            status: run_status.clone(),
-            input_payload_len: 0,
-            technical_user_id: None,
-        };
         let run = execution_run::ActiveModel {
             id: Set(body.run_id.clone()),
             board_id: Set(board_id.clone()),
@@ -235,20 +234,33 @@ pub async fn report_run(
         };
         run.insert(&state.db)
             .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to create run: {}", e)))?;
-        crate::audit::record_execution_start(&state, &user, execution_audit).await;
-    }
+            .map_err(|e| ApiError::internal_error(anyhow!("Failed to create run: {}", e)))?
+    };
+    crate::audit::record_execution_result(
+        &crate::audit::ExecutionAuditContext::from(&state),
+        &persisted,
+        &user.audit_id().await?,
+        crate::audit::actor_type_from_user(&user),
+    )
+    .await?;
 
+    let duration_us = match (persisted.started_at, persisted.completed_at) {
+        (Some(start), Some(end)) => (end - start).num_microseconds().unwrap_or(0).max(0),
+        _ => 0,
+    };
     if let Err(error) = track_reported_execution_usage(
         &state,
-        &body.run_id,
-        &board_id,
-        &body.node_id,
+        &persisted.id,
+        &persisted.board_id,
+        persisted.node_id.as_deref().unwrap_or_default(),
         duration_us,
-        execution_status,
-        Some(&sub),
-        &app_id,
-        completed_at.or(started_at).unwrap_or(now),
+        execution_status_from_log_level(persisted.log_level as u8),
+        persisted.user_id.as_deref(),
+        &persisted.app_id,
+        persisted
+            .completed_at
+            .or(persisted.started_at)
+            .unwrap_or(now),
     )
     .await
     {

@@ -198,6 +198,8 @@ model TechnicalUser {
   @@index([appId])
   @@index([creatorUserId])
   @@index([creatorMembershipId])
+
+  @@index([roleId])
 }
 
 model Feedback {
@@ -224,6 +226,8 @@ model Feedback {
   @@index([appId])
   @@index([createdAt])
   @@index([userId])
+
+  @@index([templateId])
 }
 
 model Comment {
@@ -252,6 +256,8 @@ model Comment {
   @@index([appId])
   @@index([packageId])
   @@index([userId])
+
+  @@index([templateId])
 }
 
 model Template {
@@ -556,6 +562,8 @@ model EventRemoteAuth {
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, nodeId, kind])
+
+  @@index([eventId])
 }
 
 /// Registration row written by the setup-collector for every route, file,
@@ -611,6 +619,9 @@ model EventRemoteRegistration {
   @@index([appId, eventId, eventVersion, variant, kind])
   // Avoid a 63-character CockroachDB name collision with the index above.
   @@index([appId, eventId, eventVersion, variant, kind, method, path], map: "EventRemoteRegistration_route_lookup_idx")
+
+  @@index([eventId])
+  @@index([authId])
 }
 
 /// Vanity slug -> event mapping. Slug is the global URL key; uniqueness
@@ -773,6 +784,8 @@ model AppPurchase {
   @@index([appId, status])
   @@index([appId, completedAt])
   @@index([stripeSessionId])
+
+  @@index([discountId])
 }
 
 /// Discount codes for apps

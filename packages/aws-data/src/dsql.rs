@@ -3,14 +3,18 @@
 //! DSQL closes every connection after 60 minutes and a token is valid for
 //! `DSQL_TOKEN_DURATION_SECS` (60 minutes by default). A token is only
 //! checked when a connection is opened, so the pool's connect options are
-//! swapped for freshly minted ones whenever the current token is older than
-//! 80% of its lifetime, and the pool retires connections well before the
+//! swapped for freshly minted ones before either the token or the IAM
+//! credentials that signed it expire, and the pool retires connections before the
 //! server would. Refresh happens on demand ([`DsqlDatabase::refresh_token_if_stale`])
 //! rather than on a timer, because a frozen Lambda's timers do not tick and
 //! its first connection after a long thaw would otherwise carry an expired
 //! token.
 
 use aurora_dsql_sqlx_connector::{DsqlConnectOptions, DsqlConnectOptionsBuilder, Region};
+use aws_credential_types::{
+    Credentials,
+    provider::{ProvideCredentials, SharedCredentialsProvider},
+};
 use sea_orm::DatabaseConnection;
 use sea_orm::sqlx::{
     ConnectOptions as _,
@@ -19,11 +23,12 @@ use sea_orm::sqlx::{
 use std::{
     env,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::Mutex;
 
-/// DSQL cluster endpoint, e.g. `abc0def1ghi2jkl3.dsql.eu-west-1.on.aws`.
+/// Public or PrivateLink DSQL cluster endpoint, e.g.
+/// `abc0def1ghi2jkl3.dsql-fnh4.eu-west-1.on.aws`.
 /// Its presence selects DSQL for the process.
 pub const ENDPOINT_ENV: &str = "DSQL_CLUSTER_ENDPOINT";
 pub const REGION_ENV: &str = "DSQL_REGION";
@@ -49,6 +54,9 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 4;
 const CONNECTION_MAX_LIFETIME: Duration = Duration::from_secs(25 * 60);
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Leave time for a full Lambda invocation to open a connection after its initial refresh.
+const CREDENTIAL_EXPIRY_MARGIN: Duration = Duration::from_secs(15 * 60);
+const BACKGROUND_REFRESH_PERIOD: Duration = Duration::from_secs(30);
 
 /// Static database credentials and libpq's own connection sources are refused
 /// alongside a DSQL endpoint, even when empty, because any of them could
@@ -93,7 +101,7 @@ impl DsqlConfig {
                 reason: "must not be empty".into(),
             });
         }
-        validate_host(&host)?;
+        let endpoint_region = validate_host(&host)?;
         for name in FORBIDDEN_SETTINGS {
             if env::var_os(name).is_some() {
                 return Err(DsqlConfigError::Forbidden(name));
@@ -103,6 +111,7 @@ impl DsqlConfig {
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
+        validate_region(endpoint_region, region.as_deref())?;
         let user = env::var(USER_ENV)
             .ok()
             .map(|v| v.trim().to_owned())
@@ -142,7 +151,11 @@ impl DsqlConfig {
         Duration::from_secs((self.token_duration_secs / 2).max(1))
     }
 
-    fn connect_options(&self, application_name: &str) -> Result<DsqlConnectOptions, DsqlError> {
+    fn connect_options(
+        &self,
+        application_name: &str,
+        credentials: Credentials,
+    ) -> Result<DsqlConnectOptions, DsqlError> {
         // Hostname and CA validation through SQLx's bundled WebPKI roots; DSQL
         // endpoints carry publicly trusted certificates. The connector prefixes
         // `application_name` with the value given as `orm_prefix`.
@@ -158,34 +171,83 @@ impl DsqlConfig {
             .region(self.region.clone().map(Region::new))
             .token_duration_secs(self.token_duration_secs)
             .orm_prefix(application_name.to_owned())
+            // Use exactly the credentials whose expiry the rotor inspected. Resolving a
+            // provider again inside the connector could sign with a different credential set.
+            .credentials_provider(SharedCredentialsProvider::new(credentials))
             .build()
             .map_err(|error| DsqlError::Config(error.to_string()))
     }
 }
 
 struct TokenRotor {
-    options: DsqlConnectOptions,
+    config: DsqlConfig,
+    application_name: String,
+    provider: SharedCredentialsProvider,
     pool: PgPool,
-    refresh_after: Duration,
-    last_minted: Mutex<Instant>,
+    minted: Mutex<MintedToken>,
+}
+
+struct MintedToken {
+    credentials: Credentials,
+    refresh_at: Instant,
+}
+
+fn same_credentials(a: &Credentials, b: &Credentials) -> bool {
+    a.access_key_id() == b.access_key_id()
+        && a.secret_access_key() == b.secret_access_key()
+        && a.session_token() == b.session_token()
+        && a.expiry() == b.expiry()
+}
+
+fn refresh_delay(
+    config: &DsqlConfig,
+    credentials: &Credentials,
+    now: SystemTime,
+) -> Result<Duration, DsqlError> {
+    match credentials.expiry() {
+        Some(expiry) => {
+            let remaining = expiry
+                .duration_since(now)
+                .ok()
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| DsqlError::Token("AWS signing credentials have expired".into()))?;
+            Ok(config
+                .refresh_after()
+                .min(remaining.saturating_sub(CREDENTIAL_EXPIRY_MARGIN)))
+        }
+        // Lambda environment credentials carry a session token but the SDK environment
+        // provider exposes no expiration. Resolve and mint again at every invocation.
+        None if credentials.session_token().is_some() => Ok(Duration::ZERO),
+        None => Ok(config.refresh_after()),
+    }
 }
 
 impl TokenRotor {
-    /// Mint a fresh token (a local SigV4 presign) and hand it to the pool when
-    /// the current one is older than `refresh_after`. Callers racing here
-    /// serialize on the timestamp lock so one token is minted, not several.
+    /// Resolve the current signing credentials and rotate before the refresh deadline
+    /// or whenever their identity changes. The lock serializes pool option updates.
     async fn refresh_if_stale(&self) -> Result<bool, DsqlError> {
-        let mut last_minted = self.last_minted.lock().await;
-        if last_minted.elapsed() < self.refresh_after {
+        let mut minted = self.minted.lock().await;
+        let credentials = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(|error| DsqlError::Token(error.to_string()))?;
+        let delay = refresh_delay(&self.config, &credentials, SystemTime::now())?;
+        if Instant::now() < minted.refresh_at && same_credentials(&credentials, &minted.credentials)
+        {
             return Ok(false);
         }
         let options = self
-            .options
+            .config
+            .connect_options(&self.application_name, credentials.clone())?
             .authenticated_pg_options()
             .await
             .map_err(|error| DsqlError::Token(error.to_string()))?;
         self.pool.set_connect_options(options);
-        *last_minted = Instant::now();
+        *minted = MintedToken {
+            credentials,
+            refresh_at: Instant::now() + delay,
+        };
         tracing::debug!("rotated the Aurora DSQL connection token");
         Ok(true)
     }
@@ -198,8 +260,8 @@ pub struct DsqlDatabase {
 }
 
 impl DsqlDatabase {
-    /// Refresh the pool's token if it is near expiry; a cheap timestamp
-    /// compare otherwise. Call once per Lambda invocation before any query.
+    /// Refresh after a signing-credential change or before either expiry.
+    /// Call once per Lambda invocation before any query.
     pub async fn refresh_token_if_stale(&self) -> Result<(), DsqlError> {
         self.rotor.refresh_if_stale().await.map(|_| ())
     }
@@ -209,8 +271,7 @@ impl DsqlDatabase {
     pub fn spawn_background_refresh(&self) -> tokio::task::JoinHandle<()> {
         let rotor = self.rotor.clone();
         tokio::spawn(async move {
-            let period = (rotor.refresh_after / 4).max(Duration::from_secs(1));
-            let mut interval = tokio::time::interval(period);
+            let mut interval = tokio::time::interval(BACKGROUND_REFRESH_PERIOD);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
@@ -244,7 +305,18 @@ pub async fn connect_as(
     config: &DsqlConfig,
     application_name: &str,
 ) -> Result<DsqlDatabase, DsqlError> {
-    let options = config.connect_options(application_name)?;
+    let sdk = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let provider = sdk
+        .credentials_provider()
+        .ok_or_else(|| DsqlError::Token("no AWS credentials provider configured".into()))?;
+    let credentials = provider
+        .provide_credentials()
+        .await
+        .map_err(|error| DsqlError::Token(error.to_string()))?;
+    let delay = refresh_delay(config, &credentials, SystemTime::now())?;
+    let options = config.connect_options(application_name, credentials.clone())?;
     let authenticated = options
         .authenticated_pg_options()
         .await
@@ -258,10 +330,14 @@ pub async fn connect_as(
         .test_before_acquire(true)
         .connect_lazy_with(authenticated);
     let rotor = Arc::new(TokenRotor {
-        options,
+        config: config.clone(),
+        application_name: application_name.to_owned(),
+        provider,
         pool: pool.clone(),
-        refresh_after: config.refresh_after(),
-        last_minted: Mutex::new(Instant::now()),
+        minted: Mutex::new(MintedToken {
+            credentials,
+            refresh_at: Instant::now() + delay,
+        }),
     });
     let connection = DatabaseConnection::from(pool);
     connection
@@ -279,24 +355,56 @@ pub async fn connect_as(
     Ok(DsqlDatabase { connection, rotor })
 }
 
-fn validate_host(host: &str) -> Result<(), DsqlConfigError> {
-    let valid = host.ends_with(DSQL_HOST_SUFFIX)
-        && host.len() <= 253
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-        });
-    if !valid {
+/// Return the Region carried by a public or PrivateLink connection hostname.
+fn validate_host(host: &str) -> Result<&str, DsqlConfigError> {
+    let invalid = || DsqlConfigError::Invalid {
+        name: ENDPOINT_ENV,
+        reason: concat!(
+            "must be a bare public <id>.dsql.<region>.on.aws or PrivateLink ",
+            "<id>.dsql-<service-id>.<region>.on.aws endpoint ",
+            "without a scheme, port, or path"
+        )
+        .into(),
+    };
+    let labels: Vec<_> = host.split('.').collect();
+    if labels.len() != 5
+        || !host.ends_with(DSQL_HOST_SUFFIX)
+        || labels
+            .iter()
+            .any(|label| label.is_empty() || label.len() > 63)
+    {
+        return Err(invalid());
+    }
+    let alphanumeric = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    };
+    let service_valid = labels[1] == "dsql"
+        || labels[1]
+            .strip_prefix("dsql-")
+            .is_some_and(|suffix| suffix.split('-').all(alphanumeric));
+    let region_parts: Vec<_> = labels[2].split('-').collect();
+    let region_valid = region_parts.len() >= 3
+        && region_parts[0].len() == 2
+        && region_parts[..region_parts.len() - 1]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_lowercase()))
+        && region_parts
+            .last()
+            .is_some_and(|part| part.len() == 1 && part.bytes().all(|b| b.is_ascii_digit()));
+    if !alphanumeric(labels[0]) || !service_valid || !region_valid {
+        return Err(invalid());
+    }
+    Ok(labels[2])
+}
+
+fn validate_region(endpoint_region: &str, region: Option<&str>) -> Result<(), DsqlConfigError> {
+    if region.is_some_and(|region| region != endpoint_region) {
         return Err(DsqlConfigError::Invalid {
-            name: ENDPOINT_ENV,
-            reason: format!(
-                "must be a lowercase DSQL endpoint ending in {DSQL_HOST_SUFFIX} without a scheme, port, or path"
-            ),
+            name: REGION_ENV,
+            reason: format!("must match the endpoint's region {endpoint_region}"),
         });
     }
     Ok(())
@@ -366,6 +474,36 @@ mod tests {
     }
 
     #[test]
+    fn accepts_public_and_private_endpoints_with_matching_regions() {
+        for host in [
+            "abc0def1ghi2jkl3mno4pqr5stu6.dsql.eu-west-1.on.aws",
+            "abc0def1ghi2jkl3mno4pqr5stu6.dsql-fnh4.eu-west-1.on.aws",
+        ] {
+            let region = validate_host(host).unwrap();
+            assert_eq!(region, "eu-west-1");
+            assert!(validate_region(region, None).is_ok());
+            assert!(validate_region(region, Some("eu-west-1")).is_ok());
+            assert!(validate_region(region, Some("us-east-1")).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_private_endpoints_and_other_aws_services() {
+        for host in [
+            "abc.rds.eu-west-1.on.aws",
+            "abc.dsql-.eu-west-1.on.aws",
+            "abc.dsql--fnh4.eu-west-1.on.aws",
+            "abc.dsql-fnh4-.eu-west-1.on.aws",
+            "abc.dsql-fnh4.us-east-12.on.aws",
+            "abc.dsql-fnh4.eu-west-1.on.aws:5432",
+            "abc.dsql-fnh4.eu-west-1.on.aws/postgres",
+        ] {
+            assert!(validate_host(host).is_err(), "accepted {host}");
+        }
+        assert!(validate_host(&format!("abc.dsql-{}.eu-west-1.on.aws", "a".repeat(59))).is_err());
+    }
+
+    #[test]
     fn bounds_are_enforced() {
         assert_eq!(
             parse_bounded(TOKEN_DURATION_ENV, " 900 ", 60, 604_800).unwrap(),
@@ -386,5 +524,84 @@ mod tests {
         };
         assert_eq!(config.refresh_after(), Duration::from_secs(450));
         assert!(config.is_admin());
+    }
+
+    fn config_for_refresh_tests() -> DsqlConfig {
+        DsqlConfig {
+            host: "abc.dsql.eu-west-1.on.aws".into(),
+            region: None,
+            user: DEFAULT_USER.into(),
+            token_duration_secs: 3_600,
+            max_connections: 4,
+        }
+    }
+
+    #[test]
+    fn signing_credential_expiry_bounds_the_refresh_deadline() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let credentials = Credentials::new(
+            "test-key",
+            "test-secret",
+            Some("session".into()),
+            Some(now + Duration::from_secs(20 * 60)),
+            "test",
+        );
+        assert_eq!(
+            refresh_delay(&config_for_refresh_tests(), &credentials, now).unwrap(),
+            Duration::from_secs(5 * 60)
+        );
+        let near_expiry = now + Duration::from_secs(10 * 60);
+        assert_eq!(
+            refresh_delay(&config_for_refresh_tests(), &credentials, near_expiry).unwrap(),
+            Duration::ZERO
+        );
+        assert!(
+            refresh_delay(
+                &config_for_refresh_tests(),
+                &credentials,
+                now + Duration::from_secs(20 * 60)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn opaque_session_credentials_refresh_each_invocation() {
+        let credentials = Credentials::new(
+            "test-key",
+            "test-secret",
+            Some("session".into()),
+            None,
+            "test",
+        );
+        assert_eq!(
+            refresh_delay(&config_for_refresh_tests(), &credentials, SystemTime::now()).unwrap(),
+            Duration::ZERO
+        );
+        let permanent = Credentials::new("test-key", "test-secret", None, None, "test");
+        assert_eq!(
+            refresh_delay(&config_for_refresh_tests(), &permanent, SystemTime::now()).unwrap(),
+            Duration::from_secs(1_800)
+        );
+    }
+
+    #[test]
+    fn credential_rotation_invalidates_a_token_before_its_deadline() {
+        let old = Credentials::new(
+            "test-key",
+            "test-secret",
+            Some("old-session".into()),
+            None,
+            "test",
+        );
+        let replacement = Credentials::new(
+            "test-key",
+            "test-secret",
+            Some("new-session".into()),
+            None,
+            "test",
+        );
+        assert!(same_credentials(&old, &old.clone()));
+        assert!(!same_credentials(&old, &replacement));
     }
 }

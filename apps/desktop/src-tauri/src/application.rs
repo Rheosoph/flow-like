@@ -915,7 +915,7 @@ pub fn run() {
 
             let start_urls = app.deep_link().get_current();
             if let Ok(Some(urls)) = start_urls {
-                tracing::info!("deep link URLs for start: {:?}", urls);
+                tracing::info!(count = urls.len(), "Handling startup deep links");
                 handle_deep_link(&deep_link_handle, &urls);
             }
 
@@ -1409,7 +1409,8 @@ fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     }
 
     println!(
-        "a new app instance was opened with {args:?} and the deep link event was already triggered"
+        "a new app instance was opened with {} argument(s); the deep link event was already triggered",
+        args.len()
     );
 }
 

@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::widget, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::widget, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -84,6 +84,17 @@ pub async fn create_widget_version(
         };
         update.update(&state.db).await?;
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "widget.version",
+        "Widget",
+        widget_id,
+        "Published a widget version",
+        serde_json::json!({ "version": version })
+    );
 
     Ok(Json(version))
 }

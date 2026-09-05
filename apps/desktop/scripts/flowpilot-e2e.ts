@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { arch, platform, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -33,6 +33,15 @@ const MAX_CONCURRENCY = 4;
 const CASE_OVERHEAD_MS = 5 * 60_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5 * 60_000;
 const CALLBACK_BODY_LIMIT = 256 * 1024 * 1024;
+
+export function constantTimeEqual(left: string, right: string): boolean {
+	const leftBytes = Buffer.from(left);
+	const rightBytes = Buffer.from(right);
+	return (
+		leftBytes.length === rightBytes.length &&
+		timingSafeEqual(leftBytes, rightBytes)
+	);
+}
 
 export interface CliOptions {
 	caseIds: FlowPilotE2ECaseId[];
@@ -679,7 +688,7 @@ async function run(options: CliOptions): Promise<number> {
 					"access-control-allow-headers": "content-type",
 					vary: "Origin",
 				};
-				if (url.pathname !== `/${nonce}`)
+				if (!constantTimeEqual(url.pathname, `/${nonce}`))
 					return new Response("Not found", { status: 404 });
 				const origin = request.headers.get("origin");
 				if (origin && origin !== runnerUrl.origin) {

@@ -25,6 +25,7 @@ use flow_like_storage::{
     files::store::FlowLikeStore,
     object_store::{ObjectStore, path::Path},
 };
+use flow_like_types::utils::constant_time_eq;
 use futures::{StreamExt, stream};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
@@ -736,7 +737,7 @@ impl ExecutionStateStore for FirestoreStateStore {
                 ));
             }
             if let Some(lease) = document.lease.as_ref()
-                && lease.token != lease_token
+                && !constant_time_eq(lease.token.as_bytes(), lease_token.as_bytes())
                 && lease.expires_at > now
             {
                 return Ok(RunLeaseClaim::Busy {
@@ -809,10 +810,10 @@ impl ExecutionStateStore for FirestoreStateStore {
             }
             let now = chrono::Utc::now().timestamp_millis();
             let owns_lease = document.bound_job_id.as_deref() == Some(job_id)
-                && document
-                    .lease
-                    .as_ref()
-                    .is_some_and(|lease| lease.token == lease_token && lease.expires_at > now);
+                && document.lease.as_ref().is_some_and(|lease| {
+                    constant_time_eq(lease.token.as_bytes(), lease_token.as_bytes())
+                        && lease.expires_at > now
+                });
             if !owns_lease {
                 return Err(StateStoreError::LeaseConflict(
                     "terminal callback is not from the current delivery owner".to_string(),
@@ -856,10 +857,10 @@ impl ExecutionStateStore for FirestoreStateStore {
             .ok_or(StateStoreError::NotFound)?;
         let now = chrono::Utc::now().timestamp_millis();
         let owned = document.bound_job_id.as_deref() == Some(job_id)
-            && document
-                .lease
-                .as_ref()
-                .is_some_and(|lease| lease.token == lease_token && lease.expires_at > now);
+            && document.lease.as_ref().is_some_and(|lease| {
+                constant_time_eq(lease.token.as_bytes(), lease_token.as_bytes())
+                    && lease.expires_at > now
+            });
         if owned && !document.record.status.is_terminal() {
             Ok(())
         } else {

@@ -73,7 +73,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     validate_security_prerequisites(&state).await?;
 
-    let _run_sweeper = spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _run_sweeper = spawn_run_sweeper(
+        flow_like_api::audit::ExecutionAuditContext::from(&state),
+        RunSweeperConfig::from_env(),
+    );
     let _regression_suites = spawn_regression_suites_worker(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),

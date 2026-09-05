@@ -79,6 +79,9 @@ pub struct ExecutionClaims {
     /// `None` (old tokens) means a normal run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<bool>,
+    /// Digest of the complete dispatch envelope, added after transport preparation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_hash: Option<String>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -143,6 +146,15 @@ fn sign_inner(
     params: ExecutionJwtParams,
     page_execution: Option<PageExecutionJwtContext>,
 ) -> Result<String, ExecutionJwtError> {
+    if params.token_type == TokenType::Executor
+        && params
+            .ttl_seconds
+            .is_some_and(|ttl| !(1..=86_400).contains(&ttl))
+    {
+        return Err(BackendJwtError::EncodingError(
+            "executor token lifetime must be between 1 second and 24 hours".into(),
+        ));
+    }
     let time = make_time_claims(params.token_type, params.ttl_seconds);
 
     let claims = ExecutionClaims {
@@ -156,6 +168,7 @@ fn sign_inner(
         correlation: params.correlation,
         page_execution,
         shadow: params.shadow,
+        dispatch_hash: None,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -166,6 +179,20 @@ fn sign_inner(
         jti: flow_like_types::create_id(),
     };
 
+    backend_jwt::sign(&claims)
+}
+
+pub(super) fn bind_dispatch(token: &str, hash: String) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    if std::env::var("EXECUTION_ISOLATION_MODE").as_deref() == Ok("per_run")
+        && (claims.exp.saturating_sub(claims.iat) > 86_400
+            || claims.exp > chrono::Utc::now().timestamp().saturating_add(86_400))
+    {
+        return Err(BackendJwtError::EncodingError(
+            "per-run dispatch cannot outlive cancellation retention (24 hours)".into(),
+        ));
+    }
+    claims.dispatch_hash = Some(hash);
     backend_jwt::sign(&claims)
 }
 

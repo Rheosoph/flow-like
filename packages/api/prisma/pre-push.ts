@@ -57,7 +57,7 @@ export function parsePrePushFile(
 	text: string,
 ): PrePushStatement[] {
 	const statements: PrePushStatement[] = [];
-	let guards: Partial<PrePushStatement> = {};
+	let guards: { -readonly [Key in keyof PrePushStatement]?: PrePushStatement[Key] } = {};
 	for (const raw of text.split("\n")) {
 		const line = raw.trim();
 		if (line.length === 0) continue;

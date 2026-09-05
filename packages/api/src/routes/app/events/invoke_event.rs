@@ -103,13 +103,28 @@ async fn mark_sync_dispatch_failure(
                 Err(error) => Err(error),
             };
             match terminal {
-                Ok(_) if store.backend_name() == "postgres" => return,
+                Ok(_) if store.backend_name() == "postgres" => {
+                    if let Err(error) =
+                        crate::audit::record_execution_outcome(state, run_id, "dispatcher").await
+                    {
+                        tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
+                    }
+                    return;
+                }
                 Ok(run) => {
                     match PostgresStateStore::new(std::sync::Arc::new(state.db.clone()))
                         .mirror_run_update(&run)
                         .await
                     {
-                        Ok(()) => return,
+                        Ok(()) => {
+                            if let Err(error) =
+                                crate::audit::record_execution_outcome(state, run_id, "dispatcher")
+                                    .await
+                            {
+                                tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
+                            }
+                            return;
+                        }
                         Err(error) => tracing::error!(
                             run_id,
                             app_id,
@@ -148,6 +163,9 @@ async fn mark_sync_dispatch_failure(
             error = %update_error,
             "Failed to mark the SQL run as failed after dispatch error"
         );
+    }
+    if let Err(error) = crate::audit::record_execution_outcome(state, run_id, "dispatcher").await {
+        tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
     }
 }
 
@@ -813,7 +831,7 @@ async fn invoke_event_impl(
             Ok(proxy_lambda_sse_response(
                 byte_stream,
                 run_id,
-                Some(std::sync::Arc::new(state.db.clone())),
+                Some(crate::audit::ExecutionAuditContext::from(&state)),
                 page_action_sealing,
             )
             .into_response())
@@ -838,7 +856,7 @@ async fn invoke_event_impl(
             Ok(proxy_sse_response_with_page_actions(
                 executor_response,
                 run_id,
-                Some(std::sync::Arc::new(state.db.clone())),
+                Some(crate::audit::ExecutionAuditContext::from(&state)),
                 page_action_sealing,
             )
             .into_response())
@@ -896,7 +914,7 @@ fn seal_lambda_page_actions(
 fn proxy_lambda_sse_response(
     stream: ByteStream,
     run_id: String,
-    db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
+    db: Option<crate::audit::ExecutionAuditContext>,
     page_actions: Option<std::sync::Arc<PageActionSealingContext>>,
 ) -> axum::response::sse::Sse<
     impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
@@ -940,7 +958,7 @@ fn proxy_lambda_sse_response(
 
                                         let run_status = completed_run_status(status);
 
-                                        if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                        if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
                                             tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                                         }
                                     }
@@ -953,6 +971,10 @@ fn proxy_lambda_sse_response(
                 }
                 Err(e) => {
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
+                    if let Some(context) = &db
+                        && let Err(error) = update_run_on_completion(context, &run_id, RunStatus::Failed, 0).await {
+                            tracing::error!(run_id = %run_id, %error, "Failed to record Lambda stream failure");
+                        }
                     let error_event = Event::default()
                         .event("error")
                         .data(flow_like_types::json::json!({ "error": e.to_string() }).to_string());

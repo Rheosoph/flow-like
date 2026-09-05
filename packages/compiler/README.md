@@ -185,8 +185,7 @@ A GCS-compatible private endpoint produces the same shape of message against the
 
 ## Configuration
 
-All settings are read from the environment by `CompilerConfig::from_env()`.
-Out-of-range values fall back to the default rather than failing to start.
+Compilation settings are read by `CompilerConfig::from_env()`. The HTTP service also reads `COMPILER_MAX_CONCURRENT_JOBS` when it creates its admission semaphore. Explicit concurrency limits must be positive integers; invalid values fail startup. Out-of-range storage limits fall back to their defaults.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -195,7 +194,8 @@ Out-of-range values fall back to the default rather than failing to start.
 | `COMPILER_STORAGE_TIMEOUT_SECS` | `120` | Per signed storage request. Clamped to 5–300 |
 | `COMPILER_CALLBACK_TIMEOUT_MS` | `10000` | Terminal callback timeout |
 | `COMPILER_CALLBACK_RETRIES` | `3` | Terminal callback retries |
-| `COMPILER_MAX_PARALLEL_TARGETS` | all cores | Concurrent target compilations |
+| `COMPILER_MAX_PARALLEL_TARGETS` | all cores | Concurrent target compilations per job; must be positive |
+| `COMPILER_MAX_CONCURRENT_JOBS` | `2` | HTTP jobs per compiler instance; excess requests return 429, and queue consumers retain their own admission limits |
 | `COMPILER_MAX_WASM_BYTES` | 256 MiB | Maximum raw `.wasm` download. Clamped to 1 KiB–512 MiB |
 | `COMPILER_MAX_ARTIFACT_BYTES` | 512 MiB | Maximum single artifact upload. Clamped to 1 KiB–1 GiB |
 | `AZURE_STORAGE_ACCOUNT_NAME` | unset | Required for `AzureBlob` jobs; pins the accepted blob host |

@@ -1,0 +1,16 @@
+/// The AWS file tracker commits an object's accounted size together with app and user totals.
+/// Deleted objects retain a zero-size row so replayed S3 events cannot count them again.
+/// No foreign keys: late storage events can arrive after an app or user has been removed.
+model FileAccountingObject {
+  id        String   @id
+  bucket    String
+  objectKey String
+  appId     String
+  userId    String?
+  size      BigInt
+  sequencer String
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([appId])
+  @@index([userId])
+}

@@ -1,8 +1,9 @@
 //! Per-invocation token upkeep for Lambda-hosted services.
 //!
 //! A Lambda's timers stop while the instance is frozen, so the DSQL token is
-//! refreshed at the start of each request instead: a timestamp compare on the
-//! hot path, a local SigV4 presign every ~12 minutes.
+//! refreshed at the start of each request. Credentials with a known expiry
+//! share a token until its refresh deadline; opaque session credentials are
+//! signed again for each invocation.
 
 use crate::dsql::DsqlDatabase;
 use std::{

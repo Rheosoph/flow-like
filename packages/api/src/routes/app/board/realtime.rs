@@ -16,7 +16,6 @@ use axum::{
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::STANDARD;
 use flow_like_types::{anyhow, create_id};
-use sea_orm::TransactionTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -206,37 +205,71 @@ async fn get_or_rotate_room_key(
     app_id: &str,
     board_id: &str,
 ) -> Result<(String, String), ApiError> {
-    let now = chrono::Utc::now().fixed_offset();
+    get_or_rotate_room_key_with_db(&state.db, state.db_dialect, app_id, board_id).await
+}
+
+pub(crate) async fn get_or_rotate_room_key_with_db(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    app_id: &str,
+    board_id: &str,
+) -> Result<(String, String), ApiError> {
+    let app_id = app_id.to_owned();
+    let board_id = board_id.to_owned();
+    crate::db::retry_transaction(
+        db,
+        dialect,
+        None,
+        &crate::db::RetryPolicy::default(),
+        move |txn| {
+            let app_id = app_id.clone();
+            let board_id = board_id.clone();
+            Box::pin(async move {
+                room_key_in_transaction(txn, &app_id, &board_id, chrono::Utc::now().fixed_offset())
+                    .await
+            })
+        },
+    )
+    .await
+}
+
+async fn room_key_in_transaction(
+    txn: &sea_orm::DatabaseTransaction,
+    app_id: &str,
+    board_id: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<(String, String), ApiError> {
+    crate::db::coordination::coordinate(txn, "realtime-room", &[app_id, board_id]).await?;
     let today = now.date_naive();
     let key_id = today.format("%Y-%m-%d").to_string();
-
-    let txn = state.db.begin().await?;
-
-    // Lock row if exists
     let existing = BoardSync::find()
         .filter(board_sync::Column::AppId.eq(app_id))
         .filter(board_sync::Column::BoardId.eq(board_id))
-        .one(&txn)
+        .one(txn)
         .await?;
 
     let encryption_key = match existing {
+        Some(sync) if sync.last_synced_at.date_naive() >= today => {
+            return Ok((
+                sync.sync_encryption_key,
+                sync.last_synced_at
+                    .date_naive()
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            ));
+        }
         Some(sync) => {
-            // Rotate if last_synced_at is from a previous day
-            if sync.last_synced_at.date_naive() < today {
-                let new_key = generate_encryption_key();
-                let mut active_sync: board_sync::ActiveModel = sync.into();
-                active_sync.sync_encryption_key = Set(new_key.clone());
-                active_sync.last_synced_at = Set(now);
-                active_sync.updated_at = Set(now);
-                active_sync.update(&txn).await?;
-                new_key
-            } else {
-                sync.sync_encryption_key
-            }
+            let new_key = generate_encryption_key();
+            let mut active_sync: board_sync::ActiveModel = sync.into();
+            active_sync.sync_encryption_key = Set(new_key.clone());
+            active_sync.last_synced_at = Set(now);
+            active_sync.updated_at = Set(now);
+            active_sync.update(txn).await?;
+            new_key
         }
         None => {
             let new_key = generate_encryption_key();
-            let new_sync = board_sync::ActiveModel {
+            board_sync::ActiveModel {
                 id: Set(create_id()),
                 app_id: Set(app_id.to_string()),
                 board_id: Set(board_id.to_string()),
@@ -244,13 +277,11 @@ async fn get_or_rotate_room_key(
                 sync_encryption_key: Set(new_key.clone()),
                 created_at: Set(now),
                 updated_at: Set(now),
-            };
-            new_sync.insert(&txn).await?;
+            }
+            .insert(txn)
+            .await?;
             new_key
         }
     };
-
-    txn.commit().await?;
-
     Ok((encryption_key, key_id))
 }

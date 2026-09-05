@@ -56,8 +56,8 @@ async fn session(config: &StreamConfig, backoff: &mut Duration) -> SessionEnd {
     let stream = config.kind.name();
     let token = match config.auth.id_token().await {
         Ok(token) => token,
-        Err(err) => {
-            tracing::warn!(stream, error = %err, "firebase stream cannot obtain an id token");
+        Err(_) => {
+            tracing::warn!(stream, "firebase stream cannot obtain an id token");
             return SessionEnd::Reconnect;
         }
     };
@@ -75,6 +75,7 @@ async fn session(config: &StreamConfig, backoff: &mut Duration) -> SessionEnd {
     let response = match response {
         Ok(response) => response,
         Err(err) => {
+            let err = err.without_url();
             tracing::warn!(stream, error = %err, "firebase stream request failed");
             return SessionEnd::Reconnect;
         }
@@ -114,8 +115,8 @@ async fn session(config: &StreamConfig, backoff: &mut Duration) -> SessionEnd {
                 tracing::debug!(stream, "firebase stream ended; reconnecting");
                 return SessionEnd::Reconnect;
             }
-            Ok(Some(Err(err))) => {
-                tracing::warn!(stream, error = %err, "firebase stream broke; reconnecting");
+            Ok(Some(Err(_))) => {
+                tracing::warn!(stream, "firebase stream broke; reconnecting");
                 return SessionEnd::Reconnect;
             }
             Ok(Some(Ok(event))) => {

@@ -73,14 +73,30 @@ pub mod auth {
 pub use sea_orm;
 
 pub fn warn_env_filter() -> EnvFilter {
+    env_filter_defaulting_to("warn")
+}
+
+/// Filter for the long-running local API: our own `INFO` startup lines, with
+/// the dependencies that are noisy at that level held down. `aws_config` is not
+/// merely noisy - it logs the resolved access key id at `INFO`
+/// (`loaded base credentials creds=Credentials { access_key_id: "AKIA…" }`), so
+/// an unfiltered registry writes credential material into every log.
+pub fn info_env_filter() -> EnvFilter {
+    env_filter_defaulting_to("info")
+}
+
+fn env_filter_defaulting_to(level: &str) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("warn")
+        EnvFilter::new(level)
             .add_directive("hyper=warn".parse().unwrap())
             .add_directive("hyper_util=warn".parse().unwrap())
             .add_directive("rustls=warn".parse().unwrap())
             .add_directive("tokio=warn".parse().unwrap())
             .add_directive("h2=warn".parse().unwrap())
             .add_directive("tower=warn".parse().unwrap())
+            .add_directive("aws_config=warn".parse().unwrap())
+            .add_directive("aws_sigv4=warn".parse().unwrap())
+            .add_directive("aws_smithy_runtime=warn".parse().unwrap())
     })
 }
 
@@ -172,6 +188,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .layer(from_fn_with_state(
             state.clone(),
             error_reporting_middleware,
+        ))
+        .layer(from_fn_with_state(
+            state.clone(),
+            middleware::audit::audit_middleware,
         ))
         .layer(from_fn_with_state(state.clone(), jwt_middleware))
         .layer(cors.clone())

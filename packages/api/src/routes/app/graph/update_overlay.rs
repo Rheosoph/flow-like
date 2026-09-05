@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -341,6 +341,23 @@ pub async fn update_overlay(
     {
         tracing::error!(%error, "Failed to clean up removed ontology action bindings");
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "graph.overlay.update",
+        "GraphOverlay",
+        overlay_id,
+        "Updated a graph overlay",
+        serde_json::json!({
+            "user_scoped": scope.is_user_scoped(),
+            "exposed": def.exposed,
+            "bindings_enabled": def.bindings_enabled,
+            "action_count": def.actions.len(),
+            "governed_contract_changed": governed_contract_changed,
+        })
+    );
 
     Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

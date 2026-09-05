@@ -64,17 +64,15 @@ async function processCallback(payload: IOAuthCallbackData) {
 	} = payload;
 
 	console.log("OAuth/OIDC callback received:", {
-		url,
-		code,
-		state,
-		id_token: !!id_token,
-		access_token: !!access_token,
+		hasAuthorizationCode: !!code,
+		hasIdToken: !!id_token,
+		hasAccessToken: !!access_token,
 		error,
 	});
 
 	if (error) {
 		const errorMsg = error_description || error;
-		console.error("OAuth/OIDC error:", errorMsg);
+		console.error("OAuth/OIDC callback error:", error);
 		toast.error(`Authorization failed: ${errorMsg}`);
 		return;
 	}
@@ -100,7 +98,7 @@ async function processCallback(payload: IOAuthCallbackData) {
 		const pending = await oauthTokenStore.getPendingAuth(state);
 
 		if (!pending) {
-			console.error("No pending auth found for state:", state);
+			console.error("No pending auth found for callback state");
 			toast.error("Authorization session expired or invalid");
 			return;
 		}
@@ -145,7 +143,7 @@ async function processCallback(payload: IOAuthCallbackData) {
 			}
 		}
 	} catch (e) {
-		console.error("Failed to handle callback:", e);
+		console.error("Failed to handle callback");
 		toast.error(
 			i18next.t("authorizationFailedVal", "Authorization failed: {{val}}", {
 				val: e instanceof Error ? e.message : "Unknown error",
@@ -167,7 +165,7 @@ export function OAuthCallbackHandler({
 			const url = customEvent.detail?.url;
 			if (!url) return;
 
-			console.log("Debug thirdparty callback received:", url);
+			console.log("Debug thirdparty callback received");
 
 			// Parse the URL and extract params
 			try {
@@ -196,8 +194,8 @@ export function OAuthCallbackHandler({
 				};
 
 				processCallback(payload);
-			} catch (e) {
-				console.error("Failed to parse debug callback URL:", e);
+			} catch {
+				console.error("Failed to parse debug callback URL");
 			}
 		};
 

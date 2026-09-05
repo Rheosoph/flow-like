@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -59,9 +59,24 @@ pub async fn add_to_table(
     validate_table_name(&table)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let mut db = LanceDBVectorStore::from_connection(connection, table).await;
+    let mut db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
 
+    let row_count = payload.items.len();
     db.insert(payload.items).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "database.rows.insert",
+        "DatabaseTable",
+        table,
+        "Inserted database rows",
+        serde_json::json!({
+            "row_count": row_count,
+            "user_scoped": scope.is_user_scoped(),
+        })
+    );
 
     Ok(Json(()))
 }

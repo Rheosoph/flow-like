@@ -75,6 +75,8 @@ model BitCache {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([dependencyTreeHash])
+
+  @@index([bitId])
 }
 
 model BitTreeCache {

@@ -6,8 +6,8 @@ use crate::{
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DbBackend,
-    EntityTrait, FromQueryResult, QueryFilter, Statement,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, QueryFilter, Statement,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -206,8 +206,33 @@ pub async fn enforce_app_usage_limits_for_user(
     token_delta: Option<i64>,
     cost_delta: Option<i64>,
 ) -> Result<(), ApiError> {
+    match check_app_usage_limits_for_user(
+        &state.db,
+        app_id,
+        user_id,
+        technical_user_id,
+        token_delta,
+        cost_delta,
+    )
+    .await?
+    {
+        Some(rejection) => Err(rejection),
+        None => Ok(()),
+    }
+}
+
+/// Returns a policy rejection as a value so a reservation transaction can
+/// commit its alert while omitting the rejected reservation.
+pub(crate) async fn check_app_usage_limits_for_user<C: ConnectionTrait>(
+    db: &C,
+    app_id: Option<&str>,
+    user_id: Option<&str>,
+    technical_user_id: Option<&str>,
+    token_delta: Option<i64>,
+    cost_delta: Option<i64>,
+) -> Result<Option<ApiError>, ApiError> {
     let Some(app_id) = app_id.map(str::trim).filter(|app_id| !app_id.is_empty()) else {
-        return Ok(());
+        return Ok(None);
     };
 
     let limits = app_usage_limit::Entity::find()
@@ -221,12 +246,12 @@ pub async fn enforce_app_usage_limits_for_user(
                 )
                 .add_option(user_id.map(|user_id| app_usage_limit::Column::UserId.eq(user_id))),
         )
-        .all(&state.db)
+        .all(db)
         .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+        .map_err(ApiError::from)?;
 
     if limits.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     for limit in limits {
@@ -242,52 +267,56 @@ pub async fn enforce_app_usage_limits_for_user(
         } else {
             Some(limit.user_id.as_str())
         };
-        let current = query_usage_totals(&state.db, app_id, scoped_user_id, start)
+        let current = query_usage_totals(db, app_id, scoped_user_id, start)
             .await
-            .map_err(|e| ApiError::internal_error(e.into()))?;
-        let used_tokens = current.tokens + token_delta.unwrap_or(0).max(0);
-        let used_cost = current.cost_micro_dollars + cost_delta.unwrap_or(0).max(0);
+            .map_err(ApiError::from)?;
+        let used_tokens = current
+            .tokens
+            .saturating_add(token_delta.unwrap_or(0).max(0));
+        let used_cost = current
+            .cost_micro_dollars
+            .saturating_add(cost_delta.unwrap_or(0).max(0));
 
         maybe_emit_threshold_alert(
-            &state.db,
+            db,
             &limit,
             used_tokens,
             used_cost,
             limit.warning_threshold_percent,
         )
         .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+        .map_err(ApiError::from)?;
 
         if let Some(cost_limit) = limit.cost_micro_dollars
             && used_cost > cost_limit
         {
-            emit_limit_exceeded_alert(&state.db, &limit, used_tokens, used_cost)
+            emit_limit_exceeded_alert(db, &limit, used_tokens, used_cost)
                 .await
-                .map_err(|e| ApiError::internal_error(e.into()))?;
+                .map_err(ApiError::from)?;
             if limit.hard {
-                return Err(ApiError::too_many_requests(format!(
+                return Ok(Some(ApiError::too_many_requests(format!(
                     "App usage cost limit exceeded for {}",
                     limit.period
-                )));
+                ))));
             }
         }
 
         if let Some(token_limit) = limit.token_limit
             && used_tokens > token_limit
         {
-            emit_limit_exceeded_alert(&state.db, &limit, used_tokens, used_cost)
+            emit_limit_exceeded_alert(db, &limit, used_tokens, used_cost)
                 .await
-                .map_err(|e| ApiError::internal_error(e.into()))?;
+                .map_err(ApiError::from)?;
             if limit.hard {
-                return Err(ApiError::too_many_requests(format!(
+                return Ok(Some(ApiError::too_many_requests(format!(
                     "App usage token limit exceeded for {}",
                     limit.period
-                )));
+                ))));
             }
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 #[derive(Clone, Debug, Default, Serialize, ToSchema)]
@@ -305,44 +334,59 @@ struct UsageSqlRow {
     invocations: i64,
 }
 
-pub async fn query_usage_totals(
-    db: &DatabaseConnection,
+pub async fn query_usage_totals<C: ConnectionTrait>(
+    db: &C,
     app_id: &str,
     user_id: Option<&str>,
     start: DateTime<FixedOffset>,
 ) -> Result<UsageLimitTotals, sea_orm::DbErr> {
     let backend = db.get_database_backend();
     let user_id = user_id.unwrap_or("");
-    let rows = [
-        usage_total_row(db, backend, UsageTotalTable::Llm, app_id, user_id, start).await?,
-        usage_total_row(
-            db,
-            backend,
-            UsageTotalTable::Embedding,
-            app_id,
-            user_id,
-            start,
-        )
-        .await?,
-        usage_total_row(
-            db,
-            backend,
-            UsageTotalTable::Pending,
-            app_id,
-            user_id,
-            start,
-        )
-        .await?,
-    ];
-
-    Ok(rows
-        .into_iter()
-        .fold(UsageLimitTotals::default(), |mut acc, row| {
-            acc.cost_micro_dollars += row.cost_micro_dollars;
-            acc.tokens += row.tokens;
-            acc.invocations += row.invocations;
-            acc
-        }))
+    // Tracking is inserted before an invocation is settled. Reading all three
+    // sources in one statement prevents a settlement between reads from making
+    // both the tracking row and its pending reservation disappear from the total.
+    // A linked tracking row replaces its estimate even before settlement finishes.
+    let sources = [
+        UsageTotalTable::Llm,
+        UsageTotalTable::Embedding,
+        UsageTotalTable::Pending,
+    ]
+    .map(|table| usage_total_sql(backend, table))
+    .join(" UNION ALL ");
+    let cast = if backend == DbBackend::Postgres {
+        "::BIGINT"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT SUM(cost_micro_dollars){cast} AS cost_micro_dollars, \
+         SUM(tokens){cast} AS tokens, SUM(invocations){cast} AS invocations \
+         FROM ({sources}) AS usage_totals"
+    );
+    let values = match backend {
+        DbBackend::Postgres => vec![start.into(), app_id.into(), user_id.into()],
+        _ => (0..3)
+            .flat_map(|_| {
+                [
+                    start.into(),
+                    app_id.into(),
+                    user_id.into(),
+                    user_id.into(),
+                    user_id.into(),
+                ]
+            })
+            .collect(),
+    };
+    let row = UsageSqlRow::find_by_statement(Statement::from_sql_and_values(backend, sql, values))
+        .one(db)
+        .await?;
+    Ok(row
+        .map(|row| UsageLimitTotals {
+            cost_micro_dollars: row.cost_micro_dollars,
+            tokens: row.tokens,
+            invocations: row.invocations,
+        })
+        .unwrap_or_default())
 }
 
 #[derive(Copy, Clone)]
@@ -352,15 +396,8 @@ enum UsageTotalTable {
     Pending,
 }
 
-async fn usage_total_row(
-    db: &DatabaseConnection,
-    backend: DbBackend,
-    table: UsageTotalTable,
-    app_id: &str,
-    user_id: &str,
-    start: DateTime<FixedOffset>,
-) -> Result<UsageSqlRow, sea_orm::DbErr> {
-    let sql = match (backend, table) {
+fn usage_total_sql(backend: DbBackend, table: UsageTotalTable) -> &'static str {
+    match (backend, table) {
         (DbBackend::Postgres, UsageTotalTable::Llm) => {
             r#"SELECT COALESCE(SUM("price"), 0)::BIGINT AS cost_micro_dollars,
 COALESCE(SUM("tokenIn" + "tokenOut"), 0)::BIGINT AS tokens,
@@ -380,7 +417,9 @@ WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "techn
 COALESCE(SUM("estimatedTokens"), 0)::BIGINT AS tokens,
 COUNT(*)::BIGINT AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= $1 AND "status" = 'pending' AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)"#
+WHERE "startedAt" >= $1 AND "status" = 'pending' AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)
+AND NOT EXISTS (SELECT 1 FROM "LLMUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")
+AND NOT EXISTS (SELECT 1 FROM "EmbeddingUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")"#
         }
         (_, UsageTotalTable::Llm) => {
             r#"SELECT COALESCE(SUM("price"), 0) AS cost_micro_dollars,
@@ -401,31 +440,15 @@ WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ? OR "technical
 COALESCE(SUM("estimatedTokens"), 0) AS tokens,
 COUNT(*) AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= ? AND "status" = 'pending' AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)"#
+WHERE "startedAt" >= ? AND "status" = 'pending' AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)
+AND NOT EXISTS (SELECT 1 FROM "LLMUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")
+AND NOT EXISTS (SELECT 1 FROM "EmbeddingUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")"#
         }
-    };
-
-    let values = match backend {
-        DbBackend::Postgres => vec![start.into(), app_id.into(), user_id.into()],
-        _ => vec![
-            start.into(),
-            app_id.into(),
-            user_id.into(),
-            user_id.into(),
-            user_id.into(),
-        ],
-    };
-    let stmt = Statement::from_sql_and_values(backend, sql, values);
-    let row = UsageSqlRow::find_by_statement(stmt).one(db).await?;
-    Ok(row.unwrap_or(UsageSqlRow {
-        cost_micro_dollars: 0,
-        tokens: 0,
-        invocations: 0,
-    }))
+    }
 }
 
-async fn maybe_emit_threshold_alert(
-    db: &DatabaseConnection,
+async fn maybe_emit_threshold_alert<C: ConnectionTrait>(
+    db: &C,
     limit: &app_usage_limit::Model,
     used_tokens: i64,
     used_cost: i64,
@@ -437,11 +460,15 @@ async fn maybe_emit_threshold_alert(
 
     let cost_crossed = limit
         .cost_micro_dollars
-        .map(|limit| used_cost * 100 >= limit * threshold_percent as i64)
+        .map(|limit| {
+            i128::from(used_cost) * 100 >= i128::from(limit) * i128::from(threshold_percent)
+        })
         .unwrap_or(false);
     let token_crossed = limit
         .token_limit
-        .map(|limit| used_tokens * 100 >= limit * threshold_percent as i64)
+        .map(|limit| {
+            i128::from(used_tokens) * 100 >= i128::from(limit) * i128::from(threshold_percent)
+        })
         .unwrap_or(false);
 
     if cost_crossed || token_crossed {
@@ -460,8 +487,8 @@ async fn maybe_emit_threshold_alert(
     Ok(())
 }
 
-async fn emit_limit_exceeded_alert(
-    db: &DatabaseConnection,
+async fn emit_limit_exceeded_alert<C: ConnectionTrait>(
+    db: &C,
     limit: &app_usage_limit::Model,
     used_tokens: i64,
     used_cost: i64,
@@ -478,8 +505,8 @@ async fn emit_limit_exceeded_alert(
     .await
 }
 
-async fn emit_usage_alert(
-    db: &DatabaseConnection,
+async fn emit_usage_alert<C: ConnectionTrait>(
+    db: &C,
     limit: &app_usage_limit::Model,
     kind: &str,
     severity: &str,

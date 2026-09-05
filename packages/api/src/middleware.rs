@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod jwt;
 
 pub mod error_reporting;

@@ -77,12 +77,16 @@ pub async fn sweep_runs(
         .map(Duration::from_secs)
         .unwrap_or(configured.grace);
 
-    let swept = sweep_once(&state.db, grace, configured.batch_size)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Admin run sweep failed");
-            ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", e))
-        })?;
+    let swept = sweep_once(
+        &crate::audit::ExecutionAuditContext::from(&state),
+        grace,
+        configured.batch_size,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Admin run sweep failed");
+        ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", e))
+    })?;
 
     Ok(Json(SweepRunsResponse {
         swept,

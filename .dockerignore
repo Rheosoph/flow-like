@@ -73,3 +73,17 @@ api.config.json
 **/*.pem
 **/values-secrets.yml
 **/values-secret*.yml
+
+# Compose deployment credentials may use a non-dot filename.
+**/*.env
+**/real.env
+secrets/**
+**/.secrets/**
+apps/backend/**/secrets/**
+**/__pycache__/**
+**/*.pyc
+.codex/
+.agents/
+
+# Kubernetes generated Secrets must never enter application image contexts.
+apps/backend/kubernetes/.generated/**

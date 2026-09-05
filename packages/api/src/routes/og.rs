@@ -193,12 +193,11 @@ fn html_decode(s: &str) -> String {
         (status = 502, description = "Failed to fetch the target URL")
     )
 )]
-#[tracing::instrument(name = "GET /og", skip_all, fields(url))]
+#[tracing::instrument(name = "GET /og", skip_all)]
 pub async fn fetch_og_metadata(
     Query(params): Query<OgQuery>,
 ) -> Result<Json<OgMetadata>, ApiError> {
     let url = params.url.trim().to_string();
-    tracing::Span::current().record("url", url.as_str());
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(ApiError::bad_request(
@@ -224,7 +223,7 @@ pub async fn fetch_og_metadata(
         .header("Accept", "text/html")
         .send()
         .await
-        .map_err(|e| ApiError::bad_gateway(format!("Failed to fetch URL: {e}")))?;
+        .map_err(|e| ApiError::bad_gateway(format!("Failed to fetch URL: {}", e.without_url())))?;
 
     if !response.status().is_success() {
         return Err(ApiError::bad_gateway(format!(
@@ -252,7 +251,7 @@ pub async fn fetch_og_metadata(
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| ApiError::bad_gateway(format!("Failed to read body: {e}")))?;
+        .map_err(|e| ApiError::bad_gateway(format!("Failed to read body: {}", e.without_url())))?;
 
     let body = if bytes.len() > MAX_BODY_SIZE {
         String::from_utf8_lossy(&bytes[..MAX_BODY_SIZE]).into_owned()

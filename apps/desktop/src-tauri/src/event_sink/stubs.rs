@@ -141,8 +141,7 @@ impl EventSink for crate::event_sink::web_watcher::WebWatcherSink {
         _db: DbConnection,
     ) -> Result<()> {
         tracing::info!(
-            "Registered web watcher: {} -> event {} (NOT IMPLEMENTED)",
-            self.url,
+            "Registered web watcher for event {} (NOT IMPLEMENTED)",
             registration.event_id
         );
         Ok(())
@@ -253,9 +252,7 @@ impl EventSink for crate::event_sink::mqtt::MQTTSink {
         _db: DbConnection,
     ) -> Result<()> {
         tracing::info!(
-            "Registered MQTT subscription: {} on {} -> event {} (NOT IMPLEMENTED)",
-            self.topic,
-            self.broker_url,
+            "Registered MQTT subscription for event {} (NOT IMPLEMENTED)",
             registration.event_id
         );
         Ok(())

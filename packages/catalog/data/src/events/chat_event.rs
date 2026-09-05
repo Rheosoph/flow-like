@@ -152,7 +152,7 @@ pub mod url_processing {
     pub async fn process_url(url: &str, mut context: Option<&mut ExecutionContext>) -> String {
         if let Some(ctx) = context.as_deref_mut() {
             ctx.log_message(
-                &format!("Processing URL: {}", url),
+                "Processing attachment URL",
                 flow_like::flow::execution::LogLevel::Debug,
             );
         }
@@ -179,12 +179,9 @@ pub mod url_processing {
         }
 
         if !is_tauri_asset_url(url) {
-            let msg = format!(
-                "URL is not a Tauri asset URL (doesn't start with asset:// or http://asset.localhost/), returning unchanged: {}",
-                url
-            );
+            let msg = "URL is not a Tauri asset URL, returning unchanged";
             if let Some(ctx) = context.as_deref_mut() {
-                ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Debug);
+                ctx.log_message(msg, flow_like::flow::execution::LogLevel::Debug);
             }
             return url.to_string();
         }
@@ -198,19 +195,18 @@ pub mod url_processing {
 
         let file_path = match extract_tauri_path(url) {
             Ok(path) => {
-                let msg = format!("Successfully extracted path: {}", path.display());
                 if let Some(ctx) = context.as_deref_mut() {
-                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Debug);
+                    ctx.log_message(
+                        "Successfully extracted local attachment path",
+                        flow_like::flow::execution::LogLevel::Debug,
+                    );
                 }
                 path
             }
-            Err(e) => {
-                let msg = format!(
-                    "Failed to validate local file URL '{}': {}. This is an unfetchable local (asset://) URL that cannot be resolved in this context, likely because it crossed an app/run boundary; skipping this attachment.",
-                    url, e
-                );
+            Err(_) => {
+                let msg = "Failed to validate local attachment URL; skipping this attachment";
                 if let Some(ctx) = context.as_deref_mut() {
-                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Warn);
+                    ctx.log_message(msg, flow_like::flow::execution::LogLevel::Warn);
                 } else {
                     tracing::warn!("{}", msg);
                 }
@@ -218,41 +214,29 @@ pub mod url_processing {
             }
         };
 
-        let msg = format!(
-            "Attempting to read file and convert to data URL: {}",
-            file_path.display()
-        );
         if let Some(ctx) = context.as_deref_mut() {
-            ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Debug);
+            ctx.log_message(
+                "Attempting to read local attachment and convert it to a data URL",
+                flow_like::flow::execution::LogLevel::Debug,
+            );
         }
 
         // Try to read the file and convert to data URL
         match pathbuf_to_data_url(&file_path).await {
             Ok(data_url) => {
-                let preview = if data_url.len() > 100 {
-                    format!("{}...", &data_url[0..100])
-                } else {
-                    data_url.clone()
-                };
                 let msg = format!(
-                    "Successfully converted local file '{}' to data URL (length: {} bytes, preview: {})",
-                    file_path.display(),
-                    data_url.len(),
-                    preview
+                    "Successfully converted local attachment to a data URL (length: {} bytes)",
+                    data_url.len()
                 );
                 if let Some(ctx) = context.as_deref_mut() {
                     ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Debug);
                 }
                 data_url
             }
-            Err(e) => {
-                let msg = format!(
-                    "Failed to read local file '{}': {}. The local (asset://) file is deleted, inaccessible, or lives on a different host than this run; skipping this attachment.",
-                    file_path.display(),
-                    e
-                );
+            Err(_) => {
+                let msg = "Failed to read local attachment; skipping it";
                 if let Some(ctx) = context {
-                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Warn);
+                    ctx.log_message(msg, flow_like::flow::execution::LogLevel::Warn);
                 } else {
                     tracing::warn!("{}", msg);
                 }

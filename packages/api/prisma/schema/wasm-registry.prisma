@@ -183,6 +183,8 @@ model WasmPackageInvitation {
   @@unique([packageId, inviteeId])
   @@index([packageId])
   @@index([inviteeId])
+
+  @@index([invitedById])
 }
 
 /// Authors / contributors of a WASM package

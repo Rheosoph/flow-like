@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use flow_like_types::channel::{
-    now_unix, Channel, ChannelClientDescriptor, ChannelExecutorGrant, ChannelGrant, ChannelHandle,
-    HubChannelStore, PollingChannel,
+    Channel, ChannelClientDescriptor, ChannelExecutorGrant, ChannelGrant, ChannelHandle,
+    HubChannelStore, PollingChannel, now_unix,
 };
 
 /// Grant-less runs (an API that predates channels) still get a hub-polling channel so the run

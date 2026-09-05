@@ -106,15 +106,16 @@ async fn run_maintenance_job(
         }
         MaintenanceRunRequest::RunSweep => {
             let config = RunSweeperConfig::from_env();
-            let swept = sweep_runs_once(&state.db, config.grace, config.batch_size)
-                .await
-                .map_err(|error| {
-                    tracing::error!(error = %error, "Scheduled run sweep failed");
-                    ApiError::internal_error(flow_like_types::anyhow!(
-                        "Run sweep failed: {}",
-                        error
-                    ))
-                })?;
+            let swept = sweep_runs_once(
+                &crate::audit::ExecutionAuditContext::from(&state),
+                config.grace,
+                config.batch_size,
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, "Scheduled run sweep failed");
+                ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", error))
+            })?;
 
             tracing::info!(
                 swept,

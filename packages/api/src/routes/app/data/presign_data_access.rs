@@ -4,6 +4,7 @@
 //! `apps/{app_id}/upload` with optional subpath.
 
 use crate::{
+    audit_branch,
     credentials::{CredentialsAccess, RuntimeCredentials},
     ensure_in_project, ensure_permission,
     error::ApiError,
@@ -116,6 +117,21 @@ pub async fn presign_data_access(
 
     let expiration = scoped_credentials.expiration();
 
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "file.access.authorize",
+        "Storage",
+        app_id,
+        "Issued scoped app storage credentials",
+        serde_json::json!({
+            "scope": "app",
+            "access_mode": access_mode,
+            "expiration": expiration,
+        })
+    );
+
     Ok(Json(PresignDataAccessResponse {
         shared_credentials,
         path: path_str,
@@ -192,6 +208,21 @@ pub async fn presign_user_data_access(
     })?;
 
     let expiration = scoped_credentials.expiration();
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "file.access.authorize",
+        "Storage",
+        app_id,
+        "Issued scoped private storage credentials",
+        serde_json::json!({
+            "scope": "user",
+            "access_mode": access_mode,
+            "expiration": expiration,
+        })
+    );
 
     Ok(Json(PresignDataAccessResponse {
         shared_credentials,

@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -71,6 +71,19 @@ pub async fn delete_files(
             .delete(&upload_dir)
             .await
             .map_err(|e| anyhow!("Failed to delete path: {}", e))?;
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "file.delete",
+            "Storage",
+            app_id,
+            "Deleted files under an app storage prefix",
+            serde_json::json!({
+                "scope": "app",
+                "prefix_hash": blake3::hash(prefix.as_bytes()).to_hex().to_string(),
+            })
+        );
     }
 
     Ok(Json(()))
@@ -134,6 +147,19 @@ pub async fn delete_user_files(
             .delete(&upload_dir)
             .await
             .map_err(|e| anyhow!("Failed to delete path: {}", e))?;
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "file.delete",
+            "Storage",
+            app_id,
+            "Deleted files under a private storage prefix",
+            serde_json::json!({
+                "scope": "user",
+                "prefix_hash": blake3::hash(prefix.as_bytes()).to_hex().to_string(),
+            })
+        );
     }
 
     Ok(Json(()))

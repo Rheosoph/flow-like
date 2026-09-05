@@ -472,6 +472,10 @@ impl AppUser {
     // Adds the exact method of access (OpenID, PAT, API Key) to the audit log for better traceability
     pub async fn audit_id(&self) -> Result<String, AuthorizationError> {
         let sub = match self {
+            AppUser::APIKey(key) => key
+                .creator_user_id
+                .clone()
+                .unwrap_or_else(|| format!("app:{}", key.app_id)),
             AppUser::ConnectedApp(app) => app
                 .sub
                 .clone()
@@ -1528,6 +1532,18 @@ pub async fn jwt_middleware(
 mod tests {
     use super::*;
     use axum::{http::StatusCode, response::IntoResponse};
+
+    #[flow_like_types::tokio::test]
+    async fn api_key_audit_identity_does_not_require_a_human_creator() {
+        let user = AppUser::APIKey(ApiKey {
+            key_id: "key-1".into(),
+            api_key: "private-token".into(),
+            app_id: "app-1".into(),
+            creator_user_id: None,
+        });
+        assert_eq!(user.audit_id().await.unwrap(), "api_key:app:app-1:key-1");
+        assert!(user.effective_user_id().is_err());
+    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut headers = HeaderMap::new();

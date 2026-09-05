@@ -299,7 +299,7 @@ impl DispatchConfig {
             kafka_topic: std::env::var("KAFKA_EXECUTION_TOPIC").ok(),
             redis_url: std::env::var("REDIS_URL").ok(),
             redis_queue_name: std::env::var("REDIS_EXECUTION_QUEUE")
-                .unwrap_or_else(|_| "exec:jobs".into()),
+                .unwrap_or_else(|_| "exec:jobs:v3".into()),
         }
     }
 }
@@ -473,6 +473,8 @@ pub struct Dispatcher {
     sqs_client: Option<aws_sdk_sqs::Client>,
     #[cfg(feature = "redis")]
     redis_client: Option<redis::Client>,
+    #[cfg(feature = "redis")]
+    redis_connection: Arc<tokio::sync::OnceCell<redis::aio::ConnectionManager>>,
 }
 
 impl Dispatcher {
@@ -547,6 +549,8 @@ impl Dispatcher {
             sqs_client,
             #[cfg(feature = "redis")]
             redis_client,
+            #[cfg(feature = "redis")]
+            redis_connection: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -562,6 +566,8 @@ impl Dispatcher {
             sqs_client: None,
             #[cfg(feature = "redis")]
             redis_client: None,
+            #[cfg(feature = "redis")]
+            redis_connection: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -799,7 +805,7 @@ impl Dispatcher {
                 DispatchError::Configuration("EXECUTOR_URL not configured".into())
             })?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
 
         let client = reqwest::Client::new();
         let response = attach_executor_iam_auth(client.post(format!("{}/execute", url)), url)
@@ -841,7 +847,7 @@ impl Dispatcher {
         tracing::info!(url = %url, "Dispatching HTTP SSE");
 
         let job_id = create_id();
-        let body = build_executor_payload(&job_id, &request);
+        let body = build_executor_payload(&job_id, &request)?;
 
         tracing::debug!(job_id = %job_id, "Dispatch payload built");
 
@@ -918,7 +924,7 @@ impl Dispatcher {
             .as_ref()
             .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         // Wrap in API Gateway v2 event format for lambda_http compatibility
         let apigw_event = wrap_as_apigw_v2_event("/execute", body);
         let payload = serde_json::to_vec(&apigw_event)
@@ -965,7 +971,7 @@ impl Dispatcher {
             .as_ref()
             .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         // Wrap in API Gateway v2 event format for lambda_http compatibility
         let apigw_event = wrap_as_apigw_v2_event("/execute/sse", body);
         let payload = serde_json::to_vec(&apigw_event)
@@ -1098,7 +1104,7 @@ impl Dispatcher {
             .as_ref()
             .ok_or_else(|| DispatchError::Configuration("SQS client not initialized".into()))?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let message_body = serde_json::to_string(&body)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
@@ -1145,7 +1151,7 @@ impl Dispatcher {
             DispatchError::Configuration("AZURE_QUEUE_EXECUTION not configured".into())
         })?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let payload_bytes =
             serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
@@ -1257,7 +1263,7 @@ impl Dispatcher {
             DispatchError::Configuration("PUBSUB_EXECUTION_TOPIC not configured".into())
         })?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let payload_bytes =
             serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
@@ -1380,7 +1386,7 @@ impl Dispatcher {
             .as_ref()
             .ok_or_else(|| DispatchError::Configuration("SQS client not initialized".into()))?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let payload_bytes =
             serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
@@ -1453,7 +1459,7 @@ impl Dispatcher {
             DispatchError::Configuration("KAFKA_EXECUTION_TOPIC not configured".into())
         })?;
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let message_body = serde_json::to_string(&body)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
@@ -1497,26 +1503,59 @@ impl Dispatcher {
         job_id: &str,
         request: &DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
-        use redis::AsyncCommands;
-
         let client = self.redis_client.as_ref().ok_or_else(|| {
             DispatchError::Configuration("Redis client not initialized. Set REDIS_URL.".into())
         })?;
 
-        let mut conn = client
-            .get_multiplexed_async_connection()
+        let mut conn = self
+            .redis_connection
+            .get_or_try_init(|| async {
+                client
+                    .get_connection_manager_with_config(
+                        redis::aio::ConnectionManagerConfig::new()
+                            .set_connection_timeout(std::time::Duration::from_secs(5))
+                            .set_response_timeout(std::time::Duration::from_secs(10)),
+                    )
+                    .await
+            })
             .await
-            .map_err(|e| DispatchError::Redis(e.to_string()))?;
+            .map_err(|e: redis::RedisError| DispatchError::Redis(e.to_string()))?
+            .clone();
 
-        let body = build_executor_payload(job_id, request);
+        let body = build_executor_payload(job_id, request)?;
         let message_body = serde_json::to_string(&body)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
-        // Use LPUSH to add to the left side of the list (workers use BRPOP from right)
+        if message_body.len() > 8 * 1024 * 1024 {
+            return Err(DispatchError::Configuration(
+                "dispatch exceeds 8 MiB".into(),
+            ));
+        }
         let queue_name = &self.config.redis_queue_name;
-        conn.lpush::<_, _, ()>(queue_name, &message_body)
+        let maximum = std::env::var("EXECUTION_QUEUE_MAX_DEPTH")
+            .unwrap_or_else(|_| "10000".into())
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                DispatchError::Configuration("EXECUTION_QUEUE_MAX_DEPTH must be positive".into())
+            })?;
+        let accepted: i32 = redis::Script::new(super::queue::ENQUEUE_SCRIPT)
+            .key(queue_name)
+            .key(format!("{queue_name}:pending"))
+            .key(format!("{queue_name}:dead"))
+            .key(format!("{queue_name}:notify"))
+            .key(format!("{queue_name}:published"))
+            .arg(&message_body)
+            .arg(maximum)
+            .invoke_async(&mut conn)
             .await
-            .map_err(|e| DispatchError::Redis(e.to_string()))?;
+            .map_err(|error| DispatchError::Redis(error.to_string()))?;
+        if accepted != 1 {
+            return Err(DispatchError::Redis(
+                "execution queue admission limit reached".into(),
+            ));
+        }
 
         Ok(DispatchResponse {
             job_id: job_id.to_string(),
@@ -1538,7 +1577,22 @@ impl Dispatcher {
 }
 
 /// Build the payload sent to the executor
-fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json::Value {
+fn build_executor_payload(
+    job_id: &str,
+    request: &DispatchRequest,
+) -> Result<serde_json::Value, DispatchError> {
+    let mut payload = executor_payload(job_id, request);
+    let hash = flow_like_types::dispatch::dispatch_payload_hash(&payload)
+        .map_err(|error| DispatchError::Serialization(error.to_string()))?;
+    payload.executor_jwt = super::jwt::bind_dispatch(&request.jwt, hash)
+        .map_err(|error| DispatchError::Configuration(format!("cannot sign dispatch: {error}")))?;
+    serde_json::to_value(payload).map_err(|error| DispatchError::Serialization(error.to_string()))
+}
+
+fn executor_payload(
+    job_id: &str,
+    request: &DispatchRequest,
+) -> flow_like_types::dispatch::DispatchPayload {
     let credentials: serde_json::Value = serde_json::from_str(&request.credentials_json)
         .unwrap_or_else(|_| serde_json::Value::String(request.credentials_json.clone()));
 
@@ -1558,7 +1612,7 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         .as_ref()
         .map(|_| flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL)
         .or(request.board_version);
-    let payload = flow_like_types::dispatch::DispatchPayload {
+    flow_like_types::dispatch::DispatchPayload {
         job_id: job_id.to_string(),
         run_id: request.run_id.clone(),
         app_id: request.app_id.clone(),
@@ -1572,7 +1626,11 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         credentials,
         executor_jwt: request.jwt.clone(),
         callback_url: request.callback_url.clone(),
-        token: request.token.clone(),
+        token: if std::env::var("EXECUTION_ISOLATION_MODE").as_deref() == Ok("per_run") {
+            None
+        } else {
+            request.token.clone()
+        },
         oauth_tokens,
         stream_state: request.stream_state,
         execution_mode: request.execution_mode.map(|mode| mode.as_str().to_string()),
@@ -1589,9 +1647,7 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         channel: request.channel.clone(),
         shadow: request.shadow,
         artifact: request.artifact.clone(),
-    };
-
-    serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
+    }
 }
 
 /// How long a run stays answerable. Every wait a node opens is capped by this, so it is also the
@@ -1653,11 +1709,32 @@ fn executor_auth_requires_gcp_id_token(executor_auth: Option<&str>) -> bool {
 /// without the header would only travel on to a guaranteed 403 at the
 /// executor's front door, reported as an opaque network failure instead of the
 /// missing credential.
+fn attach_execution_manager_auth(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::RequestBuilder, DispatchError> {
+    match std::env::var("EXECUTION_MANAGER_TOKEN") {
+        Ok(token) if !token.is_empty() => {
+            if token.len() < 32 {
+                return Err(DispatchError::Configuration(
+                    "EXECUTION_MANAGER_TOKEN must contain at least 32 bytes".into(),
+                ));
+            }
+            let mut value = reqwest::header::HeaderValue::from_str(&token).map_err(|_| {
+                DispatchError::Configuration("invalid execution manager token".into())
+            })?;
+            value.set_sensitive(true);
+            Ok(builder.header("X-Execution-Manager-Token", value))
+        }
+        _ => Ok(builder),
+    }
+}
+
 #[cfg(feature = "pubsub")]
 async fn attach_executor_iam_auth(
     builder: reqwest::RequestBuilder,
     executor_url: &str,
 ) -> Result<reqwest::RequestBuilder, DispatchError> {
+    let builder = attach_execution_manager_auth(builder)?;
     if !executor_auth_requires_gcp_id_token(std::env::var(EXECUTOR_AUTH_VAR).ok().as_deref()) {
         return Ok(builder);
     }
@@ -1678,6 +1755,7 @@ async fn attach_executor_iam_auth(
     builder: reqwest::RequestBuilder,
     _executor_url: &str,
 ) -> Result<reqwest::RequestBuilder, DispatchError> {
+    let builder = attach_execution_manager_auth(builder)?;
     if executor_auth_requires_gcp_id_token(std::env::var(EXECUTOR_AUTH_VAR).ok().as_deref()) {
         return Err(DispatchError::Configuration(
             "EXECUTOR_AUTH=gcp_id_token requires the 'pubsub' feature".into(),
@@ -3407,11 +3485,15 @@ mod tests {
 
         let mut request = dispatch_request(DispatchTrigger::User);
         request.artifact = Some(artifact.clone());
-        let payload = build_executor_payload("job-1", &request);
+        let payload = serde_json::to_value(executor_payload("job-1", &request)).unwrap();
         assert_eq!(payload["artifact"]["path"], artifact.path);
         assert_eq!(payload["artifact"]["source_etag"], "etag-1");
 
-        let bare = build_executor_payload("job-1", &dispatch_request(DispatchTrigger::User));
+        let bare = serde_json::to_value(executor_payload(
+            "job-1",
+            &dispatch_request(DispatchTrigger::User),
+        ))
+        .unwrap();
         assert!(
             bare.get("artifact").is_none(),
             "an unsigned request serialises without the field, which the executor rejects"

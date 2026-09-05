@@ -240,6 +240,34 @@ pub enum RuntimeCredentials {
 }
 
 impl RuntimeCredentials {
+    /// Scoped credentials without a known expiry are never reused from cache.
+    /// Mixed credentials expire when their first constituent grant expires.
+    pub fn expires_soon(&self, margin: chrono::Duration) -> bool {
+        match self {
+            #[cfg(feature = "aws")]
+            Self::Aws(credentials) => credentials
+                .expiration
+                .is_none_or(|expiry| expiry <= chrono::Utc::now() + margin),
+            #[cfg(feature = "azure")]
+            Self::Azure(credentials) => credentials
+                .expiration
+                .is_none_or(|expiry| expiry <= chrono::Utc::now() + margin),
+            #[cfg(feature = "gcp")]
+            Self::Gcp(credentials) => credentials
+                .expiration
+                .is_none_or(|expiry| expiry <= chrono::Utc::now() + margin),
+            #[cfg(feature = "r2")]
+            Self::R2(credentials) => credentials
+                .expiration
+                .is_none_or(|expiry| expiry <= chrono::Utc::now() + margin),
+            Self::Mixed(credentials) => {
+                [&credentials.meta, &credentials.content, &credentials.logs]
+                    .into_iter()
+                    .any(|credentials| credentials.expires_soon(margin))
+            }
+        }
+    }
+
     fn configured_provider_name() -> String {
         std::env::var("RUNTIME_CREDENTIALS_PROVIDER")
             .or_else(|_| std::env::var("STORAGE_PROVIDER"))
@@ -605,5 +633,32 @@ mod signing_ttl_tests {
             credentials.signing_ttl(Duration::from_secs(60 * 60 * 24)),
             Duration::from_secs(60)
         );
+    }
+}
+
+#[cfg(all(test, feature = "aws"))]
+mod expiration_tests {
+    use super::*;
+
+    fn credentials(minutes: Option<i64>) -> RuntimeCredentials {
+        let mut credentials = AwsRuntimeCredentials::new("meta", "content", "logs", "us-east-1");
+        credentials.expiration =
+            minutes.map(|minutes| chrono::Utc::now() + chrono::Duration::minutes(minutes));
+        RuntimeCredentials::Aws(credentials)
+    }
+
+    #[test]
+    fn cached_grants_require_known_expiry_and_safety_margin() {
+        let margin = chrono::Duration::minutes(2);
+        assert!(credentials(None).expires_soon(margin));
+        assert!(credentials(Some(-1)).expires_soon(margin));
+        assert!(credentials(Some(1)).expires_soon(margin));
+        assert!(!credentials(Some(10)).expires_soon(margin));
+        let mixed = RuntimeCredentials::Mixed(mixed_credentials::MixedRuntimeCredentials {
+            meta: Box::new(credentials(Some(10))),
+            content: Box::new(credentials(Some(1))),
+            logs: Box::new(credentials(Some(20))),
+        });
+        assert!(mixed.expires_soon(margin));
     }
 }

@@ -70,6 +70,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("FlowScriptApplyFailure", "appId"),
             ],
             keep: vec![
+                keep(
+                    "FileAccountingObject",
+                    "appId",
+                    "storage event deduplication outlives the app",
+                ),
                 keep("AuditEntry", "chainId", "audit trail outlives the app"),
                 keep("Channel", "appId", "expires through the channel sweeper"),
                 keep(
@@ -86,6 +91,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ("WasmPackageInvitation", "inviteeId"),
             ],
             keep: vec![
+                keep(
+                    "FileAccountingObject",
+                    "userId",
+                    "storage event deduplication outlives the user",
+                ),
                 keep("UserCourseEnrollment", "userId", "learning history"),
                 keep("UserLessonProgress", "userId", "learning history"),
                 keep("UserChallengeAttempt", "userId", "learning history"),

@@ -8,6 +8,8 @@ aws_lambda_events = { version = "0.16.1", default-features = false, features = [
 
 aws-config.workspace = true
 aws-sdk-dynamodb.workspace = true
+aws-sdk-s3.workspace = true
+blake3.workspace = true
 flow-like-aws-data.workspace = true
 flow-like-db.workspace = true
 flow-like-secrets = { workspace = true, features = ["aws"] }

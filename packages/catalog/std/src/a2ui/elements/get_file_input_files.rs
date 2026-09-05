@@ -278,18 +278,19 @@ async fn download_file_input_url(
     }
 
     let response = client.get(url).send().await.map_err(|err| {
-        flow_like_types::anyhow!("Failed to download uploaded file \"{}\": {}", name, err)
+        flow_like_types::anyhow!(
+            "Failed to download uploaded file \"{}\": {}",
+            name,
+            err.without_url()
+        )
     })?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        let body = body.chars().take(512).collect::<String>();
         return Err(flow_like_types::anyhow!(
-            "Failed to download uploaded file \"{}\" with status {}: {}",
+            "Failed to download uploaded file \"{}\" with status {}",
             name,
-            status,
-            body
+            status
         ));
     }
 
@@ -315,7 +316,11 @@ async fn download_file_input_url(
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|err| {
-            flow_like_types::anyhow!("Failed to download uploaded file \"{}\": {}", name, err)
+            flow_like_types::anyhow!(
+                "Failed to download uploaded file \"{}\": {}",
+                name,
+                err.without_url()
+            )
         })?;
         if bytes.len().saturating_add(chunk.len()) > MAX_FILE_INPUT_DOWNLOAD_BYTES {
             return Err(flow_like_types::anyhow!(

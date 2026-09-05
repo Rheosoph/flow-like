@@ -249,11 +249,7 @@ export function DesktopAuthProvider({
 						? normalizeTo(openIdAuthConfig.post_logout_redirect_uri, rawUrl)
 						: rawUrl;
 
-				console.log("[OIDC] Processing callback URL:", {
-					rawUrl,
-					signinUrl,
-					logoutUrl,
-				});
+				console.log("[OIDC] Processing callback", { isDeepLink });
 
 				if (signinUrl.startsWith(openIdAuthConfig.redirect_uri)) {
 					await userManager?.signinRedirectCallback(signinUrl);
@@ -272,9 +268,9 @@ export function DesktopAuthProvider({
 				if (signinUrl.includes("/login?id_token_hint=")) {
 					await closeOidcFlowWindows();
 				}
-			} catch (error) {
+			} catch {
 				seenUrls.delete(rawUrl);
-				console.error("Failed to process OIDC callback URL:", rawUrl, error);
+				console.error("Failed to process OIDC callback URL");
 			}
 		};
 
@@ -296,7 +292,7 @@ export function DesktopAuthProvider({
 		async function debugListener(event: Event) {
 			const url = (event as CustomEvent<{ url?: string }>).detail?.url;
 			if (!url) return;
-			console.log("Debug OIDC URL:", url);
+			console.log("Debug OIDC URL received");
 			await handleIncomingOidcUrl(url);
 		}
 
@@ -377,7 +373,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		if (!auth) return;
 
 		if (backend instanceof TauriBackend) {
-			console.log("Pushing auth context to backend:", auth);
+			console.log("Pushing auth context to backend");
 			backend.pushAuthContext(auth);
 		}
 
@@ -419,24 +415,18 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 							);
 							await auth?.signinRedirect();
 						}
-					} catch (silentError) {
-						console.warn(
-							"Silent login failed, attempting normal login:",
-							silentError,
-						);
+					} catch {
+						console.warn("Silent login failed, attempting normal login");
 
 						try {
 							await auth?.signinRedirect();
-						} catch (redirectError) {
-							console.error(
-								"Both silent and redirect login failed:",
-								redirectError,
-							);
+						} catch {
+							console.error("Both silent and redirect login failed");
 						}
 					}
 				}
-			} catch (error) {
-				console.error("Login process failed:", error);
+			} catch {
+				console.error("Login process failed");
 			}
 		})();
 	}, [auth.user?.profile?.sub]);

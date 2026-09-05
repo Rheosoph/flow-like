@@ -60,6 +60,16 @@ interface IAuditEntry {
 	kid?: string | null;
 }
 
+interface IChainVerification {
+	valid: boolean;
+	fully_authenticated: boolean;
+	entries_checked: number;
+	first_broken_at: number | null;
+	unsigned_entries: number;
+	legacy_entries: number;
+	unverifiable_signatures: number;
+}
+
 function HashChip({ hash }: { hash?: string | null }) {
 	if (!hash) return null;
 	return (
@@ -81,19 +91,36 @@ function HashChip({ hash }: { hash?: string | null }) {
 function ChainHealthBadge({
 	signed,
 	valid,
+	fullyAuthenticated,
+	firstBrokenAt,
+	unverifiableSignatures,
 }: {
 	signed: boolean;
 	valid?: boolean | null;
+	fullyAuthenticated?: boolean | null;
+	firstBrokenAt?: number | null;
+	unverifiableSignatures?: number | null;
 }) {
 	const { t } = useTranslation("admin");
 	if (valid === false) {
+		if (firstBrokenAt == null && (unverifiableSignatures ?? 0) > 0) {
+			return (
+				<Badge variant="outline" className="gap-1">
+					<ShieldEllipsis className="h-3 w-3" />{" "}
+					{t("unverifiable", "Unverifiable")}
+				</Badge>
+			);
+		}
 		return (
 			<Badge variant="destructive" className="gap-1">
-				<ShieldAlert className="h-3 w-3" /> {t("broken", "Broken")}
+				<ShieldAlert className="h-3 w-3" />{" "}
+				{firstBrokenAt != null
+					? t("broken", "Broken")
+					: t("verificationFailed", "Verification failed")}
 			</Badge>
 		);
 	}
-	if (valid === true && signed) {
+	if (valid === true && fullyAuthenticated === true) {
 		return (
 			<Badge className="gap-1 bg-emerald-500 text-white hover:bg-emerald-500/90">
 				<ShieldCheck className="h-3 w-3" /> {t("verified", "Verified")}
@@ -134,7 +161,6 @@ export function AuditChainExplorer({
 	});
 
 	const activeChainId = selected ?? null;
-
 	const entries = useQuery<IAuditEntry[]>({
 		queryKey: ["admin", "logs", "audit", "entries", activeChainId],
 		queryFn: async () => {
@@ -150,6 +176,28 @@ export function AuditChainExplorer({
 		enabled: !!profile,
 	});
 
+	const verification = useQuery<IChainVerification>({
+		queryKey: [
+			"admin",
+			"logs",
+			"audit",
+			"verify",
+			activeChainId,
+			entries.dataUpdatedAt,
+		],
+		queryFn: async () => {
+			if (!profile) throw new Error("Profile not loaded");
+			const qs = new URLSearchParams();
+			if (activeChainId) qs.set("chain_id", activeChainId);
+			return backend.apiState.get<IChainVerification>(
+				profile,
+				`audit/verify?${qs.toString()}`,
+			);
+		},
+		enabled: false,
+		retry: false,
+	});
+
 	const chainOptions = useMemo(() => {
 		if (!status.data) return [];
 		const root = {
@@ -157,6 +205,9 @@ export function AuditChainExplorer({
 			label: status.data.root_chain.label,
 			signed: status.data.root_chain.signed,
 			valid: status.data.root_chain.valid,
+			fullyAuthenticated: status.data.root_chain.fully_authenticated,
+			firstBrokenAt: status.data.root_chain.first_broken_at,
+			unverifiableSignatures: status.data.root_chain.unverifiable_signatures,
 			entries: status.data.root_chain.entries,
 		};
 		return [
@@ -166,6 +217,9 @@ export function AuditChainExplorer({
 				label: b.label,
 				signed: b.signed,
 				valid: b.valid,
+				fullyAuthenticated: b.fully_authenticated,
+				firstBrokenAt: b.first_broken_at,
+				unverifiableSignatures: b.unverifiable_signatures,
 				entries: b.entries,
 			})),
 		];
@@ -318,6 +372,9 @@ export function AuditChainExplorer({
 											<ChainHealthBadge
 												signed={c.signed}
 												valid={c.valid ?? null}
+												fullyAuthenticated={c.fullyAuthenticated}
+												firstBrokenAt={c.firstBrokenAt}
+												unverifiableSignatures={c.unverifiableSignatures}
 											/>
 										</div>
 									</button>
@@ -355,6 +412,72 @@ export function AuditChainExplorer({
 						</Button>
 					</CardHeader>
 					<CardContent>
+						<div className="mb-4 space-y-2">
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={
+									!profile ||
+									entries.isFetching ||
+									entries.isError ||
+									verification.isFetching
+								}
+								onClick={() => verification.refetch()}
+							>
+								<ShieldCheck className="mr-2 h-3.5 w-3.5" />
+								{verification.isFetching
+									? t("verifyingChain", "Verifying chain…")
+									: t("verifySelectedChain", "Verify selected chain")}
+							</Button>
+							{!entries.isFetching && verification.isError ? (
+								<p role="alert" className="text-sm text-destructive">
+									{t(
+										"chainVerificationFailed",
+										"Could not verify this chain. Try again.",
+									)}
+								</p>
+							) : !entries.isFetching && verification.data ? (
+								<div aria-live="polite" className="space-y-1 text-sm">
+									<ChainHealthBadge
+										signed={
+											verification.data.unsigned_entries === 0 &&
+											verification.data.entries_checked > 0
+										}
+										valid={verification.data.valid}
+										fullyAuthenticated={verification.data.fully_authenticated}
+										firstBrokenAt={verification.data.first_broken_at}
+										unverifiableSignatures={
+											verification.data.unverifiable_signatures
+										}
+									/>
+									<p className="text-muted-foreground">
+										{t("verificationSnapshot", "Verification snapshot")}:{" "}
+										<RelativeTime value={verification.dataUpdatedAt} />
+									</p>
+									<p className="text-muted-foreground">
+										{t(
+											"auditVerificationCounts",
+											"{{checked}} entries checked; {{unsigned}} unsigned; {{legacy}} legacy; {{unverifiable}} signatures could not be verified.",
+											{
+												checked: verification.data.entries_checked,
+												unsigned: verification.data.unsigned_entries,
+												legacy: verification.data.legacy_entries,
+												unverifiable: verification.data.unverifiable_signatures,
+											},
+										)}
+									</p>
+									{verification.data.first_broken_at !== null && (
+										<p className="text-destructive">
+											{t(
+												"auditBrokenSequence",
+												"First failing sequence: {{sequence}}",
+												{ sequence: verification.data.first_broken_at },
+											)}
+										</p>
+									)}
+								</div>
+							) : null}
+						</div>
 						{entries.isLoading ? (
 							<div className="space-y-2">
 								<Skeleton className="h-12 w-full" />
@@ -381,7 +504,7 @@ export function AuditChainExplorer({
 												{e.action}
 											</Badge>
 											{e.signature ? (
-												<Badge className="gap-1 bg-emerald-500 text-white hover:bg-emerald-500/90">
+												<Badge variant="secondary" className="gap-1">
 													<Shield className="h-3 w-3" /> {t("signed", "Signed")}
 												</Badge>
 											) : (

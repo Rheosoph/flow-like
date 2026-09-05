@@ -7,6 +7,27 @@ export interface ApiResponseErrorOptions {
 	path?: string;
 }
 
+const CAPABILITY_PATH_SEGMENTS = [
+	/((?:^|\/)team\/link\/join\/)[^/?#]+/g,
+	/((?:^|\/)solution\/track\/)[^/?#]+/g,
+];
+
+/** Remove query data and bearer-capability path segments before a path reaches diagnostics. */
+export function redactApiPathSecrets(path?: string): string | undefined {
+	if (!path) return path;
+	let redacted: string;
+	try {
+		const url = new URL(path);
+		redacted = `${url.origin}${url.pathname}`;
+	} catch {
+		redacted = path.split(/[?#]/, 1)[0] ?? path;
+	}
+	for (const pattern of CAPABILITY_PATH_SEGMENTS) {
+		redacted = redacted.replace(pattern, "$1[REDACTED]");
+	}
+	return redacted;
+}
+
 /**
  * Error returned by the FlowLike API. Keep the public correlation metadata on
  * the error object so background tasks, audit reports, and UI error boundaries
@@ -45,6 +66,17 @@ export class ApiResponseError extends Error {
 			path: this.path,
 		};
 	}
+}
+
+/** Metadata safe for logs. Response text and path capabilities are omitted or redacted. */
+export function apiErrorDiagnostic(error: ApiResponseError) {
+	return {
+		name: error.name,
+		status: error.status,
+		code: error.code,
+		errorId: error.errorId,
+		path: redactApiPathSecrets(error.path),
+	};
 }
 
 /**

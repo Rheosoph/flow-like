@@ -2,7 +2,7 @@ use crate::{
     entity::{usage_invocation, usage_limit_audit_log},
     error::ApiError,
     state::AppState,
-    usage_limits::enforce_app_usage_limits_for_user,
+    usage_limits::check_app_usage_limits_for_user,
 };
 use chrono::{Duration, Utc};
 use flow_like_types::{Value, create_id};
@@ -55,6 +55,14 @@ pub async fn start_usage_invocation(
     state: &AppState,
     start: UsageInvocationStart<'_>,
 ) -> Result<Option<String>, ApiError> {
+    start_usage_invocation_with_db(&state.db, state.db_dialect, start).await
+}
+
+pub(crate) async fn start_usage_invocation_with_db(
+    db: &DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    start: UsageInvocationStart<'_>,
+) -> Result<Option<String>, ApiError> {
     let Some(app_id) = start
         .app_id
         .map(str::trim)
@@ -63,19 +71,9 @@ pub async fn start_usage_invocation(
         return Ok(None);
     };
 
-    enforce_app_usage_limits_for_user(
-        state,
-        Some(app_id),
-        start.user_id,
-        start.technical_user_id,
-        Some(start.estimated_tokens.max(0)),
-        Some(start.estimated_cost_micro_dollars.max(0)),
-    )
-    .await?;
-
     let now = Utc::now().fixed_offset();
     let id = create_id();
-    usage_invocation::ActiveModel {
+    let reservation = usage_invocation::ActiveModel {
         id: Set(id.clone()),
         kind: Set(start.kind.to_string()),
         status: Set(STATUS_PENDING.to_string()),
@@ -99,12 +97,43 @@ pub async fn start_usage_invocation(
         completed_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
-    }
-    .insert(&state.db)
-    .await
-    .map_err(|e| ApiError::internal_error(e.into()))?;
-
-    Ok(Some(id))
+    };
+    let app_id = app_id.to_owned();
+    let user_id = start.user_id.map(ToOwned::to_owned);
+    let technical_user_id = start.technical_user_id.map(ToOwned::to_owned);
+    let estimated_tokens = start.estimated_tokens.max(0);
+    let estimated_cost = start.estimated_cost_micro_dollars.max(0);
+    crate::db::retry_transaction(
+        db,
+        dialect,
+        None,
+        &crate::db::RetryPolicy::default(),
+        move |txn| {
+            let reservation = reservation.clone();
+            let app_id = app_id.clone();
+            let user_id = user_id.clone();
+            let technical_user_id = technical_user_id.clone();
+            let id = id.clone();
+            Box::pin(async move {
+                crate::db::coordination::coordinate(txn, "usage-budget", &[&app_id]).await?;
+                if let Some(rejection) = check_app_usage_limits_for_user(
+                    txn,
+                    Some(&app_id),
+                    user_id.as_deref(),
+                    technical_user_id.as_deref(),
+                    Some(estimated_tokens),
+                    Some(estimated_cost),
+                )
+                .await?
+                {
+                    return Ok::<_, ApiError>(Err(rejection));
+                }
+                reservation.insert(txn).await?;
+                Ok(Ok(Some(id)))
+            })
+        },
+    )
+    .await?
 }
 
 pub async fn settle_usage_invocation(
@@ -119,31 +148,26 @@ pub async fn settle_usage_invocation(
         return Ok(());
     };
 
-    let Some(existing) = usage_invocation::Entity::find_by_id(invocation_id)
-        .one(db)
-        .await?
-    else {
-        return Ok(());
-    };
-
-    if existing.status != STATUS_PENDING {
-        return Ok(());
-    }
-
     let now = Utc::now().fixed_offset();
-    let mut active: usage_invocation::ActiveModel = existing.into();
-    active.status = Set(settlement.status.to_string());
-    active.input_tokens = Set(settlement.input_tokens.max(0));
-    active.output_tokens = Set(settlement.output_tokens.max(0));
-    active.embedding_tokens = Set(settlement.embedding_tokens.max(0));
-    active.cost_micro_dollars = Set(settlement.cost_micro_dollars.max(0));
-    active.latency = Set(settlement.latency_ms);
-    active.provider_request_id = Set(settlement.provider_request_id);
-    active.raw_usage = Set(settlement.raw_usage);
-    active.error = Set(settlement.error);
-    active.completed_at = Set(Some(now));
-    active.updated_at = Set(now);
-    active.update(db).await?;
+    usage_invocation::Entity::update_many()
+        .set(usage_invocation::ActiveModel {
+            status: Set(settlement.status.to_string()),
+            input_tokens: Set(settlement.input_tokens.max(0)),
+            output_tokens: Set(settlement.output_tokens.max(0)),
+            embedding_tokens: Set(settlement.embedding_tokens.max(0)),
+            cost_micro_dollars: Set(settlement.cost_micro_dollars.max(0)),
+            latency: Set(settlement.latency_ms),
+            provider_request_id: Set(settlement.provider_request_id),
+            raw_usage: Set(settlement.raw_usage),
+            error: Set(settlement.error),
+            completed_at: Set(Some(now)),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .filter(usage_invocation::Column::Id.eq(invocation_id))
+        .filter(usage_invocation::Column::Status.eq(STATUS_PENDING))
+        .exec(db)
+        .await?;
 
     Ok(())
 }
@@ -162,12 +186,18 @@ pub async fn reconcile_stale_invocations(
     let now = Utc::now().fixed_offset();
     let mut marked = 0;
     for row in stale {
-        let mut active: usage_invocation::ActiveModel = row.into();
-        active.status = Set(STATUS_UNKNOWN_USAGE.to_string());
-        active.completed_at = Set(Some(now));
-        active.updated_at = Set(now);
-        active.update(db).await?;
-        marked += 1;
+        let updated = usage_invocation::Entity::update_many()
+            .set(usage_invocation::ActiveModel {
+                status: Set(STATUS_UNKNOWN_USAGE.to_string()),
+                completed_at: Set(Some(now)),
+                updated_at: Set(now),
+                ..Default::default()
+            })
+            .filter(usage_invocation::Column::Id.eq(row.id))
+            .filter(usage_invocation::Column::Status.eq(STATUS_PENDING))
+            .exec(db)
+            .await?;
+        marked += updated.rows_affected;
     }
 
     Ok(UsageReconciliationResult {

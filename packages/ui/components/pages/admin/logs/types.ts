@@ -62,6 +62,9 @@ export interface IChainSummary {
 	signed: boolean;
 	kid?: string | null;
 	valid?: boolean | null;
+	fully_authenticated?: boolean | null;
+	first_broken_at?: number | null;
+	unverifiable_signatures?: number | null;
 }
 
 export interface IChainStatusResponse {

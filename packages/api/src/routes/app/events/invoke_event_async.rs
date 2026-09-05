@@ -95,13 +95,28 @@ async fn mark_async_dispatch_failure(
                 Err(error) => Err(error),
             };
             match terminal {
-                Ok(_) if store.backend_name() == "postgres" => return,
+                Ok(_) if store.backend_name() == "postgres" => {
+                    if let Err(error) =
+                        crate::audit::record_execution_outcome(state, run_id, "dispatcher").await
+                    {
+                        tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
+                    }
+                    return;
+                }
                 Ok(run) => {
                     match PostgresStateStore::new(Arc::new(state.db.clone()))
                         .mirror_run_update(&run)
                         .await
                     {
-                        Ok(()) => return,
+                        Ok(()) => {
+                            if let Err(error) =
+                                crate::audit::record_execution_outcome(state, run_id, "dispatcher")
+                                    .await
+                            {
+                                tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
+                            }
+                            return;
+                        }
                         Err(error) => tracing::error!(
                             run_id,
                             app_id,
@@ -140,6 +155,9 @@ async fn mark_async_dispatch_failure(
             error = %update_error,
             "Failed to mark the SQL run as failed after dispatch error"
         );
+    }
+    if let Err(error) = crate::audit::record_execution_outcome(state, run_id, "dispatcher").await {
+        tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
     }
 }
 

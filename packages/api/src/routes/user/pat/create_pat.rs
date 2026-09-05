@@ -1,4 +1,4 @@
-use crate::{entity::pat, error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{audit, entity::pat, error::ApiError, middleware::jwt::AppUser, state::AppState};
 use axum::{Extension, Json, extract::State};
 use flow_like_types::{
     base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD},
@@ -81,6 +81,18 @@ pub async fn create_pat(
     };
 
     let pat = pat.insert(&state.db).await?;
+    audit!(
+        state,
+        user,
+        "pat.create",
+        "PersonalAccessToken",
+        pat.id,
+        "Created a personal access token",
+        serde_json::json!({
+            "permissions": pat.permissions,
+            "valid_until": pat.valid_until,
+        })
+    );
     let pat_out = PatOut {
         pat: format!("pat_{}.{}", pat.id, secret_b64),
         permission: pat.permissions,

@@ -1,6 +1,7 @@
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_lambda_events::sqs::SqsEvent;
 use aws_sdk_dynamodb::Client as DynamoClient;
+use aws_sdk_s3::Client as S3Client;
 use flow_like_aws_data::dsql::{self, DsqlConfig, DsqlDatabase};
 use flow_like_db::DbDialect;
 use flow_like_secrets::{
@@ -10,7 +11,7 @@ use flow_like_secrets::{
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-mod entity;
+mod accounting;
 mod event_handler;
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,10 +115,15 @@ async fn main() -> Result<(), Error> {
 
     let config = aws_config::load_from_env().await;
     let dynamo = create_dynamo_client(&config);
+    let s3 = S3Client::new(&config);
+    let legacy = event_handler::LegacyBaseline::from_env()
+        .expect("invalid legacy file accounting configuration");
 
     run(service_fn(|event: LambdaEvent<SqsEvent>| {
         let db = db.clone();
         let dynamo = dynamo.clone();
+        let s3 = s3.clone();
+        let legacy = legacy.clone();
         async move {
             // A frozen Lambda's timers do not tick, so the token is checked per
             // invocation; a failed mint surfaces on the query if it matters.
@@ -126,7 +132,8 @@ async fn main() -> Result<(), Error> {
                     tracing::warn!(%error, "Aurora DSQL token refresh failed before invocation");
                 }
             }
-            event_handler::function_handler(event, dynamo, db.connection, db.dialect).await
+            event_handler::function_handler(event, dynamo, s3, legacy, db.connection, db.dialect)
+                .await
         }
     }))
     .await

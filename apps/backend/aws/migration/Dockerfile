@@ -47,7 +47,7 @@ RUN bash ./make-prisma-mirror.sh --target dsql \
     && ! awk '/^datasource[[:space:]]/,/^}/' prisma/schema/*.prisma | grep -q '"cockroachdb"'
 
 COPY packages/api/prisma/migrations-dsql ./prisma/migrations-dsql
-COPY apps/backend/aws/migration/prisma.dsql.config.ts apps/backend/aws/migration/migrate.ts ./
+COPY apps/backend/aws/migration/prisma.dsql.config.ts apps/backend/aws/migration/migrate.ts apps/backend/aws/migration/shared.ts ./
 
 ENV NODE_ENV=production \
     CHECKPOINT_DISABLE=1 \
@@ -58,6 +58,7 @@ ENV NODE_ENV=production \
 # libssl), the mirrored schema must validate, and the migrations directory must
 # be the committed Prisma layout.
 RUN node_modules/@prisma/engines/schema-engine-* --version \
+    && bun -e 'await import("./migrate.ts")' \
     && bunx --bun prisma --version \
     && bunx --bun prisma validate --config prisma.dsql.config.ts \
     && test -f prisma/migrations-dsql/migration_lock.toml \

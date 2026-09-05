@@ -9,6 +9,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 
 /// Wire tag of the default transport: an authenticated POST to the API's push endpoint.
 pub const CHANNEL_TRANSPORT_HTTP: &str = "http";
@@ -18,7 +19,7 @@ pub const CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB: &str = "azure_web_pubsub";
 pub const CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB: &str = "gcp_firebase_rtdb";
 
 /// Temporary AWS credentials scoped to one channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct AwsTemporaryCredentials {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -27,8 +28,19 @@ pub struct AwsTemporaryCredentials {
     pub expiration: i64,
 }
 
+impl fmt::Debug for AwsTemporaryCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AwsTemporaryCredentials")
+            .field("access_key_id", &"[REDACTED]")
+            .field("secret_access_key", &"[REDACTED]")
+            .field("session_token", &"[REDACTED]")
+            .field("expiration", &self.expiration)
+            .finish()
+    }
+}
+
 /// How a client delivers a [`ChannelPush`] for a channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChannelClientDescriptor {
     /// `POST {push_url}` with `Authorization: Bearer {token}` and a [`ChannelPush`] body.
@@ -65,6 +77,57 @@ pub enum ChannelClientDescriptor {
         inbound_path: String,
         expires_at: i64,
     },
+}
+
+impl fmt::Debug for ChannelClientDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http { .. } => f
+                .debug_struct("Http")
+                .field("push_url", &"[REDACTED]")
+                .field("token", &"[REDACTED]")
+                .finish(),
+            Self::InProcess {} => f.debug_struct("InProcess").finish(),
+            Self::AwsMqtt {
+                endpoint,
+                region,
+                target_client_id,
+                topic,
+                credentials,
+            } => f
+                .debug_struct("AwsMqtt")
+                .field("endpoint", endpoint)
+                .field("region", region)
+                .field("target_client_id", target_client_id)
+                .field("topic", topic)
+                .field("credentials", credentials)
+                .finish(),
+            Self::AzureWebPubSub {
+                group, expires_at, ..
+            } => f
+                .debug_struct("AzureWebPubSub")
+                .field("url", &"[REDACTED]")
+                .field("group", group)
+                .field("expires_at", expires_at)
+                .finish(),
+            Self::GcpFirebaseRtdb {
+                project_id,
+                inbox_path,
+                inbound_path,
+                expires_at,
+                ..
+            } => f
+                .debug_struct("GcpFirebaseRtdb")
+                .field("database_url", &"[REDACTED]")
+                .field("api_key", &"[REDACTED]")
+                .field("project_id", project_id)
+                .field("custom_token", &"[REDACTED]")
+                .field("inbox_path", inbox_path)
+                .field("inbound_path", inbound_path)
+                .field("expires_at", expires_at)
+                .finish(),
+        }
+    }
 }
 
 impl ChannelClientDescriptor {
@@ -134,7 +197,7 @@ pub struct ChannelPush {
 }
 
 /// Waiter-side credentials for one channel, minted by the API at dispatch.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChannelExecutorGrant {
     /// Register/poll rows through the API (`profile.hub` + the run's token).
@@ -157,6 +220,45 @@ pub enum ChannelExecutorGrant {
         inbox_path: String,
         inbound_path: String,
     },
+}
+
+impl fmt::Debug for ChannelExecutorGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http {} => f.debug_struct("Http").finish(),
+            Self::AwsMqtt {
+                endpoint,
+                region,
+                client_id,
+                inbox_topic,
+                credentials,
+            } => f
+                .debug_struct("AwsMqtt")
+                .field("endpoint", endpoint)
+                .field("region", region)
+                .field("client_id", client_id)
+                .field("inbox_topic", inbox_topic)
+                .field("credentials", credentials)
+                .finish(),
+            Self::AzureWebPubSub { group, .. } => f
+                .debug_struct("AzureWebPubSub")
+                .field("url", &"[REDACTED]")
+                .field("group", group)
+                .finish(),
+            Self::GcpFirebaseRtdb {
+                inbox_path,
+                inbound_path,
+                ..
+            } => f
+                .debug_struct("GcpFirebaseRtdb")
+                .field("database_url", &"[REDACTED]")
+                .field("api_key", &"[REDACTED]")
+                .field("custom_token", &"[REDACTED]")
+                .field("inbox_path", inbox_path)
+                .field("inbound_path", inbound_path)
+                .finish(),
+        }
+    }
 }
 
 /// Rides `DispatchPayload.channel` / `ExecutionRequest.channel`.
@@ -210,5 +312,82 @@ mod tests {
         assert!(json.get("request_id").is_none());
         let back: ChannelHandle = serde_json::from_value(json).unwrap();
         assert_eq!(back, handle);
+    }
+
+    #[test]
+    fn debug_output_redacts_channel_credentials() {
+        let aws_credentials = AwsTemporaryCredentials {
+            access_key_id: "private-access-key".into(),
+            secret_access_key: "private-secret-key".into(),
+            session_token: "private-session-token".into(),
+            expiration: 10,
+        };
+        let values: Vec<Box<dyn fmt::Debug>> = vec![
+            Box::new(aws_credentials.clone()),
+            Box::new(ChannelClientDescriptor::Http {
+                push_url: "https://example.test/push?signature=private-signature".into(),
+                token: "private-http-token".into(),
+            }),
+            Box::new(ChannelClientDescriptor::AwsMqtt {
+                endpoint: "iot.example.test".into(),
+                region: "test-region".into(),
+                target_client_id: "client".into(),
+                topic: "topic".into(),
+                credentials: aws_credentials,
+            }),
+            Box::new(ChannelClientDescriptor::AzureWebPubSub {
+                url: "wss://example.test/client/hubs/test?access_token=private-azure-token".into(),
+                group: "group".into(),
+                expires_at: 10,
+            }),
+            Box::new(ChannelClientDescriptor::GcpFirebaseRtdb {
+                database_url: "https://firebase.example.test?auth=private-client-database-token"
+                    .into(),
+                api_key: "private-client-api-key".into(),
+                project_id: "project".into(),
+                custom_token: "private-client-custom-token".into(),
+                inbox_path: "inbox".into(),
+                inbound_path: "inbound".into(),
+                expires_at: 10,
+            }),
+            Box::new(ChannelExecutorGrant::AzureWebPubSub {
+                url:
+                    "wss://example.test/client/hubs/test?access_token=private-executor-azure-token"
+                        .into(),
+                group: "group".into(),
+            }),
+            Box::new(ChannelExecutorGrant::GcpFirebaseRtdb {
+                database_url: "https://firebase.example.test?auth=private-database-token".into(),
+                api_key: "private-api-key".into(),
+                custom_token: "private-custom-token".into(),
+                inbox_path: "inbox".into(),
+                inbound_path: "inbound".into(),
+            }),
+        ];
+
+        let debug = values
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        for secret in [
+            "private-access-key",
+            "private-secret-key",
+            "private-session-token",
+            "private-signature",
+            "private-http-token",
+            "private-azure-token",
+            "private-client-database-token",
+            "private-client-api-key",
+            "private-client-custom-token",
+            "private-executor-azure-token",
+            "private-database-token",
+            "private-api-key",
+            "private-custom-token",
+        ] {
+            assert!(!debug.contains(secret), "Debug output leaked {secret}");
+        }
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("test-region"));
     }
 }

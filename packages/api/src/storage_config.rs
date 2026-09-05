@@ -13,6 +13,33 @@ use flow_like_types::Result;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, sync::Arc};
 
+/// Optional configuration values treat blank Compose interpolation as absent.
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
+    normalize_optional(std::env::var(name).ok())
+}
+
+fn normalize_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// File-backed secrets take precedence; unreadable and empty files fail startup.
+pub(crate) fn secret_env(name: &str) -> Result<Option<String>> {
+    if let Some(path) = non_empty_env(&format!("{name}_FILE")) {
+        let value = std::fs::read_to_string(&path)
+            .map_err(|error| flow_like_types::anyhow!("Cannot read {name}_FILE: {error}"))?;
+        let value = value.trim_end_matches(['\r', '\n']).to_owned();
+        if value.is_empty() {
+            return Err(flow_like_types::anyhow!("{name}_FILE is empty"));
+        }
+        return Ok(Some(value));
+    }
+    Ok(std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty()))
+}
+
 /// Storage provider type
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -63,12 +90,23 @@ pub struct S3Config {
 
 impl S3Config {
     pub fn from_env() -> Result<Self> {
+        let access_key_id = secret_env("AWS_ACCESS_KEY_ID")?;
+        let secret_access_key = secret_env("AWS_SECRET_ACCESS_KEY")?;
+        if access_key_id.is_some() != secret_access_key.is_some() {
+            return Err(flow_like_types::anyhow!(
+                "Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be configured"
+            ));
+        }
         Ok(S3Config {
-            endpoint: std::env::var("AWS_ENDPOINT").ok(),
-            region: std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
-            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
-            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-            session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
+            // Stores also sign browser/desktop URLs. Resolve the same public
+            // hostname inside the deployment instead of rewriting signed URLs.
+            endpoint: non_empty_env("S3_PUBLIC_ENDPOINT")
+                .or_else(|| non_empty_env("S3_INTERNAL_ENDPOINT"))
+                .or_else(|| non_empty_env("AWS_ENDPOINT")),
+            region: non_empty_env("AWS_REGION").unwrap_or_else(|| "us-east-1".to_string()),
+            access_key_id,
+            secret_access_key,
+            session_token: secret_env("AWS_SESSION_TOKEN")?,
             use_path_style: std::env::var("AWS_USE_PATH_STYLE")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
@@ -83,7 +121,9 @@ impl S3Config {
             .with_bucket_name(bucket);
 
         if let Some(endpoint) = &self.endpoint {
-            builder = builder.with_endpoint(endpoint);
+            builder = builder
+                .with_endpoint(endpoint)
+                .with_allow_http(endpoint.starts_with("http://"));
         }
 
         // Use static credentials if provided, otherwise rely on AWS credential chain
@@ -261,20 +301,20 @@ impl BucketConfig {
     pub fn from_env(provider: &StorageProvider) -> Result<Self> {
         let (content, meta, cdn, logs) = match provider {
             StorageProvider::Aws => {
-                let content = std::env::var("AWS_CONTENT_BUCKET")
-                    .or_else(|_| std::env::var("CONTENT_BUCKET"))
-                    .map_err(|_| {
+                let content = non_empty_env("AWS_CONTENT_BUCKET")
+                    .or_else(|| non_empty_env("CONTENT_BUCKET"))
+                    .ok_or_else(|| {
                         flow_like_types::anyhow!("CONTENT_BUCKET or AWS_CONTENT_BUCKET not set")
                     })?;
-                let meta = std::env::var("AWS_META_BUCKET")
-                    .or_else(|_| std::env::var("META_BUCKET"))
-                    .unwrap_or_else(|_| content.clone());
-                let cdn = std::env::var("CDN_BUCKET_NAME")
-                    .or_else(|_| std::env::var("AWS_CDN_BUCKET"))
-                    .unwrap_or_else(|_| content.clone());
-                let logs = std::env::var("AWS_LOG_BUCKET")
-                    .or_else(|_| std::env::var("LOG_BUCKET"))
-                    .map_err(|_| {
+                let meta = non_empty_env("AWS_META_BUCKET")
+                    .or_else(|| non_empty_env("META_BUCKET"))
+                    .unwrap_or_else(|| content.clone());
+                let cdn = non_empty_env("CDN_BUCKET_NAME")
+                    .or_else(|| non_empty_env("AWS_CDN_BUCKET"))
+                    .unwrap_or_else(|| content.clone());
+                let logs = non_empty_env("AWS_LOG_BUCKET")
+                    .or_else(|| non_empty_env("LOG_BUCKET"))
+                    .ok_or_else(|| {
                         flow_like_types::anyhow!("LOG_BUCKET or AWS_LOG_BUCKET not set")
                     })?;
                 (content, meta, cdn, logs)
@@ -333,6 +373,20 @@ impl BucketConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_compose_values_do_not_shadow_fallbacks() {
+        for value in [None, Some(String::new()), Some("  ".into())] {
+            assert_eq!(
+                normalize_optional(value).or_else(|| Some("fallback-bucket".into())),
+                Some("fallback-bucket".into())
+            );
+        }
+        assert_eq!(
+            normalize_optional(Some("  https://s3.example.com  ".into())),
+            Some("https://s3.example.com".into())
+        );
+    }
 
     #[test]
     fn test_storage_provider_parse() {

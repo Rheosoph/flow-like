@@ -269,6 +269,115 @@ pub struct DispatchPayload {
     pub artifact: Option<CompiledArtifactRef>,
 }
 
+/// Bind all dispatch inputs to the executor JWT. Object keys are sorted at
+/// every depth so HashMap iteration order cannot change the signature.
+pub fn dispatch_payload_hash(payload: &DispatchPayload) -> Result<String, serde_json::Error> {
+    fn canonical(value: &serde_json::Value, out: &mut Vec<u8>) -> Result<(), serde_json::Error> {
+        match value {
+            serde_json::Value::Object(object) => {
+                out.push(b'{');
+                let sorted: std::collections::BTreeMap<_, _> = object.iter().collect();
+                for (index, (key, value)) in sorted.into_iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',');
+                    }
+                    serde_json::to_writer(&mut *out, key)?;
+                    out.push(b':');
+                    canonical(value, out)?;
+                }
+                out.push(b'}');
+            }
+            serde_json::Value::Array(values) => {
+                out.push(b'[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',');
+                    }
+                    canonical(value, out)?;
+                }
+                out.push(b']');
+            }
+            value => serde_json::to_writer(out, value)?,
+        }
+        Ok(())
+    }
+    let mut value = serde_json::to_value(payload)?;
+    value
+        .as_object_mut()
+        .expect("dispatch is an object")
+        .remove("executor_jwt");
+    let mut bytes = b"flow-like-execution-dispatch/v1\0".to_vec();
+    canonical(&value, &mut bytes)?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+#[cfg(test)]
+mod execution_binding_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn payload() -> DispatchPayload {
+        serde_json::from_value(json!({
+            "job_id": "job", "run_id": "run", "app_id": "app",
+            "board_id": "board", "node_id": "node", "user_id": "user",
+            "credentials": {"secret": "scoped-key"}, "executor_jwt": "before-signing",
+            "callback_url": "https://callback.example", "payload": {"z": 1, "a": 2},
+            "artifact": {"url": "https://store.example/artifact", "path": "artifact", "registry_fingerprint": "hash"}
+        })).unwrap()
+    }
+
+    #[test]
+    fn signatures_cover_authority_credentials_artifacts_and_execution_inputs() {
+        let original = payload();
+        let digest = dispatch_payload_hash(&original).unwrap();
+        for (field, replacement) in [
+            ("job_id", json!("other")),
+            ("run_id", json!("other")),
+            ("app_id", json!("other")),
+            ("board_id", json!("other")),
+            ("board_version", json!([1, 2, 3])),
+            ("node_id", json!("other")),
+            ("user_id", json!("other")),
+            ("credentials", json!({"secret": "substituted"})),
+            ("callback_url", json!("https://attacker.example")),
+            ("shadow", json!(true)),
+            ("token", json!("new-authority")),
+            ("runtime_variables", json!({"input": "changed"})),
+            ("payload", json!({"a": 3})),
+            ("profile", json!({"hubs": ["new-hub"]})),
+            (
+                "wasm_packages",
+                json!({"package": {"version": "1", "wasm_hash": "h", "wasm_url": "u", "cwasm_url": "u", "cwasm_checksum": "attacker"}}),
+            ),
+            (
+                "artifact",
+                json!({"url": "https://attacker.example/native", "path": "artifact", "registry_fingerprint": "hash"}),
+            ),
+        ] {
+            let mut changed = serde_json::to_value(&original).unwrap();
+            changed[field] = replacement;
+            let changed: DispatchPayload = serde_json::from_value(changed).unwrap();
+            assert_ne!(
+                digest,
+                dispatch_payload_hash(&changed).unwrap(),
+                "unsigned field: {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn resigning_and_object_key_order_do_not_change_the_digest() {
+        let original = payload();
+        let mut changed = original.clone();
+        changed.executor_jwt = "after-signing".into();
+        changed.payload = Some(serde_json::from_str(r#"{"a":2,"z":1}"#).unwrap());
+        assert_eq!(
+            dispatch_payload_hash(&original).unwrap(),
+            dispatch_payload_hash(&changed).unwrap()
+        );
+    }
+}
+
 /// Reference to a dispatch payload that may be either embedded inline or
 /// stored remotely behind a (presigned) URL.
 ///

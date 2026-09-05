@@ -318,20 +318,24 @@ openssl rand -base64 32
 
 ### 2. Validate Request Origins
 
-In your Flow-Like flows, validate that requests come from expected sources:
+GitHub signs the exact request bytes. Validate the signature in an ingress that preserves those bytes before forwarding JSON to Flow-Like:
 
 ```typescript
-// Check webhook signatures (example for GitHub)
-const signature = headers['x-hub-signature-256'];
-const payload = JSON.stringify(body);
-const expectedSignature = crypto
-  .createHmac('sha256', webhookSecret)
-  .update(payload)
-  .digest('hex');
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
-if (signature !== `sha256=${expectedSignature}`) {
-  throw new Error('Invalid signature');
+const signature = request.headers.get('x-hub-signature-256');
+const rawBody = Buffer.from(await request.arrayBuffer());
+const expectedSignature = createHmac('sha256', webhookSecret)
+	.update(rawBody)
+	.digest('hex');
+const provided = Buffer.from(signature ?? '', 'utf8');
+const expected = Buffer.from(`sha256=${expectedSignature}`, 'utf8');
+
+if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+	throw new Error('Invalid signature');
 }
+
+// Forward JSON.parse(rawBody.toString('utf8')) only after verification succeeds.
 ```
 
 ### 3. Use HTTPS Only

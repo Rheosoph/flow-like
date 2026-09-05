@@ -164,9 +164,7 @@ impl CompilerConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(default_compilation_timeout_secs),
-            max_parallel_targets: std::env::var("COMPILER_MAX_PARALLEL_TARGETS")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            max_parallel_targets: positive_optional_env("COMPILER_MAX_PARALLEL_TARGETS"),
             storage_timeout_secs: bounded_env_u64(
                 "COMPILER_STORAGE_TIMEOUT_SECS",
                 default_storage_timeout_secs(),
@@ -239,4 +237,15 @@ fn bounded_env_u64(name: &str, default: u64, minimum: u64, maximum: u64) -> u64 
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (minimum..=maximum).contains(value))
         .unwrap_or(default)
+}
+
+/// Invalid explicit limits fail startup; zero would stall the target join loop.
+pub(crate) fn positive_optional_env(name: &str) -> Option<usize> {
+    nonempty_env(name).map(|value| {
+        value
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .unwrap_or_else(|| panic!("{name} must be a positive integer"))
+    })
 }

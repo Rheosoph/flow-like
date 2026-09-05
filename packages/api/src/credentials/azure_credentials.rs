@@ -795,20 +795,13 @@ mod sas_tests {
             // encryption scope is empty
         );
 
-        eprintln!("String to sign (escaped): {:?}", string_to_sign);
-        eprintln!(
-            "Newline count: {}",
-            string_to_sign.chars().filter(|&c| c == '\n').count()
-        );
-
         let key_bytes = STANDARD.decode(&account_key).expect("Failed to decode key");
 
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(&key_bytes).expect("HMAC error");
         mac.update(string_to_sign.as_bytes());
         let signature = STANDARD.encode(mac.finalize().into_bytes());
-
-        eprintln!("Generated signature: {}", signature);
+        assert_eq!(STANDARD.decode(&signature).unwrap().len(), 32);
 
         // The signature won't match because the account key might be different
         // But we can verify the format is correct by testing the SAS works
@@ -823,7 +816,7 @@ mod sas_tests {
             urlencoding::encode(&signature),
         );
 
-        eprintln!("Generated SAS: {}", sas_token);
+        assert!(sas_token.contains("sig="));
     }
 }
 
@@ -1064,23 +1057,6 @@ fn generate_shared_key_directory_sas(
                          // rscc, rscd, rsce, rscl, rsct (all empty)
     );
 
-    #[cfg(test)]
-    {
-        eprintln!("=== Directory SAS Debug ===");
-        eprintln!("Account: {}", account_name);
-        eprintln!("Container: {}", container);
-        eprintln!("Directory: {}", clean_dir);
-        eprintln!("Directory depth: {}", directory_depth);
-        eprintln!("Canonicalized resource: {}", canonicalized_resource);
-        eprintln!("Permissions: {}", permissions);
-        eprintln!("String to sign (escaped): {:?}", string_to_sign);
-        eprintln!(
-            "Newline count: {}",
-            string_to_sign.chars().filter(|&c| c == '\n').count()
-        );
-        eprintln!("===========================");
-    }
-
     let key_bytes = STANDARD
         .decode(account_key)
         .map_err(|e| anyhow!("Failed to decode account key: {}", e))?;
@@ -1103,9 +1079,6 @@ fn generate_shared_key_directory_sas(
         directory_depth,
         urlencoding::encode(&signature),
     );
-
-    #[cfg(test)]
-    eprintln!("Generated Directory SAS: {}", sas_token);
 
     Ok(sas_token)
 }

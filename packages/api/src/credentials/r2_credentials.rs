@@ -502,6 +502,7 @@ impl RuntimeCredentialsTrait for R2RuntimeCredentials {
             express: false,
             kms_key_arn: None,
             kms_bucket_key: false,
+            ..Default::default()
         });
 
         SharedCredentials::Aws(AwsSharedCredentials {

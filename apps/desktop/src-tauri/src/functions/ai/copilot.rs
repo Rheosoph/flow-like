@@ -3856,7 +3856,7 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
             match tokio::fs::read(&path).await {
                 Ok(bytes) => Some(bytes),
                 Err(error) => {
-                    eprintln!("[global_chat] failed to read attachment {path:?}: {error}");
+                    eprintln!("[global_chat] failed to read local attachment: {error}");
                     None
                 }
             }
@@ -3869,7 +3869,7 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
                         .content_length()
                         .is_some_and(|len| len > MAX_ATTACHMENT_BYTES)
                     {
-                        eprintln!("[global_chat] attachment exceeds size limit, skipped: {url}");
+                        eprintln!("[global_chat] attachment exceeds size limit, skipped");
                         None
                     } else {
                         match response.bytes().await {
@@ -3877,20 +3877,24 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
                                 Some(bytes.to_vec())
                             }
                             Ok(_) => {
-                                eprintln!(
-                                    "[global_chat] attachment exceeds size limit, skipped: {url}"
-                                );
+                                eprintln!("[global_chat] attachment exceeds size limit, skipped");
                                 None
                             }
                             Err(error) => {
-                                eprintln!("[global_chat] failed to read attachment {url}: {error}");
+                                eprintln!(
+                                    "[global_chat] failed to read attachment: {}",
+                                    error.without_url()
+                                );
                                 None
                             }
                         }
                     }
                 }
                 Err(error) => {
-                    eprintln!("[global_chat] failed to fetch attachment {url}: {error}");
+                    eprintln!(
+                        "[global_chat] failed to fetch attachment: {}",
+                        error.without_url()
+                    );
                     None
                 }
             }

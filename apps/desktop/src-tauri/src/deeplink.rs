@@ -59,8 +59,6 @@ fn dispatch_deep_links(app_handle: &AppHandle, urls: &Vec<Url>, replayed: bool) 
     }
 
     for url in urls {
-        tracing::info!("Deep link URL: {}", url);
-
         match classify(url) {
             DeepLinkIntent::ImportFile => handle_import_file(app_handle, url),
             DeepLinkIntent::Auth | DeepLinkIntent::Logout => handle_auth(app_handle, url.as_str()),
@@ -221,20 +219,17 @@ fn segment(raw: &str) -> Option<String> {
 fn handle_import_file(app_handle: &AppHandle, url: &Url) {
     // iOS 'Open in…' / AirDrop of documents.
     let Ok(path) = url.to_file_path() else {
-        tracing::warn!(
-            "Received a file deep link that is not a local path: {}",
-            url
-        );
+        tracing::warn!("Received a file deep link that is not a local path");
         return;
     };
 
     let path_str = path.to_string_lossy().to_string();
-    tracing::info!("Received file URL to import: {}", path_str);
+    tracing::info!("Received file deep link to import");
     emit(app_handle, "import/file", json::json!({ "path": path_str }));
 }
 
 fn handle_auth(app_handle: &AppHandle, url: &str) {
-    tracing::info!("Handling auth URL: {}", url);
+    tracing::info!("Handling authentication deep link");
     emit(app_handle, "oidc/url", json::json!({ "url": url }));
 }
 
@@ -297,12 +292,7 @@ fn handle_trigger(app_handle: &AppHandle, url: &Url, app_id: &str, route: &str) 
     }
     let query_params = serde_json::Value::Object(params);
 
-    tracing::info!(
-        "Trigger deep link: app_id='{}', route='{}', params={:?}",
-        app_id,
-        route,
-        query_params
-    );
+    tracing::info!(app_id = %app_id, "Trigger deep link received");
 
     match crate::event_sink::deeplink::DeeplinkSink::handle_trigger(
         app_handle,
@@ -334,15 +324,19 @@ fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
 /// whatever it happened to be showing; hand http(s) URLs to the browser instead, which is what
 /// the user expected when they tapped the link.
 fn handle_unknown(app_handle: &AppHandle, url: &Url) {
-    tracing::warn!("Unhandled deep link URL: {}", url);
+    tracing::warn!("Unhandled deep link received");
 
     if !should_open_externally(url) {
         return;
     }
 
     use tauri_plugin_opener::OpenerExt;
-    if let Err(error) = app_handle.opener().open_url(url.as_str(), None::<&str>) {
-        tracing::warn!("Failed to open the unhandled deep link in a browser: {error}");
+    if app_handle
+        .opener()
+        .open_url(url.as_str(), None::<&str>)
+        .is_err()
+    {
+        tracing::warn!("Failed to open the unhandled deep link in a browser");
     }
 }
 

@@ -971,8 +971,8 @@ export function ProfileSyncer({
 					body: bytes,
 				});
 				return uploadResponse.ok;
-			} catch (error) {
-				console.warn(`Failed to upload ${iconField} for ${profileId}:`, error);
+			} catch {
+				console.warn(`Failed to upload ${iconField} for ${profileId}`);
 				return false;
 			}
 		};

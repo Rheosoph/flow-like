@@ -44,9 +44,11 @@ async fn main() {
     // exporter is spawned below, and disarms itself when telemetry is disabled.
     let (span_layer, span_exporter) = telemetry_span_layer(SpanExportConfig::from_env());
 
+    let env_filter = flow_like_api::info_env_filter();
+
     let _sentry_guard = if sentry_endpoint.is_empty() {
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
+            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
             .with(span_layer)
             .init();
         None
@@ -65,7 +67,7 @@ async fn main() {
             },
         ));
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
+            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
             .with(sentry_layer)
             .with(span_layer)
             .init();
@@ -145,8 +147,10 @@ async fn main() {
     #[cfg(not(feature = "dsql"))]
     let state = Arc::new(State::new(catalog, cdn_bucket, Some(secret_config)).await);
 
-    let _sweeper_handle =
-        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _sweeper_handle = spawn_run_sweeper(
+        flow_like_api::audit::ExecutionAuditContext::from(&state),
+        RunSweeperConfig::from_env(),
+    );
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),

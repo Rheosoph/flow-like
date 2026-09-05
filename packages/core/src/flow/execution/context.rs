@@ -1350,7 +1350,7 @@ impl ExecutionContext {
         &mut self,
         message: crate::a2ui::A2UIServerMessage,
     ) -> flow_like_types::Result<()> {
-        tracing::debug!(message_type = ?message, "Streaming A2UI update");
+        tracing::debug!("Streaming A2UI update");
         self.record_a2ui_update(&message).await;
         self.stream_response("a2ui", message).await
     }
@@ -1632,9 +1632,9 @@ impl ExecutionContext {
         };
         let element_id = retargeted.as_deref().unwrap_or(element_id);
         self.elements.write().await.clear_requested();
-        tracing::info!(element_id = %element_id, value = ?value, "[A2UI] upsert_element called");
+        tracing::info!(element_id = %element_id, "[A2UI] upsert_element called");
         self.log_message(
-            &format!("[A2UI] upsert_element: {} -> {:?}", element_id, value),
+            &format!("[A2UI] upsert_element: {}", element_id),
             LogLevel::Debug,
         );
         let message = crate::a2ui::A2UIServerMessage::upsert_element(element_id, value);

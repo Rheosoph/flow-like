@@ -79,8 +79,8 @@ async fn parse_messages(history: &History) -> Vec<HistoryMessage> {
                                 },
                             });
                         }
-                        Err(e) => {
-                            eprintln!("Failed to optimize image URL: {}", e);
+                        Err(_) => {
+                            eprintln!("Failed to optimize image URL");
                             new_content.push(Content::Text {
                                 content_type: ContentType::Text,
                                 text: "The user tried to send an image, but it could not be optimized.".to_string(),

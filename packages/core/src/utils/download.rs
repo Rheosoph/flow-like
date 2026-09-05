@@ -46,13 +46,10 @@ async fn get_remote_size(client: &Client, url: &str) -> flow_like_types::Result<
         .head(url)
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .send()
-        .await?;
+        .await
+        .map_err(reqwest::Error::without_url)?;
     if res.status().is_server_error() {
-        bail!(
-            "Server responded with {} to HEAD request for {}",
-            res.status(),
-            url
-        );
+        bail!("Server responded with {} to HEAD request", res.status());
     }
     let total_size = res
         .headers()
@@ -197,8 +194,8 @@ async fn process_download_bit(
 
     if let Err(err) = &remote_size {
         println!(
-            "Error getting remote size for {}: {}. Falling back to cached files if available.",
-            url, err
+            "Error getting remote size: {}. Falling back to cached files if available.",
+            err
         );
         let _rem = remove_download(bit, &app_state).await;
         let _ = async_fs::remove_file(&temp_path).await;
@@ -266,8 +263,7 @@ async fn process_download_bit(
             downloaded = partial_size;
             feed_hasher_with_existing(&temp_path, &mut hasher).await?;
             println!(
-                "Resuming download: {} to {} ({} bytes already present)",
-                url,
+                "Resuming download to {} ({} bytes already present)",
                 temp_path.display(),
                 partial_size
             );
@@ -276,7 +272,7 @@ async fn process_download_bit(
         let _ = async_fs::remove_file(&temp_path).await;
     }
 
-    println!("Downloading: {} to {}", url, store_path);
+    println!("Downloading to {}", store_path);
 
     // now use range header to resume download
     let mut headers = reqwest::header::HeaderMap::new();
@@ -295,23 +291,18 @@ async fn process_download_bit(
                 if had_existing_file {
                     let _ = async_fs::remove_file(&temp_path).await;
                     println!(
-                        "Server error {} when downloading {}; using cached file instead",
-                        res.status(),
-                        url
+                        "Server error {} when downloading; using cached file instead",
+                        res.status()
                     );
                     return Ok(store_path);
                 }
-                bail!(
-                    "Server responded with {} when downloading {}",
-                    res.status(),
-                    url
-                );
+                bail!("Server responded with {} when downloading", res.status());
             }
             res
         }
         Err(e) => {
             let _rem = remove_download(bit, &app_state).await;
-            bail!("Error downloading file {}", e);
+            bail!("Error downloading file: {}", e.without_url());
         }
     };
 

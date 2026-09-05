@@ -218,7 +218,7 @@ async fn resolve_images(
         let bytes = match fetch_image_bytes(context, &client, url).await {
             Ok(bytes) => bytes,
             Err(err) => {
-                context.log_message(&format!("Skipping image \"{url}\": {err}"), LogLevel::Warn);
+                context.log_message(&format!("Skipping image: {err}"), LogLevel::Warn);
                 continue;
             }
         };
@@ -227,7 +227,7 @@ async fn resolve_images(
                 resolved.insert(url.clone(), image);
             }
             Err(err) => context.log_message(
-                &format!("Skipping undecodable image \"{url}\": {err}"),
+                &format!("Skipping undecodable image: {err}"),
                 LogLevel::Warn,
             ),
         }
@@ -258,7 +258,11 @@ async fn fetch_image_bytes(
     }
 
     if url.starts_with("http://") || url.starts_with("https://") {
-        let response = client.get(url).send().await?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(flow_like_types::reqwest::Error::without_url)?;
         if !response.status().is_success() {
             return Err(flow_like_types::anyhow!(
                 "download failed with status {}",
@@ -272,7 +276,10 @@ async fn fetch_image_bytes(
                 "image exceeds the {MAX_IMAGE_BYTES} byte limit"
             ));
         }
-        let bytes = response.bytes().await?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(flow_like_types::reqwest::Error::without_url)?;
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(flow_like_types::anyhow!(
                 "image exceeds the {MAX_IMAGE_BYTES} byte limit"

@@ -1,8 +1,14 @@
 pub mod chain;
+mod execution;
+pub mod request;
 pub mod service;
 pub mod sign;
 
 pub use chain::{GENESIS_HASH, compute_entry_hash};
+pub use execution::{
+    ExecutionAuditContext, record_execution_dispatch, record_execution_dispatch_failure,
+    record_execution_outcome, record_execution_result,
+};
 pub use service::AuditService;
 pub use sign::{sign_entry, verify_entry_signature};
 
@@ -45,6 +51,7 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
     let actor_id = match user.audit_id().await {
         Ok(actor_id) => actor_id,
         Err(err) => {
+            request::record_failure();
             tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", err);
             return;
         }
@@ -82,7 +89,7 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
     let input = service::AuditEntryInput {
         actor_id,
         actor_type,
-        actor_ip: None,
+        actor_ip: request::actor_ip(),
         action: action.to_string(),
         resource_type: "ExecutionRun".to_string(),
         resource_id: execution.run_id,
@@ -92,6 +99,7 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
     };
 
     if let Err(err) = AuditService::record(&state.db, state.db_dialect, input).await {
+        request::record_failure();
         tracing::error!(
             run_id = %run_id,
             app_id = %app_id,
@@ -102,7 +110,8 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
 }
 
 /// Record an audit entry on the platform root chain (chain_id = None).
-/// Audit is recorded synchronously — the endpoint will fail if audit recording fails (NIST AU-5).
+/// Records synchronously after the domain mutation. Failures are traced and
+/// counted in the request outcome; the middleware records an attempt before dispatch.
 /// Respects `audit.enabled` from platform config.
 ///
 /// Usage: `audit!(state, user, action, resource_type, resource_id, summary);`
@@ -127,7 +136,7 @@ macro_rules! audit {
                 let input = $crate::audit::service::AuditEntryInput {
                     actor_id,
                     actor_type,
-                    actor_ip: None,
+                    actor_ip: $crate::audit::request::actor_ip(),
                     action,
                     resource_type,
                     resource_id,
@@ -139,6 +148,7 @@ macro_rules! audit {
             }
             .await;
             if let Err(e) = &audit_result {
+                $crate::audit::request::record_failure();
                 tracing::error!("AUDIT FAILURE (root chain): {}", e);
             }
         }
@@ -162,7 +172,7 @@ macro_rules! audit {
                 let input = $crate::audit::service::AuditEntryInput {
                     actor_id,
                     actor_type,
-                    actor_ip: None,
+                    actor_ip: $crate::audit::request::actor_ip(),
                     action,
                     resource_type,
                     resource_id,
@@ -174,6 +184,7 @@ macro_rules! audit {
             }
             .await;
             if let Err(e) = &audit_result {
+                $crate::audit::request::record_failure();
                 tracing::error!("AUDIT FAILURE (root chain): {}", e);
             }
         }
@@ -181,7 +192,8 @@ macro_rules! audit {
 }
 
 /// Record an audit entry on a branch chain (app or package).
-/// Audit is recorded synchronously — the endpoint will fail if audit recording fails (NIST AU-5).
+/// Records synchronously after the domain mutation. Failures are traced and
+/// counted in the request outcome; the middleware records an attempt before dispatch.
 /// Respects `audit.enabled` from platform config.
 ///
 /// Usage: `audit_branch!(state, user, chain_id, action, resource_type, resource_id, summary);`
@@ -207,7 +219,7 @@ macro_rules! audit_branch {
                 let input = $crate::audit::service::AuditEntryInput {
                     actor_id,
                     actor_type,
-                    actor_ip: None,
+                    actor_ip: $crate::audit::request::actor_ip(),
                     action,
                     resource_type,
                     resource_id,
@@ -219,6 +231,7 @@ macro_rules! audit_branch {
             }
             .await;
             if let Err(e) = &audit_result {
+                $crate::audit::request::record_failure();
                 tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
             }
         }
@@ -243,7 +256,7 @@ macro_rules! audit_branch {
                 let input = $crate::audit::service::AuditEntryInput {
                     actor_id,
                     actor_type,
-                    actor_ip: None,
+                    actor_ip: $crate::audit::request::actor_ip(),
                     action,
                     resource_type,
                     resource_id,
@@ -255,6 +268,7 @@ macro_rules! audit_branch {
             }
             .await;
             if let Err(e) = &audit_result {
+                $crate::audit::request::record_failure();
                 tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
             }
         }

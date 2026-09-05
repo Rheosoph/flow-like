@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -77,6 +77,20 @@ pub async fn delete_overlay(
         // managed events, so a cleanup failure can only leave inert metadata.
         tracing::error!(%error, "Failed to clean up deleted ontology action bindings");
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "graph.overlay.delete",
+        "GraphOverlay",
+        overlay_id,
+        "Deleted a graph overlay",
+        serde_json::json!({
+            "user_scoped": scope.is_user_scoped(),
+            "action_count": overlay.actions.len(),
+        })
+    );
 
     Ok(())
 }

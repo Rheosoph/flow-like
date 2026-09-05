@@ -123,6 +123,54 @@ fn keyed_local_lock(
     lock
 }
 
+fn scoped_credential_minimum_lifetime(
+    mode: &CredentialsAccess,
+) -> flow_like_types::Result<chrono::Duration> {
+    if std::env::var("EXECUTION_ISOLATION_MODE").as_deref() != Ok("per_run")
+        || !matches!(
+            mode,
+            CredentialsAccess::ServerExecute | CredentialsAccess::ShadowExecute
+        )
+    {
+        return Ok(chrono::Duration::seconds(120));
+    }
+    let timeout = std::env::var("EXECUTION_TIMEOUT_SECONDS")
+        .or_else(|_| std::env::var("EXECUTOR_TIMEOUT_SECS"))
+        .unwrap_or_else(|_| "3600".into());
+    let queue_wait =
+        std::env::var("EXECUTION_QUEUE_MAX_WAIT_SECONDS").unwrap_or_else(|_| "300".into());
+    let margin =
+        std::env::var("EXECUTION_CREDENTIAL_MARGIN_SECONDS").unwrap_or_else(|_| "120".into());
+    execution_credential_lifetime(
+        &timeout,
+        &queue_wait,
+        &margin,
+        crate::execution::queue::supervision_grace_seconds()?,
+    )
+}
+
+fn execution_credential_lifetime(
+    timeout: &str,
+    queue_wait: &str,
+    margin: &str,
+    supervision_grace: u64,
+) -> flow_like_types::Result<chrono::Duration> {
+    let bounded = |value: &str, name: &str, maximum: i64| -> flow_like_types::Result<i64> {
+        value
+            .parse::<i64>()
+            .ok()
+            .filter(|value| (1..=maximum).contains(value))
+            .ok_or_else(|| flow_like_types::anyhow!("{name} must be 1..{maximum}"))
+    };
+    Ok(chrono::Duration::seconds(
+        bounded(timeout, "EXECUTION_TIMEOUT_SECONDS", 86400)?
+            + bounded(queue_wait, "EXECUTION_QUEUE_MAX_WAIT_SECONDS", 86400)?
+            + bounded(margin, "EXECUTION_CREDENTIAL_MARGIN_SECONDS", 3600)?
+            + i64::try_from(supervision_grace)
+                .map_err(|_| flow_like_types::anyhow!("Invalid supervision grace"))?,
+    ))
+}
+
 fn scoped_mutation_lock_id(domain: &[u8], parts: &[&str]) -> i64 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"flow-like.mutation-lock/v1\0");
@@ -338,6 +386,8 @@ pub struct State {
     pub mail_client: Option<DynMailClient>,
     #[cfg(feature = "aws")]
     pub aws_client: Arc<SdkConfig>,
+    #[cfg(feature = "aws")]
+    pub(crate) scoped_sts_client: std::sync::OnceLock<aws_sdk_sts::Client>,
     pub catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
     pub registry: Arc<FlowNodeRegistryInner>,
     pub provider: Arc<ModelProviderConfiguration>,
@@ -349,6 +399,9 @@ pub struct State {
     pub realtime_ice: RealtimeIceService,
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
+    /// Collapse simultaneous credential refreshes for one subject, app and grant.
+    credential_refresh_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
     /// User+app+board-scoped typed workflow drafts retained across stateless chat HTTP requests.
     /// Each store is internally bounded; the outer TTL/cap keeps abandoned board sessions finite.
@@ -706,6 +759,13 @@ impl State {
                 backend_kid.clone(),
             );
             crate::audit::sign::init(backend_key.as_deref(), backend_kid);
+            let audit_verifying_keys = secrets
+                .get_secret_string(&SecretRef::new("AUDIT_VERIFYING_KEYS"))
+                .await
+                .ok()
+                .map(|value| value.expose_secret().to_string());
+            crate::audit::sign::init_verifying_keys(audit_verifying_keys.as_deref())
+                .expect("AUDIT_VERIFYING_KEYS must contain named P-256 public keys");
         }
 
         let platform_config: Hub =
@@ -759,9 +819,12 @@ impl State {
                     .await
                     .expect("DATABASE_URL must be set");
                 let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
-                opt.max_connections(10)
-                    .min_connections(1)
+                let pool = flow_like_db::pool::PoolConfig::from_env()
+                    .expect("Invalid database connection pool configuration");
+                opt.max_connections(pool.max_connections)
+                    .min_connections(pool.min_connections)
                     .connect_timeout(Duration::from_secs(8))
+                    .acquire_timeout(Duration::from_secs(8))
                     .connect_lazy(true)
                     .sqlx_logging(platform_config.environment == Environment::Development);
                 pin_session_time_zone_to_utc(&mut opt);
@@ -811,7 +874,7 @@ impl State {
 
         let cache = moka::sync::Cache::builder()
             .max_capacity(32 * 1024 * 1024) // 32 MB
-            .time_to_live(Duration::from_secs(20 * 60)) // 20 minutes — credentials are valid for 1h, so cached ones always have ≥40min remaining
+            .time_to_live(Duration::from_secs(20 * 60)) // Each cache hit also checks the provider expiration.
             .build();
 
         let response_cache = moka::sync::Cache::builder()
@@ -946,6 +1009,8 @@ impl State {
             mail_client,
             #[cfg(feature = "aws")]
             aws_client,
+            #[cfg(feature = "aws")]
+            scoped_sts_client: std::sync::OnceLock::new(),
             catalog,
             provider: Arc::new(provider),
             registry: Arc::new(registry),
@@ -1011,6 +1076,7 @@ impl State {
                 .build(),
             board_load_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
+            credential_refresh_locks: parking_lot::Mutex::new(HashMap::new()),
             content_bucket,
             cdn_bucket,
             meta_bucket,
@@ -1132,14 +1198,32 @@ impl State {
         app_id: &str,
         mode: CredentialsAccess,
     ) -> flow_like_types::Result<Arc<RuntimeCredentials>> {
-        let key = format!("{}:{}:{}", sub, app_id, mode);
+        let key = format!("{}:{}:{}:{}:{}", sub.len(), sub, app_id.len(), app_id, mode);
+        let minimum_lifetime = scoped_credential_minimum_lifetime(&mode)?;
         if let Some(credentials) = self.credentials_cache.get(&key) {
-            return Ok(credentials);
+            if !credentials.expires_soon(minimum_lifetime) {
+                return Ok(credentials);
+            }
         }
-        let credentials = RuntimeCredentials::scoped(sub, app_id, self, mode).await?;
-        self.credentials_cache
-            .insert(key, Arc::new(credentials.clone()));
-        Ok(Arc::new(credentials))
+        let refresh_lock = keyed_local_lock(&self.credential_refresh_locks, key.clone());
+        let _refresh = refresh_lock.lock().await;
+        // The first concurrent caller may already have renewed this grant.
+        if let Some(credentials) = self.credentials_cache.get(&key) {
+            if !credentials.expires_soon(minimum_lifetime) {
+                return Ok(credentials);
+            }
+            self.credentials_cache.invalidate(&key);
+        }
+        let credentials = Arc::new(RuntimeCredentials::scoped(sub, app_id, self, mode).await?);
+        if minimum_lifetime > chrono::Duration::seconds(120)
+            && credentials.expires_soon(minimum_lifetime)
+        {
+            bail!(
+                "Scoped execution credentials have insufficient actual lifetime for execution, queue wait and cleanup; increase the provider session duration (STS_SESSION_TTL_SECONDS for S3 STS)"
+            );
+        }
+        self.credentials_cache.insert(key, credentials.clone());
+        Ok(credentials)
     }
 
     #[tracing::instrument(
@@ -1907,8 +1991,9 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 mod tests {
     use super::{
         board_mutation_lock_id, board_mutation_lock_key, cached_openid_is_current,
-        course_attempt_lock_id, entra_tenant_from_issuer, flow_ir_draft_store_key,
-        validate_jwk_for_header, validate_jwks_set, validate_openid_claims,
+        course_attempt_lock_id, entra_tenant_from_issuer, execution_credential_lifetime,
+        flow_ir_draft_store_key, validate_jwk_for_header, validate_jwks_set,
+        validate_openid_claims,
     };
     use flow_like_types::Value;
     use jsonwebtoken::{
@@ -1939,6 +2024,47 @@ mod tests {
             "e": "AQAB"
         }))
         .expect("valid test JWK")
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn cached_forty_minute_grant_cannot_back_a_new_hour_execution() {
+        let required = execution_credential_lifetime("3600", "300", "120", 210).unwrap();
+        let mut grant = crate::credentials::aws_credentials::AwsRuntimeCredentials::new(
+            "meta",
+            "content",
+            "logs",
+            "us-east-1",
+        );
+        grant.expiration = Some(chrono::Utc::now() + chrono::Duration::minutes(40));
+        assert!(crate::credentials::RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
+        grant.expiration = Some(chrono::Utc::now() + chrono::Duration::hours(2));
+        assert!(!crate::credentials::RuntimeCredentials::Aws(grant).expires_soon(required));
+    }
+
+    #[test]
+    fn hour_run_credentials_cover_queue_wait_and_cleanup() {
+        assert_eq!(
+            execution_credential_lifetime("3600", "300", "120", 210)
+                .unwrap()
+                .num_seconds(),
+            4230
+        );
+        assert_eq!(
+            execution_credential_lifetime("30", "10", "120", 210)
+                .unwrap()
+                .num_seconds(),
+            370
+        );
+        for (timeout, queue, margin) in [
+            ("0", "300", "120"),
+            ("3600", "-1", "120"),
+            ("3600", "300", "0"),
+            ("3600", "300", "3601"),
+            ("overflow", "300", "120"),
+        ] {
+            assert!(execution_credential_lifetime(timeout, queue, margin, 210).is_err());
+        }
     }
 
     #[test]

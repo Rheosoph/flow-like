@@ -285,24 +285,18 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 							);
 							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
 						}
-					} catch (silentError) {
-						console.warn(
-							"Silent login failed, attempting normal login:",
-							silentError,
-						);
+					} catch {
+						console.warn("Silent login failed, attempting normal login");
 
 						try {
 							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
-						} catch (redirectError) {
-							console.error(
-								"Both silent and redirect login failed:",
-								redirectError,
-							);
+						} catch {
+							console.error("Both silent and redirect login failed");
 						}
 					}
 				}
-			} catch (error) {
-				console.error("Login process failed:", error);
+			} catch {
+				console.error("Login process failed");
 			}
 		})();
 	}, [auth.user?.profile?.sub]);

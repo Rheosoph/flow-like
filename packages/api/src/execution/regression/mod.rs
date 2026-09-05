@@ -932,6 +932,15 @@ async fn dispatch_case(
         return (None, Some(format!("failed to create the run row: {error}")));
     }
 
+    if let Err(error) = crate::audit::record_execution_dispatch(state, &run_id, "regression").await
+    {
+        fail_replay_run(state, &run_id).await;
+        return (
+            Some(run_id),
+            Some(format!("failed to record execution audit: {error}")),
+        );
+    }
+
     let executor_jwt = match sign_execution_jwt(ExecutionJwtParams {
         user_id: context.subject.clone(),
         technical_user_id: None,
@@ -983,7 +992,7 @@ async fn dispatch_case(
         artifact: None,
     };
 
-    let db_arc = Arc::new(state.db.clone());
+    let db_arc = crate::audit::ExecutionAuditContext::from(state);
     let dispatch_error = match state.dispatcher.backend() {
         ExecutionBackend::LambdaStream => {
             match state.dispatcher.dispatch_streaming(request).await {
@@ -1024,7 +1033,14 @@ async fn dispatch_case(
 /// Mark a replay run failed when its dispatch never reached the executor, so
 /// the row does not sit `Pending` until the run sweeper finds it.
 async fn fail_replay_run(state: &AppState, run_id: &str) {
-    if let Err(error) = update_run_on_completion(&state.db, run_id, RunStatus::Failed, 0).await {
+    if let Err(error) = update_run_on_completion(
+        &crate::audit::ExecutionAuditContext::from(state),
+        run_id,
+        RunStatus::Failed,
+        0,
+    )
+    .await
+    {
         tracing::warn!(run_id, %error, "Failed to mark the replay run as failed");
     }
 }

@@ -4,7 +4,7 @@
 
 use crate::config::ExecutorConfig;
 use crate::execute::execute;
-use crate::streaming::{event_to_ndjson, execute_streaming};
+use crate::streaming::{event_to_ndjson, execute_streaming_with_permit};
 use crate::types::{DispatchPayload, ExecutionRequest};
 use axum::body::Body;
 use axum::extract::State;
@@ -16,16 +16,36 @@ use futures_util::stream::StreamExt;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Shared executor state
 #[derive(Clone)]
 pub struct ExecutorState {
     pub config: ExecutorConfig,
+    pub admission: Arc<Semaphore>,
 }
 
 impl ExecutorState {
     pub fn new(config: ExecutorConfig) -> Self {
-        Self { config }
+        let capacity = std::env::var("MAX_CONCURRENT_EXECUTIONS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(10);
+        Self::with_admission(config, Arc::new(Semaphore::new(capacity)))
+    }
+
+    pub fn with_admission(config: ExecutorConfig, admission: Arc<Semaphore>) -> Self {
+        Self { config, admission }
+    }
+
+    fn try_admit(&self) -> Result<OwnedSemaphorePermit, (StatusCode, String)> {
+        self.admission.clone().try_acquire_owned().map_err(|_| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Execution capacity is occupied or draining".to_string(),
+            )
+        })
     }
 
     pub fn from_env() -> Self {
@@ -87,7 +107,21 @@ async fn execute_callback(
     Json(payload): Json<DispatchPayload>,
 ) -> Result<Json<ExecuteResponse>, (StatusCode, String)> {
     let request = decode_dispatch(payload)?;
-    match execute(request, state.config.clone()).await {
+    let _permit = state.try_admit()?;
+    let started = std::time::Instant::now();
+    let result = execute(request, state.config.clone()).await;
+    state.config.record_completion(
+        match &result {
+            Ok(result) => match result.status {
+                crate::types::ExecutionStatus::Completed => "completed",
+                crate::types::ExecutionStatus::Cancelled => "cancelled",
+                _ => "failed",
+            },
+            Err(_) => "error",
+        },
+        started.elapsed().as_secs_f64(),
+    );
+    match result {
         Ok(result) => Ok(Json(ExecuteResponse {
             run_id: result.run_id,
             status: format!("{:?}", result.status).to_lowercase(),
@@ -109,7 +143,8 @@ async fn execute_stream(
     Json(payload): Json<DispatchPayload>,
 ) -> Result<Response, (StatusCode, String)> {
     let request = decode_dispatch(payload)?;
-    let stream = execute_streaming(request, state.config.clone())
+    let permit = state.try_admit()?;
+    let stream = execute_streaming_with_permit(request, state.config.clone(), Some(permit))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -139,7 +174,8 @@ async fn execute_sse(
     (StatusCode, String),
 > {
     let request = decode_dispatch(payload)?;
-    let stream = execute_streaming(request, state.config.clone())
+    let permit = state.try_admit()?;
+    let stream = execute_streaming_with_permit(request, state.config.clone(), Some(permit))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -165,6 +201,26 @@ async fn execute_sse(
 mod tests {
     use super::*;
     use flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL;
+
+    #[test]
+    fn shared_admission_is_enforced_and_closes_for_drain() {
+        let capacity = Arc::new(Semaphore::new(1));
+        let state = ExecutorState::with_admission(ExecutorConfig::default(), capacity.clone());
+        let queue_permit = capacity.clone().try_acquire_owned().unwrap();
+        assert_eq!(
+            state.try_admit().unwrap_err().0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        drop(queue_permit);
+        let http_permit = state.try_admit().unwrap();
+        assert!(capacity.clone().try_acquire_owned().is_err());
+        drop(http_permit);
+        capacity.close();
+        assert_eq!(
+            state.try_admit().unwrap_err().0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
 
     /// The exact body `build_executor_payload` POSTs to the direct transports.
     fn wire_payload(

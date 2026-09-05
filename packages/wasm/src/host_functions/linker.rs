@@ -1848,7 +1848,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
                         Ok(b) => b,
                         Err(e) => {
-                            println!("llm_prompt: failed to parse bit JSON: {e}");
+                            println!("llm_prompt: failed to parse bit JSON");
                             let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);
@@ -1886,7 +1886,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         additional_params: Option<serde_json::Value>,
                     }
 
-                    let (raw_messages, raw_tools, req_temperature, req_max_tokens, req_tool_choice, req_output_schema, req_additional_params) =
+                    let (raw_messages, raw_tools, req_temperature, req_max_tokens, req_tool_choice, req_output_schema, _req_additional_params) =
                         match serde_json::from_str::<LlmPromptRequest>(&messages_json) {
                             Ok(req) => (req.messages, req.tools, req.temperature, req.max_tokens, req.tool_choice, req.output_schema, req.additional_params),
                             Err(_) => {
@@ -1895,7 +1895,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                 ) {
                                     Ok(msgs) => (msgs, None, None, None, None, None, None),
                                     Err(e) => {
-                                        println!("llm_prompt: failed to parse messages JSON: {e}");
+                                        println!("llm_prompt: failed to parse messages JSON");
                                         let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
                                         let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                                         return pack_ptr_len(ptr, len);
@@ -1908,19 +1908,6 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         raw_messages.len(),
                         raw_tools.as_ref().map(|t| t.len()).unwrap_or(0)
                     );
-                    if let Some(ref tools) = raw_tools {
-                        for (i, t) in tools.iter().enumerate() {
-                            println!("llm_prompt: raw tool[{i}]: {}", t);
-                        }
-                    }
-                    for (i, m) in raw_messages.iter().enumerate() {
-                        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
-                        let content_preview = m.get("content")
-                            .and_then(|c| c.as_str())
-                            .map(|s| if s.len() > 200 { format!("{}...", &s[..200]) } else { s.to_string() })
-                            .unwrap_or_else(|| "<non-string>".to_string());
-                        println!("llm_prompt: msg[{i}] role={role} content={content_preview}");
-                    }
 
                     // Convert WASM SDK messages → native HistoryMessage
                     let mut history_messages = Vec::with_capacity(raw_messages.len());
@@ -2012,10 +1999,6 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             }),
                         ));
                     }
-                    // additional_params are provider-specific; log but don't lose them
-                    if let Some(ref params) = req_additional_params {
-                        println!("llm_prompt: additional_params: {params}");
-                    }
 
                     // Convert tool definitions if present
                     if let Some(tools) = raw_tools {
@@ -2030,8 +2013,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             };
                             let desc = t.get("description").and_then(|d| d.as_str()).map(String::from);
                             let params = t.get("parameters").cloned().unwrap_or_default();
-                            println!("llm_prompt: tool[{i}] '{name}' params: {params}");
-                            match serde_json::from_value::<flow_like_model_provider::history::HistoryFunctionParameters>(params.clone()) {
+                            match serde_json::from_value::<flow_like_model_provider::history::HistoryFunctionParameters>(params) {
                                 Ok(parsed) => {
                                     native_tools.push(flow_like_model_provider::history::Tool {
                                         tool_type: flow_like_model_provider::history::ToolType::Function,
@@ -2042,8 +2024,8 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                         },
                                     });
                                 }
-                                Err(e) => {
-                                    println!("llm_prompt: tool[{i}] '{name}' parameter deserialization FAILED: {e} — raw: {params}");
+                                Err(_) => {
+                                    println!("llm_prompt: tool[{i}] parameter deserialization failed");
                                 }
                             }
                         }
@@ -2066,21 +2048,13 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         {
                             Ok(m) => m,
                             Err(e) => {
-                                println!("llm_prompt: failed to build model: {e}");
+                                println!("llm_prompt: failed to build model");
                                 let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
                                 let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                                 return pack_ptr_len(ptr, len);
                             }
                         }
                     };
-
-                    // Log the full History before invoking
-                    if let Ok(history_json) = serde_json::to_string(&history) {
-                        println!("llm_prompt: History to invoke (len={}): {}",
-                            history_json.len(),
-                            if history_json.len() > 2000 { format!("{}...", &history_json[..2000]) } else { history_json }
-                        );
-                    }
 
                     let stream_events = should_stream.then(|| {
                         Arc::new(parking_lot::RwLock::new(Vec::<crate::host_functions::StreamEvent>::new()))
@@ -2108,7 +2082,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let response = match model.invoke(&history, callback).await {
                         Ok(r) => r,
                         Err(e) => {
-                            println!("llm_prompt: model invoke failed: {e}");
+                            println!("llm_prompt: model invoke failed");
                             let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);

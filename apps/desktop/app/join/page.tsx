@@ -58,7 +58,7 @@ export default function JoinPage() {
 			return;
 		}
 
-		console.error("Failed to join:", result.error);
+		console.error("Failed to join:", result.kind);
 		toast.error(joinFailureMessage(result.kind ?? "retry-exhausted"));
 		router.push("/");
 	}, [backend, appId, token, router]);

@@ -116,8 +116,8 @@ impl RSSSink {
             .collect::<Result<Vec<_>, _>>()?
         };
 
-        for (event_id, feed_url, _poll_interval, _last_checked, _last_guid) in feeds {
-            tracing::info!("Checking RSS feed: {} -> event {}", feed_url, event_id);
+        for (event_id, _feed_url, _poll_interval, _last_checked, _last_guid) in feeds {
+            tracing::info!("Checking RSS feed for event {}", event_id);
 
             // TODO: Fetch and parse RSS feed
             // TODO: Compare with last_item_guid
@@ -238,11 +238,7 @@ impl EventSink for RSSSink {
         db: DbConnection,
     ) -> Result<()> {
         Self::add_feed(&db, registration, self)?;
-        tracing::info!(
-            "Registered RSS feed: {} -> event {}",
-            self.feed_url,
-            registration.event_id
-        );
+        tracing::info!("Registered RSS feed for event {}", registration.event_id);
         Ok(())
     }
 

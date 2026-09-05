@@ -251,6 +251,8 @@ model Certificate {
 
   @@unique([userId, courseId])
   @@index([userId])
+
+  @@index([courseId])
 }
 
 model LeaderboardOptIn {

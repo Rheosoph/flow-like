@@ -49,10 +49,16 @@ function HashChip({ hash }: { hash?: string | null }) {
 function ChainPulse({
 	signed,
 	valid,
+	fullyAuthenticated,
+	firstBrokenAt,
+	unverifiableSignatures,
 	hasEntries,
 }: {
 	signed: boolean;
 	valid?: boolean | null;
+	fullyAuthenticated?: boolean | null;
+	firstBrokenAt?: number | null;
+	unverifiableSignatures?: number | null;
 	hasEntries: boolean;
 }) {
 	const { t } = useTranslation("admin");
@@ -65,14 +71,29 @@ function ChainPulse({
 		);
 	}
 	if (valid === false) {
+		if (firstBrokenAt == null && (unverifiableSignatures ?? 0) > 0) {
+			return (
+				<span
+					className="inline-flex h-2 w-2 rounded-full bg-amber-500"
+					title={t(
+						"verificationKeyUnavailable",
+						"Verification key unavailable",
+					)}
+				/>
+			);
+		}
 		return (
 			<span
 				className="inline-flex h-2 w-2 animate-pulse rounded-full bg-destructive shadow-[0_0_8px] shadow-destructive"
-				title={t("chainBroken", "chain broken")}
+				title={
+					firstBrokenAt != null
+						? t("chainBroken", "chain broken")
+						: t("verificationFailed", "Verification failed")
+				}
 			/>
 		);
 	}
-	if (valid === true && signed) {
+	if (valid === true && fullyAuthenticated === true) {
 		return (
 			<span
 				className="inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px] shadow-emerald-500/60"
@@ -122,23 +143,47 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 	let healthBadge: { tone: string; label: string; icon: React.ReactNode };
 	if (!data) {
 		healthBadge = { tone: "muted", label: "—", icon: <ShieldEllipsis /> };
+	} else if (root?.valid === false && root.first_broken_at != null) {
+		healthBadge = {
+			tone: "bad",
+			label: t("broken", "Broken"),
+			icon: <ShieldAlert className="h-4 w-4" />,
+		};
+	} else if (root?.valid === false && (root.unverifiable_signatures ?? 0) > 0) {
+		healthBadge = {
+			tone: "warn",
+			label: t("unverifiable", "Unverifiable"),
+			icon: <ShieldEllipsis className="h-4 w-4" />,
+		};
+	} else if (root?.valid === false) {
+		healthBadge = {
+			tone: "bad",
+			label: t("verificationFailed", "Verification failed"),
+			icon: <ShieldAlert className="h-4 w-4" />,
+		};
+	} else if (root?.valid == null && (root?.entries ?? 0) > 0) {
+		healthBadge = {
+			tone: "muted",
+			label: t("notChecked", "Not checked"),
+			icon: <ShieldEllipsis className="h-4 w-4" />,
+		};
 	} else if (!data.signing_configured) {
 		healthBadge = {
 			tone: "warn",
 			label: t("unsigned", "Unsigned"),
 			icon: <ShieldAlert className="h-4 w-4" />,
 		};
-	} else if (root?.valid === false) {
-		healthBadge = {
-			tone: "bad",
-			label: t("broken", "Broken"),
-			icon: <ShieldAlert className="h-4 w-4" />,
-		};
-	} else if (root?.valid === true) {
+	} else if (root?.valid === true && root.fully_authenticated === true) {
 		healthBadge = {
 			tone: "good",
 			label: t("verified", "Verified"),
 			icon: <ShieldCheck className="h-4 w-4" />,
+		};
+	} else if (root?.valid === true) {
+		healthBadge = {
+			tone: "warn",
+			label: t("hashesChecked", "Hashes checked"),
+			icon: <ShieldEllipsis className="h-4 w-4" />,
 		};
 	} else {
 		healthBadge = {
@@ -256,6 +301,9 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 							<ChainPulse
 								signed={Boolean(root?.signed)}
 								valid={root?.valid ?? null}
+								fullyAuthenticated={root?.fully_authenticated}
+								firstBrokenAt={root?.first_broken_at}
+								unverifiableSignatures={root?.unverifiable_signatures}
 								hasEntries={(root?.entries ?? 0) > 0}
 							/>
 							{root?.last_entry_at ? (
@@ -326,6 +374,9 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 									<ChainPulse
 										signed={b.signed}
 										valid={b.valid ?? null}
+										fullyAuthenticated={b.fully_authenticated}
+										firstBrokenAt={b.first_broken_at}
+										unverifiableSignatures={b.unverifiable_signatures}
 										hasEntries={b.entries > 0}
 									/>
 									<span className="truncate text-xs font-medium">

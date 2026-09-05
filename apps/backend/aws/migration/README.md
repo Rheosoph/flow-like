@@ -71,7 +71,10 @@ job applies each statement itself and keeps Prisma's bookkeeping:
 
 Required (same contract as `packages/aws-data/src/dsql.rs`):
 
-- `DSQL_CLUSTER_ENDPOINT`: the bare cluster endpoint `<id>.dsql.<region>.on.aws`
+- `DSQL_CLUSTER_ENDPOINT`: a bare public endpoint `<id>.dsql.<region>.on.aws`
+  or PrivateLink connection endpoint `<id>.dsql-<service-id>.<region>.on.aws`.
+  Use the private endpoint from inside the managed VPC when the cluster blocks
+  public access; running a task in that VPC does not redirect the public hostname.
 
 Optional:
 
@@ -98,7 +101,9 @@ Forbidden (the job refuses to start when any is present, even empty):
 `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGOPTIONS`.
 
 IAM for the task role: `dsql:DbConnectAdmin` on the cluster ARN. The runtime
-role needs only `dsql:DbConnect`.
+role needs only `dsql:DbConnect`. When the API and file tracker use separate
+IAM roles, run this job once with each `DSQL_RUNTIME_ROLE_ARN` and the same
+`DSQL_RUNTIME_DB_ROLE`; subsequent runs preserve the applied migrations.
 
 Exit codes: `2` environment refused, `3` lease held by another run, `1` any
 failure (token, statement, async job, invalid index, grant, status check,

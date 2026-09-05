@@ -18,6 +18,23 @@ const EVENT_PREFIX: &str = "exec:event:";
 const RUN_BY_APP_PREFIX: &str = "exec:app:runs:";
 const EVENTS_BY_RUN_PREFIX: &str = "exec:run:events:";
 const DEFAULT_TTL_SECS: i64 = 86400; // 24 hours
+const CANCEL_RUN_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then return {0, ''} end
+local run = cjson.decode(raw)
+if run.app_id ~= ARGV[1] then return {-1, ''} end
+local terminal = run.status == 'COMPLETED' or run.status == 'FAILED' or run.status == 'CANCELLED' or run.status == 'TIMEOUT'
+redis.call('DEL', KEYS[2])
+if terminal then return {2, raw} end
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+run.status = 'CANCELLED'
+run.completed_at = now
+run.updated_at = math.max(now, run.updated_at + 1)
+local result = cjson.encode(run)
+redis.call('SET', KEYS[1], result, 'KEEPTTL')
+return {1, result}
+"#;
 const UPDATE_MUTABLE_RUN_SCRIPT: &str = r#"
 local current = redis.call('GET', KEYS[1])
 if not current then
@@ -27,8 +44,53 @@ local status = cjson.decode(current)['status']
 if status == 'COMPLETED' or status == 'FAILED' or status == 'CANCELLED' or status == 'TIMEOUT' then
     return {2, current}
 end
+if redis.call('EXISTS', KEYS[2]) == 1 then return {3, ''} end
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
 return {1, ARGV[1]}
+"#;
+// Run and ownership metadata are changed by one Redis operation. Redis time
+// supplies the clock for both expiry and renewal across API replicas.
+const RUN_LEASE_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then return {0, '', 0} end
+local run = cjson.decode(raw)
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+if run.app_id ~= ARGV[2] then return {-1, '', 0} end
+if run.expires_at and run.expires_at ~= cjson.null and tonumber(run.expires_at) <= now then return {0, '', 0} end
+local lease_raw = redis.call('GET', KEYS[2])
+local lease = lease_raw and cjson.decode(lease_raw) or nil
+if lease and lease.job_id ~= ARGV[3] then return {-1, '', 0} end
+local terminal = run.status == 'COMPLETED' or run.status == 'FAILED' or run.status == 'CANCELLED' or run.status == 'TIMEOUT'
+if ARGV[1] == 'claim' and terminal then return {3, raw, 0} end
+local owned = lease and lease.token == ARGV[4] and lease.expires_at > now
+if ARGV[1] == 'claim' then
+    if lease and lease.token ~= ARGV[4] and lease.expires_at > now then return {2, raw, lease.expires_at} end
+    local expires = now + tonumber(ARGV[5])
+    local ttl = redis.call('PTTL', KEYS[1])
+    if ttl <= 0 then return {0, '', 0} end
+    redis.call('SET', KEYS[2], cjson.encode({job_id=ARGV[3], token=ARGV[4], expires_at=expires}), 'PX', ttl)
+    run.status = 'RUNNING'
+    if not run.started_at or run.started_at == cjson.null then run.started_at = now end
+    run.updated_at = math.max(now, run.updated_at + 1)
+    local result = cjson.encode(run)
+    redis.call('SET', KEYS[1], result, 'KEEPTTL')
+    return {1, result, expires}
+end
+if not owned then return {-1, '', 0} end
+if ARGV[1] == 'validate' then
+    if terminal then return {-1, '', 0} end
+    return {1, raw, lease.expires_at}
+end
+if terminal then return {3, raw, 0} end
+local update = cjson.decode(ARGV[5])
+for key, value in pairs(update) do
+    if value ~= cjson.null then run[key] = value end
+end
+run.updated_at = math.max(now, run.updated_at + 1)
+local result = cjson.encode(run)
+redis.call('SET', KEYS[1], result, 'KEEPTTL')
+return {1, result, lease.expires_at}
 "#;
 const CREATE_EVENT_SCRIPT: &str = r#"
 local created = redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
@@ -76,6 +138,36 @@ impl RedisStateStore {
         let url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
         Self::new_with_source(&url, source_db).await
+    }
+
+    async fn lease_operation(
+        &self,
+        operation: &str,
+        run_id: &str,
+        app_id: &str,
+        job_id: &str,
+        token: &str,
+        argument: String,
+    ) -> Result<(i32, String, i64), StateStoreError> {
+        let mut conn = self.conn.lock().await;
+        let result: (i32, String, i64) = Script::new(RUN_LEASE_SCRIPT)
+            .key(Self::run_key(run_id))
+            .key(format!("exec:lease:{run_id}"))
+            .arg(operation)
+            .arg(app_id)
+            .arg(job_id)
+            .arg(token)
+            .arg(argument)
+            .invoke_async(&mut *conn)
+            .await
+            .map_err(|error: redis::RedisError| StateStoreError::Database(error.to_string()))?;
+        match result.0 {
+            0 => Err(StateStoreError::NotFound),
+            -1 => Err(StateStoreError::LeaseConflict(
+                "run ownership does not match or expired".into(),
+            )),
+            _ => Ok(result),
+        }
     }
 
     fn run_key(id: &str) -> String {
@@ -301,6 +393,7 @@ impl ExecutionStateStore for RedisStateStore {
         let mut conn = self.conn.lock().await;
         let (outcome, persisted): (i32, String) = Script::new(UPDATE_MUTABLE_RUN_SCRIPT)
             .key(&key)
+            .key(format!("exec:lease:{run_id}"))
             .arg(&json)
             .arg(ttl)
             .invoke_async(&mut *conn)
@@ -309,10 +402,124 @@ impl ExecutionStateStore for RedisStateStore {
 
         match outcome {
             1 => Ok(record),
+            3 => Err(StateStoreError::LeaseConflict(
+                "run requires its execution lease".into(),
+            )),
             2 => serde_json::from_str(&persisted)
                 .map_err(|error| StateStoreError::Serialization(error.to_string())),
             _ => Err(StateStoreError::NotFound),
         }
+    }
+
+    async fn cancel_run_after_termination(
+        &self,
+        run_id: &str,
+        app_id: &str,
+    ) -> Result<ExecutionRunRecord, StateStoreError> {
+        self.get_run_for_app(run_id, app_id)
+            .await?
+            .ok_or(StateStoreError::NotFound)?;
+        let mut conn = self.conn.lock().await;
+        let (outcome, raw): (i32, String) = Script::new(CANCEL_RUN_SCRIPT)
+            .key(Self::run_key(run_id))
+            .key(format!("exec:lease:{run_id}"))
+            .arg(app_id)
+            .invoke_async(&mut *conn)
+            .await
+            .map_err(|error| StateStoreError::Database(error.to_string()))?;
+        if outcome <= 0 {
+            return Err(StateStoreError::NotFound);
+        }
+        serde_json::from_str(&raw)
+            .map_err(|error| StateStoreError::Serialization(error.to_string()))
+    }
+
+    async fn claim_run_lease(
+        &self,
+        run_id: &str,
+        app_id: &str,
+        job_id: &str,
+        lease_token: &str,
+        lease_duration_ms: i64,
+    ) -> Result<RunLeaseClaim, StateStoreError> {
+        if job_id.is_empty()
+            || lease_token.is_empty()
+            || !(1..=900_000).contains(&lease_duration_ms)
+        {
+            return Err(StateStoreError::LeaseConflict("invalid lease claim".into()));
+        }
+        self.get_run_for_app(run_id, app_id)
+            .await?
+            .ok_or(StateStoreError::NotFound)?;
+        let (outcome, raw, expires_at) = self
+            .lease_operation(
+                "claim",
+                run_id,
+                app_id,
+                job_id,
+                lease_token,
+                lease_duration_ms.to_string(),
+            )
+            .await?;
+        let run = serde_json::from_str(&raw)
+            .map_err(|error| StateStoreError::Serialization(error.to_string()))?;
+        match outcome {
+            1 => Ok(RunLeaseClaim::Acquired { run, expires_at }),
+            2 => Ok(RunLeaseClaim::Busy { run, expires_at }),
+            _ => Ok(RunLeaseClaim::Terminal { run }),
+        }
+    }
+
+    async fn update_run_with_lease(
+        &self,
+        run_id: &str,
+        app_id: &str,
+        job_id: &str,
+        lease_token: &str,
+        input: UpdateRunInput,
+    ) -> Result<ExecutionRunRecord, StateStoreError> {
+        if !input.status.as_ref().is_some_and(RunStatus::is_terminal) {
+            return Err(StateStoreError::LeaseConflict(
+                "lease update must be terminal".into(),
+            ));
+        }
+        let update = serde_json::json!({
+            "status": input.status, "progress": input.progress,
+            "current_step": input.current_step, "output_payload_len": input.output_payload_len,
+            "error_message": input.error_message, "started_at": input.started_at,
+            "completed_at": input.completed_at,
+        });
+        let (_, raw, _) = self
+            .lease_operation(
+                "finish",
+                run_id,
+                app_id,
+                job_id,
+                lease_token,
+                update.to_string(),
+            )
+            .await?;
+        serde_json::from_str(&raw)
+            .map_err(|error| StateStoreError::Serialization(error.to_string()))
+    }
+
+    async fn validate_run_lease(
+        &self,
+        run_id: &str,
+        app_id: &str,
+        job_id: &str,
+        lease_token: &str,
+    ) -> Result<(), StateStoreError> {
+        self.lease_operation(
+            "validate",
+            run_id,
+            app_id,
+            job_id,
+            lease_token,
+            String::new(),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn list_runs_for_app(

@@ -7,8 +7,9 @@ use flow_like_storage::{
     Path, blake3,
     object_store::{ObjectStore, PutPayload},
 };
-use flow_like_types::anyhow;
-use flow_like_types::{Bytes, bail, rand::TryRngCore, tokio::task};
+use flow_like_types::{
+    Bytes, anyhow, bail, rand::TryRngCore, tokio::task, utils::constant_time_eq,
+};
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -768,12 +769,8 @@ impl App {
                     &prio_ct,
                     &secondary_ct,
                 );
-                if expected != binding_tag {
-                    bail!(
-                        "Archive authentication failed (binding tag mismatch), {:?}, {:?}",
-                        expected,
-                        binding_tag
-                    );
+                if !constant_time_eq(&expected, &binding_tag) {
+                    bail!("Archive authentication failed (binding tag mismatch)");
                 }
                 // Decrypt manifest only (cheap)
                 let manifest_zip_bytes = task::spawn_blocking({
@@ -1454,6 +1451,20 @@ mod tests {
                 .await
                 .expect("blob bytes");
             assert_eq!(blob_bytes, Bytes::from_static(b"storage data"));
+
+            let (wrong_password_state, _, _) = setup_state();
+            let error = App::import_archive(
+                wrong_password_state,
+                exported_path,
+                Some("wrong-password".to_string()),
+            )
+            .await
+            .err()
+            .expect("wrong password should fail archive authentication");
+            assert_eq!(
+                error.to_string(),
+                "Archive authentication failed (binding tag mismatch)"
+            );
         });
     }
 }

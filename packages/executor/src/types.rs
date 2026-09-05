@@ -15,6 +15,9 @@ pub type BoardVersion = (u32, u32, u32);
 /// The API is responsible for resolving events to board_id + board_version before dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRequest {
+    /// Computed from the wire payload before typed conversion; never accepted from JSON.
+    #[serde(skip)]
+    pub(crate) dispatch_hash: Option<String>,
     /// Broker job identifier. Queue runtimes bind their ownership lease to
     /// this value; direct runtimes may leave it empty.
     #[serde(default)]
@@ -175,6 +178,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
     type Error = flow_like_types::Error;
 
     fn try_from(p: DispatchPayload) -> Result<Self, Self::Error> {
+        let dispatch_hash = flow_like_types::dispatch::dispatch_payload_hash(&p)?;
         let credentials: SharedCredentials = serde_json::from_value(p.credentials)?;
         let runtime_variables = p
             .runtime_variables
@@ -199,6 +203,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
         })?;
 
         Ok(Self {
+            dispatch_hash: Some(dispatch_hash),
             job_id: p.job_id,
             credentials,
             app_id: p.app_id,

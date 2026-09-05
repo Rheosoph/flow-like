@@ -318,7 +318,7 @@ function PageInterfaceInner({
 	// Comprehensive A2UI message handler for page events
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
-			console.log("[PageInterface] A2UI message:", message.type, message);
+			console.log("[PageInterface] A2UI message", { type: message.type });
 
 			if (handleWidgetQueryMessage(message)) {
 				return;
@@ -395,11 +395,10 @@ function PageInterfaceInner({
 					queryParams?: Record<string, string>;
 					dialogId?: string;
 				};
-				console.log("[PageInterface] openDialog message received:", {
-					route,
-					title,
-					queryParams,
-					dialogId,
+				console.log("[PageInterface] openDialog message received", {
+					hasTitle: Boolean(title),
+					queryParamKeys: Object.keys(queryParams ?? {}),
+					hasDialogId: Boolean(dialogId),
 				});
 				openDialog(route, title, queryParams, dialogId);
 				return;
@@ -408,8 +407,8 @@ function PageInterfaceInner({
 			// Handle close dialog
 			if (message.type === "closeDialog") {
 				const { dialogId } = message as { dialogId?: string };
-				console.log("[PageInterface] closeDialog message received:", {
-					dialogId,
+				console.log("[PageInterface] closeDialog message received", {
+					hasDialogId: Boolean(dialogId),
 				});
 				closeDialog(dialogId);
 				return;
@@ -522,11 +521,8 @@ function PageInterfaceInner({
 						manifestRevision: pageExecutionRevision,
 					},
 				);
-			} catch (e) {
-				console.error(
-					`[PageInterface] Failed to execute ${eventName} event:`,
-					e,
-				);
+			} catch {
+				console.error(`[PageInterface] Failed to execute ${eventName} event`);
 			}
 		},
 		[

@@ -43,6 +43,7 @@ pub use super::execution_run::Entity as ExecutionRun;
 pub use super::execution_run_caller_app::Entity as ExecutionRunCallerApp;
 pub use super::execution_usage_tracking::Entity as ExecutionUsageTracking;
 pub use super::feedback::Entity as Feedback;
+pub use super::file_accounting_object::Entity as FileAccountingObject;
 pub use super::flow_script_apply_failure::Entity as FlowScriptApplyFailure;
 pub use super::fork_job::Entity as ForkJob;
 pub use super::invitation::Entity as Invitation;

@@ -780,7 +780,7 @@
 			"type": "object",
 			"properties": {
 				"enabled": {
-					"description": "Master switch — when false, no audit entries are recorded",
+					"description": "Master switch. When false, no audit entries are recorded.",
 					"type": "boolean",
 					"default": true
 				},
@@ -790,7 +790,7 @@
 					"default": false
 				},
 				"ip_retention_days": {
-					"description": "Auto-null stored IPs after this many days. None = retain indefinitely.",
+					"description": "Reserved retention setting. Stored IPs in signed entries are immutable;\nthis setting does not currently erase them automatically.",
 					"type": ["integer", "null"],
 					"format": "uint32",
 					"minimum": 0

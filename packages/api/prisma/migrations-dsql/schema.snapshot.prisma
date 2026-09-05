@@ -164,6 +164,8 @@ model Invitation {
 
   @@unique([userId, appId])
   @@index([userId, createdAt])
+  @@index([appId])
+  @@index([byMemberId])
 }
 
 model AppConnection {
@@ -191,6 +193,7 @@ model AppConnection {
   @@unique([sourceAppId, targetAppId])
   @@index([targetAppId, status])
   @@index([sourceAppId, status])
+  @@index([roleId])
 }
 
 /// Free-form documentation app owners/admins attach to their app for the
@@ -233,6 +236,7 @@ model Membership {
 
   @@unique([userId, appId])
   @@index([appId, roleId])
+  @@index([roleId])
 }
 
 model Role {
@@ -256,6 +260,8 @@ model Role {
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([appId])
 }
 
 model Notification {
@@ -583,6 +589,7 @@ model TechnicalUser {
   @@index([appId])
   @@index([creatorUserId])
   @@index([creatorMembershipId])
+  @@index([roleId])
 }
 
 model Feedback {
@@ -609,6 +616,7 @@ model Feedback {
   @@index([appId])
   @@index([createdAt])
   @@index([userId])
+  @@index([templateId])
 }
 
 model Comment {
@@ -637,6 +645,7 @@ model Comment {
   @@index([appId])
   @@index([packageId])
   @@index([userId])
+  @@index([templateId])
 }
 
 model Template {
@@ -941,6 +950,7 @@ model EventRemoteAuth {
 
   @@index([appId, eventId, eventVersion, variant])
   @@index([appId, eventId, eventVersion, variant, nodeId, kind])
+  @@index([eventId])
 }
 
 /// Registration row written by the setup-collector for every route, file,
@@ -996,6 +1006,8 @@ model EventRemoteRegistration {
   @@index([appId, eventId, eventVersion, variant, kind])
   // Avoid a 63-character CockroachDB name collision with the index above.
   @@index([appId, eventId, eventVersion, variant, kind, method, path], map: "EventRemoteRegistration_route_lookup_idx")
+  @@index([eventId])
+  @@index([authId])
 }
 
 /// Vanity slug -> event mapping. Slug is the global URL key; uniqueness
@@ -1158,6 +1170,7 @@ model AppPurchase {
   @@index([appId, status])
   @@index([appId, completedAt])
   @@index([stripeSessionId])
+  @@index([discountId])
 }
 
 /// Discount codes for apps
@@ -1394,6 +1407,24 @@ model ErrorReport {
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
+// ---- file-accounting.prisma
+/// The AWS file tracker commits an object's accounted size together with app and user totals.
+/// Deleted objects retain a zero-size row so replayed S3 events cannot count them again.
+/// No foreign keys: late storage events can arrive after an app or user has been removed.
+model FileAccountingObject {
+  id        String   @id
+  bucket    String
+  objectKey String
+  appId     String
+  userId    String?
+  size      BigInt
+  sequencer String
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([appId])
+  @@index([userId])
+}
+
 // ---- flowscript.prisma
 /// A FlowScript apply that failed, was blocked, or applied with warnings, captured with the
 /// source that produced it so the team can see what users expected the editor to do.
@@ -1510,6 +1541,7 @@ model PublicationLog {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([requestId])
+  @@index([authorId])
 }
 
 // ---- hub.prisma
@@ -1590,6 +1622,7 @@ model BitCache {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([dependencyTreeHash])
+  @@index([bitId])
 }
 
 model BitTreeCache {
@@ -1937,6 +1970,7 @@ model Certificate {
 
   @@unique([userId, courseId])
   @@index([userId])
+  @@index([courseId])
 }
 
 model LeaderboardOptIn {
@@ -3130,6 +3164,7 @@ model ExecutionRun {
   @@index([parentRunId])
   @@index([traceId])
   @@index([eventId, runVariant, createdAt])
+  @@index([technicalUserId])
 }
 
 /// One row per app in `ExecutionRun.callerAppChain` (`position` = index in the chain).
@@ -3331,6 +3366,7 @@ model WasmPackageInvitation {
   @@unique([packageId, inviteeId])
   @@index([packageId])
   @@index([inviteeId])
+  @@index([invitedById])
 }
 
 /// Authors / contributors of a WASM package

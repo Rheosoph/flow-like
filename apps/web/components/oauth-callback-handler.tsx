@@ -92,17 +92,15 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 	} = payload;
 
 	console.log("[Web OAuth] Callback received:", {
-		url,
-		code,
-		state,
-		id_token: !!id_token,
-		access_token: !!access_token,
+		hasAuthorizationCode: !!code,
+		hasIdToken: !!id_token,
+		hasAccessToken: !!access_token,
 		error,
 	});
 
 	if (error) {
 		const errorMsg = error_description || error;
-		console.error("[Web OAuth] Error:", errorMsg);
+		console.error("[Web OAuth] Callback error:", error);
 		toast.error(`Authorization failed: ${errorMsg}`);
 		return false;
 	}
@@ -126,7 +124,7 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 		const pending = await oauthTokenStore.getPendingAuth(state);
 
 		if (!pending) {
-			console.error("[Web OAuth] No pending auth found for state:", state);
+			console.error("[Web OAuth] No pending auth found for callback state");
 			toast.error("Authorization session expired or invalid");
 			return false;
 		}
@@ -173,7 +171,7 @@ async function processCallback(payload: IOAuthCallbackData): Promise<boolean> {
 
 		return true;
 	} catch (e) {
-		console.error("[Web OAuth] Failed to handle callback:", e);
+		console.error("[Web OAuth] Failed to handle callback");
 		toast.error(
 			i18next.t("authorizationFailedVal", "Authorization failed: {{val}}", {
 				val: e instanceof Error ? e.message : "Unknown error",
@@ -242,7 +240,7 @@ export function OAuthCallbackHandler({
 			const payload = customEvent.detail;
 			if (!payload) return;
 
-			console.log("[Web OAuth] Event received:", payload);
+			console.log("[Web OAuth] Event received");
 			processCallbackOnce(payload);
 		};
 

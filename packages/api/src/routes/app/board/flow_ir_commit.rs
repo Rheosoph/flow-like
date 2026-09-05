@@ -15,7 +15,7 @@ use flow_like::flow::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -1151,6 +1151,20 @@ pub async fn apply_flow_ir_commit(
             )));
         }
     };
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "board.flow_ir.commit",
+        "Board",
+        board_id,
+        "Applied a compiled workflow commit",
+        serde_json::json!({
+            "command_count": result.commands.len(),
+            "approved_destructive": params.approve_destructive,
+        })
+    );
 
     if let Some(store) = store
         && !store.acknowledge_applied_commit(

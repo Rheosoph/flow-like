@@ -1,6 +1,7 @@
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like_types::json::{self, json};
+use flow_like_types::utils::constant_time_eq;
 use flow_like_types::{Value, anyhow};
 use hmac::{Hmac, Mac};
 use jsonwebtoken::jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse};
@@ -93,7 +94,7 @@ pub(crate) fn authorize_client(
         RestAuthConfig::None => Ok(client_metadata(request, protocol, None)),
         RestAuthConfig::ApiKey { header, key } => {
             let actual = request.headers.get(&header.to_lowercase());
-            if actual == Some(key) {
+            if actual.is_some_and(|actual| constant_time_eq(actual.as_bytes(), key.as_bytes())) {
                 Ok(client_metadata(request, protocol, None))
             } else {
                 Err(HttpResponse::text(401, "Unauthorized"))
@@ -102,7 +103,8 @@ pub(crate) fn authorize_client(
         RestAuthConfig::BearerToken { token } => {
             let expected = format!("Bearer {}", token);
             let actual = request.headers.get("authorization");
-            if actual == Some(&expected) {
+            if actual.is_some_and(|actual| constant_time_eq(actual.as_bytes(), expected.as_bytes()))
+            {
                 Ok(client_metadata(request, protocol, None))
             } else {
                 Err(HttpResponse::text(401, "Unauthorized"))
@@ -111,7 +113,8 @@ pub(crate) fn authorize_client(
         RestAuthConfig::BasicAuth { username, password } => {
             let expected = basic_auth_header(username, password);
             let actual = request.headers.get("authorization");
-            if actual == Some(&expected) {
+            if actual.is_some_and(|actual| constant_time_eq(actual.as_bytes(), expected.as_bytes()))
+            {
                 Ok(client_metadata(request, protocol, None))
             } else {
                 Err(HttpResponse::text(401, "Unauthorized"))
@@ -628,25 +631,83 @@ mod tests {
     }
 
     #[test]
-    fn basic_auth_accepts_expected_credentials() {
+    fn api_key_auth_accepts_valid_and_rejects_invalid_or_missing_credentials() {
+        let auth = RestAuthConfig::ApiKey {
+            header: "X-Flow-Key".to_string(),
+            key: "runtime-secret".to_string(),
+        };
+
+        let mut valid = test_request("GET", "/secure", Vec::new());
+        valid
+            .headers
+            .insert("x-flow-key".to_string(), "runtime-secret".to_string());
+        assert!(authorize_client(&auth, None, &valid, "rest").is_ok());
+
+        let mut invalid = test_request("GET", "/secure", Vec::new());
+        invalid
+            .headers
+            .insert("x-flow-key".to_string(), "runtime-secrex".to_string());
+        assert_unauthorized(authorize_client(&auth, None, &invalid, "rest"));
+
+        let missing = test_request("GET", "/secure", Vec::new());
+        assert_unauthorized(authorize_client(&auth, None, &missing, "rest"));
+    }
+
+    #[test]
+    fn bearer_auth_accepts_valid_and_rejects_invalid_or_missing_credentials() {
+        let auth = RestAuthConfig::BearerToken {
+            token: "runtime-secret".to_string(),
+        };
+
+        let mut valid = test_request("GET", "/secure", Vec::new());
+        valid.headers.insert(
+            "authorization".to_string(),
+            "Bearer runtime-secret".to_string(),
+        );
+        assert!(authorize_client(&auth, None, &valid, "rest").is_ok());
+
+        let mut invalid = test_request("GET", "/secure", Vec::new());
+        invalid.headers.insert(
+            "authorization".to_string(),
+            "Bearer runtime-secrex".to_string(),
+        );
+        assert_unauthorized(authorize_client(&auth, None, &invalid, "rest"));
+
+        let missing = test_request("GET", "/secure", Vec::new());
+        assert_unauthorized(authorize_client(&auth, None, &missing, "rest"));
+
+        let mut lowercase_scheme = test_request("GET", "/secure", Vec::new());
+        lowercase_scheme.headers.insert(
+            "authorization".to_string(),
+            "bearer runtime-secret".to_string(),
+        );
+        assert_unauthorized(authorize_client(&auth, None, &lowercase_scheme, "rest"));
+    }
+
+    #[test]
+    fn basic_auth_accepts_valid_and_rejects_invalid_or_missing_credentials() {
+        let auth = RestAuthConfig::BasicAuth {
+            username: "flow".to_string(),
+            password: "secret".to_string(),
+        };
+
         let mut request = test_request("GET", "/secure", Vec::new());
         request.headers.insert(
             "authorization".to_string(),
             basic_auth_header("flow", "secret"),
         );
-
-        let client = authorize_client(
-            &RestAuthConfig::BasicAuth {
-                username: "flow".to_string(),
-                password: "secret".to_string(),
-            },
-            None,
-            &request,
-            "rest",
-        )
-        .unwrap();
+        let client = authorize_client(&auth, None, &request, "rest").unwrap();
 
         assert_eq!(client["protocol"], "rest");
+
+        request.headers.insert(
+            "authorization".to_string(),
+            basic_auth_header("flow", "secrex"),
+        );
+        assert_unauthorized(authorize_client(&auth, None, &request, "rest"));
+
+        request.headers.remove("authorization");
+        assert_unauthorized(authorize_client(&auth, None, &request, "rest"));
     }
 
     #[test]
@@ -722,5 +783,10 @@ mod tests {
             body,
             remote_addr: "127.0.0.1:1234".to_string(),
         }
+    }
+
+    fn assert_unauthorized(result: Result<Value, HttpResponse>) {
+        let response = result.expect_err("authorization should fail");
+        assert_eq!(response.status_code, 401);
     }
 }

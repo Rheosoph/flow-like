@@ -45,6 +45,7 @@ pub mod execution_run;
 pub mod execution_run_caller_app;
 pub mod execution_usage_tracking;
 pub mod feedback;
+pub mod file_accounting_object;
 pub mod flow_script_apply_failure;
 pub mod fork_job;
 pub mod invitation;

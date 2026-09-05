@@ -43,8 +43,10 @@ export const FORBIDDEN_SETTINGS = [
 	"PGOPTIONS",
 ] as const;
 
+// Public endpoints use dsql; PrivateLink connection endpoints use the
+// cluster-specific service identifier, for example dsql-fnh4.
 export const ENDPOINT_PATTERN =
-	/^([a-z0-9]{1,63})\.dsql\.([a-z]{2}(?:-[a-z]+)+-\d)\.on\.aws$/;
+	/^([a-z0-9]{1,63})\.dsql(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.([a-z]{2}(?:-[a-z]+)+-\d)\.on\.aws$/;
 
 export type Environment = Record<string, string | undefined>;
 
@@ -108,10 +110,10 @@ export function parseDsqlTarget(env: Environment): DsqlTarget {
 	const read = envReader(env);
 	const endpoint = read.required(ENDPOINT_ENV);
 	const match = endpoint.match(ENDPOINT_PATTERN);
-	if (!match) {
+	if (!match || endpoint.split(".").some((label) => label.length > 63)) {
 		invalid(
 			ENDPOINT_ENV,
-			"must be the bare cluster endpoint <id>.dsql.<region>.on.aws (no scheme, port, or path)",
+			"must be a bare public <id>.dsql.<region>.on.aws or PrivateLink <id>.dsql-<service-id>.<region>.on.aws endpoint (no scheme, port, or path)",
 		);
 	}
 	const derivedRegion = match[2] as string;

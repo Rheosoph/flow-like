@@ -159,12 +159,13 @@ impl DeeplinkSink {
 
         drop(conn);
 
+        let parameter_count = query_params.as_object().map_or(0, serde_json::Map::len);
         tracing::info!(
-            "Triggering deeplink event '{}' for app '{}' route '{}' with params: {:?}",
-            event_id,
-            app_id,
-            route,
-            query_params
+            event_id = %event_id,
+            app_id = %app_id,
+            route = %route,
+            parameter_count,
+            "Triggering deeplink event"
         );
 
         let payload = match query_params {

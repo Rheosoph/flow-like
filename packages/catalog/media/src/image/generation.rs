@@ -672,13 +672,20 @@ async fn read_error_response(response: reqwest::Response) -> flow_like_types::Re
 }
 
 async fn download_url(client: &reqwest::Client, url: &str) -> flow_like_types::Result<Vec<u8>> {
-    let response = client.get(url).send().await?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        bail!("Image provider download failed with status {status}: {body}");
+        bail!("Image provider download failed with status {status}");
     }
-    Ok(response.bytes().await?.to_vec())
+    Ok(response
+        .bytes()
+        .await
+        .map_err(reqwest::Error::without_url)?
+        .to_vec())
 }
 
 async fn download_generated_url(
@@ -686,11 +693,14 @@ async fn download_generated_url(
     url: &str,
     metadata: Value,
 ) -> flow_like_types::Result<GeneratedImage> {
-    let response = client.get(url).send().await?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        bail!("Image provider download failed with status {status}: {body}");
+        bail!("Image provider download failed with status {status}");
     }
 
     let mime_type = response
@@ -701,13 +711,124 @@ async fn download_generated_url(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let bytes = response.bytes().await?.to_vec();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(reqwest::Error::without_url)?
+        .to_vec();
 
     Ok(GeneratedImage {
         bytes,
         mime_type,
         provider_metadata: metadata,
     })
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn serve_downloads(response: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 2048];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        (
+            format!("http://{address}/image?token=download-secret"),
+            server,
+        )
+    }
+
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+    }
+
+    async fn download_errors(url: &str) -> [flow_like_types::Error; 2] {
+        let client = test_client();
+        [
+            download_url(&client, url).await.unwrap_err(),
+            download_generated_url(&client, url, json!({}))
+                .await
+                .unwrap_err(),
+        ]
+    }
+
+    fn assert_redacted(error: &flow_like_types::Error) {
+        let diagnostic = format!("{error:?}");
+        assert!(!diagnostic.contains("download-secret"));
+        assert!(!diagnostic.contains("body-secret"));
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            assert!(error.url().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn download_request_errors_omit_signed_urls() {
+        for error in download_errors("ftp://example.com/image?token=download-secret").await {
+            assert_redacted(&error);
+            assert!(error.downcast_ref::<reqwest::Error>().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn download_status_errors_omit_response_bodies() {
+        let (url, server) = serve_downloads(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 11\r\nConnection: close\r\n\r\nbody-secret",
+        )
+        .await;
+        for error in download_errors(&url).await {
+            assert_redacted(&error);
+            assert_eq!(
+                error.to_string(),
+                "Image provider download failed with status 403 Forbidden"
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_body_errors_omit_signed_urls() {
+        let (url, server) = serve_downloads(
+            "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nbody-secret",
+        )
+        .await;
+        for error in download_errors(&url).await {
+            assert_redacted(&error);
+            assert!(error.downcast_ref::<reqwest::Error>().is_some());
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_downloads_preserve_bytes_and_metadata() {
+        let (url, server) = serve_downloads(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: image/png; charset=binary\r\nConnection: close\r\n\r\nimage",
+        )
+        .await;
+        let client = test_client();
+        assert_eq!(download_url(&client, &url).await.unwrap(), b"image");
+        let metadata = json!({"id": "image-1"});
+        let image = download_generated_url(&client, &url, metadata.clone())
+            .await
+            .unwrap();
+        assert_eq!(image.bytes, b"image");
+        assert_eq!(image.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(image.provider_metadata, metadata);
+        server.await.unwrap();
+    }
 }
 
 async fn image_from_url_or_data(

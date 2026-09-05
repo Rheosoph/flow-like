@@ -50,8 +50,6 @@ pub async fn join_invite_link(
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
     ensure_user_exists(&state, &sub).await?;
-    // Tokens are credentials: never log or audit them in full.
-    let token_hint: String = token.chars().take(8).collect();
 
     let max_prototype = state.platform_config.max_users_prototype.unwrap_or(-1);
 
@@ -76,7 +74,6 @@ pub async fn join_invite_link(
         .transaction(|txn| {
             let app_id = app_id.clone();
             let token = token.clone();
-            let token_hint = token_hint.clone();
             let sub = sub.clone();
             let membership_id = membership_id.clone();
             Box::pin(async move {
@@ -88,10 +85,9 @@ pub async fn join_invite_link(
                     .await?
                     .ok_or_else(|| {
                         tracing::warn!(
-                            "User {} attempted to join app {} with invalid invite token {}…",
+                            "User {} attempted to join app {} with an invalid invite token",
                             sub,
-                            app_id,
-                            token_hint
+                            app_id
                         );
                         ApiError::NOT_FOUND
                     })?;

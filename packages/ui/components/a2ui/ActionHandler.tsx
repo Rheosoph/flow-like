@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
 import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
-import { type IBoard, IExecutionMode } from "../../lib/schema/flow/board";
+import { IExecutionMode } from "../../lib/schema/flow/board";
 import {
 	type BoardVersion,
 	resolveEventBoardVersion,
@@ -103,64 +103,6 @@ function isSafeStateKey(key: unknown): key is string {
 
 /** Stable empty state for provider-less consumers, so hook deps stay steady. */
 const EMPTY_STATE: Record<string, unknown> = Object.freeze({});
-
-function decodePinDefaultValue(defaultValue: unknown): unknown {
-	if (!Array.isArray(defaultValue) || defaultValue.length === 0) {
-		return undefined;
-	}
-
-	try {
-		const jsonString = new TextDecoder("utf-8").decode(
-			new Uint8Array(defaultValue),
-		);
-		return JSON.parse(jsonString);
-	} catch {
-		return undefined;
-	}
-}
-
-function summarizeBoardElementRefs(board: IBoard) {
-	const refs: Array<{
-		nodeId: string;
-		nodeName: string;
-		pinId: string;
-		pinName: string;
-		defaultValue: unknown;
-	}> = [];
-
-	const collectNodeRefs = (node: Record<string, unknown>) => {
-		const pins = (node.pins as Record<string, Record<string, unknown>>) ?? {};
-		for (const pin of Object.values(pins)) {
-			const pinName = pin.name;
-			if (typeof pinName !== "string" || !pinName.startsWith("element_ref")) {
-				continue;
-			}
-
-			refs.push({
-				nodeId: String(node.id ?? ""),
-				nodeName: String(node.name ?? ""),
-				pinId: String(pin.id ?? ""),
-				pinName,
-				defaultValue: decodePinDefaultValue(pin.default_value),
-			});
-		}
-	};
-
-	for (const node of Object.values(board.nodes ?? {})) {
-		collectNodeRefs(node as Record<string, unknown>);
-	}
-
-	for (const layer of Object.values(board.layers ?? {})) {
-		const layerNodes = (layer as Record<string, unknown>).nodes as
-			| Record<string, Record<string, unknown>>
-			| undefined;
-		for (const node of Object.values(layerNodes ?? {})) {
-			collectNodeRefs(node);
-		}
-	}
-
-	return refs;
-}
 
 interface ActionContextValue {
 	onAction?: ActionHandler;
@@ -411,10 +353,9 @@ export function ActionProvider({
 					prerun.execution_mode !== IExecutionMode.Remote
 					? "local"
 					: "remote";
-			} catch (error) {
+			} catch {
 				console.warn(
-					"[A2UI] Failed to resolve temporary upload execution target; using remote storage:",
-					error,
+					"[A2UI] Failed to resolve temporary upload execution target; using remote storage",
 				);
 				return "remote";
 			}
@@ -475,8 +416,8 @@ export function ActionProvider({
 				) {
 					setPageStateLocal(persistedPage);
 				}
-			} catch (error) {
-				console.error("Failed to load persisted state:", error);
+			} catch {
+				console.error("Failed to load persisted state");
 			} finally {
 				setIsStateLoaded(true);
 			}
@@ -505,8 +446,8 @@ export function ActionProvider({
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
 				putPageBucket(pageId, persistedPage);
 				setPageStateLocal(persistedPage);
-			} catch (error) {
-				console.error("Failed to load page state:", error);
+			} catch {
+				console.error("Failed to load page state");
 				putPageBucket(pageId, {});
 				setPageStateLocal({});
 			}
@@ -524,9 +465,7 @@ export function ActionProvider({
 				if (appId) {
 					appGlobalState
 						.set(appId, key, value)
-						.catch((err) =>
-							console.error("Failed to persist global state:", err),
-						);
+						.catch(() => console.error("Failed to persist global state"));
 				}
 				return next;
 			});
@@ -545,7 +484,7 @@ export function ActionProvider({
 			if (appId) {
 				pageLocalState
 					.set(appId, pageId, key, value)
-					.catch((err) => console.error("Failed to persist page state:", err));
+					.catch(() => console.error("Failed to persist page state"));
 			}
 		},
 		[pageStateId, appId, putPageBucketEntry],
@@ -560,7 +499,7 @@ export function ActionProvider({
 		if (appId) {
 			pageLocalState
 				.clearPage(appId, pageId)
-				.catch((err) => console.error("Failed to clear page state:", err));
+				.catch(() => console.error("Failed to clear page state"));
 		}
 	}, [pageStateId, appId, putPageBucket]);
 
@@ -590,11 +529,8 @@ export function ActionProvider({
 						if (appId) {
 							pageLocalState
 								.set(appId, pageId, key, value)
-								.catch((err) =>
-									console.error(
-										"Failed to persist page state for other page:",
-										err,
-									),
+								.catch(() =>
+									console.error("Failed to persist page state for other page"),
 								);
 						}
 					}
@@ -610,9 +546,7 @@ export function ActionProvider({
 					if (appId) {
 						pageLocalState
 							.clearPage(appId, pageId)
-							.catch((err) =>
-								console.error("Failed to clear page state:", err),
-							);
+							.catch(() => console.error("Failed to clear page state"));
 					}
 					break;
 				}
@@ -985,14 +919,14 @@ export function useExecuteAction() {
 
 	const handleA2UIEvents = useCallback(
 		(events: IIntercomEvent[]) => {
-			console.log("[A2UI] Received events from backend:", events);
+			console.log("[A2UI] Received events from backend", {
+				count: events.length,
+			});
 
 			for (const event of events) {
-				console.log(
-					"[A2UI] Processing event:",
-					event.event_type,
-					event.payload,
-				);
+				console.log("[A2UI] Processing event", {
+					type: event.event_type,
+				});
 
 				if (event.event_type === "error") {
 					const payload = event.payload as { message?: unknown } | undefined;
@@ -1012,7 +946,7 @@ export function useExecuteAction() {
 
 				if (event.event_type === "a2ui") {
 					const message = event.payload as A2UIServerMessage;
-					console.log("[A2UI] A2UI message:", message);
+					console.log("[A2UI] A2UI message", { type: message.type });
 
 					if (handleWidgetQueryMessage(message)) {
 						continue;
@@ -1071,16 +1005,11 @@ export function useExecuteAction() {
 							navUrl = `${navUrl}${separator}${params.toString()}`;
 						}
 
-						console.log(
-							"[A2UI] Navigating to:",
-							navUrl,
-							"replace:",
+						console.log("[A2UI] Navigating", {
 							replace,
-							"appId:",
-							appId,
-							"currentPath:",
-							pathname,
-						);
+							hasAppContext: Boolean(appId),
+							queryParamKeys: Object.keys(queryParams ?? {}),
+						});
 
 						if (replace) {
 							router.replace(navUrl);
@@ -1106,7 +1035,11 @@ export function useExecuteAction() {
 							url.searchParams.set(key, value);
 						}
 
-						console.log("[A2UI] Setting query param:", key, "=", value);
+						console.log("[A2UI] Updating query param", {
+							key,
+							operation: value === undefined || value === "" ? "delete" : "set",
+							replace,
+						});
 
 						if (replace) {
 							router.replace(url.pathname + url.search);
@@ -1125,19 +1058,15 @@ export function useExecuteAction() {
 							dialogId?: string;
 						};
 
-						console.log("[A2UI] openDialog message received:", {
-							route,
-							title,
-							queryParams,
-							dialogId,
-							openDialogFn: !!openDialog,
+						console.log("[A2UI] openDialog message received", {
+							hasTitle: Boolean(title),
+							queryParamKeys: Object.keys(queryParams ?? {}),
+							hasDialogId: Boolean(dialogId),
+							handlerAvailable: Boolean(openDialog),
 						});
 
 						if (openDialog) {
-							console.log(
-								"[A2UI] Calling openDialog function with route:",
-								route,
-							);
+							console.log("[A2UI] Calling openDialog function");
 							openDialog(route, title, queryParams, dialogId);
 						} else {
 							console.warn(
@@ -1151,7 +1080,9 @@ export function useExecuteAction() {
 					if (message.type === "closeDialog") {
 						const { dialogId } = message as { dialogId?: string };
 
-						console.log("[A2UI] closeDialog message received:", { dialogId });
+						console.log("[A2UI] closeDialog message received", {
+							hasDialogId: Boolean(dialogId),
+						});
 
 						if (closeDialog) {
 							closeDialog(dialogId);
@@ -1165,11 +1096,9 @@ export function useExecuteAction() {
 
 					// Forward other A2UI messages to the handler (state updates, element updates, etc.)
 					if (onA2UIMessage) {
-						console.log(
-							"[A2UI] Forwarding message to handler:",
-							message.type,
-							message,
-						);
+						console.log("[A2UI] Forwarding message to handler", {
+							type: message.type,
+						});
 						onA2UIMessage(message);
 					} else {
 						console.warn("[A2UI] No onA2UIMessage handler available!");
@@ -1201,12 +1130,12 @@ export function useExecuteAction() {
 			const { name } = action;
 			const context = { ...(action.context ?? {}), ...additionalContext };
 
-			console.log("[ActionHandler] executeAction:", {
+			console.log("[ActionHandler] executeAction", {
 				name,
-				context,
-				appId,
+				contextKeys: Object.keys(context),
+				hasAppContext: Boolean(appId),
 				isPreviewMode,
-				triggeringComponentId,
+				hasTriggeringComponent: Boolean(triggeringComponentId),
 			});
 
 			if (triggeringComponentId) {
@@ -1228,19 +1157,16 @@ export function useExecuteAction() {
 							try {
 								extraParams = JSON.parse(queryParamsRaw);
 							} catch {
-								console.warn(
-									"[ActionHandler] Invalid queryParams JSON:",
-									queryParamsRaw,
-								);
+								console.warn("[ActionHandler] Invalid queryParams JSON");
 							}
 						} else if (typeof queryParamsRaw === "object" && queryParamsRaw) {
 							extraParams = queryParamsRaw;
 						}
 
-						console.log("[ActionHandler] navigate_page:", {
-							route,
-							appId,
-							extraParams,
+						console.log("[ActionHandler] navigate_page", {
+							hasRoute: Boolean(route),
+							hasAppContext: Boolean(appId),
+							queryParamKeys: Object.keys(extraParams ?? {}),
 						});
 						if (route) {
 							if (
@@ -1276,10 +1202,10 @@ export function useExecuteAction() {
 									params.set(key, value);
 								}
 								const navUrl = `/use?${params.toString()}`;
-								console.log("[ActionHandler] Navigating to:", navUrl);
+								console.log("[ActionHandler] Navigating to app page");
 								router.push(navUrl);
 							} else {
-								console.log("[ActionHandler] Fallback navigation to:", route);
+								console.log("[ActionHandler] Using fallback navigation");
 								router.push(route);
 							}
 						}
@@ -1328,9 +1254,9 @@ export function useExecuteAction() {
 						const targetEventId = contextEventId || eventId;
 
 						if (!targetAppId || !targetEventId) {
-							console.warn("[A2UI] submit_feedback missing appId or eventId", {
-								appId: targetAppId,
-								eventId: targetEventId,
+							console.warn("[A2UI] submit_feedback missing context", {
+								hasAppContext: Boolean(targetAppId),
+								hasEventContext: Boolean(targetEventId),
 							});
 							toast.error("Feedback is not available on this page.");
 							break;
@@ -1421,8 +1347,7 @@ export function useExecuteAction() {
 
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
-								"[A2UI] Refusing a raw workflow_event route on a governed Page.",
-								{ surfaceId, triggeringComponentId },
+								"[A2UI] Refusing a raw workflow_event route on a governed Page",
 							);
 							toast.error(
 								"This Page action is missing its execution authorization. Reload the Page.",
@@ -1446,11 +1371,10 @@ export function useExecuteAction() {
 
 						if (pageAction && (!effectiveAppId || !eventId)) {
 							console.warn(
-								"[A2UI] Governed workflow_event is missing Page Event context:",
+								"[A2UI] Governed workflow_event is missing Page Event context",
 								{
-									actionId: pageAction.actionId,
-									appId: effectiveAppId,
-									eventId,
+									hasAppContext: Boolean(effectiveAppId),
+									hasEventContext: Boolean(eventId),
 								},
 							);
 							toast.error(
@@ -1473,12 +1397,11 @@ export function useExecuteAction() {
 											}
 										: undefined;
 
-								console.log("[A2UI] workflow_event execution context:", {
-									nodeId,
-									effectiveAppId,
-									effectiveBoardId,
-									surfaceId,
-									componentIds: Object.keys(components ?? {}),
+								console.log("[A2UI] workflow_event execution context", {
+									governed: Boolean(pageAction),
+									hasBoardContext: Boolean(effectiveBoardId),
+									componentCount: Object.keys(components ?? {}).length,
+									hasWidgetScope: Boolean(widgetScope),
 								});
 
 								if (!pageAction && effectiveBoardId) {
@@ -1488,19 +1411,14 @@ export function useExecuteAction() {
 											effectiveBoardId,
 											inheritedBoardVersion,
 										);
-										console.log(
-											"[A2UI] workflow_event local board element refs:",
-											{
-												boardId: effectiveBoardId,
-												pageIds: currentBoard.page_ids,
-												updatedAt: currentBoard.updated_at,
-												elementRefs: summarizeBoardElementRefs(currentBoard),
-											},
-										);
-									} catch (boardErr) {
+										console.log("[A2UI] workflow_event board diagnostics", {
+											pageCount: currentBoard.page_ids.length,
+											nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
+											layerCount: Object.keys(currentBoard.layers ?? {}).length,
+										});
+									} catch {
 										console.warn(
-											"[A2UI] Failed to fetch current board for workflow_event diagnostics:",
-											boardErr,
+											"[A2UI] Failed to fetch current board for workflow_event diagnostics",
 										);
 									}
 								}
@@ -1628,7 +1546,7 @@ export function useExecuteAction() {
 									endedAtMs: Date.now(),
 								});
 							} catch (error) {
-								console.error("Failed to execute workflow event:", error);
+								console.error("Failed to execute workflow event");
 								// A Page whose Board moved under it fails for a reason the
 								// user can do nothing about and did not cause. The transports
 								// have already asked the Page to refetch itself, so say that
@@ -1675,20 +1593,20 @@ export function useExecuteAction() {
 								}
 							}
 						} else {
-							console.warn("Missing required context for workflow_event:", {
-								nodeId: invocationId,
-								boardId: effectiveBoardId,
-								appId: effectiveAppId,
+							console.warn("Missing required context for workflow_event", {
+								hasInvocation: Boolean(invocationId),
+								hasBoardContext: Boolean(effectiveBoardId),
+								hasAppContext: Boolean(effectiveAppId),
 							});
 						}
 						break;
 					}
 					case "widget_event": {
-						console.log("[A2UI] widget_event triggered:", {
-							context,
-							widgetInstance,
-							appId,
-							boardId,
+						console.log("[A2UI] widget_event triggered", {
+							contextKeys: Object.keys(context),
+							hasWidgetInstance: Boolean(widgetInstance),
+							hasAppContext: Boolean(appId),
+							hasBoardContext: Boolean(boardId),
 						});
 						const actionId = context.actionId as string | undefined;
 						if (!actionId) {
@@ -1719,12 +1637,9 @@ export function useExecuteAction() {
 							const available = Object.keys(
 								widgetInstance?.actionBindings ?? {},
 							);
-							console.warn(
-								"[A2UI] widget_event: no binding found for actionId:",
-								actionId,
-								"available bindings:",
-								widgetInstance?.actionBindings,
-							);
+							console.warn("[A2UI] widget_event has no matching binding", {
+								availableBindingCount: available.length,
+							});
 							toast.warning(
 								i18next.t(
 									"widgetActionActionidIsNotBoundToAWorkflowval",
@@ -1745,8 +1660,8 @@ export function useExecuteAction() {
 
 						if (!("workflow" in binding)) {
 							console.warn(
-								"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
-								binding,
+								"[A2UI] widget_event received a non-workflow binding",
+								{ bindingKeys: Object.keys(binding) },
 							);
 							toast.warning(
 								i18next.t(
@@ -1768,8 +1683,7 @@ export function useExecuteAction() {
 
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
-								"[A2UI] Refusing a raw widget workflow binding on a governed Page.",
-								{ actionId, surfaceId, triggeringComponentId },
+								"[A2UI] Refusing a raw widget workflow binding on a governed Page",
 							);
 							toast.error(
 								"This widget action is missing its execution authorization. Reload the Page.",
@@ -1788,11 +1702,10 @@ export function useExecuteAction() {
 
 						if (pageAction && (!effectiveAppId || !eventId)) {
 							console.warn(
-								"[A2UI] Governed widget_event is missing Page Event context:",
+								"[A2UI] Governed widget_event is missing Page Event context",
 								{
-									actionId: pageAction.actionId,
-									appId: effectiveAppId,
-									eventId,
+									hasAppContext: Boolean(effectiveAppId),
+									hasEventContext: Boolean(eventId),
 								},
 							);
 							toast.error(
@@ -1811,11 +1724,11 @@ export function useExecuteAction() {
 											}
 										: undefined;
 
-								console.log("[A2UI] widget_event execution context:", {
-									effectiveAppId,
-									effectiveBoardId,
-									surfaceId,
-									componentIds: Object.keys(components ?? {}),
+								console.log("[A2UI] widget_event execution context", {
+									governed: Boolean(pageAction),
+									hasBoardContext: Boolean(effectiveBoardId),
+									componentCount: Object.keys(components ?? {}).length,
+									hasWidgetScope: Boolean(widgetScope),
 								});
 
 								const storedValues = getElementValues?.() ?? {};
@@ -1902,7 +1815,7 @@ export function useExecuteAction() {
 									);
 								}
 							} catch (error) {
-								console.error("[A2UI] Failed to execute widget event:", error);
+								console.error("[A2UI] Failed to execute widget event");
 								toast.error(
 									i18next.t(
 										"widgetActionActionidFailed",
@@ -1922,10 +1835,10 @@ export function useExecuteAction() {
 							}
 						} else {
 							console.warn(
-								"[A2UI] Missing appId or boardId for widget_event:",
+								"[A2UI] Missing app or board context for widget_event",
 								{
-									appId: effectiveAppId,
-									boardId: effectiveBoardId,
+									hasAppContext: Boolean(effectiveAppId),
+									hasBoardContext: Boolean(effectiveBoardId),
 								},
 							);
 							toast.warning(
@@ -1944,7 +1857,11 @@ export function useExecuteAction() {
 						// indistinguishable from a working one — hence the explicit warning.
 						console.warn(
 							`[A2UI] Action "${name}" is not a built-in action; nothing will run unless this surface handles it server-side. Built-in actions: workflow_event (context.nodeId), widget_event (context.actionId), navigate_page, external_link, navigate_app_config, navigate_app_overview, submit_feedback.`,
-							{ surfaceId, triggeringComponentId, context },
+							{
+								contextKeys: Object.keys(context),
+								hasSurfaceContext: Boolean(surfaceId),
+								hasTriggeringComponent: Boolean(triggeringComponentId),
+							},
 						);
 						if (onAction) {
 							onAction({

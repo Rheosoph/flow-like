@@ -280,14 +280,6 @@ export class StorageState implements IStorageState {
 			);
 		}
 
-		console.dir({
-			isOffline: isOffline,
-			profile: this.backend.profile,
-			auth: this.backend.auth,
-			queryClient: this.backend.queryClient,
-			appId: appId,
-		});
-
 		const items = await invoke<IStorageItemActionResult[]>("storage_get", {
 			appId: appId,
 			prefixes: prefixes,

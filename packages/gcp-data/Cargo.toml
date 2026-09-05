@@ -7,6 +7,7 @@ description = "Keyless GCP data-plane clients shared by the GCP API and queue wo
 [dependencies]
 base64.workspace = true
 bytes.workspace = true
+flow-like-db.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 sea-orm.workspace = true

@@ -1,7 +1,9 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
 import {
 	ApiResponseError,
+	apiErrorDiagnostic,
 	apiResponseError,
+	redactApiPathSecrets,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
@@ -82,16 +84,18 @@ function ensureProtectedAppRouteAuth(
 		requestSilentRenew(auth, "before API request");
 	}
 
-	throw new Error(`Authentication token required for app request: ${path}`);
+	throw new Error(
+		`Authentication token required for app request: ${redactApiPathSecrets(path)}`,
+	);
 }
 
 function requestSilentRenew(auth: AuthContextProps, reason: string): void {
 	try {
-		void Promise.resolve(auth.startSilentRenew()).catch((error) => {
-			console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+		void Promise.resolve(auth.startSilentRenew()).catch(() => {
+			console.warn(`[Auth] Silent renew failed ${reason}`);
 		});
-	} catch (error) {
-		console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+	} catch {
+		console.warn(`[Auth] Silent renew failed ${reason}`);
 	}
 }
 
@@ -115,7 +119,8 @@ export async function get<T>(
 	});
 
 	if (!response.ok) {
-		console.error(`HTTP error: ${response.status}`, await response.text());
+		await response.text();
+		console.error(`HTTP error: ${response.status}`);
 		return undefined;
 	}
 
@@ -144,7 +149,8 @@ export async function post<T>(
 	});
 
 	if (!response.ok) {
-		console.error(`HTTP error: ${response.status}`, await response.text());
+		await response.text();
+		console.error(`HTTP error: ${response.status}`);
 		return undefined;
 	}
 
@@ -173,7 +179,8 @@ export async function put<T>(
 	});
 
 	if (!response.ok) {
-		console.error(`HTTP error: ${response.status}`, await response.text());
+		await response.text();
+		console.error(`HTTP error: ${response.status}`);
 		return undefined;
 	}
 
@@ -200,7 +207,8 @@ export async function del<T>(
 	});
 
 	if (!response.ok) {
-		console.error(`HTTP error: ${response.status}`, await response.text());
+		await response.text();
+		console.error(`HTTP error: ${response.status}`);
 		return undefined;
 	}
 
@@ -225,8 +233,9 @@ export async function fetcher<T>(
 
 	// Check network status before attempting request
 	if (typeof navigator !== "undefined" && !navigator.onLine) {
-		console.warn(`Network offline - request will use cache: ${path}`);
-		throw new Error(`Network unavailable: ${path}`);
+		const safePath = redactApiPathSecrets(path);
+		console.warn(`Network offline - request will use cache: ${safePath}`);
+		throw new Error(`Network unavailable: ${safePath}`);
 	}
 
 	const url = constructUrl(profile, path);
@@ -247,9 +256,10 @@ export async function fetcher<T>(
 			}
 			const errorText = await response.text();
 			const error = apiResponseError(response, errorText, path);
+			const safePath = redactApiPathSecrets(path);
 			console.error(
-				`API error ${response.status} for ${path}:`,
-				error.toJSON(),
+				`API error ${response.status} for ${safePath}:`,
+				apiErrorDiagnostic(error),
 			);
 			throw error;
 		}
@@ -257,7 +267,7 @@ export async function fetcher<T>(
 		return await response.json();
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;
-		console.error(`Error fetching ${path}:`, error);
+		console.error(`Error fetching ${redactApiPathSecrets(path)}`);
 		throw error;
 	}
 }

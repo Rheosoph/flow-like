@@ -619,12 +619,10 @@ export class WebEventState implements IEventState {
 								executionFinished = true;
 								finishAllProgressToasts(false);
 							}
-						} catch (error) {
-							console.warn(
-								"[SSE] Dropping unparseable event frame:",
-								error,
-								eventData.slice(0, 200),
-							);
+						} catch {
+							console.warn("[SSE] Dropping unparseable event frame", {
+								bytes: eventData.length,
+							});
 						}
 					}
 					if (executionFinished) break;

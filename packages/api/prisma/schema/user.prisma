@@ -471,6 +471,8 @@ model ExecutionRun {
   @@index([parentRunId])
   @@index([traceId])
   @@index([eventId, runVariant, createdAt])
+
+  @@index([technicalUserId])
 }
 
 /// One row per app in `ExecutionRun.callerAppChain` (`position` = index in the chain).

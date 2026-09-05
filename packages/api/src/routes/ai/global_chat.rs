@@ -138,7 +138,7 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
                     .content_length()
                     .is_some_and(|len| len > MAX_ATTACHMENT_BYTES as u64)
                 {
-                    tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped");
+                    tracing::warn!("[global_chat] attachment exceeds size limit, skipped");
                     continue;
                 }
                 match response.bytes().await {
@@ -149,14 +149,18 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
                         });
                     }
                     Ok(_) => {
-                        tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped")
+                        tracing::warn!("[global_chat] attachment exceeds size limit, skipped")
                     }
                     Err(error) => {
-                        tracing::warn!(%error, url, "[global_chat] attachment read failed")
+                        let error = error.without_url();
+                        tracing::warn!(%error, "[global_chat] attachment read failed")
                     }
                 }
             }
-            Err(error) => tracing::warn!(%error, url, "[global_chat] attachment fetch failed"),
+            Err(error) => {
+                let error = error.without_url();
+                tracing::warn!(%error, "[global_chat] attachment fetch failed");
+            }
         }
     }
     images

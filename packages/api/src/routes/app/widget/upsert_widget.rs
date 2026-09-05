@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     entity::{meta, widget},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -173,6 +173,20 @@ pub async fn upsert_widget(
         )
         .await?;
     }
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        if existing.is_some() {
+            "widget.update"
+        } else {
+            "widget.create"
+        },
+        "Widget",
+        widget.id,
+        "Saved a widget"
+    );
 
     Ok(Json(widget))
 }

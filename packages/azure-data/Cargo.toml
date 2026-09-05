@@ -8,6 +8,7 @@ description = "Entra-only Azure data-plane clients shared by the Azure API and q
 azure_core = "0.32.0"
 azure_identity = "0.32.0"
 bytes.workspace = true
+flow-like-db.workspace = true
 chrono.workspace = true
 moka.workspace = true
 reqwest.workspace = true

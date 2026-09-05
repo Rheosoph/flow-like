@@ -28,6 +28,7 @@ mod apple {
         Result, Value, async_trait,
         json::{self, json},
         tokio::{net::TcpListener, sync::mpsc, task::JoinHandle},
+        utils::constant_time_eq,
     };
     use serde::{Deserialize, Serialize};
 
@@ -167,7 +168,7 @@ mod apple {
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|value| value == bearer_token)
+            .is_some_and(|value| constant_time_eq(value.as_bytes(), bearer_token.as_bytes()))
     }
 
     fn unauthorized_response() -> Response {
@@ -969,6 +970,12 @@ mod apple {
 
             headers.insert(AUTHORIZATION, "Bearer runtime-secret".parse().unwrap());
             assert!(has_valid_authorization(&headers, "runtime-secret"));
+
+            headers.insert(AUTHORIZATION, "bearer runtime-secret".parse().unwrap());
+            assert!(!has_valid_authorization(&headers, "runtime-secret"));
+
+            headers.insert(AUTHORIZATION, "Bearer  runtime-secret".parse().unwrap());
+            assert!(!has_valid_authorization(&headers, "runtime-secret"));
         }
 
         #[test]

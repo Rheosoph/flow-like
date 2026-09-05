@@ -574,11 +574,10 @@ pub(crate) async fn maybe_refresh_oauth_tokens(
                     "Refreshed expired OAuth token for scheduled execution"
                 );
             }
-            Err(err) => {
+            Err(_) => {
                 tracing::warn!(
                     provider = %provider_id,
                     sink = %sink_id,
-                    error = %err,
                     "Failed to refresh OAuth token, proceeding with expired token"
                 );
             }
@@ -852,6 +851,7 @@ pub async fn trigger_event(
 
     // Insert run record
     run.insert(&state.db).await?;
+    crate::audit::record_execution_dispatch(state, &run_id, "sink").await?;
 
     // Dispatch (fire and forget for programmatic triggers)
     // Use async dispatch which respects ASYNC_EXECUTION_BACKEND config
@@ -863,11 +863,14 @@ pub async fn trigger_event(
             run_id: Some(run_id),
             message: "Event triggered successfully".to_string(),
         }),
-        Err(e) => Ok(TriggerResponse {
-            triggered: false,
-            run_id: Some(run_id),
-            message: format!("Dispatch failed: {}", e),
-        }),
+        Err(e) => {
+            crate::audit::record_execution_dispatch_failure(state, &run_id, "sink").await?;
+            Ok(TriggerResponse {
+                triggered: false,
+                run_id: Some(run_id),
+                message: format!("Dispatch failed: {}", e),
+            })
+        }
     }
 }
 
@@ -1184,6 +1187,8 @@ pub async fn trigger_http(
             .into_response());
     }
 
+    crate::audit::record_execution_dispatch(&state, &run_id, "sink:http").await?;
+
     // Match the desktop HTTP sink: wait for the first `generic_result`
     // event and return it as a single JSON response. External callers of
     // this webhook want a synchronous request/response, not SSE —
@@ -1201,7 +1206,7 @@ pub async fn trigger_http(
             match dispatch_result {
                 Ok((_dispatch_response, byte_stream)) => {
                     tracing::info!(run_id = %run_id, "Got Lambda response, collecting result");
-                    let db_arc = Arc::new(state.db.clone());
+                    let db_arc = crate::audit::ExecutionAuditContext::from(&state);
                     let run_id_owned = run_id.clone();
                     let generic_result = collect_generic_result_bytes(
                         byte_stream,
@@ -1226,6 +1231,8 @@ pub async fn trigger_http(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming");
+                    crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:http")
+                        .await?;
                     Ok((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(TriggerResponse {
@@ -1244,7 +1251,7 @@ pub async fn trigger_http(
             match dispatch_result {
                 Ok((_dispatch_response, executor_response)) => {
                     tracing::info!(run_id = %run_id, "Got executor response, collecting result");
-                    let db_arc = Arc::new(state.db.clone());
+                    let db_arc = crate::audit::ExecutionAuditContext::from(&state);
                     let run_id_owned = run_id.clone();
                     let generic_result = collect_generic_result(
                         executor_response,
@@ -1269,6 +1276,8 @@ pub async fn trigger_http(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to dispatch");
+                    crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:http")
+                        .await?;
                     Ok((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(TriggerResponse {
@@ -1583,12 +1592,24 @@ pub async fn trigger_telegram(
         ApiError::internal_error(anyhow!("Failed to create run record"))
     })?;
 
+    crate::audit::record_execution_dispatch(&state, &run_id, "sink:telegram").await?;
+
     // Dispatch async (fire and forget) - Telegram expects fast response
     let dispatcher = state.dispatcher.clone();
     let run_id_for_log = run_id.clone();
+    let audit_state = state.clone();
     tokio::spawn(async move {
         if let Err(e) = dispatcher.dispatch_async(request).await {
             tracing::error!(run_id = %run_id_for_log, error = %e, "Telegram webhook dispatch failed");
+            if let Err(error) = crate::audit::record_execution_dispatch_failure(
+                &audit_state,
+                &run_id_for_log,
+                "sink:telegram",
+            )
+            .await
+            {
+                tracing::error!(run_id = %run_id_for_log, %error, "Failed to audit webhook dispatch failure");
+            }
         }
     });
 
@@ -1936,12 +1957,24 @@ pub async fn trigger_discord(
         ApiError::internal_error(anyhow!("Failed to create run record"))
     })?;
 
+    crate::audit::record_execution_dispatch(&state, &run_id, "sink:discord").await?;
+
     // Dispatch async (fire and forget) - Discord expects response within 3 seconds
     let dispatcher = state.dispatcher.clone();
     let run_id_for_log = run_id.clone();
+    let audit_state = state.clone();
     tokio::spawn(async move {
         if let Err(e) = dispatcher.dispatch_async(request).await {
             tracing::error!(run_id = %run_id_for_log, error = %e, "Discord webhook dispatch failed");
+            if let Err(error) = crate::audit::record_execution_dispatch_failure(
+                &audit_state,
+                &run_id_for_log,
+                "sink:discord",
+            )
+            .await
+            {
+                tracing::error!(run_id = %run_id_for_log, %error, "Failed to audit webhook dispatch failure");
+            }
         }
     });
 

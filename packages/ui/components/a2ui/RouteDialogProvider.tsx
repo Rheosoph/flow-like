@@ -88,18 +88,16 @@ export function RouteDialogProvider({
 			queryParams?: Record<string, string>,
 			dialogId?: string,
 		) => {
-			console.log("[RouteDialogProvider] openDialog called:", {
-				route,
-				title,
-				queryParams,
-				dialogId,
+			console.log("[RouteDialogProvider] openDialog called", {
+				hasTitle: Boolean(title),
+				queryParamKeys: Object.keys(queryParams ?? {}),
+				hasDialogId: Boolean(dialogId),
 			});
 			const id = dialogId || `dialog-${Date.now()}`;
 			setDialogs((prev) => {
-				console.log("[RouteDialogProvider] Adding dialog to stack:", {
-					id,
-					route,
+				console.log("[RouteDialogProvider] Adding dialog to stack", {
 					prevCount: prev.length,
+					nextCount: prev.length + 1,
 				});
 				return [...prev, { id, route, title, queryParams, isOpen: true }];
 			});
@@ -331,9 +329,9 @@ function RouteDialogRenderer({
 				setPageRevision(bootstrap.revision ?? null);
 				setPageExecutionRevision(bootstrap.executionRevision);
 				setSurface(buildSurfaceFromPage(bootstrap.page, bootstrap.page.id));
-			} catch (e) {
+			} catch {
 				if (cancelled) return;
-				console.error("Failed to load dialog content:", e);
+				console.error("Failed to load dialog content");
 				setError("Failed to load content");
 			} finally {
 				if (!cancelled) setIsLoading(false);
@@ -347,7 +345,7 @@ function RouteDialogRenderer({
 	}, [appId, dialog.route, backend.pageState]);
 
 	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
-		console.log("[RouteDialog] Server message:", message);
+		console.log("[RouteDialog] Server message", { type: message.type });
 		if (message.type === "showScreen" || shouldRevealProgressively(message)) {
 			setIsScreenRevealed(true);
 		}
@@ -477,8 +475,8 @@ function RouteDialogRenderer({
 						manifestRevision: pageExecutionRevision,
 					},
 				);
-			} catch (e) {
-				console.error("[RouteDialog] Failed to execute onLoad event:", e);
+			} catch {
+				console.error("[RouteDialog] Failed to execute onLoad event");
 			} finally {
 				if (loadEventExecutedRef.current === executionKey) {
 					setCompletedLoadEventKey(executionKey);

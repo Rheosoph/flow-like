@@ -17,6 +17,8 @@ use sea_orm::{
 use serde::Serialize;
 use utoipa::ToSchema;
 
+const AUTOMATIC_VERIFICATION_ENTRY_LIMIT: i64 = 1_000;
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ChainSummary {
     pub chain_id: Option<String>,
@@ -28,6 +30,9 @@ pub struct ChainSummary {
     pub signed: bool,
     pub kid: Option<String>,
     pub valid: Option<bool>,
+    pub fully_authenticated: Option<bool>,
+    pub first_broken_at: Option<i64>,
+    pub unverifiable_signatures: Option<u64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -78,13 +83,24 @@ async fn build_summary(
         None => (None, None, None, false, None),
     };
 
-    let valid = if verify && entries > 0 {
-        match AuditService::verify_chain(&state.db, chain_id, None, None).await {
-            Ok(v) => Some(v.valid),
-            Err(_) => None,
+    let (valid, fully_authenticated, first_broken_at, unverifiable_signatures) = if verify
+        && entries > 0
+        && entries <= AUTOMATIC_VERIFICATION_ENTRY_LIMIT
+    {
+        match AuditService::verify_chain(&state.db, state.db_dialect, chain_id, None, None).await {
+            Ok(v) => (
+                Some(v.valid),
+                Some(v.fully_authenticated),
+                v.first_broken_at,
+                Some(v.unverifiable_signatures),
+            ),
+            Err(error) => {
+                tracing::error!(%error, chain_id, "Audit chain status verification failed");
+                (None, None, None, None)
+            }
         }
     } else {
-        None
+        (None, None, None, None)
     };
 
     Ok(ChainSummary {
@@ -97,6 +113,9 @@ async fn build_summary(
         signed,
         kid,
         valid,
+        fully_authenticated,
+        first_broken_at,
+        unverifiable_signatures,
     })
 }
 

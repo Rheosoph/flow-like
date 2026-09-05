@@ -64,15 +64,22 @@ impl From<aws_sdk_sts::types::Credentials> for AwsRuntimeCredentials {
             access_key_id: Some(credentials.access_key_id),
             secret_access_key: Some(credentials.secret_access_key),
             session_token: Some(credentials.session_token),
-            meta_bucket: std::env::var("META_BUCKET")
-                .or_else(|_| std::env::var("META_BUCKET_NAME"))
+            meta_bucket: non_empty_env("AWS_META_BUCKET")
+                .or_else(|| non_empty_env("META_BUCKET"))
+                .or_else(|| non_empty_env("META_BUCKET_NAME"))
                 .unwrap_or_default(),
-            content_bucket: std::env::var("CONTENT_BUCKET")
-                .or_else(|_| std::env::var("CONTENT_BUCKET_NAME"))
+            content_bucket: non_empty_env("AWS_CONTENT_BUCKET")
+                .or_else(|| non_empty_env("CONTENT_BUCKET"))
+                .or_else(|| non_empty_env("CONTENT_BUCKET_NAME"))
                 .unwrap_or_default(),
-            logs_bucket: std::env::var("LOG_BUCKET").unwrap_or_default(),
-            region: std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
-            expiration: None,
+            logs_bucket: non_empty_env("AWS_LOG_BUCKET")
+                .or_else(|| non_empty_env("LOG_BUCKET"))
+                .unwrap_or_default(),
+            region: non_empty_env("AWS_REGION").unwrap_or_else(|| "us-east-1".to_string()),
+            expiration: chrono::DateTime::from_timestamp(
+                credentials.expiration.secs(),
+                credentials.expiration.subsec_nanos(),
+            ),
             content_path_prefix: None,
             user_content_path_prefix: None,
         }
@@ -97,24 +104,34 @@ impl AwsRuntimeCredentials {
     }
 
     pub fn from_env() -> Self {
-        let logs_bucket = std::env::var("LOG_BUCKET").unwrap_or_default();
+        let logs_bucket = non_empty_env("AWS_LOG_BUCKET")
+            .or_else(|| non_empty_env("LOG_BUCKET"))
+            .unwrap_or_default();
         if logs_bucket.is_empty() {
             tracing::warn!(
                 "LOG_BUCKET environment variable is not set - logs will not be persisted"
             );
         }
         AwsRuntimeCredentials {
-            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
-            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-            session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
-            meta_bucket: std::env::var("META_BUCKET")
-                .or_else(|_| std::env::var("META_BUCKET_NAME"))
+            access_key_id: std::env::var("AWS_ACCESS_KEY_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            session_token: std::env::var("AWS_SESSION_TOKEN")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            meta_bucket: non_empty_env("AWS_META_BUCKET")
+                .or_else(|| non_empty_env("META_BUCKET"))
+                .or_else(|| non_empty_env("META_BUCKET_NAME"))
                 .unwrap_or_default(),
-            content_bucket: std::env::var("CONTENT_BUCKET")
-                .or_else(|_| std::env::var("CONTENT_BUCKET_NAME"))
+            content_bucket: non_empty_env("AWS_CONTENT_BUCKET")
+                .or_else(|| non_empty_env("CONTENT_BUCKET"))
+                .or_else(|| non_empty_env("CONTENT_BUCKET_NAME"))
                 .unwrap_or_default(),
             logs_bucket,
-            region: std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            region: non_empty_env("AWS_REGION").unwrap_or_else(|| "us-east-1".to_string()),
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
@@ -123,9 +140,15 @@ impl AwsRuntimeCredentials {
 
     pub async fn master_credentials(&self) -> Self {
         AwsRuntimeCredentials {
-            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
-            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-            session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
+            access_key_id: std::env::var("AWS_ACCESS_KEY_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            session_token: std::env::var("AWS_SESSION_TOKEN")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
             meta_bucket: self.meta_bucket.clone(),
             content_bucket: self.content_bucket.clone(),
             logs_bucket: self.logs_bucket.clone(),
@@ -156,11 +179,12 @@ impl AwsRuntimeCredentials {
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
 
-        let role = runtime_role_arn().ok_or_else(|| {
-            flow_like_types::anyhow!("RUNTIME_ROLE_ARN environment variable not set")
-        })?;
-
-        let client = aws_sdk_sts::Client::new(&state.aws_client);
+        let sts = StsSettings::from_env()?;
+        // Reuse the SDK HTTP pool across distinct tenant grants. Settings and
+        // issuer secrets are fixed for the lifetime of this API process.
+        let client = state
+            .scoped_sts_client
+            .get_or_init(|| sts.client(&state.aws_client));
 
         let apps_prefix = format!("apps/{}", app_id);
         let db_prefix = format!("{}/storage/db", apps_prefix);
@@ -197,7 +221,7 @@ impl AwsRuntimeCredentials {
             session_name
         };
 
-        let meta_express = meta_bucket_express_zone();
+        let meta_express = sts.provider == S3StsProvider::Aws && meta_bucket_express_zone();
         let kms_actions = kms_session_actions(&mode, meta_express);
         let policy = match mode {
             CredentialsAccess::EditApp => edit_app_policy(self, &apps_prefix),
@@ -246,37 +270,50 @@ impl AwsRuntimeCredentials {
 
         // A bucket encrypted with a customer-managed key answers every S3 call
         // with AccessDenied unless the session may also use the key.
-        let policy = with_kms_session_permissions(policy, &mode, kms_actions, &self.region);
+        let policy = if sts.provider == S3StsProvider::Aws {
+            with_kms_session_permissions(policy, &mode, kms_actions, &self.region)
+        } else {
+            policy
+        };
 
         let policy = to_string(&policy)
             .map_err(|e| flow_like_types::anyhow!("Failed to serialize policy: {}", e))?;
 
-        let credentials = client
+        if policy.len() > STS_POLICY_MAX_CHARS {
+            return Err(anyhow!("STS session policy exceeds the 2048-byte limit"));
+        }
+        let response = client
             .assume_role()
-            .role_arn(role)
+            .role_arn(&sts.role_arn)
             .role_session_name(session_name)
             .policy(policy)
-            .duration_seconds(3600) // 1 hour
+            .duration_seconds(sts.duration_seconds)
             .send()
             .await?;
-
-        let chrono_expiration = chrono::Utc::now() + chrono::Duration::hours(1);
-
+        let credentials = response
+            .credentials()
+            .ok_or_else(|| anyhow!("STS returned no credentials"))?;
+        let expiration = chrono::DateTime::from_timestamp(
+            credentials.expiration().secs(),
+            credentials.expiration().subsec_nanos(),
+        )
+        .ok_or_else(|| anyhow!("STS returned an invalid expiration"))?;
+        if credentials.access_key_id().is_empty()
+            || credentials.secret_access_key().is_empty()
+            || credentials.session_token().is_empty()
+            || expiration <= chrono::Utc::now()
+        {
+            return Err(anyhow!("STS returned empty or expired credentials"));
+        }
         Ok(Self {
-            access_key_id: credentials
-                .credentials()
-                .map(|c| c.access_key_id().to_string()),
-            secret_access_key: credentials
-                .credentials()
-                .map(|c| c.secret_access_key().to_string()),
-            session_token: credentials
-                .credentials()
-                .map(|c| c.session_token().to_string()),
+            access_key_id: Some(credentials.access_key_id().to_owned()),
+            secret_access_key: Some(credentials.secret_access_key().to_owned()),
+            session_token: Some(credentials.session_token().to_owned()),
             meta_bucket: self.meta_bucket.clone(),
             content_bucket: self.content_bucket.clone(),
             logs_bucket: self.logs_bucket.clone(),
             region: self.region.clone(),
-            expiration: Some(chrono_expiration),
+            expiration: Some(expiration),
             content_path_prefix,
             user_content_path_prefix,
         })
@@ -322,14 +359,135 @@ fn scoped_content_path_prefixes(
 /// STS caps a session policy at 2048 characters of plaintext.
 const STS_POLICY_MAX_CHARS: usize = 2048;
 
-/// The role every scoped credential is minted from. Deployment-constant, and
-/// `scoped_credentials` runs on every handout, so it is read once.
 #[cfg(feature = "aws")]
-fn runtime_role_arn() -> Option<&'static str> {
-    static RUNTIME_ROLE_ARN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    RUNTIME_ROLE_ARN
-        .get_or_init(|| non_empty_env("RUNTIME_ROLE_ARN"))
-        .as_deref()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum S3StsProvider {
+    Aws,
+    Rustfs,
+}
+
+#[cfg(feature = "aws")]
+impl std::str::FromStr for S3StsProvider {
+    type Err = flow_like_types::Error;
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "aws" => Ok(Self::Aws),
+            "rustfs" => Ok(Self::Rustfs),
+            _ => Err(anyhow!("S3_STS_PROVIDER must be aws or rustfs")),
+        }
+    }
+}
+
+#[cfg(feature = "aws")]
+struct StsSettings {
+    provider: S3StsProvider,
+    endpoint: Option<String>,
+    issuer: Option<(String, String)>,
+    role_arn: String,
+    duration_seconds: i32,
+}
+
+#[cfg(feature = "aws")]
+impl StsSettings {
+    fn from_env() -> Result<Self> {
+        let provider = non_empty_env("S3_STS_PROVIDER")
+            .as_deref()
+            .unwrap_or("aws")
+            .parse()?;
+        let endpoint = non_empty_env("STS_ENDPOINT_URL");
+        let key = crate::storage_config::secret_env("STS_ISSUER_ACCESS_KEY")?;
+        let secret = crate::storage_config::secret_env("STS_ISSUER_SECRET_KEY")?;
+        let issuer = match (key, secret) {
+            (Some(key), Some(secret)) => Some((key, secret)),
+            (None, None) => None,
+            _ => {
+                return Err(anyhow!(
+                    "Both STS issuer access and secret keys must be configured"
+                ));
+            }
+        };
+        if provider == S3StsProvider::Rustfs {
+            if endpoint.is_none() || issuer.is_none() {
+                return Err(anyhow!(
+                    "RustFS requires STS_ENDPOINT_URL and dedicated STS issuer credentials"
+                ));
+            }
+            if [
+                "S3_KMS_KEY_ARN",
+                "META_BUCKET_KMS_KEY_ARN",
+                "CONTENT_BUCKET_KMS_KEY_ARN",
+                "LOGS_BUCKET_KMS_KEY_ARN",
+            ]
+            .iter()
+            .any(|name| non_empty_env(name).is_some())
+                || env_flag("S3_KMS_BUCKET_KEY")
+            {
+                return Err(anyhow!(
+                    "AWS SSE-KMS options are not supported by the RustFS provider profile"
+                ));
+            }
+            if [
+                "META_BUCKET_EXPRESS_ZONE",
+                "CONTENT_BUCKET_EXPRESS_ZONE",
+                "LOGS_BUCKET_EXPRESS_ZONE",
+            ]
+            .iter()
+            .any(|name| env_flag(name))
+            {
+                return Err(anyhow!("RustFS does not support AWS S3 Express buckets"));
+            }
+        }
+        let role_arn = non_empty_env("RUNTIME_ROLE_ARN")
+            .or_else(|| {
+                (provider == S3StsProvider::Rustfs)
+                    .then(|| "arn:aws:iam::000000000000:role/flow-like-runtime".to_owned())
+            })
+            .ok_or_else(|| anyhow!("RUNTIME_ROLE_ARN environment variable not set"))?;
+        let configured_duration = non_empty_env("STS_SESSION_TTL_SECONDS");
+        let duration_seconds = parse_sts_duration(
+            configured_duration
+                .as_deref()
+                .or_else(|| (provider == S3StsProvider::Rustfs).then_some("7200")),
+        )?;
+        Ok(Self {
+            provider,
+            endpoint,
+            issuer,
+            role_arn,
+            duration_seconds,
+        })
+    }
+
+    fn client(&self, shared: &aws_config::SdkConfig) -> aws_sdk_sts::Client {
+        let mut config = aws_sdk_sts::config::Builder::from(shared);
+        if let Some(endpoint) = &self.endpoint {
+            config = config.endpoint_url(endpoint);
+        }
+        if let Some((key, secret)) = &self.issuer {
+            config = config.credentials_provider(aws_sdk_sts::config::Credentials::new(
+                key,
+                secret,
+                None,
+                None,
+                "flow-like-sts-issuer",
+            ));
+        }
+        aws_sdk_sts::Client::from_conf(config.build())
+    }
+}
+
+#[cfg(feature = "aws")]
+fn parse_sts_duration(value: Option<&str>) -> Result<i32> {
+    let duration = value
+        .unwrap_or("3600")
+        .parse::<i32>()
+        .map_err(|_| anyhow!("STS_SESSION_TTL_SECONDS must be an integer"))?;
+    if !(900..=43200).contains(&duration) {
+        return Err(anyhow!(
+            "STS_SESSION_TTL_SECONDS must be between 900 and 43200"
+        ));
+    }
+    Ok(duration)
 }
 
 #[cfg(feature = "aws")]
@@ -370,31 +528,40 @@ fn bucket_configs() -> &'static BucketConfigs {
         // arriving without `x-amz-server-side-encryption`.
         let kms = KmsKeys::configured();
         let kms_bucket_key = env_flag("S3_KMS_BUCKET_KEY");
+        let use_path_style = env_flag("AWS_USE_PATH_STYLE");
+        let public_endpoint =
+            non_empty_env("S3_PUBLIC_ENDPOINT").or_else(|| non_empty_env("AWS_ENDPOINT"));
 
         // A bucket with no endpoint, no express flag and no key needs no
         // config at all.
         let config = |endpoint: Option<String>, express: bool, kms_key_arn: Option<String>| {
-            (endpoint.is_some() || express || kms_key_arn.is_some()).then_some(BucketConfig {
-                endpoint,
-                express,
-                kms_key_arn,
-                kms_bucket_key,
-            })
+            (endpoint.is_some() || express || kms_key_arn.is_some() || use_path_style).then_some(
+                BucketConfig {
+                    allow_http: endpoint
+                        .as_ref()
+                        .is_some_and(|value| value.starts_with("http://")),
+                    use_path_style,
+                    endpoint,
+                    express,
+                    kms_key_arn,
+                    kms_bucket_key,
+                },
+            )
         };
 
         BucketConfigs {
             meta: config(
-                non_empty_env("META_BUCKET_ENDPOINT"),
+                non_empty_env("META_BUCKET_ENDPOINT").or_else(|| public_endpoint.clone()),
                 env_flag("META_BUCKET_EXPRESS_ZONE"),
                 kms.meta.clone(),
             ),
             content: config(
-                non_empty_env("CONTENT_BUCKET_ENDPOINT"),
+                non_empty_env("CONTENT_BUCKET_ENDPOINT").or_else(|| public_endpoint.clone()),
                 env_flag("CONTENT_BUCKET_EXPRESS_ZONE"),
                 kms.content.clone(),
             ),
             logs: config(
-                non_empty_env("LOGS_BUCKET_ENDPOINT"),
+                non_empty_env("LOGS_BUCKET_ENDPOINT").or_else(|| public_endpoint.clone()),
                 env_flag("LOGS_BUCKET_EXPRESS_ZONE"),
                 kms.logs.clone(),
             ),
@@ -637,6 +804,22 @@ fn with_kms_session_permissions(
 
 #[cfg(feature = "aws")]
 impl AwsRuntimeCredentials {
+    fn internal_shared_credentials(&self) -> AwsSharedCredentials {
+        let mut shared = self.aws_shared_credentials();
+        if let Some(endpoint) = non_empty_env("S3_INTERNAL_ENDPOINT") {
+            for config in [
+                &mut shared.meta_config,
+                &mut shared.content_config,
+                &mut shared.logs_config,
+            ] {
+                let config = config.get_or_insert_with(BucketConfig::default);
+                config.allow_http = endpoint.starts_with("http://");
+                config.endpoint = Some(endpoint.clone());
+            }
+        }
+        shared
+    }
+
     /// The concrete AWS view of these credentials, including the per-bucket
     /// endpoint / express / SSE-KMS configuration read from the environment.
     fn aws_shared_credentials(&self) -> AwsSharedCredentials {
@@ -668,11 +851,13 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
     }
 
     async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials().to_db(app_id).await
+        SharedCredentials::Aws(self.internal_shared_credentials())
+            .to_db(app_id)
+            .await
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
-        self.into_shared_credentials()
+        SharedCredentials::Aws(self.internal_shared_credentials())
             .to_db_scoped(sub, app_id)
             .await
     }
@@ -687,8 +872,16 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
             use flow_like_types::tokio;
 
             tokio::join!(
-                async { self.into_shared_credentials().to_store(true).await },
-                async { self.into_shared_credentials().to_store(false).await },
+                async {
+                    SharedCredentials::Aws(self.internal_shared_credentials())
+                        .to_store(true)
+                        .await
+                },
+                async {
+                    SharedCredentials::Aws(self.internal_shared_credentials())
+                        .to_store(false)
+                        .await
+                },
             )
         };
         let http_client = HTTPClient::new_without_refetch();
@@ -711,18 +904,16 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
             self.secret_access_key
                 .clone()
                 .ok_or(anyhow!("AWS_SECRET_ACCESS_KEY is not set"))?,
-            self.session_token
-                .clone()
-                .ok_or(anyhow!("SESSION_TOKEN is not set"))?,
+            self.session_token.clone(),
         );
 
         // Run logs live on the logs bucket and the project/user databases on
         // the content bucket, so each takes its own SSE-KMS configuration.
-        let shared = self.aws_shared_credentials();
-        let logs_sse = flow_like::credentials::aws_credentials::sse_kms_storage_options(
+        let shared = self.internal_shared_credentials();
+        let logs_sse = flow_like::credentials::aws_credentials::s3_storage_options(
             shared.logs_config.as_ref(),
         );
-        let content_sse = flow_like::credentials::aws_credentials::sse_kms_storage_options(
+        let content_sse = flow_like::credentials::aws_credentials::s3_storage_options(
             shared.content_config.as_ref(),
         );
 
@@ -732,6 +923,7 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
             secret.clone(),
             token.clone(),
             logs_sse,
+            self.region.clone(),
         )));
         config.register_build_project_database(Arc::new(make_s3_builder(
             content_bucket.clone(),
@@ -739,6 +931,7 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
             secret.clone(),
             token.clone(),
             content_sse.clone(),
+            self.region.clone(),
         )));
         config.register_build_user_database(Arc::new(make_s3_builder(
             content_bucket,
@@ -746,6 +939,7 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
             secret,
             token,
             content_sse,
+            self.region.clone(),
         )));
 
         let mut flow_like_state = FlowLikeState::new(config, http_client);
@@ -761,15 +955,19 @@ fn make_s3_builder(
     bucket: String,
     access_key: String,
     secret_key: String,
-    session_token: String,
+    session_token: Option<String>,
     sse_options: Vec<(String, String)>,
+    region: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
         let mut builder = connect(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
-            .storage_option("aws_session_token".to_string(), session_token.clone());
+            .storage_option("aws_region".to_string(), region.clone());
+        if let Some(token) = &session_token {
+            builder = builder.storage_option("aws_session_token".to_string(), token.clone());
+        }
         for (key, value) in &sse_options {
             builder = builder.storage_option(key.clone(), value.clone());
         }
@@ -1411,6 +1609,106 @@ mod tests {
     use flow_like_types::json::{from_str, to_string};
     use flow_like_types::tokio;
 
+    #[test]
+    fn sts_provider_and_lifetime_are_explicit() {
+        assert_eq!(
+            "rustfs".parse::<S3StsProvider>().unwrap(),
+            S3StsProvider::Rustfs
+        );
+        assert!("unknown".parse::<S3StsProvider>().is_err());
+        assert_eq!(parse_sts_duration(None).unwrap(), 3600);
+        assert_eq!(parse_sts_duration(Some("900")).unwrap(), 900);
+        for invalid in ["0", "899", "43201", "-1", "garbage"] {
+            assert!(parse_sts_duration(Some(invalid)).is_err());
+        }
+    }
+
+    /// Exercise the locked AWS SDK against a local STS endpoint, including the
+    /// signed issuer identity and the provider's returned expiry.
+    #[tokio::test]
+    async fn sts_client_uses_dedicated_endpoint_issuer_and_returned_expiration() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expires = chrono::Utc::now() + chrono::Duration::minutes(17);
+        let expiry_text = expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let response = format!(
+            r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials><AccessKeyId>scoped-key</AccessKeyId><SecretAccessKey>scoped-secret</SecretAccessKey><SessionToken>scoped-token</SessionToken><Expiration>{expiry_text}</Expiration></Credentials></AssumeRoleResult><ResponseMetadata><RequestId>test-request</RequestId></ResponseMetadata></AssumeRoleResponse>"#
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&chunk[..read]);
+                if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or_default();
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let shared = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .region(aws_sdk_sts::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_sts::config::SharedCredentialsProvider::new(
+                aws_sdk_sts::config::Credentials::new(
+                    "api-key",
+                    "api-secret",
+                    None,
+                    None,
+                    "api-test",
+                ),
+            ))
+            .build();
+        let settings = StsSettings {
+            provider: S3StsProvider::Rustfs,
+            endpoint: Some(format!("http://{address}")),
+            issuer: Some(("issuer-key".into(), "issuer-secret".into())),
+            role_arn: "arn:aws:iam::000000000000:role/test".into(),
+            duration_seconds: 900,
+        };
+        let response = settings.client(&shared).assume_role()
+            .role_arn(&settings.role_arn).role_session_name("test-session")
+            .duration_seconds(settings.duration_seconds)
+            .policy(r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::content/apps/a/*"]}]}"#)
+            .send().await.unwrap();
+        let request = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(request.contains("Credential=issuer-key/"));
+        assert!(!request.contains("api-key"));
+        assert!(request.contains("/us-east-1/sts/aws4_request"));
+        assert!(request.contains("Action=AssumeRole"));
+        assert!(request.contains("DurationSeconds=900"));
+        assert!(request.contains("Policy="));
+        let credentials = AwsRuntimeCredentials::from(response.credentials.unwrap());
+        assert_eq!(credentials.session_token.as_deref(), Some("scoped-token"));
+        assert_eq!(
+            credentials.expiration.unwrap().timestamp(),
+            expires.timestamp()
+        );
+    }
+
     #[tokio::test]
     #[ignore]
     async fn test_aws_master_credentials_setup() {
@@ -1614,7 +1912,6 @@ mod tests {
         assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
     }
 
-    #[test]
     /// The executor's board arrives as a presigned compiled artifact and its
     /// widgets come from the hub, so its credential must not be able to
     /// address the meta bucket at all — on a directory bucket any

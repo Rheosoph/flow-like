@@ -80,7 +80,10 @@ impl RegistryClient {
         let status = response.status();
         let detail = match response.text().await {
             Ok(body) => Self::compact_error_body(&body),
-            Err(error) => Some(format!("Failed to read error response body: {}", error)),
+            Err(error) => Some(format!(
+                "Failed to read error response body: {}",
+                error.without_url()
+            )),
         };
 
         match detail {
@@ -452,15 +455,23 @@ impl RegistryClient {
             Vec::new()
         } else if let Some(download_url) = &download.download_url {
             // Download from CDN/signed URL
-            let wasm_response = self.http_client.get(download_url).send().await?;
+            let wasm_response = self
+                .http_client
+                .get(download_url)
+                .send()
+                .await
+                .map_err(reqwest::Error::without_url)?;
             if !wasm_response.status().is_success() {
-                return Err(Self::http_response_error(
-                    "Failed to download WASM from CDN",
-                    wasm_response,
-                )
-                .await);
+                return Err(anyhow!(
+                    "Failed to download WASM from CDN: {}",
+                    wasm_response.status()
+                ));
             }
-            wasm_response.bytes().await?.to_vec()
+            wasm_response
+                .bytes()
+                .await
+                .map_err(reqwest::Error::without_url)?
+                .to_vec()
         } else if !download.wasm_base64.is_empty() {
             // Fallback to base64 decoding
             base64_decode(&download.wasm_base64)?
@@ -517,15 +528,23 @@ impl RegistryClient {
                 )
             })?;
 
-            let bundle_response = self.http_client.get(bundle_url).send().await?;
+            let bundle_response = self
+                .http_client
+                .get(bundle_url)
+                .send()
+                .await
+                .map_err(reqwest::Error::without_url)?;
             if !bundle_response.status().is_success() {
-                return Err(Self::http_response_error(
-                    "Failed to download widget bundle",
-                    bundle_response,
-                )
-                .await);
+                return Err(anyhow!(
+                    "Failed to download widget bundle: {}",
+                    bundle_response.status()
+                ));
             }
-            let bundle_bytes = bundle_response.bytes().await?.to_vec();
+            let bundle_bytes = bundle_response
+                .bytes()
+                .await
+                .map_err(reqwest::Error::without_url)?
+                .to_vec();
             widget_bundle_size = Some(bundle_bytes.len() as u64);
 
             let bundle_path =
@@ -1240,13 +1259,23 @@ impl RegistryClient {
         expected_checksum: Option<&str>,
         wasm_path: &Path,
     ) -> Result<()> {
-        let cwasm_response = self.http_client.get(cwasm_url).send().await?;
+        let cwasm_response = self
+            .http_client
+            .get(cwasm_url)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
         if !cwasm_response.status().is_success() {
-            return Err(
-                Self::http_response_error("Failed to download cwasm", cwasm_response).await,
-            );
+            return Err(anyhow!(
+                "Failed to download cwasm: {}",
+                cwasm_response.status()
+            ));
         }
-        let cwasm_bytes = cwasm_response.bytes().await?.to_vec();
+        let cwasm_bytes = cwasm_response
+            .bytes()
+            .await
+            .map_err(reqwest::Error::without_url)?
+            .to_vec();
 
         if let Some(expected) = expected_checksum {
             let actual = blake3::hash(&cwasm_bytes).to_hex().to_string();

@@ -6,6 +6,10 @@ pub use flow_like_db::*;
 #[cfg(feature = "db-chaos")]
 pub mod testing;
 
+pub(crate) mod coordination;
+
+#[cfg(test)]
+mod consistency_tests;
 pub mod lease;
 
 #[cfg(test)]

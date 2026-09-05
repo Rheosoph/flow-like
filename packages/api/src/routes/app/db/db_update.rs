@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -61,9 +61,24 @@ pub async fn update_table(
     validate_table_name(&table)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
 
+    let column_count = payload.updates.len();
     db.update(&payload.filter, payload.updates).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "database.rows.update",
+        "DatabaseTable",
+        table,
+        "Updated database rows matching a filter",
+        serde_json::json!({
+            "column_count": column_count,
+            "user_scoped": scope.is_user_scoped(),
+        })
+    );
 
     Ok(Json(()))
 }

@@ -96,10 +96,10 @@ pub(crate) fn validate_key(label: &str, key: &str) -> flow_like_types::Result<()
 
 pub(crate) fn database_root(database_url: &str) -> flow_like_types::Result<Url> {
     let url = Url::parse(database_url.trim())
-        .map_err(|err| anyhow!("firebase database url '{database_url}' is invalid: {err}"))?;
+        .map_err(|err| anyhow!("firebase database url is invalid: {err}"))?;
     if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
         return Err(anyhow!(
-            "firebase database url '{database_url}' must be an http(s) url with a host"
+            "firebase database url must be an http(s) url with a host"
         ));
     }
     Ok(url)
@@ -114,7 +114,7 @@ pub(crate) fn json_url(root: &Url, segments: &[&str]) -> flow_like_types::Result
     {
         let mut path = url
             .path_segments_mut()
-            .map_err(|_| anyhow!("firebase database url '{root}' cannot carry a path"))?;
+            .map_err(|_| anyhow!("firebase database url cannot carry a path"))?;
         path.pop_if_empty();
         path.extend(head);
         path.push(&format!("{last}.json"));
@@ -187,6 +187,28 @@ mod tests {
         assert!(json_url(&root, &[]).is_err());
         assert!(database_root("ftp://x").is_err());
         assert!(database_root("not a url").is_err());
+    }
+
+    #[test]
+    fn invalid_database_urls_do_not_expose_secrets() {
+        for url in [
+            "https://secret-user:secret-password@[invalid/?auth=secret-token",
+            "ftp://secret-user:secret-password@example.com/?auth=secret-token",
+            "not-a-url?auth=secret-token",
+        ] {
+            let error = database_root(url).unwrap_err();
+            let diagnostic = format!("{error:?}");
+            assert!(diagnostic.contains("firebase database url"));
+            assert!(!diagnostic.contains("secret-"));
+            assert!(!diagnostic.contains(url));
+        }
+
+        let opaque_root = Url::parse("data:secret-token").unwrap();
+        let error = json_url(&opaque_root, &["channels"]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "firebase database url cannot carry a path"
+        );
     }
 
     fn assert_no_open_grants(node: &Value, path: &str) {

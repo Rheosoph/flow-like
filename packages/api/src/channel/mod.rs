@@ -137,7 +137,8 @@ pub const KNOWN_TRANSPORTS: &[&str] = &[
 ];
 
 pub(crate) fn api_base_url() -> String {
-    std::env::var("API_BASE_URL")
+    std::env::var("PUBLIC_API_URL")
+        .or_else(|_| std::env::var("API_BASE_URL"))
         .ok()
         .map(|url| url.trim().trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())

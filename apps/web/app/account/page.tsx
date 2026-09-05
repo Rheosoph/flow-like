@@ -8,9 +8,6 @@ import {
 	type UpdateUserAttributesInput,
 	decodeJWT,
 	fetchAuthSession,
-	fetchMFAPreference,
-	fetchUserAttributes,
-	getCurrentUser,
 	updatePassword,
 	updateUserAttributes,
 } from "aws-amplify/auth";
@@ -132,17 +129,7 @@ const AccountPage: React.FC = () => {
 				},
 			);
 
-			const currentUser = await getCurrentUser();
-			const attributes = await fetchUserAttributes();
 			const authSession = await fetchAuthSession();
-			const mfaPreferences = await fetchMFAPreference();
-
-			console.dir({
-				currentUser,
-				attributes,
-				authSession,
-				mfaPreferences,
-			});
 
 			const isFederated = Array.isArray(
 				authSession.tokens?.idToken?.payload?.identities,

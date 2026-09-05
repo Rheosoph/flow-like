@@ -270,6 +270,19 @@ pub trait ExecutionStateStore: Send + Sync + Debug {
         input: UpdateRunInput,
     ) -> Result<ExecutionRunRecord, StateStoreError>;
 
+    /// Trusted control-plane cancellation, called only after the execution
+    /// manager confirms termination and blocks subsequent launches for this run.
+    /// This revokes delivery ownership without requiring the killed runner's token.
+    async fn cancel_run_after_termination(
+        &self,
+        _run_id: &str,
+        _app_id: &str,
+    ) -> Result<ExecutionRunRecord, StateStoreError> {
+        Err(StateStoreError::Configuration(
+            "confirmed execution cancellation is not supported by this state backend".into(),
+        ))
+    }
+
     /// Atomically bind a queued run to `job_id` and grant or renew ownership
     /// for one delivery token. Backends without a conditional-write lease
     /// implementation fail closed.

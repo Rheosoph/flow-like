@@ -48,6 +48,7 @@ import {
 } from "./migrate";
 
 const ENDPOINT = "abc0def1ghi2jkl3mno4pqr5stu6.dsql.eu-west-1.on.aws";
+const PRIVATE_ENDPOINT = ENDPOINT.replace(".dsql.", ".dsql-fnh4.");
 const ROLE_ARN = "arn:aws:iam::123456789012:role/flow-like-api-runtime";
 const TOKEN =
 	"abc.dsql.eu-west-1.on.aws/?Action=DbConnectAdmin&X-Amz-Signature=ab%2Fcd+ef=&X-Amz-Expires=900";
@@ -69,13 +70,25 @@ describe("parseConfig", () => {
 		expect(config.migrationsDir.endsWith("prisma/migrations-dsql")).toBe(true);
 	});
 
+	test("accepts PrivateLink endpoints and derives their region", () => {
+		const config = parseConfig({
+			...validSettings(),
+			DSQL_CLUSTER_ENDPOINT: PRIVATE_ENDPOINT,
+		});
+		expect(config.endpoint).toBe(PRIVATE_ENDPOINT);
+		expect(config.region).toBe("eu-west-1");
+	});
+
 	test("accepts a matching DSQL_REGION and rejects a mismatching one", () => {
-		expect(
-			parseConfig({ ...validSettings(), DSQL_REGION: "eu-west-1" }).region,
-		).toBe("eu-west-1");
-		expect(() =>
-			parseConfig({ ...validSettings(), DSQL_REGION: "us-east-1" }),
-		).toThrow(/DSQL_REGION: must match the endpoint's region eu-west-1/);
+		for (const endpoint of [ENDPOINT, PRIVATE_ENDPOINT]) {
+			const settings = { ...validSettings(), DSQL_CLUSTER_ENDPOINT: endpoint };
+			expect(
+				parseConfig({ ...settings, DSQL_REGION: "eu-west-1" }).region,
+			).toBe("eu-west-1");
+			expect(() =>
+				parseConfig({ ...settings, DSQL_REGION: "us-east-1" }),
+			).toThrow(/DSQL_REGION: must match the endpoint's region eu-west-1/);
+		}
 	});
 
 	test("rejects endpoints that are not bare DSQL hostnames", () => {
@@ -87,6 +100,15 @@ describe("parseConfig", () => {
 			"ABC.dsql.eu-west-1.on.aws",
 			"abc.rds.eu-west-1.amazonaws.com",
 			"abc.dsql.on.aws",
+			"abc.rds.eu-west-1.on.aws",
+			"abc.dsql-.eu-west-1.on.aws",
+			"abc.dsql--fnh4.eu-west-1.on.aws",
+			"abc.dsql-fnh4-.eu-west-1.on.aws",
+			"abc.dsql-fnh4.us-east-12.on.aws",
+			`abc.dsql-${"a".repeat(59)}.eu-west-1.on.aws`,
+			`https://${PRIVATE_ENDPOINT}`,
+			`${PRIVATE_ENDPOINT}:5432`,
+			`${PRIVATE_ENDPOINT}/postgres`,
 		]) {
 			expect(() =>
 				parseConfig({ ...validSettings(), DSQL_CLUSTER_ENDPOINT: endpoint }),
@@ -175,6 +197,20 @@ describe("parseConfig", () => {
 });
 
 describe("connection composition", () => {
+	test("preserves the PrivateLink hostname and TLS checks in both clients", () => {
+		const config = parseConfig({
+			...validSettings(),
+			DSQL_CLUSTER_ENDPOINT: PRIVATE_ENDPOINT,
+		});
+		const client = clientConfig(config, TOKEN);
+		expect(client.host).toBe(PRIVATE_ENDPOINT);
+		expect(client.ssl).toEqual({ rejectUnauthorized: true });
+		const url = new URL(composeDatabaseUrl(config, TOKEN));
+		expect(url.hostname).toBe(PRIVATE_ENDPOINT);
+		expect(url.searchParams.get("sslmode")).toBe("require");
+		expect(url.searchParams.get("sslaccept")).toBe("strict");
+	});
+
 	test("composeDatabaseUrl encodes the token and uses quaint's verify-full spelling", () => {
 		const config = parseConfig(validSettings());
 		const raw = composeDatabaseUrl(config, TOKEN);

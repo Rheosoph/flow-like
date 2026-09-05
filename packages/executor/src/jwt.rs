@@ -1,5 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
@@ -13,6 +13,7 @@ const CALLBACK_BASE_URL_ENV: &str = "CALLBACK_BASE_URL";
 
 /// Cached public key bytes (fetched from API or env var)
 static PUBLIC_KEY_CACHE: OnceCell<Vec<u8>> = OnceCell::const_new();
+static DECODING_KEY_CACHE: OnceCell<DecodingKey> = OnceCell::const_new();
 
 /// JWKS response from API
 #[derive(Debug, Deserialize)]
@@ -71,6 +72,9 @@ pub struct ExecutorClaims {
     /// normal run; the queued payload's `shadow` byte must match this claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<bool>,
+    /// Signed digest of the complete dispatch payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_hash: Option<String>,
     /// Callback URL for progress reporting
     pub callback_url: String,
     /// Token type
@@ -166,9 +170,9 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, ExecutorError> {
     point.extend_from_slice(&y_bytes);
 
     // Convert to PEM format using p256 crate
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
     use p256::EncodedPoint;
     use p256::PublicKey;
+    use p256::elliptic_curve::sec1::FromEncodedPoint;
 
     let encoded_point = EncodedPoint::from_bytes(&point)
         .map_err(|e| ExecutorError::Jwt(format!("Invalid EC point: {}", e)))?;
@@ -205,19 +209,27 @@ async fn get_public_key() -> Result<&'static Vec<u8>, ExecutorError> {
         .await
 }
 
-/// Verify and decode the executor JWT (async version - fetches key from API if needed)
-pub async fn verify_jwt_async(token: &str) -> Result<ExecutorClaims, ExecutorError> {
-    let key_bytes = get_public_key().await?;
+/// Load and parse the verification key before accepting a warm execution.
+pub async fn prepare_verification_key() -> Result<&'static DecodingKey, ExecutorError> {
+    DECODING_KEY_CACHE
+        .get_or_try_init(|| async {
+            let key_bytes = get_public_key().await?;
+            DecodingKey::from_ec_pem(key_bytes)
+                .map_err(|e| ExecutorError::Jwt(format!("Invalid public key: {}", e)))
+        })
+        .await
+}
 
-    let decoding_key = DecodingKey::from_ec_pem(key_bytes)
-        .map_err(|e| ExecutorError::Jwt(format!("Invalid public key: {}", e)))?;
+/// Verify and decode the executor JWT, fetching the key from the API if needed.
+pub async fn verify_jwt_async(token: &str) -> Result<ExecutorClaims, ExecutorError> {
+    let decoding_key = prepare_verification_key().await?;
 
     let mut validation = Validation::new(Algorithm::ES256);
     validation.validate_exp = true;
     validation.set_audience(&["flow-like-executor"]);
     validation.set_issuer(&["flow-like"]);
 
-    let token_data = decode::<ExecutorClaims>(token, &decoding_key, &validation)?;
+    let token_data = decode::<ExecutorClaims>(token, decoding_key, &validation)?;
 
     Ok(token_data.claims)
 }

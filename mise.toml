@@ -390,7 +390,7 @@ bun run --cwd packages/api db:dsql:diff -- {{arg(name="name")}} {{arg(name="flag
 description = "Apply the committed DSQL migrations to a cluster (DSQL_CLUSTER_ENDPOINT required)"
 run = """
 set -eu
-: "${DSQL_CLUSTER_ENDPOINT:?set DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws}"
+: "${DSQL_CLUSTER_ENDPOINT:?set DSQL_CLUSTER_ENDPOINT to the public or PrivateLink cluster hostname}"
 
 # The runner refuses to start when any static credential or libpq connection
 # source is present, so that nothing can redirect it or replace its IAM token

@@ -1,8 +1,19 @@
 import { describe, expect, test } from "vitest";
 
-import { parseArgs } from "../../../scripts/flowpilot-e2e";
+import { constantTimeEqual, parseArgs } from "../../../scripts/flowpilot-e2e";
 
 describe("FlowPilot E2E CLI options", () => {
+	test("compares callback capabilities without throwing on length mismatch", () => {
+		expect(constantTimeEqual("/callback-secret", "/callback-secret")).toBe(
+			true,
+		);
+		expect(constantTimeEqual("/callback-secrex", "/callback-secret")).toBe(
+			false,
+		);
+		expect(() => constantTimeEqual("/short", "/callback-secret")).not.toThrow();
+		expect(constantTimeEqual("/short", "/callback-secret")).toBe(false);
+	});
+
 	test("parses an ordered explicit subset and tight-loop controls", () => {
 		expect(
 			parseArgs([

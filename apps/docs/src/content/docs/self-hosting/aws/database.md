@@ -25,11 +25,11 @@ committed migrations and grants the runtime role.
 The presence of `DSQL_CLUSTER_ENDPOINT` selects DSQL; without it the API and
 file tracker keep reading `DATABASE_URL` from SSM under `SECRET_PREFIX` as
 before. All three components share the same validation
-(`packages/aws-data/src/dsql.rs`, mirrored in `apps/backend/aws/migration/migrate.ts`).
+(`packages/aws-data/src/dsql.rs`, mirrored in `apps/backend/aws/migration/shared.ts`).
 
 | Variable | API / file tracker | Migration job |
 | --- | --- | --- |
-| `DSQL_CLUSTER_ENDPOINT` | required, `<id>.dsql.<region>.on.aws` | required |
+| `DSQL_CLUSTER_ENDPOINT` | required, public or PrivateLink cluster hostname | required, same formats |
 | `DSQL_REGION` | optional, must match the endpoint | optional, must match the endpoint |
 | `DSQL_USER` | database role, default `admin`; production uses `flow_like_api` | always `admin` |
 | `DSQL_TOKEN_DURATION_SECS` | token lifetime, default `3600` (1800–604800) | fixed `900`, minted per connection |
@@ -38,6 +38,12 @@ before. All three components share the same validation
 | `DSQL_RUNTIME_DB_ROLE` | n/a | optional, default `flow_like_api` |
 | `DSQL_MIGRATIONS_DIR` | n/a | optional, default `prisma/migrations-dsql` (what the image ships) |
 | `DSQL_JOB_WAIT_TIMEOUT_SECS` | n/a | optional, default `7200` (60–86400), budget per wait on `sys.jobs` |
+
+Public endpoints have the form `<id>.dsql.<region>.on.aws`; PrivateLink
+connection endpoints use `<id>.dsql-<service-id>.<region>.on.aws`. Use the
+private endpoint for all three components when the cluster blocks public
+access, and run the migration task inside the connected VPC. The public
+hostname keeps its public route even when the task runs in that VPC.
 
 Forbidden alongside a DSQL endpoint, even when empty: `DATABASE_URL`,
 `PGPASSWORD`, `PGPASSFILE`, `PGSERVICE`, `PGSERVICEFILE`, `PGHOST`,

@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -434,9 +434,21 @@ pub async fn execute_commands(
     let put = save_board_and_refresh_summary(&state, &app_id, &board)
         .instrument(tracing::debug_span!("execute_commands.save"))
         .await?;
-    // The write is committed; everything below is read-only bookkeeping, so concurrent writers
-    // may proceed while the snapshot and the sync tail are built.
+    // The board write is committed. Concurrent writers may proceed while the audit entry,
+    // snapshot and sync tail are built.
     drop(mutation_guard);
+    if batch > 0 {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "board.commands.execute",
+            "Board",
+            board_id,
+            "Applied board commands",
+            serde_json::json!({ "command_count": batch })
+        );
+    }
     // Pinning the cache to this write is what makes the next request's `If-None-Match` a memory
     // hit. Building the sync snapshot on top of it only pays off when a tail is actually requested:
     // the desktop drain never sends a manifest, and a Lambda freezes at the response, so there is no

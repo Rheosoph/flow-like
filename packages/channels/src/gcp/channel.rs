@@ -140,15 +140,15 @@ impl FirebaseRtdbChannel {
     async fn delete_remote(&self) {
         let token = match self.auth.id_token().await {
             Ok(token) => token,
-            Err(err) => {
-                tracing::warn!(channel = %self.channel_id, error = %err, "firebase channel cleanup skipped: no id token");
+            Err(_) => {
+                tracing::warn!(channel = %self.channel_id, "firebase channel cleanup skipped: no id token");
                 return;
             }
         };
         let mut url = match json_url(&self.root, &["channels", &self.channel_id]) {
             Ok(url) => url,
-            Err(err) => {
-                tracing::warn!(channel = %self.channel_id, error = %err, "firebase channel cleanup skipped");
+            Err(_) => {
+                tracing::warn!(channel = %self.channel_id, "firebase channel cleanup skipped");
                 return;
             }
         };
@@ -163,6 +163,7 @@ impl FirebaseRtdbChannel {
                 tracing::warn!(channel = %self.channel_id, status = %response.status(), "firebase channel delete rejected");
             }
             Err(err) => {
+                let err = err.without_url();
                 tracing::warn!(channel = %self.channel_id, error = %err, "firebase channel delete failed");
             }
         }

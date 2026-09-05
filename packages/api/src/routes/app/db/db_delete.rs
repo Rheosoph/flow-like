@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -60,9 +60,20 @@ pub async fn delete_from_table(
     validate_table_name(&table)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
 
     db.delete(&payload.query).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "database.rows.delete",
+        "DatabaseTable",
+        table,
+        "Deleted database rows matching a filter",
+        serde_json::json!({ "user_scoped": scope.is_user_scoped() })
+    );
 
     Ok(Json(()))
 }

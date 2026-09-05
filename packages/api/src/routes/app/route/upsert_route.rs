@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::event, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::event, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -74,6 +74,17 @@ pub async fn create_route(
     active.route = Set(Some(body.path.clone()));
     active.is_default = Set(body.is_default);
     let updated = active.update(&state.db).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "route.create",
+        "Route",
+        updated.id,
+        "Created an event route mapping",
+        serde_json::json!({ "is_default": updated.is_default })
+    );
 
     Ok(Json(RouteMapping {
         id: updated.id.clone(),
@@ -150,6 +161,20 @@ pub async fn update_route(
         target_active.is_default = Set(body.is_default.unwrap_or(inherited_default));
         let updated = target_active.update(&state.db).await?;
 
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "route.reassign",
+            "Route",
+            updated.id,
+            "Reassigned an event route mapping",
+            serde_json::json!({
+                "previous_event_id": route_id,
+                "is_default": updated.is_default,
+            })
+        );
+
         return Ok(Json(RouteMapping {
             id: updated.id.clone(),
             path,
@@ -162,6 +187,17 @@ pub async fn update_route(
         active.is_default = Set(is_default);
     }
     let updated = active.update(&state.db).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "route.update",
+        "Route",
+        updated.id,
+        "Updated an event route mapping",
+        serde_json::json!({ "is_default": updated.is_default })
+    );
 
     Ok(Json(RouteMapping {
         id: updated.id.clone(),

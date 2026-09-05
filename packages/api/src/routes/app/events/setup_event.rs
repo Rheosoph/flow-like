@@ -10,8 +10,9 @@
 //! `POST /apps/{app_id}/events/{event_id}/setup` — which may name a Live
 //! variant to build that variant's own registration bucket.
 //!
-//! Persistence is a delete-then-insert by `(app_id, event_id,
-//! event_version, variant)`. Every setup writes the `(event, variant)`
+//! Persistence reconciles rows by route within `(app_id, event_id,
+//! event_version, variant)` and removes obsolete versions in bounded transactions.
+//! Every setup writes the `(event, variant)`
 //! `EventSetup` pointer row; for the stable variant the event row is
 //! additionally updated with `setup_status`, `last_setup_at`,
 //! `last_setup_version`, and `last_setup_error` — the back-compat pointer
@@ -65,6 +66,10 @@ use crate::{
 };
 
 use super::db::{encrypt_token, get_event_from_db};
+
+#[path = "setup_persistence.rs"]
+mod persistence;
+use persistence::{prune_registration_versions, replace_registration_rows};
 
 /// Default setup timeout — setup workflows are expected to finish in
 /// seconds (they're emitting config, not doing real work).
@@ -212,10 +217,16 @@ fn http_response_byte_stream(response: reqwest::Response) -> ByteStream {
 
 async fn collect_server_config_events(
     stream: ByteStream,
-) -> (Vec<ServerConfigEnvelope>, Option<String>) {
+) -> (
+    Vec<ServerConfigEnvelope>,
+    Option<String>,
+    crate::entity::sea_orm_active_enums::RunStatus,
+) {
     let mut events: Vec<ServerConfigEnvelope> = Vec::new();
     let mut error: Option<String> = None;
     let mut es = stream.eventsource();
+    let mut terminal_status = crate::entity::sea_orm_active_enums::RunStatus::Failed;
+    let mut completed = false;
 
     while let Some(item) = es.next().await {
         let sse = match item {
@@ -241,18 +252,29 @@ async fn collect_server_config_events(
         }
         if event_type == "completed" {
             let payload = parsed.get("payload");
-            if let Some(status) = payload
+            let status = payload
                 .and_then(|p| p.get("status"))
-                .and_then(|s| s.as_str())
-                && !is_completed_run_status(status)
-            {
-                error = Some(format!("setup run finished with status: {status}"));
+                .and_then(|s| s.as_str());
+            terminal_status = if status.is_some_and(is_completed_run_status) {
+                crate::entity::sea_orm_active_enums::RunStatus::Completed
+            } else {
+                crate::execution::completed_run_status(status)
+            };
+            completed = true;
+            if terminal_status != crate::entity::sea_orm_active_enums::RunStatus::Completed {
+                error = Some(format!(
+                    "setup run finished with status: {:?}",
+                    terminal_status
+                ));
             }
             break;
         }
     }
 
-    (events, error)
+    if !completed && error.is_none() {
+        error = Some("Setup stream ended without a completion event".to_owned());
+    }
+    (events, error, terminal_status)
 }
 
 /// Core setup logic. Invoked from background tasks spawned by
@@ -313,11 +335,9 @@ pub(crate) async fn run_event_setup(
         ResolvedTarget::from_variant(&event_variant)
     };
 
-    // Concurrent-setup guard. Setup writes are delete-then-insert by
-    // `(app, event, version, variant)` so two parallel calls race on the
-    // same rows. Reject the second unless the caller explicitly forces.
-    // The persist phase additionally serializes on a row lock and derives
-    // the registration prune's protect set inside its transaction.
+    // Reject overlapping setup runs unless the caller explicitly forces one.
+    // Persistence and each cleanup page lock the Event row before reading
+    // registrations and serving pointers.
     if !body.force {
         let running = if variant_name == STABLE_VARIANT {
             event::Entity::find_by_id(&core_event.id)
@@ -457,6 +477,7 @@ pub(crate) async fn run_event_setup(
         .insert(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    crate::audit::record_execution_dispatch(&state, &run_id, "event:setup").await?;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -496,6 +517,8 @@ pub(crate) async fn run_event_setup(
                 }
                 Err(e) => {
                     let msg = format!("dispatch failed: {e}");
+                    crate::audit::record_execution_dispatch_failure(&state, &run_id, "event:setup")
+                        .await?;
                     record_setup_failure(
                         &state,
                         &app_id,
@@ -517,6 +540,8 @@ pub(crate) async fn run_event_setup(
             }
             Err(e) => {
                 let msg = format!("dispatch failed: {e}");
+                crate::audit::record_execution_dispatch_failure(&state, &run_id, "event:setup")
+                    .await?;
                 record_setup_failure(
                     &state,
                     &app_id,
@@ -536,7 +561,7 @@ pub(crate) async fn run_event_setup(
     // soon as we see a `completed` event so we don't hold the connection
     // longer than necessary.
     let timeout = Duration::from_secs(body.timeout_seconds.unwrap_or(DEFAULT_SETUP_TIMEOUT_SECS));
-    let (collected, error) = match flow_like_types::tokio::time::timeout(
+    let (collected, error, terminal_status) = match flow_like_types::tokio::time::timeout(
         timeout,
         collect_server_config_events(setup_stream),
     )
@@ -545,6 +570,13 @@ pub(crate) async fn run_event_setup(
         Ok(pair) => pair,
         Err(_) => {
             let msg = format!("setup timed out after {}s", timeout.as_secs());
+            crate::execution::update_run_on_completion(
+                &crate::audit::ExecutionAuditContext::from(&state),
+                &run_id,
+                crate::entity::sea_orm_active_enums::RunStatus::Timeout,
+                0,
+            )
+            .await?;
             record_setup_failure(
                 &state,
                 &app_id,
@@ -558,6 +590,14 @@ pub(crate) async fn run_event_setup(
             return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
         }
     };
+
+    crate::execution::update_run_on_completion(
+        &crate::audit::ExecutionAuditContext::from(&state),
+        &run_id,
+        terminal_status,
+        0,
+    )
+    .await?;
 
     if let Some(ref err_msg) = error {
         record_setup_failure(
@@ -629,8 +669,8 @@ pub(crate) async fn run_event_setup(
         });
     }
 
-    // Persist: delete previous (app_id, event_id, event_version, variant)
-    // rows, then insert the freshly collected ones in a single transaction.
+    // Reconcile the collected registrations and advance the serving pointer
+    // atomically. Obsolete versions are cleaned up after this commits.
     let collected_to_persist: Vec<ServerConfigEnvelope> = match expected_kind {
         Some(kind) => collected
             .iter()
@@ -684,7 +724,9 @@ pub(crate) async fn run_event_setup(
         Ok(pair) => pair,
         Err(e) => {
             let msg = match &e {
-                PersistError::Parity(reason) | PersistError::VariantGone(reason) => reason.clone(),
+                PersistError::Parity(reason)
+                | PersistError::Budget(reason)
+                | PersistError::VariantGone(reason) => reason.clone(),
                 PersistError::Db(err) => format!("persisting registrations failed: {err}"),
                 PersistError::Other(err) => format!("persisting registrations failed: {err}"),
             };
@@ -704,7 +746,9 @@ pub(crate) async fn run_event_setup(
             // same way as other failed-but-not-broken setups (a 400 at the
             // route), not as an internal error.
             return match e {
-                PersistError::Parity(_) | PersistError::VariantGone(_) => Ok(SetupEventResponse {
+                PersistError::Parity(_)
+                | PersistError::Budget(_)
+                | PersistError::VariantGone(_) => Ok(SetupEventResponse {
                     run_id,
                     event_id: core_event.id,
                     event_version,
@@ -910,10 +954,9 @@ async fn touch_event_setup_status<C: ConnectionTrait>(
 /// MCP protocol handler will interpret it later. This keeps the inbound
 /// path implementable without locking in MCP-specific schema details.
 ///
-/// Rows from superseded event versions of the same variant are pruned in
-/// the same transaction — only the version just written and the variant's
-/// serving pointer (`last_setup_version` for stable, the `EventSetup` row
-/// otherwise) survive. Every registration row is stamped with the variant,
+/// Superseded versions are pruned in bounded transactions after persistence.
+/// Each page protects the written version, the previous serving version and
+/// the current serving pointer. Every registration row is stamped with the variant,
 /// and the `(event, variant)` `EventSetup` pointer row is written
 /// atomically with the rows it names; only the stable variant additionally
 /// advances `event.last_setup_version` + `setup_status`. A non-stable
@@ -936,16 +979,277 @@ async fn persist_registrations(
         event_version: event_version.to_string(),
         variant: variant.to_string(),
         target: target.clone(),
-        envelopes: envelopes.to_vec(),
-        setup_board: setup_board.cloned(),
+        prepared: prepare_registrations(
+            state,
+            app_id,
+            event_id,
+            event_version,
+            variant,
+            envelopes,
+            setup_board,
+        )?,
     });
-    state
+    let (registrations, auths, previous_version) = state
         .transaction(|txn| {
             let state = state.clone();
             let inputs = inputs.clone();
             Box::pin(async move { persist_registrations_in(txn, &state, &inputs).await })
         })
-        .await
+        .await?;
+    if let Err(error) =
+        prune_registration_versions(state, &inputs, previous_version.as_deref()).await
+    {
+        tracing::warn!(%event_id, %error, "obsolete registration cleanup will be retried on the next setup");
+    }
+    Ok((registrations, auths))
+}
+
+#[derive(Clone)]
+struct PreparedRegistrations {
+    registrations: Vec<event_remote_registration::ActiveModel>,
+    auths: Vec<event_remote_auth::ActiveModel>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_registrations(
+    state: &AppState,
+    app_id: &str,
+    event_id: &str,
+    event_version: &str,
+    variant: &str,
+    envelopes: &[ServerConfigEnvelope],
+    setup_board: Option<&Board>,
+) -> flow_like_types::Result<PreparedRegistrations> {
+    let mut registrations = Vec::new();
+    let mut auths = Vec::new();
+    let now = chrono::Utc::now().fixed_offset();
+    // Dedup `(variant, kind, method, path)` across all envelopes for this
+    // event version. A misconfigured graph can produce duplicate routes (e.g.
+    // two REST server nodes both registering `POST /webhook`). We keep the
+    // first occurrence and emit a warning for the rest — inbound dispatch
+    // would otherwise pick rows in DB-order, which is undefined.
+    let mut seen: std::collections::HashSet<(String, String, String, String)> =
+        std::collections::HashSet::new();
+
+    for env in envelopes {
+        match env.kind.as_str() {
+            "rest" => {
+                let (regs, auth_id) = expand_rest_config(
+                    state,
+                    app_id,
+                    event_id,
+                    event_version,
+                    variant,
+                    &env.node_id,
+                    &env.config,
+                    &mut auths,
+                    now,
+                )?;
+                for mut reg in regs {
+                    reg.auth_id = Set(auth_id.clone());
+                    let kind_s = reg.kind.clone().take().unwrap_or_default();
+                    let method_s = reg
+                        .method
+                        .clone()
+                        .take()
+                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let path_s = reg.path.clone().take().unwrap_or_default();
+                    let key = (variant.to_string(), kind_s, method_s.to_uppercase(), path_s);
+                    if !seen.insert(key.clone()) {
+                        tracing::warn!(
+                            kind = %key.1, method = %key.2, path = %key.3,
+                            "duplicate inbound route within setup batch; ignoring later occurrence"
+                        );
+                        continue;
+                    }
+                    registrations.push(reg);
+                }
+            }
+            "mcp" => {
+                let auth_id = prepare_auth_from_value(
+                    state,
+                    app_id,
+                    event_id,
+                    event_version,
+                    variant,
+                    &env.node_id,
+                    "mcp",
+                    env.config.get("auth"),
+                    &mut auths,
+                    now,
+                )?;
+                let key = (
+                    variant.to_string(),
+                    "mcp_raw".to_string(),
+                    String::new(),
+                    "/".to_string(),
+                );
+                if !seen.insert(key) {
+                    tracing::warn!(
+                        node_id = %env.node_id,
+                        "duplicate mcp_raw registration within setup batch; ignoring"
+                    );
+                    continue;
+                }
+                let mut config_json = env.config.clone();
+                if let Some(auth) = env.config.get("auth")
+                    && let Some(obj) = config_json.as_object_mut()
+                {
+                    obj.insert(
+                        "auth".to_string(),
+                        protect_auth_config_for_storage(auth, &state.encryption_key),
+                    );
+                }
+                registrations.push(event_remote_registration::ActiveModel {
+                    id: Set(flow_like_types::create_id()),
+                    app_id: Set(app_id.to_string()),
+                    event_id: Set(event_id.to_string()),
+                    event_version: Set(event_version.to_string()),
+                    variant: Set(variant.to_string()),
+                    kind: Set("mcp_raw".to_string()),
+                    method: Set(None),
+                    path: Set("/".to_string()),
+                    node_id: Set(Some(env.node_id.clone())),
+                    schema_json: Set(None),
+                    extras_json: Set(Some(config_json)),
+                    auth_id: Set(auth_id.clone()),
+                    created_at: Set(now),
+                });
+
+                for tool in mcp_tool_entries(setup_board, &env.config) {
+                    let key = (
+                        variant.to_string(),
+                        "mcp_tool".to_string(),
+                        String::new(),
+                        tool.name.clone(),
+                    );
+                    if !seen.insert(key.clone()) {
+                        tracing::warn!(
+                            kind = %key.1, path = %key.3,
+                            "duplicate mcp tool registration within setup batch; ignoring later occurrence"
+                        );
+                        continue;
+                    }
+                    registrations.push(event_remote_registration::ActiveModel {
+                        id: Set(flow_like_types::create_id()),
+                        app_id: Set(app_id.to_string()),
+                        event_id: Set(event_id.to_string()),
+                        event_version: Set(event_version.to_string()),
+                        variant: Set(variant.to_string()),
+                        kind: Set("mcp_tool".to_string()),
+                        method: Set(None),
+                        path: Set(tool.name.clone()),
+                        node_id: Set(Some(tool.node_id.clone())),
+                        schema_json: Set(Some(tool.schema.clone())),
+                        extras_json: Set(Some(json!({
+                            "name": tool.name,
+                            "description": tool.description,
+                            "function_ref": tool.node_id,
+                        }))),
+                        auth_id: Set(auth_id.clone()),
+                        created_at: Set(now),
+                    });
+                }
+
+                if let Some(resources) = env.config.get("resources").and_then(|v| v.as_array()) {
+                    for resource in resources {
+                        let uri = mcp_resource_uri(resource);
+                        if uri.is_empty() {
+                            tracing::warn!(
+                                node_id = %env.node_id,
+                                "mcp resource has no uri or flow_path.path; skipping registration row"
+                            );
+                            continue;
+                        }
+                        let key = (
+                            variant.to_string(),
+                            "mcp_resource".to_string(),
+                            String::new(),
+                            uri.clone(),
+                        );
+                        if !seen.insert(key.clone()) {
+                            tracing::warn!(
+                                kind = %key.1, path = %key.3,
+                                "duplicate mcp resource registration within setup batch; ignoring later occurrence"
+                            );
+                            continue;
+                        }
+                        registrations.push(event_remote_registration::ActiveModel {
+                            id: Set(flow_like_types::create_id()),
+                            app_id: Set(app_id.to_string()),
+                            event_id: Set(event_id.to_string()),
+                            event_version: Set(event_version.to_string()),
+                            variant: Set(variant.to_string()),
+                            kind: Set("mcp_resource".to_string()),
+                            method: Set(None),
+                            path: Set(uri),
+                            node_id: Set(None),
+                            schema_json: Set(None),
+                            extras_json: Set(Some(resource.clone())),
+                            auth_id: Set(auth_id.clone()),
+                            created_at: Set(now),
+                        });
+                    }
+                }
+
+                if let Some(prompts) = env.config.get("prompts").and_then(|v| v.as_array()) {
+                    for prompt in prompts {
+                        let name = prompt
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        if name.is_empty() {
+                            tracing::warn!(
+                                node_id = %env.node_id,
+                                "mcp prompt has no name; skipping registration row"
+                            );
+                            continue;
+                        }
+                        let key = (
+                            variant.to_string(),
+                            "mcp_prompt".to_string(),
+                            String::new(),
+                            name.clone(),
+                        );
+                        if !seen.insert(key.clone()) {
+                            tracing::warn!(
+                                kind = %key.1, path = %key.3,
+                                "duplicate mcp prompt registration within setup batch; ignoring later occurrence"
+                            );
+                            continue;
+                        }
+                        registrations.push(event_remote_registration::ActiveModel {
+                            id: Set(flow_like_types::create_id()),
+                            app_id: Set(app_id.to_string()),
+                            event_id: Set(event_id.to_string()),
+                            event_version: Set(event_version.to_string()),
+                            variant: Set(variant.to_string()),
+                            kind: Set("mcp_prompt".to_string()),
+                            method: Set(None),
+                            path: Set(name),
+                            node_id: Set(None),
+                            schema_json: Set(None),
+                            extras_json: Set(Some(prompt.clone())),
+                            auth_id: Set(auth_id.clone()),
+                            created_at: Set(now),
+                        });
+                    }
+                }
+            }
+            other => {
+                tracing::warn!(kind = %other, "ignoring unknown server_config kind");
+            }
+        }
+    }
+
+    Ok(PreparedRegistrations {
+        registrations,
+        auths,
+    })
 }
 
 /// Everything one persist attempt reads, owned so the retried body can run
@@ -956,15 +1260,14 @@ struct PersistInputs {
     event_version: String,
     variant: String,
     target: ResolvedTarget,
-    envelopes: Vec<ServerConfigEnvelope>,
-    setup_board: Option<Board>,
+    prepared: PreparedRegistrations,
 }
 
 async fn persist_registrations_in(
     txn: &DatabaseTransaction,
     state: &AppState,
     inputs: &PersistInputs,
-) -> Result<(usize, usize), PersistError> {
+) -> Result<(usize, usize, Option<String>), PersistError> {
     use sea_orm::QuerySelect;
 
     let PersistInputs {
@@ -973,8 +1276,7 @@ async fn persist_registrations_in(
         event_version,
         variant,
         target,
-        envelopes,
-        setup_board,
+        prepared: _,
     } = inputs;
     let (app_id, event_id, event_version, variant) = (
         app_id.as_str(),
@@ -982,7 +1284,6 @@ async fn persist_registrations_in(
         event_version.as_str(),
         variant.as_str(),
     );
-    let setup_board = setup_board.as_ref();
 
     // Lock the event row for the whole persist phase. Two overlapping setups
     // (force, or the non-atomic running-status guard) serialize here, and the
@@ -1025,265 +1326,7 @@ async fn persist_registrations_in(
             .filter(|version| !version.is_empty())
     };
 
-    // Wipe previous rows for this (version, variant) so re-runs don't pile up
-    // duplicates.
-    event_remote_registration::Entity::delete_many()
-        .filter(event_remote_registration::Column::AppId.eq(app_id))
-        .filter(event_remote_registration::Column::EventId.eq(event_id))
-        .filter(event_remote_registration::Column::EventVersion.eq(event_version))
-        .filter(event_remote_registration::Column::Variant.eq(variant))
-        .exec(txn)
-        .await?;
-    event_remote_auth::Entity::delete_many()
-        .filter(event_remote_auth::Column::AppId.eq(app_id))
-        .filter(event_remote_auth::Column::EventId.eq(event_id))
-        .filter(event_remote_auth::Column::EventVersion.eq(event_version))
-        .filter(event_remote_auth::Column::Variant.eq(variant))
-        .exec(txn)
-        .await?;
-
-    let mut reg_count = 0usize;
-    let mut auth_count = 0usize;
-    let now = chrono::Utc::now().fixed_offset();
-    // Dedup `(variant, kind, method, path)` across all envelopes for this
-    // event version. A misconfigured graph can produce duplicate routes (e.g.
-    // two REST server nodes both registering `POST /webhook`). We keep the
-    // first occurrence and emit a warning for the rest — inbound dispatch
-    // would otherwise pick rows in DB-order, which is undefined.
-    let mut seen: std::collections::HashSet<(String, String, String, String)> =
-        std::collections::HashSet::new();
-
-    for env in envelopes {
-        match env.kind.as_str() {
-            "rest" => {
-                let (regs, auth_id) = expand_rest_config(
-                    state,
-                    app_id,
-                    event_id,
-                    event_version,
-                    variant,
-                    &env.node_id,
-                    &env.config,
-                    &mut auth_count,
-                    now,
-                    txn,
-                )
-                .await?;
-                for mut reg in regs {
-                    reg.auth_id = Set(auth_id.clone());
-                    let kind_s = reg.kind.clone().take().unwrap_or_default();
-                    let method_s = reg
-                        .method
-                        .clone()
-                        .take()
-                        .unwrap_or_default()
-                        .unwrap_or_default();
-                    let path_s = reg.path.clone().take().unwrap_or_default();
-                    let key = (variant.to_string(), kind_s, method_s.to_uppercase(), path_s);
-                    if !seen.insert(key.clone()) {
-                        tracing::warn!(
-                            kind = %key.1, method = %key.2, path = %key.3,
-                            "duplicate inbound route within setup batch; ignoring later occurrence"
-                        );
-                        continue;
-                    }
-                    reg.insert(txn).await?;
-                    reg_count += 1;
-                }
-            }
-            "mcp" => {
-                let auth_id = maybe_insert_auth_from_value(
-                    state,
-                    app_id,
-                    event_id,
-                    event_version,
-                    variant,
-                    &env.node_id,
-                    "mcp",
-                    env.config.get("auth"),
-                    &mut auth_count,
-                    now,
-                    txn,
-                )
-                .await?;
-                let key = (
-                    variant.to_string(),
-                    "mcp_raw".to_string(),
-                    String::new(),
-                    "/".to_string(),
-                );
-                if !seen.insert(key) {
-                    tracing::warn!(
-                        node_id = %env.node_id,
-                        "duplicate mcp_raw registration within setup batch; ignoring"
-                    );
-                    continue;
-                }
-                let mut config_json = env.config.clone();
-                if let Some(auth) = env.config.get("auth")
-                    && let Some(obj) = config_json.as_object_mut()
-                {
-                    obj.insert(
-                        "auth".to_string(),
-                        protect_auth_config_for_storage(auth, &state.encryption_key),
-                    );
-                }
-                event_remote_registration::ActiveModel {
-                    id: Set(flow_like_types::create_id()),
-                    app_id: Set(app_id.to_string()),
-                    event_id: Set(event_id.to_string()),
-                    event_version: Set(event_version.to_string()),
-                    variant: Set(variant.to_string()),
-                    kind: Set("mcp_raw".to_string()),
-                    method: Set(None),
-                    path: Set("/".to_string()),
-                    node_id: Set(Some(env.node_id.clone())),
-                    schema_json: Set(None),
-                    extras_json: Set(Some(config_json)),
-                    auth_id: Set(auth_id.clone()),
-                    created_at: Set(now),
-                }
-                .insert(txn)
-                .await?;
-                reg_count += 1;
-
-                for tool in mcp_tool_entries(setup_board, &env.config) {
-                    let key = (
-                        variant.to_string(),
-                        "mcp_tool".to_string(),
-                        String::new(),
-                        tool.name.clone(),
-                    );
-                    if !seen.insert(key.clone()) {
-                        tracing::warn!(
-                            kind = %key.1, path = %key.3,
-                            "duplicate mcp tool registration within setup batch; ignoring later occurrence"
-                        );
-                        continue;
-                    }
-                    event_remote_registration::ActiveModel {
-                        id: Set(flow_like_types::create_id()),
-                        app_id: Set(app_id.to_string()),
-                        event_id: Set(event_id.to_string()),
-                        event_version: Set(event_version.to_string()),
-                        variant: Set(variant.to_string()),
-                        kind: Set("mcp_tool".to_string()),
-                        method: Set(None),
-                        path: Set(tool.name.clone()),
-                        node_id: Set(Some(tool.node_id.clone())),
-                        schema_json: Set(Some(tool.schema.clone())),
-                        extras_json: Set(Some(json!({
-                            "name": tool.name,
-                            "description": tool.description,
-                            "function_ref": tool.node_id,
-                        }))),
-                        auth_id: Set(auth_id.clone()),
-                        created_at: Set(now),
-                    }
-                    .insert(txn)
-                    .await?;
-                    reg_count += 1;
-                }
-
-                if let Some(resources) = env.config.get("resources").and_then(|v| v.as_array()) {
-                    for resource in resources {
-                        let uri = mcp_resource_uri(resource);
-                        if uri.is_empty() {
-                            tracing::warn!(
-                                node_id = %env.node_id,
-                                "mcp resource has no uri or flow_path.path; skipping registration row"
-                            );
-                            continue;
-                        }
-                        let key = (
-                            variant.to_string(),
-                            "mcp_resource".to_string(),
-                            String::new(),
-                            uri.clone(),
-                        );
-                        if !seen.insert(key.clone()) {
-                            tracing::warn!(
-                                kind = %key.1, path = %key.3,
-                                "duplicate mcp resource registration within setup batch; ignoring later occurrence"
-                            );
-                            continue;
-                        }
-                        event_remote_registration::ActiveModel {
-                            id: Set(flow_like_types::create_id()),
-                            app_id: Set(app_id.to_string()),
-                            event_id: Set(event_id.to_string()),
-                            event_version: Set(event_version.to_string()),
-                            variant: Set(variant.to_string()),
-                            kind: Set("mcp_resource".to_string()),
-                            method: Set(None),
-                            path: Set(uri),
-                            node_id: Set(None),
-                            schema_json: Set(None),
-                            extras_json: Set(Some(resource.clone())),
-                            auth_id: Set(auth_id.clone()),
-                            created_at: Set(now),
-                        }
-                        .insert(txn)
-                        .await?;
-                        reg_count += 1;
-                    }
-                }
-
-                if let Some(prompts) = env.config.get("prompts").and_then(|v| v.as_array()) {
-                    for prompt in prompts {
-                        let name = prompt
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .map(str::trim)
-                            .filter(|v| !v.is_empty())
-                            .map(ToString::to_string)
-                            .unwrap_or_default();
-                        if name.is_empty() {
-                            tracing::warn!(
-                                node_id = %env.node_id,
-                                "mcp prompt has no name; skipping registration row"
-                            );
-                            continue;
-                        }
-                        let key = (
-                            variant.to_string(),
-                            "mcp_prompt".to_string(),
-                            String::new(),
-                            name.clone(),
-                        );
-                        if !seen.insert(key.clone()) {
-                            tracing::warn!(
-                                kind = %key.1, path = %key.3,
-                                "duplicate mcp prompt registration within setup batch; ignoring later occurrence"
-                            );
-                            continue;
-                        }
-                        event_remote_registration::ActiveModel {
-                            id: Set(flow_like_types::create_id()),
-                            app_id: Set(app_id.to_string()),
-                            event_id: Set(event_id.to_string()),
-                            event_version: Set(event_version.to_string()),
-                            variant: Set(variant.to_string()),
-                            kind: Set("mcp_prompt".to_string()),
-                            method: Set(None),
-                            path: Set(name),
-                            node_id: Set(None),
-                            schema_json: Set(None),
-                            extras_json: Set(Some(prompt.clone())),
-                            auth_id: Set(auth_id.clone()),
-                            created_at: Set(now),
-                        }
-                        .insert(txn)
-                        .await?;
-                        reg_count += 1;
-                    }
-                }
-            }
-            other => {
-                tracing::warn!(kind = %other, "ignoring unknown server_config kind");
-            }
-        }
-    }
+    let (reg_count, auth_count) = replace_registration_rows(txn, state, inputs).await?;
 
     // Fatal parity gates for a non-stable setup, checked against the stable
     // variant's currently served rows while everything is still uncommitted.
@@ -1298,40 +1341,6 @@ async fn persist_registrations_in(
         )
         .await?;
     }
-
-    // Prune this variant's superseded versions' rows. The previous successful
-    // setup — the set inbound traffic is serving until this txn commits —
-    // stays protected alongside the one just written. Other variants' buckets
-    // are never touched.
-    let protected_versions: Vec<&str> = std::iter::once(event_version)
-        .chain(live_setup_version.as_deref())
-        .collect();
-    let pruned_registrations = event_remote_registration::Entity::delete_many()
-        .filter(event_remote_registration::Column::AppId.eq(app_id))
-        .filter(event_remote_registration::Column::EventId.eq(event_id))
-        .filter(event_remote_registration::Column::Variant.eq(variant))
-        .filter(
-            event_remote_registration::Column::EventVersion
-                .is_not_in(protected_versions.iter().copied()),
-        )
-        .exec(txn)
-        .await?;
-    let pruned_auths = event_remote_auth::Entity::delete_many()
-        .filter(event_remote_auth::Column::AppId.eq(app_id))
-        .filter(event_remote_auth::Column::EventId.eq(event_id))
-        .filter(event_remote_auth::Column::Variant.eq(variant))
-        .filter(
-            event_remote_auth::Column::EventVersion.is_not_in(protected_versions.iter().copied()),
-        )
-        .exec(txn)
-        .await?;
-    tracing::debug!(
-        event_id = %event_id,
-        variant = %variant,
-        registrations_pruned = pruned_registrations.rows_affected,
-        auths_pruned = pruned_auths.rows_affected,
-        "pruned remote registrations for superseded event versions"
-    );
 
     // A stale forced setup can commit after a newer version's setup already
     // advanced the pointer: keep its rows (protected above) and refresh the
@@ -1369,8 +1378,7 @@ async fn persist_registrations_in(
         }
     } else {
         // Advance the serving pointer atomically with the rows it names.
-        // Outside this txn a failed update could leave the pointer naming a
-        // version whose rows the prune above already removed.
+        // A failed replacement rolls back both registrations and this pointer.
         write_event_setup_row(
             txn,
             app_id,
@@ -1402,7 +1410,7 @@ async fn persist_registrations_in(
         }
     }
 
-    Ok((reg_count, auth_count))
+    Ok((reg_count, auth_count, live_setup_version))
 }
 
 /// Persist-phase failure split: a stable-parity refusal is the caller's
@@ -1414,6 +1422,7 @@ async fn persist_registrations_in(
 #[derive(Debug)]
 enum PersistError {
     Parity(String),
+    Budget(String),
     VariantGone(String),
     Db(sea_orm::DbErr),
     Other(flow_like_types::Error),
@@ -1422,7 +1431,9 @@ enum PersistError {
 impl std::fmt::Display for PersistError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PersistError::Parity(reason) | PersistError::VariantGone(reason) => f.write_str(reason),
+            PersistError::Parity(reason)
+            | PersistError::Budget(reason)
+            | PersistError::VariantGone(reason) => f.write_str(reason),
             PersistError::Db(error) => write!(f, "{error}"),
             PersistError::Other(error) => write!(f, "{error}"),
         }
@@ -1576,7 +1587,7 @@ async fn enforce_stable_parity<C: ConnectionTrait>(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
+fn prepare_auth_from_value(
     state: &AppState,
     app_id: &str,
     event_id: &str,
@@ -1585,9 +1596,8 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
     node_id: &str,
     kind: &str,
     auth: Option<&Value>,
-    auth_count: &mut usize,
+    auths: &mut Vec<event_remote_auth::ActiveModel>,
     now: chrono::DateTime<chrono::FixedOffset>,
-    txn: &C,
 ) -> flow_like_types::Result<Option<String>> {
     // Treat missing, null, plain `"none"`, or `{ "type": "none" }` as "no auth".
     let Some(auth) = auth else { return Ok(None) };
@@ -1614,7 +1624,7 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
     }
     let id = flow_like_types::create_id();
     let config_json = protect_auth_config_for_storage(auth, &state.encryption_key);
-    event_remote_auth::ActiveModel {
+    auths.push(event_remote_auth::ActiveModel {
         id: Set(id.clone()),
         app_id: Set(app_id.to_string()),
         event_id: Set(event_id.to_string()),
@@ -1625,10 +1635,7 @@ async fn maybe_insert_auth_from_value<C: ConnectionTrait>(
         config_json: Set(config_json),
         created_at: Set(now),
         updated_at: Set(now),
-    }
-    .insert(txn)
-    .await?;
-    *auth_count += 1;
+    });
     Ok(Some(id))
 }
 
@@ -1955,7 +1962,7 @@ fn pin_schema(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn expand_rest_config<C: ConnectionTrait>(
+fn expand_rest_config(
     state: &AppState,
     app_id: &str,
     event_id: &str,
@@ -1963,11 +1970,10 @@ async fn expand_rest_config<C: ConnectionTrait>(
     variant: &str,
     node_id: &str,
     config: &Value,
-    auth_count: &mut usize,
+    auths: &mut Vec<event_remote_auth::ActiveModel>,
     now: chrono::DateTime<chrono::FixedOffset>,
-    txn: &C,
 ) -> flow_like_types::Result<(Vec<event_remote_registration::ActiveModel>, Option<String>)> {
-    let auth_id = maybe_insert_auth_from_value(
+    let auth_id = prepare_auth_from_value(
         state,
         app_id,
         event_id,
@@ -1976,11 +1982,9 @@ async fn expand_rest_config<C: ConnectionTrait>(
         node_id,
         "rest",
         config.get("auth"),
-        auth_count,
+        auths,
         now,
-        txn,
-    )
-    .await?;
+    )?;
 
     let mut out: Vec<event_remote_registration::ActiveModel> = Vec::new();
 
@@ -2284,6 +2288,39 @@ mod tests {
         assert!(is_completed_run_status("COMPLETED"));
         assert!(is_completed_run_status(" completed "));
         assert!(!is_completed_run_status("Failed"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn setup_completion_preserves_failure_cancellation_and_timeout() {
+        use crate::entity::sea_orm_active_enums::RunStatus;
+        for (status, expected) in [
+            ("Completed", RunStatus::Completed),
+            ("Failed", RunStatus::Failed),
+            ("Cancelled", RunStatus::Cancelled),
+            ("Timeout", RunStatus::Timeout),
+        ] {
+            let data = format!(
+                "data: {{\"event_type\":\"completed\",\"payload\":{{\"status\":\"{status}\"}}}}\n\n"
+            );
+            let stream = Box::pin(futures::stream::iter([Ok(bytes::Bytes::from(data))]));
+            let (_, error, terminal) = super::collect_server_config_events(stream).await;
+            assert_eq!(terminal, expected);
+            assert_eq!(error.is_none(), expected == RunStatus::Completed);
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn setup_stream_without_an_explicit_success_never_reports_success() {
+        use crate::entity::sea_orm_active_enums::RunStatus;
+        for data in [
+            "",
+            "data: {\"event_type\":\"completed\",\"payload\":{}}\n\n",
+        ] {
+            let stream = Box::pin(futures::stream::iter([Ok(bytes::Bytes::from(data))]));
+            let (_, error, terminal) = super::collect_server_config_events(stream).await;
+            assert_eq!(terminal, RunStatus::Failed);
+            assert!(error.is_some());
+        }
     }
 
     #[test]

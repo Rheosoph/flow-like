@@ -27,6 +27,11 @@
 //! never swept: they are bounded or user-owned. An issue therefore keeps its
 //! `eventCount`/`installCount` after the `TelemetryErrorEvent` rows they were
 //! derived from age out — those counters are lifetime totals by design.
+//!
+//! A `TelemetrySourceMap` row outliving every sweep also keeps the meta-store
+//! object its `mapRef` names alive; the upload route frees the one it
+//! supersedes. A sweep added here later must delete that object before the row,
+//! which is the only thing that points at it.
 
 use std::sync::Arc;
 use std::time::Duration;

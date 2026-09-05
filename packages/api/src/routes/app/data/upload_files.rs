@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -125,9 +125,9 @@ pub async fn upload_files(
         entries.push((prefix.clone(), upload_path));
     }
 
-    Ok(Json(
-        sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await,
-    ))
+    let uploads = sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await;
+    audit_upload_grants(&state, &user, &app_id, &uploads, "app", ttl).await;
+    Ok(Json(uploads))
 }
 
 #[utoipa::path(
@@ -187,7 +187,41 @@ pub async fn upload_user_files(
         entries.push((prefix.clone(), upload_path));
     }
 
-    Ok(Json(
-        sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await,
-    ))
+    let uploads = sign_uploads(&project_dir, entries, ttl, &sub, &app_id).await;
+    audit_upload_grants(&state, &user, &app_id, &uploads, "user", ttl).await;
+    Ok(Json(uploads))
+}
+
+async fn audit_upload_grants(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    uploads: &[Value],
+    scope: &str,
+    ttl: Duration,
+) {
+    let granted_count = uploads
+        .iter()
+        .filter(|entry| entry.get("url").is_some())
+        .count();
+    if granted_count == 0 {
+        return;
+    }
+
+    // A signed URL grants access; the subsequent storage write bypasses this API.
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "file.upload.authorize",
+        "Storage",
+        app_id,
+        "Issued signed file upload URLs",
+        serde_json::json!({
+            "scope": scope,
+            "granted_count": granted_count,
+            "failed_count": uploads.len() - granted_count,
+            "expires_in_seconds": ttl.as_secs(),
+        })
+    );
 }

@@ -1,4 +1,4 @@
-use crate::{entity::pat, error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{audit, entity::pat, error::ApiError, middleware::jwt::AppUser, state::AppState};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -29,10 +29,21 @@ pub async fn delete_pat(
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
 
-    pat::Entity::delete_many()
-        .filter(pat::Column::Id.eq(pat_id).and(pat::Column::UserId.eq(sub)))
+    let deleted = pat::Entity::delete_many()
+        .filter(pat::Column::Id.eq(&pat_id).and(pat::Column::UserId.eq(sub)))
         .exec(&state.db)
         .await?;
+
+    if deleted.rows_affected > 0 {
+        audit!(
+            state,
+            user,
+            "pat.delete",
+            "PersonalAccessToken",
+            pat_id,
+            "Deleted a personal access token"
+        );
+    }
 
     Ok(Json(()))
 }

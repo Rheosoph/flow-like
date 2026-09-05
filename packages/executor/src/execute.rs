@@ -4,12 +4,12 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{verify_jwt_async, ExecutorClaims, ExecutorPageExecutionClaims};
+use crate::jwt::{ExecutorClaims, ExecutorPageExecutionClaims, verify_jwt_async};
 use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
-use flow_like::flow::compiled::{template_from_bytes, CompiledRunTemplate, TemplateCache};
+use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
@@ -36,6 +36,12 @@ pub(crate) static PREPARED_REGISTRY: LazyLock<Arc<FlowNodeRegistryInner>> = Lazy
     let catalog_arc = Arc::new(catalog);
     Arc::new(FlowNodeRegistryInner::prepare(&catalog_arc))
 });
+
+/// Prepare only the trusted static catalog. Call after catalog initialization
+/// and before advertising a single-use sandbox as ready. No tenant code loads.
+pub fn prepare_runtime() {
+    LazyLock::force(&PREPARED_REGISTRY);
+}
 
 /// The registry for one request: the shared prepared catalog when the request
 /// brings no WASM overlay, a copy-on-write extension otherwise. The full deep
@@ -224,6 +230,14 @@ pub(crate) fn validate_executor_request_claims(
     claims: &ExecutorClaims,
     request: &ExecutionRequest,
 ) -> Result<(), ExecutorError> {
+    match (&claims.dispatch_hash, &request.dispatch_hash) {
+        (Some(signed), Some(actual)) if signed == actual => {}
+        _ => {
+            return Err(ExecutorError::InvalidRequest(
+                "executor JWT does not bind the complete dispatch payload".to_string(),
+            ));
+        }
+    }
     if claims.app_id != request.app_id || claims.board_id != request.board_id {
         return Err(ExecutorError::InvalidRequest(
             "executor JWT claims do not match the queued request".to_string(),
@@ -1563,6 +1577,7 @@ mod shadow_claim_binding_tests {
             "app_id": "app-1",
             "board_id": "board-1",
             "shadow": shadow,
+            "dispatch_hash": "test-envelope",
             "callback_url": "https://api.example",
             "typ": "executor",
             "iss": "flow-like",
@@ -1576,7 +1591,7 @@ mod shadow_claim_binding_tests {
     }
 
     fn request(shadow: bool) -> ExecutionRequest {
-        serde_json::from_value(serde_json::json!({
+        let mut request: ExecutionRequest = serde_json::from_value(serde_json::json!({
             "app_id": "app-1",
             "board_id": "board-1",
             "node_id": "node-1",
@@ -1600,7 +1615,23 @@ mod shadow_claim_binding_tests {
                 "registry_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
-        .expect("request deserializes")
+        .expect("request deserializes");
+        request.dispatch_hash = Some("test-envelope".into());
+        request
+    }
+
+    #[test]
+    fn altered_or_unbound_dispatches_are_rejected_before_artifact_loading() {
+        let signed = claims(Some(false));
+        let mut request = request(false);
+        assert!(validate_executor_request_claims(&signed, &request).is_ok());
+        request.dispatch_hash = Some("changed-envelope".into());
+        assert!(validate_executor_request_claims(&signed, &request).is_err());
+        request.dispatch_hash = None;
+        assert!(validate_executor_request_claims(&signed, &request).is_err());
+        let mut unsigned = signed;
+        unsigned.dispatch_hash = None;
+        assert!(validate_executor_request_claims(&unsigned, &request).is_err());
     }
 
     /// Bytes the API would have persisted: a board holding one real catalog
@@ -1745,14 +1776,16 @@ mod page_request_binding_tests {
         let page = latest_page();
         validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None)
             .expect("the decoded ETag-bound Latest selector is accepted");
-        assert!(validate_page_request_binding(
-            &page,
-            Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
-            Some("etag-a"),
-            "entry-1",
-            None,
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(
+                &page,
+                Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+                Some("etag-a"),
+                "entry-1",
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1787,14 +1820,10 @@ mod page_request_binding_tests {
                 cwasm_checksum: "cwasm-checksum".into(),
             },
         )]);
-        assert!(validate_page_request_binding(
-            &page,
-            None,
-            Some("etag-a"),
-            "entry-1",
-            Some(&packages),
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", Some(&packages),)
+                .is_err()
+        );
     }
 }
 
@@ -1844,25 +1873,33 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Completed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Running"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(false, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Completed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Running"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(false, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
     }
 }

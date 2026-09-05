@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    audit_branch, ensure_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -74,11 +74,25 @@ pub async fn undo_board(
     }
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
+    let command_count = params.commands.len();
     board.undo(params.commands, flow_state.clone()).await?;
     mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
     drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+
+    if command_count > 0 {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "board.commands.undo",
+            "Board",
+            board_id,
+            "Undid board commands",
+            serde_json::json!({ "command_count": command_count })
+        );
+    }
 
     Ok(Json(()))
 }
@@ -131,11 +145,25 @@ pub async fn redo_board(
     }
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
+    let command_count = params.commands.len();
     board.redo(params.commands, flow_state.clone()).await?;
     mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
     drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
+
+    if command_count > 0 {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "board.commands.redo",
+            "Board",
+            board_id,
+            "Redid board commands",
+            serde_json::json!({ "command_count": command_count })
+        );
+    }
 
     Ok(Json(()))
 }

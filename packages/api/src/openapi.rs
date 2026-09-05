@@ -491,6 +491,7 @@ impl Modify for SecurityAddon {
         crate::routes::execution::progress::push_events,
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
+        crate::routes::execution::cancel::cancel_run,
         crate::routes::execution::public_key::get_execution_jwks,
         // Channel routes
         crate::routes::channel::register_message,

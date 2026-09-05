@@ -51,4 +51,6 @@ model PublicationLog {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([requestId])
+
+  @@index([authorId])
 }

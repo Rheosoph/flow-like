@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -280,5 +280,21 @@ pub async fn create_overlay(
         // executable. A later reconciliation safely retries this pointer move.
         tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "graph.overlay.create",
+        "GraphOverlay",
+        overlay_id,
+        "Created a graph overlay",
+        serde_json::json!({
+            "user_scoped": scope.is_user_scoped(),
+            "exposed": def.exposed,
+            "bindings_enabled": def.bindings_enabled,
+            "action_count": def.actions.len(),
+        })
+    );
+
     Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

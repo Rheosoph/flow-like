@@ -71,9 +71,11 @@ impl NodeLogic for ReadImageFromUrlNode {
         context.deactivate_exec_pin("exec_out").await?;
         let signed_url: String = context.evaluate_pin("signed_url").await?;
         let bytes = flow_like_types::reqwest::get(&signed_url)
-            .await?
+            .await
+            .map_err(flow_like_types::reqwest::Error::without_url)?
             .bytes()
-            .await?
+            .await
+            .map_err(flow_like_types::reqwest::Error::without_url)?
             .to_vec();
         let apply_exif: bool = context.evaluate_pin("apply_exif").await?;
 

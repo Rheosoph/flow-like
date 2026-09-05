@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -70,6 +70,23 @@ pub async fn drop_table(
     let mut db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
     let dropped = db.list_tables().await?.iter().any(|name| name == &table);
     db.drop_table().await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "database.table.drop",
+        "DatabaseTable",
+        table,
+        "Dropped a database table and pruned its references",
+        serde_json::json!({
+            "dropped": dropped,
+            "user_scoped": scope.is_user_scoped(),
+            "ontology_count": cascade.ontologies.len(),
+            "saved_query_count": cascade.saved_queries.len(),
+            "warning_count": cascade.warnings.len(),
+        })
+    );
 
     Ok(Json(DropTableResponse {
         table_name: table,

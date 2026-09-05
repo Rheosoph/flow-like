@@ -161,14 +161,14 @@ async fn resolve_compilation_jobs(json: &str) -> Result<Vec<CompilationJob>, Str
                     tokio::time::timeout(Duration::from_secs(30), reqwest::get(&remote_url))
                         .await
                         .map_err(|_| "Remote job fetch timed out".to_string())?
-                        .map_err(|e| format!("Failed to fetch remote job: {e}"))?;
+                        .map_err(|e| format!("Failed to fetch remote job: {}", e.without_url()))?;
                 if !response.status().is_success() {
                     return Err(format!("HTTP {} from job URL", response.status()));
                 }
                 let body = response
                     .text()
                     .await
-                    .map_err(|e| format!("Failed to read response: {e}"))?;
+                    .map_err(|e| format!("Failed to read response: {}", e.without_url()))?;
                 return parse_inline_jobs(&body);
             }
             CompilationJobRef::Inline(job) => return Ok(vec![job]),

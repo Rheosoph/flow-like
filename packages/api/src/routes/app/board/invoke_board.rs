@@ -385,10 +385,18 @@ pub async fn invoke_board(
             })?;
         crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
-        let response = state
+        let response = match state
             .dispatcher
             .dispatch_with_backend(ExecutionBackend::KubernetesJob, request)
-            .await
+            .await {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    if let Err(audit_error) = crate::audit::record_execution_dispatch_failure(&state, &run_id, "dispatcher").await {
+                        tracing::error!(run_id = %run_id, %audit_error, "Failed to record dispatch failure");
+                    }
+                    Err(error)
+                }
+            }
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to dispatch job");
                 ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
@@ -422,10 +430,18 @@ pub async fn invoke_board(
     match backend {
         ExecutionBackend::LambdaStream => {
             // Use Lambda SDK streaming
-            let (_dispatch_response, byte_stream) = state
+            let (_dispatch_response, byte_stream) = match state
                 .dispatcher
                 .dispatch_streaming(request)
-                .await
+                .await {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    if let Err(audit_error) = crate::audit::record_execution_dispatch_failure(&state, &run_id, "dispatcher").await {
+                        tracing::error!(run_id = %run_id, %audit_error, "Failed to record dispatch failure");
+                    }
+                    Err(error)
+                }
+            }
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
                     ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
@@ -436,16 +452,24 @@ pub async fn invoke_board(
             Ok(proxy_lambda_sse_response(
                 byte_stream,
                 run_id,
-                Some(std::sync::Arc::new(state.db.clone())),
+                Some(crate::audit::ExecutionAuditContext::from(&state)),
             )
             .into_response())
         }
         _ => {
             // Use HTTP SSE for all other backends (Http, etc.)
-            let (_dispatch_response, executor_response) = state
+            let (_dispatch_response, executor_response) = match state
                 .dispatcher
                 .dispatch_http_sse(request)
-                .await
+                .await {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    if let Err(audit_error) = crate::audit::record_execution_dispatch_failure(&state, &run_id, "dispatcher").await {
+                        tracing::error!(run_id = %run_id, %audit_error, "Failed to record dispatch failure");
+                    }
+                    Err(error)
+                }
+            }
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
                     ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
@@ -456,7 +480,7 @@ pub async fn invoke_board(
             Ok(proxy_sse_response(
                 executor_response,
                 run_id,
-                Some(std::sync::Arc::new(state.db.clone())),
+                Some(crate::audit::ExecutionAuditContext::from(&state)),
             )
             .into_response())
         }
@@ -467,7 +491,7 @@ pub async fn invoke_board(
 fn proxy_lambda_sse_response(
     stream: ByteStream,
     run_id: String,
-    db: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
+    db: Option<crate::audit::ExecutionAuditContext>,
 ) -> axum::response::sse::Sse<
     impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
 > {
@@ -502,7 +526,7 @@ fn proxy_lambda_sse_response(
 
                                         let run_status = completed_run_status(status);
 
-                                        if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                        if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
                                             tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                                         }
                                     }
@@ -515,6 +539,10 @@ fn proxy_lambda_sse_response(
                 }
                 Err(e) => {
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
+                    if let Some(context) = &db
+                        && let Err(error) = update_run_on_completion(context, &run_id, RunStatus::Failed, 0).await {
+                            tracing::error!(run_id = %run_id, %error, "Failed to record Lambda stream failure");
+                        }
                     let error_event = Event::default()
                         .event("error")
                         .data(format!(r#"{{"error":"{}"}}"#, e));

@@ -48,8 +48,8 @@ impl FirebaseAuth {
         let refreshed = match session.as_ref().and_then(|s| s.refresh_token.clone()) {
             Some(refresh_token) => match self.refresh(&refresh_token).await {
                 Ok(next) => Some(next),
-                Err(err) => {
-                    tracing::warn!(error = %err, "firebase id token refresh failed, signing in again");
+                Err(_) => {
+                    tracing::warn!("firebase id token refresh failed, signing in again");
                     None
                 }
             },
@@ -82,7 +82,12 @@ impl FirebaseAuth {
             })
             .send()
             .await
-            .map_err(|err| anyhow!("firebase signInWithCustomToken request failed: {err}"))?;
+            .map_err(|err| {
+                anyhow!(
+                    "firebase signInWithCustomToken request failed: {}",
+                    err.without_url()
+                )
+            })?;
         let body: SignInResponse = read_json(response, "signInWithCustomToken").await?;
         Ok(Session {
             id_token: body.id_token,
@@ -102,7 +107,12 @@ impl FirebaseAuth {
             ])
             .send()
             .await
-            .map_err(|err| anyhow!("firebase token refresh request failed: {err}"))?;
+            .map_err(|err| {
+                anyhow!(
+                    "firebase token refresh request failed: {}",
+                    err.without_url()
+                )
+            })?;
         let body: RefreshResponse = read_json(response, "token refresh").await?;
         Ok(Session {
             id_token: body.id_token,
@@ -123,10 +133,12 @@ async fn read_json<T: for<'de> Deserialize<'de>>(
     operation: &str,
 ) -> flow_like_types::Result<T> {
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| anyhow!("firebase {operation} response unreadable: {err}"))?;
+    let text = response.text().await.map_err(|err| {
+        anyhow!(
+            "firebase {operation} response unreadable: {}",
+            err.without_url()
+        )
+    })?;
     if !status.is_success() {
         return Err(anyhow!(
             "firebase {operation} returned {status}: {}",

@@ -214,7 +214,7 @@ mod tests {
                     || msg.to_lowercase().contains("invalid_api_key")
                     || msg.to_lowercase().contains("incorrect api key")
                 {
-                    eprintln!("Skipping due to invalid API key: {msg}");
+                    eprintln!("Skipping OpenAI embedding test due to invalid API key");
                     return;
                 }
                 panic!("{e}");

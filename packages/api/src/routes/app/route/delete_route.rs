@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::event, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission, entity::event, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
@@ -48,6 +48,16 @@ pub async fn delete_route(
     active.route = Set(None);
     active.is_default = Set(false);
     active.update(&state.db).await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "route.delete",
+        "Route",
+        route_id,
+        "Deleted an event route mapping"
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }

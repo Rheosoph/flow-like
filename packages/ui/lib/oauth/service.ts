@@ -234,8 +234,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				hasClientSecret: !!provider.client_secret,
 				pkceRequired: provider.pkce_required,
 				requiresSecretProxy: provider.requires_secret_proxy,
-				code: code ? `${code.substring(0, 10)}...` : "none",
-				state,
+				hasCode: !!code,
 				error,
 			});
 
@@ -258,9 +257,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				providerId: pendingAuth.providerId,
 				hasProvider: !!pendingAuth.provider,
 				pendingProviderClientId: pendingAuth.provider?.client_id,
-				codeVerifier: pendingAuth.codeVerifier
-					? `${pendingAuth.codeVerifier.substring(0, 10)}...`
-					: "none",
+				hasCodeVerifier: !!pendingAuth.codeVerifier,
 			});
 
 			if (pendingAuth.providerId !== provider.id) {
@@ -283,8 +280,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 						tokenResponse.access_token,
 						pendingAuth.apiBaseUrl,
 					);
-				} catch (e) {
-					console.warn("Failed to fetch user info:", e);
+				} catch {
+					console.warn("Failed to fetch OAuth user info");
 				}
 			}
 
@@ -331,8 +328,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 						tokenData.access_token,
 						pendingAuth.apiBaseUrl,
 					);
-				} catch (e) {
-					console.warn("Failed to fetch user info:", e);
+				} catch {
+					console.warn("Failed to fetch OAuth user info");
 				}
 			}
 
@@ -378,7 +375,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			console.log("[OAuth] exchangeCodeForTokens called:", {
 				providerId: provider.id,
 				hasCode: !!code,
-				codeVerifierLength: codeVerifier?.length ?? 0,
+				hasCodeVerifier: !!codeVerifier,
 				redirectUri: callbackRedirectUri,
 				requiresSecretProxy: provider.requires_secret_proxy,
 				pkceRequired: provider.pkce_required,
@@ -407,15 +404,12 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				});
 
 				if (!response.ok) {
-					const errorText = await response.text();
+					await response.text();
 					console.error(
 						"[OAuth] Proxy token exchange failed:",
 						response.status,
-						errorText,
 					);
-					throw new Error(
-						`Token exchange failed: ${response.status} - ${errorText}`,
-					);
+					throw new Error(`Token exchange failed: ${response.status}`);
 				}
 
 				const tokenData = (await response.json()) as {
@@ -481,11 +475,7 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				hasClientSecret: !!provider.client_secret,
 				pkceRequired: provider.pkce_required,
 				clientId: provider.client_id,
-				codeVerifier: codeVerifier
-					? `${codeVerifier.substring(0, 10)}...`
-					: "none",
 				redirectUri: callbackRedirectUri,
-				params: params.toString(),
 			});
 
 			const response = await runtime.httpPost(
@@ -501,19 +491,12 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			);
 
 			if (!response.ok) {
-				const errorText = await response.text();
-				console.error(
-					"[OAuth] Token exchange failed:",
-					response.status,
-					errorText,
-				);
-				throw new Error(
-					`Token exchange failed: ${response.status} - ${errorText}`,
-				);
+				await response.text();
+				console.error("[OAuth] Token exchange failed:", response.status);
+				throw new Error(`Token exchange failed: ${response.status}`);
 			}
 
 			const responseText = await response.text();
-			console.log("[OAuth] Token exchange raw response:", responseText);
 
 			// Try to parse as JSON, fall back to form-urlencoded parsing
 			let tokenData: {
@@ -594,11 +577,9 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				});
 
 				if (!response.ok) {
-					const errorText = await response.text();
+					await response.text();
 					await tokenStore.deleteToken(provider.id);
-					throw new Error(
-						`Token refresh failed: ${response.status} - ${errorText}`,
-					);
+					throw new Error(`Token refresh failed: ${response.status}`);
 				}
 
 				const tokenResponse = (await response.json()) as {
@@ -651,11 +632,9 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			);
 
 			if (!response.ok) {
-				const errorText = await response.text();
+				await response.text();
 				await tokenStore.deleteToken(provider.id);
-				throw new Error(
-					`Token refresh failed: ${response.status} - ${errorText}`,
-				);
+				throw new Error(`Token refresh failed: ${response.status}`);
 			}
 
 			const tokenResponse = (await response.json()) as {
@@ -750,8 +729,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 						"Content-Type": "application/x-www-form-urlencoded",
 					});
 				}
-			} catch (e) {
-				console.warn("Token revocation failed:", e);
+			} catch {
+				console.warn("Token revocation failed");
 			}
 
 			await tokenStore.deleteToken(provider.id);
@@ -802,8 +781,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 				try {
 					const refreshed = await this.refreshToken(provider, token);
 					valid.set(providerId, refreshed);
-				} catch (e) {
-					console.warn(`Failed to refresh token for ${providerId}:`, e);
+				} catch {
+					console.warn(`Failed to refresh token for ${providerId}`);
 					missing.push(provider);
 				}
 			}
@@ -952,8 +931,8 @@ export function createOAuthService(config: OAuthServiceConfig) {
 			if (provider.userinfo_url && data.access_token) {
 				try {
 					userInfo = await this.fetchUserInfo(provider, data.access_token);
-				} catch (e) {
-					console.warn("Failed to fetch user info:", e);
+				} catch {
+					console.warn("Failed to fetch OAuth user info");
 				}
 			}
 

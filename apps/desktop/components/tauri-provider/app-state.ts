@@ -824,7 +824,7 @@ export class AppState implements IAppState {
 				try {
 					await this.backend.uploadSignedUrl(uploadUrl, file, 0, 1, () => {});
 				} catch (error) {
-					console.error(`Failed to upload file ${uploadUrl}:`, error);
+					console.error("Failed to upload file");
 					throw error;
 				}
 			}

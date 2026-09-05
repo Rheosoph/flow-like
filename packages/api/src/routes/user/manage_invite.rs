@@ -1,4 +1,5 @@
 use crate::{
+    audit_branch,
     entity::{
         app::{self},
         invitation, membership,
@@ -41,11 +42,29 @@ pub async fn reject_invite(
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
 
-    invitation::Entity::delete_many()
+    let invite = invitation::Entity::find_by_id(&invite_id)
+        .filter(invitation::Column::UserId.eq(&sub))
+        .one(&state.db)
+        .await?;
+    let deleted = invitation::Entity::delete_many()
         .filter(invitation::Column::Id.eq(invite_id.clone()))
         .filter(invitation::Column::UserId.eq(sub))
         .exec(&state.db)
         .await?;
+
+    if deleted.rows_affected > 0
+        && let Some(invite) = invite
+    {
+        audit_branch!(
+            state,
+            user,
+            invite.app_id,
+            "team.invite.reject",
+            "Invitation",
+            invite_id,
+            "Rejected an app invitation"
+        );
+    }
 
     Ok(Json(()))
 }
@@ -77,7 +96,7 @@ pub async fn accept_invite(
 
     let max_prototype = state.platform_config.max_users_prototype.unwrap_or(-1);
 
-    state
+    let app_id = state
         .transaction(|txn| {
             let sub = sub.clone();
             let invite_id = invite_id.clone();
@@ -132,7 +151,7 @@ pub async fn accept_invite(
                     let membership = membership::ActiveModel {
                         id: Set(create_id()),
                         user_id: Set(sub),
-                        app_id: Set(app.id),
+                        app_id: Set(app.id.clone()),
                         role_id: Set(default_role),
                         created_at: Set(chrono::Utc::now().fixed_offset()),
                         updated_at: Set(chrono::Utc::now().fixed_offset()),
@@ -156,10 +175,20 @@ pub async fn accept_invite(
 
                 let invite: invitation::ActiveModel = invite.into();
                 invite.delete(txn).await?;
-                Ok::<_, ApiError>(())
+                Ok::<_, ApiError>(app.id)
             })
         })
         .await?;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "team.invite.accept",
+        "Invitation",
+        invite_id,
+        "Accepted an app invitation"
+    );
 
     Ok(Json(()))
 }

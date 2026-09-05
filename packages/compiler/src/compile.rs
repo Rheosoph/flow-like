@@ -23,6 +23,11 @@ pub async fn compile(
     job: CompilationJob,
     config: &CompilerConfig,
 ) -> Result<CompilationResult, CompilerError> {
+    if config.max_parallel_targets == Some(0) {
+        return Err(CompilerError::Config(
+            "Compiler target parallelism must be positive".to_string(),
+        ));
+    }
     let claims = verify_jwt_async(&job.compiler_jwt).await?;
     if let Err(error) = validate_job_envelope(&job, &claims, config) {
         return Err(envelope_failure(&job, &claims, error, config).await);

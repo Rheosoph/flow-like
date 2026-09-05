@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 /// All events are sent as InterComEvent for consistent frontend handling
 pub type StreamEvent = InterComEvent;
@@ -70,8 +70,8 @@ fn fallback_error_message(error: &ExecutorError, is_page_execution: bool) -> Str
     }
 }
 
-fn send_fallback_failure(
-    tx: &mpsc::UnboundedSender<StreamEvent>,
+async fn send_fallback_failure(
+    tx: &mpsc::Sender<StreamEvent>,
     run_id: &str,
     duration_ms: u64,
     error: &ExecutorError,
@@ -84,18 +84,22 @@ fn send_fallback_failure(
         "Streaming execution failed before the workflow could report a result"
     );
     let message = fallback_error_message(error, is_page_execution);
-    let _ = tx.send(error_event(&message));
-    let _ = tx.send(completed_event(
-        run_id,
-        ExecutionStatus::Failed,
-        duration_ms,
-        Some(4),
-    ));
+    let _ = tx.try_send(error_event(&message));
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tx.send(completed_event(
+            run_id,
+            ExecutionStatus::Failed,
+            duration_ms,
+            Some(4),
+        )),
+    )
+    .await;
 }
 
 /// Stream of execution events
 pub struct ExecutionStream {
-    rx: mpsc::UnboundedReceiver<StreamEvent>,
+    rx: mpsc::Receiver<StreamEvent>,
 }
 
 impl Stream for ExecutionStream {
@@ -111,27 +115,42 @@ pub async fn execute_streaming(
     request: ExecutionRequest,
     config: ExecutorConfig,
 ) -> Result<ExecutionStream, ExecutorError> {
+    execute_streaming_with_permit(request, config, None).await
+}
+
+/// Admission remains occupied until the execution task exits, including after a
+/// client disconnect. Bounded progress buffering prevents slow readers growing
+/// the process without limit. Terminal events wait for readers while attached.
+pub async fn execute_streaming_with_permit(
+    request: ExecutionRequest,
+    config: ExecutorConfig,
+    permit: Option<OwnedSemaphorePermit>,
+) -> Result<ExecutionStream, ExecutorError> {
     let claims = verify_jwt_async(&request.executor_jwt).await?;
     if let Err(error) = validate_executor_request_claims(&claims, &request) {
         crate::execute::record_claims_rejection(&request, &claims.run_id, &error).await;
         return Err(error);
     }
 
-    let (tx, rx) = mpsc::unbounded_channel::<StreamEvent>();
+    let (tx, rx) = mpsc::channel::<StreamEvent>(256);
 
     // Send started event immediately
-    let _ = tx.send(run_initiated_event(&claims.run_id));
+    let _ = tx.try_send(run_initiated_event(&claims.run_id));
 
     // Spawn execution task
-    tokio::spawn(run_execution(
-        request,
-        config,
-        claims.run_id,
-        claims.callback_url,
-        claims.sub,
-        claims.page_execution.is_some(),
-        tx,
-    ));
+    tokio::spawn(async move {
+        let _permit = permit;
+        run_execution(
+            request,
+            config,
+            claims.run_id,
+            claims.callback_url,
+            claims.sub,
+            claims.page_execution.is_some(),
+            tx,
+        )
+        .await;
+    });
 
     Ok(ExecutionStream { rx })
 }
@@ -143,7 +162,7 @@ async fn run_execution(
     callback_url: String,
     executor_subject: String,
     is_page_execution: bool,
-    tx: mpsc::UnboundedSender<StreamEvent>,
+    tx: mpsc::Sender<StreamEvent>,
 ) {
     let start = Instant::now();
 
@@ -161,10 +180,23 @@ async fn run_execution(
 
     match result {
         Ok((status, log_level, _output, _error)) => {
-            let _ = tx.send(completed_event(&run_id, status, duration_ms, log_level));
+            config.record_completion(
+                match status {
+                    ExecutionStatus::Completed => "completed",
+                    ExecutionStatus::Cancelled => "cancelled",
+                    _ => "failed",
+                },
+                start.elapsed().as_secs_f64(),
+            );
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                tx.send(completed_event(&run_id, status, duration_ms, log_level)),
+            )
+            .await;
         }
         Err(e) => {
-            send_fallback_failure(&tx, &run_id, duration_ms, &e, is_page_execution);
+            config.record_completion("error", start.elapsed().as_secs_f64());
+            send_fallback_failure(&tx, &run_id, duration_ms, &e, is_page_execution).await;
         }
     }
 }
@@ -175,7 +207,7 @@ async fn execute_inner(
     run_id: &str,
     callback_url: &str,
     executor_subject: &str,
-    tx: &mpsc::UnboundedSender<StreamEvent>,
+    tx: &mpsc::Sender<StreamEvent>,
 ) -> Result<
     (
         ExecutionStatus,
@@ -339,7 +371,7 @@ async fn execute_inner(
                 );
                 for intercom_event in events {
                     tracing::debug!(event_type = %intercom_event.event_type, "Forwarding intercom event");
-                    let _ = tx.send(intercom_event);
+                    let _ = tx.send(intercom_event).await;
                 }
                 Ok(())
             })
@@ -412,7 +444,7 @@ async fn execute_inner(
 
     // Flush any remaining buffered events
     tracing::debug!("Flushing remaining buffered intercom events");
-    let _ = intercom_handler.flush().await;
+    let _ = tokio::time::timeout(config.callback_timeout(), intercom_handler.flush()).await;
     tracing::debug!("Intercom flush completed");
 
     match execution_result {
@@ -484,12 +516,8 @@ async fn execute_inner(
     }
 }
 
-fn emit_event(
-    tx: &mpsc::UnboundedSender<StreamEvent>,
-    event_type: &str,
-    payload: serde_json::Value,
-) {
-    let _ = tx.send(InterComEvent::with_type(event_type, payload));
+fn emit_event(tx: &mpsc::Sender<StreamEvent>, event_type: &str, payload: serde_json::Value) {
+    let _ = tx.try_send(InterComEvent::with_type(event_type, payload));
 }
 
 #[cfg(test)]
@@ -521,12 +549,12 @@ mod tests {
         assert!(message.contains("apps/app-1"));
     }
 
-    #[test]
-    fn fallback_failure_always_finishes_the_stream_with_terminal_status() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+    #[tokio::test]
+    async fn fallback_failure_always_finishes_the_stream_with_terminal_status() {
+        let (tx, mut rx) = mpsc::channel(256);
         let error = ExecutorError::BoardLoad("resolver failed".to_string());
 
-        send_fallback_failure(&tx, "run-1", 42, &error, true);
+        send_fallback_failure(&tx, "run-1", 42, &error, true).await;
 
         let error_event = rx.try_recv().expect("error event");
         assert_eq!(error_event.event_type, "error");

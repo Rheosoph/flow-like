@@ -1,5 +1,5 @@
 use crate::{
-    ensure_any_permission,
+    audit_branch, ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -122,6 +122,22 @@ pub async fn create_table(
                 ApiError::from(error)
             }
         })?;
+
+    if created {
+        audit_branch!(
+            state,
+            user,
+            app_id,
+            "database.table.create",
+            "DatabaseTable",
+            table,
+            "Created a database table",
+            serde_json::json!({
+                "column_count": fields.len(),
+                "user_scoped": scope.is_user_scoped(),
+            })
+        );
+    }
 
     Ok(Json(CreateTableResponse {
         table_name: table,

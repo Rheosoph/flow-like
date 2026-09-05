@@ -178,6 +178,7 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
 
     match suppression(state, &context).await {
         Ok(Suppression::Fold(existing)) => {
+            record_rejection_audit(state, &context, &existing).await;
             tracing::debug!(
                 run_id = %existing,
                 app_id = %context.app_id,
@@ -206,14 +207,15 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
         ),
     }
 
-    if let Err(error) = record_run_row(state, &context).await {
-        tracing::error!(
+    match record_run_row(state, &context).await {
+        Ok(()) => record_rejection_audit(state, &context, &run_id).await,
+        Err(error) => tracing::error!(
             error = %error,
             run_id = %run_id,
             app_id = %context.app_id,
             stage = context.stage.as_str(),
             "Failed to persist rejected run"
-        );
+        ),
     }
 
     if let Err(error) = record_run_logs(state, &context).await {
@@ -236,6 +238,62 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
     );
 
     run_id
+}
+
+/// Match the existing rejection cap: a folded attempt shares its audit entry
+/// with the persisted rejected run, and retries can repair an earlier failure.
+async fn record_rejection_audit(state: &AppState, context: &RejectedRunContext, run_id: &str) {
+    if !state.platform_config.audit.enabled || !state.platform_config.audit.log_executions {
+        return;
+    }
+    let result: flow_like_types::Result<()> = async {
+        let Some(run) = execution_run::Entity::find_by_id(run_id)
+            .filter(execution_run::Column::AppId.eq(&context.app_id))
+            .one(&state.db)
+            .await?
+        else {
+            return Ok(());
+        };
+        if run.status != RunStatus::Failed
+            || run.current_step.as_deref() != Some(context.stage.operation_id().as_str())
+        {
+            return Ok(());
+        }
+        let kind = if run.event_id.is_some() {
+            "event"
+        } else {
+            "board"
+        };
+        crate::audit::AuditService::record_once(
+            &state.db,
+            state.db_dialect,
+            crate::audit::service::AuditEntryInput {
+                actor_id: "execution-admission".to_owned(),
+                actor_type: crate::entity::sea_orm_active_enums::AuditActorType::System,
+                actor_ip: crate::audit::request::actor_ip(),
+                action: format!("execution.{kind}.reject"),
+                resource_type: "ExecutionRun".to_owned(),
+                resource_id: run.id,
+                chain_id: Some(run.app_id),
+                summary: "Execution rejected before dispatch".to_owned(),
+                details: Some(serde_json::json!({
+                    "board_id": run.board_id,
+                    "event_id": run.event_id,
+                    "stage": context.stage.as_str(),
+                    "user_id": run.user_id,
+                    "technical_user_id": run.technical_user_id,
+                    "input_payload_len": run.input_payload_len,
+                })),
+            },
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        crate::audit::request::record_failure();
+        tracing::error!(run_id, %error, "AUDIT FAILURE (execution rejection)");
+    }
 }
 
 enum Suppression {
@@ -326,7 +384,13 @@ async fn record_run_row(
             updated_at: Set(now),
             ..Default::default()
         };
-        update.update(&state.db).await?;
+        execution_run::Entity::update_many()
+            .set(update)
+            .filter(execution_run::Column::Id.eq(&context.run_id))
+            .filter(execution_run::Column::AppId.eq(&context.app_id))
+            .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+            .exec(&state.db)
+            .await?;
         return Ok(());
     }
 

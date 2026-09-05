@@ -332,13 +332,14 @@ impl Default for ForkingConfig {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct AuditConfig {
-    /// Master switch — when false, no audit entries are recorded
+    /// Master switch. When false, no audit entries are recorded.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Whether to capture client IP addresses in audit entries (GDPR consideration)
     #[serde(default)]
     pub log_ip: bool,
-    /// Auto-null stored IPs after this many days. None = retain indefinitely.
+    /// Reserved retention setting. Stored IPs in signed entries are immutable;
+    /// this setting does not currently erase them automatically.
     pub ip_retention_days: Option<u32>,
     /// If true, the server will refuse to start without signing keys configured
     #[serde(default)]

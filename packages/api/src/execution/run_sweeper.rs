@@ -11,17 +11,15 @@
 //! `Local` runs are skipped — they have no executor lifecycle and the
 //! caller controls completion explicitly.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set};
 
+use crate::audit::{ExecutionAuditContext, record_execution_result};
 use crate::entity::execution_run;
 use crate::entity::prelude::ExecutionRun;
-use crate::entity::sea_orm_active_enums::{RunMode, RunStatus};
+use crate::entity::sea_orm_active_enums::{AuditActorType, RunMode, RunStatus};
 
 const DEFAULT_INTERVAL_SECS: u64 = 300;
 const DEFAULT_GRACE_SECS: u64 = 3600;
@@ -76,7 +74,7 @@ fn normalized_batch_size(value: Option<&str>) -> u64 {
 /// the join handle of the spawned task. The task runs forever and is
 /// expected to be aborted on process shutdown.
 pub fn spawn_run_sweeper(
-    db: Arc<DatabaseConnection>,
+    context: ExecutionAuditContext,
     config: RunSweeperConfig,
 ) -> Option<JoinHandle<()>> {
     if std::env::var("RUN_SWEEPER_DISABLED")
@@ -102,7 +100,7 @@ pub fn spawn_run_sweeper(
 
         loop {
             ticker.tick().await;
-            match sweep_once(db.as_ref(), config.grace, config.batch_size).await {
+            match sweep_once(&context, config.grace, config.batch_size).await {
                 Ok(0) => {}
                 Ok(n) => tracing::warn!(swept = n, "Run sweeper marked stale runs as Timeout"),
                 Err(e) => tracing::error!(error = %e, "Run sweeper iteration failed"),
@@ -119,11 +117,16 @@ pub fn spawn_run_sweeper(
 /// Exposed for tests and ad-hoc reconciliation; the spawned task calls
 /// this on each interval tick.
 pub async fn sweep_once(
-    db: &DatabaseConnection,
+    context: &ExecutionAuditContext,
     grace: Duration,
     batch_size: u64,
 ) -> Result<u64, sea_orm::DbErr> {
-    let now = chrono::Utc::now().fixed_offset();
+    let db = context.db.as_ref();
+    // ExecutionRun timestamps use millisecond precision. Reuse that exact value
+    // for the update and the query identifying rows changed by this sweep.
+    let now = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+        .expect("current timestamp is representable in milliseconds")
+        .fixed_offset();
     let threshold =
         now - chrono::Duration::from_std(grace).unwrap_or_else(|_| chrono::Duration::seconds(3600));
     let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);
@@ -163,7 +166,7 @@ pub async fn sweep_once(
             )),
             ..Default::default()
         })
-        .filter(execution_run::Column::Id.is_in(ids))
+        .filter(execution_run::Column::Id.is_in(ids.clone()))
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
         // A callback may refresh a run after the selection query. Keep the
         // age predicate in the conditional update so the sweep cannot time out
@@ -172,6 +175,19 @@ pub async fn sweep_once(
         .exec(db)
         .await?;
 
+    if context.enabled && result.rows_affected > 0 {
+        let timed_out = ExecutionRun::find()
+            .filter(execution_run::Column::Id.is_in(ids))
+            .filter(execution_run::Column::Status.eq(RunStatus::Timeout))
+            .filter(execution_run::Column::CompletedAt.eq(now))
+            .all(db)
+            .await?;
+        for run in timed_out {
+            record_execution_result(context, &run, "run-sweeper", AuditActorType::System)
+                .await
+                .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+        }
+    }
     Ok(result.rows_affected)
 }
 

@@ -27,6 +27,8 @@ pub struct ExecutorConfig {
     /// cannot accidentally weaken message settlement semantics.
     #[serde(default)]
     terminal_status_ack_required: bool,
+    #[serde(skip)]
+    completion_observer: Option<fn(&str, f64)>,
 }
 
 fn default_batch_interval_ms() -> u64 {
@@ -57,6 +59,7 @@ impl Default for ExecutorConfig {
             callback_retries: default_callback_retries(),
             execution_timeout_secs: default_execution_timeout_secs(),
             terminal_status_ack_required: false,
+            completion_observer: None,
         }
     }
 }
@@ -80,11 +83,26 @@ impl ExecutorConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(default_callback_retries),
-            execution_timeout_secs: std::env::var("EXECUTOR_TIMEOUT_SECS")
+            execution_timeout_secs: std::env::var("EXECUTION_TIMEOUT_SECONDS")
+                .or_else(|_| std::env::var("EXECUTOR_TIMEOUT_SECS"))
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(default_execution_timeout_secs),
             terminal_status_ack_required: false,
+            completion_observer: None,
+        }
+    }
+
+    /// Record completion at the execution task boundary, including streaming
+    /// work that outlives its HTTP response headers or a client connection.
+    pub fn with_completion_observer(mut self, observer: fn(&str, f64)) -> Self {
+        self.completion_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn record_completion(&self, status: &str, duration: f64) {
+        if let Some(observer) = self.completion_observer {
+            observer(status, duration);
         }
     }
 
@@ -130,8 +148,10 @@ mod tests {
     #[test]
     fn queue_runtime_must_explicitly_enable_terminal_acknowledgement() {
         assert!(!ExecutorConfig::default().terminal_status_ack_required());
-        assert!(ExecutorConfig::default()
-            .with_required_terminal_status_ack()
-            .terminal_status_ack_required());
+        assert!(
+            ExecutorConfig::default()
+                .with_required_terminal_status_ack()
+                .terminal_status_ack_required()
+        );
     }
 }
