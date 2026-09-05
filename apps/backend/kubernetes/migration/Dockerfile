@@ -2,7 +2,7 @@
 # Database Migration Image for Kubernetes
 # =============================================================================
 # This image contains the Prisma schema and tools needed to run migrations
-# against CockroachDB in the Kubernetes cluster.
+# against PostgreSQL or CockroachDB in the Kubernetes cluster.
 # =============================================================================
 
 FROM oven/bun:1.2-debian
@@ -25,11 +25,13 @@ WORKDIR /workspace
 COPY packages/api/prisma/schema ./prisma/schema
 COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
 COPY packages/api/prisma/pre-push ./prisma/pre-push
+COPY packages/api/scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
 COPY packages/api/package.json ./package.json
 
 # Install dependencies for prisma (including prisma which has the config module)
 # and for prisma/pre-push.ts (pg, dotenv)
 RUN bun install --production && bun add prisma @prisma/client pg dotenv
+RUN chmod +x /usr/local/bin/make-prisma-mirror.sh
 
 # Create a minimal prisma.config.ts for migrations
 RUN cat > ./prisma.config.ts <<'CONFIGEOF'
@@ -43,44 +45,11 @@ export default defineConfig({
 });
 CONFIGEOF
 
-# Create migration script
-COPY <<'EOF' /usr/local/bin/run-migration.sh
-#!/bin/bash
-set -e
-
-echo "=== Flow-Like Database Migration ==="
-echo "Waiting for database to be ready..."
-
-# Wait for database to be accessible
-max_retries=30
-retry_count=0
-until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" 2>/dev/null; do
-    retry_count=$((retry_count + 1))
-    if [ $retry_count -ge $max_retries ]; then
-        echo "ERROR: Database not ready after $max_retries attempts"
-        exit 1
-    fi
-    echo "Database not ready yet, attempt $retry_count/$max_retries..."
-    sleep 2
-done
-
-echo "Database is ready!"
-echo "Applying pre-push SQL..."
-bun prisma/pre-push.ts
-
-echo "Applying database schema..."
-
-# Run prisma db push to create/update schema
-if bunx prisma db push --schema=prisma/schema --accept-data-loss; then
-    echo "✅ Database schema applied successfully!"
-else
-    echo "❌ Failed to apply database schema"
-    exit 1
-fi
-
-echo "=== Migration Complete ==="
-EOF
+COPY apps/backend/kubernetes/migration/run-migration.sh /usr/local/bin/run-migration.sh
+COPY apps/backend/kubernetes/migration/wait-for-migration.ts /usr/local/bin/wait-for-migration.ts
 
 RUN chmod +x /usr/local/bin/run-migration.sh
+RUN bash -n /usr/local/bin/run-migration.sh \
+    && bun -e 'await import("/usr/local/bin/wait-for-migration.ts")'
 
 CMD ["/usr/local/bin/run-migration.sh"]

@@ -1,31 +1,45 @@
+{{- if or .Values.database.migration.enabled .Values.rustfs.enabled (eq .Values.execution.backend "kubernetes_job") (eq .Values.execution.asyncBackend "kubernetes_job") }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "flow-like.fullname" . }}-job-manager
+  name: {{ include "flow-like.fullname" . }}-api
   labels:
     {{- include "flow-like.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+  {{- if or .Values.database.migration.enabled .Values.rustfs.enabled }}
+  - apiGroups: [batch]
+    resources: [jobs]
+    resourceNames:
+      {{- if .Values.database.migration.enabled }}
+      - {{ include "flow-like.migrationJobName" . }}
+      {{- end }}
+      {{- if .Values.rustfs.enabled }}
+      - {{ include "flow-like.objectStoreInitJobName" . }}
+      {{- end }}
+    verbs: [get]
+  {{- end }}
+  {{- if or (eq .Values.execution.backend "kubernetes_job") (eq .Values.execution.asyncBackend "kubernetes_job") }}
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, delete, get, list, watch]
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    resources: [pods]
+    verbs: [get, list, watch]
   - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
+    resources: [pods/log]
+    verbs: [get]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "flow-like.fullname" . }}-job-manager
-  labels:
-    {{- include "flow-like.labels" . | nindent 4 }}
+  name: {{ include "flow-like.fullname" . }}-api
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "flow-like.fullname" . }}-job-manager
+  name: {{ include "flow-like.fullname" . }}-api
 subjects:
   - kind: ServiceAccount
     name: {{ include "flow-like.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -2,67 +2,252 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "flow-like.fullname" . }}-api
-  labels:
-    {{- include "flow-like.api.labels" . | nindent 4 }}
+  name: {{ include "flow-like.fullname" . }}-default-deny
 spec:
   podSelector:
     matchLabels:
-      {{- include "flow-like.api.selectorLabels" . | nindent 6 }}
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 8080
-  egress:
-    # Internal cluster communication
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 5432   # PostgreSQL
-        - protocol: TCP
-          port: 26257  # CockroachDB
-        - protocol: TCP
-          port: 6379   # Redis
-        - protocol: TCP
-          port: 4317   # OpenTelemetry gRPC (Tempo)
-        - protocol: TCP
-          port: 8080   # Executor pool
-        - protocol: UDP
-          port: 53     # DNS
-    # External HTTPS (auth servers, S3, external APIs)
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
-        - protocol: TCP
-          port: 443
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "flow-like.fullname" . }}-executor
-  labels:
-    {{- include "flow-like.executor.labels" . | nindent 4 }}
+  name: {{ include "flow-like.fullname" . }}-dns
 spec:
   podSelector:
     matchLabels:
-      app: flow-like-executor
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress: []  # No inbound traffic to executors
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [execution-sandbox]
+  policyTypes: [Egress]
   egress:
-    {{- with .Values.networkPolicy.executor.allowedEgress }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.dnsNamespaceSelector | nindent 12 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- $root := . }}
+{{- $targets := dict "api" (dict "port" 8080 "from" (list "execution-egress" "executor-pool" "queue-bridge" "compiler" "sink-trigger" "sink-services")) "web" (dict "port" 3001 "from" list) "signaling" (dict "port" (int .Values.signaling.service.port) "from" list) "redis" (dict "port" 6379 "from" (list "api" "execution-manager" "queue-bridge" "executor-pool" "signaling" "sink-services" "redis-exporter")) "cockroachdb" (dict "port" 26257 "from" (list "api" "db-migration" "cockroachdb-init")) "rustfs" (dict "port" 9000 "from" (list "api" "object-store-init" "object-gateway")) "object-gateway" (dict "port" 9000 "from" (list "api" "compiler" "execution-egress" "executor-pool" "object-store-init")) "compiler" (dict "port" (int .Values.compiler.service.port) "from" (list "api")) "execution-manager" (dict "port" 9000 "from" (list "api" "queue-bridge")) "executor-pool" (dict "port" (int .Values.executorPool.service.port) "from" (list "api")) }}
+{{- range $component, $target := $targets }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" $root }}-{{ $component }}-access
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- if $target.from }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" $root | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: {{ $target.from | toJson }}
+      ports:
+        - {protocol: TCP, port: {{ $target.port }}}
+    {{- end }}
+    {{- if has $component (list "api" "web" "signaling" "object-gateway") }}
+    - from:
+        - namespaceSelector:
+            {{- toYaml $root.Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+      ports:
+        - {protocol: TCP, port: {{ $target.port }}}
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-control-plane-egress
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, compiler, queue-bridge, execution-manager, db-migration, cockroachdb-init, object-store-init, object-gateway, signaling, sink-trigger, sink-services, executor-pool]
+  policyTypes: [Egress]
+  egress:
+    {{- range $component, $target := $targets }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" $root | nindent 14 }}
+              app.kubernetes.io/component: {{ $component }}
+      ports:
+        - {protocol: TCP, port: {{ $target.port }}}
+    {{- end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: tempo
+      ports: [{protocol: TCP, port: 4317}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- with .Values.networkPolicy.controlPlaneExtraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-    - to: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-kubernetes-api
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, execution-manager]
+  policyTypes: [Egress]
+  egress:
+    # Endpoint IP/port depends on the cluster and on pre/post-DNAT enforcement.
+    # These trusted pods still need a service-account token for authorization.
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-manager-slots
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-manager
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: execution-sandbox
+      ports: [{protocol: TCP, port: 8080}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: execution-egress
+      ports: [{protocol: TCP, port: 9001}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-egress
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-egress
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.api.selectorLabels" . | nindent 14 }}
+      ports: [{protocol: TCP, port: 8080}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: object-gateway
+      ports: [{protocol: TCP, port: 9000}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- with .Values.networkPolicy.executionGatewayExtraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [execution-sandbox, execution-egress, rustfs, redis, cockroachdb]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: prometheus
       ports:
-        - protocol: UDP
-          port: 53  # DNS
+        - {protocol: TCP, port: 9090}
+        - {protocol: TCP, port: 9000}
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-monitoring-services
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [prometheus, grafana, tempo]
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: NotIn
+                values: [execution-sandbox, execution-egress]
+      ports:
+        - {protocol: TCP, port: 9090}
+        - {protocol: TCP, port: 4317}
+        - {protocol: TCP, port: 4318}
+        - {protocol: TCP, port: 3200}
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+      ports: [{protocol: TCP, port: 3000}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: NotIn
+                values: [execution-sandbox, execution-egress]
+      ports:
+        - {protocol: TCP, port: 9090}
+        - {protocol: TCP, port: 9000}
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 3200}
+    - ports: [{protocol: TCP, port: 443}]
 {{- end }}

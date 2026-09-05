@@ -20,11 +20,14 @@ use flow_like_api::telemetry::{
 };
 use flow_like_api::{construct_router, state::State};
 use flow_like_catalog::get_catalog;
+use hardening::{cors_from_env, shutdown};
 use std::{sync::Arc, time::Instant};
-use tower_http::cors::CorsLayer;
 
 mod config;
+#[path = "../../../shared/api_hardening.rs"]
+mod hardening;
 mod metrics;
+mod secrets;
 mod storage;
 
 async fn metrics_middleware(request: Request<Body>, next: Next) -> impl IntoResponse {
@@ -32,7 +35,7 @@ async fn metrics_middleware(request: Request<Body>, next: Next) -> impl IntoResp
         .extensions()
         .get::<MatchedPath>()
         .map(|p| p.as_str().to_string())
-        .unwrap_or_else(|| request.uri().path().to_string());
+        .unwrap_or_else(|| "unmatched".to_string());
     let method = request.method().to_string();
 
     let start = Instant::now();
@@ -55,8 +58,15 @@ async fn metrics_middleware(request: Request<Body>, next: Next) -> impl IntoResp
     response
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    secrets::load()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     metrics::init_telemetry();
 
     tracing::info!("Starting Flow-Like Docker Compose API Service");
@@ -64,13 +74,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = config::Config::from_env()?;
     tracing::info!("Loaded configuration: provider={}", config.provider());
 
-    if !flow_like_api::execution::is_jwt_configured() {
-        tracing::warn!(
-            "Execution JWT keys not configured. \
-            Generate keys using tools/gen-execution-keys.sh and set \
-            BACKEND_KEY, BACKEND_PUB environment variables."
-        );
+    for name in ["SINK_TOKEN_ENCRYPTION_KEY", "MAINTENANCE_TOKEN"] {
+        if std::env::var(name)
+            .ok()
+            .is_none_or(|value| value.trim().len() < 32)
+        {
+            return Err(format!("{name} must be configured with at least 32 bytes").into());
+        }
     }
+    let cors = cors_from_env()?;
 
     let catalog = get_catalog();
 
@@ -78,8 +90,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
 
-    let _sweeper_handle =
-        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    if !flow_like_api::execution::is_jwt_configured() {
+        return Err("backend JWT signing keys were not initialized".into());
+    }
+    // Decode success alone does not establish that these keys form a pair.
+    let token_type = flow_like_api::backend_jwt::TokenType::User;
+    let time = flow_like_api::backend_jwt::make_time_claims(token_type, Some(60));
+    let probe = serde_json::json!({
+        "sub": "startup-key-check", "typ": token_type,
+        "iss": flow_like_api::backend_jwt::issuer(), "aud": token_type.audience(),
+        "iat": time.iat, "nbf": time.nbf, "exp": time.exp,
+    });
+    let signed = flow_like_api::backend_jwt::sign(&probe)?;
+    flow_like_api::backend_jwt::verify::<serde_json::Value>(&signed, token_type)?;
+
+    let _sweeper_handle = spawn_run_sweeper(
+        flow_like_api::audit::ExecutionAuditContext::from(&state),
+        RunSweeperConfig::from_env(),
+    );
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),
@@ -114,8 +142,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .merge(construct_router(state.clone()))
+        .route(
+            "/ready",
+            axum::routing::get({
+                let state = state.clone();
+                move || {
+                    let state = state.clone();
+                    async move {
+                        let check = async {
+                            state.db.ping().await.map_err(|_| ())?;
+                            let store =
+                                flow_like_api::execution::state::StateStoreConfig::default()
+                                    .with_db(Arc::new(state.db.clone()));
+                            let store = flow_like_api::execution::state::create_state_store(store)
+                                .await
+                                .map_err(|_| ())?;
+                            store.get_run("__readiness_probe__").await.map_err(|_| ())?;
+                            Ok::<_, ()>(())
+                        };
+                        match tokio::time::timeout(std::time::Duration::from_secs(3), check).await {
+                            Ok(Ok(())) => axum::http::StatusCode::OK,
+                            _ => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        }
+                    }
+                }
+            }),
+        )
         .layer(middleware::from_fn(metrics_middleware))
-        .layer(CorsLayer::permissive());
+        .layer(cors);
 
     let metrics_port = std::env::var("METRICS_PORT").unwrap_or_else(|_| "9090".to_string());
     let metrics_app = Router::new().route("/metrics", axum::routing::get(metrics::handler));
@@ -129,10 +183,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let metrics_listener = tokio::net::TcpListener::bind(&metrics_addr).await?;
 
-    tokio::select! {
-        res = axum::serve(listener, app) => res?,
-        res = axum::serve(metrics_listener, metrics_app) => res?,
-    }
+    tokio::try_join!(
+        async {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown())
+                .await
+        },
+        async {
+            axum::serve(metrics_listener, metrics_app)
+                .with_graceful_shutdown(shutdown())
+                .await
+        },
+    )?;
 
     Ok(())
 }

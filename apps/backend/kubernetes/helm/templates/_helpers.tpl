@@ -133,7 +133,9 @@ Redis secret name. An existing secret is used only when authentication is
 enabled; otherwise the chart-managed secret carries the unauthenticated URL.
 */}}
 {{- define "flow-like.redisSecretName" -}}
-{{- if and .Values.redis.auth.enabled (ne (default "" .Values.redis.auth.existingSecret) "") -}}
+{{- if not .Values.redis.enabled -}}
+{{- required "redis.externalExistingSecret with REDIS_URL is required when redis.enabled=false" .Values.redis.externalExistingSecret -}}
+{{- else if .Values.redis.auth.existingSecret -}}
 {{- .Values.redis.auth.existingSecret -}}
 {{- else -}}
 {{- printf "%s-redis" (include "flow-like.fullname" .) -}}
@@ -237,3 +239,76 @@ Storage secret name - based on provider
   {{- end -}}
 {{- end -}}
 {{- end }}
+{{/* Keep the current completed Job for replacement API pods; Helm removes it on the next upgrade. */}}
+{{- define "flow-like.migrationJobName" -}}
+{{- printf "%s-db-migrate-%d" (include "flow-like.fullname" . | trunc 40 | trimSuffix "-") .Release.Revision -}}
+{{- end -}}
+
+{{- define "flow-like.redisEnv" -}}
+- name: REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "flow-like.redisSecretName" . }}
+      key: REDIS_URL
+{{- end -}}
+
+{{- define "flow-like.executionSecretName" -}}
+{{- default (printf "%s-execution" (include "flow-like.fullname" .)) .Values.execution.existingSecret -}}
+{{- end -}}
+
+{{- define "flow-like.apiSecretName" -}}
+{{- required "api.existingSecret is required; run scripts/setup-config.py" .Values.api.existingSecret -}}
+{{- end -}}
+
+{{- define "flow-like.objectStoreInternalEndpoint" -}}
+{{- if .Values.rustfs.enabled -}}
+{{- printf "http://%s-object-gateway.%s.svc.cluster.local:9000" (include "flow-like.fullname" .) .Release.Namespace -}}
+{{- else -}}
+{{- default .Values.storage.s3.endpoint .Values.storage.s3.internalEndpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "flow-like.objectStorePublicEndpoint" -}}
+{{- if .Values.storage.s3.publicEndpoint -}}
+{{- .Values.storage.s3.publicEndpoint -}}
+{{- else if .Values.rustfs.enabled -}}
+{{- include "flow-like.objectStoreInternalEndpoint" . -}}
+{{- else -}}
+{{- required "storage.s3.publicEndpoint or endpoint is required" .Values.storage.s3.endpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "flow-like.objectStoreStsEndpoint" -}}
+{{- if .Values.rustfs.enabled -}}
+{{- printf "http://%s-rustfs:9000" (include "flow-like.fullname" .) -}}
+{{- else -}}
+{{- required "storage.s3.stsEndpoint is required for prefix-scoped temporary credentials" .Values.storage.s3.stsEndpoint -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "flow-like.objectStoreInitJobName" -}}
+{{- printf "%s-object-init-%d" (include "flow-like.fullname" . | trunc 40 | trimSuffix "-") .Release.Revision -}}
+{{- end -}}
+
+{{- define "flow-like.containerSecurityContext" -}}
+runAsNonRoot: true
+runAsUser: 1000
+runAsGroup: 1000
+readOnlyRootFilesystem: true
+allowPrivilegeEscalation: false
+capabilities:
+  drop: [ALL]
+seccompProfile:
+  type: RuntimeDefault
+{{- end -}}
+
+{{- define "flow-like.compilerStorageHosts" -}}
+{{- $hosts := .Values.compiler.allowedStorageHosts -}}
+{{- if eq .Values.storage.provider "s3" -}}
+{{- $hosts = append $hosts (include "flow-like.objectStorePublicEndpoint" .) -}}
+{{- end -}}
+{{- if .Values.rustfs.enabled -}}
+{{- $hosts = append $hosts (include "flow-like.objectStoreInternalEndpoint" .) -}}
+{{- end -}}
+{{- required "compiler.allowedStorageHosts must contain storage origins" ($hosts | uniq | join ",") -}}
+{{- end -}}

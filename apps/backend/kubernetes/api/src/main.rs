@@ -13,16 +13,27 @@ use flow_like_api::telemetry::{
 };
 use flow_like_api::{construct_router, state::State};
 use flow_like_catalog::get_catalog;
+use hardening::{cors_from_env, shutdown};
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 
 mod config;
+#[path = "../../../shared/api_hardening.rs"]
+mod hardening;
 mod health;
 mod metrics;
+#[path = "../../../docker-compose/api/src/secrets.rs"]
+mod secrets;
 mod storage;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    secrets::load()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     metrics::init_telemetry();
 
     tracing::info!("Starting Flow-Like Kubernetes API Service");
@@ -33,13 +44,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.storage_provider()
     );
 
-    if !flow_like_api::execution::is_jwt_configured() {
-        tracing::warn!(
-            "Execution JWT keys not configured. \
-            Generate keys using tools/gen-execution-keys.sh and set \
-            BACKEND_KEY, BACKEND_PUB environment variables."
-        );
+    for name in ["SINK_TOKEN_ENCRYPTION_KEY", "MAINTENANCE_TOKEN"] {
+        if std::env::var(name)
+            .ok()
+            .is_none_or(|value| value.trim().len() < 32)
+        {
+            return Err(format!("{name} must be configured with at least 32 bytes").into());
+        }
     }
+    let cors = cors_from_env()?;
 
     let catalog = get_catalog();
 
@@ -47,9 +60,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
 
-    let _sweeper_handle =
-        spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    if !flow_like_api::execution::is_jwt_configured() {
+        return Err("backend JWT signing keys were not initialized".into());
+    }
+    // Decode success alone does not establish that these keys form a pair.
+    let token_type = flow_like_api::backend_jwt::TokenType::User;
+    let time = flow_like_api::backend_jwt::make_time_claims(token_type, Some(60));
+    let probe = serde_json::json!({
+        "sub": "startup-key-check", "typ": token_type,
+        "iss": flow_like_api::backend_jwt::issuer(), "aud": token_type.audience(),
+        "iat": time.iat, "nbf": time.nbf, "exp": time.exp,
+    });
+    let signed = flow_like_api::backend_jwt::sign(&probe)?;
+    flow_like_api::backend_jwt::verify::<serde_json::Value>(&signed, token_type)?;
+
+    let _sweeper_handle = spawn_run_sweeper(
+        flow_like_api::audit::ExecutionAuditContext::from(&state),
+        RunSweeperConfig::from_env(),
+    );
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
+    let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
+        state.clone(),
+        flow_like_api::deletion::DeletionWorkerConfig::from_env(),
+    );
     let _channel_sweeper_handle = spawn_channel_sweeper(
         Arc::new(state.db.clone()),
         state.db_dialect,
@@ -77,10 +110,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_alert_handle =
         spawn_telemetry_alert_evaluator(state.clone(), TelemetryAlertConfig::from_env());
 
+    let execution_store = flow_like_api::execution::state::create_state_store(
+        flow_like_api::execution::state::StateStoreConfig::default()
+            .with_db(Arc::new(state.db.clone())),
+    )
+    .await?;
     let app = Router::new()
         .merge(construct_router(state.clone()))
-        .nest("/health", health::routes())
-        .layer(CorsLayer::permissive());
+        .nest("/health", health::routes(state.db.clone(), execution_store))
+        .layer(cors);
 
     let metrics_port = std::env::var("METRICS_PORT").unwrap_or_else(|_| "9090".to_string());
     let metrics_app = Router::new().route("/metrics", axum::routing::get(metrics::handler));
@@ -94,10 +132,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let metrics_listener = tokio::net::TcpListener::bind(&metrics_addr).await?;
 
-    tokio::select! {
-        res = axum::serve(listener, app) => res?,
-        res = axum::serve(metrics_listener, metrics_app) => res?,
-    }
+    tokio::try_join!(
+        async {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown())
+                .await
+        },
+        async {
+            axum::serve(metrics_listener, metrics_app)
+                .with_graceful_shutdown(shutdown())
+                .await
+        },
+    )?;
 
     Ok(())
 }

@@ -5,99 +5,75 @@ sidebar:
   order: 11
 ---
 
-## Required Tools
+Prepare the cluster's execution boundary and storage before deploying the chart.
+The default `per_run` mode requires Linux execution nodes with gVisor and Cilium.
 
-For any cluster:
+## Build and operator tools
 
-- Helm 3
-- A compatible `kubectl`
-- Access to the Flow-Like repository or a packaged copy of
-  `apps/backend/kubernetes/helm/`
-- OpenSSL when generating the ES256 execution-key pair with the repository
-  helper
+Install Docker with BuildKit, Helm 3, a compatible `kubectl`, Python 3 and
+OpenSSL. Python runs configuration and deployment helpers; execution supervision,
+gateway enforcement and the slot adapter run in Rust.
 
-Local k3d development also requires Docker and k3d.
+The build machine needs the Flow-Like repository and permission to push images
+to a registry reachable by the cluster. Configure `global.imagePullSecrets`
+when the registry requires authentication. Isolated execution requires immutable
+manager and executor image digests; the image helper records them after a push.
 
-## Application Images
+## Execution nodes and Cilium
 
-Your cluster must be able to pull these Flow-Like images:
+Provide:
 
-- API
-- Web application
-- Executor, used by the working warm HTTP pool; the checked-in one-job
-  entrypoint for per-run Jobs is not implemented
-- Database migration
+- A working `runsc` runtime handler on eligible Linux nodes.
+- A matching Kubernetes RuntimeClass, normally named `runsc`.
+- Cilium with policy enforcement enabled, Kubernetes NetworkPolicy support and
+  `allow-localhost=policy`.
+- A completed Cilium DaemonSet rollout and the CiliumNetworkPolicy CRD.
+- CPU and memory for active executions plus the warm reserve and gateway Pods.
 
-The optional compiler and sink services need their own images when enabled.
+Creating a RuntimeClass object only names an installed handler. The Helm chart
+does not install gVisor or configure the container runtime.
 
-The chart defaults point to a local k3d registry with
-`imagePullPolicy: Never`; they are not production image settings. Publish the
-images to an accessible registry and configure `global.imagePullSecrets` when
-authentication is required.
+Standard Kubernetes NetworkPolicy permits traffic to the local node. The chart
+therefore requires Cilium deny rules for node, Kubernetes API and metadata
+destinations. The deploy helper checks Cilium configuration. Each warm slot also
+checks a reachable gateway and prohibited endpoints before accepting tenant
+input. These checks supplement live isolation tests; they do not cover every
+possible network path.
 
-## Object Storage
+See [Security](/self-hosting/kubernetes/security/) for namespace and policy
+ownership requirements. A local k3d cluster does not provide this boundary;
+its helper requires explicit `trusted_shared` mode.
 
-Object storage is external to the chart. Select one provider:
+## Persistent services
 
-- AWS S3
-- Azure Blob Storage
-- Google Cloud Storage
-- Cloudflare R2
-- A generic S3-compatible service such as MinIO
+A default StorageClass, or explicit storage classes, must satisfy the enabled
+RustFS, Redis, database and monitoring PVCs. Size them for retained objects,
+execution state, queue claims and metrics.
 
-Create the meta, content, and logs buckets or containers before installation.
-You need provider credentials that can access them. Some execution modes also
-require the provider-specific ability to issue scoped runtime credentials.
+RustFS and its private metadata, content and log buckets are provisioned by the
+chart. An external object store is optional. Any replacement used by isolated
+execution must support the required prefix-scoped temporary credentials and a
+bucket-only public data endpoint.
 
-## Database
+The internal CockroachDB workload is a single-node, insecure evaluation database.
+For production, prepare an externally operated PostgreSQL or CockroachDB service
+and a complete `DATABASE_URL`. External Redis is supported through a Secret
+containing an authenticated `REDIS_URL`.
 
-Choose one of:
+## Public endpoints and identity
 
-- The chart's single-node, insecure CockroachDB workload for evaluation or
-  development
-- An externally operated PostgreSQL or CockroachDB service for production
+Choose the browser origins for the web application, API and S3 object gateway.
+The S3 origin must resolve and be reachable from both browsers and Pods; presigned
+URLs are bound to that exact host and path.
 
-External mode requires a `DATABASE_URL` Secret and network access from the
-release namespace.
+Prepare an ingress controller and certificates for public HTTPS endpoints.
+Configure the API's public hub and OIDC settings in the JSON file selected by
+`FLOW_LIKE_CONFIG` before building the API. Those settings are embedded at build
+time, while credentials belong in Kubernetes Secrets.
 
-## Cluster Capabilities
+Optional features may require Metrics Server for HPAs, Prometheus Operator CRDs
+for ServiceMonitor resources, and additional network rules for external database,
+Redis, DNS or private integration endpoints.
 
-At minimum, provide:
-
-- A Kubernetes cluster that supports `apps/v1`, `batch/v1`,
-  `networking.k8s.io/v1`, and persistent-volume claims
-- A default `StorageClass`, or explicit storage classes for CockroachDB,
-  Redis, Prometheus, and Grafana persistence
-- DNS and egress access to the selected object store, database, identity
-  provider, and model APIs
-- Sufficient CPU, memory, and storage for the enabled workloads
-
-The default chart also enables Prometheus, Grafana, and Tempo. Disable
-`monitoring.enabled` for a smaller evaluation install, or size their
-persistence and resources deliberately.
-
-## Optional Capabilities
-
-- An Ingress controller and TLS certificate workflow when
-  `ingress.enabled: true`
-- Metrics APIs for HPA when autoscaling is enabled
-- Prometheus Operator CRDs when `monitoring.serviceMonitor.enabled: true`
-- Kata Containers installed on cluster nodes before referencing a Kata
-  `RuntimeClass` from a separately completed Job runner
-
-Creating a `RuntimeClass` object does not install its runtime handler.
-
-## Secrets to Prepare
-
-Plan for:
-
-- `BACKEND_KEY`, `BACKEND_PUB`, and `BACKEND_KID`
-- Provider-specific storage credentials and logical bucket names
-- `DATABASE_URL` for an external database
-- `REDIS_PASSWORD` when supplying Redis authentication through an existing
-  Secret
-- Optional registry, LLM-provider, ingress TLS, and observability credentials
-
-Do not pass long-lived secrets as Helm `--set` values. The
-[Installation](/self-hosting/kubernetes/installation/) guide uses local
-environment files and pre-created Kubernetes Secrets instead.
+Continue with [Installation](/self-hosting/kubernetes/installation/). The setup
+helper generates matching execution keys and separate service credentials.

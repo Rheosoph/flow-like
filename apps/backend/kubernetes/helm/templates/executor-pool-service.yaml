@@ -1,10 +1,10 @@
-{{- if .Values.executorPool.enabled }}
+{{- if and (eq .Values.execution.isolationMode "trusted_shared") .Values.executorPool.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "flow-like.fullname" . }}-executor-pool
   labels:
-    {{- include "flow-like.executor.labels" . | nindent 4 }}
+    {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: executor-pool
 spec:
   type: ClusterIP

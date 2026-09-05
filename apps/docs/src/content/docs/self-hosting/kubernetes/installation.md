@@ -5,247 +5,160 @@ sidebar:
   order: 12
 ---
 
-The chart lives at `apps/backend/kubernetes/helm/`. Its checked-in image
-defaults target the local k3d registry, so a production install must provide
-images that your cluster can pull.
+Install the chart with a private RustFS store and single-use execution sandboxes.
+Complete [Prerequisites](/self-hosting/kubernetes/prerequisites/) first, especially
+gVisor, Cilium and persistent storage. Commands below assume the release and
+namespace are both named `flow-like`.
 
-For a local evaluation, use the
-[k3d setup](/self-hosting/kubernetes/local-development/) instead.
+For trusted local evaluation, use
+[Local Development](/self-hosting/kubernetes/local-development/) instead.
 
-## Before You Start
+## Configure public endpoints and identity
 
-You need:
-
-- A Kubernetes cluster, `kubectl`, and Helm 3
-- A default `StorageClass`, or explicit storage classes for persistent volumes
-- Published API, web, executor, and migration images
-- One configured object-storage provider. The checked-in API build supports
-  Azure, GCP, and R2 runtime credentials; see the
-  [storage status table](/self-hosting/kubernetes/storage/#current-provider-status)
-  before choosing AWS or generic S3.
-- An ES256 key pair used to sign and verify execution tokens
-
-Create the storage buckets or containers before installing. The Azure example
-below uses separate `meta`, `content`, and `logs` containers.
-
-## 1. Create the Namespace
+From the repository root:
 
 ```bash
-kubectl create namespace flow-like
+cd apps/backend/kubernetes
+export PUBLIC_API_URL=https://api.flow-like.example.com
+export PUBLIC_WEB_URL=https://app.flow-like.example.com
+export S3_PUBLIC_ENDPOINT=https://s3.flow-like.example.com
+
+cp flow-like.config.example.json ../../../flow-like.kubernetes.config.json
+export FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json
 ```
 
-Reusing an existing namespace is fine.
+Edit that JSON file for your OIDC issuer, client, JWKS URL, hub domain, web origin
+and signaling URL. `FLOW_LIKE_CONFIG` is relative to the repository root and is
+embedded in the API binary. Rebuild the API when those settings change.
 
-## 2. Create the Backend-Key Secret
+The object-store endpoint must serve the configured buckets and be reachable from
+both browsers and Pods. Configure its ingress and DNS before running workflows.
 
-From the repository root, generate a key pair and write only its environment
-entries to a private local file:
+## Generate private configuration
+
+For production, provide `DATABASE_URL` through your shell's secret-management
+workflow before setup. The URL selects an external PostgreSQL database by default;
+set `DATABASE_PROVIDER=cockroachdb` for an external CockroachDB service. Without
+it, setup retains the internal evaluation database.
 
 ```bash
-umask 077
-./tools/gen-execution-keys.sh --export \
-  | grep -E '^BACKEND_(KEY|PUB|KID)=' \
-  > flow-like-backend-jwt.env
+./scripts/setup-config.sh
 ```
 
-Create a Kubernetes Secret without placing its values in the shell command:
+Setup writes:
+
+| File | Contents |
+| --- | --- |
+| `.generated/secrets.yaml` | ES256 keypair, API secrets, manager token, Redis credentials and separate RustFS root/API/STS identities |
+| `.generated/values-generated.yaml` | Matching Secret references and deployment settings |
+
+Both files are created with mode `0600`. Setup does not change the cluster and
+refuses to overwrite existing files. Preserve them for upgrades and back them up
+with the data services. Use `--namespace`, `--release` and `--output-dir` when
+maintaining multiple installations.
+
+## Build and publish the images
 
 ```bash
-kubectl -n flow-like create secret generic flow-like-backend-jwt \
-  --from-env-file=flow-like-backend-jwt.env \
-  --dry-run=client -o yaml \
-  | kubectl apply -f -
+REGISTRY=registry.example.com/flow-like TAG=release-2026-09 PUSH=true \
+  ./scripts/build-images.sh
 ```
 
-The Secret must contain `BACKEND_KEY`, `BACKEND_PUB`, and `BACKEND_KID`.
-Protect the private key and delete the temporary environment file securely
-after the Secret has been stored.
+The script builds the API, executor, Rust manager and gateway, queue bridge,
+compiler, signaling, migration, RustFS initializer and web images. It writes
+`.generated/values-images.yaml` with image references. Isolated execution
+requires the pushed manager and executor digests.
 
-## 3. Create the Storage Secret
+To rebuild selected components, set `COMPONENTS`, for example
+`COMPONENTS="api execution-manager"`. Partial builds preserve other entries in
+the image values file. Generated Secrets are excluded from Docker build contexts.
 
-For Azure Blob Storage, create a private
-`flow-like-storage.env` file:
+## Review the deployment values
 
-```dotenv
-STORAGE_PROVIDER=azure
-AZURE_STORAGE_ACCOUNT_NAME=replace-me
-AZURE_STORAGE_ACCOUNT_KEY=replace-me
-AZURE_META_CONTAINER=meta
-AZURE_CONTENT_CONTAINER=content
-AZURE_LOG_CONTAINER=logs
-```
+Start from `helm/values-production.yaml` and create an operator override file
+such as `values-operator.yaml`. Replace example domains, registry values and
+node placement. Configure:
 
-Then load it into the cluster:
+- An external database and its connection budget.
+- API and web ingress hosts, ingress class and TLS Secrets.
+- The separate `rustfs.gateway.ingress` host and TLS configuration.
+- Execution node selectors, manager replica count, concurrency and warm reserve.
+- Persistent volume sizes and any external-service network rules.
+
+For an HTTPS object gateway in isolated mode,
+`executionManager.objectStoreTlsGateway=true` is required. Set it only when the
+endpoint exposes bucket data and blocks root, STS and administration routes.
+Ingress must preserve the signed Host header and path.
+
+## Apply Secrets and deploy
 
 ```bash
-kubectl -n flow-like create secret generic flow-like-storage \
-  --from-env-file=flow-like-storage.env \
-  --dry-run=client -o yaml \
-  | kubectl apply -f -
+kubectl config current-context
+kubectl create namespace flow-like --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f .generated/secrets.yaml
+
+./scripts/deploy.sh \
+  -f helm/values-production.yaml \
+  -f .generated/values-generated.yaml \
+  -f values-operator.yaml \
+  -f .generated/values-images.yaml
 ```
 
-Provider readiness and the other Secret contracts are listed in the
-[storage guide](/self-hosting/kubernetes/storage/) and
-[Helm chart reference](/self-hosting/kubernetes/helm/#existing-secret-contracts).
+Helm applies later values last. Keep the generated image file last so its actual
+digests replace production examples. The deploy script lints and renders before
+checking Cilium and updating the release. It waits for workloads and initialization
+Jobs; `HELM_TIMEOUT` defaults to `20m`.
 
-## 4. Create a Values File
+The namespace must already exist. The script does not apply or rotate Secrets.
+Choose the cluster and identity through `KUBECONFIG` and its selected context;
+use `K8S_NAMESPACE` and `RELEASE` for deployment names.
 
-Save the following as `flow-like-values.yaml`, then replace every image
-repository and tag with artifacts available to your cluster:
-
-```yaml
-fullnameOverride: flow-like
-
-api:
-  image:
-    repository: registry.example.com/flow-like/api
-    tag: replace-me
-    pullPolicy: IfNotPresent
-
-web:
-  image:
-    repository: registry.example.com/flow-like/web
-    tag: replace-me
-    pullPolicy: IfNotPresent
-
-executor:
-  image:
-    repository: registry.example.com/flow-like/executor
-    tag: replace-me
-    pullPolicy: IfNotPresent
-
-executorPool:
-  image:
-    repository: registry.example.com/flow-like/executor
-    tag: replace-me
-    pullPolicy: IfNotPresent
-
-jwt:
-  existingSecret: flow-like-backend-jwt
-
-storage:
-  provider: azure
-  azure:
-    existingSecret: flow-like-storage
-
-database:
-  type: internal
-  migration:
-    image:
-      repository: registry.example.com/flow-like/migration
-      tag: replace-me
-      pullPolicy: IfNotPresent
-  internal:
-    replicas: 1
-
-execution:
-  backend: http
-  asyncBackend: http
-
-runtimeClass:
-  create: false
-
-monitoring:
-  enabled: false
-```
-
-The internal database is a single-node, insecure CockroachDB intended for
-evaluation and development. Use an external database for production.
-
-`runtimeClass.create: false` is appropriate when the cluster does not already
-provide the configured Kata handler. The default HTTP execution backend uses
-the warm executor pool. The checked-in executor does not yet implement its
-one-job entrypoint, so do not select per-run Kubernetes Jobs even if a runtime
-class is available.
-
-The chart's default asynchronous backend is `redis`, but the Kubernetes
-executor-pool binary does not consume that Redis list. The example therefore
-uses `asyncBackend: http`. Keep `redis` only when you deploy a compatible queue
-consumer.
-
-## 5. Render and Install
-
-Validate the values locally:
-
-```bash
-helm lint apps/backend/kubernetes/helm \
-  --values flow-like-values.yaml
-
-helm template flow-like apps/backend/kubernetes/helm \
-  --namespace flow-like \
-  --values flow-like-values.yaml
-```
-
-Install or update the release:
-
-```bash
-helm upgrade --install flow-like apps/backend/kubernetes/helm \
-  --namespace flow-like \
-  --values flow-like-values.yaml
-```
-
-## 6. Use an External Database in Production
-
-Create a private `flow-like-database.env` file containing a complete
-PostgreSQL or CockroachDB connection URL:
-
-```dotenv
-DATABASE_URL=postgresql://flowlike:replace-me@database.example.com:5432/flowlike?sslmode=require
-```
-
-Create the Secret:
-
-```bash
-kubectl -n flow-like create secret generic flow-like-database \
-  --from-env-file=flow-like-database.env \
-  --dry-run=client -o yaml \
-  | kubectl apply -f -
-```
-
-Replace the `database` block in `flow-like-values.yaml`:
-
-```yaml
-database:
-  type: external
-  external:
-    existingSecret: flow-like-database
-  migration:
-    image:
-      repository: registry.example.com/flow-like/migration
-      tag: replace-me
-      pullPolicy: IfNotPresent
-```
-
-The migration Job reads the same `DATABASE_URL` as the API and runs during
-install and upgrade.
-
-## 7. Verify the Release
+## Verify the installation
 
 ```bash
 helm status flow-like -n flow-like
-kubectl get pods,svc,pvc -n flow-like
+kubectl get pods,jobs,svc,pvc -n flow-like
 kubectl rollout status deployment/flow-like-api -n flow-like
-kubectl rollout status deployment/flow-like-executor-pool -n flow-like
+kubectl rollout status deployment/flow-like-execution-manager -n flow-like
+kubectl logs deployment/flow-like-queue-bridge -n flow-like --tail=100
+kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
 ```
 
-If Ingress is disabled, open the web service locally:
+In another terminal:
 
 ```bash
-kubectl port-forward -n flow-like service/flow-like-web 3001:3001
+curl -fsS http://localhost:8083/health/ready
 ```
 
-Then visit `http://localhost:3001`.
+API readiness checks the database, required schema and execution-state store.
+Also inspect the manager's warm-slot metrics: a reachable API does not mean clean
+execution capacity is available.
 
-## Common Failures
+Run `helm test flow-like -n flow-like --logs` against a disposable or backed-up
+store to exercise scoped STS and object-gateway behavior. The test creates and
+removes unique temporary object prefixes. Qualify network isolation, cancellation,
+node loss and representative load on the actual cluster before serving tenants.
 
-- `ImagePullBackOff`: replace the local k3d image defaults and configure
-  `global.imagePullSecrets` when the registry is private.
-- Missing backend-key errors: check that `jwt.existingSecret` names a Secret
-  with all three `BACKEND_*` keys.
-- Storage startup errors: verify the selected provider, credential keys, and
-  pre-created bucket or container names.
-- Pending PVCs: set the relevant `storageClass` values or configure a default
-  cluster `StorageClass`.
-- RuntimeClass errors: disable RuntimeClass creation for the warm-pool setup.
-  Creating the object does not install its runtime handler, and the checked-in
-  isolated Job runner is not operational.
+## Upgrade and recovery
+
+Reuse existing Secrets. Before replacing an older queue protocol, stop new
+dispatch and drain or reconcile all accepted jobs. Switch the API and consumers
+together to `exec:jobs:v3`. Preserve Redis replay claims and cancellation records;
+restoring an older snapshot can allow already executed work to be admitted again.
+
+Allow active runs to drain when replacing managers. Helm's derived termination
+grace includes the workflow and supervisor budgets. Review database schema changes
+and back up persistent services before upgrade; a Helm rollback does not undo
+database or object-store changes.
+
+## Common failures
+
+| Symptom | First check |
+| --- | --- |
+| Missing digest or rejected values | Pushed image values are present and applied last |
+| Cilium preflight failure | Policy configuration, RuntimeClass and Cilium rollout |
+| Warm slots remain unavailable | Execution node capacity, Pod events, gateway reachability and denied-endpoint probes |
+| API waits in an init container | Release migration or RustFS initialization Job |
+| Object download or signature failure | Browser-and-Pod DNS, exact public S3 origin, Host preservation and TLS |
+| Pending PVC | StorageClass, access mode, capacity and volume events |
+| Cancellation cannot confirm termination | Node or API connectivity; retain the restrictive policy and reconcile the run |

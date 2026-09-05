@@ -11,7 +11,13 @@ pub struct CronScheduler {
     api_client: Arc<ApiClient>,
     storage: Option<Arc<RedisStorage>>,
     scheduler: JobScheduler,
-    active_jobs: Arc<RwLock<HashMap<String, Uuid>>>,
+    active_jobs: Arc<RwLock<HashMap<String, ActiveJob>>>,
+}
+
+struct ActiveJob {
+    job_id: Uuid,
+    event_id: String,
+    cron_expression: String,
 }
 
 impl CronScheduler {
@@ -91,6 +97,13 @@ impl CronScheduler {
             }
         }
 
+        self.reconcile_jobs(enabled_schedules).await
+    }
+
+    async fn reconcile_jobs(
+        &self,
+        enabled_schedules: HashMap<String, CronScheduleInfo>,
+    ) -> Result<(usize, usize), CronError> {
         let mut added = 0;
         let mut removed = 0;
 
@@ -98,13 +111,22 @@ impl CronScheduler {
 
         let current_ids: Vec<String> = active_jobs.keys().cloned().collect();
         for id in current_ids {
-            if !enabled_schedules.contains_key(&id) {
-                if let Some(job_id) = active_jobs.remove(&id) {
-                    if let Err(e) = self.scheduler.remove(&job_id).await {
-                        warn!("Failed to remove job {}: {}", id, e);
-                    } else {
-                        debug!("Removed cron job: {}", id);
+            let active = &active_jobs[&id];
+            let unchanged = enabled_schedules.get(&id).is_some_and(|schedule| {
+                active.event_id == schedule.event_id
+                    && active.cron_expression == schedule.cron_expression
+            });
+            if !unchanged {
+                match self.scheduler.remove(&active.job_id).await {
+                    Ok(()) => {
+                        active_jobs.remove(&id);
+                        debug!("Removed obsolete cron job: {}", id);
                         removed += 1;
+                    }
+                    Err(e) => {
+                        // Retain ownership until removal succeeds, so the next
+                        // sync cannot create a duplicate trigger.
+                        warn!("Failed to remove job {}: {}", id, e);
                     }
                 }
             }
@@ -114,7 +136,14 @@ impl CronScheduler {
             if !active_jobs.contains_key(&id) {
                 match self.add_job(&schedule).await {
                     Ok(job_id) => {
-                        active_jobs.insert(id.clone(), job_id);
+                        active_jobs.insert(
+                            id.clone(),
+                            ActiveJob {
+                                job_id,
+                                event_id: schedule.event_id.clone(),
+                                cron_expression: schedule.cron_expression.clone(),
+                            },
+                        );
                         debug!("Added cron job: {} ({})", id, schedule.cron_expression);
                         added += 1;
                     }
@@ -153,8 +182,7 @@ impl CronScheduler {
                         // Update last_triggered in Redis
                         if let Some(ref storage) = storage {
                             let now = chrono::Utc::now().timestamp();
-                            if let Err(e) =
-                                storage.update_cron_last_triggered(&schedule_id, now).await
+                            if let Err(e) = storage.update_cron_last_triggered(&event_id, now).await
                             {
                                 warn!("Failed to update last_triggered in Redis: {}", e);
                             }
@@ -196,3 +224,70 @@ impl std::fmt::Display for CronError {
 }
 
 impl std::error::Error for CronError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn changed_cron_and_event_replace_the_scheduled_job() {
+        let scheduler = CronScheduler::new(
+            Arc::new(ApiClient::new("http://unused.invalid", "unused")),
+            None,
+        )
+        .await
+        .unwrap();
+        let mut schedule = CronScheduleInfo {
+            id: "schedule-a".into(),
+            event_id: "event-a".into(),
+            cron_expression: "0 0 * * * *".into(),
+            enabled: true,
+            last_triggered: None,
+            next_trigger: None,
+        };
+        let schedules =
+            |value: &CronScheduleInfo| HashMap::from([(value.id.clone(), value.clone())]);
+        assert_eq!(
+            scheduler
+                .reconcile_jobs(schedules(&schedule))
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        let original = scheduler.active_jobs.read().await["schedule-a"].job_id;
+        assert_eq!(
+            scheduler
+                .reconcile_jobs(schedules(&schedule))
+                .await
+                .unwrap(),
+            (0, 0)
+        );
+        schedule.cron_expression = "0 15 * * * *".into();
+        assert_eq!(
+            scheduler
+                .reconcile_jobs(schedules(&schedule))
+                .await
+                .unwrap(),
+            (1, 1)
+        );
+        let changed = scheduler.active_jobs.read().await["schedule-a"].job_id;
+        assert_ne!(original, changed);
+        schedule.event_id = "event-b".into();
+        assert_eq!(
+            scheduler
+                .reconcile_jobs(schedules(&schedule))
+                .await
+                .unwrap(),
+            (1, 1)
+        );
+        assert_ne!(
+            changed,
+            scheduler.active_jobs.read().await["schedule-a"].job_id
+        );
+        assert_eq!(
+            scheduler.reconcile_jobs(HashMap::new()).await.unwrap(),
+            (0, 1)
+        );
+        assert!(scheduler.active_jobs.read().await.is_empty());
+    }
+}

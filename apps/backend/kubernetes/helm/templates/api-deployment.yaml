@@ -20,10 +20,66 @@ spec:
       labels:
         {{- include "flow-like.api.selectorLabels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "flow-like.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.database.migration.enabled .Values.rustfs.enabled }}
+      initContainers:
+      {{- if .Values.database.migration.enabled }}
+        - name: wait-for-database-migration
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.database.migration.image.repository }}:{{ .Values.database.migration.image.tag | default "dev" }}"
+          imagePullPolicy: {{ .Values.database.migration.image.pullPolicy | default "Always" }}
+          command: ["bun", "/usr/local/bin/wait-for-migration.ts"]
+          env:
+            - name: MIGRATION_JOB_NAME
+              value: {{ include "flow-like.migrationJobName" . | quote }}
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: migration-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: "10m", memory: "64Mi"}
+            limits: {cpu: "100m", memory: "128Mi"}
+      {{- end }}
+      {{- if .Values.rustfs.enabled }}
+        - name: wait-for-object-store
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.database.migration.image.repository }}:{{ .Values.database.migration.image.tag | default "dev" }}"
+          imagePullPolicy: {{ .Values.database.migration.image.pullPolicy }}
+          command: ["bun", "/usr/local/bin/wait-for-migration.ts"]
+          env:
+            - name: MIGRATION_JOB_NAME
+              value: {{ include "flow-like.objectStoreInitJobName" . | quote }}
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: migration-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: "10m", memory: "64Mi"}
+            limits: {cpu: "100m", memory: "128Mi"}
+      {{- end }}
       {{- end }}
       containers:
         - name: api
@@ -52,21 +108,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "flow-like.databaseSecretName" . }}
                   key: DATABASE_URL
-            {{- if $redisUsesExistingSecret }}
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow-like.redisSecretName" . }}
-                  key: REDIS_PASSWORD
-            - name: REDIS_URL
-              value: {{ printf "redis://:$(REDIS_PASSWORD)@%s-redis-master:6379" (include "flow-like.fullname" .) | quote }}
-            {{- else }}
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow-like.redisSecretName" . }}
-                  key: REDIS_URL
-            {{- end }}
+            - name: DATABASE_POOL_MAX_CONNECTIONS
+              value: {{ .Values.database.pool.maxConnections | quote }}
+            - name: DATABASE_POOL_MIN_CONNECTIONS
+              value: {{ .Values.database.pool.minConnections | quote }}
+            {{- include "flow-like.redisEnv" . | nindent 12 }}
             - name: KUBERNETES_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -75,12 +121,46 @@ spec:
               value: "{{ .Values.global.imageRegistry }}{{ .Values.executor.image.repository }}:{{ .Values.executor.image.tag }}"
             - name: K8S_EXECUTOR_RUNTIME_CLASS
               value: {{ default .Values.runtimeClass.name .Values.executor.runtimeClass | quote }}
+            - name: EXECUTION_ISOLATION_MODE
+              value: {{ .Values.execution.isolationMode | quote }}
+            - name: EXECUTION_TIMEOUT_SECONDS
+              value: {{ .Values.executor.timeout | quote }}
+            - name: EXECUTION_STARTUP_GRACE_SECONDS
+              value: {{ .Values.executionManager.startupGraceSeconds | quote }}
+            - name: EXECUTION_TERMINAL_GRACE_SECONDS
+              value: {{ .Values.executionManager.terminalGraceSeconds | quote }}
+            - name: EXECUTION_CLEANUP_TIMEOUT_SECONDS
+              value: {{ .Values.executionManager.cleanupTimeoutSeconds | quote }}
+            - name: EXECUTION_QUEUE_MAX_WAIT_SECONDS
+              value: {{ .Values.execution.queueMaxWaitSeconds | quote }}
+            - name: EXECUTION_CREDENTIAL_MARGIN_SECONDS
+              value: {{ .Values.execution.credentialMarginSeconds | quote }}
+            - name: EXECUTION_STATE_BACKEND
+              value: redis
+            - name: EXECUTION_STATE_TTL_SECONDS
+              value: {{ .Values.execution.stateTtlSeconds | quote }}
+            - name: CHANNEL_TTL_SECONDS
+              value: {{ .Values.execution.channelTtlSeconds | quote }}
+            - name: REDIS_EXECUTION_QUEUE
+              value: {{ .Values.execution.queueName | quote }}
+            - name: EXECUTION_QUEUE_MAX_DEPTH
+              value: {{ .Values.execution.queueMaxDepth | quote }}
+            - name: EXECUTION_MANAGER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow-like.executionSecretName" . }}
+                  key: EXECUTION_MANAGER_TOKEN
+                  optional: {{ ne .Values.execution.isolationMode "per_run" }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.api.corsAllowedOrigins | join "," | quote }}
+            - name: PUBLIC_API_URL
+              value: {{ .Values.api.publicUrl | quote }}
             - name: EXECUTION_BACKEND
               value: {{ .Values.execution.backend | quote }}
             - name: ASYNC_EXECUTION_BACKEND
               value: {{ .Values.execution.asyncBackend | quote }}
             - name: EXECUTOR_URL
-              value: {{ if .Values.execution.executorUrl }}{{ .Values.execution.executorUrl | quote }}{{ else if .Values.executorPool.enabled }}{{ printf "http://%s-executor-pool:%d" (include "flow-like.fullname" .) (int .Values.executorPool.service.port) }}{{ else }}""{{ end }}
+              value: {{ if .Values.execution.executorUrl }}{{ .Values.execution.executorUrl | quote }}{{ else if eq .Values.execution.isolationMode "per_run" }}{{ printf "http://%s-execution-manager:9000" (include "flow-like.fullname" .) | quote }}{{ else if .Values.executorPool.enabled }}{{ printf "http://%s-executor-pool:%d" (include "flow-like.fullname" .) (int .Values.executorPool.service.port) }}{{ else }}""{{ end }}
             - name: JOB_TIMEOUT_SECONDS
               value: {{ .Values.executor.timeout | quote }}
             - name: JOB_MAX_RETRIES
@@ -217,13 +297,55 @@ spec:
             {{- with .Values.api.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if eq $provider "s3" }}
+            - name: STORAGE_PROVIDER
+              value: aws
+            - name: RUNTIME_CREDENTIALS_PROVIDER
+              value: aws
+            - name: S3_STS_PROVIDER
+              value: {{ .Values.storage.s3.runtimeCredentialsProvider | quote }}
+            - name: AWS_ENDPOINT
+              value: {{ include "flow-like.objectStorePublicEndpoint" . | quote }}
+            - name: S3_PUBLIC_ENDPOINT
+              value: {{ include "flow-like.objectStorePublicEndpoint" . | quote }}
+            - name: S3_INTERNAL_ENDPOINT
+              value: {{ include "flow-like.objectStoreInternalEndpoint" . | quote }}
+            - name: STS_ENDPOINT_URL
+              value: {{ include "flow-like.objectStoreStsEndpoint" . | quote }}
+            - name: STS_SESSION_TTL_SECONDS
+              value: {{ .Values.storage.s3.stsSessionTtlSeconds | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.storage.s3.region | quote }}
+            - name: AWS_USE_PATH_STYLE
+              value: {{ .Values.storage.s3.usePathStyle | quote }}
+            - name: RUNTIME_ROLE_ARN
+              value: {{ .Values.storage.s3.runtimeRoleArn | quote }}
+            - name: META_BUCKET
+              value: {{ .Values.storage.s3.metaBucket | quote }}
+            - name: CONTENT_BUCKET
+              value: {{ .Values.storage.s3.contentBucket | quote }}
+            - name: LOG_BUCKET
+              value: {{ .Values.storage.s3.logBucket | quote }}
+            {{- end }}
           envFrom:
+            - secretRef:
+                name: {{ include "flow-like.apiSecretName" . }}
             - secretRef:
                 name: {{ $storageSecretName }}
             - secretRef:
                 name: {{ include "flow-like.jwtSecretName" . }}
             {{- with .Values.api.envFrom }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- include "flow-like.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if or .Values.sinkServices.enabled (eq .Values.execution.backend "kubernetes_job") (eq .Values.execution.asyncBackend "kubernetes_job") }}
+            - name: migration-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
             {{- end }}
           livenessProbe:
             httpGet:
@@ -237,6 +359,7 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
           startupProbe:
             httpGet:
               path: /health/startup
@@ -246,6 +369,29 @@ spec:
             failureThreshold: 30
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- if or .Values.database.migration.enabled .Values.rustfs.enabled .Values.sinkServices.enabled (eq .Values.execution.backend "kubernetes_job") (eq .Values.execution.asyncBackend "kubernetes_job") }}
+        - name: migration-api-access
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        {{- end }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

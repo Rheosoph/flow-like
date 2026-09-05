@@ -1,0 +1,41 @@
+{{- if .Values.rustfs.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flow-like.fullname" . }}-object-gateway
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+    error_log /dev/null;
+    events { worker_connections 4096; }
+    http {
+      access_log off;
+      client_body_temp_path /tmp/client;
+      proxy_temp_path /tmp/proxy;
+      upstream store {
+        server {{ include "flow-like.fullname" . }}-rustfs:9000;
+        keepalive 64;
+      }
+      server {
+        listen 9000;
+        client_max_body_size 0;
+        if ($arg_action != '') { return 403; }
+        location = /health { return 200 'ok'; }
+        location ~ ^/({{ .Values.storage.s3.metaBucket | replace "." "\\." }}|{{ .Values.storage.s3.contentBucket | replace "." "\\." }}|{{ .Values.storage.s3.logBucket | replace "." "\\." }})(/|$) {
+          proxy_pass http://store;
+          proxy_http_version 1.1;
+          proxy_set_header Host $http_host;
+          proxy_set_header Connection "";
+          proxy_request_buffering off;
+          proxy_buffering off;
+          proxy_next_upstream off;
+          proxy_read_timeout 3660s;
+          proxy_send_timeout 3660s;
+        }
+        location / { return 403; }
+      }
+    }
+{{- end }}

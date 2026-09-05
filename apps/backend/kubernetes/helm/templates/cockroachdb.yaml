@@ -87,6 +87,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: cockroachdb
     spec:
+      automountServiceAccountToken: false
       serviceAccountName: {{ include "flow-like.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -159,7 +160,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $fullname }}-cockroachdb-init
+  name: {{ printf "%s-cockroachdb-init-%d" ($fullname | trunc 40 | trimSuffix "-") .Release.Revision }}
   labels:
     {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: cockroachdb-init
@@ -173,6 +174,7 @@ spec:
         app.kubernetes.io/component: cockroachdb-init
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

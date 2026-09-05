@@ -5,15 +5,18 @@ sidebar:
   order: 55
 ---
 
-Flow-Like's server API builds a normalized run request and hands it to a
-configured dispatch backend. The backend controls transport and worker
-lifecycle; it does not change the Flow graph itself.
+Compose and Kubernetes default to a Rust execution manager that assigns each
+workflow to a clean gVisor sandbox. The API signs the dispatch, including its
+artifact, credentials, callback destination and run identity. The runtime
+verifies that binding before loading tenant code.
+
+Execution mode determines the isolation boundary. Dispatch backend determines
+how the request reaches that boundary. An HTTP response alone does not prove
+that a workflow has started or completed.
 
 ## Dispatch model
 
-![Flow-Like execution dispatch, including the implemented destinations and the Kubernetes Job dispatcher whose job runner is still pending](../../../assets/ExecutionBackends.svg)
-
-Two environment variables select the default lanes:
+The default self-hosted routes are:
 
 ```bash
 # /invoke and streaming endpoints
@@ -21,22 +24,60 @@ EXECUTION_BACKEND=http
 
 # /invoke/async endpoints
 ASYNC_EXECUTION_BACKEND=redis
+EXECUTION_ISOLATION_MODE=per_run
+REDIS_EXECUTION_QUEUE=exec:jobs:v3
 ```
 
 Both variables are parsed into the same backend enum, but not every transport
 is appropriate for every endpoint. In particular, `lambda_stream` uses the
 streaming dispatcher, while queue backends are normally selected for
-asynchronous endpoints.
+asynchronous endpoints. Compose and Helm configure `EXECUTOR_URL` to reach the
+manager and supply its private authentication token to trusted callers.
+
+## Per-execution isolation
+
+1. A manager prepares a runner and an external gateway before requests arrive.
+   The runtime initializes its catalog and verification key, then waits without
+   tenant code or credentials.
+2. Admission reserves one ready slot and records a durable run claim. Compose
+   managers share a local SQLite registry; Kubernetes managers share Redis
+   claims. An empty pool returns HTTP 429 with `X-Execution-Admitted: false`
+   before streaming success.
+3. The gateway accepts one immutable run policy. The manager supplies the signed
+   dispatch, and the runtime verifies it before fetching executable content.
+4. The manager relays bounded results and retains capacity through cleanup.
+   A client disconnect leaves accepted work running under its existing deadline.
+   Completion, failure and cancellation destroy the used environment.
+
+Compose disables external runner networking and exposes only that run's Unix
+proxy socket. Kubernetes uses a separate gateway Pod and requires Cilium rules
+denying node, Kubernetes API and metadata access. Workflow environments receive
+no Docker socket, service-account token, manager token or storage root key.
+
+The gateway permits the selected callbacks, configured storage buckets and
+explicit HTTPS integration hosts. The object store enforces prefix permissions
+through temporary STS credentials. HTTPS storage must terminate at a bucket-only
+gateway because CONNECT hides the request path. Raw TCP/UDP and broad API/PAT
+access have no fallback in this execution class.
+
+Cancellation first records a shared marker, then confirms termination. A
+Kubernetes API object disappearing does not prove that a partitioned node has
+stopped its process. Unconfirmed cleanup closes admission and requires
+reconciliation; it must not cause automatic replay of possible external effects.
+
+See [Compose scaling](/self-hosting/docker-compose/scaling/) and the
+[Kubernetes executor guide](/self-hosting/kubernetes/executor/) for capacity,
+warm reserves, time budgets and operational checks.
 
 ## Supported backend values
 
 | Value | Dispatch behavior | Required configuration |
 | --- | --- | --- |
-| `http` | Posts to an executor's `/execute` or `/execute/sse` endpoint | `EXECUTOR_URL` |
+| `http` | Posts to a manager or compatible executor's `/execute` or `/execute/sse` endpoint | `EXECUTOR_URL`; manager authentication in `per_run` mode |
 | `lambda_invoke` | Uses the AWS SDK with asynchronous `Event` invocation | `lambda` build feature, `LAMBDA_EXECUTOR_FUNCTION`, AWS region and credentials |
 | `lambda_stream` | Uses the AWS SDK response-stream API | `lambda` build feature, function name, region and credentials |
-| `kubernetes_job` | Creates a Kubernetes Job, but the checked-in executor's one-job entrypoint is not implemented | `kubernetes` build feature, cluster access, `K8S_NAMESPACE`, `K8S_EXECUTOR_IMAGE`; a separately implemented compatible job runner |
-| `redis` | Pushes the serialized job to a Redis list | `redis` build feature, `REDIS_URL`; optional `REDIS_EXECUTION_QUEUE` |
+| `kubernetes_job` | Legacy API Job dispatcher, rejected by the isolated Helm deployment | A separately reviewed deployment and runner contract |
+| `redis` | Publishes a bounded, retained delivery consumed by the queue bridge | `redis` build feature, authenticated `REDIS_URL`, matching v3 queue settings and consumer |
 | `sqs` | Sends the job to an AWS SQS queue | `sqs` build feature, `SQS_EXECUTION_QUEUE_URL` and AWS credentials |
 | `kafka` | Posts a record to a Kafka-compatible REST proxy | `KAFKA_BROKERS` as the proxy base URL and `KAFKA_EXECUTION_TOPIC` |
 | `sqs_event_bridge` | Stages the payload in object storage, then sends a compact SQS reference for an EventBridge-to-ECS path | `sqs` build feature, staging store, `SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL`, AWS credentials, and the external Pipe/ECS resources |
@@ -48,10 +89,10 @@ than relying on a typo to fail closed.
 
 ## HTTP executors
 
-`http` describes the protocol, not the platform. `EXECUTOR_URL` can point to:
+`EXECUTOR_URL` can point to:
 
-- The Docker Compose runtime service
-- The Kubernetes executor-pool Service
+- The Compose or Kubernetes execution manager, the self-hosted default
+- A shared runtime or executor-pool Service in explicit `trusted_shared` mode
 - A Lambda Function URL
 - Another compatible HTTP execution service
 
@@ -59,29 +100,18 @@ This is the default synchronous backend in the checked-in Compose and Helm
 configurations. It supports ordinary dispatch and an SSE endpoint for streamed
 state.
 
-Long-running workers may handle multiple runs over their lifetime. Treat them
-as a shared execution environment and verify cleanup, filesystem, credential,
-and concurrency behavior for your threat model.
+For trusted internal workflows, Compose's trusted profile and Helm's
+`execution.isolationMode=trusted_shared` with `execution.asyncBackend=http`
+enable shared workers. These processes may handle multiple workflows over their
+lifetime. That mode does not meet isolation per execution for hostile tenants.
 
 ## Kubernetes Job dispatcher
 
-`kubernetes_job` asks the API to create a fresh Kubernetes Job in isolated
-mode. The dispatcher builds a pod with run identifiers, scoped credentials,
-JWT, callback URL, payload, resource limits, and an optional `RuntimeClass`.
-
-The repository's `flow-like-k8s-executor` image does **not** currently consume
-that one-job environment. Unless `EXECUTOR_SERVER_MODE=true`, its entrypoint
-logs that job-once mode is unimplemented and exits with status `1`. The
-dispatcher therefore proves Job creation, not a functioning end-to-end
-execution backend.
-
-Do not select `kubernetes_job` with the checked-in image. Use the HTTP executor
-pool, or supply and validate your own compatible one-job runner.
-
-Even with a runner, a fresh pod is not automatically a hardware-isolated
-sandbox. Isolation still depends on the container runtime, node configuration,
-workload identity, mounted resources, and policies. If a Job names a Kata
-runtime class, the matching runtime handler must already exist on the nodes.
+The Kubernetes runner supports `--once` with a signed dispatch on stdin. The
+Rust slot adapter feeds that interface in a prepared Pod. This implementation
+does not make the legacy API Job dispatcher's environment-based contract the
+supported execution path. The Helm chart rejects `kubernetes_job` in `per_run`
+mode; use its manager and queue bridge.
 
 ## Lambda modes
 
@@ -121,7 +151,7 @@ traced back to a run.
 Accepted values are `sub` (equivalently `user`, `user_id`, `true`, `1`, `on`,
 `enabled`) and `off` (equivalently `false`, `0`, `none`, `disabled`, or unset).
 Unlike `EXECUTION_BACKEND`, an unrecognized value is rejected rather than
-treated as `off` — a typo that silently disabled isolation would leave the
+treated as `off`. A typo that silently disabled isolation would leave the
 deployment looking correctly configured.
 
 Before enabling it, confirm all of the following:
@@ -150,25 +180,29 @@ function's execution role. Per-run authorization remains the executor JWT's job.
 
 Queue transports decouple API response time from worker execution:
 
-- **Redis** uses `LPUSH`; Flow-Like runtime workers consume the configured list.
+- **Redis** atomically publishes and claims retained v3 deliveries. The queue
+  bridge forwards a signed dispatch to the manager and settles it only after
+  independently confirming durable terminal API state.
 - **SQS** sends a complete serialized request to the configured queue.
 - **Kafka** uses an HTTP REST proxy rather than an embedded Kafka client.
 - **SQS + EventBridge + ECS** stores the full payload first and queues a signed
   reference, avoiding ECS container-override payload limits.
 
-Provisioning a queue is only half of the system. A compatible consumer must
-claim the message, execute the run, report state, and apply the retry and
-dead-letter policy you require.
+The Compose and Kubernetes deployments include the Redis consumer. Explicit
+non-admission can requeue with backoff and the original publication time.
+Expired or ambiguous work remains retained for reconciliation. SQL run creation
+and Redis publication do not share a transactional outbox; retained delivery
+does not promise exactly-once external effects. Preserve queue and replay state
+across upgrades, and drain or reconcile older queues before switching every
+producer and consumer to v3.
 
 ## Choosing a backend
 
 | Need | Start with | Verify before production |
 | --- | --- | --- |
-| Compose or a trusted internal cluster | `http` + warm runtime pool | Cross-run cleanup, worker concurrency, host access |
-| Background work in Compose | `redis` | Persistence, queue depth, retry and poison-message handling |
-| Background work in the checked-in Kubernetes chart | `http` | The chart's executor pool has no Redis queue consumer; deploy one before selecting `redis` |
-| Kubernetes with the checked-in executor | `http` + Helm executor pool | Pool capacity, cross-run cleanup, service account, egress |
-| A new Kubernetes pod per run | Not available end to end in the checked-in executor | Implement the job runner first; then verify startup, callbacks, identity, runtime class, and egress |
+| Untrusted workflows on one Linux Docker host | Default `per_run` manager over `http`, background work over `redis` | gVisor Unix proxy access, storage-prefix denial, replay state and host resources |
+| Untrusted workflows across Kubernetes nodes | Default `per_run` manager and Redis queue bridge | Installed gVisor, Cilium enforcement, Pod termination, warm replacement rate and node resources |
+| Trusted internal workflows | Explicit `trusted_shared` HTTP pool | Shared-process behavior, worker concurrency and integration access |
 | Private streaming Lambda | `lambda_stream` | AWS feature build, response streaming, timeouts, concurrency |
 | AWS asynchronous Lambda | `lambda_invoke` or `sqs` | Retry semantics, DLQ, idempotency, callback reachability |
 | Long AWS container task | `sqs_event_bridge` | Staging-store lifetime, signed URL scope, Pipe and ECS task configuration |
@@ -183,12 +217,14 @@ backends.
 ```bash
 # HTTP
 EXECUTION_BACKEND=http
-EXECUTOR_URL=http://runtime:9000
+EXECUTOR_URL=http://execution-gateway:9000
+EXECUTION_ISOLATION_MODE=per_run
+# The deployment generator supplies the private manager token.
 
 # Redis for background runs
 ASYNC_EXECUTION_BACKEND=redis
-REDIS_URL=redis://redis:6379
-REDIS_EXECUTION_QUEUE=exec:jobs
+# Use the authenticated REDIS_URL generated for the API.
+REDIS_EXECUTION_QUEUE=exec:jobs:v3
 
 # AWS Lambda SDK
 LAMBDA_EXECUTOR_FUNCTION=arn:aws:lambda:eu-central-1:123456789012:function:flow-like-executor
@@ -199,5 +235,6 @@ AWS_REGION=eu-central-1
 LAMBDA_TENANT_ISOLATION=sub
 ```
 
-Keep credentials in your platform's secret store. Environment-variable names
+The HTTP URL above is the Compose gateway. Helm supplies its release-specific
+manager Service address. Keep credentials in your platform's secret store. Environment-variable names
 belong in documentation and configuration; their secret values do not.

@@ -5,104 +5,80 @@ sidebar:
   order: 10
 ---
 
-The Helm chart in `apps/backend/kubernetes/helm/` deploys Flow-Like's web,
-API, persistence, execution, and observability components to a Kubernetes
-cluster.
+The Helm chart deploys Flow-Like with a private RustFS object store and a Rust
+execution manager that prepares a clean gVisor sandbox for each execution. Use
+this path for untrusted workflows from multiple tenants. The cluster must provide
+gVisor and Cilium before installation.
 
-## Architecture
+The chart lives at `apps/backend/kubernetes/helm/`. Follow
+[Installation](/self-hosting/kubernetes/installation/) for the generated Secrets,
+image builds and deployment commands. For trusted local development, the
+[k3d workflow](/self-hosting/kubernetes/local-development/) uses an explicitly
+selected shared runtime.
 
-![Flow-Like Kubernetes architecture, showing the application plane, state services, working warm executor pool, incomplete Kubernetes Job path, optional services, and observability](../../../../assets/KubernetesArchitecture.svg)
+## Components and defaults
 
-The default chart values enable the web application, API, a reusable executor
-pool, internal CockroachDB, Redis, network policies, and the Prometheus,
-Grafana, and Tempo stack. Ingress, the WASM compiler, and sink services are
-configurable and are not all enabled by default.
+| Component | Default behavior |
+| --- | --- |
+| API and web | One Deployment replica each |
+| Execution manager | One Rust supervisor, ten active executions and two additional warm slots |
+| Execution slot | One single-use gVisor runner Pod paired with a separate gateway Pod |
+| Queue bridge | One trusted Redis consumer forwarding background work to the manager |
+| RustFS | One persistent storage Pod, bucket initialization Job and two object gateway replicas |
+| Redis | Authenticated single instance with persistent queue and replay records |
+| Database | Single-node CockroachDB for evaluation; external PostgreSQL or CockroachDB for production |
+| Monitoring | Prometheus, Grafana and Tempo enabled |
+| Compiler, signaling and sink services | Optional |
+| Public ingress | Disabled until domains and TLS are configured |
 
-Object storage is supplied separately. Select and configure one of the chart's
-`aws`, `azure`, `gcp`, `r2`, or `s3` provider blocks.
+The default execution settings are `execution.isolationMode=per_run`,
+`execution.backend=http` and `execution.asyncBackend=redis`. The API sends
+interactive requests directly to the manager; the queue bridge sends background
+requests to the same admission path.
 
-## Execution choices
+## What isolates a run
 
-The chart exposes configuration for two server-side execution shapes, but only
-the warm HTTP pool is operational with the checked-in executor:
+The runner initializes trusted runtime code before it receives tenant input. On
+assignment, it receives one signed dispatch and scoped temporary storage
+credentials. Its network policy permits traffic only to its paired gateway. That
+gateway enforces the selected callbacks, object store and approved HTTPS
+destinations outside the tenant sandbox.
 
-| Shape | Helm value | Current status |
-| --- | --- | --- | --- |
-| Warm pool | `execution.backend: http` | Implemented; reuses executor pods behind a Service |
-| Per-run Job | `execution.backend: kubernetes_job` | API can create the Job, but the image's one-job runner is not implemented and exits |
+After completion or cancellation, the manager confirms runner termination before
+removing its network policy. A used runner never returns to the warm reserve.
+Runner and gateway Pods receive no Kubernetes service account token, database
+credentials, Redis password, storage root key or API signing key.
 
-Asynchronous execution has its own
-`execution.asyncBackend` value. The chart default is `redis`, but the
-Kubernetes executor-pool binary does not include a Redis queue consumer.
-Use `http` for an operational chart-only deployment, or deploy a compatible
-consumer before selecting `redis`.
+Read [Executor](/self-hosting/kubernetes/executor/) for capacity and lifecycle
+settings, and [Security](/self-hosting/kubernetes/security/) for the Cilium policy
+requirements and the limits of this boundary.
 
-The chart can create a `RuntimeClass` named `kata`, but that manifest alone
-does not install a Kata runtime on cluster nodes. Confirm that the configured
-handler exists before referencing it. The warm pool does not use the
-RuntimeClass, and creating one does not make the incomplete Job path
-operational.
+## Scale and availability
 
-## Local development
+API replicas, manager replicas, warm reserve size, queue consumers and compiler
+concurrency have separate settings. Adding managers increases configured
+execution capacity only when the execution nodes have enough resources. Account
+for both active and idle warm Pod pairs.
 
-The checked-in k3d bootstrap creates a local cluster and registry, builds the
-required images, and deploys the chart:
+Bundled RustFS, Redis and the internal database are single-instance data services.
+More application replicas do not provide storage failover. Review
+[Storage](/self-hosting/kubernetes/storage/) and
+[Database](/self-hosting/kubernetes/database/) before selecting an availability
+target.
 
-```bash
-cd apps/backend/kubernetes
-./scripts/k3d-setup.sh
-```
+Warm initialization removes process creation from admission. It does not establish
+a few-millisecond start guarantee: Kubernetes requests, credential issuance and
+signed artifact preparation still contribute to latency. Qualify isolation,
+failure recovery and representative load on the actual cluster before exposing
+tenants.
 
-See [Local Development](/self-hosting/kubernetes/local-development/) for
-requirements, generated resources, and access instructions.
-
-## Before a production install
-
-Create a values file for your environment and review at least:
-
-- Image registry and pull policy
-- Storage provider, buckets or containers, and credentials
-- Backend signing keys
-- Internal versus external database
-- Redis authentication and persistence
-- Ingress, TLS, and network policy
-- Resource requests, limits, replica counts, and autoscaling
-- Executor image, execution backend, and runtime class
-- Monitoring persistence and external exposure
-
-Do not pass long-lived credentials directly on a shared shell command line.
-Use existing Kubernetes Secrets or a secrets-management workflow supported by
-your cluster.
-
-Continue with the [Installation](/self-hosting/kubernetes/installation/) and
-[Security](/self-hosting/kubernetes/security/) guides.
-
-## Component map
-
-| Component | Default | Kubernetes resource |
-| --- | --- | --- |
-| Web application | Enabled | Deployment + Service |
-| API | Enabled | Deployment + Service |
-| Warm executor pool | Enabled | Deployment + Service |
-| Per-run executor | Incomplete | API can create a Job; checked-in job runner is pending |
-| CockroachDB | Internal by default | StatefulSet and Services |
-| Redis | Enabled | Chart-managed Redis resources |
-| Database migration | Enabled | Helm install/upgrade Job |
-| WASM compiler | Disabled | Deployment + Service |
-| Sink services | Disabled | CronJob and optional bot workloads |
-| Prometheus, Grafana, Tempo | Enabled in chart defaults | Monitoring resources |
-| Ingress | Disabled | Ingress |
-
-## Guides
+## Operator guides
 
 - [Prerequisites](/self-hosting/kubernetes/prerequisites/)
 - [Installation](/self-hosting/kubernetes/installation/)
 - [Configuration](/self-hosting/kubernetes/configuration/)
-- [Database](/self-hosting/kubernetes/database/)
-- [Local development](/self-hosting/kubernetes/local-development/)
-- [Helm chart](/self-hosting/kubernetes/helm/)
+- [Helm chart and Secret contracts](/self-hosting/kubernetes/helm/)
+- [Monitoring](/self-hosting/kubernetes/monitoring/)
 - [API service](/self-hosting/kubernetes/api/)
-- [Executor](/self-hosting/kubernetes/executor/)
-- [Storage](/self-hosting/kubernetes/storage/)
 - [Scripts](/self-hosting/kubernetes/scripts/)
-- [Security](/self-hosting/kubernetes/security/)
+- [kubectl basics](/self-hosting/kubernetes/kubectl-basics/)

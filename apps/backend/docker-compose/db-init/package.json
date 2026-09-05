@@ -1,0 +1,7 @@
+{
+  "name": "flow-like-compose-migration",
+  "private": true,
+  "type": "module",
+  "dependencies": { "dotenv": "17.2.3", "pg": "8.16.3", "prisma": "7.3.0" },
+  "trustedDependencies": ["@prisma/engines", "prisma"]
+}

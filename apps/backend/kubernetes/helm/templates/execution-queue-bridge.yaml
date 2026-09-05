@@ -1,0 +1,73 @@
+{{- if and (eq .Values.execution.isolationMode "per_run") (or (eq .Values.execution.backend "redis") (eq .Values.execution.asyncBackend "redis")) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow-like.fullname" . }}-queue-bridge
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: queue-bridge
+spec:
+  replicas: {{ .Values.executionManager.queueBridge.replicaCount }}
+  strategy:
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: queue-bridge
+  template:
+    metadata:
+      labels:
+        {{- include "flow-like.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: queue-bridge
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ add .Values.executor.timeout .Values.executionManager.startupGraceSeconds .Values.executionManager.terminalGraceSeconds .Values.executionManager.cleanupTimeoutSeconds 60 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bridge
+          image: {{ printf "%s%s:%s" .Values.global.imageRegistry .Values.executionManager.queueBridge.image.repository .Values.executionManager.queueBridge.image.tag | quote }}
+          imagePullPolicy: {{ .Values.executionManager.queueBridge.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          ports: [{name: http, containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+          resources: {{ toYaml .Values.executionManager.queueBridge.resources | nindent 12 }}
+          env:
+            - {name: PORT, value: "9000"}
+            - {name: EXECUTION_ISOLATION_MODE, value: per_run}
+            - {name: QUEUE_WORKER_ENABLED, value: "true"}
+            - {name: MAX_CONCURRENT_EXECUTIONS, value: {{ .Values.executionManager.queueBridge.concurrency | quote }}}
+            - {name: EXECUTION_TIMEOUT_SECONDS, value: {{ .Values.executor.timeout | quote }}}
+            - {name: EXECUTION_STARTUP_GRACE_SECONDS, value: {{ .Values.executionManager.startupGraceSeconds | quote }}}
+            - {name: EXECUTION_TERMINAL_GRACE_SECONDS, value: {{ .Values.executionManager.terminalGraceSeconds | quote }}}
+            - {name: EXECUTION_CLEANUP_TIMEOUT_SECONDS, value: {{ .Values.executionManager.cleanupTimeoutSeconds | quote }}}
+            - {name: REDIS_EXECUTION_QUEUE, value: {{ .Values.execution.queueName | quote }}}
+            - {name: EXECUTION_QUEUE_MAX_WAIT_SECONDS, value: {{ .Values.execution.queueMaxWaitSeconds | quote }}}
+            - {name: QUEUE_POLL_TIMEOUT_SECS, value: "5"}
+            - {name: EXECUTION_MANAGER_URL, value: {{ printf "http://%s-execution-manager:9000" (include "flow-like.fullname" .) | quote }}}
+            - {name: API_URL, value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}}
+            - {name: EXECUTION_MANAGER_TOKEN_FILE, value: /secrets/execution/EXECUTION_MANAGER_TOKEN}
+            {{- include "flow-like.redisEnv" . | nindent 12 }}
+          volumeMounts:
+            - {name: execution-token, mountPath: /secrets/execution, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: execution-token
+          secret:
+            secretName: {{ include "flow-like.executionSecretName" . }}
+            items: [{key: EXECUTION_MANAGER_TOKEN, path: EXECUTION_MANAGER_TOKEN}]
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+{{- end }}

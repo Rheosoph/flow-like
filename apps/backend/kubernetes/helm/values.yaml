@@ -15,7 +15,7 @@ api:
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-api
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
 
   service:
     type: ClusterIP
@@ -40,6 +40,14 @@ api:
   tolerations: []
   affinity: {}
 
+  # Browser origins must match the deployed web application.
+  corsAllowedOrigins:
+    - http://localhost:3001
+    - tauri://localhost
+  publicUrl: ""
+  # Keys: SINK_TOKEN_ENCRYPTION_KEY, SINK_SECRET, MAINTENANCE_TOKEN.
+  existingSecret: ""
+  terminationGracePeriodSeconds: 120
   env: []
   envFrom: []
 
@@ -50,7 +58,7 @@ web:
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-web
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
 
   service:
     type: ClusterIP
@@ -84,13 +92,17 @@ compiler:
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-compiler
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
   service:
     port: 8080
   timeoutSecs: 600
   callbackTimeoutMs: 10000
   callbackRetries: 3
-  # maxParallelTargets: "" # leave empty to use all CPU cores
+  maxParallelTargets: 2
+  maxConcurrentJobs: 2
+  # Exact storage origins, including scheme and port for HTTP endpoints.
+  # The bundled object gateway is added automatically.
+  allowedStorageHosts: []
   resources:
     requests:
       memory: "512Mi"
@@ -117,7 +129,7 @@ signaling:
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-signaling
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
   service:
     port: 4444
   # Exact origins allowed to open realtime WebSocket connections (max 20).
@@ -143,16 +155,16 @@ signaling:
   tolerations: []
   affinity: {}
 
-# Executor Configuration (for Kubernetes Jobs)
+# Executor artifact and execution deadline configuration
 executor:
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-executor
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
 
-  runtimeClass: kata
+  runtimeClass: runsc
   timeout: 3600
-  maxRetries: 3
+  maxRetries: 0
   ttlSecondsAfterFinished: 3600
 
   resources:
@@ -170,14 +182,15 @@ executor:
     runAsUser: 1000
     readOnlyRootFilesystem: true
 
-# Executor pool (standard mode) — reusable workers behind a Service
+# Shared executor pool for explicitly trusted workflows
 executorPool:
   enabled: true
   replicaCount: 1
+  maxConcurrentExecutions: 10
   image:
     repository: k3d-flow-like.localhost:5000/flow-like-k8s-executor
     tag: latest
-    pullPolicy: Never
+    pullPolicy: IfNotPresent
   service:
     port: 8080
   resources:
@@ -221,22 +234,21 @@ jwt:
 # =============================================================================
 # Controls how flow executions are dispatched
 execution:
-  # Backend for sync/streaming requests (/invoke endpoints)
-  # Options: http, kubernetes_job, redis
-  #   http           - HTTP to warm executor pool (default, fastest)
-  #   kubernetes_job - Create isolated K8s Job per execution (slower, more isolated)
-  #   redis          - Queue to Redis (consumed by executor pool)
+  isolationMode: per_run
+  # Secret key EXECUTION_MANAGER_TOKEN, also mounted into the queue bridge.
+  existingSecret: ""
+  managerToken: ""
+  queueName: exec:jobs:v3
+  queueMaxDepth: 10000
+  queueMaxWaitSeconds: 300
+  credentialMarginSeconds: 120
+  channelTtlSeconds: 7200
+  stateTtlSeconds: 86400
+  # Interactive requests use the isolated manager, or the explicit trusted pool.
   backend: http
-
-  # Backend for async requests (/invoke/async endpoints)
-  # Options: redis, http, kubernetes_job
-  #   redis          - Queue to Redis (default, recommended for background jobs)
-  #   http           - Direct HTTP to executor pool
-  #   kubernetes_job - Create isolated K8s Job per execution
+  # Isolated mode requires redis; trusted_shared requires http.
   asyncBackend: redis
-
-  # Executor pool URL (auto-configured when executorPool.enabled=true)
-  # Override if using external executor service
+  # Optional externally managed executor/manager origin.
   executorUrl: ""
 
 # =============================================================================
@@ -252,7 +264,7 @@ execution:
 # IMPORTANT: Do NOT commit credentials here! Use values-secrets.yaml or --set
 #
 storage:
-  provider: "azure"
+  provider: "s3"
 
   # AWS S3 Configuration (when provider=aws)
   aws:
@@ -304,6 +316,15 @@ storage:
   # S3-Compatible Storage Configuration (when provider=s3)
   s3:
     endpoint: ""
+    # Presigned URLs use this exact origin, reachable by browsers AND pods.
+    publicEndpoint: ""
+    internalEndpoint: ""
+    stsEndpoint: ""
+    runtimeCredentialsProvider: rustfs
+    stsSessionTtlSeconds: 7200
+    stsIssuerAccessKey: ""
+    stsIssuerSecretKey: ""
+    runtimeRoleArn: arn:aws:iam::000000000000:role/flow-like-runtime
     region: "us-east-1"
     accessKeyId: ""
     secretAccessKey: ""
@@ -383,6 +404,9 @@ llm:
 #   - external: Use an external PostgreSQL/CockroachDB database
 database:
   type: internal
+  pool:
+    maxConnections: 10
+    minConnections: 1
 
   # Database migration job (runs on install/upgrade)
   migration:
@@ -392,7 +416,8 @@ database:
       tag: "dev"
       pullPolicy: Always
     backoffLimit: 5
-    ttlSecondsAfterFinished: 300
+    # The completed Job remains until the next Helm upgrade so new API pods
+    # can verify that their release's migration completed.
     resources:
       requests:
         memory: "256Mi"
@@ -432,17 +457,23 @@ database:
 
   # External database configuration (when type=external)
   external:
+    provider: postgresql
     connectionString: ""
     existingSecret: ""
 
 # Redis Configuration (for job queue)
 redis:
   enabled: true
+  image: redis:7.4.11-alpine
+  # When enabled=false, this Secret must contain a complete REDIS_URL.
+  # Use rediss:// for a TLS endpoint; URL-encode username/password components.
+  externalExistingSecret: ""
+  maxmemory: 384mb
   architecture: standalone
   auth:
     enabled: true
-    # Use an existing Secret with a REDIS_PASSWORD key. When set, the chart
-    # injects that password into both Redis and the API connection URL.
+    # Existing Secret requires REDIS_PASSWORD and complete, URL-encoded REDIS_URL.
+    # Setup generates both without putting credentials in process arguments.
     existingSecret: ""
     password: ""
   master:
@@ -454,6 +485,9 @@ redis:
       requests:
         memory: "128Mi"
         cpu: "50m"
+      limits:
+        memory: "512Mi"
+        cpu: "1"
 
 # Ingress Configuration
 ingress:
@@ -490,20 +524,22 @@ ingress:
           # service: api (default), web, or signaling
   tls: []
 
-# Network Policies
+# Network Policies. per_run also requires Cilium host-egress deny enforcement.
 networkPolicy:
   enabled: true
 
-  # Executor network restrictions
-  executor:
-    allowedEgress:
-      - to:
-          - namespaceSelector:
-              matchLabels:
-                name: flow-like
-        ports:
-          - protocol: TCP
-            port: 443   # External S3
+  # Select the ingress controller namespace used by this installation.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  dnsNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system
+  # Extra rules for external databases, Redis, custom DNS or storage endpoints.
+  # Rules apply only to trusted control-plane components, never sandbox pods.
+  controlPlaneExtraEgress: []
+  executionGatewayExtraEgress: []
+  trustedExecutorExtraEgress: []
 
 # Service Account
 serviceAccount:
@@ -706,8 +742,86 @@ sinkServices:
       token: ""
       existingSecret: ""
 
-# Runtime Class for Kata Containers
+# The runtime must already be installed on the execution nodes.
 runtimeClass:
-  create: true
-  name: kata
-  handler: kata
+  create: false
+  name: runsc
+  handler: runsc
+
+# Bundled single-node RustFS. Use an external distributed store for host HA.
+rustfs:
+  enabled: true
+  image: rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4
+  # Contains only RUSTFS_ROOT_USER and RUSTFS_ROOT_PASSWORD.
+  existingSecret: ""
+  persistence:
+    storageClass: ""
+    size: 100Gi
+  resources:
+    requests: {cpu: "500m", memory: "512Mi"}
+    limits: {cpu: "2", memory: "2Gi"}
+  bootstrap:
+    image:
+      repository: flow-like/object-store-init
+      tag: local
+      pullPolicy: IfNotPresent
+    resources:
+      requests: {cpu: "100m", memory: "128Mi"}
+      limits: {cpu: "500m", memory: "256Mi"}
+  gateway:
+    image: nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    replicaCount: 2
+    resources:
+      requests: {cpu: "50m", memory: "32Mi"}
+      limits: {cpu: "1", memory: "128Mi"}
+    ingress:
+      enabled: false
+      className: ""
+      host: ""
+      annotations: {}
+      tls: []
+
+# Warm slots are clean, single-use runner/gateway Pod pairs per manager replica.
+# Reserve only the memory and CPU that the execution nodes can supply.
+executionManager:
+  replicaCount: 1
+  workerThreads: 2
+  image:
+    repository: flow-like/execution-manager
+    tag: local
+    # Required digest also pins the external gateway enforcement image.
+    digest: ""
+    pullPolicy: IfNotPresent
+  maxConcurrentExecutions: 10
+  warmPoolSize: 2
+  warmPoolMaxAgeSeconds: 600
+  warmPoolCreationConcurrency: 2
+  startupGraceSeconds: 30
+  terminalGraceSeconds: 60
+  cleanupTimeoutSeconds: 30
+  sandbox:
+    # Full repository@sha256 reference for the k8s-executor image.
+    image: ""
+    memoryMb: 1024
+    cpus: 1
+    tmpMb: 256
+    nodeSelector: {}
+    tolerations: []
+  allowedHttpsHosts: []
+  # Enable only when the HTTPS endpoint enforces a bucket-only data API.
+  objectStoreTlsGateway: false
+  resources:
+    requests: {cpu: "100m", memory: "128Mi"}
+    limits: {cpu: "1", memory: "512Mi"}
+  nodeSelector: {}
+  tolerations: []
+  queueBridge:
+    replicaCount: 1
+    concurrency: 10
+    image:
+      repository: flow-like/runtime
+      tag: local
+      pullPolicy: IfNotPresent
+    resources:
+      requests: {cpu: "100m", memory: "256Mi"}
+      limits: {cpu: "1", memory: "1Gi"}

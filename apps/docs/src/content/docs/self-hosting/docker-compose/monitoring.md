@@ -1,177 +1,104 @@
 ---
 title: Monitoring
-description: Run the bundled Prometheus, Grafana, Tempo, and exporter services
+description: Observe admission, warm capacity, storage and service health in Docker Compose
 sidebar:
   order: 25
 ---
 
-The optional `monitoring` profile adds metrics, dashboards, distributed
-tracing, and database exporters to the same Compose network.
+Enable the optional monitoring profile to collect service metrics and inspect
+execution capacity. Alert delivery and host/container resource collection need
+additional operator configuration.
 
-## Start the profile
+## Enable collection
 
-```bash
-docker compose --profile monitoring up -d
-docker compose --profile monitoring ps
-```
-
-The profile starts:
-
-| Service | Template host port | Purpose |
-| --- | --- | --- |
-| Grafana | `3002` | Provisioned dashboards and trace exploration |
-| Prometheus | `9091` | Metrics storage, rules, and queries |
-| Tempo | `3200` | Trace storage and query API |
-| Tempo OTLP gRPC | `4317` | Trace ingestion |
-| Tempo OTLP HTTP | `4318` | Trace ingestion |
-| Redis exporter | `9121` | Redis metrics |
-| PostgreSQL exporter | `9187` | PostgreSQL metrics |
-
-The compiler metrics listener is separately published on `9092` by default.
-API and runtime metrics stay on the Compose network.
-
-Change `GRAFANA_ADMIN_PASSWORD` before making Grafana reachable outside a
-trusted development machine.
-
-## What Prometheus scrapes
-
-The checked-in configuration at
-`monitoring/prometheus/prometheus.yml` defines these targets:
-
-| Job | Internal target | Metrics path |
-| --- | --- | --- |
-| Prometheus | `localhost:9090` | `/metrics` |
-| Flow-Like API | `api:9090` | `/metrics` |
-| Runtime | `runtime:9000` | `/metrics` |
-| WASM compiler | `compiler:9091` | `/metrics` |
-| Redis | `redis-exporter:9121` | `/metrics` |
-| PostgreSQL | `postgres-exporter:9187` | `/metrics` |
-
-There is no cAdvisor service in the current profile, so the bundled stack does
-not collect per-container CPU, memory, or network metrics by default.
-
-Check target health:
-
-```bash
-curl --fail http://localhost:9091/api/v1/targets
-```
-
-Check the service listeners directly:
-
-```bash
-docker compose exec api curl --fail http://localhost:9090/metrics
-docker compose exec runtime curl --fail http://localhost:9000/metrics
-curl --fail http://localhost:9092/metrics
-```
-
-## Provisioned dashboards
-
-Grafana loads the JSON dashboards in
-`monitoring/grafana/dashboards/` into a **Flow-Like** folder:
-
-- system overview;
-- API;
-- execution runtime;
-- WASM compiler;
-- PostgreSQL;
-- Redis;
-- distributed tracing.
-
-The provisioned provider is read-only in the UI. To maintain another bundled
-dashboard, add its JSON file to that directory and restart Grafana:
-
-```bash
-docker compose restart grafana
-```
-
-For dashboards managed independently of the repository, configure another
-Grafana provider or use an external Grafana instance.
-
-## Metrics and trace configuration
-
-Useful environment variables include:
+Add monitoring without removing the execution profile:
 
 ```dotenv
-PROMETHEUS_PORT=9091
-GRAFANA_PORT=3002
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=<strong-password>
+COMPOSE_PROFILES=per-run,monitoring
+```
 
-TEMPO_HTTP_PORT=3200
-TEMPO_OTLP_GRPC_PORT=4317
-TEMPO_OTLP_HTTP_PORT=4318
+Then run:
 
+```bash
+python3 scripts/up.py
+docker compose ps
+```
+
+Grafana binds to `http://localhost:3002` and uses the generated
+`GRAFANA_ADMIN_PASSWORD`. Prometheus, Tempo, their ingestion ports and the Redis
+and PostgreSQL exporters remain private.
+
+Prometheus discovers API replicas at port 9090, compiler replicas at 9091, and
+execution managers/queue bridges at 9000 through Docker DNS. Shared runtimes are
+discovered when the trusted profile is active. DNS refreshes every ten seconds;
+scrapes and rule evaluations run every fifteen seconds.
+
+Inspect targets through an internal service:
+
+```bash
+docker compose exec api curl --fail http://prometheus:9090/api/v1/targets
+docker compose exec api curl --fail http://execution-manager:9000/metrics
+```
+
+## Execution signals
+
+| Metric | Interpretation |
+| --- | --- |
+| `executor_active_jobs`, `executor_capacity` | Occupied manager admission permits and configured limit |
+| `executor_ready_sandboxes` | Unused slots available for immediate assignment |
+| `executor_creating_sandboxes` | Slots being prepared |
+| `executor_retiring_sandboxes` | Expired unused slots still being cleaned up |
+| `executor_sandbox_creation_errors_total` | Preparation failures |
+| `flow_executions_total` | Completed, failed and rejected requests |
+| `executor_assignment_seconds_sum/count` | Local reservation and durable binding time |
+
+Assignment timing excludes client transit, credential issuance, artifact loading
+and the first workflow node. Measure those stages separately before setting a
+startup-latency objective.
+
+A manager can be healthy while its warm reserve is empty. Watch reserve depletion
+alongside active capacity and rejection counts. Persistent preparation errors
+call for host/runtime investigation; increasing queue concurrency cannot create
+missing sandbox capacity.
+
+Also track Redis memory, queue age and retained uncertain deliveries, PostgreSQL
+connections, object-store latency and host resource use. The supplied profile
+does not include cAdvisor or a complete host/storage metrics collector.
+
+## Dashboards, traces and retention
+
+Grafana provisions dashboards from `monitoring/grafana/dashboards/` and data
+sources for Prometheus and Tempo. Maintain bundled dashboards in the repository;
+the provisioned provider is read-only in the UI.
+
+Tracing is disabled by an empty exporter endpoint. To enable application traces:
+
+```dotenv
 OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_TRACES_SAMPLER=parentbased_traceidratio
 OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 
-The API, runtime, and compiler use their own `OTEL_SERVICE_NAME` values in the
-Compose file. Grafana provisions both Prometheus and Tempo data sources.
+Prometheus retains fifteen days by default. Review storage growth before changing
+`--storage.tsdb.retention.time` in a Compose override. Named monitoring volumes
+persist across container recreation; back them up if their history is required.
 
-Prometheus retention is currently fixed to `15d` in
-`docker-compose.yml`. Change it with a small override:
+Logs and traces may contain workflow material. Restrict their readers and
+retention. The object gateway disables access logging and request-context error
+logging to avoid exposing presigned credentials.
 
-```yaml
-services:
-  prometheus:
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=30d
-      - --web.enable-lifecycle
-```
+## Alert delivery
 
-Prometheus, Grafana, and Tempo already use named volumes. Back up those volumes
-if their history or dashboard state is important.
+The rules in `monitoring/prometheus/rules/alerts.yml` are evaluated, but the
+configured Alertmanager list is empty. They do not send notifications by default.
 
-## Recording and alert rules
+Provide an Alertmanager endpoint and receivers, mount the maintained Prometheus
+configuration and test a notification route. Add deployment-specific thresholds
+for warm reserve depletion, preparation errors, uncertain queue entries and
+datastore saturation.
 
-`monitoring/prometheus/rules/alerts.yml` contains API, runtime, Redis, and
-PostgreSQL alerts plus recording rules for request and execution metrics.
-Prometheus loads and evaluates the file automatically.
-
-The bundled Prometheus configuration has an empty Alertmanager list. Alerts
-therefore appear in Prometheus but are not delivered to email, chat, or an
-incident-management system. To route alerts:
-
-1. run an Alertmanager service or use a managed endpoint;
-2. add it under `alerting.alertmanagers` in a maintained Prometheus
-   configuration;
-3. mount that configuration with a Compose override;
-4. validate the target and a test route before relying on it.
-
-Do not assume that the presence of an alert rule means notifications are
-configured.
-
-## Troubleshooting
-
-### A target is down
-
-```bash
-docker compose --profile monitoring ps
-docker compose logs prometheus
-docker compose logs api runtime compiler
-```
-
-Prometheus targets use internal ports and service names. Do not substitute
-host-published ports inside `prometheus.yml`.
-
-### Grafana has no data
-
-Open **Connections → Data sources** and test the provisioned Prometheus URL:
-`http://prometheus:9090`. Then inspect the Prometheus targets page to determine
-whether collection or visualization is failing.
-
-### Traces are missing
-
-Check Tempo health and the application exporters:
-
-```bash
-curl --fail http://localhost:3200/ready
-docker compose logs tempo api runtime compiler
-```
-
-Confirm that `OTEL_EXPORTER_OTLP_ENDPOINT` resolves to `http://tempo:4317`
-inside the Compose network and that the sampling ratio is greater than zero.
+If Grafana has no data, test its `http://prometheus:9090` data source, inspect
+the target list and compare it with `docker compose ps`. For missing traces,
+inspect `docker compose logs tempo api compiler queue-bridge` and verify the
+exporter endpoint and sampling setting.

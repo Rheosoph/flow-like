@@ -37,7 +37,8 @@ data:
         scheme: https
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-          insecure_skip_verify: true
+          server_name: kubernetes.default.svc
+          insecure_skip_verify: false
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         relabel_configs:
           - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
@@ -49,7 +50,8 @@ data:
         scheme: https
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-          insecure_skip_verify: true
+          server_name: kubernetes.default.svc
+          insecure_skip_verify: false
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         kubernetes_sd_configs:
           - role: node
@@ -68,7 +70,8 @@ data:
         scheme: https
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-          insecure_skip_verify: true
+          server_name: kubernetes.default.svc
+          insecure_skip_verify: false
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         kubernetes_sd_configs:
           - role: node
@@ -346,6 +349,7 @@ metadata:
     app.kubernetes.io/component: prometheus
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       {{- include "flow-like.selectorLabels" . | nindent 6 }}
@@ -459,7 +463,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "flow-like.fullname" . }}-prometheus
+  name: {{ include "flow-like.fullname" . }}-{{ .Release.Namespace }}-prometheus
   labels:
     {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: prometheus
@@ -484,14 +488,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "flow-like.fullname" . }}-prometheus
+  name: {{ include "flow-like.fullname" . }}-{{ .Release.Namespace }}-prometheus
   labels:
     {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: prometheus
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "flow-like.fullname" . }}-prometheus
+  name: {{ include "flow-like.fullname" . }}-{{ .Release.Namespace }}-prometheus
 subjects:
   - kind: ServiceAccount
     name: {{ include "flow-like.fullname" . }}-prometheus

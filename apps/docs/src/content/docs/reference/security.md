@@ -20,11 +20,39 @@ or an incorrectly exposed deployment safe by themselves.
 | Boundary | Enforced by | Operator or author responsibility |
 | --- | --- | --- |
 | External WASM node | Wasmtime memory isolation, fuel, epoch interruption, resource limits, capability-aware host functions | Review requested permissions and package provenance |
+| Self-hosted workflow in `per_run` mode | Single-use gVisor sandbox, external Rust egress gateway, signed dispatch and confirmed termination | Install and qualify the runtime and network boundary; size active and warm capacity |
 | Workflow and app data | Scoped storage paths, runtime credentials, app roles | Configure storage and identities with least privilege |
 | Public API | OIDC, API keys, PATs, internal JWTs, route-level permission checks | Protect credentials and expose the API only through an appropriate network boundary |
-| Service-to-service calls | Audience-specific ES256 backend JWTs | Share one valid backend keypair across replicas and rotate it deliberately |
+| Service-to-service calls | Audience-specific ES256 backend JWTs | Keep the private signing key on authorized signers; distribute the public verification key to workers and coordinate rotation |
 | Network transport | Reverse proxy, load balancer, ingress, and network policy | Configure TLS, trusted forwarding, egress, and internal segmentation |
 | Third-party services | Explicit network/model/OAuth use by workflows | Understand what data leaves the deployment and which provider receives it |
+
+## Self-hosted workflow isolation
+
+Compose and Kubernetes default to `per_run`. A Rust manager reserves a clean,
+prepared environment, supplies one signed dispatch and destroys the environment
+after execution. Tenant code and credentials enter only after reservation.
+Failed or cancelled executions never return their environment to the warm pool.
+The runner verifies the complete dispatch binding before loading executable code.
+
+Compose runners have no external network interface and access their gateway
+through a private Unix socket. Kubernetes runners can reach only their paired
+gateway Pod; mandatory Cilium policies deny node, Kubernetes API and metadata
+access. The gateway runs outside the tenant sandbox and enforces one immutable
+callback/storage/integration policy. Ignoring the proxy settings does not grant
+direct external connectivity in the qualified deployment.
+
+The manager is trusted control-plane code. Compose's Docker socket grants
+control of its execution daemon; the Kubernetes manager has namespace-scoped
+Pod, policy and cancellation permissions. Neither authority reaches workflow
+Pods. Restrict who can change execution images, labels, policies and manager
+configuration, because those changes can alter the isolation boundary.
+
+Cancellation records a shared marker and confirms termination before reporting
+success. Unconfirmed cleanup closes admission and retains state for
+reconciliation. External side effects and exported STS credentials can outlive
+the sandbox. Shared workers selected through `trusted_shared` do not provide
+this per-execution boundary.
 
 ## WASM execution
 
@@ -103,7 +131,9 @@ resource tiers.
 :::caution
 An empty `allowed_hosts` list means unrestricted hosts when HTTP is enabled in
 the package manifest. Use an explicit allowlist when a package only needs known
-services.
+services. In a self-hosted `per_run` sandbox, the deployment's external gateway
+and network restrictions still apply to permitted WASM host calls and native
+nodes.
 :::
 
 See [Sandboxing and permissions](/dev/wasm-nodes/sandboxing/) for the author
@@ -142,8 +172,9 @@ and revoke credentials that are no longer needed.
 
 ### Backend JWTs
 
-Internal services use a shared ES256 P-256 keypair configured through
-`BACKEND_KEY`, `BACKEND_PUB`, and optional `BACKEND_KID`. Tokens include a
+API signers use an ES256 P-256 keypair configured through `BACKEND_KEY`,
+`BACKEND_PUB`, and optional `BACKEND_KID`. Isolated runners receive the public
+verification key and a run-bound JWT, never the private signing key. Tokens include a
 type-specific audience. Current audiences cover executors, compilers, users,
 realtime collaboration, interaction responders, and app connections.
 
@@ -187,6 +218,14 @@ the same storage boundary.
 - A WASM storage capability grants access only through host functions; it does
   not mount the host filesystem into the module.
 
+The bundled RustFS setup separates root, API storage and STS issuer identities.
+Root keys reach only the store and initializer. The API requests temporary
+credentials whose session policy narrows access to authorized prefixes; the
+store must enforce that restriction. The public S3 gateway rejects STS and
+administration, while issuance uses a private endpoint. In-run credential renewal
+is not implemented: checkout checks actual remaining lifetime against queued
+wait, execution and supervisor allowances, including cached grants.
+
 Do not put credentials in board definitions, documentation examples, route
 query parameters, or screenshot fixtures.
 
@@ -224,12 +263,14 @@ internal port directly to an untrusted network.
 
 - Use separate service accounts for API, compiler, runtime, and sink
   components.
-- Apply least-privilege RBAC and NetworkPolicies.
+- Apply least-privilege RBAC and preserve the manager's per-slot NetworkPolicies.
 - Set requests, limits, disruption budgets, and autoscaling for the expected
   workload.
-- Pin reviewed images by immutable digest when release processes permit it.
-- Use a compatible sandboxed `runtimeClass` only after verifying the cluster
-  supports it.
+- Pin manager/gateway and runner images by immutable digest, as `per_run` requires.
+- Install the `runsc` runtime handler on execution nodes and use its RuntimeClass.
+  Creating a RuntimeClass object alone does not install gVisor.
+- Configure enforcing Cilium policies and `allow-localhost=policy`; verify denial
+  of node, API and metadata access on the actual cluster.
 - Protect metrics, logs, and tracing endpoints as operational data.
 
 See [Kubernetes security](/self-hosting/kubernetes/security/).
@@ -242,6 +283,10 @@ See [Kubernetes security](/self-hosting/kubernetes/security/).
 - Terminate TLS before public traffic reaches the API.
 - Back up object storage and persistent service volumes.
 - Keep images and configuration under change control.
+- Configure gVisor with `--network=none` and `--host-uds=open`, and pin the runner
+  and gateway images. The manager requires a local Unix Docker socket.
+- Preserve the local manager SQLite volume and Redis replay/delivery state
+  through drained upgrades. Reconcile uncertain work before resuming dispatch.
 
 See [Docker Compose configuration](/self-hosting/docker-compose/configuration/)
 and [troubleshooting](/self-hosting/docker-compose/troubleshooting/).

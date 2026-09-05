@@ -14,3 +14,11 @@ target/
 .vscode/
 *.swp
 *.swo
+
+# Local deployment inputs
+.generated/
+values-secrets.yaml
+
+# Python deployment checks
+__pycache__/
+*.pyc

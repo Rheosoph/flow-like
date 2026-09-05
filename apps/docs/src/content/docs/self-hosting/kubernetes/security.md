@@ -5,196 +5,125 @@ sidebar:
   order: 90
 ---
 
-The Helm chart supplies useful security building blocks, but it is not a
-complete hardened deployment. Review the rendered resources against your
-cluster, identity provider, CNI, admission policy, and threat model.
+The default deployment isolates untrusted executions with a single-use gVisor
+runner and a separate gateway that enforces egress. The API, manager, queue bridge
+and storage issuer remain trusted control-plane components. Protect their
+credentials and restrict who can modify the deployment namespace.
 
-## Execution isolation
-
-The default chart uses a warm executor pool:
+## Execution boundary
 
 ```yaml
 execution:
+  isolationMode: per_run
   backend: http
-executorPool:
+  asyncBackend: redis
+networkPolicy:
   enabled: true
-```
-
-Pool pods handle multiple executions over their lifetime. WASM nodes still run
-inside Wasmtime, but the container, process environment, service account, and
-pod network are shared between runs. Validate request cleanup, board caching,
-credential scoping, and concurrency for your deployment.
-
-### Kubernetes Job status
-
-The API can create one Job per dispatch, but the checked-in executor's one-job
-entrypoint is not implemented and exits with status `1`. Do not use
-`kubernetes_job` as a security isolation control until a compatible runner is
-implemented and tested.
-
-### RuntimeClass and Kata
-
-The chart can create a `RuntimeClass` object:
-
-```yaml
 runtimeClass:
-  create: true
-  name: kata
-  handler: kata
+  create: false
+  name: runsc
+  handler: runsc
 ```
 
-This only registers a reference to a runtime handler. It does not install Kata
-Containers or configure the nodes. The handler must already exist and work on
-eligible nodes.
+Install the gVisor handler on execution nodes before referencing this
+RuntimeClass. Setting `runtimeClass.create=true` creates the Kubernetes
+reference only.
 
-The warm executor-pool Deployment does not set `runtimeClassName`. The API's
-isolated Job dispatcher can set one, but that execution mode is not currently
-operational with the checked-in executor. Creating the RuntimeClass therefore
-does not add a VM boundary to the default executor pool.
+The manager prepares a clean runner and gateway before tenant input arrives.
+The runner executes one signed dispatch and is then destroyed. Its filesystem is
+read-only apart from bounded temporary storage, it runs as a non-root user, and
+it drops Linux capabilities. The gateway occupies a separate Pod so tenant code
+cannot change its assigned policy.
 
-## Credentials and secrets
+Runner and gateway Pods have no mounted Kubernetes service account token. The
+runner receives no API signing key, database URL, Redis password, RustFS root key
+or installation-wide model-provider credential. Runtime environment variables
+can be visible to workflow code, so keep tenant-visible capabilities scoped to
+the assigned execution.
 
-The API loads database, storage, backend signing, and optional provider
-credentials. Execution requests carry scoped storage credentials and an
-executor JWT to the pool.
+## Network enforcement
 
-Prefer the chart's existing-secret options:
+The chart requires Cilium for `per_run` mode. Configure policy enforcement,
+Kubernetes NetworkPolicy support and `allow-localhost=policy` before deployment.
+The deploy helper checks the Cilium CRD, configuration and rollout state.
 
-```yaml
-jwt:
-  existingSecret: flow-like-jwt
+A runner's policy permits only its own gateway on TCP port 3128. Manager Pods
+can reach the runner's assignment endpoint and the gateway's control endpoint.
+Additional Cilium deny policies block local/remote nodes, Kubernetes API and
+metadata destinations. Explicit host ingress preserves kubelet health probes.
 
-storage:
-  provider: azure
-  azure:
-    existingSecret: flow-like-storage
+Standard Kubernetes NetworkPolicy allows local-node traffic. The required Cilium
+rules close that path. Each warm runner also tests gateway reachability and
+prohibited endpoints before accepting input. Qualify these controls on the real
+cluster, including node-local services, metadata, other tenants and IPv6 where
+used.
 
-database:
-  type: external
-  external:
-    existingSecret: flow-like-database
-```
+The gateway permits the run's authorized callbacks, selected object-store origin
+and exact HTTPS integration hosts. For an HTTPS object store, enable
+`executionManager.objectStoreTlsGateway` only for an endpoint that blocks
+administration, root and STS paths: a TLS tunnel cannot inspect those paths itself.
 
-Check the required keys in the corresponding chart template before creating a
-Secret. Keep secret values out of ordinary Helm values, rendered-manifest logs,
-and source control.
+## Service accounts and namespace ownership
 
-After rebuilding the Kubernetes API with its currently omitted AWS feature,
-AWS workload identity can use an annotated ServiceAccount and a storage Secret
-that contains provider/bucket configuration without static access keys. Verify
-the AWS credential chain and STS `RUNTIME_ROLE_ARN` path end to end. GKE and
-AKS identity integrations likewise require provider- and cluster-specific
-configuration; the chart does not enable them automatically.
+The trusted manager has namespace-scoped permission to manage execution Pods,
+NetworkPolicies and cancellation ConfigMaps. Runtime Pods have no such role.
+The API has the permissions needed to check release initialization Jobs; it does
+not need to supervise tenant sandboxes.
 
-The executor-pool template can inject OpenRouter and OpenAI keys into the
-process environment. Component Model WASM runtimes currently inherit the
-executor environment for language-runtime compatibility. Treat executor
-environment variables as visible to untrusted component code and keep them
-minimal. Prefer request-scoped host services where possible.
+Use a dedicated namespace. Restrict permission to create Pods, change labels,
+edit NetworkPolicies or bind service accounts there. A user who can rewrite those
+objects can undermine the intended boundary.
 
-## Service accounts and RBAC
-
-The chart creates one ServiceAccount and binds a namespaced Role that can
-create, delete, get, list, watch, update, and patch Jobs, plus read pods and pod
-logs. Both the API and executor pool use that ServiceAccount.
-
-That is broader than the warm pool needs. For a hardened deployment:
-
-- give the API a Job-management ServiceAccount only if Kubernetes Job dispatch
-  is enabled;
-- give the executor pool a separate ServiceAccount without Job mutation rights;
-- remove unused verbs;
-- keep all permissions namespaced;
-- audit which workloads can read Secrets.
-
-The current chart does not expose separate ServiceAccount values for those
-workloads, so least-privilege separation requires chart customization.
-
-## NetworkPolicy
-
-When `networkPolicy.enabled=true`, the chart renders API and executor policies.
-Read their selectors and rules literally:
-
-- API ingress allows port `8080` from any namespace.
-- API egress allows selected cluster ports to any namespace and HTTPS to
-  `0.0.0.0/0`.
-- The executor policy selects `app: flow-like-executor`.
-- The warm executor pool instead has
-  `app.kubernetes.io/component: executor-pool`.
-- The isolated Job builder sets `app: flow-like-executor` on the Job object,
-  not on the pod template.
-
-The executor policy therefore does not currently select the default pool and
-should not be assumed to select generated Job pods. Its empty ingress and
-`allowedEgress` rules provide no protection to pods it does not match.
-
-Check actual coverage:
+Inspect the actual resources:
 
 ```bash
-kubectl get pods --namespace flow-like --show-labels
-kubectl get networkpolicy --namespace flow-like --output yaml
-kubectl describe networkpolicy --namespace flow-like
+kubectl get serviceaccount,role,rolebinding -n flow-like
+kubectl get pods -n flow-like --show-labels
+kubectl get networkpolicy,ciliumnetworkpolicy -n flow-like
 ```
 
-Your CNI must enforce NetworkPolicy. When egress restriction matters, add a
-policy whose selector matches the real executor-pool labels and test DNS,
-database, API callback, object storage, OAuth, model-provider, compiler, and
-Tempo traffic explicitly.
+## Object-store and service credentials
 
-## Pod security
+Setup generates separate RustFS root, API and STS issuer identities. Root
+credentials enter only RustFS and its initializer. The API obtains temporary
+credentials narrowed with a session policy; the provider must enforce that policy
+within the issuer's base permissions. Object prefixes are enforced by storage
+authorization, while the gateway restricts reachable origins and API paths.
 
-`executor.securityContext` and `podSecurityPolicy.enabled` appear in
-`values.yaml`, but the current executor-pool template does not consume the
-former and the chart does not render a PodSecurityPolicy from the latter.
-PodSecurityPolicy is also removed from modern Kubernetes.
+Keep credentials in existing Secrets and preserve them on upgrade. Review the
+[Secret contracts](/self-hosting/kubernetes/helm/#existing-secret-contracts).
+API startup rejects missing signing material and mismatched signing keys. Browser
+CORS origins must be explicit.
 
-Enforce pod hardening through the actual workload specs and cluster admission:
+Bundled Redis uses an authenticated account shared by trusted components. Runner
+and gateway Pods do not receive it. A dedicated manager Redis ACL needs `PING`,
+`SET`, its `exec:claims:v1:<namespace>:<release>:*` key pattern, and `SELECT`
+if using a nonzero database. The Rust client uses RESP2 and disables
+library-identification commands.
 
-- run as a non-root UID;
-- disallow privilege escalation;
-- drop Linux capabilities;
-- use a read-only root filesystem where compatible;
-- set seccomp to `RuntimeDefault`;
-- restrict host namespaces, host paths, and privileged containers;
-- apply Pod Security Admission or an equivalent policy engine.
+## Cancellation and recovery
 
-Render the chart and verify the resulting `securityContext`; do not infer it
-from unused values.
+The manager records cancellation before searching for assigned Pods, then waits
+for confirmed termination. Keep restrictive policies in place if confirmation
+fails. A partitioned node may still be running a sandbox after its Pod object is
+forcibly removed.
 
-## Supply chain
+Replay claims and cancellation records survive manager replacement. Preserve
+them when restoring Redis or changing deployment versions. A rollback of those
+records can permit already executed work to run again. Reconcile ambiguous queue
+items and use idempotency for external side effects.
 
-- Pin images by immutable digest for production.
-- Scan API, executor, web, compiler, database-migration, and monitoring images.
-- Sign images and verify signatures through admission policy.
-- Protect the registry and restrict mutable tags.
-- Review WASM package publisher, binary hash, permissions, and version before
-  installation.
-- Maintain an inventory of chart, application, and WASM dependencies.
+## Supply chain and qualification
 
-## Validation checklist
+The manager and runner images require immutable digests. Review the images and
+WASM artifacts used by the installation, protect registry write access and apply
+your cluster's image admission policy.
 
-Render the exact production values:
+Before exposing tenants, verify cross-tenant storage denial, missing/expired
+session tokens, direct node and API access, cancellation, manager replacement,
+node loss and queue recovery. The Helm storage test exercises several STS and
+gateway denials; it does not establish complete isolation or throughput.
 
-```bash
-helm template flow-like apps/backend/kubernetes/helm \
-  --namespace flow-like \
-  --values values-production.yaml > /tmp/flow-like-rendered.yaml
-```
-
-Then verify:
-
-- no plaintext production secrets are embedded;
-- API and executor use the intended ServiceAccounts;
-- network-policy selectors match real pod labels;
-- public Ingress exposes only intended Services and ports;
-- every RuntimeClass exists on eligible nodes;
-- security contexts are present in rendered pods;
-- image references are immutable;
-- `EXECUTION_BACKEND` is not `kubernetes_job` with the checked-in executor.
-
-## Related
-
-- [Executor](/self-hosting/kubernetes/executor/)
-- [Execution Backends](/self-hosting/execution-backends/)
-- [Storage](/self-hosting/kubernetes/storage/)
-- [WASM Sandboxing](/dev/wasm-nodes/sandboxing/)
+The `trusted_shared` mode exists for explicitly trusted workflows and local
+development. It reuses executor processes and does not provide this per-execution
+boundary.

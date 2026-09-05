@@ -1,24 +1,21 @@
-FROM rust:1.97.1-bookworm AS seaorm_builder
-RUN cargo install sea-orm-cli@1.1.16 --locked
-
-FROM oven/bun:latest
-
+# syntax=docker/dockerfile:1.7
+FROM oven/bun:1.3.8-debian
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    postgresql-client ca-certificates curl git libssl3 \
- && rm -rf /var/lib/apt/lists/*
-
-RUN bun add -g prisma@latest
-
-COPY --from=seaorm_builder /usr/local/cargo/bin/sea-orm-cli /usr/local/bin/sea-orm-cli
-
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
-COPY scripts/wait-for-postgres.sh /usr/local/bin/wait-for-postgres.sh
-COPY scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
-COPY scripts/make-postgres-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh
-COPY scripts/export-database-url.sh /usr/local/bin/export-database-url.sh
-RUN chmod +x /usr/local/bin/wait-for-postgres.sh /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh /usr/local/bin/export-database-url.sh
-
-# Brings prisma/pre-push.ts and prisma/pre-push/ along; the compose command runs
-# the runner (pg and dotenv come from `bun install`) before `prisma db push`.
-COPY . /workspace
+COPY apps/backend/docker-compose/db-init/package.json apps/backend/docker-compose/db-init/bun.lock ./
+RUN bun install --frozen-lockfile --production
+# Only schema and migration code enter this image. No service .env files,
+# signing keys, API sources, or development dependencies are copied.
+COPY packages/api/prisma/schema ./prisma/schema
+COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
+COPY packages/api/prisma/pre-push ./prisma/pre-push
+COPY packages/api/scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
+COPY apps/backend/docker-compose/db-init/prisma.config.ts ./prisma.config.ts
+COPY apps/backend/docker-compose/db-init/run-migration.ts ./run-migration.ts
+RUN chmod +x /usr/local/bin/make-prisma-mirror.sh \
+    && PATH=/usr/bin:/bin /usr/local/bin/make-prisma-mirror.sh --target postgresql \
+    && DATABASE_URL=postgresql://build:build@localhost/build bun node_modules/prisma/build/index.js validate --schema=prisma-postgres-mirror/schema
+USER bun
+CMD ["bun", "/workspace/run-migration.ts"]

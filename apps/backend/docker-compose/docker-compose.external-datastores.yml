@@ -1,0 +1,38 @@
+# Configure DATABASE_URL and each service Redis URL before enabling.
+# Apply schema updates explicitly: docker compose run --rm db-init.
+services:
+  postgres:
+    profiles: [disabled-bundled-datastores]
+  redis:
+    profiles: [disabled-bundled-datastores]
+  db-init:
+    profiles: [migration]
+    depends_on: !reset {}
+    networks: !override [app]
+  api:
+    depends_on:
+      postgres: !reset null
+      redis: !reset null
+      db-init: !reset null
+  signaling:
+    depends_on:
+      redis: !reset null
+  sink-services:
+    depends_on:
+      redis: !reset null
+  runtime:
+    depends_on:
+      redis: !reset null
+  queue-bridge:
+    depends_on:
+      redis: !reset null
+  postgres-exporter:
+    depends_on: !reset {}
+    networks: !override [app, monitoring]
+  redis-exporter:
+    depends_on: !reset {}
+    networks: !override [app, monitoring]
+    environment:
+      REDIS_ADDR: ${METRICS_REDIS_URL:?Set a metrics Redis URL for the external datastore}
+      REDIS_USER: ""
+      REDIS_PASSWORD: ""

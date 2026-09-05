@@ -3,7 +3,7 @@ groups:
     rules:
       # High error rate
       - alert: FlowLikeHighErrorRate
-        expr: sum(rate(http_requests_total{job="flow-like-api",status_code=~"5.."}[5m])) / sum(rate(http_requests_total{job="flow-like-api"}[5m])) > 0.05
+        expr: sum(rate(http_requests_total{job="flow-like-api",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="flow-like-api"}[5m])) > 0.05
         for: 5m
         labels:
           severity: critical
@@ -85,7 +85,7 @@ groups:
     rules:
       # API request rate
       - record: flow_like:api_request_rate:5m
-        expr: sum(rate(http_requests_total{job="flow-like-api"}[5m])) by (method, status_code)
+        expr: sum(rate(http_requests_total{job="flow-like-api"}[5m])) by (method, status)
 
       # API latency percentiles
       - record: flow_like:api_latency_p99:5m

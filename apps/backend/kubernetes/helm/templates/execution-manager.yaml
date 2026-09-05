@@ -1,0 +1,142 @@
+{{- if eq .Values.execution.isolationMode "per_run" }}
+{{- $digest := required "executionManager.image.digest must pin the manager and gateway image" .Values.executionManager.image.digest }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "executionManager.image.digest must be sha256:<64 hex characters>" }}{{- end }}
+{{- $image := printf "%s%s@%s" .Values.global.imageRegistry .Values.executionManager.image.repository $digest }}
+{{- $sandbox := required "executionManager.sandbox.image must pin the executor image by digest" .Values.executionManager.sandbox.image }}
+{{- $storage := index .Values.storage .Values.storage.provider }}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $sandbox) }}{{ fail "executionManager.sandbox.image must be repository@sha256:<64 hex characters>" }}{{- end }}
+{{- if not .Values.networkPolicy.enabled }}{{ fail "per_run isolation requires an enforcing CNI and networkPolicy.enabled=true" }}{{- end }}
+{{- if gt (int .Values.executionManager.warmPoolSize) (int .Values.executionManager.maxConcurrentExecutions) }}{{ fail "executionManager.warmPoolSize must not exceed maxConcurrentExecutions" }}{{- end }}
+{{- if or (lt (int .Values.executionManager.workerThreads) 1) (gt (int .Values.executionManager.workerThreads) 64) }}{{ fail "executionManager.workerThreads must be between 1 and 64" }}{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-manager
+spec:
+  replicas: {{ .Values.executionManager.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: execution-manager
+  template:
+    metadata:
+      labels:
+        {{- include "flow-like.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: execution-manager
+    spec:
+      serviceAccountName: {{ include "flow-like.fullname" . }}-execution-manager
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ add .Values.executor.timeout .Values.executionManager.startupGraceSeconds .Values.executionManager.terminalGraceSeconds .Values.executionManager.cleanupTimeoutSeconds 60 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.executionManager.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.executionManager.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: manager
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.executionManager.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          ports: [{name: http, containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          resources: {{ toYaml .Values.executionManager.resources | nindent 12 }}
+          env:
+            - name: NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: APP_NAME, value: {{ include "flow-like.name" . | quote }}}
+            - {name: EXECUTION_INSTALLATION_ID, value: {{ .Release.Name | quote }}}
+            - {name: SANDBOX_IMAGE, value: {{ $sandbox | quote }}}
+            - {name: SANDBOX_GATEWAY_IMAGE, value: {{ $image | quote }}}
+            - {name: SANDBOX_RUNTIME_CLASS, value: {{ required "runtimeClass.name is required for per_run isolation" .Values.runtimeClass.name | quote }}}
+            - {name: MAX_CONCURRENT_EXECUTIONS, value: {{ .Values.executionManager.maxConcurrentExecutions | quote }}}
+            - {name: EXECUTION_MANAGER_WORKER_THREADS, value: {{ .Values.executionManager.workerThreads | quote }}}
+            - {name: WARM_POOL_SIZE, value: {{ .Values.executionManager.warmPoolSize | quote }}}
+            - {name: WARM_POOL_MAX_AGE_SECONDS, value: {{ .Values.executionManager.warmPoolMaxAgeSeconds | quote }}}
+            - {name: WARM_POOL_CREATION_CONCURRENCY, value: {{ .Values.executionManager.warmPoolCreationConcurrency | quote }}}
+            - {name: EXECUTION_TIMEOUT_SECONDS, value: {{ .Values.executor.timeout | quote }}}
+            - {name: EXECUTION_STARTUP_GRACE_SECONDS, value: {{ .Values.executionManager.startupGraceSeconds | quote }}}
+            - {name: EXECUTION_TERMINAL_GRACE_SECONDS, value: {{ .Values.executionManager.terminalGraceSeconds | quote }}}
+            - {name: EXECUTION_CLEANUP_TIMEOUT_SECONDS, value: {{ .Values.executionManager.cleanupTimeoutSeconds | quote }}}
+            - {name: SANDBOX_MEMORY_MB, value: {{ .Values.executionManager.sandbox.memoryMb | quote }}}
+            - {name: SANDBOX_CPUS, value: {{ .Values.executionManager.sandbox.cpus | quote }}}
+            - {name: SANDBOX_TMP_MB, value: {{ .Values.executionManager.sandbox.tmpMb | quote }}}
+            - {name: SANDBOX_NODE_SELECTOR, value: {{ .Values.executionManager.sandbox.nodeSelector | toJson | quote }}}
+            - {name: SANDBOX_TOLERATIONS, value: {{ .Values.executionManager.sandbox.tolerations | toJson | quote }}}
+            - {name: SANDBOX_IMAGE_PULL_SECRETS, value: {{ .Values.global.imagePullSecrets | toJson | quote }}}
+            - {name: EXECUTION_CALLBACK_URL, value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}}
+            - {name: EXECUTION_OBJECT_STORE_URL, value: {{ include "flow-like.objectStorePublicEndpoint" . | quote }}}
+            - {name: EXECUTION_OBJECT_STORE_TLS_GATEWAY, value: {{ .Values.executionManager.objectStoreTlsGateway | quote }}}
+            - {name: EXECUTION_ALLOWED_HTTPS_HOSTS, value: {{ join "," .Values.executionManager.allowedHttpsHosts | quote }}}
+            - {name: META_BUCKET, value: {{ default "flow-like-meta" $storage.metaBucket | quote }}}
+            - {name: CONTENT_BUCKET, value: {{ default "flow-like-content" $storage.contentBucket | quote }}}
+            - {name: LOG_BUCKET, value: {{ default "flow-like-logs" $storage.logBucket | quote }}}
+            - {name: EXECUTION_MANAGER_TOKEN_FILE, value: /secrets/execution/EXECUTION_MANAGER_TOKEN}
+            {{- include "flow-like.redisEnv" . | nindent 12 }}
+            - name: BACKEND_PUB
+              valueFrom:
+                secretKeyRef: {name: {{ include "flow-like.jwtSecretName" . }}, key: BACKEND_PUB}
+            - name: BACKEND_KID
+              valueFrom:
+                secretKeyRef: {name: {{ include "flow-like.jwtSecretName" . }}, key: BACKEND_KID}
+          volumeMounts:
+            - {name: execution-token, mountPath: /secrets/execution, readOnly: true}
+      volumes:
+        - name: execution-token
+          secret:
+            secretName: {{ include "flow-like.executionSecretName" . }}
+            items: [{key: EXECUTION_MANAGER_TOKEN, path: EXECUTION_MANAGER_TOKEN}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-manager
+spec:
+  type: ClusterIP
+  ports: [{name: http, port: 9000, targetPort: http}]
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: execution-manager
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: execution-manager
+{{- end }}

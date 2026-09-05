@@ -24,7 +24,7 @@
 {{- $host := printf "%s-redis-master" $fullname -}}
 {{- $url := "" -}}
 {{- if .Values.redis.auth.enabled -}}
-  {{- $url = printf "redis://:%s@%s:6379" $password $host -}}
+  {{- $url = printf "redis://:%s@%s:6379" ($password | urlquery | replace "+" "%20") $host -}}
 {{- else -}}
   {{- $url = printf "redis://%s:6379" $host -}}
 {{- end -}}
@@ -70,6 +70,7 @@ metadata:
     app.kubernetes.io/component: redis
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "flow-like.name" . }}
@@ -82,9 +83,17 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: redis
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      terminationGracePeriodSeconds: 60
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: {{ .Values.redis.image | quote }}
           ports:
             - containerPort: 6379
           env:
@@ -93,16 +102,37 @@ spec:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: REDIS_PASSWORD
-          command: ["/bin/sh", "-lc"]
+          command: ["/bin/sh", "-ec"]
           args:
             - |
-              set -eu
-              if [ "{{ ternary "1" "0" .Values.redis.auth.enabled }}" = "1" ] && [ -n "${REDIS_PASSWORD}" ]; then
-                exec redis-server --appendonly yes --requirepass "${REDIS_PASSWORD}"
-              else
-                exec redis-server --appendonly yes
-              fi
+              test -n "$REDIS_PASSWORD" || { echo 'REDIS_PASSWORD is required' >&2; exit 1; }
+              umask 077
+              digest=$(printf '%s' "$REDIS_PASSWORD" | sha256sum)
+              digest=${digest%% *}
+              printf 'user default on #%s ~* &* +@all\n' "$digest" > /tmp/users.acl
+              printf 'aclfile /tmp/users.acl\nappendonly yes\nappendfsync everysec\nmaxmemory {{ .Values.redis.maxmemory }}\nmaxmemory-policy noeviction\n' > /tmp/redis.conf
+              exec redis-server /tmp/redis.conf
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          startupProbe:
+            exec:
+              command: ["sh", "-ec", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -qx PONG"]
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["sh", "-ec", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -qx PONG"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-ec", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -qx PONG"]
+            periodSeconds: 10
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: data
               mountPath: /data
           {{- with .Values.redis.master.resources }}
@@ -110,6 +140,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
         - name: data
           {{- if .Values.redis.master.persistence.enabled }}
           persistentVolumeClaim:

@@ -8989,6 +8989,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-execution-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "constant_time_eq",
+ "flow-like-types-contracts",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.10.1",
+ "hyper-rustls",
+ "hyper-util",
+ "libc",
+ "percent-encoding",
+ "redis",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "rustls 0.23.38",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-io-timeout",
+ "tokio-stream",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "flow-like-executor"
 version = "0.1.0"
 dependencies = [
@@ -25068,6 +25111,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "slab",
  "tokio",

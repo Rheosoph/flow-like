@@ -41,6 +41,7 @@ members = [
     "apps/backend/kubernetes/executor",
     "apps/backend/kubernetes/compiler",
     "apps/backend/kubernetes/sink-trigger",
+    "apps/backend/execution-manager",
     "apps/backend/docker-compose/api",
     "apps/backend/docker-compose/runtime",
     "apps/backend/docker-compose/sink-services",

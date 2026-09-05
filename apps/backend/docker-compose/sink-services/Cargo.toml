@@ -15,7 +15,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 cron = "0.15"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager"] }
 async-trait = "0.1"
 # Discord bot
 serenity = { version = "0.12", default-features = false, features = [

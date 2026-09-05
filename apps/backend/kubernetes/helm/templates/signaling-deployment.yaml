@@ -21,6 +21,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: signaling
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       serviceAccountName: {{ include "flow-like.serviceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -38,21 +42,7 @@ spec:
             - name: REALTIME_FANOUT_MODE
               value: {{ $fanoutMode | quote }}
             {{- if eq $fanoutMode "redis" }}
-            {{- if $redisUsesExistingSecret }}
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow-like.redisSecretName" . }}
-                  key: REDIS_PASSWORD
-            - name: REDIS_URL
-              value: {{ printf "redis://:$(REDIS_PASSWORD)@%s-redis-master:6379" (include "flow-like.fullname" .) | quote }}
-            {{- else }}
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "flow-like.redisSecretName" . }}
-                  key: REDIS_URL
-            {{- end }}
+            {{- include "flow-like.redisEnv" . | nindent 12 }}
             {{- if .Values.signaling.signalChannel }}
             - name: SIGNAL_CHANNEL
               value: {{ .Values.signaling.signalChannel | quote }}
@@ -72,6 +62,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "flow-like.jwtSecretName" . }}
                   key: BACKEND_KID
+          securityContext:
+            {{- include "flow-like.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           ports:
             - containerPort: {{ .Values.signaling.service.port }}
               name: http
@@ -91,6 +86,10 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
       {{- with .Values.signaling.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

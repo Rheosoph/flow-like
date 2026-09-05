@@ -1,0 +1,58 @@
+{{- if .Values.rustfs.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "flow-like.fullname" . }}-object-store-conformance
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: object-store-init
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "flow-like.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: object-store-init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: conformance
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.rustfs.bootstrap.image.repository }}:{{ .Values.rustfs.bootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.rustfs.bootstrap.image.pullPolicy }}
+          command: [python, /opt/object-store/conformance.py]
+          envFrom:
+            - secretRef: {name: {{ include "flow-like.storageSecretName" . }}}
+          env:
+            - name: S3_INTERNAL_ENDPOINT
+              value: {{ include "flow-like.objectStoreStsEndpoint" . | quote }}
+            - name: STS_ENDPOINT_URL
+              value: {{ include "flow-like.objectStoreStsEndpoint" . | quote }}
+            - name: S3_PUBLIC_ENDPOINT
+              value: {{ include "flow-like.objectStorePublicEndpoint" . | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.storage.s3.region | quote }}
+            - name: META_BUCKET
+              value: {{ .Values.storage.s3.metaBucket | quote }}
+            - name: CONTENT_BUCKET
+              value: {{ .Values.storage.s3.contentBucket | quote }}
+            - name: LOG_BUCKET
+              value: {{ .Values.storage.s3.logBucket | quote }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            {{- toYaml .Values.rustfs.bootstrap.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,53 @@
+[package]
+name = "flow-like-execution-manager"
+version = "0.1.0"
+edition = "2024"
+description = "Single-use execution supervision and egress enforcement for Compose and Kubernetes"
+
+[lib]
+name = "execution_manager"
+
+[[bin]]
+name = "execution-manager"
+path = "src/main.rs"
+
+[dependencies]
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
+async-trait.workspace = true
+anyhow = "1"
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+constant_time_eq.workspace = true
+futures-util.workspace = true
+http-body-util = "0.1"
+http = "1"
+http-body = "1"
+hyper.workspace = true
+hyper-util.workspace = true
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-roots"] }
+libc = "0.2"
+percent-encoding.workspace = true
+redis = { version = "0.27", default-features = false, features = ["tokio-rustls-comp", "disable-client-setinfo"] }
+regex.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+subtle = "2"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+tokio-io-timeout = "1.2"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url = "2"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

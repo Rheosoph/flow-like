@@ -1,0 +1,39 @@
+{{- if eq .Values.execution.isolationMode "per_run" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+rules:
+  # Namespace scoped creation permissions are administrative. Place execution
+  # hosts in a dedicated namespace with admission policy restricting Pod specs.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "flow-like.fullname" . }}-execution-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "flow-like.fullname" . }}-execution-manager
+    namespace: {{ .Release.Namespace }}
+{{- end }}

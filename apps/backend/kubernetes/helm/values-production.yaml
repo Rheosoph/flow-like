@@ -10,6 +10,9 @@ global:
     - name: registry-credentials
 
 api:
+  existingSecret: flow-like-api-config
+  publicUrl: https://api.flow-like.example.com
+  corsAllowedOrigins: ["https://app.flow-like.example.com", "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]
   replicaCount: 3
   image:
     repository: api
@@ -29,7 +32,7 @@ web:
 
 # Realtime collaboration signaling. The hub config's signaling URL must point
 # at this service (wss://signaling.flow-like.example.com below), not the
-# vendor-hosted default — tokens are signed with this deployment's BACKEND_KEY.
+# vendor-hosted default. Tokens are signed with this deployment's BACKEND_KEY.
 signaling:
   enabled: true
   replicaCount: 2
@@ -50,21 +53,27 @@ executor:
     repository: executor
     tag: "replace-me"
     pullPolicy: IfNotPresent
-  # Set this only after the named RuntimeClass handler exists on cluster nodes.
-  runtimeClass: kata
+  # Install runsc on execution nodes before deploying.
+  runtimeClass: runsc
 
+# The shared pool is unused by per_run. To use it for explicitly trusted work,
+# also select execution.isolationMode=trusted_shared and asyncBackend=http.
+# Its HPA scales shared processes, not isolated execution capacity.
 executorPool:
+  enabled: false
   replicaCount: 2
   image:
     repository: executor
     tag: "replace-me"
     pullPolicy: IfNotPresent
   autoscaling:
-    enabled: true
+    enabled: false
     minReplicas: 2
     maxReplicas: 20
 
 execution:
+  isolationMode: per_run
+  existingSecret: flow-like-execution
   backend: http
   asyncBackend: redis
 
@@ -87,14 +96,17 @@ database:
 storage:
   provider: s3
   s3:
-    # Required keys are documented in values.yaml and the Helm docs.
+    # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, STS_ISSUER_ACCESS_KEY,
+    # STS_ISSUER_SECRET_KEY. Root credentials belong in a separate Secret.
     existingSecret: flow-like-storage
+    publicEndpoint: https://s3.flow-like.example.com
+    stsSessionTtlSeconds: 7200
 
 redis:
   enabled: true
   auth:
     enabled: true
-    # Required key: REDIS_PASSWORD
+    # Required keys: REDIS_PASSWORD and URL-encoded REDIS_URL
     existingSecret: flow-like-redis
   master:
     persistence:
@@ -136,8 +148,46 @@ monitoring:
   serviceMonitor:
     enabled: false
 
-# Creating the object does not install Kata on the nodes.
+# Creating a RuntimeClass does not install the runtime on the nodes.
 runtimeClass:
   create: false
-  name: kata
-  handler: kata
+  name: runsc
+  handler: runsc
+
+executionManager:
+  replicaCount: 2
+  maxConcurrentExecutions: 20
+  warmPoolSize: 4
+  image:
+    repository: execution-manager
+    tag: replace-me
+    digest: "" # Set the real pushed sha256 digest, or use values-images.yaml.
+  sandbox:
+    image: "" # Full registry/repository@sha256 reference.
+    nodeSelector:
+      flow-like.io/execution: "true"
+  queueBridge:
+    replicaCount: 2
+    concurrency: 20
+    image:
+      repository: runtime
+      tag: replace-me
+  objectStoreTlsGateway: true
+
+rustfs:
+  enabled: true
+  existingSecret: flow-like-rustfs-root
+  bootstrap:
+    image:
+      repository: object-store-init
+      tag: replace-me
+  persistence:
+    size: 250Gi
+  gateway:
+    ingress:
+      enabled: true
+      className: nginx
+      host: s3.flow-like.example.com
+      tls:
+        - secretName: flow-like-s3-tls
+          hosts: [s3.flow-like.example.com]

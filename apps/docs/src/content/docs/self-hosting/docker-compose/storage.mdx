@@ -1,231 +1,166 @@
 ---
 title: Storage Providers
-description: Configure object storage and scoped runtime credentials for Docker Compose
+description: Operate bundled RustFS and configure external object storage with scoped credentials
 sidebar:
   order: 24
 ---
 
-Flow-Like uses object storage for app metadata, user content, CDN/public
-content, and execution logs. The Compose stack does not create buckets or
-containers.
+A new Compose installation includes RustFS, three private buckets and bootstrap
+for separate API and temporary-credential issuer identities. The API uses
+S3-compatible object operations and prefix-scoped STS credentials. Basic bucket
+access alone does not validate execution isolation.
 
-## Current Provider Status
+The checked-in RustFS image is pinned by digest to `1.0.0-rc.5`, a release
+candidate. Qualify the exact image, gateway and policies together before
+admitting tenants, and repeat that qualification when changing the pin.
 
-| Configuration | Checked-in Compose images | Notes |
+## Bundled storage settings
+
+| Variable | Default or source | Purpose |
 | --- | --- | --- |
-| Azure Blob Storage | Supported | API includes Azure runtime credentials |
-| Google Cloud Storage | Supported | API includes GCP runtime credentials |
-| Cloudflare R2 | Supported with an explicit R2 runtime override | Uses the AWS-compatible backing-store adapter and R2 temporary credentials |
-| AWS S3 | Backing-store adapter is present, but the API image omits the `flow-like-api/aws` feature | Rebuild the API with that feature |
-| Other S3-compatible services | Same missing AWS runtime feature, plus unverified STS behavior | Not a stock end-to-end option |
+| `OBJECT_STORE_MODE` | `bundled` | Enables the bundled topology |
+| `STORAGE_PROVIDER`, `RUNTIME_CREDENTIALS_PROVIDER` | `aws` | S3 backing adapter and runtime credential implementation |
+| `S3_STS_PROVIDER` | `rustfs` | RustFS session issuance |
+| `S3_PUBLIC_ENDPOINT` | `http://s3.localhost:9000` | Signed origin reachable by clients and execution services |
+| `S3_INTERNAL_ENDPOINT` | `http://object-store:9000` | Direct internal storage access |
+| `STS_ENDPOINT_URL` | `http://object-store:9000` | Private credential issuance |
+| `AWS_USE_PATH_STYLE` | `true` | Bucket names appear in object paths |
+| `META_BUCKET` | `flow-like-meta` | App and Flow metadata |
+| `CONTENT_BUCKET` | `flow-like-content` | App and user content |
+| `LOG_BUCKET` | `flow-like-logs` | Execution logs |
+| `STS_SESSION_TTL_SECONDS` | `7200` | Requested session lifetime |
 
-The Docker Compose API target enables `azure`, `gcp`, and `r2` runtime
-credentials. It does not enable `aws`, even though the Compose file's
-interpolation default and `.env.example` currently select `aws`.
+The default mode requires three distinct bucket names. `CDN_BUCKET_NAME`
+defaults to the content bucket in the S3 adapter; this does not make that bucket
+public.
 
-:::caution[Do not use the copied storage defaults unchanged]
-The API loads master runtime credentials during startup. With the checked-in
-image, `STORAGE_PROVIDER=aws` is rejected as an unsupported runtime provider.
-Choose Azure, GCP, or the R2 configuration below, or rebuild the API with its
-`aws` feature.
-:::
+Setup generates three independent identities:
 
-## Explicit Values Required by Compose
+- `RUSTFS_ROOT_USER` and `RUSTFS_ROOT_PASSWORD` reach the store and bootstrap only.
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` identify the API storage user.
+- `STS_ISSUER_ACCESS_KEY` and `STS_ISSUER_SECRET_KEY` identify the restricted issuer.
 
-The Compose template injects the runtime-provider, CDN, and provider-specific
-bucket variables even when their `.env` values are empty. The Rust
-configuration treats an explicit empty value as configured; it does not fall
-through to another variable.
+Runners receive temporary credentials in their signed dispatch payloads. Session
+policies limit access to the required buckets and app, user, temporary or run-log
+prefixes. Killing a runner ends its processes; it does not instantly revoke
+credentials that were copied elsewhere. Provider expiration remains relevant.
 
-For the selected provider:
+## Keep the signing origin reachable
 
-- set `RUNTIME_CREDENTIALS_PROVIDER` to a non-empty provider name;
-- set `CDN_BUCKET_NAME` to a real bucket/container, commonly the content
-  location;
-- set all selected provider-specific meta, content, and log names;
-- do not expect empty credential fields to activate an ambient credential
-  chain.
+The API, compiler, browser/desktop clients and per-run gateways must all reach
+the exact `S3_PUBLIC_ENDPOINT` used for signatures. Changing a signed URL's
+host, port or path breaks its signature.
 
-The generic logical names should also be set:
+For the local default, `s3.localhost` resolves to the data gateway inside
+Compose and to loopback on the client machine. Add a client hosts entry when
+needed. A client on another machine cannot use the operator's loopback address.
 
-```dotenv
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-CDN_BUCKET_NAME=flow-like-content
-```
+The data gateway forwards only configured bucket paths. Root listing, STS and
+administration routes are denied. The private RustFS endpoint remains separate;
+do not publish it in place of the data gateway.
 
-Meta and CDN can share the content location by using the same name. Execution
-state is configured separately through `EXECUTION_STATE_BACKEND`; it is not
-stored in the meta bucket by default.
+### Public TLS storage
 
-## Azure Blob Storage
+For `https://storage.example.com`, route your TLS proxy to the data gateway and
+configure:
 
 ```dotenv
-STORAGE_PROVIDER=azure
-RUNTIME_CREDENTIALS_PROVIDER=azure
-
-AZURE_STORAGE_ACCOUNT_NAME=replace-me
-AZURE_STORAGE_ACCOUNT_KEY=replace-me
-AZURE_META_CONTAINER=meta
-AZURE_CONTENT_CONTAINER=content
-AZURE_LOG_CONTAINER=logs
-
-META_BUCKET=meta
-CONTENT_BUCKET=content
-LOG_BUCKET=logs
-CDN_BUCKET_NAME=content
+S3_PUBLIC_ENDPOINT=https://storage.example.com
+S3_GATEWAY_ALIAS=object-gateway
+COMPILER_ALLOWED_STORAGE_HOSTS=https://storage.example.com,http://object-store:9000
+EXECUTION_OBJECT_STORE_TLS_GATEWAY=true
 ```
 
-Create all three containers before starting the API. The account key is also
-used to mint short-lived SAS credentials for scoped access.
+The alias prevents Compose from resolving the public HTTPS hostname directly to
+a plaintext internal listener. Preserve the signed host and request path through
+the TLS proxy.
+
+Enable `EXECUTION_OBJECT_STORE_TLS_GATEWAY` only after verifying that this TLS
+origin denies STS and administration. A sandbox's HTTPS CONNECT tunnel hides
+request paths from its execution proxy, so that proxy relies on the TLS
+endpoint's bucket-only contract.
+
+## Verify prefix authorization
+
+After bootstrap, run the included conformance command against a disposable or
+backed-up store:
 
 ```bash
-az storage container create --name meta --account-name replace-me
-az storage container create --name content --account-name replace-me
-az storage container create --name logs --account-name replace-me
+docker compose build object-store-init
+docker compose up -d object-store object-gateway
+docker compose run --rm object-store-init
+docker compose run --rm --entrypoint python object-store-init /opt/object-store/conformance.py
 ```
 
-## Google Cloud Storage
+The script uses unique test prefixes and removes its objects afterward. It
+checks permitted reads/writes, denied sibling prefixes and other buckets,
+list-prefix restrictions, copy-source authorization, multipart initiation and
+abort, missing/invalid session tokens, STS/admin denial and presigned GET/PUT.
+
+Complete additional tests for actual expiration, multipart completion and copy,
+application operations, restored IAM state and host failure. A passing smoke
+test does not cover those paths.
+
+Back up both object data and RustFS IAM metadata. Restore them together with
+matching deployment identities on a clean host, then rerun authorization checks.
+Do not treat the named `object_store_data` volume as an off-host backup.
+
+## Retain or adopt external S3/STS
+
+Use the supplied overlay:
 
 ```dotenv
-STORAGE_PROVIDER=gcp
-RUNTIME_CREDENTIALS_PROVIDER=gcp
-
-GCP_PROJECT_ID=replace-me
-GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"replace-me"}
-GCP_META_BUCKET=flow-like-meta
-GCP_CONTENT_BUCKET=flow-like-content
-GCP_LOG_BUCKET=flow-like-logs
-
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-CDN_BUCKET_NAME=flow-like-content
+OBJECT_STORE_MODE=external
+COMPOSE_FILE=docker-compose.yml:docker-compose.external-store.yml
+S3_STS_PROVIDER=aws
+S3_INTERNAL_ENDPOINT=https://your-storage-origin
+S3_PUBLIC_ENDPOINT=https://your-storage-origin
+STS_ENDPOINT_URL=https://your-sts-origin
+COMPILER_ALLOWED_STORAGE_HOSTS=https://your-storage-origin
 ```
 
-`GOOGLE_APPLICATION_CREDENTIALS_JSON` is JSON text, not a path. The Compose
-template injects this variable even when it is empty, so provide valid JSON
-instead of relying on an empty value to select ambient credentials.
+Provide the external API and issuer credentials, existing bucket names and
+provider-appropriate path-style settings. Use `S3_STS_PROVIDER=rustfs` for a
+separately hosted qualified RustFS installation.
 
-Grant the service account access only to the configured buckets and validate
-the token-exchange/downscoping path as well as ordinary object access.
+The overlay removes bundled storage and bootstrap from the active graph. It
+does not create buckets or migrate data. The per-run TLS gateway restriction
+still applies: an unrestricted S3/administration endpoint does not satisfy the
+bucket-only contract.
 
-## Cloudflare R2
+### AWS S3
 
-Keep the backing-store selector on the AWS-compatible adapter and select R2
-only for runtime credentials:
+The stock API already includes AWS runtime credentials. Set
+`RUNTIME_ROLE_ARN` to the execution role and configure the issuer's permission
+to assume it. Flow-Like supplies an inline session policy that narrows the
+role's access. Verify role and bucket policies as well as ordinary API access.
 
-```dotenv
-STORAGE_PROVIDER=aws
-RUNTIME_CREDENTIALS_PROVIDER=r2
+For hour-long executions, the role's maximum session duration must cover the
+requested session and all execution budgets. AWS role chaining is limited to one
+hour, which cannot cover a full hour of execution plus queueing and grace.
+See the [AWS AssumeRole duration contract](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
+Automatic credential renewal is not implemented.
 
-AWS_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
-AWS_REGION=auto
-AWS_USE_PATH_STYLE=true
-AWS_ACCESS_KEY_ID=replace-me
-AWS_SECRET_ACCESS_KEY=replace-me
-AWS_META_BUCKET=flow-like-meta
-AWS_CONTENT_BUCKET=flow-like-content
-AWS_LOG_BUCKET=flow-like-logs
+For customer-managed KMS encryption, the role also needs the relevant KMS
+permissions. Configure `S3_KMS_KEY_ARN` or the per-bucket KMS variables; details
+are in [Storage Providers](/dev/storage-providers/#buckets-encrypted-with-a-customer-managed-kms-key).
 
-R2_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
-R2_ACCOUNT_ID=replace-me
-R2_ACCESS_KEY_ID=replace-me
-R2_SECRET_ACCESS_KEY=replace-me
-R2_API_TOKEN=replace-me
+The Compose API includes explicit AWS credential environment entries. To use
+workload identity, supply a reviewed override that removes those entries and
+provides the platform's identity material. Empty static keys are not a
+workload-identity configuration.
 
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-CDN_BUCKET_NAME=flow-like-content
-```
+### Other providers
 
-The R2 API token is separate from the S3-compatible key pair. It is used to
-mint prefix-scoped temporary credentials, so restrict it to the required
-account and R2 operations.
+The API also includes Azure, GCP and R2 implementations. Their variables remain
+in `.env.example`; [Storage Providers](/dev/storage-providers/) describes the
+provider contracts.
 
-## AWS S3
+For R2, retain `STORAGE_PROVIDER=aws` for the backing adapter and select
+`RUNTIME_CREDENTIALS_PROVIDER=r2` for scoped credentials. Configure the R2
+account, API token and S3 keys. For Azure/GCP, set the provider-specific names
+explicitly where the Compose file injects empty overrides.
 
-AWS requires rebuilding `docker-compose-api` with the `flow-like-api/aws`
-feature. After doing so, configure both backing storage and credential
-scoping:
-
-```dotenv
-STORAGE_PROVIDER=aws
-RUNTIME_CREDENTIALS_PROVIDER=aws
-
-AWS_REGION=eu-central-1
-AWS_USE_PATH_STYLE=false
-AWS_ACCESS_KEY_ID=replace-me
-AWS_SECRET_ACCESS_KEY=replace-me
-AWS_META_BUCKET=flow-like-meta
-AWS_CONTENT_BUCKET=flow-like-content
-AWS_LOG_BUCKET=flow-like-logs
-
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-CDN_BUCKET_NAME=flow-like-content
-RUNTIME_ROLE_ARN=arn:aws:iam::123456789012:role/FlowLikeRuntimeRole
-```
-
-The API identity needs bucket access and permission to assume
-`RUNTIME_ROLE_ARN`. Flow-Like adds per-request inline session policies that
-narrow the role to app, user, temporary, and run-log prefixes.
-
-Those session policies also carry the KMS grant a bucket on a customer-managed
-key needs, so the runtime role must allow `kms:Decrypt` and
-`kms:GenerateDataKey` on that key. Set `S3_KMS_KEY_ARN` (or the per-bucket
-`META_BUCKET_KMS_KEY_ARN`, `CONTENT_BUCKET_KMS_KEY_ARN` and
-`LOG_BUCKET_KMS_KEY_ARN`) to narrow the grant to named keys and to send explicit
-SSE-KMS headers on writes. See
-[Storage Providers](/dev/storage-providers/#buckets-encrypted-with-a-customer-managed-kms-key).
-
-The supplied Compose service always injects the static AWS keys. Empty values
-remain explicit credentials and can prevent the AWS credential chain from
-using workload identity. To use an instance or web identity, add a Compose
-override that removes those environment entries entirely and mounts the
-identity material required by the platform.
-
-The `META_BUCKET_EXPRESS_ZONE`, `CONTENT_BUCKET_EXPRESS_ZONE`, and
-`LOGS_BUCKET_EXPRESS_ZONE` names still appear in the Compose template, but the
-current storage code does not read them. They do not enable S3 Express.
-
-## Other S3-Compatible Services
-
-An endpoint such as MinIO can implement the object operations used by the
-backing-store adapter, but `STORAGE_PROVIDER=aws` also selects the AWS runtime
-credential implementation. That implementation calls AWS STS
-`AssumeRole`; basic S3 API compatibility is insufficient.
-
-Do not describe an S3-compatible provider as end-to-end supported until its
-scoped runtime-credential path has been implemented and tested. The API does
-not read `MINIO_*` variables.
-
-## Validate Before Starting
-
-Check interpolation without printing secrets:
-
-```bash
-docker compose config --quiet
-```
-
-Then inspect only the non-secret selection and names:
-
-```bash
-docker compose run --rm --no-deps api sh -lc \
-  'printf "storage=%s runtime=%s meta=%s content=%s logs=%s cdn=%s\n" \
-  "$STORAGE_PROVIDER" "$RUNTIME_CREDENTIALS_PROVIDER" \
-  "$META_BUCKET" "$CONTENT_BUCKET" "$LOG_BUCKET" "$CDN_BUCKET_NAME"'
-```
-
-Start or recreate the API and review its logs:
-
-```bash
-docker compose up -d --build api api-gateway
-docker compose logs api
-```
-
-Test metadata, content, temporary-file, database, and log operations. A
-successful bucket listing does not exercise temporary credential scoping.
+An alternative provider still needs the execution gateway, compiler, reachable
+signing endpoint and lifetime checks validated together. Generic S3 API support
+does not establish support for inline STS prefix policies.

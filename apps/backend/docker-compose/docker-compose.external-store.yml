@@ -1,0 +1,12 @@
+# Existing storage is never initialized or mutated by the bundled job.
+# Set OBJECT_STORE_MODE=external and external endpoints/identities explicitly.
+services:
+  object-store:
+    profiles: [disabled-bundled-storage]
+  object-store-init:
+    profiles: [disabled-bundled-storage]
+  object-gateway:
+    profiles: [disabled-bundled-storage]
+  api:
+    depends_on:
+      object-store-init: !reset null

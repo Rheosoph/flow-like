@@ -16,20 +16,29 @@ scrape_configs:
 
   # Flow-Like API metrics
   - job_name: 'flow-like-api'
-    static_configs:
-      - targets: ['api:9090']
+    dns_sd_configs:
+      - names: ['api']
+        type: A
+        port: 9090
+        refresh_interval: 10s
     metrics_path: /metrics
 
   # Flow-Like Runtime/Executor metrics
   - job_name: 'flow-like-runtime'
-    static_configs:
-      - targets: ['runtime:9000']
+    dns_sd_configs:
+      - names: ['runtime', 'queue-bridge', 'execution-manager']
+        type: A
+        port: 9000
+        refresh_interval: 10s
     metrics_path: /metrics
 
   # Flow-Like WASM Compiler metrics
   - job_name: 'flow-like-compiler'
-    static_configs:
-      - targets: ['compiler:9091']
+    dns_sd_configs:
+      - names: ['compiler']
+        type: A
+        port: 9091
+        refresh_interval: 10s
     metrics_path: /metrics
 
   # Redis metrics (via redis-exporter)

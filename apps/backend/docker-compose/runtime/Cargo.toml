@@ -19,6 +19,8 @@ mimalloc.workspace = true
 axum.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 metrics.workspace = true

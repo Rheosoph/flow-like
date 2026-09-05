@@ -1,13 +1,15 @@
-{{- if .Values.executorPool.enabled }}
+{{- if and (eq .Values.execution.isolationMode "trusted_shared") .Values.executorPool.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "flow-like.fullname" . }}-executor-pool
   labels:
-    {{- include "flow-like.executor.labels" . | nindent 4 }}
+    {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: executor-pool
 spec:
+  {{- if not .Values.executorPool.autoscaling.enabled }}
   replicas: {{ .Values.executorPool.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "flow-like.name" . }}
@@ -20,7 +22,11 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: executor-pool
     spec:
-      serviceAccountName: {{ include "flow-like.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ add .Values.executor.timeout 60 }}
+      securityContext:
+        fsGroup: 1000
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -29,7 +35,26 @@ spec:
         - name: executor-pool
           image: "{{ .Values.global.imageRegistry }}{{ .Values.executorPool.image.repository }}:{{ .Values.executorPool.image.tag }}"
           imagePullPolicy: {{ .Values.executorPool.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+          livenessProbe:
+            httpGet: {path: /health, port: http}
           env:
+            - name: EXECUTION_ISOLATION_MODE
+              value: trusted_shared
+            - name: EXECUTION_TIMEOUT_SECONDS
+              value: {{ .Values.executor.timeout | quote }}
+            - name: MAX_CONCURRENT_EXECUTIONS
+              value: {{ .Values.executorPool.maxConcurrentExecutions | quote }}
             - name: EXECUTOR_SERVER_MODE
               value: "true"
             - name: PORT
@@ -68,4 +93,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
 {{- end }}

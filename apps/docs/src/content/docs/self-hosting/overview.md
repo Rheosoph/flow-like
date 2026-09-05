@@ -5,33 +5,59 @@ sidebar:
   order: 60
 ---
 
-Flow-Like can be deployed on your own infrastructure.
+Run Flow-Like on one Linux Docker host or across a Kubernetes cluster. Both
+deployments include object storage and default to a separate gVisor sandbox for
+each workflow execution. Choose the deployment by the infrastructure you can
+operate and the failure recovery you need.
 
 ![Conceptual overview of one Flow-Like workflow being deployed to a single-server stack, a multi-node cluster, or isolated on-demand executors](../../../assets/SelfHostingOverview.webp)
 
 ## Deployment Options
 
-| Option | Best for | Isolation | Complexity |
-|--------|----------|-----------|------------|
-| [Docker Compose](/self-hosting/docker-compose/overview/) | Single machine, development | Container | Low |
-| [Kubernetes](/self-hosting/kubernetes/overview/) | Multi-node orchestration after storage, database, and security hardening | Warm executor pods by default | Medium |
+| Deployment | Execution boundary | Operating requirements |
+| --- | --- | --- |
+| [Docker Compose](/self-hosting/docker-compose/overview/) | Single-use gVisor container with a private Unix proxy socket | Linux Docker host with `runsc`, local persistent volumes, backups and enough resources for active and warm slots |
+| [Kubernetes](/self-hosting/kubernetes/overview/) | Single-use gVisor runner Pod and a separate gateway Pod | Installed `runsc` RuntimeClass, enforcing Cilium policies, execution-node capacity, persistent storage and a registry |
 
-Deployment topology and execution isolation are separate choices. Docker
-Compose and Kubernetes can use warm HTTP executors or configured serverless
-executors. The API also contains a Kubernetes Job dispatcher, but the
-checked-in executor's one-job runner is not implemented yet.
+Compose remains a single-host deployment. Kubernetes can place execution slots
+across nodes, but its bundled Redis and RustFS services remain single instances.
+Additional API or manager replicas do not provide datastore failover.
+
+Both paths generate private configuration and credentials, initialize separate
+metadata, content and log buckets in RustFS, and run database initialization
+before serving API traffic. Existing installations can retain qualified external
+services. A custom S3 endpoint must support the scoped temporary credentials
+required by runtimes and clients.
 
 ## Execution Backends
 
-Flow-Like supports multiple execution backends with different isolation and performance characteristics:
+The self-hosted API sends interactive requests to a Rust execution manager and
+background requests through a retained Redis queue. The manager assigns a clean,
+prepared sandbox, supplies one signed dispatch, and destroys the sandbox after
+completion or cancellation. An environment that has run tenant code never
+returns to the warm reserve.
 
-| Backend | Isolation | Latency | Best For |
-|---------|-----------|---------|----------|
-| HTTP warm pool | Process or container | Low | Trusted, latency-sensitive workloads |
-| Lambda invoke, stream, or function URL | Isolated function environment | Medium | Elastic and multi-tenant workloads |
-| Kubernetes Job | Dispatcher only in the current tree | Not operational end to end | Requires a compatible one-job runner |
+`per_run` is the default execution mode. `trusted_shared` is an explicit option
+for internal workflows whose authors are trusted; it shares worker processes
+between runs. The legacy Kubernetes Job dispatcher is outside the supported
+isolated Helm path.
 
-→ [Learn more about execution backends](/self-hosting/execution-backends/)
+Read [Execution Backends](/self-hosting/execution-backends/) for admission,
+cancellation, transport selection and the isolation boundary.
+
+## Plan capacity and qualification
+
+Managers have separate limits for active executions, ready sandboxes and
+concurrent replenishment. Reserve resources for active and warm slots, including
+one gateway per slot. At one arrival per second and a one-hour mean run duration,
+steady state needs about 3,600 active sandboxes before spare capacity.
+
+Prewarming removes environment creation and static runtime initialization from
+admission. Artifact loading, durable claims and storage access can still delay
+the first workflow node. Measure startup latency and sustained replacement rate
+on the target host or cluster; the implementation has no measured
+few-millisecond guarantee. Before admitting untrusted tenants, qualify runtime
+isolation, storage-prefix denial, cancellation, recovery and representative load.
 
 ## Connecting the Desktop App
 
@@ -47,5 +73,5 @@ export FLOW_LIKE_API_URL=https://your-api.example.com
 ## Quick Links
 
 - [Execution Backends](/self-hosting/execution-backends/) - Understanding job isolation and choosing the right backend
-- [Docker Compose](/self-hosting/docker-compose/overview/) - Simple deployment for development and small teams
+- [Docker Compose](/self-hosting/docker-compose/overview/) - Installation and operation on one Linux host
 - [Kubernetes](/self-hosting/kubernetes/overview/) - Cluster deployment, Helm configuration, and autoscaling options

@@ -73,6 +73,7 @@ spec:
       annotations:
         checksum/config: {{ .Values.monitoring.tempo | toJson | sha256sum }}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: tempo
           image: "{{ .Values.monitoring.tempo.image.repository | default "grafana/tempo" }}:{{ .Values.monitoring.tempo.image.tag | default "2.3.1" }}"

@@ -1,0 +1,40 @@
+{{- if eq .Values.execution.isolationMode "per_run" }}
+# Kubernetes NetworkPolicy permits local-node traffic. Cilium deny rules close
+# that route and take precedence over standard or Cilium allow rules.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-sandbox-host-deny
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-sandbox
+  egressDeny:
+    - toEntities: [host, remote-node, kube-apiserver]
+    - toCIDR:
+        - 169.254.0.0/16
+        - 100.100.100.200/32
+        - fd00:ec2::254/128
+---
+# Cilium allow-localhost=policy requires explicit kubelet health-probe access.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-node-health-probes
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            {{- range list "8080" "9000" "9001" "9090" "3000" "3001" "3200" (toString .Values.signaling.service.port) (toString .Values.compiler.service.port) (toString .Values.executorPool.service.port) | uniq }}
+            - {port: {{ . | quote }}, protocol: TCP}
+            {{- end }}
+{{- end }}

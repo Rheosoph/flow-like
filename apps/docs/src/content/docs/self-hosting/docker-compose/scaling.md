@@ -1,128 +1,105 @@
 ---
 title: Scaling
-description: Scale API and shared runtime workers on one Docker host
+description: Size active executions, warm sandboxes and service replicas on one Docker host
 sidebar:
   order: 26
 ---
 
-Docker Compose can add API and runtime processes on the same host. This improves
-throughput and resilience to one process failure, but it does not create a
-multi-host control plane or a fresh container for every run.
+Scale Compose by changing service counts and resource limits for one host.
+Execution managers maintain unused sandboxes separately from active runs, so
+both consume resources. Moving beyond one host requires a different scheduling
+and persistence arrangement, such as the
+[Kubernetes deployment](/self-hosting/kubernetes/overview/).
 
-## Set replica counts
+## Active capacity and warm reserves
 
-The template reads:
+For `M` managers, active limit `C` per manager and warm reserve `W` per manager:
 
-```dotenv
-API_REPLICAS=2
-RUNTIME_REPLICAS=3
-```
+- Maximum admitted active runs: `M × C`.
+- Additional warm slots: `M × W`.
+- Each slot has one runner container and one gateway container.
 
-Apply a change with:
-
-```bash
-docker compose up -d --scale api=3 --scale runtime=4
-docker compose ps
-```
-
-The published API port belongs to `api-gateway`, which forwards to the internal
-`api` service. API containers share PostgreSQL, Redis, object storage, backend
-signing keys, and hub configuration.
-
-Runtime replicas expose only the internal `runtime:9000` service. Interactive
-runs use the HTTP execution backend; background runs can use the Redis queue,
-which is consumed by every enabled runtime worker.
-
-## Concurrency
-
-Two settings bound work inside each runtime:
+For example:
 
 ```dotenv
+EXECUTION_MANAGER_REPLICAS=2
 MAX_CONCURRENT_EXECUTIONS=10
+SANDBOX_WARM_POOL_SIZE=4
+SANDBOX_CREATE_CONCURRENCY=2
+QUEUE_BRIDGE_REPLICAS=2
 QUEUE_WORKER_CONCURRENCY=10
 ```
 
-Replica count multiplied by a concurrency value is a theoretical ceiling, not
-a capacity guarantee. A run can be limited by CPU, memory, database
-connections, object-storage bandwidth, model-provider quotas, or downstream
-APIs first.
+This permits twenty active runs and prepares up to eight additional unused
+slots. At the default limits, twenty-eight runners can consume up to 28 GiB,
+and their gateways up to 3.5 GiB, before accounting for other services. CPU
+limits can also exceed the host's physical capacity; measure contention.
 
-Increase concurrency only after measuring representative Flows. For
-CPU-intensive, memory-intensive, or non-thread-safe workloads, more smaller
-workers can be safer than one highly concurrent process.
+Preparation and retirement count against the warm inventory budget. Assigned
+slots are never returned to it. A positive warm reserve is required; setting
+`SANDBOX_WARM_POOL_SIZE=0` is rejected.
 
-## Resource limits
+When no ready slot or active capacity is available, the manager rejects
+admission. Explicit rejection allows queued work to retry with backoff.
+Ambiguous requests are retained for reconciliation because they may have
+already executed.
 
-The runtime service declares resource limits and reservations under
-`deploy.resources`. Docker Compose support for these fields depends on the
-runtime and mode. Confirm the effective limits with Docker rather than assuming
-the YAML was enforced.
+## Throughput and start latency
 
-Maintain deployment-specific values in an override:
+Concurrency is the number of occupied slots; throughput is completed executions
+per second. At steady state, required active slots are approximately the arrival
+rate multiplied by the average execution duration. Ten starts per second with
+one-hour executions would need about 36,000 active slots.
 
-```yaml
-services:
-  runtime:
-    deploy:
-      resources:
-        limits:
-          cpus: "8"
-          memory: 16G
-        reservations:
-          cpus: "2"
-          memory: 4G
-```
+Warm preparation removes container creation and trusted runtime initialization
+from normal admission. Artifact fetches, credential issuance, storage and
+downstream services still contribute to startup and completion time. A
+few-millisecond end-to-end start is not a measured guarantee.
 
-Keep enough host capacity for image builds and all non-runtime services.
+Increase `SANDBOX_CREATE_CONCURRENCY` when preparation cannot replace consumed
+slots quickly enough. Increase the warm reserve to cover bursts. Measure the
+reserve level, preparation errors and startup latency under representative
+work before increasing active capacity.
 
-## Stateful bottlenecks
+`EXECUTION_MANAGER_WORKER_THREADS` defaults to two Tokio workers. It controls
+the manager's async scheduling threads independently of execution capacity.
 
-The Compose topology contains one PostgreSQL service and one Redis service.
-Scaling API or runtime containers does not scale either datastore.
+## Apply changes
 
-For an external PostgreSQL-compatible service, create an override that:
-
-- supplies the external `DATABASE_URL` to API and `db-init`;
-- removes or disables the bundled PostgreSQL dependency;
-- applies the required TLS settings;
-- preserves the normal schema-initialization step;
-- backs up and migrates data deliberately.
-
-Do the same level of planning before replacing Redis. A lone environment
-variable is not enough because the base file wires service dependencies and
-internal URLs.
-
-## Services that should remain singletons
-
-Keep `sink-services` at one replica unless the scheduler and every enabled sink
-have been designed and tested for active/active operation. Multiple uncoordinated
-schedulers can duplicate triggers.
-
-`db-init` is a one-time job. `api-gateway` is the single published gateway in
-the supplied topology.
-
-## Docker Swarm
-
-`docker-stack.yml` is provided for Swarm. Swarm does not build images from the
-stack file and does not automatically load `.env`.
-
-Build and push registry-backed images first, validate the interpolated stack,
-and then deploy it:
+Set replica counts and limits in `.env`, then run:
 
 ```bash
-docker compose build
-docker stack config -c docker-stack.yml
-docker stack deploy -c docker-stack.yml flowlike
+python3 scripts/preflight.py
+python3 scripts/up.py
+docker compose ps
+docker stats --no-stream
 ```
 
-Use explicit `*_IMAGE` values that every Swarm node can pull. Keep backend
-keys, storage credentials, and sink tokens consistent across replicas and
-prefer Swarm secrets over plain environment values for production.
+API, compiler and execution gateways refresh Docker DNS every ten seconds.
+They do not retry execution POSTs after ambiguous acceptance. Drain before
+scaling managers down; their default stop grace allows hour-long executions
+and final cleanup.
 
-## When to move to Kubernetes
+API, web, compiler and signaling have separate replica settings. Keep
+`sink-services` at one replica unless every enabled scheduler and adapter has
+been tested for concurrent ownership.
 
-Use the [Kubernetes deployment](/self-hosting/kubernetes/overview/) when you
-need multi-host scheduling, cluster-native autoscaling, or network policies.
-The chart's warm HTTP executor pool is implemented; its fresh-Job path is not
-yet operational end to end. Compose remains a shared-worker, single-host
-deployment even when several process replicas are running.
+## Shared services and limits
+
+All managers on this daemon must share the local `execution_manager_state`
+volume. It contains SQLite ownership and replay records. Do not place it on
+NFS or reuse this arrangement across multiple Docker hosts.
+
+API database pools scale with `API_REPLICAS`. Preflight reserves one extra API
+replica for rollout and ten administrative connections when comparing pools
+against `POSTGRES_MAX_CONNECTIONS`.
+
+The bundled PostgreSQL, Redis and RustFS services remain single instances.
+Use the supplied external-service overlays for managed datastores, with a
+separate backup and migration procedure. Merely adding worker replicas does not
+increase datastore capacity or protect against host loss.
+
+For an explicitly trusted shared-worker installation, `RUNTIME_REPLICAS`
+controls reused workers instead of execution managers. The legacy Swarm file
+also supports trusted shared execution with external storage only. Neither is
+a substitute for per-execution isolation.

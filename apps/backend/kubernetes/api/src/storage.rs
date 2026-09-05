@@ -53,7 +53,9 @@ fn build_aws_store(
         .with_bucket_name(bucket_name);
 
     if let Some(endpoint) = &cfg.endpoint {
-        builder = builder.with_endpoint(endpoint);
+        builder = builder
+            .with_allow_http(endpoint.starts_with("http://"))
+            .with_endpoint(endpoint);
     }
 
     if let (Some(access_key), Some(secret_key)) = (&cfg.access_key_id, &cfg.secret_access_key) {
@@ -137,6 +139,7 @@ fn build_s3_store(
     let mut builder = AmazonS3Builder::new()
         .with_bucket_name(bucket_name)
         .with_endpoint(&cfg.endpoint)
+        .with_allow_http(cfg.endpoint.starts_with("http://"))
         .with_region(&cfg.region)
         .with_access_key_id(&cfg.access_key_id)
         .with_secret_access_key(&cfg.secret_access_key);

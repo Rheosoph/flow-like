@@ -3,7 +3,16 @@ repos:
       rev: v3.2.0
       hooks:
       -   id: check-yaml
-          exclude: ^apps/backend/kubernetes/helm/templates/
+          exclude: |
+            (?x)^(
+              apps/backend/kubernetes/helm/templates/|
+              apps/backend/docker-compose/docker-compose\.external-(datastores|store)\.yml$
+            )
+      -   id: check-yaml
+          name: Check Compose Override Yaml
+          # Compose's !reset and !override tags require syntax-only validation.
+          args: [--unsafe]
+          files: ^apps/backend/docker-compose/docker-compose\.external-(datastores|store)\.yml$
       # -   id: end-of-file-fixer
       -   id: trailing-whitespace
 

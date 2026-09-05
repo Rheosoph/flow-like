@@ -92,6 +92,7 @@ metadata:
     app.kubernetes.io/component: grafana
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       {{- include "flow-like.selectorLabels" . | nindent 6 }}
@@ -105,21 +106,12 @@ spec:
         checksum/config: {{ .Values.monitoring.grafana | toYaml | sha256sum }}
         checksum/dashboards: {{ .Values.monitoring | toYaml | sha256sum }}
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
         runAsUser: 472
-      initContainers:
-        - name: init-chown-data
-          image: busybox:1.36
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            runAsNonRoot: false
-            runAsUser: 0
-          command: ["chown", "-R", "472:472", "/var/lib/grafana"]
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/grafana
       containers:
         - name: grafana
           image: "{{ .Values.monitoring.grafana.image.repository }}:{{ .Values.monitoring.grafana.image.tag }}"
@@ -238,7 +230,12 @@ data:
   {{- if .Values.monitoring.grafana.adminPassword }}
   admin-password: {{ .Values.monitoring.grafana.adminPassword | b64enc | quote }}
   {{- else }}
-  admin-password: {{ randAlphaNum 16 | b64enc | quote }}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-grafana" (include "flow-like.fullname" .)) }}
+  {{- if and $existing $existing.data (index $existing.data "admin-password") }}
+  admin-password: {{ index $existing.data "admin-password" | quote }}
+  {{- else }}
+  admin-password: {{ randAlphaNum 32 | b64enc | quote }}
+  {{- end }}
   {{- end }}
 
 {{- if .Values.monitoring.grafana.persistence.enabled }}

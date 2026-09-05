@@ -1,10 +1,10 @@
-{{- if and .Values.executorPool.enabled .Values.executorPool.autoscaling.enabled }}
+{{- if and (eq .Values.execution.isolationMode "trusted_shared") .Values.executorPool.enabled .Values.executorPool.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "flow-like.fullname" . }}-executor-pool
   labels:
-    {{- include "flow-like.executor.labels" . | nindent 4 }}
+    {{- include "flow-like.labels" . | nindent 4 }}
     app.kubernetes.io/component: executor-pool
 spec:
   scaleTargetRef:

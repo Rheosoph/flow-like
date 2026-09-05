@@ -1,0 +1,58 @@
+{{- if not (has .Values.execution.isolationMode (list "per_run" "trusted_shared")) }}
+{{- fail "execution.isolationMode must be per_run or trusted_shared" }}
+{{- end }}
+{{- if and (eq .Values.execution.isolationMode "per_run") (or (ne .Values.execution.backend "http") (ne .Values.execution.asyncBackend "redis")) }}
+{{- fail "per_run requires execution.backend=http and asyncBackend=redis; legacy Kubernetes Jobs do not provide the isolated admission protocol" }}
+{{- end }}
+{{- if and (eq .Values.execution.isolationMode "per_run") (not .Values.networkPolicy.enabled) }}
+{{- fail "per_run requires networkPolicy.enabled and a CNI that enforces NetworkPolicy" }}
+{{- end }}
+{{- if and .Values.redis.enabled (not .Values.redis.auth.enabled) }}
+{{- fail "bundled Redis requires authentication" }}
+{{- end }}
+{{- if and .Values.redis.enabled (ne .Values.redis.architecture "standalone") }}
+{{- fail "bundled Redis supports standalone only; configure redis.enabled=false and externalExistingSecret for managed Redis" }}
+{{- end }}
+{{- if and .Values.signaling.enabled (gt (int .Values.signaling.replicaCount) 1) (ne .Values.signaling.fanoutMode "redis") }}
+{{- fail "multiple signaling replicas require signaling.fanoutMode=redis" }}
+{{- end }}
+{{- if and .Values.compiler.enabled (or (lt (int .Values.compiler.maxConcurrentJobs) 1) (lt (int .Values.compiler.maxParallelTargets) 1)) }}
+{{- fail "compiler concurrency and parallel target counts must be positive" }}
+{{- end }}
+{{- if and .Values.rustfs.enabled (ne .Values.storage.provider "s3") }}
+{{- fail "bundled RustFS requires storage.provider=s3; disable rustfs.enabled to use another provider" }}
+{{- end }}
+{{- if .Values.rustfs.enabled }}
+{{- $_ := required "rustfs.existingSecret is required; run scripts/setup-config.py" .Values.rustfs.existingSecret }}
+{{- if ne .Values.storage.s3.runtimeCredentialsProvider "rustfs" }}
+{{- fail "bundled RustFS requires storage.s3.runtimeCredentialsProvider=rustfs" }}
+{{- end }}
+{{- end }}
+{{- if eq .Values.storage.provider "s3" }}
+{{- range $bucket := list .Values.storage.s3.metaBucket .Values.storage.s3.contentBucket .Values.storage.s3.logBucket }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" $bucket) }}
+{{- fail "S3 bucket names must be valid lowercase DNS bucket names" }}
+{{- end }}
+{{- end }}
+{{- if ne (len (list .Values.storage.s3.metaBucket .Values.storage.s3.contentBucket .Values.storage.s3.logBucket | uniq)) 3 }}
+{{- fail "metadata, content and logs require distinct buckets" }}
+{{- end }}
+{{- if or (lt (int .Values.storage.s3.stsSessionTtlSeconds) 900) (gt (int .Values.storage.s3.stsSessionTtlSeconds) 43200) }}
+{{- fail "storage.s3.stsSessionTtlSeconds must be between 900 and 43200" }}
+{{- end }}
+{{- end }}
+
+{{- $reservedEnv := list "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" }}
+{{- range .Values.api.env }}
+{{- if has .name $reservedEnv }}
+{{- fail (printf "api.env cannot override chart-managed %s; configure its values.yaml setting" .name) }}
+{{- end }}
+{{- end }}
+
+{{- if and (eq .Values.execution.isolationMode "trusted_shared") (or (ne .Values.execution.backend "http") (ne .Values.execution.asyncBackend "http")) }}
+{{- fail "trusted_shared requires execution.backend=http and asyncBackend=http; the shared Kubernetes executor has no Redis consumer" }}
+{{- end }}
+
+{{- if and (eq .Values.execution.isolationMode "per_run") (ne .Values.storage.provider "s3") }}
+{{- fail "per_run currently requires storage.provider=s3 with bundled RustFS or an external S3/STS endpoint" }}
+{{- end }}

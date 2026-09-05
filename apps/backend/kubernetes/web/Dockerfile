@@ -2,21 +2,13 @@
 # ============================================================
 # Stage 1: Builder
 # ============================================================
-FROM oven/bun:1.2-debian AS builder
+FROM oven/bun:1.3.8-debian AS builder
 
 WORKDIR /app
 
-# Copy root package files for workspace resolution
-COPY package.json bun.lock ./
-COPY packages/ui/package.json packages/ui/
-COPY apps/web/package.json apps/web/
-
-# Install dependencies
+# Include the complete frozen workspace dependency graph.
+COPY . .
 RUN bun install --frozen-lockfile
-
-# Copy source code
-COPY packages/ui packages/ui/
-COPY apps/web apps/web/
 
 # Build arguments for environment variables
 ARG NEXT_PUBLIC_API_URL=http://localhost:8080
@@ -36,9 +28,10 @@ RUN bun run build
 # ============================================================
 # Stage 2: Runtime (nginx to serve static files)
 # ============================================================
-FROM nginx:alpine
+FROM nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
 
 # Copy custom nginx configuration
+COPY apps/backend/kubernetes/web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/backend/kubernetes/web/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy static files from builder
@@ -56,4 +49,4 @@ USER flowlike
 
 EXPOSE 3001
 
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx", "-g", "daemon off;"]

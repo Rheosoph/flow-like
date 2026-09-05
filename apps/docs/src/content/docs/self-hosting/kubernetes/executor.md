@@ -5,125 +5,122 @@ sidebar:
   order: 70
 ---
 
-The checked-in Kubernetes executor has two entrypoint modes, but only its
-long-lived server mode currently executes workflows.
+The Rust execution manager assigns each run to a preinitialized, single-use
+gVisor runner Pod. A separate gateway Pod enforces that run's network permissions.
+The runner is destroyed after use and the manager prepares a replacement in the
+background.
 
-Source:
+The default configuration uses `execution.isolationMode=per_run`. Both
+interactive HTTP dispatch and the Redis queue bridge use this manager. The chart
+rejects the legacy Kubernetes Job backend for isolated execution.
 
-- `apps/backend/kubernetes/executor/src/main.rs`
-- `packages/executor/`
+## Follow one execution
 
-## Current mode status
+1. The manager creates a runner NetworkPolicy and its paired gateway policy
+   before creating either Pod.
+2. The gateway starts with no execution grant. The runner checks its gateway
+   connection and prohibited cluster/node/metadata endpoints, initializes the
+   trusted Rust catalog and JWT verification key, then waits for input.
+3. Admission removes a ready slot and atomically claims the run in Redis with
+   `SET NX EX`. An existing claim prevents another manager replica from
+   assigning the same run.
+4. The manager binds both Pods to the run and deadline, checks cancellation
+   markers, configures the gateway once and sends a signed dispatch.
+5. The runtime verifies the dispatch before fetching executable artifacts.
+   It executes once and streams bounded events and terminal acknowledgement.
+6. The manager confirms runner termination, removes the Pod pair and only then
+   removes the restrictive policies.
 
-| Mode | Selection | Status |
-| --- | --- | --- |
-| HTTP server | `EXECUTOR_SERVER_MODE=true` | Implemented and used by the Helm executor pool |
-| One-job process | Default when the variable is absent or false | Placeholder; logs an error and exits with status `1` |
+The slot adapter shares the runner's sandbox. Its HTTP server is a transport
+adapter; cancellation, deadlines and egress are enforced externally. No sandbox
+is reused across tenants or executions.
 
-:::caution
-The API contains a `kubernetes_job` dispatcher that can create a Job, but the
-executor image's one-job entrypoint does not consume that Job's environment or
-run the board yet. Do not configure `EXECUTION_BACKEND=kubernetes_job` with the
-checked-in executor image and expect successful executions.
-:::
+## Capacity and warm reserve
 
-## Server mode
+| Helm value | Default | Effect |
+| --- | ---: | --- |
+| `executionManager.replicaCount` | 1 | Independent manager partitions |
+| `executionManager.maxConcurrentExecutions` | 10 | Active runs per manager |
+| `executionManager.warmPoolSize` | 2 | Additional clean slots per manager |
+| `executionManager.warmPoolCreationConcurrency` | 2 | Concurrent preparation per manager |
+| `executionManager.warmPoolMaxAgeSeconds` | 600 | Unassigned slot lifetime |
+| `executionManager.workerThreads` | 2 | Async supervisor workers |
+| `executionManager.queueBridge.replicaCount` | 1 | Background dispatch consumers |
+| `executionManager.queueBridge.concurrency` | 10 | Outstanding jobs per consumer |
 
-The Helm chart's `executorPool` Deployment sets
-`EXECUTOR_SERVER_MODE=true` and exposes the executor through a ClusterIP
-Service. The API normally uses:
+Set runner CPU, memory and temporary storage under `executionManager.sandbox`.
+The default runner requests 1 GiB of memory, has a one-CPU limit and a 256 MiB
+memory-backed temporary volume. Include the separate gateway and gVisor overhead
+in node sizing.
 
-```dotenv
-EXECUTION_BACKEND=http
-EXECUTOR_URL=http://flow-like-executor-pool:8080
-```
+Configured concurrency is approximately manager replicas multiplied by the active
+limit. Sustainable throughput also depends on run duration and preparation rate:
+100 executions per second with a 60-second average duration require about 6,000
+concurrent executions. Adding replicas cannot compensate for exhausted nodes.
 
-The actual Service name includes the Helm release/fullname prefix.
+When no clean slot is available, immediate requests are refused without starting
+a run. Queue delivery can wait within its age budget. Monitor available warm slots
+and preparation failures as well as active execution counts.
 
-Server mode provides:
+## Latency and long runs
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /execute` | Execute and return a final JSON response |
-| `POST /execute/stream` | Stream newline-delimited JSON events |
-| `POST /execute/sse` | Stream Server-Sent Events |
-| `GET /health` | Executor health |
-| `GET /metrics` | Prometheus metrics |
+Warm initialization removes process creation from the admission path. The Rust
+manager reuses asynchronous network connections and binds the two Pods in
+parallel. Kubernetes API requests, Redis claims, credential issuance and artifact
+preparation still contribute to start time. No few-millisecond start guarantee
+has been measured.
 
-The application port defaults to `8080`. A second metrics listener defaults to
-`9090` and exposes `/metrics` as well.
+`executor.timeout` defaults to one hour. Separate startup, terminal and cleanup
+allowances cover supervision, and Pod deadlines remain in force if a manager
+disappears. Graceful manager shutdown stops new admission and allows accepted
+executions to drain.
 
-```dotenv
-EXECUTOR_SERVER_MODE=true
-PORT=8080
-METRICS_PORT=9090
-```
+The default RustFS session request is two hours. Actual credential expiry must
+cover queue wait, execution and the supervisor allowances. See
+[Configuration](/self-hosting/kubernetes/configuration/#time-budgets) before
+changing either the workflow or credential limits.
 
-Executor behavior is configured by:
+## Cancellation and replay protection
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `EXECUTOR_BATCH_INTERVAL_MS` | `1000` | Callback event batching interval |
-| `EXECUTOR_MAX_BATCH_SIZE` | `100` | Events per callback batch |
-| `EXECUTOR_CALLBACK_TIMEOUT_MS` | `5000` | Callback request timeout |
-| `EXECUTOR_CALLBACK_RETRIES` | `3` | Callback retry count |
-| `EXECUTOR_TIMEOUT_SECS` | `3600` | Workflow execution timeout |
+Cancellation writes a shared ConfigMap marker before looking up assigned Pods.
+The manager shortens Pod deadlines and waits for kubelet-reported termination.
+It does not equate forced deletion of a Pod API object with a stopped sandbox.
+If a node or API partition prevents confirmation, cancellation reports failure
+and admission closes.
 
-## Request contract
+Redis claims survive manager replacement and expire after 24 hours plus the
+execution and supervisor allowances. A lost claim reply is not retried. Retain
+Redis data across upgrades; restoring a snapshot can remove claims for work that
+already ran. External side effects still require application-level idempotency.
 
-The shared executor contract is `ExecutionRequest` in
-`packages/executor/src/types.rs`. It includes the application and board,
-payload, scoped credentials, execution JWT, callback information, board
-version, and optional WASM package references.
+The `exec:jobs:v3` queue retains accepted delivery until trusted terminal
+confirmation. Ambiguous delivery and expired queue items are quarantined for
+reconciliation. Do not replay them solely because the client lost its connection.
 
-The API builds this request. Operators should not hand-construct it from a few
-environment variables: the credentials and JWT are part of the trust boundary.
-
-During a run, the executor:
-
-1. verifies the execution JWT;
-2. constructs request-scoped Flow-Like state from the supplied credentials;
-3. loads and prepares the requested board;
-4. overlays verified WASM package artifacts when present;
-5. executes the board;
-6. returns or streams events and reports callbacks as required.
-
-The warm pool caches prepared board data, but request-specific state and logic
-are stripped before cache insertion and reattached per run.
-
-## One-job mode
-
-`run_job_once` in `apps/backend/kubernetes/executor/src/main.rs` currently
-contains only an implementation outline. It does not read `RUN_ID`, `APP_ID`,
-`BOARD_ID`, `FLOW_LIKE_CREDENTIALS`, `FLOW_LIKE_JWT`,
-`FLOW_LIKE_CALLBACK_URL`, or `PAYLOAD`, even though the API's Kubernetes
-dispatcher places those values in created Jobs.
-
-The process deliberately exits with status `1` and directs operators to use the
-executor pool.
-
-## Local debugging
-
-Run the implemented server mode:
+## Inspect execution
 
 ```bash
-cd apps/backend/kubernetes/executor
-EXECUTOR_SERVER_MODE=true cargo run
+kubectl get pods -n flow-like -l app.kubernetes.io/component=execution-sandbox -o wide
+kubectl get pods -n flow-like -l app.kubernetes.io/component=execution-egress -o wide
+kubectl logs deployment/flow-like-execution-manager -n flow-like --tail=100
+kubectl logs deployment/flow-like-queue-bridge -n flow-like --tail=100
+kubectl port-forward service/flow-like-execution-manager 9000:9000 -n flow-like
 ```
 
-Then check:
+Manager `/ready` reports supervisor availability. Inspect `/metrics` to establish
+whether warm capacity is actually available. Runtime dispatch and cancellation
+endpoints require the manager token and should remain private.
 
-```bash
-curl http://localhost:8080/health
-curl http://localhost:9090/metrics
-```
+## Trusted local workflows
 
-An `/execute` test additionally requires a valid `ExecutionRequest`, signed JWT,
-and reachable backing services. The normal API dispatch path is the safest way
-to exercise that contract.
+`execution.isolationMode=trusted_shared` with
+`execution.asyncBackend=http` enables the existing reusable executor pool.
+Configure its replicas and bounded concurrency under `executorPool`. It shares
+a process between executions and does not meet the multi-tenant isolation
+requirement.
 
-## Related
-
-- [Execution Backends](/self-hosting/execution-backends/)
-- [Kubernetes Installation](/self-hosting/kubernetes/installation/)
-- [Kubernetes Monitoring](/self-hosting/kubernetes/monitoring/)
+The source entry points are
+`apps/backend/execution-manager/src/kubernetes/`,
+`apps/backend/kubernetes/executor/src/main.rs` and
+`packages/executor/`. The Kubernetes runner uses `/app/execution-slot` to
+deliver one `--once warm` dispatch to the Rust executor.

@@ -40,6 +40,7 @@ target
 *.sw?
 tmp
 /.tools/
+/.local-notes/
 .ruff_cache
 /.next/
 /out/

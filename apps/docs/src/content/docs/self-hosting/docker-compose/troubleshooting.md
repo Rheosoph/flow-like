@@ -1,222 +1,144 @@
 ---
 title: Troubleshooting
-description: Diagnose Docker Compose configuration, health, storage, execution, and build failures
+description: Diagnose configuration, isolated execution, object storage and recovery failures
 sidebar:
   order: 27
 ---
 
-Start with the effective service state and recent logs:
+Start with validation, container state and the affected service's recent logs:
 
 ```bash
-docker compose config --quiet
+python3 scripts/preflight.py
 docker compose ps --all
-docker compose logs --tail=200
+docker compose logs --tail=100 db-init object-store-init api execution-manager queue-bridge
 ```
 
-`db-init` is expected to exit after a successful schema update. Long-running
-services should become healthy.
+The initializers should exit successfully. Long-running services should become
+healthy. Use `preflight.py --config-only` if the Docker daemon is unavailable.
+Avoid posting rendered configuration or full workflow payloads in support logs.
 
-## A service does not start
+## Setup or preflight fails
 
-Inspect that service and its dependencies:
+| Symptom | Check |
+| --- | --- |
+| Existing `.env` is refused | Setup protects existing secrets. Merge new settings into that file. |
+| Image digest is absent or stale | Run `python3 scripts/prepare-images.py` on the target daemon. |
+| `runsc` validation fails | Install gVisor and configure both `--network=none` and `--host-uds=open`. |
+| Mixed execution profiles | Use `per-run` for `per_run`, or `trusted` for `trusted_shared`. |
+| Warm pool is zero | The Rust manager requires at least one unused slot. |
+| Database budget is exceeded | Reduce API pools/replicas or increase the reviewed PostgreSQL limit. |
+| Stop grace is too short | Cover execution, startup, finalization and cleanup budgets. |
+| Private environment permissions fail | Restore mode `0600`; keep the file out of Git. |
+
+Do not bypass a gVisor failure by switching an untrusted installation to shared
+workers.
+
+## An initializer blocks startup
+
+For a database failure:
 
 ```bash
 docker compose logs db-init postgres
-docker compose logs api redis
-docker compose logs runtime
 ```
 
-Recreate the one-time initializer after correcting a database issue:
+Confirm connectivity and the schema change being attempted. The initializer
+uses a migration advisory lock and rejects destructive changes. Do not remove
+these checks to force an upgrade. After correcting the cause, run the reviewed
+initializer and rerun the startup helper.
+
+For storage bootstrap:
 
 ```bash
-docker compose up --force-recreate db-init
-docker compose up -d
+docker compose logs object-store-init object-store
 ```
 
-Do not run several schema initializers concurrently.
+Confirm the bucket names and generated identities match the intended deployment.
+Bootstrap refuses unexpected existing policies. A copied environment file with
+new keys does not rotate an existing store's credentials. Preserve the original
+configuration or perform an explicit, tested rotation.
 
-## A host port is already in use
+The external-datastore overlay removes automatic database initialization.
+Apply reviewed schema changes with `docker compose run --rm db-init` before
+starting incompatible API images.
 
-Docker reports the conflicting host port during startup. Either stop the other
-listener or change the matching value in `.env`, for example:
-
-```dotenv
-API_PORT=8180
-COMPILER_METRICS_PORT=9192
-```
-
-If the API or web port changes, also update browser-facing URLs, OIDC redirects,
-reverse-proxy configuration, and the hub configuration.
-
-## Health checks fail
-
-Check the gateway and published services:
+## Health and login
 
 ```bash
-curl --fail --verbose http://localhost:8080/health
-curl --fail --verbose http://localhost:3001/health
-curl --fail --verbose http://localhost:4444/health
-curl --fail --verbose http://localhost:8081/health
+curl --fail http://localhost:8080/health
+curl --fail http://localhost:3001/health
+docker compose exec execution-manager /app/execution-manager healthcheck
+docker compose exec api curl --fail http://execution-gateway:9000/ready
 ```
 
-Check internal endpoints from their containers:
+Manager and compiler ports are internal. Host port 9000 belongs to the object
+data gateway by default.
+
+For login or browser CORS failures, compare the hub's OIDC and signaling settings
+with `PUBLIC_API_URL`, `NEXT_PUBLIC_*` and both allowed-origin lists. Rebuild
+web/API images when their embedded configuration changes. Add the required
+desktop origins explicitly.
+
+## Executions are rejected or stop early
+
+Inspect `executor_ready_sandboxes`, active capacity and preparation errors.
+A depleted reserve returns explicit non-admission, allowing queue retries.
+Check runner/gateway image availability, host CPU/memory/PIDs, gVisor settings
+and the manager's writable state volume before increasing concurrency.
+
+The runner has no container network. A denied HTTPS integration needs an exact
+host grant and an HTTP client that honors the supplied proxy. Raw sockets,
+arbitrary callback paths and general user-token API access are unavailable.
+
+An insufficient credential-lifetime error means the provider's actual remaining
+session cannot cover the configured queue wait, execution and grace periods.
+Changing the requested TTL cannot exceed the provider's policy limits. There is
+no automatic renewal.
+
+Cleanup failure closes admission. Fix Docker or volume access and restart the
+manager with its existing `execution_manager_state` volume so reconciliation
+can find abandoned resources. Do not delete ownership/replay records to make
+a repeated run appear new.
+
+## Queued jobs do not progress
+
+Check queue bridges, Redis health and manager readiness. The default queue is
+`exec:jobs:v3`; producers and consumers must use the same version.
+
+Inspect counts without printing queued credentials or payloads:
 
 ```bash
-docker compose exec api curl --fail http://localhost:8080/api/v1/health
-docker compose exec runtime curl --fail http://localhost:9000/health
+docker compose exec redis sh -c 'REDISCLI_AUTH="$REDIS_RUNTIME_PASSWORD" redis-cli --user runtime LLEN exec:jobs:v3'
+docker compose exec redis sh -c 'REDISCLI_AUTH="$REDIS_RUNTIME_PASSWORD" redis-cli --user runtime HLEN exec:jobs:v3:pending'
+docker compose exec redis sh -c 'REDISCLI_AUTH="$REDIS_RUNTIME_PASSWORD" redis-cli --user runtime LLEN exec:jobs:v3:dead'
 ```
 
-The runtime is not published to the host by default, so
-`http://localhost:9000` on the Docker host is not the expected diagnostic path.
+Ready jobs older than the configured wait limit and uncertain delivery attempts
+are retained for reconciliation. Compare each affected run with application
+state and external effects before authorizing another attempt. Do not bulk-move
+retained payloads back to the ready list or clear them to bypass queue capacity.
 
-## API cannot dispatch a run
+Redis uses `noeviction`; full memory can stop admission and bookkeeping.
+Investigate retention and host capacity before changing memory limits.
 
-Verify the runtime name resolves and its internal health endpoint responds:
+## Object requests fail
 
-```bash
-docker compose exec api curl --fail http://runtime:9000/health
-docker compose logs api runtime
-```
+Use [Storage](/self-hosting/docker-compose/storage/) to check that every client,
+compiler and run gateway reaches the same signed origin. Signature errors often
+follow a changed host, port, path or proxy rewrite. Browser failures can also
+come from storage CORS or an unreachable `s3.localhost` name.
 
-Then check the configured lanes:
+For HTTPS storage, verify the public endpoint forwards bucket data and denies
+STS/admin routes before enabling its gateway contract flag. Test temporary
+prefix-scoped credentials through both the public gateway and private store
+with the supplied conformance script.
 
-```bash
-docker compose exec api sh -lc \
-  'printf "sync=%s async=%s executor=%s\n" \
-  "$EXECUTION_BACKEND" "$ASYNC_EXECUTION_BACKEND" "$EXECUTOR_URL"'
-```
+## Recovery and removal
 
-For the template, interactive runs use HTTP and background runs use Redis.
-Confirm `QUEUE_WORKER_ENABLED=true`, the same `REDIS_EXECUTION_QUEUE` is present
-on API and runtime, and Redis is healthy.
+Back up database state, objects and IAM metadata, Redis, keys/configuration and
+the manager's local ownership database. Restore onto a clean host and verify
+authorization, representative workflows and any uncertain deliveries before
+reopening traffic.
 
-## Backend JWT errors
-
-The current variables are `BACKEND_KEY`, `BACKEND_PUB`, and `BACKEND_KID`.
-Check presence without printing the secret:
-
-```bash
-docker compose exec api sh -lc \
-  'test -n "$BACKEND_KEY" && test -n "$BACKEND_PUB" && echo "API keys present"'
-docker compose exec runtime sh -lc \
-  'test -n "$BACKEND_PUB" && echo "Runtime public key present"'
-```
-
-Generate a new matching set from the Compose directory:
-
-```bash
-../../../tools/gen-execution-keys.sh --export
-```
-
-After replacing all three `.env` values, recreate the API, runtime, and
-compiler together. Rotating the signing key invalidates tokens signed by the
-old key; plan the restart accordingly.
-
-## Object storage fails
-
-First read the API startup error. It distinguishes an unknown provider, a
-missing required value, and a store-construction failure.
-
-Common causes include:
-
-- leaving `RUNTIME_CREDENTIALS_PROVIDER` or `CDN_BUCKET_NAME` explicitly empty;
-- leaving the selected provider's bucket/container overrides explicitly empty;
-- selecting AWS with the checked-in API image, which omits its AWS runtime
-  feature;
-- an empty or incorrect endpoint;
-- using virtual-hosted requests with a provider that needs path style;
-- a bucket/container that does not exist;
-- master credentials without list/read/write/delete permissions;
-- missing `RUNTIME_ROLE_ARN` or temporary-credential permissions;
-- buckets on a customer-managed KMS key that the runtime role may not
-  `kms:Decrypt` / `kms:GenerateDataKey`;
-- an Azure account without the required SAS behavior;
-- a GCP service account that cannot exchange/downscope tokens;
-- an R2 API token that cannot create temporary credentials.
-
-Check which non-secret values reached the API:
-
-```bash
-docker compose exec api sh -lc \
-  'printf "storage=%s runtime=%s meta=%s content=%s logs=%s cdn=%s\n" \
-  "$STORAGE_PROVIDER" "$RUNTIME_CREDENTIALS_PROVIDER" \
-  "$META_BUCKET" "$CONTENT_BUCKET" "$LOG_BUCKET" "$CDN_BUCKET_NAME"'
-```
-
-For the selected provider, also confirm the corresponding
-`AWS_*_BUCKET`, `AZURE_*_CONTAINER`, or `GCP_*_BUCKET` names are non-empty.
-
-Do not paste full container environments or credential-bearing logs into a
-public issue.
-
-## PostgreSQL problems
-
-```bash
-docker compose exec postgres sh -lc \
-  'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-docker compose logs postgres db-init
-docker compose exec postgres sh -lc \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-```
-
-Back up PostgreSQL before changing schemas, replacing the service, or deleting
-volumes.
-
-## Compiler failures
-
-```bash
-curl --fail http://localhost:8081/health
-curl --fail http://localhost:9092/metrics
-docker compose logs compiler api
-```
-
-Check `COMPILATION_BACKEND`, `COMPILER_URL`, target configuration, callback
-timeouts, and available CPU/memory. Compilation logs can contain source paths
-or package metadata; review them before sharing.
-
-## Server-side Events do not trigger
-
-```bash
-docker compose logs sink-services api redis
-```
-
-Confirm:
-
-- the Event is active and configured for remote execution;
-- its sink type is enabled in the hub configuration;
-- `SINK_SECRET` is present on the API;
-- `SINK_TRIGGER_JWT` is present on `sink-services` and is scoped to the
-  required sink type;
-- `SINK_TOKEN_ENCRYPTION_KEY` is set in production;
-- `sink-services` can reach `http://api:8080` and Redis.
-
-Keep the scheduler at one replica while diagnosing duplicate triggers.
-
-## Build failures
-
-The first build downloads dependencies and compiles several large images.
-Check disk space and the failed build stage:
-
-```bash
-docker system df
-docker compose build api
-docker compose build runtime
-```
-
-Use a no-cache build only when you have evidence that a stale build layer is
-the cause; it discards useful compilation caches and can make diagnosis much
-slower.
-
-## Resetting local state
-
-Restarting or rebuilding containers does not require deleting volumes:
-
-```bash
-docker compose down
-docker compose up -d --build
-```
-
-`docker compose down -v` deletes Compose-managed database, Redis, and
-observability volumes. Use it only for an intentional development reset after
-backing up anything important. External object-storage data is separate and is
-not removed by that command.
+`docker compose down` retains named volumes. `down --volumes` deletes bundled
+application, object-store, replay and monitoring state. It is a removal command,
+not a recovery procedure.

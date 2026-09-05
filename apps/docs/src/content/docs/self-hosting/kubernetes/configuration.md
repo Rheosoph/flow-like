@@ -5,161 +5,130 @@ sidebar:
   order: 20
 ---
 
-The Helm chart is the source of truth for cluster configuration:
+Helm values configure workloads and runtime environment variables. The API's
+public hub and OIDC configuration is selected separately at image build time.
 
-- Defaults: `apps/backend/kubernetes/helm/values.yaml`
-- Templates: `apps/backend/kubernetes/helm/templates/`
-- Local k3d input: `apps/backend/kubernetes/.env`
-- Generated local overrides: `apps/backend/kubernetes/helm/values-local.yaml`
-
-The older `scripts/setup-config.sh` creates standalone resources with legacy
-names and is not part of the current Helm release wiring. Use Helm values and
-the documented `existingSecret` contracts for cluster installs.
-
-## Required Configuration
-
-A non-local install must configure:
-
-1. Pullable API, web, executor, and migration images.
-2. `jwt.backendKey` / `backendPub`, or `jwt.existingSecret`.
-3. One `storage.provider` block and its credentials or `existingSecret`.
-4. `database.type` and, for external mode, a `DATABASE_URL`.
-
-The chart manages `REDIS_URL` when its Redis workload is enabled.
-
-## Database Environment
-
-The API and migration Job require:
-
-- `DATABASE_URL`
-
-Internal mode creates a chart-managed Secret. External mode reads it from
-`database.external.existingSecret` or, less safely, from
-`database.external.connectionString`.
-
-## Storage Environment
-
-The chart supports five user-facing provider values:
-
-| Helm provider | Runtime selection | Main variables | Stock API status |
-| --- | --- | --- | --- |
-| `aws` | AWS | `AWS_REGION`, optional static keys, `RUNTIME_ROLE_ARN` | Requires rebuilding the API with `aws` |
-| `azure` | Azure | `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_STORAGE_ACCOUNT_KEY`, container names | Included |
-| `gcp` | GCP | `GCP_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`, bucket names | Included |
-| `r2` | AWS-compatible storage plus R2 runtime credentials | `R2_*` credentials, `R2_API_TOKEN`, and matching `AWS_*` aliases | Included; use an existing Secret because the generated one omits the token |
-| `s3` | Generic S3 plus AWS runtime credentials | `S3_*` settings and matching `AWS_*` aliases | Requires rebuilding with `aws`; provider-side STS compatibility must be validated |
-
-Logical storage names are `META_BUCKET`, `CONTENT_BUCKET`, and `LOG_BUCKET`.
-Provider-specific names are also emitted where the runtime needs them.
-
-When the chart creates the storage Secret, it writes the required aliases
-automatically, except for the R2 API token. For an externally managed Secret,
-follow the exact key table in
-the [Helm reference](/self-hosting/kubernetes/helm/#object-storage).
-
-## Execution Environment
-
-The API template derives these variables from values:
-
-| Environment variable | Helm value |
+| Source | Purpose |
 | --- | --- |
-| `EXECUTION_BACKEND` | `execution.backend` |
-| `ASYNC_EXECUTION_BACKEND` | `execution.asyncBackend` |
-| `EXECUTOR_URL` | `execution.executorUrl`, or the warm-pool Service |
-| `K8S_EXECUTOR_IMAGE` | `global.imageRegistry` + `executor.image` |
-| `K8S_EXECUTOR_RUNTIME_CLASS` | `executor.runtimeClass` / `runtimeClass.name` |
-| `JOB_TIMEOUT_SECONDS` | `executor.timeout` |
-| `JOB_MAX_RETRIES` | `executor.maxRetries` |
-| `KUBERNETES_NAMESPACE` | Pod namespace |
+| `helm/values.yaml` | Chart defaults |
+| `helm/values-production.yaml` | Example operator overrides |
+| `.generated/values-generated.yaml` | Setup-generated endpoint settings and Secret references |
+| `.generated/values-images.yaml` | Build-generated image references and required digests |
+| `.generated/secrets.yaml` | Private credentials, applied separately |
+| `FLOW_LIKE_CONFIG` | Repository-relative JSON embedded in the API image |
 
-The values accept `http`, `redis`, and `kubernetes_job`, but the checked-in
-Kubernetes executor pool only implements HTTP. It does not consume the Redis
-execution list, and its one-job entrypoint is not implemented. Use `http` for
-both lanes unless you deploy another compatible consumer.
+Paths above are relative to `apps/backend/kubernetes/`, except the path supplied
+to `FLOW_LIKE_CONFIG`. Setup reads exported environment variables as data; it
+does not source a `.env` file. Changing Helm values does not rebuild the embedded
+hub configuration.
 
-The Job dispatcher also reads `K8S_NAMESPACE`, `K8S_RUNTIME_CLASS`,
-`K8S_JOB_TIMEOUT`, and `K8S_JOB_MAX_RETRIES`, while the current API template
-emits the differently named variables shown above. Those Job-specific values
-are therefore not wired to the dispatcher. This is another reason not to
-operate `kubernetes_job` from the current chart without code/chart changes.
+## Execution capacity
 
-Execution-token variables come from the Secret selected by
-`jwt.existingSecret`: the API uses `BACKEND_KEY`, `BACKEND_PUB`, and
-`BACKEND_KID`; executors and the optional compiler use the public key and key
-identifier.
-
-## Additional API Variables
-
-Add non-secret variables with `api.env`:
+The default mode prepares clean, single-use Pod pairs:
 
 ```yaml
-api:
-  env:
-    - name: RUST_LOG
-      value: flow_like=debug,tower_http=info
+execution:
+  isolationMode: per_run
+  backend: http
+  asyncBackend: redis
+  queueName: exec:jobs:v3
+  queueMaxWaitSeconds: 300
+  credentialMarginSeconds: 120
+
+executionManager:
+  replicaCount: 2
+  workerThreads: 2
+  maxConcurrentExecutions: 20
+  warmPoolSize: 4
+  warmPoolCreationConcurrency: 2
+  warmPoolMaxAgeSeconds: 600
+  sandbox:
+    memoryMb: 1024
+    cpus: 1
+    tmpMb: 256
+    nodeSelector:
+      flow-like.io/execution: "true"
+  queueBridge:
+    replicaCount: 2
+    concurrency: 20
 ```
 
-Import another ConfigMap or Secret with `api.envFrom`:
+This example configures up to 40 active executions and eight additional clean
+slots across the two managers, subject to resources and slot availability. Each
+slot also has a separate gateway Pod. Provision execution nodes before raising
+these values.
 
-```yaml
-api:
-  envFrom:
-    - configMapRef:
-        name: flow-like-extra-config
-    - secretRef:
-        name: flow-like-extra-secret
-```
+`workerThreads` sets each manager's Tokio worker count; it does not set workflow
+concurrency. `queueBridge.concurrency` limits jobs a bridge can hold while waiting
+or executing. A large queue-consumer count does not create runner capacity.
 
-Do not duplicate chart-owned names such as `DATABASE_URL`, `REDIS_URL`, or
-`BACKEND_KEY` unless you intentionally understand Kubernetes environment
-precedence.
+## Time budgets
 
-## Redis
+| Helm value | Default | Runtime variable |
+| --- | ---: | --- |
+| `executor.timeout` | 3600 s | `EXECUTION_TIMEOUT_SECONDS` |
+| `executionManager.startupGraceSeconds` | 30 s | `EXECUTION_STARTUP_GRACE_SECONDS` |
+| `executionManager.terminalGraceSeconds` | 60 s | `EXECUTION_TERMINAL_GRACE_SECONDS` |
+| `executionManager.cleanupTimeoutSeconds` | 30 s | `EXECUTION_CLEANUP_TIMEOUT_SECONDS` |
+| `execution.queueMaxWaitSeconds` | 300 s | `EXECUTION_QUEUE_MAX_WAIT_SECONDS` |
+| `execution.credentialMarginSeconds` | 120 s | `EXECUTION_CREDENTIAL_MARGIN_SECONDS` |
+| `storage.s3.stsSessionTtlSeconds` | 7200 s | `STS_SESSION_TTL_SECONDS` |
 
-With chart-managed authentication, the chart generates a password and an
-in-cluster `REDIS_URL`. To supply a stable password:
+The API checks actual remaining credential lifetime against the execution, queue,
+supervisor and safety budgets. The defaults require 4,140 seconds at checkout.
+Requesting a longer STS session does not help if the provider returns a shorter
+one. Adjust ingress and load-balancer timeouts when changing execution duration.
 
-```yaml
-redis:
-  auth:
-    enabled: true
-    existingSecret: flow-like-redis
-```
+## Storage and Secrets
 
-The Secret must contain `REDIS_PASSWORD`; the API template constructs the URL
-without copying the password into rendered Helm output.
+`storage.provider=s3` and `rustfs.enabled=true` select the bundled RustFS setup.
+Public, internal and STS origins are distinct settings:
 
-## LLM Providers
+- `storage.s3.publicEndpoint`: signed object URLs used by browsers and runtimes.
+- `storage.s3.internalEndpoint`: API access to storage.
+- `storage.s3.stsEndpoint`: private temporary-credential issuance.
 
-The warm executor pool can read:
+Setup generates separate root, API and STS identities. Keep Secret values out of
+ordinary values files and command-line `--set` arguments. See
+[Storage](/self-hosting/kubernetes/storage/) and
+[Secret contracts](/self-hosting/kubernetes/helm/#existing-secret-contracts).
 
-- `OPENROUTER_API_KEY` and optional `OPENROUTER_ENDPOINT`
-- `OPENAI_API_KEY` and optional `OPENAI_ENDPOINT`
+Bundled Redis requires both `REDIS_PASSWORD` and a complete, URL-encoded
+`REDIS_URL` in `redis.auth.existingSecret`. External Redis uses
+`redis.enabled=false` with `redis.externalExistingSecret`; that Secret contains
+`REDIS_URL`. Use `rediss://` and a trusted certificate chain for TLS.
 
-Select their Secrets with `llm.openrouter.existingSecret` and
-`llm.openai.existingSecret`.
+## API, database and integrations
 
-## Inspect the Result
+Configure API replicas with `api.replicaCount`, or enable `api.autoscaling` and
+let the HPA own the count. Size `database.pool.maxConnections` and
+`database.pool.minConnections` per API process; include maximum replicas and
+rollout surge in the database's total connection budget.
 
-Render changes before applying them:
+Add extra configuration through `api.env` and `api.envFrom`. Avoid duplicating
+chart-owned names such as `DATABASE_URL`, `REDIS_URL` or `BACKEND_KEY`.
 
-```bash
-helm lint apps/backend/kubernetes/helm \
-  --values flow-like-values.yaml
+Hosted-model provider credentials belong to the API's authenticated model proxy.
+The chart's `llm.*` Secret references configure that proxy. Runner Pods receive
+execution capabilities, not installation-wide model-provider keys. Grant direct
+HTTPS integrations with exact hostnames in
+`executionManager.allowedHttpsHosts`; add private destination rules through
+`networkPolicy.executionGatewayExtraEgress` when required.
 
-helm template flow-like apps/backend/kubernetes/helm \
-  --namespace flow-like \
-  --values flow-like-values.yaml
-```
+For multiple signaling replicas, set `signaling.fanoutMode=redis`, exact browser
+origins in `signaling.allowedOrigins`, and the deployment's WSS endpoint in the
+embedded hub configuration.
 
-After installation:
+## Review effective configuration
 
 ```bash
 helm get values flow-like -n flow-like
-helm get manifest flow-like -n flow-like
 kubectl describe deployment flow-like-api -n flow-like
+kubectl describe deployment flow-like-execution-manager -n flow-like
 ```
 
-Rendered manifests contain Secret names and references. They should not contain
-long-lived credential values when all sensitive configuration uses
-`existingSecret`.
+Use the [deploy helper](/self-hosting/kubernetes/scripts/#deploysh) to validate the
+same ordered values files before applying an update. For trusted-only local
+workflows, `execution.isolationMode=trusted_shared` and
+`execution.asyncBackend=http` select the reusable executor pool. That mode does
+not provide per-execution tenant isolation.

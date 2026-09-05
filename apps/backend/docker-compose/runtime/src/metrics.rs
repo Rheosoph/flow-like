@@ -193,12 +193,8 @@ pub fn record_execution(status: &str, duration_secs: f64) {
         .record(duration_secs);
 }
 
-pub fn increment_active_jobs() {
-    metrics::gauge!("executor_active_jobs").increment(1.0);
-}
-
-pub fn decrement_active_jobs() {
-    metrics::gauge!("executor_active_jobs").decrement(1.0);
+pub fn set_active_jobs(count: usize) {
+    metrics::gauge!("executor_active_jobs").set(count as f64);
 }
 
 pub fn record_http_request(method: &str, path: &str, status: u16, duration_secs: f64) {

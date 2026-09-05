@@ -84,6 +84,7 @@ apps/backend/**/secrets/**
 **/*.pyc
 .codex/
 .agents/
+.local-notes/
 
 # Kubernetes generated Secrets must never enter application image contexts.
 apps/backend/kubernetes/.generated/**

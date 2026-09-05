@@ -14,6 +14,11 @@ WORKDIR /app
 
 COPY . .
 
+# The API embeds this public hub/OIDC configuration at compile time.
+# A self-hosted build must not inherit the repository's hosted configuration.
+ARG FLOW_LIKE_CONFIG=apps/backend/kubernetes/flow-like.config.example.json
+RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
+
 # Remove packages that require edition 2024 or other backends
 RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
     sed -i '/apps\/backend\/local\/api/d' Cargo.toml && \

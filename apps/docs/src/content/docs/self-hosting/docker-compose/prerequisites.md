@@ -1,126 +1,102 @@
 ---
 title: Prerequisites
-description: Prepare the host, identity provider, object storage, and network
+description: Prepare a Linux execution host, identity provider, networking and capacity
 sidebar:
   order: 21
 ---
 
-The Compose deployment is a complete single-host stack, not only an API and one
-runtime. It builds and runs the web app, API gateway and replicas, runtime
-workers, compiler, Event sink service, signaling service, PostgreSQL, Redis,
-and an initialization job.
+The default Compose deployment requires a Linux Docker daemon with gVisor.
+Prepare that execution host before generating configuration or building images.
+A client workstation may connect to a suitable remote daemon, but ordinary
+Docker Desktop containers do not satisfy the required execution runtime setup.
 
 ## Host tools
 
-Install:
+Install Git, Python 3, OpenSSL, Docker Engine and Docker Compose v2. The daemon
+must support Engine API 1.47, introduced in Engine 27.2; see the
+[API version matrix](https://docs.docker.com/reference/api/engine/#api-version-matrix).
+Compose must be at least 2.24.4 because the supplied overlays use its
+[reset and override tags](https://docs.docker.com/reference/compose-file/merge/#replace-value).
 
-- Git;
-- Docker Engine or Docker Desktop;
-- the Docker Compose v2 plugin;
-- OpenSSL for the backend-key generator;
-- Bun when you need to generate server-side Event tokens.
-
-Verify the commands used by the guide:
+Verify the tools:
 
 ```bash
 docker version
 docker compose version
+python3 --version
 openssl version
-bun --version
 ```
 
-The Compose implementation must support service health conditions, profiles,
-configs, and service scaling.
+The setup scripts use Python on the operator's machine. The execution manager
+and per-run gateway themselves are Rust binaries.
 
-## Identity provider
+## Configure gVisor
 
-The template hub configuration uses OpenID Connect placeholders. Prepare an
-OIDC application with:
+Install `runsc` using the
+[gVisor Docker instructions](https://gvisor.dev/docs/user_guide/quick_start/docker/).
+Merge this runtime entry into the execution daemon's
+`/etc/docker/daemon.json`, preserving its existing settings:
 
-- an authority/discovery URL and JWKS endpoint;
-- a client ID;
-- the Flow-Like callback and post-logout URLs;
-- the claims required by your chosen user lookup settings.
-
-Do not expose a deployment that still points to
-`https://your-auth-provider.com`.
-
-## Object storage
-
-Prepare three buckets or containers:
-
-- metadata;
-- content;
-- execution logs.
-
-The stock Compose API includes Azure, GCP, and R2 runtime credentials. Its
-backing-store adapter also understands AWS/S3-compatible endpoints, but the
-checked-in target omits the AWS runtime feature and cannot start with that
-provider until rebuilt. Credentials must be able to read, write, list, and
-delete objects in the configured locations. Runtime credential scoping needs
-additional provider-specific setup.
-
-See [Storage Providers](/self-hosting/docker-compose/storage/) before starting
-the stack.
-
-## Capacity planning
-
-There is no useful universal CPU or memory minimum: a Flow that calls an API is
-very different from a Flow that processes a large model or dataset.
-
-The template starts two API replicas and three runtime replicas. Each runtime
-declares a 4-CPU/8-GB limit and a 1-CPU/2-GB reservation. Docker Compose does
-not enforce every `deploy` resource field consistently outside Swarm, so
-observe the actual host as well as the file.
-
-For a development laptop, begin with:
-
-```dotenv
-API_REPLICAS=1
-RUNTIME_REPLICAS=1
-MAX_CONCURRENT_EXECUTIONS=2
-QUEUE_WORKER_CONCURRENCY=2
+```json
+{
+  "runtimes": {
+    "runsc": {
+      "path": "/usr/local/bin/runsc",
+      "runtimeArgs": ["--network=none", "--host-uds=open"]
+    }
+  }
+}
 ```
 
-Leave headroom for Docker image builds, PostgreSQL, Redis, the compiler, the
-web app, and optional monitoring. Size production from representative Flow
-runs and measured concurrency rather than the example defaults.
+Restart Docker after updating the configuration. The manager checks both
+arguments and refuses a shared-kernel fallback. Each runner receives only its
+own proxy socket volume, with a read-only mount. It receives no Docker socket
+or host directory.
 
-## Network access
+The trusted manager mounts the Docker socket to administer execution containers.
+Restrict access to this host and its deployment credentials accordingly.
 
-The host needs outbound access to:
+## Identity and public access
 
-- the container and package registries used during builds;
-- the configured object-storage endpoint;
-- the OIDC provider;
-- any model providers, APIs, or data systems used by Flows.
+Prepare an OpenID Connect application with the correct discovery/JWKS endpoints,
+client ID, callback URL and logout URL. The checked-in hub configuration contains
+placeholder identity-provider settings.
 
-The template publishes these core ports:
+Public hosting also needs DNS and an operator-managed TLS reverse proxy.
+Configure HTTPS for web/API/storage and WSS for signaling. Keep the browser
+origins, OIDC redirects and hub configuration consistent.
 
-| Port | Service |
+The default published listeners bind to loopback:
+
+| Address | Service |
 | --- | --- |
-| `3001` | Web app |
-| `8080` | API gateway |
-| `4444` | Realtime signaling |
-| `8081` | WASM compiler |
-| `9092` | Compiler metrics |
-| `5432` | PostgreSQL |
-| `6379` | Redis |
+| `localhost:3001` | Web |
+| `localhost:8080` | API |
+| `localhost:4444` | Signaling |
+| `s3.localhost:9000` | Object data gateway |
+| `localhost:3002` | Grafana, when monitoring is enabled |
 
-The monitoring profile publishes additional ports. In production, normally
-expose only the web/API endpoints and the signaling endpoint required by
-clients. Restrict database, Redis, compiler, metrics, and observability ports
-with firewall rules or a Compose override.
+PostgreSQL, Redis, the compiler, execution managers, RustFS administration and
+metrics listeners are private. The `s3.localhost` name must resolve to the
+gateway from both clients and containers. Add a hosts entry on clients whose
+resolver does not recognize `.localhost`.
 
-## TLS and DNS
+## Capacity and outbound access
 
-The Compose stack does not terminate public TLS. Prepare DNS and a reverse
-proxy or load balancer for HTTPS/WSS, then update:
+Budget active executions plus unused warm slots. The defaults allow ten active
+executions and two additional warm slots per manager. Each slot has a runner
+limited to 1 GiB and one CPU, plus a gateway limited to 128 MiB and half a CPU.
+Leave room for the API, compiler, datastores, storage, monitoring and image builds.
 
-- `NEXT_PUBLIC_API_URL`;
-- login and logout redirect URLs;
-- the hub configuration's `domain`, `app`, `web`, `secure`, and `signaling`
-  fields.
+Select smaller counts before installation when the host cannot support those
+limits. See [Scaling](/self-hosting/docker-compose/scaling/) for the capacity
+calculation.
 
-Rebuild the web and API images after changing build-time public
-configuration.
+The host needs registry/package access for builds and access to your identity
+provider. Workflows can reach only the destinations permitted by the execution
+gateway. Plan explicit HTTPS integration grants; raw TCP/UDP clients cannot use
+the default sandbox network.
+
+RustFS is included, so a new installation does not require external object
+storage. Existing installations should retain their current store until a
+separately verified data migration is complete.

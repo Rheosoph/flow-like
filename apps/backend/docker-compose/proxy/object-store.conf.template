@@ -1,0 +1,25 @@
+# Presigned URLs contain credentials; suppress request/error context at this hop.
+access_log off;
+error_log /dev/null;
+resolver 127.0.0.11 valid=10s ipv6=off;
+upstream s3_store { zone s3_store 64k; server object-store:9000 resolve; keepalive 32; }
+server {
+    listen 9000;
+    client_max_body_size 0;
+    # STS is private to the issuer. Root POST and administration paths never
+    # reach RustFS through this data gateway; private bucket IAM still applies.
+    if ($arg_action != '') { return 403; }
+    location = /health { access_log off; return 200 'ok'; }
+    location ~ ^/(${META_BUCKET}|${CONTENT_BUCKET}|${LOG_BUCKET})(/|$) {
+        proxy_pass http://s3_store;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header Connection "";
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_next_upstream off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+    location / { return 403; }
+}

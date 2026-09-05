@@ -1,0 +1,104 @@
+{
+  "name": "Flow-Like Self-Hosted",
+  "description": "Self-hosted Flow-Like instance on Kubernetes",
+  "authentication": {
+    "variant": "openid",
+    "openid": {
+      "authority": "https://your-auth-provider.com",
+      "client_id": "your-client-id",
+      "redirect_uri": "https://your-domain.com/callback",
+      "post_logout_redirect_uri": "https://your-domain.com/logout",
+      "response_type": "code",
+      "scope": "openid email profile",
+      "jwks_url": "https://your-auth-provider.com/.well-known/jwks.json",
+      "discovery_url": "https://your-auth-provider.com/.well-known/openid-configuration"
+    }
+  },
+  "features": {
+    "model_hosting": true,
+    "flow_hosting": true,
+    "governance": false,
+    "ai_act": false,
+    "unauthorized_read": true,
+    "admin_interface": true,
+    "premium": false,
+    "wasm_registry": true
+  },
+  "forking": {
+    "enabled": true,
+    "max_size_bytes": 1073741824,
+    "max_file_count": 10000,
+    "allow_unauthenticated_to_offline": false
+  },
+  "supported_sinks": {
+    "http": true,
+    "webhook": true,
+    "cron": true,
+    "mqtt": false,
+    "github": true,
+    "rss": true,
+    "discord": true,
+    "slack": true,
+    "telegram": true,
+    "email": true
+  },
+  "hubs": [],
+  "cdn": null,
+  "domain": "localhost:8080",
+  "secure": false,
+  "app": "localhost:3001",
+  "web": "localhost:3001",
+  "provider": "aws",
+  "region": "us-east-1",
+  "signaling": [
+    "ws://localhost:4444"
+  ],
+  "realtime": {
+    "ice": null
+  },
+  "terms_of_service": "https://your-domain.com/terms",
+  "legal_notice": "https://your-domain.com/legal",
+  "privacy_policy": "https://your-domain.com/privacy",
+  "contact": {
+    "name": "Admin",
+    "email": "admin@your-domain.com",
+    "url": "https://your-domain.com"
+  },
+  "max_users_prototype": -1,
+  "default_user_plan": "FREE",
+  "environment": "Development",
+  "tiers": {
+    "FREE": {
+      "max_non_visible_projects": -1,
+      "max_remote_executions": -1,
+      "execution_tier": "max",
+      "max_total_size": -1,
+      "max_llm_cost": -1,
+      "max_llm_calls": -1,
+      "llm_tiers": [
+        "FREE"
+      ]
+    }
+  },
+  "conversion": {
+    "enabled": true,
+    "mode": "enterprise",
+    "contact": {
+      "name": "IT Administration",
+      "email": "admin@your-domain.com",
+      "url": "https://your-domain.com"
+    },
+    "contact_message": "Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity."
+  },
+  "lookup": {
+    "email": true,
+    "username": true,
+    "name": true,
+    "preferred_username": true,
+    "avatar": true,
+    "additional_information": true,
+    "description": true,
+    "created_at": true
+  },
+  "oauth_providers": {}
+}

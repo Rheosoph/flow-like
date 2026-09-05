@@ -32,3 +32,4 @@ reqwest.workspace = true
 url = "2"
 base64 = "0.22"
 axum.workspace = true
+futures-util = "0.3"

@@ -222,7 +222,7 @@ impl Config {
             }
 
             // Default: S3-compatible (MinIO, etc.)
-            _ => Ok(StorageConfig::S3(S3StorageConfig {
+            "s3" => Ok(StorageConfig::S3(S3StorageConfig {
                 endpoint: env::var("S3_ENDPOINT")
                     .map_err(|_| ConfigError::MissingVar("S3_ENDPOINT"))?,
                 region: env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
@@ -240,6 +240,7 @@ impl Config {
                     .map(|v| v == "true" || v == "1")
                     .unwrap_or(true),
             })),
+            _ => Err(ConfigError::InvalidValue("STORAGE_PROVIDER")),
         }
     }
 }
