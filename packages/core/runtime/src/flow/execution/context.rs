@@ -284,6 +284,8 @@ pub struct ExecutionContext {
     pub channel: Option<Arc<dyn Channel>>,
     /// The run's elements: seeded from `payload._elements`, grown by element requests.
     pub elements: Arc<RwLock<ElementCache>>,
+    /// Package runtimes and host resources shared only with contexts of this run.
+    pub resources: Arc<super::resources::RunResources>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
     nodes_executed: Arc<AtomicU64>,
@@ -335,6 +337,7 @@ impl ExecutionContext {
             log_flush_interval,
             nodes_executed,
             elements,
+            resources,
         ) = match run.upgrade() {
             Some(run) => {
                 let run = run.lock().await;
@@ -345,6 +348,7 @@ impl ExecutionContext {
                     super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                     run.nodes_executed.clone(),
                     run.elements.clone(),
+                    run.resources.clone(),
                 )
             }
             None => (
@@ -354,12 +358,19 @@ impl ExecutionContext {
                 super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 Arc::new(AtomicU64::new(0)),
                 Arc::new(RwLock::new(ElementCache::default())),
+                {
+                    // A detached context has no owner to close live resources.
+                    let resources = Arc::new(super::resources::RunResources::default());
+                    resources.abort();
+                    resources
+                },
             ),
         };
         ExecutionContext {
             id,
             run_id,
             elements,
+            resources,
             execution_environment: ExecutionEnvironment::Local,
             execution_mode: ExecutionMode::Sync,
             started_by: None,
@@ -466,6 +477,7 @@ impl ExecutionContext {
             id,
             run_id: run_meta.run_id.clone(),
             elements: run_meta.elements.clone(),
+            resources: run_meta.resources.clone(),
             execution_environment: run_meta.environment,
             execution_mode: run_meta.execution_mode,
             started_by: None,
@@ -638,6 +650,7 @@ impl ExecutionContext {
             id,
             run: self.run.clone(),
             elements: self.elements.clone(),
+            resources: self.resources.clone(),
             nodes: self.nodes.clone(),
             profile: self.profile.clone(),
             node: node.clone(),

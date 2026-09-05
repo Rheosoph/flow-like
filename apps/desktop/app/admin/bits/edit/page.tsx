@@ -43,6 +43,8 @@ const ALL_BIT_TYPES = [
 	IBitTypes.Llm,
 	IBitTypes.Vlm,
 	IBitTypes.Tts,
+	IBitTypes.ImageGeneration,
+	IBitTypes.VideoGeneration,
 	IBitTypes.Stt,
 	IBitTypes.Embedding,
 	IBitTypes.ImageEmbedding,

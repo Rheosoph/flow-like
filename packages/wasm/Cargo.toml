@@ -17,7 +17,7 @@ hyper = { workspace = true }
 flow-like-wasm-schema = { workspace = true, features = ["bundle", "nodes"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../core/runtime", default-features = false, features = ["flow-metadata", "model"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata", "model"] }
 flow-like-model-provider.workspace = true
 flow-like-catalog-core.workspace = true
 flow-like-catalog-embedding.workspace = true
@@ -82,9 +82,9 @@ wasi = []
 component-model = ["wasmtime/component-model"]
 # Enable model/embedding support for WASM host functions, including the
 # authenticated embedding proxy used by hosted/remote-capable Bits.
-model = ["flow-like/model", "flow-like/remote-ml"]
+model = ["flow-like-runtime/model", "flow-like-runtime/remote-ml"]
 # Enable OpenAPI schema generation
-openapi = ["dep:utoipa", "flow-like/openapi", "flow-like-wasm-schema/openapi"]
+openapi = ["dep:utoipa", "flow-like-runtime/openapi", "flow-like-wasm-schema/openapi"]
 # Enable all cranelift backends for cross-compilation
 all-arch = ["wasmtime/all-arch"]
 # Load WASM modules directly from a URL (`WasmEngine::load_module_from_url`).

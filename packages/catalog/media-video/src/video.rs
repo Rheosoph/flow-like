@@ -2390,6 +2390,8 @@ impl NodeLogic for GenerateVideoNode {
             } else {
                 from_value(provider_options_value)?
             };
+        let typed_provider_options =
+            stablediffusion::with_model_defaults(&provider, typed_provider_options)?;
         let provider_options =
             typed_provider_options.normalized_for_provider(&provider.provider_name)?;
 
@@ -2415,6 +2417,13 @@ impl NodeLogic for GenerateVideoNode {
             LogLevel::Info,
         );
 
+        let provider = flow_like::models::generation::resolve_generation_provider(
+            &bit,
+            &provider,
+            &context.profile,
+            &context.app_state,
+        )
+        .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let videos = generate_video_with_provider(&provider, &request).await?;
         let total = videos.len();

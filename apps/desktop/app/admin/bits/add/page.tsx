@@ -8,6 +8,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	type GenerationAssetDraft,
 	type HuggingFaceGgufSelectionOptions,
 	type HuggingFaceModelImport,
 	type IBit,
@@ -36,15 +37,21 @@ import {
 	Separator,
 	Textarea,
 	applyHuggingFaceMlxImportToBit,
+	applyGenerationModelPreset,
+	buildGenerationModelRootBit,
 	buildMlxModelRootBit,
 	createHuggingFaceGgufAdminDraft,
 	createHuggingFaceMlxAssetBits,
+	createGenerationAssetDrafts,
+	defaultGenerationPreset,
+	isGenerationModelBit,
 	inferMlxAssetBitType,
 	nowSystemTime,
 	prepareMlxAssetBit,
 	useBackend,
 	useInvoke,
 	validateMlxModelAssets,
+	validateGenerationAssets,
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
@@ -63,6 +70,7 @@ import {
 	ScanLine,
 	TimerIcon,
 	UploadCloudIcon,
+	VideoIcon,
 	X,
 	Zap,
 } from "lucide-react";
@@ -80,6 +88,8 @@ import {
 } from "../utils";
 import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
+import { GenerationConfiguration } from "./generation";
+import { registerGenerationAssets } from "./generation-upload";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
 import { HuggingFaceModelImporter, MlxAssetsConfiguration } from "./mlx-assets";
@@ -117,6 +127,8 @@ type BitMode =
 	| "local-stt"
 	| "vlm"
 	| "tts"
+	| "image-generation"
+	| "video-generation"
 	| "embedding"
 	| "image-embedding"
 	| "classification";
@@ -725,6 +737,16 @@ const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
 	{ id: "hosted-llm", label: "Hosted LLM", icon: <Zap className="h-4 w-4" /> },
 	{ id: "vlm", label: "VLM", icon: <Eye className="h-4 w-4" /> },
 	{ id: "tts", label: "TTS", icon: <AudioLines className="h-4 w-4" /> },
+	{
+		id: "image-generation",
+		label: "Image Generation",
+		icon: <ImageIcon className="h-4 w-4" />,
+	},
+	{
+		id: "video-generation",
+		label: "Video Generation",
+		icon: <VideoIcon className="h-4 w-4" />,
+	},
 	{ id: "hosted-stt", label: "Hosted STT", icon: <Mic className="h-4 w-4" /> },
 	{ id: "local-stt", label: "Local STT", icon: <Mic className="h-4 w-4" /> },
 	{ id: "embedding", label: "Embedding", icon: <Binary className="h-4 w-4" /> },
@@ -776,6 +798,10 @@ export default function Page() {
 	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
 	const [sttAssets, setSttAssets] = useState<SttAssetDraft[]>([]);
 	const [mlxAssets, setMlxAssets] = useState<IBit[]>([]);
+	const [generationAssets, setGenerationAssets] = useState<
+		GenerationAssetDraft[]
+	>([]);
+	const completedGenerationAssets = useRef(new Map<string, string>());
 	const skipNextModeResetRef = useRef(false);
 	const importedGgufDownloadRef = useRef<string | null>(null);
 	const [progress, setProgress] = useState(0);
@@ -794,6 +820,8 @@ export default function Page() {
 		if (mode === "local-llm" || mode === "hosted-llm") return IBitTypes.Llm;
 		if (mode === "vlm") return IBitTypes.Vlm;
 		if (mode === "tts") return IBitTypes.Tts;
+		if (mode === "image-generation") return IBitTypes.ImageGeneration;
+		if (mode === "video-generation") return IBitTypes.VideoGeneration;
 		if (mode === "hosted-stt" || mode === "local-stt") return IBitTypes.Stt;
 		if (mode === "embedding") return IBitTypes.Embedding;
 		if (mode === "image-embedding") return IBitTypes.ImageEmbedding;
@@ -802,6 +830,12 @@ export default function Page() {
 
 	const isHostedMode = mode === "hosted-llm" || mode === "hosted-stt";
 	const isLocalStt = mode === "local-stt";
+	const generationKind =
+		mode === "image-generation"
+			? "image"
+			: mode === "video-generation"
+				? "video"
+				: undefined;
 
 	const isHostedModel =
 		(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Stt) &&
@@ -962,6 +996,49 @@ export default function Page() {
 	);
 
 	// ── prefill helpers ────────────────────────────────────────────────────
+
+	const registerGenerationModel = useCallback(async () => {
+		if (!profile.data) throw new Error("User profile is not available");
+		const errors = validateGenerationAssets(generationAssets);
+		if (errors.length) throw new Error(errors.join(". "));
+		const registered = await registerGenerationAssets({
+			assets: generationAssets,
+			completed: completedGenerationAssets.current,
+			uploadBit,
+			onProgress: (asset, index) => {
+				setProgress(0);
+				setProgressDownloaded(null);
+				setProgressTotal(asset.bit.size ?? null);
+				setProgressLabel(
+					`Uploading model file ${index + 1} of ${generationAssets.length}: ${asset.bit.file_name}`,
+				);
+				setProgressBit(asset.bit);
+				lastSampleRef.current = null;
+				setSpeedBps(0);
+				setEtaSec(null);
+			},
+			onRegistered: (asset) =>
+				setGenerationAssets((current) =>
+					current.map((candidate) =>
+						candidate.key === asset.key ? asset : candidate,
+					),
+				),
+		});
+		const root = buildGenerationModelRootBit(bit, registered);
+		setBit(root);
+		setProgress(0);
+		setProgressDownloaded(null);
+		setProgressTotal(null);
+		setProgressLabel("Registering the generation model");
+		setProgressBit(root);
+		const response = await uploadBit(root);
+		setBit({ ...response, meta: root.meta });
+		await backend.apiState.put(
+			profile.data,
+			`admin/bit/${response.id}/en`,
+			root.meta.en,
+		);
+	}, [bit, generationAssets, uploadBit, profile.data, backend.apiState]);
 
 	const prefillLLM = useCallback(async () => {
 		if (importedGgufDownloadRef.current) {
@@ -1190,7 +1267,18 @@ export default function Page() {
 			return;
 		}
 		importedGgufDownloadRef.current = null;
+		completedGenerationAssets.current.clear();
+		setProgress(0);
+		setProgressLabel(null);
 		const providerName = isHostedMode ? "Hosted" : "Local";
+		const generationPreset = generationKind
+			? defaultGenerationPreset(generationKind)
+			: undefined;
+		const generationAssetLayout = generationPreset
+			? createGenerationAssetDrafts(generationPreset.id, () =>
+					getDefaultBit(IBitTypes.File),
+				)
+			: [];
 		const ttsAssetLayout =
 			bitType === IBitTypes.Tts
 				? defaultTtsAssetLayout(
@@ -1204,12 +1292,17 @@ export default function Page() {
 					getDefaultSttAssetBit,
 				)
 			: [];
-		const isAssetMode = bitType === IBitTypes.Tts || isLocalStt;
+		const isAssetMode =
+			bitType === IBitTypes.Tts || isLocalStt || !!generationKind;
 		setBit((old) => {
 			const nextBit = {
-				...old,
+				...(generationKind || isGenerationModelBit(old)
+					? getDefaultBit(bitType)
+					: old),
 				id: createId(),
 				type: bitType,
+				dependencies: [],
+				dependency_tree_hash: "",
 				parameters: isLocalStt
 					? DEFAULT_STT_PARAMETERS
 					: bitType === IBitTypes.Llm ||
@@ -1227,6 +1320,13 @@ export default function Page() {
 				size: isHostedMode || isAssetMode ? 0 : old.size,
 				name: "",
 			};
+
+			if (generationPreset)
+				return applyGenerationModelPreset(
+					nextBit,
+					generationPreset.id,
+					generationAssetLayout,
+				);
 
 			if (bitType === IBitTypes.Tts) {
 				return applyTtsModelPreset(
@@ -1248,6 +1348,7 @@ export default function Page() {
 		});
 		if (bitType === IBitTypes.Tts) setTtsAssets(ttsAssetLayout);
 		if (isLocalStt) setSttAssets(sttAssetLayout);
+		setGenerationAssets(generationAssetLayout);
 		setMlxAssets([]);
 		setDefaultDependencies(bitType);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1317,6 +1418,7 @@ export default function Page() {
 		setLoading(true);
 		try {
 			let dependencies: IBit[] = [];
+			if (isGenerationModelBit(bit)) await registerGenerationModel();
 			const isLocalSttBit =
 				bit.type === IBitTypes.Stt &&
 				(bit.parameters as ILlmParameters | undefined)?.provider
@@ -1595,6 +1697,9 @@ export default function Page() {
 			setTtsAssets([]);
 			setSttAssets([]);
 			setMlxAssets([]);
+			setGenerationAssets([]);
+			completedGenerationAssets.current.clear();
+			if (isGenerationModelBit(bit)) setMode("local-llm");
 		} catch (error: unknown) {
 			toast.error(
 				t("failedToAddBitVal", "Failed to add bit: {{val}}", {
@@ -1621,6 +1726,7 @@ export default function Page() {
 		tokenizer,
 		tokenizerConfig,
 		uploadBit,
+		registerGenerationModel,
 	]);
 
 	// ── render ─────────────────────────────────────────────────────────────
@@ -1656,6 +1762,7 @@ export default function Page() {
 										key={id}
 										variant={mode === id ? "default" : "outline"}
 										size="sm"
+										disabled={loading}
 										onClick={() => setMode(id)}
 										className="gap-2"
 									>
@@ -1688,7 +1795,10 @@ export default function Page() {
 							) : null}
 
 							{/* download link for non-hosted file-backed models */}
-							{bit.type !== IBitTypes.Tts && !isLocalStt && !isMlxModel ? (
+							{bit.type !== IBitTypes.Tts &&
+							!isLocalStt &&
+							!isMlxModel &&
+							!generationKind ? (
 								<div className="flex flex-row items-center gap-2 max-w-3xl">
 									{loading ? (
 										<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
@@ -1708,6 +1818,17 @@ export default function Page() {
 							) : null}
 
 							{/* model-type-specific configuration */}
+							{generationKind ? (
+								<GenerationConfiguration
+									bit={bit}
+									setBit={setBit}
+									kind={generationKind}
+									assets={generationAssets}
+									setAssets={setGenerationAssets}
+									createAssetBit={() => getDefaultBit(IBitTypes.File)}
+									disabled={loading}
+								/>
+							) : null}
 							{bit.type === IBitTypes.Llm ||
 							bit.type === IBitTypes.Vlm ||
 							(bit.type === IBitTypes.Stt && !isLocalStt) ? (
@@ -1831,7 +1952,13 @@ export default function Page() {
 								</>
 							) : null}
 
-							<MetaConfiguration bit={bit} setBit={setBit} />
+							<fieldset disabled={loading && !!generationKind}>
+								<MetaConfiguration
+									bit={bit}
+									setBit={setBit}
+									hideFileFields={!!generationKind}
+								/>
+							</fieldset>
 
 							{(progress > 0 || loading) && (
 								<UploadProgressCard

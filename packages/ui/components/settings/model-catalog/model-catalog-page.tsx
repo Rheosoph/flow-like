@@ -24,6 +24,7 @@ import {
 	Shield,
 	Sparkles,
 	Type,
+	Video,
 	Wand2,
 	X,
 	Zap,
@@ -85,7 +86,14 @@ type SortOption =
 	| "coding";
 type ViewMode = "grid" | "list";
 type InputModality = "text" | "image" | "speech";
-type OutputModality = "text" | "embedding" | "speech";
+type OutputModality = "text" | "embedding" | "speech" | "image" | "video";
+const ALL_OUTPUT_MODALITIES: OutputModality[] = [
+	"text",
+	"embedding",
+	"speech",
+	"image",
+	"video",
+];
 
 function getBitModality(type: IBitTypes): {
 	input: InputModality;
@@ -104,6 +112,10 @@ function getBitModality(type: IBitTypes): {
 			return { input: "text", output: "embedding" };
 		case IBitTypes.ImageEmbedding:
 			return { input: "image", output: "embedding" };
+		case IBitTypes.ImageGeneration:
+			return { input: "text", output: "image" };
+		case IBitTypes.VideoGeneration:
+			return { input: "text", output: "video" };
 		default:
 			return { input: "text", output: "text" };
 	}
@@ -186,7 +198,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		new Set(["text", "image", "speech"]),
 	);
 	const [outputModalities, setOutputModalities] = useState<Set<OutputModality>>(
-		new Set(["text", "embedding", "speech"]),
+		new Set(ALL_OUTPUT_MODALITIES),
 	);
 	const [capabilityFilters, setCapabilityFilters] = useState<
 		Record<string, number>
@@ -223,6 +235,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					IBitTypes.Stt,
 					IBitTypes.Embedding,
 					IBitTypes.ImageEmbedding,
+					IBitTypes.ImageGeneration,
+					IBitTypes.VideoGeneration,
 				],
 			},
 		],
@@ -382,7 +396,10 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			});
 		}
 
-		if (inputModalities.size < 3 || outputModalities.size < 3) {
+		if (
+			inputModalities.size < 3 ||
+			outputModalities.size < ALL_OUTPUT_MODALITIES.length
+		) {
 			models = models.filter((m) => {
 				const bitModality = getBitModality(m.type);
 				const inputMatch =
@@ -520,6 +537,20 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				match: (b) => b.type === IBitTypes.Tts,
 			},
 			{
+				id: "rail-image-generation",
+				label: t("imageGeneration", "Image generation"),
+				icon: ImageIcon,
+				color: "var(--m-image)",
+				match: (b) => b.type === IBitTypes.ImageGeneration,
+			},
+			{
+				id: "rail-video-generation",
+				label: t("videoGeneration", "Video generation"),
+				icon: Video,
+				color: "var(--m-video)",
+				match: (b) => b.type === IBitTypes.VideoGeneration,
+			},
+			{
 				id: "rail-embed",
 				label: t("embeddings", "Embeddings"),
 				icon: FileSearchIcon,
@@ -549,7 +580,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			});
 		}
 		return built;
-	}, [filteredModels]);
+	}, [filteredModels, t]);
 
 	const populatedRails = useMemo(
 		() => rails.filter((rail) => rail.items.length > 0),
@@ -623,7 +654,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		if (contextLengthFilter[0] > 0 || contextLengthFilter[1] < maxContextLength)
 			count++;
 		if (inputModalities.size < 2) count++;
-		if (outputModalities.size < 3) count++;
+		if (outputModalities.size < ALL_OUTPUT_MODALITIES.length) count++;
 		if (Object.values(capabilityFilters).some((v) => v > 0)) count++;
 		return count;
 	}, [
@@ -661,7 +692,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		setShowDownloadedOnly(false);
 		setContextLengthFilter([0, maxContextLength]);
 		setInputModalities(new Set(["text", "image", "speech"]));
-		setOutputModalities(new Set(["text", "embedding", "speech"]));
+		setOutputModalities(new Set(ALL_OUTPUT_MODALITIES));
 		setCapabilityFilters({
 			reasoning: 0,
 			coding: 0,
@@ -1063,7 +1094,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 					<span className="hidden h-4 w-px bg-border sm:block" />
 
-					<div className="flex items-center gap-1.5">
+					<div className="flex flex-wrap items-center gap-1.5">
 						<FilterGroupLabel>{t("produces", "Produces")}</FilterGroupLabel>
 						<ModalityChip
 							active={outputModalities.has("text")}
@@ -1082,6 +1113,18 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							onClick={() => toggleOutputModality("speech")}
 							icon={AudioLines}
 							label="Speech"
+						/>
+						<ModalityChip
+							active={outputModalities.has("image")}
+							onClick={() => toggleOutputModality("image")}
+							icon={ImageIcon}
+							label={t("image", "Image")}
+						/>
+						<ModalityChip
+							active={outputModalities.has("video")}
+							onClick={() => toggleOutputModality("video")}
+							icon={Video}
+							label={t("video", "Video")}
 						/>
 					</div>
 

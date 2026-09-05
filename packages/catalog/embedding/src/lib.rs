@@ -1,5 +1,7 @@
 //! Embedding handles shared by native nodes and WASM host functions.
 
+extern crate flow_like_runtime as flow_like;
+
 use flow_like::bit::BitTypes;
 use flow_like_model_provider::{
     embedding::EmbeddingModelLogic, image_embedding::ImageEmbeddingModelLogic,

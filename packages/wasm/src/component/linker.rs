@@ -3,7 +3,6 @@ use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
 use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
-use futures::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,6 +13,7 @@ use wasmtime_wasi_http::WasiHttpCtx;
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
+    pub limits: wasmtime::StoreLimits,
     pub wasi_ctx: WasiCtx,
     pub http_ctx: WasiHttpCtx,
     pub resource_table: wasmtime::component::ResourceTable,
@@ -134,7 +134,7 @@ impl ComponentStoreData {
         }
 
         Self::with_host_state(
-            HostState::new(security.capabilities),
+            HostState::with_security(security),
             builder.build(),
             security,
         )
@@ -149,6 +149,7 @@ impl ComponentStoreData {
     ) -> Self {
         Self {
             host_state,
+            limits: crate::limits::store_limits(&security.limits),
             wasi_ctx,
             http_ctx: WasiHttpCtx::new(),
             resource_table: wasmtime::component::ResourceTable::new(),
@@ -1845,204 +1846,132 @@ fn register_websocket(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()>
         .instance("flow-like:node/websocket@0.1.0")
         .map_err(map_err)?;
 
-    // connect(url, headers_json) -> Option<session_id>
     ws.func_wrap_async(
         "connect",
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
          (url, headers_json): (String, String)| {
             Box::new(async move {
-                if !store
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
                     return Ok((None::<String>,));
                 }
-
-                // Resolve and connect through the egress policy so the socket
-                // goes to a vetted address; the request keeps the hostname
-                // for Host / SNI.
-                let environment = store.data().environment;
-                let request = match tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url.as_str()) {
-                    Ok(request) => request,
-                    Err(_) => return Ok((None,)),
-                };
-                let uri = request.uri().clone();
-                let Some(host) = uri.host().map(str::to_string) else {
-                    return Ok((None,));
-                };
-                let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
-                    Some("wss") => 443,
-                    _ => 80,
-                });
-                let addrs = match flow_like::flow::execution::egress::resolve_socket_addrs(
-                    environment,
-                    &host,
-                    port,
-                )
-                .await
-                {
-                    Ok(addrs) => addrs,
-                    Err(_) => {
-                        tracing::warn!("WASM WebSocket connection refused by egress policy");
-                        return Ok((None,));
-                    }
-                };
-                let tcp = match tokio::net::TcpStream::connect(addrs.as_slice()).await {
-                    Ok(tcp) => tcp,
-                    Err(_) => return Ok((None,)),
-                };
-                let connect_result =
-                    tokio_tungstenite::client_async_tls_with_config(request, tcp, None, None).await;
-                let (ws_stream, _response) = match connect_result {
-                    Ok(r) => r,
-                    Err(_) => return Ok((None,)),
-                };
-
-                let (sink, stream) = futures::StreamExt::split(ws_stream);
-                let session_id = format!("ws_{}", rand_float().to_bits());
-
-                let conn = crate::host_functions::WsConnection { sink, stream };
-                store
-                    .data()
-                    .host_state
-                    .ws_connections
-                    .lock()
-                    .await
-                    .insert(session_id.clone(), conn);
-
-                let _ = headers_json; // reserved for future header injection
-                Ok((Some(session_id),))
+                Ok((host
+                    .websocket
+                    .connect(
+                        store.data().environment,
+                        host.allowed_hosts.as_deref(),
+                        &url,
+                        &headers_json,
+                    )
+                    .await,))
             })
         },
     )
     .map_err(map_err)?;
 
-    // send(session_id, message, is_binary) -> bool
+    ws.func_wrap_async(
+        "listen",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (address,): (String,)| {
+            Box::new(async move {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) || !host.run_scoped {
+                    return Ok((None::<String>,));
+                }
+                Ok((host
+                    .websocket
+                    .listen(
+                        store.data().environment,
+                        host.allowed_hosts.as_deref(),
+                        &address,
+                    )
+                    .await,))
+            })
+        },
+    )
+    .map_err(map_err)?;
+
+    ws.func_wrap_async(
+        "accept",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+         (reference, timeout_ms): (String, u32)| {
+            Box::new(async move {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+                    return Ok((None::<String>,));
+                }
+                Ok((host
+                    .websocket
+                    .accept(&reference, websocket_timeout(host, timeout_ms))
+                    .await,))
+            })
+        },
+    )
+    .map_err(map_err)?;
+
+    ws.func_wrap(
+        "local-address",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (reference,): (String,)| {
+            let host = &store.data().host_state;
+            if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+                return Ok((None::<String>,));
+            }
+            Ok((host.websocket.local_address(&reference),))
+        },
+    )
+    .map_err(map_err)?;
+
     ws.func_wrap_async(
         "send",
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-         (session_id, message, is_binary): (String, Vec<u8>, bool)| {
+         (reference, message, is_binary): (String, Vec<u8>, bool)| {
             Box::new(async move {
-                if !store
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
                     return Ok((false,));
                 }
-
-                let connections = store.data().host_state.ws_connections.clone();
-                let mut guard = connections.lock().await;
-                let conn = match guard.get_mut(&session_id) {
-                    Some(c) => c,
-                    None => return Ok((false,)),
-                };
-
-                let msg = if is_binary {
-                    tokio_tungstenite::tungstenite::Message::Binary(message.into())
-                } else {
-                    let text = String::from_utf8(message).unwrap_or_default();
-                    tokio_tungstenite::tungstenite::Message::Text(text.into())
-                };
-
-                let sent = futures::SinkExt::send(&mut conn.sink, msg).await.is_ok();
-                Ok((sent,))
+                Ok((host.websocket.send(&reference, message, is_binary).await,))
             })
         },
     )
     .map_err(map_err)?;
 
-    // receive(session_id, timeout_ms) -> Option<json_string>
-    // Returns JSON: { "type": "text"|"binary"|"close", "data": "..." }
     ws.func_wrap_async(
         "receive",
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-         (session_id, timeout_ms): (String, u32)| {
+         (reference, timeout_ms): (String, u32)| {
             Box::new(async move {
-                if !store
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
                     return Ok((None::<String>,));
                 }
-
-                let connections = store.data().host_state.ws_connections.clone();
-                let mut guard = connections.lock().await;
-                let conn = match guard.get_mut(&session_id) {
-                    Some(c) => c,
-                    None => return Ok((None,)),
-                };
-
-                let timeout = std::time::Duration::from_millis(timeout_ms as u64);
-                let msg = tokio::time::timeout(timeout, conn.stream.next()).await;
-
-                let msg = match msg {
-                    Ok(Some(Ok(m))) => m,
-                    _ => return Ok((None,)),
-                };
-
-                let result = match msg {
-                    tokio_tungstenite::tungstenite::Message::Text(t) => {
-                        serde_json::json!({ "type": "text", "data": t.to_string() })
-                    }
-                    tokio_tungstenite::tungstenite::Message::Binary(b) => {
-                        let encoded = base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &b,
-                        );
-                        serde_json::json!({ "type": "binary", "data": encoded })
-                    }
-                    tokio_tungstenite::tungstenite::Message::Close(frame) => {
-                        let reason = frame
-                            .map(|f| f.reason.to_string())
-                            .unwrap_or_default();
-                        serde_json::json!({ "type": "close", "data": reason })
-                    }
-                    tokio_tungstenite::tungstenite::Message::Ping(d) => {
-                        serde_json::json!({ "type": "ping", "data": String::from_utf8_lossy(&d).to_string() })
-                    }
-                    tokio_tungstenite::tungstenite::Message::Pong(d) => {
-                        serde_json::json!({ "type": "pong", "data": String::from_utf8_lossy(&d).to_string() })
-                    }
-                    _ => return Ok((None,)),
-                };
-                Ok((Some(result.to_string()),))
+                Ok((host
+                    .websocket
+                    .receive(&reference, websocket_timeout(host, timeout_ms))
+                    .await,))
             })
         },
     )
     .map_err(map_err)?;
 
-    // close(session_id) -> bool
     ws.func_wrap_async(
         "close",
-        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (session_id,): (String,)| {
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (reference,): (String,)| {
             Box::new(async move {
-                if !store
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
+                let host = &store.data().host_state;
+                if !host.has_capability(WasmCapabilities::WEBSOCKET) {
                     return Ok((false,));
                 }
-
-                let connections = store.data().host_state.ws_connections.clone();
-                let mut guard = connections.lock().await;
-                let conn = match guard.remove(&session_id) {
-                    Some(c) => c,
-                    None => return Ok((false,)),
-                };
-
-                let mut sink = conn.sink;
-                let _ = futures::SinkExt::close(&mut sink).await;
-                Ok((true,))
+                Ok((host.websocket.close(&reference).await,))
             })
         },
     )
     .map_err(map_err)?;
 
     Ok(())
+}
+
+fn websocket_timeout(host: &HostState, requested_ms: u32) -> u32 {
+    requested_ms.min(host.node_timeout.as_millis().min(u32::MAX as u128) as u32)
 }
 
 fn map_err(e: impl std::fmt::Display) -> WasmError {

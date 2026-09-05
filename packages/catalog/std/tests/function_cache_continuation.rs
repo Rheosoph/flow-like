@@ -1,6 +1,8 @@
 //! A function-cache miss must not keep the function's execution successor from running while the
 //! cache backend is still persisting the result.
 
+extern crate flow_like_runtime as flow_like;
+
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},

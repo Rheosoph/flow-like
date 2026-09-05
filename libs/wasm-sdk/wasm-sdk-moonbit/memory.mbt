@@ -9,36 +9,51 @@ extern "wasm" fn wasm_load8(addr : Int) -> Int =
   #|(func (param i32) (result i32) (i32.load8_u (local.get 0)))
 
 // ---------------------------------------------------------------------------
-// Bump allocator — grows memory independently of MoonBit's own heap
+// Invocation scratch pages, separate from MoonBit's managed heap.
 // ---------------------------------------------------------------------------
 
-let arena_next : Ref[Int] = Ref::new(0)
-let arena_end : Ref[Int] = Ref::new(0)
+let scratch_blocks : Array[(Int, Int)] = []
+let scratch_block : Ref[Int] = Ref::new(0)
+let scratch_offset : Ref[Int] = Ref::new(0)
 
 ///| Allocate `size` bytes of linear memory (exported to the host).
 pub fn alloc(size : Int) -> Int {
-  let aligned = (size + 7) / 8 * 8
-  if arena_next.val + aligned > arena_end.val {
-    let needed = if aligned > 65536 { aligned } else { 65536 }
-    let pages = (needed + 65535) / 65536
-    let prev = wasm_memory_grow(pages)
-    if prev < 0 {
-      return 0
-    }
-    let base = prev * 65536
-    if arena_next.val == 0 {
-      arena_next.val = base
-    }
-    arena_end.val = base + pages * 65536
+  if size <= 0 || size > 0x7fff0000 {
+    return 0
   }
-  let ptr = arena_next.val
-  arena_next.val = arena_next.val + aligned
-  ptr
+  let aligned = (size + 7) / 8 * 8
+  while scratch_block.val < scratch_blocks.length() {
+    let (base, capacity) = scratch_blocks[scratch_block.val]
+    if aligned <= capacity - scratch_offset.val {
+      let ptr = base + scratch_offset.val
+      scratch_offset.val = scratch_offset.val + aligned
+      return ptr
+    }
+    scratch_block.val = scratch_block.val + 1
+    scratch_offset.val = 0
+  }
+  let pages = (aligned + 65535) / 65536
+  let prev = wasm_memory_grow(pages)
+  if prev < 0 {
+    return 0
+  }
+  let base = prev * 65536
+  // Track each allocation separately: guest heap growth can leave gaps between
+  // scratch blocks, and those gaps must never be treated as scratch memory.
+  scratch_blocks.push((base, pages * 65536))
+  scratch_offset.val = aligned
+  base
 }
 
-///| Free memory (no-op for bump allocator).
+///| Reuse ABI buffers before the host allocates the next invocation's input.
+pub fn reset_scratch() -> Unit {
+  scratch_block.val = 0
+  scratch_offset.val = 0
+}
+
+///| Individual buffers remain borrowed until the next scratch reset.
 pub fn dealloc(_ptr : Int, _size : Int) -> Unit {
-  // no-op
+  // The host resets the arena between calls; managed guest objects are retained.
 }
 
 // ---------------------------------------------------------------------------

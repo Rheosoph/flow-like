@@ -15,7 +15,7 @@ fi
 
 [tasks.build]
 description = "Build the WASM node"
-run = "mkdir -p build && grain compile --release --no-gc --elide-type-info -I ../wasm-sdk-grain -o build/node.wasm src/main.gr"
+run = "mkdir -p build && grain compile --release --no-gc --elide-type-info -I ../../libs/wasm-sdk/wasm-sdk-grain -o build/node.wasm src/main.gr"
 
 [tasks.test]
 description = "Run unit tests"

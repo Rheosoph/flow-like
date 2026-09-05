@@ -21,7 +21,12 @@ import type { Dispatch, SetStateAction } from "react";
 export function MetaConfiguration({
 	bit,
 	setBit,
-}: Readonly<{ bit: IBit; setBit: Dispatch<SetStateAction<IBit>> }>) {
+	hideFileFields = false,
+}: Readonly<{
+	bit: IBit;
+	setBit: Dispatch<SetStateAction<IBit>>;
+	hideFileFields?: boolean;
+}>) {
 	const { t } = useTranslation("common");
 	const getMeta = (field: keyof IMetadata) => {
 		return bit.meta?.["en"]?.[field];
@@ -100,9 +105,11 @@ export function MetaConfiguration({
 				<CardHeader>
 					<CardTitle className="flex items-center justify-between">
 						{t("metadataConfiguration", "Metadata Configuration")}
-						<small className="font-normal text-muted-foreground">
-							{humanFileSize(bit.size ?? 0)}
-						</small>
+						{!hideFileFields && (
+							<small className="font-normal text-muted-foreground">
+								{humanFileSize(bit.size ?? 0)}
+							</small>
+						)}
 					</CardTitle>
 					<CardDescription>
 						{t(
@@ -124,18 +131,20 @@ export function MetaConfiguration({
 							/>
 						</div>
 
-						<div className="space-y-2">
-							<Label htmlFor="filename">{t("filename", "Filename")}</Label>
-							<Input
-								id="filename"
-								value={bit.file_name || ""}
-								onChange={(e) =>
-									setBit((old) => ({ ...old, file_name: e.target.value }))
-								}
-								placeholder="model-file.bin"
-								required
-							/>
-						</div>
+						{!hideFileFields && (
+							<div className="space-y-2">
+								<Label htmlFor="filename">{t("filename", "Filename")}</Label>
+								<Input
+									id="filename"
+									value={bit.file_name || ""}
+									onChange={(e) =>
+										setBit((old) => ({ ...old, file_name: e.target.value }))
+									}
+									placeholder="model-file.bin"
+									required
+								/>
+							</div>
+						)}
 
 						<div className="space-y-2">
 							<Label htmlFor="age-rating">

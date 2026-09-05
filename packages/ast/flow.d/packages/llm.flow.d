@@ -703,10 +703,11 @@ declare namespace ai {
          * @param provider (optional) — Choose OpenAI cloud or Azure OpenAI
          * @param endpoint (optional) — Base API endpoint (override for Azure or proxies)
          * @param apiKey (optional) — API key or Azure key used for authentication
+         * @param apiSurface (optional) — Which OpenAI API the endpoint serves. Responses is the default; pick Chat Completions for gateways that only expose /chat/completions
          * @returns model — Bit containing the provider configuration
          * @impure has side effects / drives control flow
          */
-        function openai({ provider?: string, endpoint?: string, apiKey?: string }): Struct;
+        function openai({ provider?: string, endpoint?: string, apiKey?: string, apiSurface?: string }): Struct;
 
         /**
          * Builds the OpenRouter model based on certain selection criteria

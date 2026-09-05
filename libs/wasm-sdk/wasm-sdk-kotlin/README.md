@@ -81,12 +81,6 @@ fun run(ptr: Int, len: Int): Long {
     return serializeResult(runUppercase(ctx))
 }
 
-@WasmExport("alloc")
-fun alloc(size: Int): Int = wasmAlloc(size)
-
-@WasmExport("dealloc")
-fun dealloc(ptr: Int, size: Int) = wasmDealloc(ptr, size)
-
 @WasmExport("get_abi_version")
 fun getAbiVersion(): Int = 1
 ```
@@ -114,6 +108,32 @@ fun run(ptr: Int, len: Int): Long = pkg.run(ptr, len)
 
 # Output: build/compileSync/wasmWasi/main/productionExecutable/kotlin/<module>.wasm
 ```
+
+## Memory between node calls
+
+Nodes in the same package runtime can retain Kotlin objects between calls within a run.
+The host calls the SDK's exported `reset_scratch()` before allocating the next invocation's
+input. This reuses temporary ABI buffers without clearing Kotlin objects or package globals.
+The runtime and its state are destroyed when the run ends.
+
+Pointers returned by `alloc`, `stringToPtr`, or `packResult` are transient and remain valid
+only until the next invocation. Copy data into Kotlin-owned values, such as `String` or
+`ByteArray`, before retaining it in package state. For example:
+
+```kotlin
+private var savedText: String? = null
+
+fun saveText(ptr: Int, len: Int) {
+    savedText = ptrToString(ptr, len)
+}
+```
+
+`ptrToString` copies the bytes into a Kotlin string. Do not retain the pointer itself or call
+`reset_scratch()` from node code; the host resets it after consuming the previous result.
+The SDK exports `alloc`, `dealloc`, and `reset_scratch`, so those exports do not need wrappers.
+Rebuild packages with the updated SDK to include the reset export. Existing Wasm binaries
+cannot acquire it through a runtime update alone. Published dependencies need an SDK release
+containing this change; use a local composite build while testing an unreleased SDK.
 
 ## API Reference
 

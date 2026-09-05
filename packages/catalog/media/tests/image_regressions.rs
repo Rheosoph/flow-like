@@ -1,3 +1,5 @@
+extern crate flow_like_runtime as flow_like;
+
 use std::sync::{Arc, Weak};
 
 use ahash::AHashMap;

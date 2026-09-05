@@ -37,6 +37,10 @@ pub mod exports {
     /// Signature: (ptr: i32, size: i32) -> ()
     pub const DEALLOC: &str = "dealloc";
 
+    /// Optional: release temporary ABI buffers before the next invocation.
+    /// This must preserve package objects and other guest state.
+    pub const RESET_SCRATCH: &str = "reset_scratch";
+
     /// Optional: Get multiple node definitions (for multi-node modules)
     /// Signature: () -> i64 (pointer << 32 | length)
     pub const GET_NODES: &str = "get_nodes";

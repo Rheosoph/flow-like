@@ -264,6 +264,21 @@ declare namespace ai {
             function openrouter({ aspectRatio?: string, size?: string }): Struct;
 
             /**
+             * Sets image dimensions, sampling controls, and seed for PNG generation.
+             * @node ai_image_options_stablediffusion @alias aiImageOptionsStablediffusion
+             * @param width (optional) — Image width in pixels, a positive multiple of 8
+             * @param height (optional) — Image height in pixels, a positive multiple of 8
+             * @param steps (optional) — Number of sampling steps, between 1 and 100
+             * @param seed (optional) — Use -1 for randomness, or zero and above for a reproducible seed
+             * @param cfgScale (optional) — Text guidance strength, a finite non-negative 32-bit float
+             * @param negativePrompt (optional) — Content to discourage in the generated image
+             * @param sampler (optional) — Sampling method; auto uses the model default
+             * @param scheduler (optional) — Noise schedule; auto uses the model default
+             * @returns options — Typed image generation provider options
+             */
+            function stablediffusion({ width?: int, height?: int, steps?: int, seed?: int, cfgScale?: float, negativePrompt?: string, sampler?: string, scheduler?: string }): Struct;
+
+            /**
              * Creates typed image options for Together text-to-image models.
              * @node ai_image_options_together @alias aiImageOptionsTogether
              * @param aspectRatio (optional) — Together aspect ratio. Ignored when Size is set.
@@ -283,6 +298,19 @@ declare namespace ai {
              */
             function xai({ aspectRatio?: string }): Struct;
         }
+    }
+
+    namespace provider {
+        // === AI/Generative/Provider ===
+
+        /**
+         * Prepares an image provider for local model files or an existing stable-diffusion.cpp server.
+         * @node ai_image_build_stablediffusion @alias aiImageBuildStablediffusion
+         * @param config (optional) — Set a server endpoint, or a local model path with any required VAE and text encoders. Local paths refer to the machine executing the flow.
+         * @returns model — Image generation provider Bit
+         * @impure has side effects / drives control flow
+         */
+        function stablediffusion_image({ config?: Struct }): Struct;
     }
 
     namespace video {
@@ -363,6 +391,24 @@ declare namespace ai {
             function runway({ aspectRatio?: string, size?: string, durationSeconds?: int, seed?: int, pollIntervalSeconds?: int, maxWaitSeconds?: int }): Struct;
 
             /**
+             * Sets local video dimensions, sampling settings, frame count, and container format.
+             * @node ai_video_options_stablediffusion @alias aiVideoOptionsStablediffusion
+             * @param width (optional) — Frame width in pixels, a positive multiple of 8
+             * @param height (optional) — Frame height in pixels, a positive multiple of 8
+             * @param videoFrames (optional) — Frame count must be 4n + 1, for example 33 or 81
+             * @param fps (optional) — Playback frames per second
+             * @param steps (optional) — Number of sampling steps, between 1 and 100
+             * @param cfgScale (optional) — Text guidance scale, a finite non-negative 32-bit float
+             * @param negativePrompt (optional) — Text describing what to avoid
+             * @param seed (optional) — Use -1 for random generation. Zero is a deterministic seed.
+             * @param sampler (optional) — Use auto to keep the loaded model's default
+             * @param scheduler (optional) — Use auto to keep the loaded model's default
+             * @param outputFormat (optional) — AVI is built in. Animated WebP and WebM require support in the server build.
+             * @returns options — Typed video generation provider options
+             */
+            function stableDiffusion({ width?: int, height?: int, videoFrames?: int, fps?: int, steps?: int, cfgScale?: float, negativePrompt?: string, seed?: int, sampler?: string, scheduler?: string, outputFormat?: string }): Struct;
+
+            /**
              * Creates typed video options for Google Vertex Veo models.
              * @node ai_video_options_vertex_veo @alias aiVideoOptionsVertexVeo
              * @param negativePrompt (optional) — Text describing what to avoid
@@ -415,6 +461,15 @@ declare namespace ai {
              * @impure has side effects / drives control flow
              */
             function runway({ apiKey?: string, endpoint?: string, apiVersion?: string, modelId?: string }): Struct;
+
+            /**
+             * Configures a local video model or an existing stable-diffusion.cpp server.
+             * @node ai_video_build_stablediffusion @alias aiVideoBuildStablediffusion
+             * @param config (optional) — Set a local model path and optional companion models, or an existing server endpoint. Paths refer to the machine executing the flow.
+             * @returns provider — Bit containing the video generation provider configuration
+             * @impure has side effects / drives control flow
+             */
+            function stableDiffusion({ config?: Struct }): Struct;
         }
     }
 }

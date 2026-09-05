@@ -14,6 +14,7 @@ use wasmtime::{Caller, Linker, Memory, Ref, Val};
 /// Store data passed to host functions
 pub struct StoreData {
     pub host_state: HostState,
+    pub limits: wasmtime::StoreLimits,
     pub memory: Option<Memory>,
     pub allocator: Option<WasmAllocator>,
     /// Set by `_emscripten_throw_longjmp`; consumed by `invoke_vii` to
@@ -25,6 +26,7 @@ impl StoreData {
     pub fn new(capabilities: WasmCapabilities) -> Self {
         Self {
             host_state: HostState::new(capabilities),
+            limits: crate::limits::store_limits(&crate::limits::WasmLimits::default()),
             memory: None,
             allocator: None,
             longjmp_pending: false,
@@ -1168,90 +1170,294 @@ fn register_http_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 }
 
 fn register_websocket_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
-    // connect(url_ptr, url_len, headers_ptr, headers_len) -> i32 (session_id handle or -1)
+    // String references can be passed through graph pins. Returned strings use
+    // the usual host result-buffer offset/length pair; zero means unavailable.
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "connect_ref",
+            |caller: Caller<'_, StoreData>, args: (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    websocket_result(&caller, websocket_connect(&caller, args).await)
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "listen",
+            |caller: Caller<'_, StoreData>, (ptr, len): (u32, u32)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(WasmCapabilities::WEBSOCKET) || !host.run_scoped {
+                        return 0u64;
+                    }
+                    let Ok(address) = read_string_from_caller(&caller, ptr, len) else {
+                        return 0;
+                    };
+                    let reference = host
+                        .websocket
+                        .listen(
+                            host.execution_environment,
+                            host.allowed_hosts.as_deref(),
+                            &address,
+                        )
+                        .await;
+                    websocket_result(&caller, reference)
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "accept",
+            |caller: Caller<'_, StoreData>, (ptr, len, timeout_ms): (u32, u32, u32)| {
+                Box::new(async move {
+                    let Some(reference) = websocket_reference(&caller, ptr, len) else {
+                        return 0u64;
+                    };
+                    let host = &caller.data().host_state;
+                    websocket_result(
+                        &caller,
+                        host.websocket
+                            .accept(&reference, websocket_timeout(host, timeout_ms))
+                            .await,
+                    )
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
     linker
         .func_wrap(
+            "flowlike_ws",
+            "local_address",
+            |caller: Caller<'_, StoreData>, ptr: u32, len: u32| -> u64 {
+                let Some(reference) = websocket_reference(&caller, ptr, len) else {
+                    return 0;
+                };
+                websocket_result(
+                    &caller,
+                    caller.data().host_state.websocket.local_address(&reference),
+                )
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "send_ref",
+            |caller: Caller<'_, StoreData>,
+             (ptr, len, msg_ptr, msg_len, binary): (u32, u32, u32, u32, i32)| {
+                Box::new(async move {
+                    let Some(reference) = websocket_reference(&caller, ptr, len) else {
+                        return 0i32;
+                    };
+                    let Ok(message) = read_bytes_from_caller(&caller, msg_ptr, msg_len) else {
+                        return 0;
+                    };
+                    caller
+                        .data()
+                        .host_state
+                        .websocket
+                        .send(&reference, message, binary != 0)
+                        .await as i32
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "receive_ref",
+            |caller: Caller<'_, StoreData>, (ptr, len, timeout_ms): (u32, u32, u32)| {
+                Box::new(async move {
+                    let Some(reference) = websocket_reference(&caller, ptr, len) else {
+                        return 0u64;
+                    };
+                    let host = &caller.data().host_state;
+                    websocket_result(
+                        &caller,
+                        host.websocket
+                            .receive(&reference, websocket_timeout(host, timeout_ms))
+                            .await,
+                    )
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_ws",
+            "close_ref",
+            |caller: Caller<'_, StoreData>, (ptr, len): (u32, u32)| {
+                Box::new(async move {
+                    let Some(reference) = websocket_reference(&caller, ptr, len) else {
+                        return 0i32;
+                    };
+                    caller.data().host_state.websocket.close(&reference).await as i32
+                })
+            },
+        )
+        .map_err(websocket_registration_error)?;
+
+    // Preserve the original numeric ABI for existing core modules. These
+    // handles resolve only inside this package's registry in the current run.
+    linker
+        .func_wrap_async(
             "flowlike_ws",
             "connect",
-            |caller: Caller<'_, StoreData>,
-             _url_ptr: u32,
-             _url_len: u32,
-             _headers_ptr: u32,
-             _headers_len: u32|
-             -> i32 {
-                if !caller
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
-                    return -1;
-                }
-                // Async WebSocket handled in component model
-                0
+            |caller: Caller<'_, StoreData>, args: (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    let Some(reference) = websocket_connect(&caller, args).await else {
+                        return -1i32;
+                    };
+                    caller
+                        .data()
+                        .host_state
+                        .websocket
+                        .legacy_handle(&reference)
+                        .unwrap_or(-1)
+                })
             },
         )
-        .map_err(|e| WasmError::Initialization(format!("Failed to register ws.connect: {}", e)))?;
+        .map_err(websocket_registration_error)?;
 
-    // send(session_id, msg_ptr, msg_len, is_binary) -> i32
     linker
-        .func_wrap(
+        .func_wrap_async(
             "flowlike_ws",
             "send",
-            |caller: Caller<'_, StoreData>,
-             _session_id: i32,
-             _msg_ptr: u32,
-             _msg_len: u32,
-             _is_binary: i32|
-             -> i32 {
-                if !caller
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
-                    return -1;
-                }
-                0
+            |caller: Caller<'_, StoreData>, (handle, ptr, len, binary): (i32, u32, u32, i32)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+                        return -1i32;
+                    }
+                    let Some(reference) = host.websocket.legacy_reference(handle) else {
+                        return -1;
+                    };
+                    let Ok(message) = read_bytes_from_caller(&caller, ptr, len) else {
+                        return -1;
+                    };
+                    if host.websocket.send(&reference, message, binary != 0).await {
+                        0
+                    } else {
+                        -1
+                    }
+                })
             },
         )
-        .map_err(|e| WasmError::Initialization(format!("Failed to register ws.send: {}", e)))?;
+        .map_err(websocket_registration_error)?;
 
-    // receive(session_id, timeout_ms) -> i32 (result_ptr or -1)
+    // The legacy receive returns an offset into the host result buffer, or -1.
+    // New modules should use receive_ref for an explicit offset and length.
     linker
-        .func_wrap(
+        .func_wrap_async(
             "flowlike_ws",
             "receive",
-            |caller: Caller<'_, StoreData>, _session_id: i32, _timeout_ms: u32| -> i32 {
-                if !caller
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
-                    return -1;
-                }
-                0
+            |caller: Caller<'_, StoreData>, (handle, timeout_ms): (i32, u32)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+                        return -1i32;
+                    }
+                    let Some(reference) = host.websocket.legacy_reference(handle) else {
+                        return -1;
+                    };
+                    let Some(message) = host
+                        .websocket
+                        .receive(&reference, websocket_timeout(host, timeout_ms))
+                        .await
+                    else {
+                        return -1;
+                    };
+                    let (offset, _) = host.store_result(message.as_bytes());
+                    i32::try_from(offset).unwrap_or(-1)
+                })
             },
         )
-        .map_err(|e| WasmError::Initialization(format!("Failed to register ws.receive: {}", e)))?;
+        .map_err(websocket_registration_error)?;
 
-    // close(session_id) -> i32
     linker
-        .func_wrap(
+        .func_wrap_async(
             "flowlike_ws",
             "close",
-            |caller: Caller<'_, StoreData>, _session_id: i32| -> i32 {
-                if !caller
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::WEBSOCKET)
-                {
-                    return -1;
-                }
-                0
+            |caller: Caller<'_, StoreData>, (handle,): (i32,)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+                        return -1i32;
+                    }
+                    let Some(reference) = host.websocket.legacy_reference(handle) else {
+                        return -1;
+                    };
+                    if host.websocket.close(&reference).await {
+                        0
+                    } else {
+                        -1
+                    }
+                })
             },
         )
-        .map_err(|e| WasmError::Initialization(format!("Failed to register ws.close: {}", e)))?;
-
+        .map_err(websocket_registration_error)?;
     Ok(())
+}
+
+async fn websocket_connect(
+    caller: &Caller<'_, StoreData>,
+    (url_ptr, url_len, headers_ptr, headers_len): (u32, u32, u32, u32),
+) -> Option<String> {
+    let host = &caller.data().host_state;
+    if !host.has_capability(WasmCapabilities::WEBSOCKET) {
+        return None;
+    }
+    let url = read_string_from_caller(caller, url_ptr, url_len).ok()?;
+    let headers = read_string_from_caller(caller, headers_ptr, headers_len).ok()?;
+    host.websocket
+        .connect(
+            host.execution_environment,
+            host.allowed_hosts.as_deref(),
+            &url,
+            &headers,
+        )
+        .await
+}
+
+fn websocket_reference(caller: &Caller<'_, StoreData>, ptr: u32, len: u32) -> Option<String> {
+    if !caller
+        .data()
+        .host_state
+        .has_capability(WasmCapabilities::WEBSOCKET)
+    {
+        return None;
+    }
+    read_string_from_caller(caller, ptr, len).ok()
+}
+
+fn websocket_result(caller: &Caller<'_, StoreData>, result: Option<String>) -> u64 {
+    result
+        .map(|result| {
+            let (ptr, len) = caller.data().host_state.store_result(result.as_bytes());
+            pack_ptr_len(ptr, len)
+        })
+        .unwrap_or(0)
+}
+
+fn websocket_timeout(host: &HostState, requested_ms: u32) -> u32 {
+    requested_ms.min(host.node_timeout.as_millis().min(u32::MAX as u128) as u32)
+}
+
+fn websocket_registration_error(error: impl std::fmt::Display) -> WasmError {
+    WasmError::Initialization(format!(
+        "Failed to register WebSocket host function: {error}"
+    ))
 }
 
 fn register_streaming_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
@@ -2784,4 +2990,217 @@ fn register_emscripten_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .map_err(|e| WasmError::Initialization(format!("Failed to register invoke_vii: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod websocket_tests {
+    use super::*;
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use wasmtime::{Engine, Instance, Module, Store};
+
+    async fn guest() -> (Store<StoreData>, Instance, Memory) {
+        let engine = Engine::default();
+        let module = Module::new(&engine, wat::parse_str(r#"
+            (module
+                (import "flowlike_ws" "listen" (func $listen (param i32 i32) (result i64)))
+                (import "flowlike_ws" "accept" (func $accept (param i32 i32 i32) (result i64)))
+                (import "flowlike_ws" "local_address" (func $address (param i32 i32) (result i64)))
+                (import "flowlike_ws" "send_ref" (func $send (param i32 i32 i32 i32 i32) (result i32)))
+                (import "flowlike_ws" "receive_ref" (func $receive (param i32 i32 i32) (result i64)))
+                (import "flowlike_ws" "close_ref" (func $close (param i32 i32) (result i32)))
+                (import "flowlike_ws" "connect" (func $legacy_connect (param i32 i32 i32 i32) (result i32)))
+                (import "flowlike_ws" "send" (func $legacy_send (param i32 i32 i32 i32) (result i32)))
+                (import "flowlike_ws" "receive" (func $legacy_receive (param i32 i32) (result i32)))
+                (import "flowlike_ws" "close" (func $legacy_close (param i32) (result i32)))
+                (memory (export "memory") 1)
+                (export "listen" (func $listen))
+                (export "accept" (func $accept))
+                (export "address" (func $address))
+                (export "send" (func $send))
+                (export "receive" (func $receive))
+                (export "close" (func $close))
+                (export "legacy_connect" (func $legacy_connect))
+                (export "legacy_send" (func $legacy_send))
+                (export "legacy_receive" (func $legacy_receive))
+                (export "legacy_close" (func $legacy_close))
+            )
+        "#).unwrap()).unwrap();
+        let mut linker = Linker::new(&engine);
+        register_websocket_functions(&mut linker).unwrap();
+        let mut store = Store::new(&engine, StoreData::new(WasmCapabilities::WEBSOCKET));
+        store.data_mut().host_state.run_scoped = true;
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        store.data_mut().memory = Some(memory);
+        (store, instance, memory)
+    }
+
+    fn result(store: &Store<StoreData>, packed: u64) -> String {
+        assert_ne!(packed, 0, "host operation returned no result");
+        let offset = (packed >> 32) as usize;
+        let len = (packed & u32::MAX as u64) as usize;
+        String::from_utf8(
+            store.data().host_state.result_buffer.read()[offset..offset + len].to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn core_websocket_reference_abi_shares_server_between_calls() {
+        let (mut store, instance, memory) = guest().await;
+        let listen = instance
+            .get_typed_func::<(u32, u32), u64>(&mut store, "listen")
+            .unwrap();
+        let address = instance
+            .get_typed_func::<(u32, u32), u64>(&mut store, "address")
+            .unwrap();
+        let accept = instance
+            .get_typed_func::<(u32, u32, u32), u64>(&mut store, "accept")
+            .unwrap();
+        let send = instance
+            .get_typed_func::<(u32, u32, u32, u32, i32), i32>(&mut store, "send")
+            .unwrap();
+        let receive = instance
+            .get_typed_func::<(u32, u32, u32), u64>(&mut store, "receive")
+            .unwrap();
+        let close = instance
+            .get_typed_func::<(u32, u32), i32>(&mut store, "close")
+            .unwrap();
+        let bind = b"127.0.0.1:0";
+        memory.write(&mut store, 0, bind).unwrap();
+        store.data_mut().host_state.run_scoped = false;
+        assert_eq!(
+            listen
+                .call_async(&mut store, (0, bind.len() as u32))
+                .await
+                .unwrap(),
+            0
+        );
+        store.data_mut().host_state.run_scoped = true;
+        store.data_mut().host_state.capabilities = WasmCapabilities::empty();
+        assert_eq!(
+            listen
+                .call_async(&mut store, (0, bind.len() as u32))
+                .await
+                .unwrap(),
+            0
+        );
+        store.data_mut().host_state.capabilities = WasmCapabilities::WEBSOCKET;
+        let packed = listen
+            .call_async(&mut store, (0, bind.len() as u32))
+            .await
+            .unwrap();
+        let listener = result(&store, packed);
+        memory.write(&mut store, 128, listener.as_bytes()).unwrap();
+        let packed = address
+            .call_async(&mut store, (128, listener.len() as u32))
+            .await
+            .unwrap();
+        let bound = result(&store, packed);
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{bound}"))
+            .await
+            .unwrap();
+        let packed = accept
+            .call_async(&mut store, (128, listener.len() as u32, 1_000))
+            .await
+            .unwrap();
+        let connection = result(&store, packed);
+        memory
+            .write(&mut store, 256, connection.as_bytes())
+            .unwrap();
+        memory.write(&mut store, 512, b"hello").unwrap();
+        let args = (256, connection.len() as u32, 512, 5, 0);
+        store.data_mut().host_state.capabilities = WasmCapabilities::empty();
+        assert_eq!(send.call_async(&mut store, args).await.unwrap(), 0);
+        store.data_mut().host_state.capabilities = WasmCapabilities::WEBSOCKET;
+        assert_eq!(send.call_async(&mut store, args).await.unwrap(), 1);
+        assert_eq!(
+            client.next().await.unwrap().unwrap().into_text().unwrap(),
+            "hello"
+        );
+        client.send(Message::Text("reply".into())).await.unwrap();
+        let packed = receive
+            .call_async(&mut store, (256, connection.len() as u32, 1_000))
+            .await
+            .unwrap();
+        let message: serde_json::Value = serde_json::from_str(&result(&store, packed)).unwrap();
+        assert_eq!(message["data"], "reply");
+        store.data().host_state.websocket.shutdown().await;
+        assert_eq!(send.call_async(&mut store, args).await.unwrap(), 0);
+        assert_eq!(
+            close
+                .call_async(&mut store, (128, listener.len() as u32))
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(tokio::net::TcpStream::connect(bound).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn core_websocket_legacy_abi_uses_the_same_backend() {
+        let (mut store, instance, memory) = guest().await;
+        let connect = instance
+            .get_typed_func::<(u32, u32, u32, u32), i32>(&mut store, "legacy_connect")
+            .unwrap();
+        let send = instance
+            .get_typed_func::<(i32, u32, u32, i32), i32>(&mut store, "legacy_send")
+            .unwrap();
+        let receive = instance
+            .get_typed_func::<(i32, u32), i32>(&mut store, "legacy_receive")
+            .unwrap();
+        let close = instance
+            .get_typed_func::<i32, i32>(&mut store, "legacy_close")
+            .unwrap();
+        let registry = store.data().host_state.websocket.clone();
+        let listener = registry
+            .listen(
+                flow_like::flow::execution::ExecutionEnvironment::Local,
+                None,
+                "127.0.0.1:0",
+            )
+            .await
+            .unwrap();
+        let url = format!("ws://{}", registry.local_address(&listener).unwrap());
+        memory.write(&mut store, 0, url.as_bytes()).unwrap();
+        memory.write(&mut store, 128, b"{}").unwrap();
+        let handle = connect
+            .call_async(&mut store, (0, url.len() as u32, 128, 2))
+            .await
+            .unwrap();
+        assert!(handle > 0);
+        let accepted = registry.accept(&listener, 1_000).await.unwrap();
+        memory.write(&mut store, 256, b"legacy").unwrap();
+        assert_eq!(
+            send.call_async(&mut store, (handle, 256, 6, 0))
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(registry
+            .receive(&accepted, 1_000)
+            .await
+            .unwrap()
+            .contains("legacy"));
+        assert!(registry.send(&accepted, b"reply".to_vec(), false).await);
+        let offset = receive
+            .call_async(&mut store, (handle, 1_000))
+            .await
+            .unwrap();
+        assert!(offset >= 0);
+        assert!(String::from_utf8(
+            store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
+        )
+        .unwrap()
+        .contains("reply"));
+        assert_eq!(close.call_async(&mut store, handle).await.unwrap(), 0);
+        assert_eq!(
+            send.call_async(&mut store, (handle, 256, 6, 0))
+                .await
+                .unwrap(),
+            -1
+        );
+        registry.shutdown().await;
+    }
 }

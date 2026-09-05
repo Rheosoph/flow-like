@@ -158,6 +158,10 @@ provide let _dealloc = (ptr: WasmI32, size: WasmI32) => {
 }
 
 @unsafe
+@externalName("reset_scratch")
+provide let _resetScratch = () => Memory.resetScratch()
+
+@unsafe
 @externalName("get_abi_version")
 provide let _getAbiVersion = () => {
   1n

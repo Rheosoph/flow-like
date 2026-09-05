@@ -70,13 +70,13 @@ impl Cacheable for CachedRemoteAppSession {
     }
 }
 
-#[cfg(any(feature = "execute", test))]
+#[cfg(feature = "execute")]
 #[derive(Clone)]
 struct CachedRemoteOntologyAuthorization {
     authorized: Arc<flow_like_types::tokio::sync::OnceCell<()>>,
 }
 
-#[cfg(any(feature = "execute", test))]
+#[cfg(feature = "execute")]
 impl Cacheable for CachedRemoteOntologyAuthorization {
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -18,7 +18,7 @@ execute = [
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, default-features = false }

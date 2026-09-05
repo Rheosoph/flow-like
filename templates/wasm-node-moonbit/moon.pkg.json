@@ -15,6 +15,7 @@
 				"run",
 				"alloc",
 				"dealloc",
+				"reset_scratch",
 				"get_abi_version"
 			],
 			"export-memory-name": "memory"

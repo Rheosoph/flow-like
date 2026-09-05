@@ -178,6 +178,36 @@ let ts = util::now();
 let r  = util::random();
 ```
 
+## WebSocket resources within a run
+
+Declare `NodePermission::NetworkWebsocket` on each node that uses a socket.
+The host owns listeners and connections, while the SDK passes opaque string
+handles between nodes in the same package and run.
+Nodes must also use the same security domain; a separate domain has its own
+instance and resource registry.
+
+| Context method | Result |
+|---|---|
+| `ws_listen("127.0.0.1:8080")` | Listener handle, or `None` if binding is denied or fails |
+| `ws_local_address(&listener)` | Bound IP address and port; useful when listening on port 0 |
+| `ws_accept(&listener, 10_000)` | Next accepted connection, or `None` when unavailable or timed out |
+| `ws_connect(&url, &headers)` | Outbound connection handle |
+| `ws_send_text(&connection, "hello")` | Whether text was sent |
+| `ws_send(&connection, &bytes)` | Whether binary data was sent |
+| `ws_receive(&connection, 1_000)` | Message JSON, or `None` when unavailable or timed out |
+| `ws_close(&handle)` | Whether the connection, or listener and its clients, was closed |
+
+These APIs require a runtime that implements the WebSocket listener interface.
+Network policy still applies to each operation. The desktop loopback address
+in the example is subject to different restrictions in hosted executors.
+
+A listener remains active after its creating node returns. All handles expire
+when the run ends or is cancelled. Saving a handle does not preserve its socket
+for another run. Guest globals also persist only in a reusable export-based
+instance within the current run and security domain. See the
+[complete server example](../../../templates/wasm-node-rust/src/websocket_server.rs)
+for Start Server, Accept Connection, Send Text and Close nodes.
+
 ## Testing
 
 Unit tests run on native target:

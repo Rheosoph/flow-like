@@ -1,9 +1,9 @@
 [tasks.setup]
 description = "Validate local SDK dependency and prepare environment"
 run = """
-if [ ! -d "../wasm-sdk-moonbit" ]; then
-	echo "Missing ../wasm-sdk-moonbit"
-	echo "Copy templates/wasm-sdk-moonbit next to this template before building."
+if [ ! -d "../../libs/wasm-sdk/wasm-sdk-moonbit" ]; then
+	echo "Missing ../../libs/wasm-sdk/wasm-sdk-moonbit"
+	echo "Keep this template inside the checkout or update moon.mod.json to the SDK location."
 	exit 1
 fi
 moon check

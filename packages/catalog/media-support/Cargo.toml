@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true

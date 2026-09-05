@@ -11,7 +11,7 @@ This template provides a starting point for creating custom WASM nodes using the
 1. **Build the WASM module:**
    ```bash
    grain compile --release --no-gc --elide-type-info \
-     -I ../wasm-sdk-grain -o build/node.wasm src/main.gr
+     -I ../../libs/wasm-sdk/wasm-sdk-grain -o build/node.wasm src/main.gr
    ```
 
 2. **Find the output:**
@@ -37,9 +37,22 @@ wasm-node-grain/
 └── README.md
 ```
 
+## Memory between node calls
+
+The template exports `reset_scratch`. The host invokes it before allocating
+input for the next call, so each call can reuse the 1 MiB ABI scratch buffer.
+Input and result pointers are borrowed for one invocation. Copy data into Grain
+strings or objects to retain it between nodes in the package's current run.
+
+Rebuild older packages with this SDK and export; a runtime update cannot add
+the hook to an existing binary. Oversized scratch requests fail before writing
+past the buffer. The existing `--no-gc` compiler option still causes guest heap
+allocations to accumulate within the run's memory budget. All live state ends
+with the run.
+
 ## SDK Structure
 
-The SDK lives in `../wasm-sdk-grain/` and is included via the `-I` compiler flag:
+The SDK lives in `../../libs/wasm-sdk/wasm-sdk-grain/` and is included via the `-I` compiler flag:
 
 ```
 wasm-sdk-grain/
@@ -99,7 +112,7 @@ provide let _run = (ptr: WasmI32, len: WasmI32) => {
 
 ```bash
 grain compile --release --no-gc --elide-type-info \
-  -I ../wasm-sdk-grain -o build/node.wasm src/main.gr
+  -I ../../libs/wasm-sdk/wasm-sdk-grain -o build/node.wasm src/main.gr
 ```
 
 ## Available Pin Types
@@ -148,7 +161,7 @@ grain compile --release --no-gc --elide-type-info \
 
 ## Troubleshooting
 
-- **"Module not found"**: Ensure the `-I ../wasm-sdk-grain` flag points to the SDK directory.
+- **"Module not found"**: Ensure the `-I ../../libs/wasm-sdk/wasm-sdk-grain` flag points to the SDK directory.
 - **Runtime errors**: Compile with `--debug` instead of `--release` to keep debug info.
 - **Large binary**: Add `--elide-type-info` and `--no-gc` flags.
 - **Memory issues**: The SDK pre-allocates a 1 MiB scratch buffer for host communication.

@@ -121,6 +121,24 @@ fun run(ptr: Int, len: Int): Long {
 fun get_abi_version(): Int = ABI_VERSION
 ```
 
+### Package state and temporary memory
+
+Nodes sharing a package runtime can store Kotlin objects between calls within one run.
+Keep persistent values in Kotlin-owned objects. For example, a package-level
+`private var savedText: String? = null` can retain a string copied with `ptrToString(ptr, len)`.
+The runtime and its state are discarded when the run ends.
+
+The SDK exports `reset_scratch()`, which the host calls before allocating the next
+invocation's input. It reuses temporary ABI buffers while preserving Kotlin objects and
+package globals. Pointers returned by `alloc`, `stringToPtr`, or `packResult` are valid only
+until that next invocation. Copy their contents into a Kotlin `String` or `ByteArray` if
+later nodes need the data. Do not retain raw pointers or call `reset_scratch()` from node code.
+
+Rebuild existing Wasm packages with an SDK containing this export. This template references
+the published SDK in `build.gradle.kts`; update that dependency when the SDK release is
+available, or substitute a local SDK build during development. Updating the runtime alone
+cannot add the reset hook to an older Wasm binary.
+
 ## Pin Data Types
 
 | Type     | Kotlin Type | Description          |

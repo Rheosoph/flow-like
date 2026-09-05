@@ -340,6 +340,21 @@ pub fn random() -> f64 {
 // WebSocket
 // ============================================================================
 
+/// Start a WebSocket listener owned by the current run and package.
+pub fn ws_listen(bind_address: &str) -> Option<String> {
+    websocket::listen(bind_address)
+}
+
+/// Take the next accepted connection, waiting at most `timeout_ms`.
+pub fn ws_accept(listener_id: &str, timeout_ms: u32) -> Option<String> {
+    websocket::accept(listener_id, timeout_ms)
+}
+
+/// Read the listener's bound address, including the assigned port when binding to port 0.
+pub fn ws_local_address(listener_id: &str) -> Option<String> {
+    websocket::local_address(listener_id)
+}
+
 pub fn ws_connect(url: &str, headers_json: &str) -> Option<String> {
     websocket::connect(url, headers_json)
 }
@@ -356,6 +371,7 @@ pub fn ws_receive(session_id: &str, timeout_ms: u32) -> Option<String> {
     websocket::receive(session_id, timeout_ms)
 }
 
+/// Close a connection, or a listener and all connections it accepted.
 pub fn ws_close(session_id: &str) -> bool {
     websocket::close(session_id)
 }

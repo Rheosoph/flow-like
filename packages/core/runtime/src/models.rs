@@ -2,6 +2,7 @@ use crate::bit::Bit;
 
 pub mod embedding;
 pub mod embedding_factory;
+pub mod generation;
 pub mod image_embedding;
 pub mod llm;
 pub mod local_utils;

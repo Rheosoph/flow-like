@@ -102,5 +102,9 @@ provide let _alloc = (size: WasmI32) => Memory.wasmAlloc(size)
 provide let _dealloc = (ptr: WasmI32, size: WasmI32) => Memory.wasmDealloc(ptr, size)
 
 @unsafe
+@externalName("reset_scratch")
+provide let _resetScratch = () => Memory.resetScratch()
+
+@unsafe
 @externalName("get_abi_version")
 provide let _getAbiVersion = () => 1n

@@ -1,6 +1,6 @@
 # Flow-Like WASM SDKs
 
-This directory contains official SDKs for building **WASM nodes** for the [Flow-Like](https://github.com/Rheosoph/flow-like) runtime. Each SDK targets a different language but exposes the same programming model and ABI.
+This directory contains SDKs for building **WASM nodes** for the [Flow-Like](https://github.com/Rheosoph/flow-like) runtime. Each SDK targets a different language. They share the node programming model, with different ABI bindings and host API coverage.
 
 ## What is a WASM Node?
 
@@ -87,6 +87,33 @@ run(ptr, len) → ExecutionResult JSON
 get_nodes() → PackageNodes JSON (array of NodeDefinitions)
 run(ptr, len) → ExecutionResult JSON (dispatches to correct handler)
 ```
+
+## State between nodes and calls
+
+A run owns its live Wasm state. For packages with reusable `run` exports, the
+runtime retains an instance within the run and its security domain, so guest
+globals and heap objects can survive calls from nodes in that package. Each
+invocation receives fresh execution data and permissions. The package's host
+cache and socket handles are shared within that same runtime scope. A different
+security domain uses a separate instance and resource registry.
+
+When the run completes or is cancelled, its instances, cache and sockets are
+released. A later run always starts with fresh live state. Persist application
+data through storage if needed; stored pointer values and socket handles cannot
+restore a client or connection.
+
+Command-style components executed through `wasi:cli/run` still start with fresh
+guest memory on every command. The in-process command path can share the run's
+host cache and sockets. The external CLI fallback is rejected during run-scoped
+execution because its separate process cannot access these resources. Do not
+infer guest-state persistence from the source language alone. It depends on the
+compiled artifact's exports and execution path.
+
+The Rust SDK exposes WebSocket listen, accept, connect, send, receive and close
+methods. Other SDKs do not currently provide equivalent WebSocket convenience
+methods. Their component bindings can import the shared WIT interface directly.
+See the [Rust server example](../../templates/wasm-node-rust/src/websocket_server.rs)
+and [template lifecycle matrix](../../templates/wasm-capability-matrix.md#state-and-resource-lifetime).
 
 ## Memory ABI
 

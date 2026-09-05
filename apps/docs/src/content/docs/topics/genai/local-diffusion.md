@@ -9,6 +9,19 @@ Use **stable-diffusion.cpp Image Model** or **stable-diffusion.cpp Video Model**
 
 The existing generation nodes also support cloud providers. Image generation includes OpenAI and Azure OpenAI, Gemini, Vertex AI, Bedrock, xAI, Together, Hugging Face, OpenRouter, and Mistral. Video generation includes OpenAI Sora, Vertex Veo, Runway, fal, and Replicate. Choose the matching provider and options nodes for each service.
 
+## Add a model through the admin catalog
+
+Admins can register a complete local generation model from **Admin → Bits → Add** in the desktop or web app. Choose **Image Generation** or **Video Generation**, then select a preset. The form fills in the model metadata, required weights, text encoders, decoder, and sampling defaults.
+
+Image presets include FLUX.2 klein 4B, Z-Image-Turbo, and Qwen-Image-2512. Video presets include Wan2.1 T2V 1.3B and Wan2.2 TI2V 5B. These selections target the bundled stable-diffusion.cpp revision. The form describes each model's intended use and shows the combined download size. Download size measures stored files; generation also needs working memory, which grows with resolution and video length.
+
+1. Choose a preset and review its description, license, and required files. Each supplied download URL is pinned to a specific Hugging Face revision.
+2. Edit the model metadata or file URLs if needed, then upload. The admin service copies each file into the registry and registers the parent model after its dependencies finish.
+3. Find the model in the model catalog under **Image generation** or **Video generation**. Download it on the machine that will execute the workflow.
+4. Use the uploaded model Bit as the **Provider** input of **Generate Image** or **Generate Video**. Leave **Provider Options** at **Default** to use the preset's sampling settings, or connect the corresponding stable-diffusion.cpp options node to override them.
+
+The parent Bit groups the files by their role. At execution, Flow-Like resolves the dependency files from its local model store, downloads missing files, and supplies their paths to the runtime. The preset does not store paths from the admin's computer. Uploading through the web admin prepares the catalog; local generation runs on a desktop or executor with the native runtime installed.
+
 ## Choose where the model runs
 
 The diffusion model builders accept a **Configuration** object. For a checkpoint containing the model components, set its path on the execution machine:
@@ -22,7 +35,7 @@ The diffusion model builders accept a **Configuration** object. For a checkpoint
 }
 ```
 
-For models distributed as separate components, use `diffusion_model_path` and the companion paths required by that model. Available fields are `vae_path`, `clip_l_path`, `clip_g_path`, `t5xxl_path`, and `llm_path`. For example, a Flux model can require a diffusion model, VAE, CLIP-L, and T5 encoder. All files must already exist. The builder validates the configuration; generation checks the files before starting the runtime.
+For models distributed as separate components, use `diffusion_model_path` and the companion paths required by that model. Available fields are `vae_path`, `clip_l_path`, `clip_g_path`, `t5xxl_path`, and `llm_path`. For example, a Flux model can require a diffusion model, VAE, CLIP-L, and T5 encoder. When entering paths manually, all files must already exist on the execution machine. The builder validates the configuration; generation checks the files before starting the runtime.
 
 Flow-Like starts the bundled `sd-server` on a loopback port, waits for it to load, submits the job, and stops the process when the request finishes. Managed diffusion requests run one at a time within the execution process. Each request reloads its model and releases its GPU allocation afterward. `diffusion_flash_attention` is available as an optional configuration setting and defaults to `false`.
 

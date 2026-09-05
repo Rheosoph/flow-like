@@ -59,6 +59,7 @@ pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
 pub mod rejection;
+pub mod resources;
 pub mod trace;
 pub mod user_context;
 
@@ -518,6 +519,8 @@ pub struct Run {
     pub payload: Arc<RunPayload>,
     /// `payload._elements`, shared by every node of the run instead of cloned per read.
     pub elements: Arc<RwLock<ElementCache>>,
+    /// Live package state and host resources, closed when this execution ends.
+    pub resources: Arc<resources::RunResources>,
     pub sub: String,
     pub highest_log_level: LogLevel,
     pub log_initialized: bool,
@@ -944,6 +947,7 @@ pub struct RunMeta {
     pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
     pub elements: Arc<RwLock<ElementCache>>,
+    pub resources: Arc<resources::RunResources>,
     /// Shadow/replay isolation: app storage, user store and app meta store are
     /// wrapped read-only for every context built from this run.
     pub shadow: bool,
@@ -1017,6 +1021,7 @@ pub struct InternalRun {
     pub user_context: Option<UserExecutionContext>,
     /// Reply conduit to the run's client, shared by every context of this run.
     pub channel: Arc<dyn Channel>,
+    resource_owner: Arc<resources::RunResourceOwner>,
 
     stack: Arc<RunStack>,
     /// Fresh Function-local variables for a directly selected layer entry.
@@ -1214,6 +1219,7 @@ impl InternalRun {
         let elements = Arc::new(RwLock::new(ElementCache::from_payload(
             payload.payload.as_ref(),
         )));
+        let resources = Arc::new(resources::RunResources::default());
         let run = Run {
             id: run_id.clone(),
             app_id: app_id.to_string(),
@@ -1226,6 +1232,7 @@ impl InternalRun {
             board: board.clone(),
             payload: Arc::new(payload.clone()),
             elements: elements.clone(),
+            resources: resources.clone(),
             sub: sub_value.clone(),
             highest_log_level: LogLevel::Debug,
             log_initialized: false,
@@ -1400,6 +1407,7 @@ impl InternalRun {
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
             channel,
+            resource_owner: Arc::new(resources::RunResourceOwner(resources.clone())),
             has_node_errors: Arc::new(AtomicBool::new(false)),
             log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
             cancellation_token: None,
@@ -1424,6 +1432,7 @@ impl InternalRun {
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed,
                 elements,
+                resources,
                 shadow: false,
             },
             board: board.clone(),
@@ -1559,6 +1568,10 @@ impl InternalRun {
         };
         let next_stack = stack_for_entry(&self.nodes, &entry_node_id)?;
 
+        // Fork can reuse compiled topology and a run ID, but never live package state.
+        self.meta.resources.shutdown().await;
+        let resources = Arc::new(resources::RunResources::default());
+
         self.cache.write().await.clear();
         self.stack = Arc::new(next_stack);
         self.concurrency_limit = 128_000;
@@ -1566,6 +1579,7 @@ impl InternalRun {
         reset_execution_counters(&self.nodes, &self.meta.nodes_executed);
         {
             let mut run = lock_with_timeout(self.run.as_ref(), "run_fork").await?;
+            run.resources = resources.clone();
             run.status = RunStatus::Running;
             run.traces.clear();
             run.visited_nodes.clear();
@@ -1575,6 +1589,8 @@ impl InternalRun {
             run.start = SystemTime::now();
             run.end = SystemTime::now();
         }
+        self.meta.resources = resources.clone();
+        self.resource_owner = Arc::new(resources::RunResourceOwner(resources));
         for node in self.nodes.values() {
             for pin in node.pins.iter() {
                 // Reset is async but pin access is lock-free
@@ -1767,6 +1783,8 @@ impl InternalRun {
     }
 
     pub async fn execute(&mut self, handler: Arc<FlowLikeState>) -> Option<LogMeta> {
+        let resources = self.meta.resources.clone();
+        let mut resource_guard = resources::AbortResourcesOnDrop::new(&resources);
         let start = Instant::now();
         let flush_interval = self.log_flush_interval;
 
@@ -1784,6 +1802,8 @@ impl InternalRun {
         // Spawn background flush task for long-running nodes
         let run_clone = self.run.clone();
         let flush_cancel = CancellationToken::new();
+        // A dropped execution future must also release the flush task's run snapshot.
+        let _flush_cancel_on_drop = flush_cancel.clone().drop_guard();
         let flush_cancel_clone = flush_cancel.clone();
         let flush_task = flow_like_types::tokio::spawn(async move {
             let mut interval = flow_like_types::tokio::time::interval(flush_interval);
@@ -1846,7 +1866,15 @@ impl InternalRun {
         let mut errored = false;
 
         while current_stack_len > 0 {
-            self.step(handler.clone()).await;
+            if let Some(token) = self.cancellation_token.clone() {
+                flow_like_types::tokio::select! {
+                    biased;
+                    _ = token.cancelled() => break,
+                    _ = self.step(handler.clone()) => {}
+                }
+            } else {
+                self.step(handler.clone()).await;
+            }
 
             current_stack_len = self.stack.len();
             let new_stack_hash = self.stack.hash();
@@ -1866,6 +1894,9 @@ impl InternalRun {
             .cancellation_token
             .as_ref()
             .is_some_and(|token| token.is_cancelled());
+        if cancelled {
+            resources.abort();
+        }
         let cancellation_log_level = self.cancellation_log_level;
         let cancellation_log_message = self.cancellation_log_message.clone();
 
@@ -1880,6 +1911,8 @@ impl InternalRun {
             errored = true;
         }
         self.drop_nodes().await;
+        resources.shutdown().await;
+        resource_guard.disarm();
 
         let meta = {
             let prepared: Option<PreparedFlush> =
@@ -1955,8 +1988,11 @@ impl InternalRun {
     }
 
     pub async fn debug_step(&mut self, handler: Arc<FlowLikeState>) -> bool {
+        let resources = self.meta.resources.clone();
+        let mut resource_guard = resources::AbortResourcesOnDrop::new(&resources);
         let stack_hash = self.stack.hash();
         if self.stack.len() == 0 {
+            resources.shutdown().await;
             match lock_with_timeout(self.run.as_ref(), "run_debug_step_success").await {
                 Ok(mut run) => {
                     run.end = SystemTime::now();
@@ -1969,9 +2005,25 @@ impl InternalRun {
             return false;
         }
 
-        self.step(handler.clone()).await;
+        if let Some(token) = self.cancellation_token.clone() {
+            flow_like_types::tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    resources.shutdown().await;
+                    if let Ok(mut run) = lock_with_timeout(self.run.as_ref(), "run_debug_cancel").await {
+                        run.end = SystemTime::now();
+                        run.status = RunStatus::Stopped;
+                    }
+                    return false;
+                }
+                _ = self.step(handler.clone()) => {}
+            }
+        } else {
+            self.step(handler.clone()).await;
+        }
 
         if self.stack.len() == 0 {
+            resources.shutdown().await;
             match lock_with_timeout(self.run.as_ref(), "run_debug_step_success").await {
                 Ok(mut run) => {
                     run.end = SystemTime::now();
@@ -1986,6 +2038,7 @@ impl InternalRun {
 
         let new_stack_hash = self.stack.hash();
         if new_stack_hash == stack_hash {
+            resources.shutdown().await;
             match lock_with_timeout(self.run.as_ref(), "run_debug_step_failed").await {
                 Ok(mut run) => {
                     run.end = SystemTime::now();
@@ -1998,6 +2051,7 @@ impl InternalRun {
             return false;
         }
 
+        resource_guard.disarm();
         true
     }
 
@@ -2068,6 +2122,7 @@ impl InternalRun {
 
     // ONLY CALL THIS IF WE ARE BEING CANCELLED
     pub async fn flush_logs_cancelled(&mut self) -> flow_like_types::Result<Option<LogMeta>> {
+        self.meta.resources.shutdown().await;
         let prepared = {
             let mut run = lock_with_timeout(self.run.as_ref(), "run_cancel").await?;
             run.highest_log_level = LogLevel::Fatal;
@@ -2275,6 +2330,11 @@ pub fn extract_sub_from_jwt(token: &str) -> flow_like_types::Result<String> {
 pub async fn flush_run_cancelled(
     run: &Arc<Mutex<Run>>,
 ) -> flow_like_types::Result<Option<LogMeta>> {
+    let resources = lock_with_timeout(run.as_ref(), "run_cancel_resources")
+        .await?
+        .resources
+        .clone();
+    resources.shutdown().await;
     let prepared = {
         let mut run = flow_like_types::tokio::time::timeout(RUN_LOCK_TIMEOUT, run.lock())
             .await
@@ -2468,6 +2528,236 @@ mod tests {
             Some(false),
         )
         .into_callback()
+    }
+
+    mod resource_lifecycle {
+        use super::*;
+        use crate::flow::execution::resources::RunResource;
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Default)]
+        struct ResourceProbe {
+            closed: AtomicBool,
+            shutdowns: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl RunResource for ResourceProbe {
+            fn abort(&self) {
+                self.closed.store(true, Ordering::SeqCst);
+            }
+
+            async fn shutdown(&self) {
+                self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                self.abort();
+            }
+        }
+
+        struct ResourceLogic {
+            observed: Arc<std::sync::Mutex<Vec<Arc<ResourceProbe>>>>,
+            pending: Option<Arc<tokio::sync::Notify>>,
+            fail: bool,
+        }
+
+        #[async_trait]
+        impl NodeLogic for ResourceLogic {
+            fn get_node(&self) -> Node {
+                let mut node = Node::new("resource_probe", "Resource Probe", "", "Tests");
+                node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+                node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+                node
+            }
+
+            async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                let resource = context
+                    .resources
+                    .get_or_insert_with("package", || Arc::new(ResourceProbe::default()))?;
+                let child = context.create_sub_context(&context.node).await;
+                assert!(Arc::ptr_eq(&context.resources, &child.resources));
+                self.observed.lock().unwrap().push(resource);
+                if let Some(pending) = &self.pending {
+                    pending.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                if self.fail {
+                    return Err(anyhow!("resource node failed"));
+                }
+                context.activate_exec_pin("exec_out").await
+            }
+        }
+
+        async fn make_run(
+            logic: Arc<ResourceLogic>,
+            pair: bool,
+        ) -> (InternalRun, Arc<FlowLikeState>) {
+            let state = state_with_node_logics(vec![logic.clone()]).await;
+            let mut board = Board::new_detached(Some("resource-lifecycle".into()), Path::default());
+            let mut entry = logic.get_node();
+            entry.id = "resource-start".into();
+            entry.set_start(true);
+            let entry_id = entry.id.clone();
+            let output = entry
+                .pins
+                .values()
+                .find(|pin| pin.name == "exec_out")
+                .unwrap()
+                .id
+                .clone();
+            board.nodes.insert(entry.id.clone(), entry);
+            if pair {
+                let mut next = logic.get_node();
+                next.id = "resource-use".into();
+                let next_id = next.id.clone();
+                let input = next
+                    .pins
+                    .values()
+                    .find(|pin| pin.name == "exec_in")
+                    .unwrap()
+                    .id
+                    .clone();
+                board.nodes.insert(next.id.clone(), next);
+                connect_pins(&mut board, &entry_id, &output, &next_id, &input).unwrap();
+            }
+            let run = InternalRun::new(
+                "test-app",
+                Arc::new(board),
+                None,
+                &state,
+                &Profile::default(),
+                &RunPayload {
+                    id: entry_id,
+                    payload: None,
+                    runtime_variables: None,
+                    filter_secrets: Some(true),
+                },
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await
+            .unwrap();
+            (run, state)
+        }
+
+        fn logic(fail: bool, pending: Option<Arc<tokio::sync::Notify>>) -> Arc<ResourceLogic> {
+            Arc::new(ResourceLogic {
+                observed: Arc::new(std::sync::Mutex::new(Vec::new())),
+                pending,
+                fail,
+            })
+        }
+
+        #[tokio::test]
+        async fn nodes_share_resources_until_completion_and_forks_start_fresh() {
+            let logic = logic(false, None);
+            let (mut run, state) = make_run(logic.clone(), true).await;
+            run.execute(state.clone()).await;
+            assert!(matches!(run.get_status().await, RunStatus::Success));
+            {
+                let observed = logic.observed.lock().unwrap();
+                assert_eq!(observed.len(), 2);
+                assert!(Arc::ptr_eq(&observed[0], &observed[1]));
+                assert!(observed[0].closed.load(Ordering::SeqCst));
+                assert_eq!(observed[0].shutdowns.load(Ordering::SeqCst), 1);
+            }
+            let old_resources = run.meta.resources.clone();
+            run.fork().await.unwrap();
+            assert!(!Arc::ptr_eq(&old_resources, &run.meta.resources));
+            run.execute(state).await;
+            let observed = logic.observed.lock().unwrap();
+            assert_eq!(observed.len(), 4);
+            assert!(!Arc::ptr_eq(&observed[0], &observed[2]));
+            assert!(observed[2].closed.load(Ordering::SeqCst));
+        }
+
+        #[tokio::test]
+        async fn failure_closes_resources() {
+            let logic = logic(true, None);
+            let (mut run, state) = make_run(logic.clone(), false).await;
+            run.execute(state).await;
+            assert!(matches!(run.get_status().await, RunStatus::Failed));
+            assert!(
+                logic.observed.lock().unwrap()[0]
+                    .closed
+                    .load(Ordering::SeqCst)
+            );
+        }
+
+        #[tokio::test]
+        async fn cancellation_closes_resources_from_a_pending_node() {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let logic = logic(false, Some(started.clone()));
+            let (mut run, state) = make_run(logic.clone(), false).await;
+            let cancellation = CancellationToken::new();
+            run.set_cancellation_token(cancellation.clone());
+            tokio::join!(run.execute(state), async {
+                started.notified().await;
+                cancellation.cancel();
+            });
+            assert!(matches!(run.get_status().await, RunStatus::Stopped));
+            assert!(
+                logic.observed.lock().unwrap()[0]
+                    .closed
+                    .load(Ordering::SeqCst)
+            );
+        }
+
+        #[tokio::test]
+        async fn dropping_execution_future_closes_resources_while_run_is_retained() {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let logic = logic(false, Some(started.clone()));
+            let (mut run, state) = make_run(logic.clone(), false).await;
+            let mut execution = Box::pin(run.execute(state));
+            tokio::select! {
+                _ = &mut execution => panic!("pending node returned"),
+                _ = started.notified() => {}
+            }
+            drop(execution);
+            assert!(run.meta.resources.is_closed());
+            assert!(
+                logic.observed.lock().unwrap()[0]
+                    .closed
+                    .load(Ordering::SeqCst)
+            );
+        }
+
+        #[tokio::test]
+        async fn debug_steps_keep_resources_between_nodes_then_close_them() {
+            let logic = logic(false, None);
+            let (mut run, state) = make_run(logic.clone(), true).await;
+            assert!(run.debug_step(state.clone()).await);
+            assert!(
+                !logic.observed.lock().unwrap()[0]
+                    .closed
+                    .load(Ordering::SeqCst)
+            );
+            assert!(!run.debug_step(state).await);
+            let observed = logic.observed.lock().unwrap();
+            assert!(Arc::ptr_eq(&observed[0], &observed[1]));
+            assert!(observed[0].closed.load(Ordering::SeqCst));
+        }
+
+        #[tokio::test]
+        async fn dropping_last_run_owner_closes_resources_despite_retained_metadata() {
+            let logic = logic(false, None);
+            let (mut run, state) = make_run(logic.clone(), true).await;
+            assert!(run.debug_step(state).await);
+            let retained_meta = run.meta.clone();
+            let retained_snapshot = run.get_run().await;
+            let retained_run = run.clone();
+            drop(run);
+            assert!(!retained_meta.resources.is_closed());
+            drop(retained_run);
+            assert!(retained_meta.resources.is_closed());
+            assert!(retained_snapshot.resources.is_closed());
+            assert!(
+                logic.observed.lock().unwrap()[0]
+                    .closed
+                    .load(Ordering::SeqCst)
+            );
+        }
     }
 
     mod variable_overrides {

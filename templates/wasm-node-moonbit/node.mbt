@@ -85,6 +85,10 @@ pub fn dealloc(ptr : Int, size : Int) -> Unit {
   @sdk.dealloc(ptr, size)
 }
 
+pub fn reset_scratch() -> Unit {
+  @sdk.reset_scratch()
+}
+
 pub fn get_abi_version() -> Int {
   @sdk.abi_version
 }

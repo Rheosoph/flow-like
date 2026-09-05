@@ -3,6 +3,8 @@
 //! These tests do NOT require the `execute` feature — they only test
 //! node definitions, pin schemas, and catalog registration.
 
+extern crate flow_like_runtime as flow_like;
+
 use flow_like_catalog_code_interpreter::get_catalog;
 
 #[test]

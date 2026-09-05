@@ -28,6 +28,8 @@
 //! let app = executor_router(state);
 //! ```
 
+extern crate flow_like_runtime as flow_like;
+
 pub mod channel;
 pub mod config;
 pub mod error;

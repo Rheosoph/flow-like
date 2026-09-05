@@ -21,6 +21,7 @@ import {
 	SparklesIcon,
 	TrashIcon,
 	TypeIcon,
+	VideoIcon,
 	XIcon,
 } from "lucide-react";
 import type { JSX, ReactNode } from "react";
@@ -295,7 +296,11 @@ export function ModelCard({
 	const isEmbeddingModel =
 		isEmbeddingBit(bit) ||
 		bit.type === IBitTypes.Tts ||
-		bit.type === IBitTypes.Stt;
+		bit.type === IBitTypes.Stt ||
+		((bit.type === IBitTypes.ImageGeneration ||
+			bit.type === IBitTypes.VideoGeneration) &&
+			bit.parameters?.provider?.provider_name === "local:stablediffusion" &&
+			!bit.parameters?.provider?.params?.stablediffusion?.endpoint);
 
 	if (variant === "list") {
 		return (
@@ -825,6 +830,10 @@ export function ModelTypeIcon({
 			return <FileSearch className={cn} />;
 		case IBitTypes.ImageEmbedding:
 			return <ScanEyeIcon className={cn} />;
+		case IBitTypes.ImageGeneration:
+			return <ImageIcon className={cn} />;
+		case IBitTypes.VideoGeneration:
+			return <VideoIcon className={cn} />;
 		default:
 			return <BrainIcon className={cn} />;
 	}
@@ -838,6 +847,9 @@ export function ModalityIcons({
 	const arrowClass = `h-2.5 w-2.5 text-foreground`;
 
 	switch (type) {
+		case IBitTypes.ImageGeneration:
+		case IBitTypes.VideoGeneration:
+			return <ModalityFlow type={type} compact />;
 		case IBitTypes.Llm:
 			return (
 				<div className="flex items-center gap-1 text-muted-foreground">
@@ -912,6 +924,10 @@ export function getModelModality(bit: IBit): string {
 			return i18next.t("textEmbedding", "Text → Embedding");
 		case IBitTypes.ImageEmbedding:
 			return i18next.t("imageEmbedding", "Image → Embedding");
+		case IBitTypes.ImageGeneration:
+			return i18next.t("textImage", "Text → Image");
+		case IBitTypes.VideoGeneration:
+			return i18next.t("textVideo", "Text → Video");
 		default:
 			return "Unknown";
 	}

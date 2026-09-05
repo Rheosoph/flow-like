@@ -5,6 +5,8 @@
 //! - Serialized/deserialized properly
 //! - Have valid input/output pin schemas
 
+extern crate flow_like_runtime as flow_like;
+
 use flow_like_catalog_automation::get_catalog;
 use flow_like_catalog_automation::types::{
     fingerprints::{ElementFingerprint, FingerprintMatchOptions, MatchStrategy},

@@ -16,7 +16,7 @@ pub mod variables;
 pub mod websocket;
 
 use crate::host_functions::storage::StorageFlowPath;
-use crate::limits::WasmCapabilities;
+use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
 use parking_lot::RwLock;
@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use linker::register_host_functions;
-pub use websocket::WsConnection;
+pub use websocket::WebSocketResources;
 
 /// Storage context for WASM modules — resolves stores server-side without exposing credentials.
 pub struct StorageContext {
@@ -246,8 +246,8 @@ pub struct HostState {
     pub inputs: RwLock<HashMap<String, Value>>,
     /// Variables (shared with execution context)
     pub variables: RwLock<HashMap<String, Value>>,
-    /// Cache entries
-    pub cache: RwLock<HashMap<String, Value>>,
+    /// Package cache entries, shared only within the owning run.
+    pub cache: Arc<RwLock<HashMap<String, Value>>>,
     /// OAuth tokens (provider_id -> token)
     pub oauth_tokens: RwLock<HashMap<String, OAuthTokenData>>,
     /// Execution metadata
@@ -261,8 +261,14 @@ pub struct HostState {
     /// Usage attribution forwarded to hosted model APIs. Offline app runs keep
     /// the app ID unset while retaining their run ID.
     pub model_usage_context: Option<flow_like::models::llm::ModelUsageContext>,
-    /// Active WebSocket connections (session_id -> connection)
-    pub ws_connections: Arc<tokio::sync::Mutex<HashMap<String, WsConnection>>>,
+    /// Sockets and listeners owned by this package's run.
+    pub websocket: Arc<WebSocketResources>,
+    /// Trusted network policy, configured before guest initialization.
+    pub execution_environment: flow_like::flow::execution::ExecutionEnvironment,
+    pub allowed_hosts: Option<Vec<String>>,
+    pub node_timeout: std::time::Duration,
+    /// Run-owned execution cannot delegate its resources to an external process.
+    pub run_scoped: bool,
     /// In-flight chunked writes (write_id -> buffer)
     pub pending_writes: RwLock<HashMap<String, storage::PendingWrite>>,
 }
@@ -321,16 +327,30 @@ impl HostState {
             result_buffer: RwLock::new(Vec::new()),
             inputs: RwLock::new(HashMap::new()),
             variables: RwLock::new(HashMap::new()),
-            cache: RwLock::new(HashMap::new()),
+            cache: Arc::new(RwLock::new(HashMap::new())),
             oauth_tokens: RwLock::new(HashMap::new()),
             metadata: ExecutionMetadata::default(),
             stream_events: RwLock::new(Vec::new()),
             storage_context: None,
             model_context: None,
             model_usage_context: None,
-            ws_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            websocket: Arc::new(WebSocketResources::default()),
+            execution_environment: Default::default(),
+            allowed_hosts: None,
+            node_timeout: crate::limits::DEFAULT_TIMEOUT,
+            run_scoped: false,
             pending_writes: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Build invocation state from the host's effective security policy.
+    pub fn with_security(security: &WasmSecurityConfig) -> Self {
+        let mut state = Self::new(security.capabilities);
+        state.execution_environment = security.execution_environment;
+        state.metadata.execution_environment = security.execution_environment;
+        state.allowed_hosts = security.allowed_hosts.clone();
+        state.node_timeout = security.limits.timeout;
+        state
     }
 
     /// Check if a capability is granted

@@ -44,7 +44,9 @@ Key Rust crates in the workspace include:
 
 | Path | Crate | Responsibility |
 |------|-------|----------------|
-| `packages/core/` | `flow-like` | Core workflow library |
+| `packages/core/` | `flow-like` | Public runtime and editor compatibility API |
+| `packages/core/runtime/` | `flow-like-runtime` | Boards, execution, and host services |
+| `packages/core/editor/` | `flow-like-editor` | FlowScript editing and copilot services |
 | `packages/types/` | `flow-like-types` | Shared domain types |
 | `packages/storage/` | `flow-like-storage` | Storage abstraction |
 | `packages/model-provider/` | `flow-like-model-provider` | AI and ML providers |
@@ -59,9 +61,12 @@ Dependency-light boundaries live below their owning package so the top-level
 | Path | Crate | Boundary |
 |------|-------|----------|
 | `packages/core/contracts/` | `flow-like-core-contracts` | Serde-only core/copilot contracts |
+| `packages/core/a2ui-schema/` | `flow-like-a2ui-schema` | A2UI schemas and protobuf conversions |
+| `packages/core/editor-contracts/` | `flow-like-editor-contracts` | Editing commands, metadata, and layer cache settings |
 | `packages/core/dev-check/` | `flow-like-dev-check` | Internal lightweight target for bare Cargo commands |
 | `packages/types/contracts/` | `flow-like-types-contracts` | Cache, dispatch, and maintenance wire types |
 | `packages/types/proto/` | `flow-like-types-proto` | Protobuf schemas and generated types |
+| `packages/types/data-url/` | `flow-like-types-data-url` | Byte, file, and HTTP data URL helpers |
 | `packages/storage/contracts/` | `flow-like-storage-contracts` | Graph and vector storage traits |
 | `packages/storage/files/` | `flow-like-storage-files` | Object/file stores without the database engine |
 | `packages/model-provider/protocol/` | `flow-like-model-protocol` | Model message/response protocol |
@@ -71,11 +76,23 @@ Dependency-light boundaries live below their owning package so the top-level
 The workspace also contains supporting crates. Treat the root `Cargo.toml`
 member list as the authoritative inventory.
 
-Internal crate locations are declared once in the root
-`[workspace.dependencies]` table. Member manifests use `workspace = true`
-instead of `../..` dependency paths, so moving a nested boundary only requires
-updating the workspace manifest. A `path` under `[lib]` names that crate's own
-source target and is not an inter-crate dependency.
+Internal dependencies inherit their locations from the root
+`[workspace.dependencies]` table through `workspace = true`. Runtime consumers
+use the canonical `flow-like-runtime` dependency and select the features they
+need:
+
+```toml
+[dependencies]
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
+```
+
+Crates that retain `flow_like::...` imports declare
+`extern crate flow_like_runtime as flow_like;` at their Rust crate root. The
+source alias preserves those imports; Cargo dependency declarations and feature
+forwarding use `flow-like-runtime`. The workspace dependency named `flow-like`
+continues to provide the public runtime and editor facade. Declare inter-crate
+dependency paths in the root workspace manifest. A `path` under `[lib]` names
+that crate's own source target and is not an inter-crate dependency.
 
 ### Key Dependencies
 

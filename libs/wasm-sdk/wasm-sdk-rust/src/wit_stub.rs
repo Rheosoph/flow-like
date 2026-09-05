@@ -186,6 +186,15 @@ pub mod flow_like {
         }
 
         pub mod websocket {
+            pub fn listen(_bind_address: &str) -> Option<String> {
+                None
+            }
+            pub fn accept(_listener_id: &str, _timeout_ms: u32) -> Option<String> {
+                None
+            }
+            pub fn local_address(_listener_id: &str) -> Option<String> {
+                None
+            }
             pub fn connect(_url: &str, _headers_json: &str) -> Option<String> {
                 None
             }

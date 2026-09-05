@@ -33,6 +33,9 @@ pub struct WasmInstance {
     run_func: TypedFunc<(i32, i32), i64>,
     alloc_func: Option<TypedFunc<i32, i32>>,
     dealloc_func: Option<TypedFunc<(i32, i32), ()>>,
+    reset_scratch_func: Option<TypedFunc<(), ()>>,
+    /// Host-owned input buffer for modules without an allocator export.
+    input_scratch: Option<(u32, u32)>,
     /// Fuel limit for tracking
     fuel_limit: u64,
 }
@@ -44,6 +47,17 @@ impl WasmInstance {
         module: Arc<WasmModule>,
         security: WasmSecurityConfig,
     ) -> WasmResult<Self> {
+        let host_state = HostState::with_security(&security);
+        Self::with_host_state(engine, module, security, host_state).await
+    }
+
+    pub async fn with_host_state(
+        engine: &WasmEngine,
+        module: Arc<WasmModule>,
+        security: WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<Self> {
+        let run_scoped = host_state.run_scoped;
         // Use the engine that compiled/deserialized this module to ensure
         // Store, Linker, and Module are all tied to the same Engine instance.
         // This is critical for Pulley-targeted iOS modules and other
@@ -53,7 +67,11 @@ impl WasmInstance {
         let mut linker = Linker::new(module_engine);
         register_host_functions(&mut linker)?;
 
-        let mut store = Store::new(module_engine, StoreData::new(security.capabilities));
+        let mut data = StoreData::new(security.capabilities);
+        data.host_state = host_state;
+        data.limits = crate::limits::store_limits(&security.limits);
+        let mut store = Store::new(module_engine, data);
+        store.limiter(|data| &mut data.limits);
 
         // Configure store limits
         let fuel_limit = security.limits.fuel_limit;
@@ -61,12 +79,26 @@ impl WasmInstance {
             store
                 .set_fuel(fuel_limit)
                 .map_err(|e| WasmError::Internal(format!("Failed to set fuel: {}", e)))?;
+            if run_scoped {
+                store
+                    .fuel_async_yield_interval(Some(100_000))
+                    .map_err(|e| {
+                        WasmError::Internal(format!(
+                            "Failed to configure initialization yielding: {e}"
+                        ))
+                    })?;
+            }
         }
 
         if engine.config().epoch_interruption {
-            store.epoch_deadline_trap();
-            let timeout_epochs = (security.limits.timeout.as_millis() / 10) as u64;
-            store.set_epoch_deadline(timeout_epochs);
+            if run_scoped {
+                store.epoch_deadline_async_yield_and_update(1);
+                store.set_epoch_deadline(1);
+            } else {
+                store.epoch_deadline_trap();
+                let timeout_epochs = (security.limits.timeout.as_millis() / 10).max(1) as u64;
+                store.set_epoch_deadline(timeout_epochs);
+            }
         }
 
         // Instantiate module
@@ -134,6 +166,9 @@ impl WasmInstance {
         let dealloc_func = instance
             .get_typed_func::<(i32, i32), ()>(&mut store, exports::DEALLOC)
             .ok();
+        let reset_scratch_func = instance
+            .get_typed_func::<(), ()>(&mut store, exports::RESET_SCRATCH)
+            .ok();
 
         // Set up allocator
         let memory_size = memory.data_size(&store);
@@ -154,6 +189,8 @@ impl WasmInstance {
             run_func,
             alloc_func,
             dealloc_func,
+            reset_scratch_func,
+            input_scratch: None,
             fuel_limit,
         })
     }
@@ -266,11 +303,45 @@ impl WasmInstance {
         self.get_nodes_func.is_some()
     }
 
+    /// Refresh invocation data and budgets while retaining package memory.
+    pub fn prepare_call(
+        &mut self,
+        engine: &WasmEngine,
+        security: &WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<()> {
+        self.store.data_mut().host_state = host_state;
+        self.store.data_mut().limits = crate::limits::store_limits(&security.limits);
+        self.fuel_limit = security.limits.fuel_limit;
+        if engine.config().fuel_metering {
+            self.store
+                .set_fuel(self.fuel_limit)
+                .map_err(|e| WasmError::Internal(format!("Failed to reset execution fuel: {e}")))?;
+            self.store
+                .fuel_async_yield_interval(Some(100_000))
+                .map_err(|e| {
+                    WasmError::Internal(format!("Failed to configure execution yielding: {e}"))
+                })?;
+        }
+        if engine.config().epoch_interruption {
+            // The package runtime enforces the wall-clock deadline. Yielding
+            // lets run cancellation interrupt guest code between host calls.
+            self.store.epoch_deadline_async_yield_and_update(1);
+            self.store.set_epoch_deadline(1);
+        }
+        Ok(())
+    }
+
     /// Call the run export with execution input
     pub async fn call_run(
         &mut self,
         input: &WasmExecutionInput,
     ) -> WasmResult<WasmExecutionResult> {
+        if let Some(reset) = &self.reset_scratch_func {
+            reset.call_async(&mut self.store, ()).await.map_err(|e| {
+                WasmError::execution(exports::RESET_SCRATCH, format!("Call failed: {e}"))
+            })?;
+        }
         // Serialize input to JSON
         let input_json = serde_json::to_vec(input).map_err(WasmError::Json)?;
         let input_len = input_json.len() as u32;
@@ -334,17 +405,28 @@ impl WasmInstance {
                 .map_err(|e| WasmError::memory_access(format!("Allocation failed: {}", e)))?;
             Ok(ptr as u32)
         } else {
-            // Use bump allocator
+            if let Some((ptr, capacity)) = self.input_scratch {
+                if size <= capacity {
+                    return Ok(ptr);
+                }
+            }
+            // Reserve scratch outside existing guest memory and reuse it on
+            // later calls. Guest objects may outlive the invocation, but ABI
+            // input bytes are borrowed only until run() returns.
+            let capacity = size.checked_next_power_of_two().unwrap_or(size).max(1024);
+            let start = u32::try_from(self.memory.data_size(&self.store))
+                .map_err(|_| WasmError::memory_access("Input scratch exceeds wasm32 memory"))?;
             let ptr = {
                 let allocator =
                     self.store.data_mut().allocator.as_mut().ok_or_else(|| {
                         WasmError::Internal("Allocator not initialized".to_string())
                     })?;
-                allocator.bump_alloc(size, 8)?
+                allocator.reset(start);
+                allocator.bump_alloc(capacity, 8)?
             };
 
             // Grow WASM memory if the allocation extends beyond current size
-            let end = ptr as u64 + size as u64;
+            let end = ptr as u64 + capacity as u64;
             let current_size = self.memory.data_size(&self.store) as u64;
             if end > current_size {
                 let page_size: u64 = 65536;
@@ -359,6 +441,7 @@ impl WasmInstance {
                     })?;
             }
 
+            self.input_scratch = Some((ptr, capacity));
             Ok(ptr)
         }
     }

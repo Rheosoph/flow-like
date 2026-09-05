@@ -18,6 +18,7 @@ const RUNTIME_DLLS = [
 	"vcruntime140.dll",
 	"vcruntime140_1.dll",
 ] as const;
+const SD_RUNTIME_DLLS = ["msvcp140_codecvt_ids.dll", "vcomp140.dll"] as const;
 
 const ARCHITECTURES = {
 	x64: {
@@ -33,6 +34,10 @@ const ARCHITECTURES = {
 } as const;
 
 type Architecture = keyof typeof ARCHITECTURES;
+
+function runtimeDllsForArchitecture(arch: Architecture): readonly string[] {
+	return arch === "x64" ? [...RUNTIME_DLLS, ...SD_RUNTIME_DLLS] : RUNTIME_DLLS;
+}
 
 type CliOptions = {
 	arch?: Architecture;
@@ -163,20 +168,16 @@ function findCaseInsensitiveFile(
 	}
 }
 
-function hasRuntimeDlls(dir: string): boolean {
-	return RUNTIME_DLLS.every((dll) => findCaseInsensitiveFile(dir, dll));
-}
-
 function fileHash(filePath: string): string {
 	const hash = createHash("sha256");
 	hash.update(fs.readFileSync(filePath));
 	return hash.digest("hex");
 }
 
-function microsoftCrtDirs(archDir: string): string[] {
+function microsoftRuntimeDirs(archDir: string): string[] {
 	return sortNewestFirst(
 		subdirectories(archDir).filter((dir) =>
-			/^Microsoft\.VC\d+\.CRT$/i.test(path.basename(dir)),
+			/^Microsoft\.VC\d+\.(CRT|OpenMP)$/i.test(path.basename(dir)),
 		),
 	);
 }
@@ -186,13 +187,18 @@ function candidateRuntimeDirs(root: string, arch: Architecture): string[] {
 	const candidates: string[] = [root];
 	const archDir = path.join(root, redistArch);
 
+	// An explicit CRT folder can have the OpenMP DLL in a sibling directory.
+	if (/^Microsoft\.VC\d+\.(CRT|OpenMP)$/i.test(path.basename(root))) {
+		candidates.push(...microsoftRuntimeDirs(path.dirname(root)));
+	}
+	candidates.push(...microsoftRuntimeDirs(root));
 	candidates.push(archDir);
-	candidates.push(...microsoftCrtDirs(archDir));
+	candidates.push(...microsoftRuntimeDirs(archDir));
 
 	for (const versionDir of sortNewestFirst(subdirectories(root))) {
 		const versionArchDir = path.join(versionDir, redistArch);
 		candidates.push(versionArchDir);
-		candidates.push(...microsoftCrtDirs(versionArchDir));
+		candidates.push(...microsoftRuntimeDirs(versionArchDir));
 	}
 
 	return candidates;
@@ -272,10 +278,10 @@ function detectVisualStudioRedistRoots(): string[] {
 	return unique(roots);
 }
 
-function resolveRuntimeDir(
+export function resolveRuntimeFiles(
 	arch: Architecture,
 	options: CliOptions,
-): string | undefined {
+): Map<string, string> | undefined {
 	const roots = unique(
 		[
 			options.redistDir,
@@ -285,38 +291,38 @@ function resolveRuntimeDir(
 	);
 
 	for (const root of roots) {
+		const files = new Map<string, string>();
+		const requiredDlls = runtimeDllsForArchitecture(arch);
 		for (const candidate of candidateRuntimeDirs(root, arch)) {
-			if (hasRuntimeDlls(candidate)) {
-				return candidate;
+			for (const dll of requiredDlls) {
+				if (files.has(dll)) continue;
+				const source = findCaseInsensitiveFile(candidate, dll);
+				if (source) files.set(dll, source);
 			}
 		}
+		if (files.size === requiredDlls.length) return files;
 	}
 
 	return undefined;
 }
 
 function stageRuntimeDlls(arch: Architecture, options: CliOptions): void {
-	const runtimeDir = resolveRuntimeDir(arch, options);
+	const runtimeFiles = resolveRuntimeFiles(arch, options);
 	const config = ARCHITECTURES[arch];
 
-	if (!runtimeDir) {
+	if (!runtimeFiles) {
 		throw new Error(
 			[
 				`Could not locate Visual C++ runtime DLLs for ${arch}.`,
 				"Install the Visual Studio C++ build tools with the latest v14 redistributable component,",
-				"or set FLOWLIKE_VC_REDIST_DIR / --redist-dir to a folder containing Microsoft.VC143.CRT.",
+				"or set FLOWLIKE_VC_REDIST_DIR / --redist-dir to a redist folder containing the CRT and, for x64, OpenMP DLLs.",
 			].join(" "),
 		);
 	}
 
 	fs.mkdirSync(config.outputDir, { recursive: true });
 
-	for (const dll of RUNTIME_DLLS) {
-		const source = findCaseInsensitiveFile(runtimeDir, dll);
-		if (!source) {
-			throw new Error(`Missing ${dll} in ${runtimeDir}`);
-		}
-
+	for (const [dll, source] of runtimeFiles) {
 		const dest = path.join(config.outputDir, `${dll}-${config.targetTriple}`);
 
 		if (!options.force && fs.existsSync(dest)) {
@@ -324,7 +330,7 @@ function stageRuntimeDlls(arch: Architecture, options: CliOptions): void {
 				console.log(`Already staged: ${path.relative(process.cwd(), dest)}`);
 			} else {
 				console.log(
-					`Keeping staged ${path.relative(process.cwd(), dest)}; use --force to refresh from ${runtimeDir}`,
+					`Keeping staged ${path.relative(process.cwd(), dest)}; use --force to refresh from ${path.dirname(source)}`,
 				);
 			}
 			continue;
@@ -413,4 +419,4 @@ async function main(): Promise<void> {
 	}
 }
 
-await main();
+if (import.meta.main) await main();

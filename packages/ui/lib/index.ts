@@ -25,6 +25,7 @@ export * from "./storage-file";
 
 export * from "./bit/bit";
 export * from "./bit/bit-pack";
+export * from "./bit/generation-model-preset";
 export * from "./bit/huggingface-mlx-import";
 export * from "./bit/huggingface-model-import";
 export * from "./bit/local-model-filter";

@@ -27,6 +27,13 @@ Enable `execute` when checking an execution implementation. Metadata-only checks
 do not type-check code behind that feature. Product bundles still select the
 complete node set and the runtime capabilities appropriate to the product.
 
+Unit tests move with their implementation crate. Select the children as well as
+the facade when running a whole domain's tests:
+
+```bash
+cargo test -p 'flow-like-catalog-std*' --features flow-like-catalog-std/execute
+```
+
 ## Shared types and dependencies
 
 Use support crates for shared implementations rather than importing another
@@ -46,11 +53,24 @@ if their fields were identical. Put an external dependency on the implementation
 crate that uses it, and forward execution features from the facade.
 
 `flow-like-runtime` provides `NodeLogic`, board types, and the concrete execution
-context. Catalog manifests use the dependency name `flow-like` as an alias for
-this package, preserving imports inside node implementations. The public
-`flow-like` facade combines runtime with `flow-like-editor`; application code can
-keep using that facade. A production node crate must depend on the runtime
-directly to avoid waiting for editor and copilot compilation.
+context. Catalog manifests inherit its location from the root
+`[workspace.dependencies]` table using the canonical dependency name:
+
+```toml
+[dependencies]
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
+```
+
+Crates that retain `flow_like::...` source imports declare
+`extern crate flow_like_runtime as flow_like;` at their Rust crate root. This
+source alias keeps imports working while Cargo uses `flow-like-runtime` for
+dependency declarations and feature forwarding. Declare dependency paths in
+the root workspace manifest.
+
+The public `flow-like` facade combines runtime with `flow-like-editor`;
+application code can keep using that facade. A production node crate must
+depend on the runtime directly to avoid waiting for editor and copilot
+compilation.
 
 The engine also uses `flow-like-a2ui-schema` and `flow-like-editor-contracts`
 for types that can compile independently of the application runtime.

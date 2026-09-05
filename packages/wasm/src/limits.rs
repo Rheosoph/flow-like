@@ -135,6 +135,16 @@ impl WasmSecurityConfig {
     }
 }
 
+pub(crate) fn store_limits(limits: &WasmLimits) -> wasmtime::StoreLimits {
+    wasmtime::StoreLimitsBuilder::new()
+        .memory_size(limits.memory_limit)
+        .table_elements(limits.max_table_elements as usize)
+        .instances(limits.max_instances as usize)
+        .tables(limits.max_tables as usize)
+        .memories(limits.max_memories as usize)
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -57,6 +57,7 @@ export enum IBitTypes {
 	Embedding = "Embedding",
 	File = "File",
 	ImageEmbedding = "ImageEmbedding",
+	ImageGeneration = "ImageGeneration",
 	Llm = "Llm",
 	Media = "Media",
 	ObjectDetection = "ObjectDetection",
@@ -71,4 +72,5 @@ export enum IBitTypes {
 	Stt = "Stt",
 	Tts = "Tts",
 	Vlm = "Vlm",
+	VideoGeneration = "VideoGeneration",
 }

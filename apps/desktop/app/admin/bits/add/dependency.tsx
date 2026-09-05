@@ -15,6 +15,7 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useId,
 } from "react";
 import { getModelSize } from "../utils";
 
@@ -30,6 +31,7 @@ export function DependencyConfiguration({
 	setBit: Dispatch<SetStateAction<IBit | undefined>>;
 }>) {
 	const { t } = useTranslation("common");
+	const inputId = useId();
 	const prefillData = useCallback(async () => {
 		if (!bit.download_link) return;
 
@@ -41,11 +43,15 @@ export function DependencyConfiguration({
 		const downloadLink = bit.download_link.trim();
 		const fileName = downloadLink.split("/").pop()?.split("?")[0] ?? "";
 
-		setBit((old) => ({
-			...(old ?? defaultBit),
-			size: size,
-			file_name: old?.file_name === "" ? fileName : old?.file_name,
-		}));
+		setBit((old) =>
+			!old || old.download_link !== bit.download_link
+				? old
+				: {
+						...old,
+						size: Number.isFinite(size) && size > 0 ? size : -1,
+						file_name: old.file_name === "" ? fileName : old.file_name,
+					},
+		);
 	}, [bit, defaultBit]);
 
 	useEffect(() => {
@@ -69,11 +75,11 @@ export function DependencyConfiguration({
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="projection-link">
+						<Label htmlFor={`${inputId}-link`}>
 							{t("nameLink", "{{name}} Link *", { name })}
 						</Label>
 						<Input
-							id="projection-link"
+							id={`${inputId}-link`}
 							value={bit.download_link ?? ""}
 							onChange={(e) => {
 								const downloadLink = e.target.value.trim();
@@ -82,14 +88,19 @@ export function DependencyConfiguration({
 									...(old ?? defaultBit),
 									download_link: downloadLink,
 									file_name: downloadLink.split("/").pop()?.split("?")[0] || "",
+									size: downloadLink ? -1 : 0,
 								}));
 
 								if (downloadLink) {
-									Promise.all([getModelSize(downloadLink)]).then(([size]) => {
-										setBit((old) => ({
-											...(old ?? defaultBit),
-											size: size,
-										}));
+									getModelSize(downloadLink).then((size) => {
+										setBit((old) =>
+											!old || old.download_link !== downloadLink
+												? old
+												: {
+														...old,
+														size: Number.isFinite(size) && size > 0 ? size : -1,
+													},
+										);
 									});
 								}
 							}}
@@ -101,11 +112,11 @@ export function DependencyConfiguration({
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="file-name">
+						<Label htmlFor={`${inputId}-file`}>
 							{t("storedFilePath", "Stored File Path")}
 						</Label>
 						<Input
-							id="file-name"
+							id={`${inputId}-file`}
 							value={bit.file_name ?? ""}
 							onChange={(e) => {
 								setBit((old) => ({

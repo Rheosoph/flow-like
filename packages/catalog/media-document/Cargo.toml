@@ -10,7 +10,7 @@ execute = ["flow-like-catalog-core/execute", "dep:zip", "dep:quick-xml", "dep:lo
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 schemars.workspace = true
 bytes.workspace = true

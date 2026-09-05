@@ -6,14 +6,14 @@ edition = "2024"
 [features]
 default = []
 manifest = ["dep:toml"]
-nodes = ["manifest", "dep:flow-like"]
+nodes = ["manifest", "dep:flow-like-runtime"]
 bundle = ["manifest", "dep:anyhow", "dep:sha2", "dep:zip"]
-openapi = ["dep:utoipa", "flow-like?/openapi"]
+openapi = ["dep:utoipa", "flow-like-runtime?/openapi"]
 
 [dependencies]
 anyhow = { version = "1", optional = true }
 bitflags.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"], optional = true }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = { version = "0.10", optional = true }

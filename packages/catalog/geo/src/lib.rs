@@ -6,6 +6,8 @@
 //! - Route planning
 //! - H3 geospatial indexing
 
+extern crate flow_like_runtime as flow_like;
+
 pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 use std::sync::Arc;
 

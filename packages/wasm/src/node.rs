@@ -5,19 +5,20 @@
 use crate::abi::{WasmExecutionInput, WasmNodeDefinition, WasmPinDefinition};
 use crate::engine::WasmEngine;
 use crate::error::WasmResult;
-use crate::host_functions::{ExecutionMetadata, ModelContext, StorageContext};
+use crate::host_functions::{ExecutionMetadata, HostState, ModelContext, StorageContext};
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::module::WasmModule;
+use crate::package_runtime::{package_runtime_key, PackageRuntime};
 use crate::unified::LoadedWasm;
 use async_trait::async_trait;
 use flow_like::flow::execution::context::{ExecutionContext, ExecutionContextCache};
-use flow_like::flow::execution::{LogLevel, Run};
+use flow_like::flow::execution::LogLevel;
 use flow_like::flow::node::{Node, NodeLogic, NodeScores, NodeWasm};
 use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};
 use flow_like::flow::variable::VariableType;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
-use flow_like_types::{sync::Mutex, tokio::sync::RwLock, Cacheable, Value};
+use flow_like_types::{tokio::sync::RwLock, Cacheable, Value};
 use parking_lot::RwLock as ParkingRwLock;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -544,12 +545,6 @@ impl NodeLogic for WasmNodeLogic {
         {
             security.capabilities = strip_shadow_capabilities(security.capabilities);
         }
-        let mut instance = self
-            .loaded
-            .instantiate(&self.engine, security)
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to create WASM instance: {}", e))?;
-
         let definition = self
             .get_definition()
             .await
@@ -572,17 +567,13 @@ impl NodeLogic for WasmNodeLogic {
         }
 
         // Set up host state
-        let host_state = instance.host_state_mut();
+        let mut host_state = HostState::with_security(&security);
         let inputs_for_state: std::collections::HashMap<String, Value> =
             inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         host_state.set_inputs(inputs_for_state);
 
         // Build run_id
-        let run_id: String = context
-            .run
-            .upgrade()
-            .and_then(|r: Arc<Mutex<Run>>| r.try_lock().ok().map(|run| run.id.clone()))
-            .unwrap_or_default();
+        let run_id = context.run_id().to_string();
 
         // Get node_id from context
         let node_id = context.id.to_string();
@@ -674,10 +665,31 @@ impl NodeLogic for WasmNodeLogic {
             node_name: definition.name.clone(),
         };
 
-        let result = instance
-            .call_run(&exec_input)
+        let shadow = context
+            .execution_cache
+            .as_ref()
+            .is_some_and(|cache| cache.shadow);
+        let key = package_runtime_key(
+            self.package_id.as_deref().expect("package validated above"),
+            self.loaded.hash(),
+            &security,
+            &exec_input.user_id,
+            shadow,
+        )?;
+        let runtime = context
+            .resources
+            .get_or_insert_with(key, || Arc::new(PackageRuntime::default()))?;
+        let call = runtime
+            .call(
+                &self.loaded,
+                &self.engine,
+                &security,
+                host_state,
+                &exec_input,
+            )
             .await
             .map_err(|e| flow_like_types::anyhow!("WASM execution failed: {}", e))?;
+        let result = call.result;
 
         // Process outputs
         for (name, value) in result.outputs {
@@ -690,7 +702,7 @@ impl NodeLogic for WasmNodeLogic {
         }
 
         // Process logs
-        for log in instance.host_state().get_logs() {
+        for log in call.logs {
             let level = match log.level {
                 0..=1 => LogLevel::Debug,
                 2 => LogLevel::Info,
@@ -701,7 +713,7 @@ impl NodeLogic for WasmNodeLogic {
         }
 
         // Process stream events
-        for event in instance.host_state().take_stream_events() {
+        for event in call.events {
             match event.event_type.as_str() {
                 "text" => {
                     if let Some(text) = event.data.as_str() {
@@ -718,7 +730,7 @@ impl NodeLogic for WasmNodeLogic {
         }
 
         // Check for errors
-        if let Some(error) = instance.host_state().get_error() {
+        if let Some(error) = call.error {
             return Err(flow_like_types::anyhow!("WASM node error: {}", error));
         }
 

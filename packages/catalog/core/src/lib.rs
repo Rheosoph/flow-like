@@ -7,6 +7,8 @@
 //! - Attachment
 //! - NodeConstructor and get_catalog()
 
+extern crate flow_like_runtime as flow_like;
+
 use std::sync::Arc;
 
 pub use flow_like::flow::node::NodeLogic;

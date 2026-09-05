@@ -1,3 +1,5 @@
+extern crate flow_like_runtime as flow_like;
+
 /// The `custom:vertex` media providers fall back to Google application-default
 /// credentials when the provider carries neither an access token nor a
 /// service-account key. This uses the host process's own identity. Refuse that

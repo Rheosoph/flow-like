@@ -23,8 +23,8 @@ executor-local-ml = ["flow-like-catalog/executor-local-ml"]
 local-runtime = ["flow-like-catalog/local-runtime"]
 local-runtime-ml = ["flow-like-catalog/local-runtime-ml"]
 local-ml = ["flow-like-catalog/local-ml"]
-local-ml-cuda = ["local-ml", "flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
-local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
+local-ml-cuda = ["local-ml", "flow-like-runtime/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like-runtime/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 tauri = ["flow-like-catalog/tauri"]
 # Cloud channel transports; each executor binary enables exactly its own cloud.
 channel-aws = ["flow-like-channels/aws"]
@@ -32,7 +32,7 @@ channel-azure = ["flow-like-channels/azure"]
 channel-gcp = ["flow-like-channels/gcp"]
 
 [dependencies]
-flow-like = { package = "flow-like-runtime", path = "../core/runtime", default-features = false, features = ["flow-metadata", "flow-runtime", "model"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata", "flow-runtime", "model"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true

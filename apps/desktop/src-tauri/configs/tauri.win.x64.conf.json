@@ -39,7 +39,7 @@
 		}
 	},
 	"build": {
-		"beforeDevCommand": "bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run dev",
-		"beforeBuildCommand": "bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run build"
+		"beforeDevCommand": "bun ./scripts/prepare-windows-prereqs.ts --arch x64 && bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run dev",
+		"beforeBuildCommand": "bun ./scripts/prepare-windows-prereqs.ts --arch x64 && bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run build"
 	}
 }

@@ -44,7 +44,8 @@ wasm-node-moonbit/
 
 ## SDK Structure
 
-The SDK currently lives in `../wasm-sdk-moonbit/` and is referenced via `moon.mod.json`:
+The SDK lives in `../../libs/wasm-sdk/wasm-sdk-moonbit/` and is referenced via
+`moon.mod.json`. Update that dependency path if you copy the template elsewhere:
 
 ```
 wasm-sdk-moonbit/
@@ -58,6 +59,16 @@ wasm-sdk-moonbit/
 ```
 
 When the SDK is published to mooncakes, switch the dependency in `moon.mod.json` to a version string.
+
+## Memory between node calls
+
+The template exports `reset_scratch`. The host invokes it before allocating
+the next call's input, reusing ABI buffers while preserving package globals
+within the run. Input and result pointers are borrowed for one invocation.
+Retain parsed MoonBit values instead of raw pointers into these buffers.
+
+Rebuild older packages with the updated SDK and this export; existing binaries
+cannot gain the hook through a runtime update. All live state ends with the run.
 
 ## Creating Your Node
 

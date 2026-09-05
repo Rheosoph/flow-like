@@ -1,13 +1,22 @@
+use flow_like_wasm_node_template as _;
 use flow_like_wasm_sdk::*;
 
 /// Auto-discovers all `#[register_node]` nodes via `inventory`.
-/// Nodes whose `get_node()` panics (e.g. RigPromptNode calling a WASM host
-/// function) are silently skipped.
 fn all_template_nodes() -> Vec<NodeDefinition> {
-    inventory::iter::<WasmNodeEntry>
+    let nodes: Vec<_> = inventory::iter::<WasmNodeEntry>
         .into_iter()
-        .filter_map(|entry| std::panic::catch_unwind(entry.get_node).ok())
-        .collect()
+        .map(|entry| (entry.get_node)())
+        .collect();
+    assert!(
+        !nodes.is_empty(),
+        "template nodes must be linked into this test"
+    );
+    nodes
+}
+
+fn uses_host_schema(node: &NodeDefinition, pin: &PinDefinition) -> bool {
+    // Bit::schema() is supplied by the runtime and unavailable in native tests.
+    node.name == "weather_agent" && pin.name == "model"
 }
 
 #[test]
@@ -57,6 +66,9 @@ fn lint_impure_nodes_have_both_exec_sides() {
 fn lint_struct_pins_have_schema() {
     for node in all_template_nodes() {
         for pin in &node.pins {
+            if uses_host_schema(&node, pin) {
+                continue;
+            }
             if pin.data_type == VariableType::Struct {
                 assert!(
                     pin.schema.as_ref().map_or(false, |s| !s.trim().is_empty()),
@@ -74,6 +86,9 @@ fn lint_struct_pins_have_schema() {
 fn lint_no_root_array_schemas() {
     for node in all_template_nodes() {
         for pin in &node.pins {
+            if uses_host_schema(&node, pin) {
+                continue;
+            }
             if let Some(schema_str) = &pin.schema {
                 let schema: serde_json::Value =
                     serde_json::from_str(schema_str).expect("schema must be valid JSON");

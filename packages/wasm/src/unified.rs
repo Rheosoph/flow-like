@@ -43,6 +43,29 @@ impl LoadedWasm {
             LoadedWasm::Component(c) => c.hash(),
         }
     }
+
+    pub async fn instantiate_with_host_state(
+        &self,
+        engine: &WasmEngine,
+        security: WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<UnifiedInstance> {
+        match self {
+            LoadedWasm::Module(module) => Ok(UnifiedInstance::Module(
+                WasmInstance::with_host_state(engine, module.clone(), security, host_state).await?,
+            )),
+            #[cfg(feature = "component-model")]
+            LoadedWasm::Component(component) => Ok(UnifiedInstance::Component(
+                WasmComponentInstance::with_host_state(
+                    engine,
+                    component.clone(),
+                    security,
+                    host_state,
+                )
+                .await?,
+            )),
+        }
+    }
 }
 
 impl Clone for LoadedWasm {
@@ -64,6 +87,23 @@ pub enum UnifiedInstance {
 }
 
 impl UnifiedInstance {
+    pub fn prepare_call(
+        &mut self,
+        engine: &WasmEngine,
+        security: &WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<()> {
+        match self {
+            UnifiedInstance::Module(instance) => {
+                instance.prepare_call(engine, security, host_state)
+            }
+            #[cfg(feature = "component-model")]
+            UnifiedInstance::Component(instance) => {
+                instance.prepare_call(engine, security, host_state)
+            }
+        }
+    }
+
     pub async fn call_get_nodes(&mut self) -> WasmResult<Vec<WasmNodeDefinition>> {
         match self {
             UnifiedInstance::Module(i) => i.call_get_nodes().await,

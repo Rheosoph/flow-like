@@ -4,6 +4,6 @@
 	"license": "MIT",
 	"description": "Template for creating Flow-Like WASM nodes in MoonBit",
 	"deps": {
-		"felix-schultz/flow-like-wasm-sdk": { "path": "../wasm-sdk-moonbit" }
+		"felix-schultz/flow-like-wasm-sdk": { "path": "../../libs/wasm-sdk/wasm-sdk-moonbit" }
 	}
 }

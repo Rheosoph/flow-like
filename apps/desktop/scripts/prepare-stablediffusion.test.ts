@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import AdmZip from "adm-zip";
-import { extractRuntime, prepare } from "./prepare-stablediffusion";
+import {
+	extractRuntime,
+	prepare,
+	stageWindowsRuntimeDlls,
+} from "./prepare-stablediffusion";
 
 const temporaryDirectories: string[] = [];
 
@@ -146,4 +150,40 @@ test("unsupported platforms fail before downloading or modifying a runtime", asy
 	await expect(prepare("linux-arm64")).rejects.toThrow(
 		"Unsupported sd-server platform: linux-arm64",
 	);
+});
+
+describe("private Windows runtime dependencies", () => {
+	const dlls = [
+		"msvcp140.dll",
+		"msvcp140_codecvt_ids.dll",
+		"vcomp140.dll",
+		"vcruntime140.dll",
+		"vcruntime140_1.dll",
+	];
+	test("stages every DLL imported by the server and its CPU backend", () => {
+		const source = temporaryDirectory();
+		const destination = temporaryDirectory();
+		for (const name of dlls)
+			fs.writeFileSync(
+				path.join(source, `${name}-x86_64-pc-windows-msvc`),
+				name,
+			);
+		stageWindowsRuntimeDlls(destination, source);
+		expect(fs.readdirSync(destination).sort()).toEqual([...dlls].sort());
+		for (const name of dlls)
+			expect(fs.readFileSync(path.join(destination, name), "utf8")).toBe(name);
+	});
+	test("rejects a missing OpenMP runtime before copying any DLLs", () => {
+		const source = temporaryDirectory();
+		const destination = temporaryDirectory();
+		for (const name of dlls.filter((name) => name !== "vcomp140.dll"))
+			fs.writeFileSync(
+				path.join(source, `${name}-x86_64-pc-windows-msvc`),
+				name,
+			);
+		expect(() => stageWindowsRuntimeDlls(destination, source)).toThrow(
+			"Missing prepared vcomp140.dll",
+		);
+		expect(fs.readdirSync(destination)).toEqual([]);
+	});
 });

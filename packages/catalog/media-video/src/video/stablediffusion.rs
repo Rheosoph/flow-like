@@ -147,6 +147,28 @@ impl StableDiffusionVideoOptions {
     }
 }
 
+pub(super) fn with_model_defaults(
+    provider: &ModelProvider,
+    options: VideoGenerationProviderOptions,
+) -> flow_like_types::Result<VideoGenerationProviderOptions> {
+    if provider.provider_name != PROVIDER_NAME
+        || !matches!(options, VideoGenerationProviderOptions::Default)
+    {
+        return Ok(options);
+    }
+    let Some(defaults) = provider
+        .params
+        .as_ref()
+        .and_then(|params| params.get("generation_defaults"))
+    else {
+        return Ok(options);
+    };
+    let defaults: StableDiffusionVideoOptions = from_value(defaults.clone())
+        .map_err(|error| anyhow!("Invalid stable-diffusion.cpp video model defaults: {error}"))?;
+    defaults.validate()?;
+    Ok(VideoGenerationProviderOptions::StableDiffusion(defaults))
+}
+
 pub(super) fn normalize_options(
     options: &StableDiffusionVideoOptions,
 ) -> NormalizedVideoProviderOptions {
@@ -438,6 +460,66 @@ impl NodeLogic for MakeStableDiffusionVideoOptionsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_defaults_apply_only_to_default_local_options() {
+        let mut provider = ModelProvider {
+            provider_name: PROVIDER_NAME.into(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(HashMap::from([(
+                "generation_defaults".into(),
+                json!({"width":1280,"height":720,"steps":4,
+                    "cfg_scale":1.0,"video_frames":81,"fps":24,"output_format":"avi"}),
+            )])),
+        };
+        let options =
+            with_model_defaults(&provider, VideoGenerationProviderOptions::Default).unwrap();
+        let VideoGenerationProviderOptions::StableDiffusion(options) = options else {
+            panic!("Expected local options")
+        };
+        let native = generation_request(&request(options)).unwrap();
+        assert_eq!(native.params["width"], 1280);
+        assert_eq!(native.params["video_frames"], 81);
+        assert_eq!(native.params["fps"], 24);
+        assert_eq!(native.params["sample_params"]["sample_steps"], 4);
+        assert_eq!(native.params["sample_params"]["guidance"]["txt_cfg"], 1.0);
+        let explicit =
+            VideoGenerationProviderOptions::StableDiffusion(StableDiffusionVideoOptions::default());
+        let options = with_model_defaults(&provider, explicit).unwrap();
+        let VideoGenerationProviderOptions::StableDiffusion(options) = options else {
+            panic!("Expected local options")
+        };
+        assert_eq!(options.video_frames, 33);
+        provider.provider_name = PROVIDER_OPENAI.into();
+        assert!(matches!(
+            with_model_defaults(&provider, VideoGenerationProviderOptions::Default).unwrap(),
+            VideoGenerationProviderOptions::Default
+        ));
+    }
+
+    #[test]
+    fn invalid_model_defaults_fail_before_generation() {
+        for defaults in [
+            json!({"width":513}),
+            json!({"steps":101}),
+            json!({"video_frames":32}),
+            json!({"output_format":"mp4"}),
+            json!(null),
+        ] {
+            let provider = ModelProvider {
+                provider_name: PROVIDER_NAME.into(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(HashMap::from([("generation_defaults".into(), defaults)])),
+            };
+            assert!(
+                with_model_defaults(&provider, VideoGenerationProviderOptions::Default).is_err()
+            );
+        }
+    }
 
     fn request(options: StableDiffusionVideoOptions) -> VideoGenerationRequest {
         let normalized = normalize_options(&options);

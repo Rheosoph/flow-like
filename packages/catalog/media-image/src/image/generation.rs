@@ -2455,6 +2455,8 @@ impl NodeLogic for GenerateImageNode {
             } else {
                 from_value(provider_options_value)?
             };
+        let typed_provider_options =
+            stablediffusion::with_model_defaults(&provider, typed_provider_options)?;
         let provider_options = typed_provider_options.normalized();
 
         let request = ImageGenerationRequest {
@@ -2480,6 +2482,13 @@ impl NodeLogic for GenerateImageNode {
             LogLevel::Info,
         );
 
+        let provider = flow_like::models::generation::resolve_generation_provider(
+            &bit,
+            &provider,
+            &context.profile,
+            &context.app_state,
+        )
+        .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let generated =
             generate_with_provider(&provider, &request, &typed_provider_options).await?;

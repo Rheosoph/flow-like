@@ -1,5 +1,7 @@
 //! Shared data handles and runtime helpers used by independent catalog packages.
 
+extern crate flow_like_runtime as flow_like;
+
 pub mod remote_util;
 
 #[path = "attachment.rs"]

@@ -11,8 +11,9 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# When copying this template outside the repo, replace with: flow-like-wasm-sdk = "0.3"
-flow-like-wasm-sdk = { version = "0.3.7", features = ["rig"] }
+# The listener example needs the SDK from this checkout and a matching runtime.
+# When copying the template, keep this dependency pointed at that SDK source.
+flow-like-wasm-sdk = { version = "0.3.7", path = "../../libs/wasm-sdk/wasm-sdk-rust", features = ["rig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

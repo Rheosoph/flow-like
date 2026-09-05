@@ -7,18 +7,18 @@ edition = "2024"
 default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
 execute = ["flow-like-catalog-core/execute"]
-local-tts = ["flow-like/local-tts"]
-local-tts-metal = ["local-tts", "flow-like/local-tts-metal"]
-local-tts-cuda = ["local-tts", "flow-like/local-tts-cuda"]
-local-tts-accelerate = ["local-tts", "flow-like/local-tts-accelerate"]
-local-stt = ["flow-like/local-stt"]
-local-stt-metal = ["local-stt", "flow-like/local-stt-metal"]
-local-stt-cuda = ["local-stt", "flow-like/local-stt-cuda"]
-local-stt-accelerate = ["local-stt", "flow-like/local-stt-accelerate"]
+local-tts = ["flow-like-runtime/local-tts"]
+local-tts-metal = ["local-tts", "flow-like-runtime/local-tts-metal"]
+local-tts-cuda = ["local-tts", "flow-like-runtime/local-tts-cuda"]
+local-tts-accelerate = ["local-tts", "flow-like-runtime/local-tts-accelerate"]
+local-stt = ["flow-like-runtime/local-stt"]
+local-stt-metal = ["local-stt", "flow-like-runtime/local-stt-metal"]
+local-stt-cuda = ["local-stt", "flow-like-runtime/local-stt-cuda"]
+local-stt-accelerate = ["local-stt", "flow-like-runtime/local-stt-accelerate"]
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-model-provider.workspace = true
 google-cloud-auth.workspace = true

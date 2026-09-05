@@ -34,7 +34,7 @@ flow-like-catalog-std-runtime.workspace = true
 flow-like-catalog-std-support.workspace = true
 
 [dev-dependencies]
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-storage = { workspace = true, default-features = false }
 futures.workspace = true

@@ -79,7 +79,7 @@ flow-like-catalog-data-databricks.workspace = true
 flow-like-catalog-data-linkedin.workspace = true
 flow-like-catalog-data-support.workspace = true
 flow-like-catalog-core.workspace = true
-flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 # Only for `to_camel_case`: SQL param pins are addressed by their FlowScript argument
 # name, and the node validates that two placeholders cannot render to the same one.

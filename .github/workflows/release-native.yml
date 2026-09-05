@@ -320,6 +320,11 @@ jobs:
           echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
+      - name: Prepare Windows VC runtime DLLs
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        run: bun ./scripts/prepare-windows-prereqs.ts --arch x64
+
       # The CI Tauri config disables beforeBuildCommand. Stage the ignored
       # runtime explicitly so the platform resource mapping can bundle it.
       - name: Prepare stable-diffusion.cpp runtime
@@ -329,11 +334,6 @@ jobs:
         env:
           STABLEDIFFUSION_PLATFORM: ${{ inputs.stablediffusion_platform }}
         run: bun ./scripts/prepare-stablediffusion.ts --platform "$STABLEDIFFUSION_PLATFORM"
-
-      - name: Prepare Windows VC runtime DLLs
-        if: runner.os == 'Windows'
-        working-directory: apps/desktop
-        run: bun ./scripts/prepare-windows-prereqs.ts --arch x64
 
       - name: Prepare AppImage tooling (Linux)
         if: runner.os == 'Linux'

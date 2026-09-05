@@ -1,5 +1,6 @@
 // Public node paths and registration order before splitting the data catalog.
-assert_legacy_registry![
+assert_legacy_registry! {
+    public: [
     catalog::data::atlassian::confluence::add_comment::AddConfluenceCommentNode,
     catalog::data::atlassian::confluence::attachments::ListConfluenceAttachmentsNode,
     catalog::data::atlassian::confluence::attachments::UploadConfluenceAttachmentNode,
@@ -492,7 +493,11 @@ assert_legacy_registry![
     catalog::events::mail_event::SimpleEventNode,
     catalog::events::simple_event::SimpleEventNode,
     catalog::events::widget_action_event::WidgetActionEvent,
-    catalog::interaction::form::FormInteraction,
-    catalog::interaction::multiple_choice::MultipleChoiceInteraction,
-    catalog::interaction::single_choice::SingleChoiceInteraction,
-];
+    ],
+    // These nodes were registered through private modules before the split.
+    private: [
+        "interaction_form",
+        "interaction_multiple_choice",
+        "interaction_single_choice",
+    ],
+}

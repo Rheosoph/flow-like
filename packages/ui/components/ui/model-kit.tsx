@@ -54,6 +54,10 @@ export function bitModalities(type: IBitTypes): ModalityFlowSpec {
 			return { inputs: ["audio"], output: "text" };
 		case IBitTypes.Tts:
 			return { inputs: ["text"], output: "speech" };
+		case IBitTypes.ImageGeneration:
+			return { inputs: ["text"], output: "image" };
+		case IBitTypes.VideoGeneration:
+			return { inputs: ["text"], output: "video" };
 		case IBitTypes.Embedding:
 			return { inputs: ["text"], output: "embed" };
 		case IBitTypes.ImageEmbedding:
@@ -283,6 +287,7 @@ export function ProviderGlyph({
 
 /** Providers write their own names — title-casing them reads as a typo. */
 const PROVIDER_NAMES: Record<string, string> = {
+	"local:stablediffusion": "stable-diffusion.cpp",
 	anthropic: "Anthropic",
 	azure: "Azure OpenAI",
 	bedrock: "Amazon Bedrock",

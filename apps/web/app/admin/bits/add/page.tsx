@@ -7,6 +7,7 @@ import {
 	CardHeader,
 	type HuggingFaceGgufSelectionOptions,
 	type HuggingFaceModelImport,
+	type GenerationAssetDraft,
 	type IBit,
 	IBitTypes,
 	type IEmbeddingModelParameters,
@@ -24,6 +25,12 @@ import {
 	Progress,
 	Separator,
 	applyHuggingFaceMlxImportToBit,
+	applyGenerationModelPreset,
+	buildGenerationModelRootBit,
+	createGenerationAssetDrafts,
+	defaultGenerationPreset,
+	isGenerationModelBit,
+	validateGenerationAssets,
 	buildMlxModelRootBit,
 	createHuggingFaceGgufAdminDraft,
 	createHuggingFaceMlxAssetBits,
@@ -59,6 +66,8 @@ import {
 } from "../utils";
 import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
+import { GenerationConfiguration } from "./generation";
+import { registerGenerationAssets } from "./generation-upload";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
 import { HuggingFaceModelImporter, MlxAssetsConfiguration } from "./mlx-assets";
@@ -227,6 +236,16 @@ export default function Page() {
 	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
 	const [sttAssets, setSttAssets] = useState<SttAssetDraft[]>([]);
 	const [mlxAssets, setMlxAssets] = useState<IBit[]>([]);
+	const [generationAssets, setGenerationAssets] = useState<
+		GenerationAssetDraft[]
+	>([]);
+	const completedGenerationAssets = useRef(new Map<string, string>());
+	const generationKind =
+		type === IBitTypes.ImageGeneration
+			? "image"
+			: type === IBitTypes.VideoGeneration
+				? "video"
+				: undefined;
 	const skipNextTypeResetRef = useRef(false);
 	const importedGgufDownloadRef = useRef<string | null>(null);
 	const [progress, setProgress] = useState<number>(0);
@@ -413,6 +432,49 @@ export default function Page() {
 		},
 		[backend.apiState, profile.data],
 	);
+
+	const registerGenerationModel = useCallback(async () => {
+		if (!profile.data) throw new Error("User profile is not available");
+		const errors = validateGenerationAssets(generationAssets);
+		if (errors.length) throw new Error(errors.join(". "));
+		const registered = await registerGenerationAssets({
+			assets: generationAssets,
+			completed: completedGenerationAssets.current,
+			uploadBit,
+			onProgress: (asset, index) => {
+				setProgress(0);
+				setProgressDownloaded(null);
+				setProgressTotal(asset.bit.size ?? null);
+				setProgressLabel(
+					`Uploading model file ${index + 1} of ${generationAssets.length}: ${asset.bit.file_name}`,
+				);
+				setProgressBit(asset.bit);
+				lastSampleRef.current = null;
+				setSpeedBps(0);
+				setEtaSec(null);
+			},
+			onRegistered: (asset) =>
+				setGenerationAssets((current) =>
+					current.map((candidate) =>
+						candidate.key === asset.key ? asset : candidate,
+					),
+				),
+		});
+		const root = buildGenerationModelRootBit(bit, registered);
+		setBit(root);
+		setProgress(0);
+		setProgressDownloaded(null);
+		setProgressTotal(null);
+		setProgressLabel("Registering the generation model");
+		setProgressBit(root);
+		const response = await uploadBit(root);
+		setBit({ ...response, meta: root.meta });
+		await backend.apiState.put(
+			profile.data,
+			`admin/bit/${response.id}/en`,
+			root.meta.en,
+		);
+	}, [bit, generationAssets, uploadBit, profile.data, backend.apiState]);
 
 	function setDefaultDependencies(type: IBitTypes) {
 		if (type === IBitTypes.Vlm) {
@@ -659,6 +721,26 @@ export default function Page() {
 			return;
 		}
 		importedGgufDownloadRef.current = null;
+		completedGenerationAssets.current.clear();
+		setProgress(0);
+		setProgressLabel(null);
+		setGenerationAssets([]);
+		if (generationKind) {
+			const preset = defaultGenerationPreset(generationKind);
+			const assets = createGenerationAssetDrafts(preset.id, () =>
+				getDefaultBit(IBitTypes.File),
+			);
+			setBit(
+				applyGenerationModelPreset(getDefaultBit(type), preset.id, assets),
+			);
+			setGenerationAssets(assets);
+			setMlxAssets([]);
+			setDefaultDependencies(type);
+			return;
+		}
+		if (isGenerationModelBit(bit)) {
+			setBit(getDefaultBit(type));
+		}
 		if (
 			(type === IBitTypes.Llm ||
 				type === IBitTypes.Vlm ||
@@ -779,7 +861,10 @@ export default function Page() {
 				<p className="max-w-screen-md">
 					{`This page is for adding new bits, which are the building blocks of extra models available to the user. You can add bits here by providing the necessary information.`}
 				</p>
-				<div className="max-w-screen-md flex flex-row items-center gap-2 mt-4">
+				<fieldset
+					disabled={loading}
+					className="max-w-screen-lg flex flex-row flex-wrap items-center gap-2 mt-4"
+				>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Llm ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.Llm)}
@@ -837,7 +922,21 @@ export default function Page() {
 					>
 						{t("classification", "Classification")}
 					</button>
-				</div>
+					{(
+						[IBitTypes.ImageGeneration, IBitTypes.VideoGeneration] as const
+					).map((generationType) => (
+						<button
+							key={generationType}
+							type="button"
+							className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === generationType ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+							onClick={() => setType(generationType)}
+						>
+							{generationType === IBitTypes.ImageGeneration
+								? "Image Generation"
+								: "Video Generation"}
+						</button>
+					))}
+				</fieldset>
 				<br />
 				{type === IBitTypes.Llm || type === IBitTypes.Vlm ? (
 					<>
@@ -848,7 +947,10 @@ export default function Page() {
 						<Separator className="my-4" />
 					</>
 				) : null}
-				{bit.type !== IBitTypes.Tts && !isLocalSttBit && !isMlxModel ? (
+				{bit.type !== IBitTypes.Tts &&
+				!isLocalSttBit &&
+				!isMlxModel &&
+				!generationKind ? (
 					<>
 						<div className="max-w-screen-lg flex flex-row items-center gap-2 w-full">
 							{loading ? (
@@ -877,6 +979,17 @@ export default function Page() {
 						<LLMConfiguration bit={bit} setBit={setBit} />
 						<Separator className="my-4" />
 					</>
+				) : null}
+				{generationKind ? (
+					<GenerationConfiguration
+						bit={bit}
+						setBit={setBit}
+						kind={generationKind}
+						assets={generationAssets}
+						setAssets={setGenerationAssets}
+						createAssetBit={() => getDefaultBit(IBitTypes.File)}
+						disabled={loading}
+					/>
 				) : null}
 				{isMlxModel ? (
 					<>
@@ -988,7 +1101,13 @@ export default function Page() {
 						<Separator className="my-4" />
 					</>
 				) : null}
-				<MetaConfiguration bit={bit} setBit={setBit} />
+				<fieldset disabled={loading && !!generationKind}>
+					<MetaConfiguration
+						bit={bit}
+						setBit={setBit}
+						hideFileFields={!!generationKind}
+					/>
+				</fieldset>
 				{(progress > 0 || loading) && (
 					<UploadProgressCard
 						percent={progress}
@@ -1011,6 +1130,7 @@ export default function Page() {
 						setLoading(true);
 						try {
 							let dependencies: IBit[] = [];
+							if (isGenerationModelBit(bit)) await registerGenerationModel();
 							if (isMlxModel) {
 								const manifestErrors = validateMlxModelAssets(
 									mlxAssets,
@@ -1312,6 +1432,8 @@ export default function Page() {
 							setTtsAssets([]);
 							setSttAssets([]);
 							setMlxAssets([]);
+							setGenerationAssets([]);
+							completedGenerationAssets.current.clear();
 							setLocalStt(false);
 							setType(IBitTypes.Llm);
 						} catch (error: unknown) {

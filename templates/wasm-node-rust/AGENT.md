@@ -50,6 +50,20 @@ wasm_main!(); // Must appear exactly once — auto-discovers all #[register_node
 1. **`get_node()`** — called once to register metadata (pins, scores, descriptions). Never does I/O.
 2. **`run(ctx)`** — called per execution. Read inputs, do work, set outputs, activate exec pins.
 
+The runtime retains an export-based package instance within one run when its
+security configuration permits reuse. Guest globals and heap objects survive
+calls to that instance; the registration macro still constructs the node type
+for each call. Use a package-level registry for guest-owned clients. Each call
+receives fresh inputs, outputs, logs and permissions. Changing the security
+domain selects a separate instance and resource registry. Guest state and host
+resource handles cannot cross that boundary.
+
+Guest memory, host cache and open sockets are scoped to the run. They are
+discarded when it completes or is cancelled and are never restored into another
+run. The [WebSocket example](src/websocket_server.rs) passes a listener and
+accepted connection between nodes using host-owned handles. Every node that
+operates on those handles declares `NodePermission::NetworkWebsocket`.
+
 ## Pin System
 
 The WASM SDK API mirrors the native catalog API. Pin types use proper Rust enums, schemas are derived from typed structs.

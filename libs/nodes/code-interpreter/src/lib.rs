@@ -8,6 +8,8 @@
 //!   actually running nodes; without it nodes can still be introspected and
 //!   displayed in the UI.
 
+extern crate flow_like_runtime as flow_like;
+
 use std::sync::Arc;
 
 pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};

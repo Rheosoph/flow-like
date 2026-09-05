@@ -56,6 +56,56 @@ wasm_main!();
 Add as many `#[register_node]` structs as you like — they're auto-discovered
 at startup via the `inventory` crate.
 
+## Share a WebSocket between nodes
+
+The included [WebSocket example](src/websocket_server.rs) starts a listener in
+one node, accepts a client in another, and sends a message in a third. Build it
+with the SDK in this checkout and a runtime that provides the WebSocket listener
+API. The template's local SDK path selects that version automatically.
+
+On Flow-Like Desktop, wire the execution pins in this order:
+
+```text
+Start WebSocket Server -> Accept WebSocket Connection -> Send WebSocket Text -> Close WebSocket
+```
+
+Connect Start Server's `listener` output to Accept Connection's `listener`
+input, and Accept Connection's `connection` output to Send Text's `connection`
+input. Connect Start Server's `listener` output to Close WebSocket's `handle`
+input to close the listener and its accepted clients after sending.
+
+Keep the default bind address `127.0.0.1:8080`, start the flow, and connect a
+WebSocket client to `ws://127.0.0.1:8080` while Accept Connection waits. The
+client receives `Hello from Flow-Like`. If that port is occupied, choose another
+port in both places. Setting the port to `0` chooses an available port; read the
+`address` output before connecting. Hosted executors apply their own bind-address
+policy and can reject the desktop loopback address.
+
+Every example node declares `NodePermission::NetworkWebsocket`. The handles
+refer to host-owned sockets scoped to this package and this run. The host keeps
+the listener active after Start Server returns. A new run cannot reuse these
+handles, even if it loads the same package or a saved handle value. Closing the
+listener closes its clients; run completion or cancellation also releases the
+resources. A flow that should keep listening must keep its run active.
+
+## State between calls
+
+Within a run, the runtime reuses the package's export-based Wasm instance when
+its security configuration permits reuse. Guest globals and heap objects can
+therefore survive a node return. Nodes in the same package can access those
+objects through a package-level registry, while each invocation receives fresh
+inputs, outputs, logs and permissions. Calls to one instance execute in order.
+The Rust registration macro constructs the node type for each call, so fields
+on the node struct alone do not provide persistent state.
+Different security domains have separate instances and resource registries;
+their nodes cannot exchange live handles even within the same package and run.
+
+All live state ends with the run. The next run starts with fresh guest memory,
+host cache and sockets. Do not store a pointer, socket handle, or client object
+in durable storage expecting to reuse it in another run. For the distinction
+between reusable exports and command-style components, see the
+[runtime lifecycle notes](../wasm-capability-matrix.md#state-and-resource-lifetime).
+
 ## Pin Types
 
 | Type | Description |

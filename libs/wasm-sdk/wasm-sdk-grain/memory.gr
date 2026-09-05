@@ -123,10 +123,14 @@ let mut scratchOffset: WasmI32 = 0n
 
 @unsafe
 provide let wasmAlloc = (size: WasmI32) => {
-  let base = fromGrain(scratchBuffer) + 8n
-  let ptr = base + scratchOffset
-  scratchOffset = scratchOffset + size
-  ptr
+  if (size < 0n || 1048576n - scratchOffset < size) {
+    fail("WASM scratch allocation exceeds the 1 MiB buffer")
+  } else {
+    let base = fromGrain(scratchBuffer) + 8n
+    let ptr = base + scratchOffset
+    scratchOffset = scratchOffset + size
+    ptr
+  }
 }
 
 @unsafe
@@ -136,6 +140,8 @@ provide let wasmDealloc = (_ptr: WasmI32, _size: WasmI32) => {
 
 @unsafe
 provide let resetScratch = () => {
+  // The host calls this before allocating the next invocation's input.
+  // Guest strings and objects live outside this transient ABI buffer.
   scratchOffset = 0n
 }
 

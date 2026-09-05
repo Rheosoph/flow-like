@@ -91,8 +91,14 @@ interface db {
 
 interface websocket {
     connect: func(url: string, headers-json: string) -> option<string>;
+    /// Start a listener owned by this package in the current run.
+    listen: func(bind-address: string) -> option<string>;
+    /// Return an accepted connection reference, or none on timeout/closure.
+    accept: func(listener-id: string, timeout-ms: u32) -> option<string>;
+    local-address: func(listener-id: string) -> option<string>;
     send: func(session-id: string, message: list<u8>, is-binary: bool) -> bool;
     receive: func(session-id: string, timeout-ms: u32) -> option<string>;
+    /// Closing a listener also closes all connections accepted by it.
     close: func(session-id: string) -> bool;
 }
 

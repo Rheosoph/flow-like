@@ -121,6 +121,42 @@ impl StableDiffusionImageOptions {
     }
 }
 
+pub(super) fn with_model_defaults(
+    provider: &ModelProvider,
+    options: ImageGenerationProviderOptions,
+) -> flow_like_types::Result<ImageGenerationProviderOptions> {
+    if provider.provider_name != PROVIDER_NAME {
+        return Ok(options);
+    }
+    match &options {
+        ImageGenerationProviderOptions::Default => {}
+        ImageGenerationProviderOptions::StableDiffusion(explicit) => {
+            explicit.validate()?;
+            return Ok(options);
+        }
+        _ => bail!("stable-diffusion.cpp requires its image options or Default provider options"),
+    }
+    let Some(defaults) = provider
+        .params
+        .as_ref()
+        .and_then(|params| params.get("generation_defaults"))
+    else {
+        return Ok(options);
+    };
+    let mut defaults = defaults.clone();
+    if let Some(format) = defaults
+        .as_object_mut()
+        .and_then(|params| params.remove("output_format"))
+        && format != "png"
+    {
+        bail!("stable-diffusion.cpp image model defaults support PNG output");
+    }
+    let defaults: StableDiffusionImageOptions = from_value(defaults)
+        .map_err(|error| anyhow!("Invalid stable-diffusion.cpp image model defaults: {error}"))?;
+    defaults.validate()?;
+    Ok(ImageGenerationProviderOptions::StableDiffusion(defaults))
+}
+
 fn request_params(
     prompt: &str,
     options: &ImageGenerationProviderOptions,
@@ -390,6 +426,91 @@ impl NodeLogic for MakeStableDiffusionImageOptionsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_defaults_apply_only_to_default_local_options() {
+        let mut provider = ModelProvider {
+            provider_name: PROVIDER_NAME.into(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(HashMap::from([(
+                "generation_defaults".into(),
+                json!({"width":1024,"height":768,"steps":4,
+                    "cfg_scale":1.0,"sampler":"euler","scheduler":"simple","output_format":"png"}),
+            )])),
+        };
+        let options =
+            with_model_defaults(&provider, ImageGenerationProviderOptions::Default).unwrap();
+        let params = request_params("A landscape", &options).unwrap();
+        assert_eq!(params["width"], 1024);
+        assert_eq!(params["height"], 768);
+        assert_eq!(params["sample_params"]["sample_steps"], 4);
+        assert_eq!(params["sample_params"]["guidance"]["txt_cfg"], 1.0);
+        assert_eq!(params["sample_params"]["sample_method"], "euler");
+        assert_eq!(params["seed"], -1);
+        let explicit =
+            ImageGenerationProviderOptions::StableDiffusion(StableDiffusionImageOptions::default());
+        let options = with_model_defaults(&provider, explicit).unwrap();
+        assert_eq!(
+            request_params("A landscape", &options).unwrap()["width"],
+            512
+        );
+        provider.provider_name = PROVIDER_OPENAI.into();
+        assert!(matches!(
+            with_model_defaults(&provider, ImageGenerationProviderOptions::Default).unwrap(),
+            ImageGenerationProviderOptions::Default
+        ));
+    }
+
+    #[test]
+    fn invalid_model_defaults_fail_before_generation() {
+        for defaults in [
+            json!({"width":513}),
+            json!({"steps":101}),
+            json!({"video_frames":33}),
+            json!({"output_format":"webp"}),
+            json!(null),
+        ] {
+            let provider = ModelProvider {
+                provider_name: PROVIDER_NAME.into(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(HashMap::from([("generation_defaults".into(), defaults)])),
+            };
+            assert!(
+                with_model_defaults(&provider, ImageGenerationProviderOptions::Default).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_explicit_options_fail_before_weight_resolution() {
+        let provider = ModelProvider {
+            provider_name: PROVIDER_NAME.into(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: None,
+        };
+        let invalid =
+            ImageGenerationProviderOptions::StableDiffusion(StableDiffusionImageOptions {
+                width: 513,
+                ..Default::default()
+            });
+        assert!(with_model_defaults(&provider, invalid).is_err());
+        let foreign = ImageGenerationProviderOptions::OpenAi(OpenAiImageOptions::default());
+        assert!(with_model_defaults(&provider, foreign.clone()).is_err());
+        let cloud_provider = ModelProvider {
+            provider_name: PROVIDER_OPENAI.into(),
+            ..provider
+        };
+        assert!(matches!(
+            with_model_defaults(&cloud_provider, foreign).unwrap(),
+            ImageGenerationProviderOptions::OpenAi(_)
+        ));
+    }
 
     #[test]
     fn sampling_boundaries_match_native_server_limits() {

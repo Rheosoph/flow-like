@@ -41,6 +41,8 @@
 //! let result = module.execute(&context).await?;
 //! ```
 
+extern crate flow_like_runtime as flow_like;
+
 pub mod abi;
 pub mod aot_cache;
 pub mod client;
@@ -56,6 +58,7 @@ pub mod manifest;
 pub mod memory;
 pub mod module;
 pub mod node;
+pub mod package_runtime;
 pub mod registry;
 pub mod unified;
 pub mod wasi;

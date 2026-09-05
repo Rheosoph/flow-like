@@ -140,6 +140,12 @@ fn allows_external_cli_fallback(security: &WasmSecurityConfig) -> bool {
 
 fn cli_child_host_state(parent: &HostState) -> HostState {
     let mut child = HostState::new(parent.capabilities);
+    child.cache = parent.cache.clone();
+    child.websocket = parent.websocket.clone();
+    child.execution_environment = parent.execution_environment;
+    child.allowed_hosts = parent.allowed_hosts.clone();
+    child.node_timeout = parent.node_timeout;
+    child.run_scoped = parent.run_scoped;
     child.model_context = parent.model_context.clone();
     child.model_usage_context = parent.model_usage_context.clone();
     // The child runs where the parent runs; the egress policy keys off this.
@@ -153,6 +159,17 @@ impl WasmComponentInstance {
         component: Arc<WasmComponent>,
         security: WasmSecurityConfig,
     ) -> WasmResult<Self> {
+        let host_state = HostState::with_security(&security);
+        Self::with_host_state(engine, component, security, host_state).await
+    }
+
+    pub async fn with_host_state(
+        engine: &WasmEngine,
+        component: Arc<WasmComponent>,
+        security: WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<Self> {
+        let run_scoped = host_state.run_scoped;
         // Use the engine that compiled/deserialized this component to ensure
         // Store, Linker, and Component are all tied to the same Engine instance.
         let component_engine = component.component().engine();
@@ -160,19 +177,36 @@ impl WasmComponentInstance {
         let mut linker: Linker<ComponentStoreData> = Linker::new(component_engine);
         register_component_host_functions(&mut linker, &security)?;
 
-        let mut store = Store::new(component_engine, ComponentStoreData::new(&security));
+        let mut data = ComponentStoreData::new(&security);
+        data.host_state = host_state;
+        let mut store = Store::new(component_engine, data);
+        store.limiter(|data| &mut data.limits);
 
         let fuel_limit = security.limits.fuel_limit;
         if engine.config().fuel_metering {
             store
                 .set_fuel(fuel_limit)
                 .map_err(|e| WasmError::Internal(format!("Failed to set fuel: {}", e)))?;
+            if run_scoped {
+                store
+                    .fuel_async_yield_interval(Some(100_000))
+                    .map_err(|e| {
+                        WasmError::Internal(format!(
+                            "Failed to configure initialization yielding: {e}"
+                        ))
+                    })?;
+            }
         }
 
         if engine.config().epoch_interruption {
-            store.epoch_deadline_trap();
-            let timeout_epochs = (security.limits.timeout.as_millis() / 10) as u64;
-            store.set_epoch_deadline(timeout_epochs);
+            if run_scoped {
+                store.epoch_deadline_async_yield_and_update(1);
+                store.set_epoch_deadline(1);
+            } else {
+                store.epoch_deadline_trap();
+                let timeout_epochs = (security.limits.timeout.as_millis() / 10).max(1) as u64;
+                store.set_epoch_deadline(timeout_epochs);
+            }
         }
 
         let instance = linker
@@ -221,6 +255,24 @@ impl WasmComponentInstance {
             &self.engine,
             ComponentStoreData::with_host_state(child_host_state, builder.build(), &self.security),
         );
+        store.limiter(|data| &mut data.limits);
+        if self.store.get_fuel().is_ok() {
+            store
+                .set_fuel(self.fuel_limit)
+                .map_err(|e| WasmError::Internal(format!("Failed to set command fuel: {e}")))?;
+            store
+                .fuel_async_yield_interval(Some(100_000))
+                .map_err(|e| {
+                    WasmError::Internal(format!("Failed to configure command yielding: {e}"))
+                })?;
+        }
+        if self.store.data().host_state.run_scoped {
+            store.epoch_deadline_async_yield_and_update(1);
+            store.set_epoch_deadline(1);
+        } else {
+            store.epoch_deadline_trap();
+            store.set_epoch_deadline((self.security.limits.timeout.as_millis() / 10).max(1) as u64);
+        }
 
         let command = wasmtime_wasi::p2::bindings::Command::instantiate_async(
             &mut store,
@@ -395,6 +447,14 @@ impl WasmComponentInstance {
 
                 let result_json = match in_process {
                     Ok(value) => value,
+                    Err(in_process_err) if self.store.data().host_state.run_scoped => {
+                        return Err(WasmError::execution(
+                            "run",
+                            format!(
+                                "Run-owned packages require in-process execution: {in_process_err}"
+                            ),
+                        ));
+                    }
                     Err(in_process_err) => {
                         tracing::debug!(
                             "In-process CLI run failed: {in_process_err}, trying external wasmtime"
@@ -435,6 +495,35 @@ impl WasmComponentInstance {
 
     pub fn host_state(&self) -> &HostState {
         &self.store.data().host_state
+    }
+
+    /// Replace invocation state while preserving this component's memory and resources.
+    pub fn prepare_call(
+        &mut self,
+        engine: &WasmEngine,
+        security: &WasmSecurityConfig,
+        host_state: HostState,
+    ) -> WasmResult<()> {
+        self.store.data_mut().host_state = host_state;
+        self.store.data_mut().limits = crate::limits::store_limits(&security.limits);
+        self.store.data_mut().node_timeout = security.limits.timeout;
+        self.security = security.clone();
+        self.fuel_limit = security.limits.fuel_limit;
+        if engine.config().fuel_metering {
+            self.store
+                .set_fuel(self.fuel_limit)
+                .map_err(|e| WasmError::Internal(format!("Failed to reset execution fuel: {e}")))?;
+            self.store
+                .fuel_async_yield_interval(Some(100_000))
+                .map_err(|e| {
+                    WasmError::Internal(format!("Failed to configure execution yielding: {e}"))
+                })?;
+        }
+        if engine.config().epoch_interruption {
+            self.store.epoch_deadline_async_yield_and_update(1);
+            self.store.set_epoch_deadline(1);
+        }
+        Ok(())
     }
 
     pub fn host_state_mut(&mut self) -> &mut HostState {

@@ -6,6 +6,8 @@
 //! Run unit tests: cargo test --package flow-like-catalog-onnx --test node_tests
 //! Run all tests: cargo test --package flow-like-catalog-onnx --test node_tests -- --include-ignored
 
+extern crate flow_like_runtime as flow_like;
+
 use flow_like::flow::node::NodeLogic;
 use flow_like_catalog_onnx::{
     audio::{AudioData, SpeechSegment, TranscriptionSegment, VadResult},

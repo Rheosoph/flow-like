@@ -40,10 +40,50 @@ This matrix tracks template/runtime parity across language targets in `templates
 | Grain (`wasm-sdk-grain`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MoonBit (`wasm-sdk-moonbit`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
+## State and resource lifetime
+
+Live state belongs to a run. Reusable export-based packages retain guest memory
+between calls within the same package and security domain. Calls to an instance
+are serialized. A node's inputs, outputs, logs and permissions are refreshed for
+each invocation, while its package's host cache and sockets remain available to
+later calls in that scope. Different security domains have separate instances
+and resource registries, even within the same package and run.
+
+| Execution path | Guest globals between calls | Package host cache and sockets |
+|---|---|---|
+| Core module with `run` export | Retained within the run and security domain | Shared within the package, run and security domain |
+| Component with `run` export | Retained within the run and security domain | Shared within the package, run and security domain |
+| In-process `wasi:cli/run` command fallback | Fresh for each command | Shared through the command's host context |
+| External Wasmtime CLI fallback | Rejected during run-scoped execution | Separate process cannot access the run's resources |
+
+Completion and cancellation release all of this live state. A later run starts
+fresh, even for the same package. A stored connection handle or pointer is not
+valid in the next run. This lifetime is determined by exports and runtime path,
+so a language's Component Model support alone does not establish reuse.
+
+Kotlin, MoonBit and Grain packages should be rebuilt with the updated SDK and
+the optional `reset_scratch` export. This lets the runtime reuse transient ABI
+buffers between calls while preserving guest objects. Input and result pointers
+remain borrowed for one invocation; retain parsed values instead. Older binaries
+cannot gain this export through a runtime update and can keep accumulating ABI
+allocations within the run. Guest heap allocations remain subject to the memory
+budget, including Grain builds that disable garbage collection.
+
+The Rust SDK wraps the host WebSocket listener and connection APIs. The
+[Rust template example](wasm-node-rust/src/websocket_server.rs) passes handles
+through Start Server, Accept Connection and Send Text nodes. Each node declares
+`NetworkWebsocket`, and the runtime's network policy applies. Other SDKs do not
+yet wrap these WebSocket APIs; custom component bindings can use the shared WIT
+interface. Core-module users need the corresponding `flowlike_ws` host imports.
+String connection handles use `connect_ref`, `send_ref`, `receive_ref` and
+`close_ref`; listener handles use `listen`, `accept` and `local_address`.
+The original connection imports use numeric handles and are separate from this
+string-handle API.
+
 ## Notes
 
 - **Component Model templates** (Rust, Go, C++, Zig, C#, Swift, Python, TypeScript) execute through `WasmComponent` + `WasmComponentInstance`. They support TCP, UDP, DNS via WASI sockets, plus all custom flow-like host APIs via WIT.
-- **Core module templates** (AssemblyScript, Kotlin, Nim, Lua, Java, Grain, MoonBit) execute through `WasmModule` + `WasmInstance`. They only have network access through the host HTTP bridge.
+- **Core module templates** (AssemblyScript, Kotlin, Nim, Lua, Java, Grain, MoonBit) execute through `WasmModule` + `WasmInstance`. Network access uses host bridges; these SDKs do not currently wrap the WebSocket imports.
 - Rust uses `wit-bindgen` crate (proc macro) + `wasm32-wasip2` target + `wasm-tools component new`.
 - Go uses `wit-bindgen-go` + TinyGo `wasip2` target.
 - C++ uses `wit-bindgen-c` + wasi-sdk + `wasm-tools component new`.

@@ -33,6 +33,7 @@ fn run_meta(shadow: bool) -> RunMeta {
         log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
         nodes_executed: Arc::new(AtomicU64::new(0)),
         elements: Arc::new(RwLock::new(ElementCache::default())),
+        resources: Arc::new(flow_like::flow::execution::resources::RunResources::default()),
         shadow,
     }
 }

@@ -82,8 +82,25 @@ provide let run = (ptr, len) => {
 
 provide let alloc = Memory.wasmAlloc
 provide let dealloc = Memory.wasmDealloc
+@unsafe
+@externalName("reset_scratch")
+provide let reset_scratch = () => Memory.resetScratch()
 provide let get_abi_version = () => Memory.abiVersion
 ```
+
+## Memory between calls
+
+Export `reset_scratch` as shown above. The host calls it before allocating the
+next invocation's input, so the 1 MiB ABI scratch buffer can be reused while
+package globals remain alive for the current run. Allocations larger than the
+remaining scratch capacity fail before they can overwrite the guest heap.
+
+Input and result pointers are borrowed for one invocation. Copy data into Grain
+strings or other guest objects to retain it between calls; keep no pointers into
+the scratch buffer. Rebuild existing packages with this SDK and the reset export.
+An older binary cannot acquire the hook from a runtime update. The template's
+`--no-gc` setting still means guest heap allocations accumulate within the run's
+memory budget.
 
 ## Multi-Node Package Example
 

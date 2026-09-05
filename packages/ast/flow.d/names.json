@@ -1637,6 +1637,15 @@
     "class": "History",
     "category": "AI/Generative/History"
   },
+  "ai_image_build_stablediffusion": {
+    "qualified": "ai::provider::stablediffusion_image",
+    "namespace": "ai.provider",
+    "alias": "stablediffusion_image",
+    "flat": "aiImageBuildStablediffusion",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Provider"
+  },
   "ai_image_generate": {
     "qualified": "ai::image::generate",
     "namespace": "ai.image",
@@ -1687,6 +1696,15 @@
     "namespace": "ai.image.options",
     "alias": "openrouter",
     "flat": "aiImageOptionsOpenrouter",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Image/Options"
+  },
+  "ai_image_options_stablediffusion": {
+    "qualified": "ai::image::options::stablediffusion",
+    "namespace": "ai.image.options",
+    "alias": "stablediffusion",
+    "flat": "aiImageOptionsStablediffusion",
     "receiver": null,
     "class": null,
     "category": "AI/Generative/Image/Options"
@@ -1943,6 +1961,15 @@
     "class": null,
     "category": "AI/Generative/Video/Provider"
   },
+  "ai_video_build_stablediffusion": {
+    "qualified": "ai::video::provider::stableDiffusion",
+    "namespace": "ai.video.provider",
+    "alias": "stableDiffusion",
+    "flat": "aiVideoBuildStablediffusion",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Video/Provider"
+  },
   "ai_video_generate": {
     "qualified": "ai::video::generate",
     "namespace": "ai.video",
@@ -1984,6 +2011,15 @@
     "namespace": "ai.video.options",
     "alias": "runway",
     "flat": "aiVideoOptionsRunway",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Video/Options"
+  },
+  "ai_video_options_stablediffusion": {
+    "qualified": "ai::video::options::stableDiffusion",
+    "namespace": "ai.video.options",
+    "alias": "stableDiffusion",
+    "flat": "aiVideoOptionsStablediffusion",
     "receiver": null,
     "class": null,
     "category": "AI/Generative/Video/Options"

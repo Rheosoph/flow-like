@@ -13,6 +13,14 @@ const ROOT = path.resolve(
 	"../src-tauri/runtimes/stablediffusion",
 );
 const MACOS_TARGET = "14.0";
+const WINDOWS_RUNTIME_DLLS = [
+	"msvcp140.dll",
+	"msvcp140_codecvt_ids.dll",
+	"vcomp140.dll",
+	"vcruntime140.dll",
+	"vcruntime140_1.dll",
+] as const;
+const WINDOWS_RUNTIME_SOURCE = path.resolve(ROOT, "../../binaries/win/x64");
 const ASSETS = {
 	"win-x64": {
 		name: "sd-master-6b3edaa-bin-win-vulkan-x64.zip",
@@ -85,6 +93,25 @@ export function extractRuntime(
 
 function run(command: string, args: string[], cwd?: string) {
 	execFileSync(command, args, { cwd, stdio: "inherit" });
+}
+
+export function stageWindowsRuntimeDlls(
+	destination: string,
+	sourceDirectory = WINDOWS_RUNTIME_SOURCE,
+) {
+	const sources = WINDOWS_RUNTIME_DLLS.map((name) => {
+		const source = path.join(sourceDirectory, `${name}-x86_64-pc-windows-msvc`);
+		if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
+			throw new Error(
+				`Missing prepared ${name}. Run bun ./scripts/prepare-windows-prereqs.ts --arch x64 before preparing stable-diffusion.cpp.`,
+			);
+		}
+		return { name, source };
+	});
+	// Each child process loads the VC runtime from its own executable directory.
+	for (const { name, source } of sources) {
+		fs.copyFileSync(source, path.join(destination, name));
+	}
 }
 
 async function downloadRuntime(
@@ -212,6 +239,8 @@ export async function prepare(platform: string, force = false) {
 		throw new Error(`Unsupported sd-server platform: ${platform}`);
 	}
 	const destination = path.join(ROOT, platform);
+	const includeWindowsRuntime =
+		platform === "win-x64" && process.platform === "win32";
 	const executable =
 		platform === "mac-arm"
 			? "sd-server-aarch64-apple-darwin"
@@ -226,6 +255,7 @@ export async function prepare(platform: string, force = false) {
 		commit: COMMIT,
 		platform,
 		macosTarget: platform.startsWith("mac-") ? MACOS_TARGET : null,
+		...(includeWindowsRuntime ? { vcRuntime: 1 } : {}),
 	};
 	const manifest = path.join(destination, "runtime.json");
 	if (!force && fs.existsSync(manifest)) {
@@ -235,6 +265,20 @@ export async function prepare(platform: string, force = false) {
 			if (
 				JSON.stringify(installed.build) === JSON.stringify(stamp) &&
 				executable in files &&
+				(!includeWindowsRuntime ||
+					WINDOWS_RUNTIME_DLLS.every((name) => {
+						const source = path.join(
+							WINDOWS_RUNTIME_SOURCE,
+							`${name}-x86_64-pc-windows-msvc`,
+						);
+						return (
+							name in files &&
+							fs.existsSync(source) &&
+							createHash("sha256")
+								.update(fs.readFileSync(source))
+								.digest("hex") === files[name]
+						);
+					})) &&
 				Object.entries(files).every(
 					([name, checksum]) =>
 						path.basename(name) === name &&
@@ -257,6 +301,7 @@ export async function prepare(platform: string, force = false) {
 		if (platform !== "win-x64")
 			buildSourceRuntime(platform, staging, executable);
 		else await downloadRuntime(platform as keyof typeof ASSETS, staging);
+		if (includeWindowsRuntime) stageWindowsRuntimeDlls(staging);
 		const files = Object.fromEntries(
 			fs
 				.readdirSync(staging)
