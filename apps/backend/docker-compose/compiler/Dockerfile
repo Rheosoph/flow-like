@@ -13,7 +13,8 @@ RUN sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml && \
     sed -i '/apps\/backend\/kubernetes\/api/d' Cargo.toml && \
     sed -i '/apps\/backend\/kubernetes\/executor/d' Cargo.toml
 
-ENV CARGO_BUILD_JOBS=2
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
     --mount=type=cache,target=/app/target,id=cargo-target-compiler,sharing=locked \
