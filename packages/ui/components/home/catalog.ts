@@ -19,10 +19,27 @@ const preset = (
 	category,
 	icon,
 	type,
-	config,
+	config: {
+		...config,
+		...(type === "app-collection"
+			? {
+					rendering: ["list", "icons", "editorial", "carousel"].includes(
+						variant,
+					)
+						? variant
+						: "standard",
+				}
+			: type === "models"
+				? { rendering: "standard" }
+				: {}),
+	},
 	columns,
 	rows,
-	variant,
+	variant:
+		type === "app-collection" &&
+		!["card", "borderless", "tinted"].includes(variant)
+			? "card"
+			: variant,
 	accent,
 });
 const data = (

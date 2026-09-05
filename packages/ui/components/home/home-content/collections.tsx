@@ -1,9 +1,10 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Box, Check, Download, Layers, Star } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowUpRight, Box, Layers } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import { useAppCategoryLabel } from "../../../lib/app-category";
 import {
 	APP_CATEGORY_ORDER,
@@ -12,13 +13,18 @@ import {
 } from "../../../lib/category-meta";
 import type { IApp, IAppCategory } from "../../../lib/schema/app/app";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
-import type { IMetadata } from "../../../lib/schema/bit/bit";
+import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/hub/bit-search-query";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
-import { BitCard } from "../../ui/bit-card";
+import { AppCard, SpotlightCard } from "../../ui/app-card";
+import { AppTypeMark } from "../../ui/app-type-mark";
+import { ModelCard } from "../../ui/model-card";
+import { ModelDetailSheet } from "../../ui/model-detail-sheet";
 import {
 	type HomeContentProps,
+	homeAppRendering,
+	homeModelRendering,
 	numberConfig,
 	stringList,
 	textConfig,
@@ -43,6 +49,7 @@ export function useHomeLibrary() {
 }
 
 export function HomeAppCollection({ widget }: HomeContentProps) {
+	const router = useRouter();
 	const backend = useBackend();
 	const scope = useHomeScope();
 	const library = useHomeLibrary();
@@ -52,10 +59,11 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 	const query = textConfig(widget.config, "query");
 	const appIds = stringList(widget.config, "appIds");
 	const limit = numberConfig(widget.config, "limit", 8);
+	const usesProfile = ["library", "recent", "favorites"].includes(source);
 	const profile = useQuery({
 		queryKey: ["home", ...scope, "profile-apps"],
 		queryFn: () => backend.userState.getProfile(),
-		enabled: source === "favorites",
+		enabled: usesProfile,
 	});
 	const remote = source === "new" || source === "popular";
 	const results = useQuery({
@@ -103,6 +111,12 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 		let apps = [
 			...((remote || source === "manual" ? results.data : library.data) ?? []),
 		];
+		if (usesProfile) {
+			const visible = new Set(
+				(profile.data?.apps ?? []).map((app) => app.app_id),
+			);
+			apps = apps.filter(([app]) => visible.has(app.id));
+		}
 		if (source === "favorites") {
 			const favorites = new Map(
 				(profile.data?.apps ?? [])
@@ -141,6 +155,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 		return apps.slice(0, limit);
 	}, [
 		remote,
+		usesProfile,
 		source,
 		results.data,
 		library.data,
@@ -154,7 +169,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 	if (
 		state.isLoading ||
 		state.isError ||
-		(source === "favorites" && (profile.isLoading || profile.isError))
+		(usesProfile && (profile.isLoading || profile.isError))
 	)
 		return (
 			<HomeQueryState
@@ -162,7 +177,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 				error={state.isError || profile.isError}
 				retry={() => {
 					void state.refetch();
-					if (source === "favorites") void profile.refetch();
+					if (usesProfile) void profile.refetch();
 				}}
 			/>
 		);
@@ -176,117 +191,80 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 						: "No apps match this collection yet."}
 			</HomeEmpty>
 		);
-	const variant = widget.appearance.variant;
+	const rendering = homeAppRendering(widget.config, widget.appearance.variant);
 	const owned = new Set((library.data ?? []).map(([app]) => app.id));
 	return (
 		<div
+			data-home-collection-rendering={rendering}
 			className={cn(
-				"h-full min-h-0 overflow-auto p-3",
-				variant === "carousel"
-					? "flex snap-x gap-3"
-					: variant === "list"
-						? "space-y-2"
-						: variant === "icons"
-							? "grid auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(84px,1fr))] gap-3"
-							: "grid auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,230px),1fr))] gap-3",
+				"@container/home-apps min-w-0",
+				rendering === "carousel"
+					? "flex snap-x snap-proximity gap-4 overflow-x-auto pb-2"
+					: rendering === "list" || rendering === "editorial"
+						? "space-y-3"
+						: rendering === "icons"
+							? "grid grid-cols-[repeat(auto-fill,minmax(min(100%,96px),1fr))] gap-x-3 gap-y-4"
+							: "grid auto-rows-max grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-4",
 			)}
 		>
-			{rows.map(([app, metadata], index) => {
-				const href = owned.has(app.id)
+			{rows.map(([app, metadata]) => {
+				const isOwned = owned.has(app.id);
+				const href = isOwned
 					? `/use?id=${encodeURIComponent(app.id)}`
 					: `/store?id=${encodeURIComponent(app.id)}`;
 				const title = metadata?.name ?? app.id;
-				const image = metadata?.thumbnail ?? metadata?.icon;
-				const editorial = variant === "editorial" || variant === "spotlight";
+				if (rendering === "editorial")
+					return (
+						<SpotlightCard
+							key={app.id}
+							app={app}
+							metadata={metadata}
+							isOwned={isOwned}
+							href={href}
+							className="min-w-0 sm:grid-cols-1 @min-[480px]/home-apps:grid-cols-[160px_minmax(0,1fr)] [&>div:first-child]:min-h-40 @min-[480px]/home-apps:[&>div:first-child]:min-h-0"
+						/>
+					);
+				if (rendering === "icons")
+					return (
+						<Link
+							key={app.id}
+							href={href}
+							className="group flex min-w-0 flex-col items-center gap-2.5 rounded-xl px-2 py-3 text-center transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+						>
+							<AppTypeMark
+								type={app.app_type}
+								size={56}
+								src={metadata?.icon ?? undefined}
+								fallback={title.slice(0, 2).toUpperCase()}
+							/>
+							<span className="line-clamp-2 text-xs font-medium leading-snug">
+								{title}
+							</span>
+						</Link>
+					);
 				return (
-					<Link
+					<div
 						key={app.id}
-						href={href}
 						className={cn(
-							homeItemClass,
-							"relative overflow-hidden",
-							variant === "carousel" &&
-								"w-64 shrink-0 snap-start flex-col items-start",
-							variant === "icons" &&
-								"flex-col border-0 bg-transparent p-2 text-center",
-							editorial && "flex-col items-start p-0",
-							editorial && index === 0 && "col-span-full",
+							"min-w-0",
+							rendering === "carousel" &&
+								"w-[min(100%,264px)] shrink-0 snap-start pt-1",
 						)}
 					>
-						{editorial && image ? (
-							<img
-								src={image}
-								alt=""
-								loading="lazy"
-								className={cn(
-									"h-28 w-full object-cover",
-									index === 0 && "h-40",
-								)}
-							/>
-						) : (
-							<div
-								className={cn(
-									"flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/10 text-primary",
-									variant === "icons" && "size-14",
-								)}
-							>
-								{metadata?.icon ? (
-									<img
-										src={metadata.icon}
-										alt=""
-										loading="lazy"
-										className="size-full object-cover"
-									/>
-								) : (
-									<Box className="size-5" />
-								)}
-							</div>
-						)}
-						<div className={cn("min-w-0 flex-1", editorial && "w-full p-4")}>
-							<div className="flex items-center justify-between gap-2">
-								<span
-									className={cn(
-										"line-clamp-2 text-sm font-semibold",
-										editorial && index === 0 && "text-xl",
-									)}
-								>
-									{title}
-								</span>
-								{variant !== "icons" && (
-									<ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
-								)}
-							</div>
-							{variant !== "icons" && (
-								<>
-									<p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-										{metadata?.description ||
-											app.primary_category ||
-											"Open this app"}
-									</p>
-									<div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-										{owned.has(app.id) && (
-											<span className="flex items-center gap-1 text-emerald-500">
-												<Check className="size-3" />
-												In your library
-											</span>
-										)}
-										{app.avg_rating != null && app.rating_count > 0 && (
-											<span className="flex items-center gap-1">
-												<Star className="size-3" />
-												{app.avg_rating.toFixed(1)}
-											</span>
-										)}
-										{remote && (
-											<span className="flex items-center gap-1">
-												<Download className="size-3" />
-												{app.download_count.toLocaleString()}
-											</span>
-										)}
-									</div>
-								</>
-							)}
-						</div>
-					</Link>
+						<AppCard
+							app={app}
+							metadata={metadata}
+							isOwned={isOwned}
+							variant={
+								rendering === "compact" || rendering === "list"
+									? "small"
+									: "extended"
+							}
+							href={href}
+							onClick={() => router.push(href)}
+							className="w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+						/>
+					</div>
 				);
 			})}
 		</div>
@@ -299,11 +277,13 @@ export function HomeCategories({ widget }: HomeContentProps) {
 	const categories = APP_CATEGORY_ORDER.filter(
 		(category) => !selected.length || selected.includes(category),
 	);
-	const tiles = widget.appearance.variant === "grid";
+	const tiles =
+		textConfig(widget.config, "rendering", widget.appearance.variant) ===
+		"grid";
 	return (
 		<div
 			className={cn(
-				"flex h-full content-start flex-wrap gap-2 overflow-auto p-4",
+				"flex min-w-0 content-start flex-wrap gap-2",
 				tiles && "grid grid-cols-[repeat(auto-fit,minmax(125px,1fr))]",
 			)}
 		>
@@ -362,8 +342,9 @@ export function HomePackages({ widget }: HomeContentProps) {
 	return (
 		<div
 			className={cn(
-				"h-full overflow-auto p-3",
-				widget.appearance.variant === "grid"
+				"min-w-0",
+				textConfig(widget.config, "rendering", widget.appearance.variant) ===
+					"grid"
 					? "grid auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))] gap-3"
 					: "space-y-2",
 			)}
@@ -396,7 +377,9 @@ export function HomePackages({ widget }: HomeContentProps) {
 	);
 }
 
-export function HomeModels({ widget }: HomeContentProps) {
+export function HomeModels({ widget, editing }: HomeContentProps) {
+	const [selectedModel, setSelectedModel] = useState<IBit | null>(null);
+	const queryClient = useQueryClient();
 	const backend = useBackend();
 	const scope = useHomeScope();
 	const query = textConfig(widget.config, "query");
@@ -414,6 +397,9 @@ export function HomeModels({ widget }: HomeContentProps) {
 								IBitTypes.Llm,
 								IBitTypes.Vlm,
 								IBitTypes.Embedding,
+								IBitTypes.ImageEmbedding,
+								IBitTypes.ObjectDetection,
+								IBitTypes.VideoGeneration,
 								IBitTypes.ImageGeneration,
 								IBitTypes.Stt,
 								IBitTypes.Tts,
@@ -427,6 +413,9 @@ export function HomeModels({ widget }: HomeContentProps) {
 							"Llm",
 							"Vlm",
 							"Embedding",
+							"ImageEmbedding",
+							"ObjectDetection",
+							"VideoGeneration",
 							"ImageGeneration",
 							"Stt",
 							"Tts",
@@ -436,7 +425,13 @@ export function HomeModels({ widget }: HomeContentProps) {
 								.toLowerCase()
 								.includes(query.toLowerCase())),
 				)
-				.slice(0, limit);
+				.slice(0, limit)
+				.map((bit) => {
+					const meta = bit.meta.en ?? Object.values(bit.meta)[0];
+					return bit.meta.en || !meta
+						? bit
+						: { ...bit, meta: { ...bit.meta, en: meta } };
+				});
 		},
 		staleTime: 60_000,
 	});
@@ -451,19 +446,49 @@ export function HomeModels({ widget }: HomeContentProps) {
 	if (!results.data?.length)
 		return (
 			<HomeEmpty>
-				No models match this selection. Choose Explore models in widget settings
-				to browse available models.
+				{source === "profile"
+					? "No models match this profile selection. Choose Explore available models in widget settings to add models."
+					: "No models match this search. Try a different search in widget settings."}
 			</HomeEmpty>
 		);
+	const rendering = homeModelRendering(
+		widget.config,
+		widget.appearance.variant,
+	);
+	const refreshModels = () =>
+		queryClient.invalidateQueries({ queryKey: ["home", ...scope, "models"] });
 	return (
-		<div className="grid h-full auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-3 overflow-auto p-3">
-			{results.data.map((bit) => (
-				<BitCard
-					key={`${bit.hub}:${bit.id}`}
-					bit={bit}
-					wide={widget.appearance.variant === "list"}
+		<>
+			<div
+				data-home-collection-rendering={rendering}
+				className={cn(
+					"@container/home-models grid min-w-0 auto-rows-max gap-3",
+					rendering === "list"
+						? "grid-cols-1"
+						: "grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))]",
+				)}
+			>
+				{results.data.map((bit) => (
+					<ModelCard
+						key={`${bit.hub}:${bit.id}`}
+						bit={bit}
+						variant={rendering === "list" ? "list" : "grid"}
+						queryScope={scope}
+						onProfileChange={refreshModels}
+						onClick={editing ? undefined : setSelectedModel}
+					/>
+				))}
+			</div>
+			{!editing && selectedModel && (
+				<ModelDetailSheet
+					bit={selectedModel}
+					queryScope={scope}
+					onProfileChange={refreshModels}
+					open
+					onOpenChange={(open) => !open && setSelectedModel(null)}
+					webMode={!backend.capabilities().canExecuteLocally}
 				/>
-			))}
-		</div>
+			)}
+		</>
 	);
 }

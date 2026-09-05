@@ -13,9 +13,14 @@ import {
 } from "recharts";
 import { getNivoChartTheme } from "../../lib/chart-theme";
 import type { ExecuteSqlResult } from "../../state/backend-state/query-state";
+import { HomeDataLegend, HomeDataMessage } from "./data-widget-ui";
 import {
+	HOME_DATA_COLORS,
+	homeDataAxisValue,
+	homeDataCategoryLabel,
 	homeDataChartSeries,
 	homeDataNumber,
+	homeDataShortLabel,
 	homeDataText,
 	keyHomeDataRows,
 } from "./home-data-presentation";
@@ -31,13 +36,7 @@ const Sankey = lazy(async () => ({
 const Funnel = lazy(async () => ({
 	default: (await import("@nivo/funnel")).ResponsiveFunnel,
 }));
-const COLORS = [
-	"var(--chart-1)",
-	"var(--chart-2)",
-	"var(--chart-3)",
-	"var(--chart-4)",
-	"var(--chart-5)",
-];
+const COLORS = HOME_DATA_COLORS;
 export const EXTENDED_HOME_DATA_VIEWS = new Set([
 	"progress",
 	"gauge",
@@ -55,7 +54,8 @@ export const EXTENDED_HOME_DATA_VIEWS = new Set([
 export function HomeDataExtendedView({
 	result,
 	config,
-}: { result: ExecuteSqlResult; config: HomeDataConfig }) {
+	width = 360,
+}: { result: ExecuteSqlResult; config: HomeDataConfig; width?: number }) {
 	const theme = useMemo(() => getNivoChartTheme(), []);
 	const format = (value: unknown) => formatHomeDataValue(value, config);
 	const view = config.visualization;
@@ -64,24 +64,24 @@ export function HomeDataExtendedView({
 		const value = homeDataNumber(firstRow?.__measure_0);
 		if (value === null)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					This measure has no numeric value.
-				</p>
+				</HomeDataMessage>
 			);
 		if (config.target === null || config.target <= 0)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					Set a target greater than zero in widget settings.
-				</p>
+				</HomeDataMessage>
 			);
 		const fraction = Math.max(0, Math.min(1, value / config.target));
 		const maximum = Math.max(config.target, value, 0) * 1.15;
 		return (
-			<div className="flex h-full flex-col justify-center gap-4 p-2">
+			<div className="flex h-full min-h-0 flex-col justify-center gap-3 overflow-auto">
 				{view === "gauge" ? (
 					<svg
 						viewBox="0 0 220 175"
-						className="min-h-0 w-full flex-1"
+						className="mx-auto min-h-0 w-full max-w-52 flex-1"
 						role="img"
 						aria-label={`${format(value)} of target ${format(config.target)}`}
 					>
@@ -115,7 +115,7 @@ export function HomeDataExtendedView({
 							fontSize={22}
 							fontWeight={600}
 						>
-							{format(value)}
+							{homeDataAxisValue(value, config)}
 						</text>
 						<text
 							x={110}
@@ -130,7 +130,7 @@ export function HomeDataExtendedView({
 				) : (
 					<>
 						<div className="flex items-baseline justify-between gap-2">
-							<span className="text-3xl font-semibold tabular-nums">
+							<span className="min-w-0 break-words text-[clamp(1.65rem,4cqw,2.25rem)] font-semibold leading-tight tabular-nums">
 								{format(value)}
 							</span>
 							<span className="text-xs text-muted-foreground">
@@ -138,14 +138,21 @@ export function HomeDataExtendedView({
 							</span>
 						</div>
 						{view === "progress" ? (
-							<progress
-								className="h-3 w-full overflow-hidden rounded-full accent-primary"
-								max={config.target}
-								value={Math.max(0, value)}
+							<div
+								role="meter"
+								className="h-2 w-full shrink-0 overflow-hidden rounded-full bg-muted"
+								aria-valuemin={0}
+								aria-valuemax={config.target}
+								aria-valuenow={Math.min(config.target, Math.max(0, value))}
 								aria-label={homeDataMeasureTitle(config.measures[0])}
-							/>
+							>
+								<div
+									className="h-full rounded-full bg-primary"
+									style={{ width: `${fraction * 100}%` }}
+								/>
+							</div>
 						) : (
-							<div className="relative h-8 rounded bg-muted">
+							<div className="relative h-6 shrink-0 rounded bg-muted/60">
 								<div
 									className="absolute inset-y-2 left-0 rounded bg-primary"
 									style={{ width: `${Math.max(0, (value / maximum) * 100)}%` }}
@@ -193,108 +200,111 @@ export function HomeDataExtendedView({
 		});
 		if (!data.length)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					Choose a numeric distribution field in widget settings.
-				</p>
+				</HomeDataMessage>
 			);
 		const min = Math.min(...data.map((item) => item.values[0]));
 		const max = Math.max(...data.map((item) => item.values[4]));
 		const span = max - min || 1;
 		const y = (value: number) => 190 - ((value - min) / span) * 160;
-		const width = Math.max(300, 60 + data.length * 75);
+		const plotWidth = Math.max(width, 60 + data.length * 56);
 		return (
-			<div className="h-full overflow-auto">
-				<svg
-					viewBox={`0 0 ${width} 240`}
-					className="h-full"
-					style={{ minWidth: width }}
-					role="img"
-					aria-label={`Distribution of ${config.yField}`}
-				>
-					<title>
-						Distribution of {config.yField}. Quartiles are approximate; whiskers
-						show minimum and maximum.
-					</title>
-					{[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
-						<g key={fraction}>
-							<line
-								x1={55}
-								x2={width}
-								y1={y(min + span * fraction)}
-								y2={y(min + span * fraction)}
-								stroke="var(--border)"
-							/>
-							<text
-								x={50}
-								y={y(min + span * fraction) + 3}
-								textAnchor="end"
-								fontSize={9}
-								fill="var(--muted-foreground)"
-							>
-								{format(min + span * fraction)}
-							</text>
-						</g>
-					))}
-					{data.map((item, index) => {
-						const x = 90 + index * 75;
-						return (
-							<g key={item.label}>
-								<title>
-									{item.label}: min {format(item.values[0])}, Q1{" "}
-									{format(item.values[1])}, median {format(item.values[2])}, Q3{" "}
-									{format(item.values[3])}, max {format(item.values[4])}
-								</title>
+			<div className="flex h-full min-h-0 flex-col gap-1">
+				<div className="min-h-0 flex-1 overflow-auto">
+					<svg
+						viewBox={`0 0 ${plotWidth} 240`}
+						className="h-full min-h-0 w-full"
+						style={{ minWidth: plotWidth }}
+						preserveAspectRatio="none"
+						role="img"
+						aria-label={`Distribution of ${config.yField}`}
+					>
+						<title>
+							Distribution of {config.yField}. Quartiles are approximate;
+							whiskers show minimum and maximum.
+						</title>
+						{[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
+							<g key={fraction}>
 								<line
-									x1={x}
-									x2={x}
-									y1={y(item.values[0])}
-									y2={y(item.values[4])}
-									stroke="var(--chart-1)"
-								/>
-								<line
-									x1={x - 10}
-									x2={x + 10}
-									y1={y(item.values[0])}
-									y2={y(item.values[0])}
-									stroke="var(--chart-1)"
-								/>
-								<line
-									x1={x - 10}
-									x2={x + 10}
-									y1={y(item.values[4])}
-									y2={y(item.values[4])}
-									stroke="var(--chart-1)"
-								/>
-								<rect
-									x={x - 20}
-									y={y(item.values[3])}
-									width={40}
-									height={Math.max(1, y(item.values[1]) - y(item.values[3]))}
-									fill="var(--chart-1)"
-									opacity={0.6}
-								/>
-								<line
-									x1={x - 20}
-									x2={x + 20}
-									y1={y(item.values[2])}
-									y2={y(item.values[2])}
-									stroke="var(--foreground)"
-									strokeWidth={2}
+									x1={55}
+									x2={plotWidth}
+									y1={y(min + span * fraction)}
+									y2={y(min + span * fraction)}
+									stroke="var(--border)"
 								/>
 								<text
-									x={x}
-									y={215}
-									textAnchor="middle"
-									fontSize={10}
+									x={50}
+									y={y(min + span * fraction) + 3}
+									textAnchor="end"
+									fontSize={9}
 									fill="var(--muted-foreground)"
 								>
-									{item.label.slice(0, 12)}
+									{format(min + span * fraction)}
 								</text>
 							</g>
-						);
-					})}
-				</svg>
-				<p className="text-[11px] text-muted-foreground">
+						))}
+						{data.map((item, index) => {
+							const x = 55 + ((index + 0.5) / data.length) * (plotWidth - 65);
+							return (
+								<g key={item.label}>
+									<title>
+										{item.label}: min {format(item.values[0])}, Q1{" "}
+										{format(item.values[1])}, median {format(item.values[2])},
+										Q3 {format(item.values[3])}, max {format(item.values[4])}
+									</title>
+									<line
+										x1={x}
+										x2={x}
+										y1={y(item.values[0])}
+										y2={y(item.values[4])}
+										stroke="var(--chart-1)"
+									/>
+									<line
+										x1={x - 10}
+										x2={x + 10}
+										y1={y(item.values[0])}
+										y2={y(item.values[0])}
+										stroke="var(--chart-1)"
+									/>
+									<line
+										x1={x - 10}
+										x2={x + 10}
+										y1={y(item.values[4])}
+										y2={y(item.values[4])}
+										stroke="var(--chart-1)"
+									/>
+									<rect
+										x={x - 20}
+										y={y(item.values[3])}
+										width={40}
+										height={Math.max(1, y(item.values[1]) - y(item.values[3]))}
+										fill="var(--chart-1)"
+										opacity={0.6}
+									/>
+									<line
+										x1={x - 20}
+										x2={x + 20}
+										y1={y(item.values[2])}
+										y2={y(item.values[2])}
+										stroke="var(--foreground)"
+										strokeWidth={2}
+									/>
+									<text
+										x={x}
+										y={215}
+										textAnchor="middle"
+										fontSize={10}
+										fill="var(--muted-foreground)"
+									>
+										{homeDataShortLabel(item.label, 11)}
+									</text>
+								</g>
+							);
+						})}
+					</svg>
+				</div>
+				<p className="shrink-0 text-[10px] leading-4 text-muted-foreground">
 					Approximate quartiles; median, minimum and maximum are computed on the
 					source.
 				</p>
@@ -304,15 +314,15 @@ export function HomeDataExtendedView({
 	if (view === "pivot") {
 		if (!config.groupBy || !config.seriesBy)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					Choose a row group and a column series for the pivot table.
-				</p>
+				</HomeDataMessage>
 			);
 		const pivot = homeDataChartSeries(result.rows, config);
 		return (
 			<div className="h-full overflow-auto">
-				<table className="w-full text-left text-xs">
-					<thead>
+				<table className="w-full border-collapse text-left text-xs">
+					<thead className="sticky top-0 z-10 bg-card">
 						<tr className="border-b">
 							<th className="sticky left-0 bg-background p-2">
 								{config.groupBy}
@@ -331,7 +341,7 @@ export function HomeDataExtendedView({
 						{pivot.points.map((row) => (
 							<tr
 								key={homeDataText(row.name)}
-								className="border-b last:border-0"
+								className="border-b border-border/50 last:border-0 hover:bg-muted/20"
 							>
 								<th className="sticky left-0 bg-background p-2 font-medium">
 									{homeDataText(row.name)}
@@ -354,9 +364,9 @@ export function HomeDataExtendedView({
 	if (view === "sankey") {
 		if (!config.groupBy || !config.seriesBy)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					Choose source groups and destination series for the Sankey.
-				</p>
+				</HomeDataMessage>
 			);
 		const labels = new Map<string, string>();
 		const links = result.rows.flatMap((row) => {
@@ -372,9 +382,9 @@ export function HomeDataExtendedView({
 		});
 		if (!links.length)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					A Sankey needs positive values between groups.
-				</p>
+				</HomeDataMessage>
 			);
 		return (
 			<Sankey
@@ -382,15 +392,31 @@ export function HomeDataExtendedView({
 					nodes: [...labels].map(([id, label]) => ({ id, label })),
 					links,
 				}}
-				label={(node) => labels.get(node.id) ?? node.id}
+				label={(node) =>
+					homeDataShortLabel(
+						labels.get(node.id) ?? node.id,
+						width < 360 ? 15 : 22,
+					)
+				}
 				theme={theme}
 				colors={COLORS}
-				margin={{ top: 15, right: 20, bottom: 15, left: 20 }}
-				nodeThickness={15}
+				margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
+				nodeThickness={10}
 				nodeSpacing={10}
 				nodeBorderWidth={0}
 				linkBlendMode="normal"
-				linkOpacity={0.4}
+				linkOpacity={0.32}
+				nodeTooltip={({ node }) => (
+					<div className="rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
+						{labels.get(node.id) ?? node.id}: {format(node.value)}
+					</div>
+				)}
+				linkTooltip={({ link }) => (
+					<div className="rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
+						{labels.get(link.source.id)} → {labels.get(link.target.id)}:{" "}
+						{format(link.value)}
+					</div>
+				)}
 				labelTextColor="var(--foreground)"
 				animate={false}
 			/>
@@ -425,22 +451,33 @@ export function HomeDataExtendedView({
 				data.some((item) => item.value < 0)
 			)
 				return (
-					<p className="text-sm text-muted-foreground">
+					<HomeDataMessage title="Nothing to display">
 						A funnel needs nonnegative stage values.
-					</p>
+					</HomeDataMessage>
 				);
 			return (
-				<Funnel
-					data={data}
-					theme={theme}
-					colors={COLORS}
-					direction="horizontal"
-					margin={{ top: 12, right: 15, bottom: 12, left: 15 }}
-					valueFormat={(value) => format(value)}
-					labelColor="var(--foreground)"
-					borderWidth={0}
-					animate={false}
-				/>
+				<div className="flex h-full min-h-0 flex-col">
+					<div className="min-h-0 flex-1">
+						<Funnel
+							data={data}
+							theme={theme}
+							colors={COLORS}
+							direction={width < 440 ? "vertical" : "horizontal"}
+							margin={{ top: 12, right: 15, bottom: 12, left: 15 }}
+							valueFormat={(value) => format(value)}
+							labelColor="var(--foreground)"
+							borderWidth={0}
+							animate={false}
+						/>
+					</div>
+					<HomeDataLegend
+						items={data.map((item) => ({
+							key: item.id,
+							label: item.label,
+							value: format(item.value),
+						}))}
+					/>
+				</div>
 			);
 		}
 		let total = config.baseline;
@@ -466,8 +503,22 @@ export function HomeDataExtendedView({
 							data={changes}
 							margin={{ top: 10, left: 0, right: 10, bottom: 10 }}
 						>
-							<XAxis dataKey="name" tick={{ fontSize: 10 }} />
-							<YAxis tick={{ fontSize: 10 }} />
+							<XAxis
+								dataKey="name"
+								tickFormatter={(value) => homeDataCategoryLabel(value, 12)}
+								tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+								axisLine={false}
+								tickLine={false}
+								minTickGap={16}
+							/>
+							<YAxis
+								tickFormatter={(value) => homeDataAxisValue(value, config)}
+								tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+								axisLine={false}
+								tickLine={false}
+								width={48}
+								tickCount={4}
+							/>
 							<ReferenceLine y={0} stroke="var(--border)" />
 							<Tooltip
 								formatter={(_value, _name, item) => format(item.payload.change)}
@@ -477,7 +528,13 @@ export function HomeDataExtendedView({
 									borderRadius: 8,
 								}}
 							/>
-							<Bar dataKey="range" name="Change" isAnimationActive={false}>
+							<Bar
+								dataKey="range"
+								name="Change"
+								maxBarSize={36}
+								radius={[3, 3, 0, 0]}
+								isAnimationActive={false}
+							>
 								{changes.map((item) => (
 									<Cell
 										key={item.name}
@@ -504,8 +561,8 @@ export function HomeDataExtendedView({
 		const rows = keyHomeDataRows(result.rows.slice(0, 10));
 		return (
 			<div className="h-full overflow-auto">
-				<table className="w-full text-left text-xs">
-					<thead>
+				<table className="w-full border-collapse text-left text-xs">
+					<thead className="sticky top-0 z-10 bg-card">
 						<tr className="border-b">
 							<th className="p-2">Property</th>
 							{rows.map(({ key, row }) => (
@@ -517,7 +574,10 @@ export function HomeDataExtendedView({
 					</thead>
 					<tbody>
 						{columns.slice(1).map((field) => (
-							<tr key={field} className="border-b last:border-0">
+							<tr
+								key={field}
+								className="border-b border-border/50 last:border-0 hover:bg-muted/20"
+							>
 								<th className="p-2 font-medium text-muted-foreground">
 									{field}
 								</th>
@@ -542,9 +602,9 @@ export function HomeDataExtendedView({
 	if (view === "timeline" || view === "recordcalendar") {
 		if (!config.xField)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					Choose a date column in widget settings.
-				</p>
+				</HomeDataMessage>
 			);
 		const dated = keyHomeDataRows(result.rows)
 			.flatMap((item) => {
@@ -560,26 +620,38 @@ export function HomeDataExtendedView({
 			.sort((a, b) => a.date.getTime() - b.date.getTime());
 		if (!dated.length)
 			return (
-				<p className="text-sm text-muted-foreground">
+				<HomeDataMessage title="Nothing to display">
 					No records have a valid date in this field.
-				</p>
+				</HomeDataMessage>
 			);
 		if (view === "timeline")
 			return (
-				<ol className="h-full space-y-4 overflow-auto pl-2">
+				<ol className="h-full space-y-3 overflow-auto pl-2">
 					{dated.map(({ key, row, date }) => (
 						<li
 							key={key}
-							className="relative border-l-2 border-primary/30 pl-4"
+							className="relative border-l border-primary/25 pb-2 pl-4"
 						>
 							<span className="absolute -left-[5px] top-1 size-2 rounded-full bg-primary" />
 							<time
 								className="text-[11px] text-muted-foreground"
 								dateTime={date.toISOString()}
 							>
-								{date.toLocaleString()}
+								{/^\d{4}-\d{2}-\d{2}$/.test(homeDataText(row[config.xField]))
+									? date.toLocaleDateString(undefined, {
+											month: "short",
+											day: "numeric",
+											year: "numeric",
+											timeZone: "UTC",
+										})
+									: date.toLocaleString(undefined, {
+											month: "short",
+											day: "numeric",
+											hour: "2-digit",
+											minute: "2-digit",
+										})}
 							</time>
-							<p className="text-sm font-medium">
+							<p className="truncate text-sm font-medium">
 								{homeDataText(row[columns[0]])}
 							</p>
 							{columns

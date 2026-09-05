@@ -3,8 +3,13 @@
 import {
 	DndContext,
 	type DragEndEvent,
+	type DragMoveEvent,
 	DragOverlay,
+	type DragStartEvent,
+	type KeyboardCoordinateGetter,
 	KeyboardSensor,
+	MeasuringStrategy,
+	type Modifier,
 	PointerSensor,
 	closestCenter,
 	pointerWithin,
@@ -16,10 +21,8 @@ import {
 import {
 	SortableContext,
 	rectSortingStrategy,
-	sortableKeyboardCoordinates,
 	useSortable,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
 	ArrowDown,
 	ArrowLeft,
@@ -49,6 +52,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -86,9 +90,18 @@ import {
 import { HomeDataWidget } from "./data-widget";
 import { HomeDataWidgetSettings } from "./data-widget-settings";
 import {
+	type HomeDragPoint,
+	homeInsertionIndex,
+	insertHomeWidget,
+} from "./home-drag";
+import {
 	HOME_GRID_GAP,
+	HOME_GRID_TRACK,
 	HOME_ROW_HEIGHT,
 	MAX_HOME_WIDGETS,
+	homeGridRowSpan,
+	homeWidgetAutoHeight,
+	homeWidgetHeight,
 	homeWidgetSpan,
 	minimumHomeWidgetRows,
 	moveHomeWidget,
@@ -174,16 +187,104 @@ export function HomeEditor({
 	const [resetPending, setResetPending] = useState(false);
 	const [dirty, setDirty] = useState(false);
 	const [announcement, setAnnouncement] = useState("");
-	const [draggedPreset, setDraggedPreset] = useState<HomeWidgetPreset | null>(
+	const editorRef = useRef<HTMLDivElement>(null);
+	const pointer = useRef<HomeDragPoint | null>(null);
+	const lastPlacement = useRef<{ x: number; y: number; scroll: number } | null>(
 		null,
 	);
+	const [drag, setDrag] = useState<{
+		widget: IHomeWidget;
+		preset: boolean;
+		widgets: IHomeWidget[];
+		inside: boolean;
+		snapshot: HTMLElement | null;
+		width: number;
+		height: number;
+	} | null>(null);
+	const dragRef = useRef(drag);
+	const setDragState = useCallback((value: typeof drag) => {
+		dragRef.current = value;
+		setDrag(value);
+	}, []);
+	useLayoutEffect(() => {
+		if (!drag?.preset || !drag.inside) return;
+		const element = [
+			...(editorRef.current?.querySelectorAll<HTMLElement>(
+				"[data-home-widget]",
+			) ?? []),
+		].find((node) => node.dataset.homeWidget === drag.widget.id);
+		if (!element) return;
+		const refresh = () => {
+			const currentDrag = dragRef.current;
+			if (!currentDrag || currentDrag.widget.id !== drag.widget.id) return;
+			const box = element.getBoundingClientRect();
+			if (
+				currentDrag.snapshot &&
+				Math.abs(currentDrag.width - box.width) < 1 &&
+				Math.abs(currentDrag.height - box.height) < 1
+			)
+				return;
+			setDragState({
+				...currentDrag,
+				snapshot: cloneWidgetPreview(element),
+				width: box.width,
+				height: box.height,
+			});
+		};
+		const observer = new ResizeObserver(refresh);
+		observer.observe(element);
+		refresh();
+		return () => observer.disconnect();
+	}, [drag?.widget.id, drag?.preset, drag?.inside, setDragState]);
 	const editingChangeRef = useRef(onEditingChange);
 	const current = editing ? draft : runtimeLayout;
 	const selected = current.widgets.find((widget) => widget.id === selectedId);
+	const keyboardCoordinates: KeyboardCoordinateGetter = (
+		event,
+		{ currentCoordinates },
+	) => {
+		if (
+			!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.code)
+		)
+			return;
+		const currentDrag = dragRef.current;
+		if (!currentDrag) return;
+		event.preventDefault();
+		const direction =
+			event.code === "ArrowLeft" || event.code === "ArrowUp" ? -1 : 1;
+		const currentIndex = currentDrag.widgets.findIndex(
+			(item) => item.id === currentDrag.widget.id,
+		);
+		const index = Math.max(
+			0,
+			Math.min(
+				currentDrag.widgets.length - (currentIndex >= 0 ? 1 : 0),
+				currentIndex < 0 ? 0 : currentIndex + direction,
+			),
+		);
+		const widgets = insertHomeWidget(
+			currentDrag.widgets,
+			currentDrag.widget,
+			index,
+		);
+		setDragState({ ...currentDrag, widgets, inside: true });
+		setAnnouncement(
+			`${currentDrag.widget.title ?? "Widget"}, position ${index + 1} of ${widgets.length}`,
+		);
+		requestAnimationFrame(() =>
+			editorRef.current
+				?.querySelector("[data-home-placeholder]")
+				?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+		);
+		return {
+			x: currentCoordinates.x,
+			y: currentCoordinates.y + direction * 24,
+		};
+	};
 	const sensors = useSensors(
 		useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
 		useSensor(KeyboardSensor, {
-			coordinateGetter: sortableKeyboardCoordinates,
+			coordinateGetter: keyboardCoordinates,
 		}),
 	);
 
@@ -251,7 +352,13 @@ export function HomeEditor({
 		[change],
 	);
 	const undo = useCallback(() => {
-		if (!past.length || saving) return;
+		if (
+			!past.length ||
+			saving ||
+			dragRef.current ||
+			editorRef.current?.querySelector("[data-home-resizing]")
+		)
+			return;
 		const previous = past[past.length - 1];
 		setFuture((history) => [
 			{ layout: draft, reset: resetPending },
@@ -263,7 +370,13 @@ export function HomeEditor({
 		setDirty(true);
 	}, [past, draft, resetPending, saving]);
 	const redo = useCallback(() => {
-		if (!future.length || saving) return;
+		if (
+			!future.length ||
+			saving ||
+			dragRef.current ||
+			editorRef.current?.querySelector("[data-home-resizing]")
+		)
+			return;
 		const next = future[0];
 		setPast((history) => [...history, { layout: draft, reset: resetPending }]);
 		setDraft(next.layout);
@@ -275,6 +388,9 @@ export function HomeEditor({
 		if (draftKey) homeDrafts.delete(draftKey);
 		setHasDraft(false);
 		setEditing(false);
+		setDrag(null);
+		dragRef.current = null;
+		pointer.current = null;
 		setPanel(null);
 		setSelectedId(null);
 		setPast([]);
@@ -284,6 +400,11 @@ export function HomeEditor({
 		setPreview("desktop");
 	}, [draftKey]);
 	const save = useCallback(async () => {
+		if (
+			dragRef.current ||
+			editorRef.current?.querySelector("[data-home-resizing]")
+		)
+			return;
 		if (saving) return;
 		if (new Blob([JSON.stringify(draft)]).size > 128 * 1024) {
 			toast.error(
@@ -331,7 +452,7 @@ export function HomeEditor({
 				event.preventDefault();
 				event.shiftKey ? redo() : undo();
 			}
-			if (event.key === "Escape" && panel) setPanel(null);
+			if (event.key === "Escape" && panel && !dragRef.current) setPanel(null);
 		};
 		window.addEventListener("keydown", keyboard);
 		return () => window.removeEventListener("keydown", keyboard);
@@ -390,18 +511,107 @@ export function HomeEditor({
 		setPanel("settings");
 		setAnnouncement(`${widget.title} added`);
 	};
-	const dragEnd = (event: DragEndEvent) => {
-		setDraggedPreset(null);
-		if (!editing || saving || !event.over) return;
-		const active = String(event.active.id);
-		const over = String(event.over.id);
-		if (active.startsWith("preset:")) {
-			add(active.slice(7), over);
+	const dragStart = ({ active }: DragStartEvent) => {
+		lastPlacement.current = null;
+		const preset = String(active.id).startsWith("preset:");
+		if (preset && draft.widgets.length >= MAX_HOME_WIDGETS) {
+			toast.error(`A home can contain up to ${MAX_HOME_WIDGETS} widgets.`);
 			return;
 		}
-		if (active !== over && over !== "home-canvas") {
-			change((page) => moveHomeWidget(page, active, over));
-			setAnnouncement("Widget moved");
+		const widget = preset
+			? createHomeWidget(String(active.id).slice(7))
+			: draft.widgets.find((item) => item.id === active.id);
+		if (!widget) return;
+		const element = preset
+			? null
+			: [
+					...(editorRef.current?.querySelectorAll<HTMLElement>(
+						"[data-home-widget]",
+					) ?? []),
+				].find((item) => item.dataset.homeWidget === widget.id);
+		const box = element?.getBoundingClientRect();
+		const snapshot = element ? cloneWidgetPreview(element) : null;
+		setDragState({
+			widget,
+			preset,
+			widgets: draft.widgets,
+			inside: !preset,
+			snapshot: snapshot ?? null,
+			width: box?.width ?? 280,
+			height: box?.height ?? 100,
+		});
+		setAnnouncement(
+			`Moving ${widget.title ?? "widget"}. Use arrow keys to choose a position, Space to place, or Escape to cancel.`,
+		);
+	};
+	const dragMove = (event: DragMoveEvent) => {
+		const currentDrag = dragRef.current;
+		const canvas =
+			editorRef.current?.querySelector<HTMLElement>("[data-home-canvas]");
+		if (!currentDrag || !canvas) return;
+		let index: number | null = null;
+		if (pointer.current) {
+			const scroll =
+				editorRef.current?.querySelector<HTMLElement>("[data-home-scroll]")
+					?.scrollTop ?? 0;
+			const previous = lastPlacement.current;
+			if (
+				previous &&
+				previous.x === pointer.current.x &&
+				previous.y === pointer.current.y &&
+				previous.scroll === scroll
+			)
+				return;
+			// Layout changes also trigger collision events. Only physical movement or scrolling chooses a new slot.
+			lastPlacement.current = { ...pointer.current, scroll };
+			const box = canvas.getBoundingClientRect();
+			const rects = [
+				...canvas.querySelectorAll<HTMLElement>("[data-home-widget]"),
+			].map((element) => ({
+				id: element.dataset.homeWidget ?? "",
+				...widgetBounds(element),
+			}));
+			index = homeInsertionIndex(
+				currentDrag.widgets,
+				currentDrag.widget.id,
+				pointer.current,
+				box,
+				rects,
+			);
+		} else return;
+		if (index === null) {
+			if (currentDrag.inside) setDragState({ ...currentDrag, inside: false });
+			return;
+		}
+		const next = insertHomeWidget(
+			currentDrag.widgets,
+			currentDrag.widget,
+			index,
+		);
+		if (
+			!currentDrag.inside ||
+			next.some((widget, i) => widget.id !== currentDrag.widgets[i]?.id)
+		) {
+			setDragState({ ...currentDrag, widgets: next, inside: true });
+			setAnnouncement(
+				`${currentDrag.widget.title ?? "Widget"}, position ${index + 1} of ${next.length}`,
+			);
+		}
+	};
+	const dragEnd = (_event: DragEndEvent) => {
+		const currentDrag = dragRef.current;
+		setDragState(null);
+		pointer.current = null;
+		if (!editing || saving || !currentDrag?.inside) return;
+		if (
+			currentDrag.widgets.some(
+				(item, index) => item.id !== draft.widgets[index]?.id,
+			) ||
+			currentDrag.widgets.length !== draft.widgets.length
+		) {
+			change({ ...draft, widgets: currentDrag.widgets });
+			setSelectedId(currentDrag.widget.id);
+			setAnnouncement(`${currentDrag.widget.title ?? "Widget"} placed`);
 		}
 	};
 	const duplicate = (widget: IHomeWidget) => {
@@ -445,7 +655,8 @@ export function HomeEditor({
 
 	return (
 		<div
-			className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+			ref={editorRef}
+			className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			data-home-editor
 			data-editing={editing}
 		>
@@ -588,19 +799,29 @@ export function HomeEditor({
 			</div>
 			<DndContext
 				sensors={sensors}
-				collisionDetection={(args) =>
-					String(args.active.id).startsWith("preset:")
-						? pointerWithin(args)
-						: closestCenter(args)
-				}
-				onDragStart={({ active }) =>
-					setDraggedPreset(
-						HOME_WIDGET_PRESETS.find(
-							(item) => `preset:${item.id}` === active.id,
-						) ?? null,
-					)
-				}
-				onDragCancel={() => setDraggedPreset(null)}
+				measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+				collisionDetection={(args) => {
+					pointer.current = args.pointerCoordinates;
+					if (args.pointerCoordinates) {
+						const hits = pointerWithin(args);
+						const widget = hits.find((hit) => hit.id !== "home-canvas");
+						return widget ? [widget] : hits;
+					}
+					return closestCenter({
+						...args,
+						droppableContainers: args.droppableContainers.filter(
+							(item) => item.id !== "home-canvas" && item.id !== args.active.id,
+						),
+					});
+				}}
+				onDragStart={dragStart}
+				onDragMove={dragMove}
+				onDragOver={dragMove}
+				onDragCancel={() => {
+					setDragState(null);
+					pointer.current = null;
+					setAnnouncement("Move cancelled");
+				}}
 				onDragEnd={dragEnd}
 			>
 				<div
@@ -608,6 +829,8 @@ export function HomeEditor({
 					inert={saving || runtimeSaving}
 				>
 					<div
+						data-home-scroll
+						style={{ overflowAnchor: "none" }}
 						className={cn(
 							"min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 sm:px-7 sm:py-8",
 							editing && "bg-muted/20",
@@ -632,7 +855,9 @@ export function HomeEditor({
 								</div>
 							)}
 							<HomeCanvas
-								widgets={current.widgets}
+								widgets={drag?.widgets ?? current.widgets}
+								draggedId={drag?.widget.id}
+								dropInside={drag?.inside ?? false}
 								editing={editing}
 								selectedId={selectedId}
 								onSelect={(widget) => {
@@ -711,28 +936,13 @@ export function HomeEditor({
 				{typeof document !== "undefined" &&
 					createPortal(
 						<DragOverlay
+							style={{ pointerEvents: "none" }}
 							zIndex={80}
-							dropAnimation={{ duration: 160, easing: "ease-out" }}
+							adjustScale={false}
+							dropAnimation={null}
+							modifiers={[keepPreviewInWindow]}
 						>
-							{draggedPreset && (
-								<div className="flex w-[280px] items-start gap-3 rounded-xl border border-primary/60 bg-card p-4 shadow-2xl">
-									<HomeWidgetIcon
-										name={draggedPreset.icon}
-										className="mt-0.5 size-6 shrink-0 text-primary"
-									/>
-									<div>
-										<p className="text-sm font-semibold">
-											{draggedPreset.name}
-										</p>
-										<p className="mt-1 text-xs text-muted-foreground">
-											Drop onto your home
-										</p>
-										<p className="mt-3 text-[10px] tabular-nums text-muted-foreground">
-											{draggedPreset.columns} × {draggedPreset.rows}
-										</p>
-									</div>
-								</div>
-							)}
+							{drag && <WidgetDragPreview drag={drag} />}
 						</DragOverlay>,
 						document.body,
 					)}
@@ -831,8 +1041,119 @@ function HomeWidgetPanel({
 	);
 }
 
+const keepPreviewInWindow: Modifier = ({
+	transform,
+	overlayNodeRect,
+	windowRect,
+}) => {
+	if (!overlayNodeRect || !windowRect) return transform;
+	const left = windowRect.left + 8 - overlayNodeRect.left;
+	const right = windowRect.right - 8 - overlayNodeRect.right;
+	const top = windowRect.top + 8 - overlayNodeRect.top;
+	const bottom = windowRect.bottom - 8 - overlayNodeRect.bottom;
+	return {
+		...transform,
+		x: Math.max(left, Math.min(right, transform.x)),
+		y: Math.max(top, Math.min(bottom, transform.y)),
+	};
+};
+
+function cloneWidgetPreview(element: HTMLElement) {
+	const box = element.getBoundingClientRect();
+	const snapshot = element.cloneNode(true) as HTMLElement;
+	snapshot.removeAttribute("data-home-widget");
+	snapshot.removeAttribute("data-home-placeholder");
+	snapshot.removeAttribute("id");
+	for (const node of snapshot.querySelectorAll("[id]"))
+		node.removeAttribute("id");
+	for (const node of snapshot.querySelectorAll("[data-home-drop-hint]"))
+		node.remove();
+	snapshot.classList.remove(
+		"border-dashed",
+		"border-primary/70",
+		"bg-primary/5",
+		"ring-1",
+		"ring-primary/25",
+	);
+	Object.assign(snapshot.style, {
+		width: `${box.width}px`,
+		height: `${box.height}px`,
+		transform: "none",
+		margin: "0",
+		opacity: "1",
+	});
+	return snapshot;
+}
+
+function rectValues(rect: DOMRect) {
+	return {
+		left: rect.left,
+		top: rect.top,
+		right: rect.right,
+		bottom: rect.bottom,
+	};
+}
+
+function widgetBounds(element: HTMLElement) {
+	const bounds = rectValues(element.getBoundingClientRect());
+	const transform = getComputedStyle(element).transform;
+	if (transform === "none") return bounds;
+	const matrix = new DOMMatrixReadOnly(transform);
+	return {
+		left: bounds.left - matrix.m41,
+		right: bounds.right - matrix.m41,
+		top: bounds.top - matrix.m42,
+		bottom: bounds.bottom - matrix.m42,
+	};
+}
+
+function WidgetDragPreview({
+	drag,
+}: {
+	drag: {
+		widget: IHomeWidget;
+		snapshot: HTMLElement | null;
+		width: number;
+		height: number;
+	};
+}) {
+	const ref = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (!ref.current || !drag.snapshot) return;
+		ref.current.replaceChildren(drag.snapshot);
+	}, [drag.snapshot]);
+	return drag.snapshot ? (
+		<div
+			ref={ref}
+			aria-hidden
+			inert
+			data-home-drag-preview
+			className="pointer-events-none overflow-hidden rounded-2xl bg-background shadow-2xl ring-2 ring-primary/60"
+			style={{ width: drag.width, height: drag.height, opacity: 0.94 }}
+		/>
+	) : (
+		<div
+			data-home-drag-preview
+			className="flex w-64 items-center gap-3 rounded-xl border border-primary/40 bg-background p-4 shadow-2xl"
+		>
+			<HomeWidgetIcon
+				name={getHomeWidgetPreset(drag.widget)?.icon}
+				className="size-6 text-primary"
+			/>
+			<div className="min-w-0">
+				<p className="truncate text-sm font-semibold">{drag.widget.title}</p>
+				<p className="mt-1 text-xs text-muted-foreground">
+					Place anywhere on your home
+				</p>
+			</div>
+		</div>
+	);
+}
+
 function HomeCanvas({
 	widgets,
+	draggedId,
+	dropInside,
 	editing,
 	selectedId,
 	onSelect,
@@ -844,6 +1165,8 @@ function HomeCanvas({
 	onConfigChange,
 }: {
 	widgets: IHomeWidget[];
+	draggedId?: string;
+	dropInside: boolean;
 	editing: boolean;
 	selectedId: string | null;
 	onSelect: (widget: IHomeWidget) => void;
@@ -872,6 +1195,36 @@ function HomeCanvas({
 		return () => observer.disconnect();
 	}, []);
 	const columns = responsiveHomeColumns(width);
+	const positions = useRef(new Map<string, { left: number; top: number }>());
+	const order = widgets.map((widget) => widget.id).join("|");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Re-measure after React changes widget order.
+	useLayoutEffect(() => {
+		const nodes =
+			ref.current?.querySelectorAll<HTMLElement>("[data-home-widget]");
+		if (!nodes) return;
+		const next = new Map<string, { left: number; top: number }>();
+		const animate =
+			editing && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		for (const node of nodes) {
+			const id = node.dataset.homeWidget ?? "";
+			const bounds = widgetBounds(node);
+			next.set(id, { left: bounds.left, top: bounds.top });
+			const before = positions.current.get(id);
+			for (const animation of node.getAnimations()) animation.cancel();
+			if (!animate || !before || id === draggedId) continue;
+			const x = before.left - bounds.left;
+			const y = before.top - bounds.top;
+			if (Math.abs(x) + Math.abs(y) > 1)
+				node.animate(
+					[
+						{ transform: `translate(${x}px, ${y}px)` },
+						{ transform: "translate(0, 0)" },
+					],
+					{ duration: 160, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+				);
+		}
+		positions.current = next;
+	}, [order, editing, draggedId]);
 	return (
 		<div
 			ref={(node) => {
@@ -893,7 +1246,7 @@ function HomeCanvas({
 					className="grid items-stretch"
 					style={{
 						gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-						gridAutoRows: `${HOME_ROW_HEIGHT + (editing ? 32 : 0)}px`,
+						gridAutoRows: `${HOME_GRID_TRACK}px`,
 						gap: `${HOME_GRID_GAP}px`,
 					}}
 				>
@@ -901,6 +1254,8 @@ function HomeCanvas({
 						<HomeWidgetFrame
 							key={widget.id}
 							widget={widget}
+							placeholder={widget.id === draggedId}
+							activeDrop={widget.id === draggedId && dropInside}
 							editing={editing}
 							selected={selectedId === widget.id}
 							columns={columns}
@@ -941,6 +1296,8 @@ function HomeCanvas({
 
 function HomeWidgetFrame({
 	widget,
+	placeholder,
+	activeDrop,
 	editing,
 	selected,
 	columns,
@@ -955,6 +1312,8 @@ function HomeWidgetFrame({
 	onConfigChange,
 }: {
 	widget: IHomeWidget;
+	placeholder: boolean;
+	activeDrop: boolean;
 	editing: boolean;
 	selected: boolean;
 	columns: number;
@@ -968,22 +1327,109 @@ function HomeWidgetFrame({
 	onMove: (offset: number) => void;
 	onConfigChange?: (config: Record<string, unknown>) => void;
 }) {
-	const {
-		attributes,
-		listeners,
-		setNodeRef,
-		transform,
-		transition,
-		isDragging,
-	} = useSortable({ id: widget.id, disabled: !editing });
+	const { attributes, listeners, setNodeRef } = useSortable({
+		id: widget.id,
+		disabled: !editing,
+	});
 	const [resize, setResize] = useState<IHomeWidget["size"] | null>(null);
 	const resizeRef = useRef<IHomeWidget["size"] | null>(null);
 	const origin = useRef<{
 		x: number;
 		y: number;
 		size: IHomeWidget["size"];
+		height: number;
 	} | null>(null);
+	const frameRef = useRef<HTMLElement | null>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const [contentHeight, setContentHeight] = useState(120);
+	const [dataState, setDataState] = useState("");
+	useEffect(() => {
+		const cancel = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || !origin.current) return;
+			event.preventDefault();
+			event.stopPropagation();
+			origin.current = null;
+			resizeRef.current = null;
+			setResize(null);
+		};
+		window.addEventListener("keydown", cancel, true);
+		return () => window.removeEventListener("keydown", cancel, true);
+	}, []);
 	const size = resize ?? widget.size;
+	const autoHeight = homeWidgetAutoHeight({ ...widget, size });
+	useLayoutEffect(() => {
+		const content = contentRef.current;
+		if (!content) return;
+		const measure = () =>
+			setContentHeight(Math.ceil(content.getBoundingClientRect().height) + 2);
+		const readDataState = () =>
+			setDataState(
+				content.querySelector<HTMLElement>("[data-home-data-state]")?.dataset
+					.homeDataState ?? "",
+			);
+		const observer = new ResizeObserver(measure);
+		observer.observe(content);
+		const mutations = new MutationObserver(readDataState);
+		mutations.observe(content, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			attributeFilter: ["data-home-data-state"],
+		});
+		readDataState();
+		measure();
+		return () => {
+			observer.disconnect();
+			mutations.disconnect();
+		};
+	}, []);
+	const metric = ["stat", "metricstrip", "progress", "bullet"].includes(
+		String(widget.config.visualization),
+	);
+	const bodyHeight =
+		autoHeight && widget.type === "data" && dataState === "ready" && !metric
+			? widget.config.visualization === "gauge"
+				? 220
+				: widget.config.visualization === "calendar"
+					? 240
+					: 280
+			: undefined;
+	const embedHeight =
+		autoHeight && widget.type === "app-embed" && widget.config.appId
+			? Math.max(360, homeWidgetHeight(widget))
+			: undefined;
+	const minHeight =
+		widget.type === "app-embed"
+			? 240
+			: widget.type === "data" && !metric
+				? 220
+				: 96;
+	const height = autoHeight
+		? Math.max(56, contentHeight)
+		: Math.max(minHeight, homeWidgetHeight({ ...widget, size }));
+	const resizedSize = (
+		nextColumns: number,
+		nextHeight: number,
+	): IHomeWidget["size"] => {
+		const height = Math.max(
+			minHeight,
+			Math.min(1240, Math.round(nextHeight / 8) * 8),
+		);
+		return {
+			columns: Math.max(1, Math.min(12, nextColumns)),
+			rows: Math.max(
+				1,
+				Math.min(
+					12,
+					Math.ceil(
+						(height + HOME_GRID_GAP) / (HOME_ROW_HEIGHT + HOME_GRID_GAP),
+					),
+				),
+			),
+			heightMode: "fixed",
+			height,
+		};
+	};
 	const preset = getHomeWidgetPreset(widget);
 	const ownHeader = [
 		"greeting",
@@ -994,12 +1440,9 @@ function HomeWidgetFrame({
 	const accent = ACCENTS[widget.appearance.accent] ?? ACCENTS.neutral;
 	const style: CSSProperties = {
 		gridColumn: `span ${homeWidgetSpan(size.columns, columns)}`,
-		gridRow: `span ${Math.max(columns === 1 && widget.type === "quick-actions" ? 3 : minimumHomeWidgetRows(widget), size.rows)}`,
-		transform: CSS.Transform.toString(transform),
-		transition: resize ? undefined : transition,
+		gridRow: `span ${homeGridRowSpan(height)}`,
+		height: autoHeight ? undefined : height,
 		position: "relative",
-		zIndex: isDragging ? 10 : undefined,
-		opacity: isDragging ? 0.65 : 1,
 		"--home-accent": accent,
 	} as CSSProperties;
 	if (widget.appearance.variant === "tinted")
@@ -1007,12 +1450,21 @@ function HomeWidgetFrame({
 	const borderless = widget.appearance.variant === "borderless";
 	return (
 		<section
-			ref={setNodeRef}
+			ref={(node) => {
+				frameRef.current = node;
+				setNodeRef(node);
+			}}
 			style={style}
 			data-home-widget={widget.id}
 			data-widget-type={widget.type}
+			data-height-mode={autoHeight ? "auto" : "fixed"}
+			data-home-resizing={resize ? "true" : undefined}
+			data-home-placeholder={
+				placeholder ? (activeDrop ? "active" : "outside") : undefined
+			}
 			className={cn(
 				"group/widget relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl",
+				borderless && !editing && autoHeight && "overflow-visible rounded-none",
 				borderless
 					? "bg-transparent"
 					: "border border-border/60 bg-card/70 shadow-sm shadow-black/[0.02]",
@@ -1020,11 +1472,17 @@ function HomeWidgetFrame({
 				selected &&
 					editing &&
 					"ring-2 ring-primary ring-offset-2 ring-offset-background",
-				isDragging && "shadow-xl",
+				placeholder &&
+					"border-dashed border-primary/70 bg-primary/5 ring-1 ring-primary/25",
 			)}
 		>
-			{editing && (
-				<div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-muted/30 px-2">
+			{editing && !placeholder && (
+				<div
+					className={cn(
+						"absolute top-2 inset-x-2 z-20 flex h-8 items-center justify-between gap-2 rounded-lg border border-border/70 bg-background/95 px-2 shadow-sm transition-opacity group-hover/widget:opacity-100 group-focus-within/widget:opacity-100",
+						selected ? "opacity-100" : "opacity-0",
+					)}
+				>
 					<button
 						type="button"
 						className="flex min-w-0 flex-1 cursor-grab touch-none items-center gap-2 text-left text-xs text-muted-foreground active:cursor-grabbing"
@@ -1038,7 +1496,8 @@ function HomeWidgetFrame({
 						</span>
 					</button>
 					<span className="text-[10px] tabular-nums text-muted-foreground">
-						{size.columns} × {size.rows}
+						{size.columns}/12 ·{" "}
+						{autoHeight ? "Auto" : `${Math.round(height)}px`}
 					</span>
 					<Button
 						variant="ghost"
@@ -1089,55 +1548,84 @@ function HomeWidgetFrame({
 					</DropdownMenu>
 				</div>
 			)}
-			{!ownHeader && (widget.title || widget.description) && (
-				<header className="shrink-0 px-5 pt-5 pb-3">
-					<h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
-						<HomeWidgetIcon
-							name={preset?.icon}
-							className="h-4 w-4 shrink-0 text-[var(--home-accent)]"
-						/>
-						{widget.title}
-					</h2>
-					{widget.description && (
-						<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-							{widget.description}
-						</p>
-					)}
-				</header>
+			{placeholder && (
+				<div
+					data-home-drop-hint
+					className="pointer-events-none absolute inset-0 z-30 flex items-start justify-start rounded-2xl bg-background/65 p-3 backdrop-blur-[1px]"
+				>
+					<span className="rounded-full border border-primary/30 bg-background px-4 py-2 text-xs font-medium text-primary shadow-sm">
+						{activeDrop ? "Drop here" : "Move onto your home"}
+					</span>
+				</div>
 			)}
 			<div
+				ref={contentRef}
 				className={cn(
-					"relative min-h-0 min-w-0 flex-1",
-					!ownHeader && "overflow-auto px-5 pb-5",
-					ownHeader && "overflow-hidden",
+					"min-w-0",
+					(!autoHeight || embedHeight) && "flex h-full min-h-0 flex-col",
 				)}
+				style={{ height: embedHeight }}
 			>
-				<WidgetErrorBoundary
-					key={`${widget.id}:${widget.type}`}
-					resetKey={JSON.stringify(widget.config)}
-				>
-					<div className="h-full min-h-0 min-w-0" inert={editing}>
-						{widget.type === "data" ? (
-							<HomeDataWidget widget={widget} editing={editing} />
-						) : (
-							<HomeWidgetContent
-								widget={widget}
-								editing={editing}
-								onUpdate={onConfigChange}
+				{!ownHeader && (widget.title || widget.description) && (
+					<header className="shrink-0 px-4 pt-4 pb-3">
+						<h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+							<HomeWidgetIcon
+								name={preset?.icon}
+								className="h-4 w-4 shrink-0 text-[var(--home-accent)]"
 							/>
+							{widget.title}
+						</h2>
+						{widget.description && (
+							<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+								{widget.description}
+							</p>
 						)}
-					</div>
-				</WidgetErrorBoundary>
-				{editing && (
-					<button
-						type="button"
-						className="absolute inset-0 z-[1] cursor-pointer"
-						aria-label={`Select ${widget.title ?? "widget"}`}
-						onClick={onSelect}
-					/>
+					</header>
 				)}
+				<div
+					className={cn(
+						"relative min-h-0 min-w-0",
+						(!autoHeight || embedHeight) && "flex-1 overflow-auto",
+						!ownHeader && "px-4 pb-4",
+						!ownHeader && !widget.title && !widget.description && "pt-4",
+						ownHeader && autoHeight && !embedHeight && "overflow-hidden",
+					)}
+				>
+					<WidgetErrorBoundary
+						key={`${widget.id}:${widget.type}`}
+						resetKey={JSON.stringify(widget.config)}
+					>
+						<div
+							className={cn(
+								"min-h-0 min-w-0",
+								(!autoHeight || embedHeight) && "h-full",
+							)}
+							style={{ height: bodyHeight }}
+							inert={editing}
+						>
+							{widget.type === "data" ? (
+								<HomeDataWidget widget={widget} editing={editing} />
+							) : (
+								<HomeWidgetContent
+									widget={widget}
+									editing={editing}
+									onUpdate={onConfigChange}
+								/>
+							)}
+						</div>
+					</WidgetErrorBoundary>
+					{editing && (
+						<button
+							type="button"
+							className="absolute inset-0 z-[1] cursor-grab active:cursor-grabbing"
+							{...listeners}
+							aria-label={`Select ${widget.title ?? "widget"}`}
+							onClick={onSelect}
+						/>
+					)}
+				</div>
 			</div>
-			{editing && (
+			{editing && !placeholder && (
 				<button
 					type="button"
 					aria-label={`Resize ${widget.title ?? "widget"}`}
@@ -1151,39 +1639,22 @@ function HomeWidgetFrame({
 							x: event.clientX,
 							y: event.clientY,
 							size: widget.size,
+							height:
+								frameRef.current?.getBoundingClientRect().height ?? height,
 						};
 						resizeRef.current = widget.size;
 					}}
 					onPointerMove={(event) => {
 						if (!origin.current) return;
 						const unit = (canvasWidth + HOME_GRID_GAP) / columns;
-						const next = {
-							columns:
-								columns === 1
-									? origin.current.size.columns
-									: Math.max(
-											1,
-											Math.min(
-												12,
-												origin.current.size.columns +
-													Math.round(
-														(event.clientX - origin.current.x) / unit,
-													) *
-														(12 / columns),
-											),
-										),
-							rows: Math.max(
-								minimumHomeWidgetRows(widget),
-								Math.min(
-									12,
-									origin.current.size.rows +
-										Math.round(
-											(event.clientY - origin.current.y) /
-												(HOME_ROW_HEIGHT + (editing ? 32 : 0) + HOME_GRID_GAP),
-										),
-								),
-							),
-						};
+						const next = resizedSize(
+							columns === 1
+								? origin.current.size.columns
+								: origin.current.size.columns +
+										Math.round((event.clientX - origin.current.x) / unit) *
+											(12 / columns),
+							origin.current.height + event.clientY - origin.current.y,
+						);
 						resizeRef.current = next;
 						setResize(next);
 					}}
@@ -1209,32 +1680,22 @@ function HomeWidgetFrame({
 							return;
 						event.preventDefault();
 						event.stopPropagation();
-						onResize({
-							columns: Math.max(
-								1,
-								Math.min(
-									12,
-									widget.size.columns +
-										(event.key === "ArrowRight"
-											? 1
-											: event.key === "ArrowLeft"
-												? -1
-												: 0),
-								),
+						onResize(
+							resizedSize(
+								widget.size.columns +
+									(event.key === "ArrowRight"
+										? 1
+										: event.key === "ArrowLeft"
+											? -1
+											: 0),
+								(frameRef.current?.getBoundingClientRect().height ?? height) +
+									(event.key === "ArrowDown"
+										? 16
+										: event.key === "ArrowUp"
+											? -16
+											: 0),
 							),
-							rows: Math.max(
-								minimumHomeWidgetRows(widget),
-								Math.min(
-									12,
-									widget.size.rows +
-										(event.key === "ArrowDown"
-											? 1
-											: event.key === "ArrowUp"
-												? -1
-												: 0),
-								),
-							),
-						});
+						);
 					}}
 				>
 					<Maximize2 className="h-3 w-3 rotate-90" />
@@ -1345,6 +1806,7 @@ function CatalogItem({
 			<button
 				type="button"
 				onClick={onAdd}
+				{...listeners}
 				className="flex min-w-0 flex-1 items-start gap-3 text-left"
 				aria-label={`Add ${preset.name}`}
 			>
@@ -1429,6 +1891,7 @@ function WidgetInspector({
 							className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
 							value={widget.size.columns}
 							onChange={(event) =>
+								event.target.value !== "custom" &&
 								onChange({
 									size: { ...widget.size, columns: Number(event.target.value) },
 								})
@@ -1448,13 +1911,36 @@ function WidgetInspector({
 						<select
 							id="home-widget-height"
 							className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-							value={Math.max(widget.size.rows, minimumHomeWidgetRows(widget))}
+							value={
+								homeWidgetAutoHeight(widget)
+									? "auto"
+									: widget.size.height
+										? "custom"
+										: Math.max(widget.size.rows, minimumHomeWidgetRows(widget))
+							}
 							onChange={(event) =>
+								event.target.value !== "custom" &&
 								onChange({
-									size: { ...widget.size, rows: Number(event.target.value) },
+									size:
+										event.target.value === "auto"
+											? {
+													...widget.size,
+													heightMode: "auto",
+													height: undefined,
+												}
+											: {
+													...widget.size,
+													rows: Number(event.target.value),
+													heightMode: "fixed",
+													height: undefined,
+												},
 								})
 							}
 						>
+							<option value="auto">Fit content</option>
+							{widget.size.height && (
+								<option value="custom">{widget.size.height}px</option>
+							)}
 							{Array.from(
 								{ length: 13 - minimumHomeWidgetRows(widget) },
 								(_, index) => index + minimumHomeWidgetRows(widget),
@@ -1467,11 +1953,17 @@ function WidgetInspector({
 					</div>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="home-widget-style">Presentation</Label>
+					<Label htmlFor="home-widget-style">Widget surface</Label>
 					<select
 						id="home-widget-style"
 						className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-						value={widget.appearance.variant}
+						value={
+							["card", "borderless", "tinted"].includes(
+								widget.appearance.variant,
+							)
+								? widget.appearance.variant
+								: "card"
+						}
 						onChange={(event) =>
 							onChange({
 								appearance: {
@@ -1481,16 +1973,7 @@ function WidgetInspector({
 							})
 						}
 					>
-						{[
-							"card",
-							"borderless",
-							"tinted",
-							...(widget.type === "app-collection"
-								? ["grid", "list", "icons", "editorial", "carousel"]
-								: widget.type === "quick-links"
-									? ["grid", "list"]
-									: []),
-						].map((variant) => (
+						{["card", "borderless", "tinted"].map((variant) => (
 							<option key={variant} value={variant}>
 								{variant.charAt(0).toUpperCase() + variant.slice(1)}
 							</option>

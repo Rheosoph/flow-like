@@ -1,10 +1,51 @@
 import { describe, expect, it } from "bun:test";
 import {
+	HOME_APP_RENDERINGS,
+	homeAppRendering,
 	homeEmbedHref,
+	homeLinksRendering,
+	homeModelRendering,
 	mergeHomeEmbedNavigation,
 	parseHomeEmbedTarget,
 	safeHomeHref,
 } from "./config";
+
+describe("home collection rendering", () => {
+	it("uses the native Standard cards when no rendering was chosen", () => {
+		for (const surface of [undefined, "grid", "card", "borderless", "tinted"]) {
+			expect(homeAppRendering({}, surface)).toBe("standard");
+			expect(homeModelRendering({}, surface)).toBe("standard");
+		}
+	});
+	it("keeps an explicit card choice independent of the widget surface", () => {
+		for (const [rendering] of HOME_APP_RENDERINGS) {
+			expect(homeAppRendering({ rendering }, "tinted")).toBe(rendering);
+		}
+		expect(homeAppRendering({ rendering: "standard" }, "list")).toBe(
+			"standard",
+		);
+		expect(homeModelRendering({ rendering: "standard" }, "list")).toBe(
+			"standard",
+		);
+		expect(homeModelRendering({ rendering: "list" }, "card")).toBe("list");
+	});
+	it("retains deliberately selected layouts from older saved homes", () => {
+		for (const variant of ["list", "icons", "editorial", "carousel"] as const) {
+			expect(homeAppRendering({}, variant)).toBe(variant);
+		}
+		expect(homeAppRendering({}, "spotlight")).toBe("editorial");
+		expect(homeModelRendering({}, "list")).toBe("list");
+		expect(homeLinksRendering({}, "list")).toBe("list");
+		expect(homeLinksRendering({ rendering: "grid" }, "list")).toBe("grid");
+		expect(homeLinksRendering({ rendering: "list" }, "tinted")).toBe("list");
+	});
+	it("falls back to Standard for unsupported or malformed rendering values", () => {
+		for (const rendering of ["unknown", {}, 42, "grid"]) {
+			expect(homeAppRendering({ rendering }, "list")).toBe("standard");
+			expect(homeModelRendering({ rendering }, "list")).toBe("standard");
+		}
+	});
+});
 
 describe("home app embed targets", () => {
 	it("keeps query values separate from shell routing and encodes full-view links", () => {

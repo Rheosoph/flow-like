@@ -1,6 +1,6 @@
 # Editable home pages
 
-Web and desktop use the same home renderer and editor. A layout contains ordered widgets with stable IDs, column and row spans, appearance, and configuration. Widget data loads through the current viewer's backend state; published defaults contain configuration only.
+Web and desktop use the same home renderer and editor. A layout contains ordered widgets with stable IDs, column spans, content or fixed heights, appearance, and configuration. Widget data loads through the current viewer's backend state; published defaults contain configuration only.
 
 ## Profiles and defaults
 
@@ -21,13 +21,17 @@ Apply the schema before deploying the API. See [migration and rollout instructio
 
 Customize opens the catalog and widget inspector. Users can add, reorder, resize, duplicate, configure, and remove widgets. Save commits the draft; Cancel preserves the saved layout. Reset remains undoable until saved. The editor supports up to 80 widgets and a 128 KiB configuration document.
 
-Drag handles support keyboard pickup, arrow movement, and drop through DnD Kit. Resize handles support arrow keys. Command/Ctrl+Z undoes changes, Shift+Command/Ctrl+Z redoes them, and Command/Ctrl+S saves. The options menu also moves widgets earlier or later.
+Dragging shows the destination in the canvas before committing. Existing and newly placed widgets show their actual content and dimensions in the drag preview; nearby widgets move without stretching. Drag handles support keyboard pickup with Space, arrow movement, Space to place, and Escape to cancel. Resize handles support arrow keys and Escape to cancel a pointer resize. Command/Ctrl+Z undoes changes, Shift+Command/Ctrl+Z redoes them, and Command/Ctrl+S saves. The options menu also moves widgets earlier or later.
+
+Widgets fit their content by default, including layouts saved before height modes were introduced. Width and order are retained. Resizing a corner or choosing a row height sets a fixed height; choose **Height → Fit content** to restore automatic sizing. The optional `size.heightMode` and `size.height` fields retain this choice. Embedded apps retain a usable viewport based on their saved height.
 
 The canvas adapts to one, six, or twelve columns. The mobile inspector uses a modal sheet with focus trapping and focus return. Desktop, tablet, and phone previews share the same layout order. Unsaved drafts survive route and profile changes in the current app session. Closing the app ends that session; a browser unload warning protects an open dirty editor.
 
 ## Widget catalog
 
 The 79 presets cover four FlowPilot forms, native app embeds, app collections, packages, models, categories, quick actions, links, rich content, personal activity, and 32 data presentations. Presets share configurable renderers rather than separate persistence formats.
+
+Collection card style is independent of the widget surface. App collections offer the library's standard cards, compact cards, lists, editorial cards, icons, and a horizontal carousel. Model collections offer the model catalog's standard cards or compact list, including details and profile controls. Links, categories, and packages have their own layout choices. Automatic heights let these collections expand without adding a second vertical scrollbar.
 
 App embeds use the existing native page and event runtime. They can open an app's landing page, a route, or an event/chat with query parameters. Each embed owns its navigation state. Embedded navigation does not change the home URL or another widget. The editor shows a preview without starting the embedded runtime. Arbitrary external iframes and app-published widget extensions are outside this release.
 
@@ -54,6 +58,8 @@ node tests/home-browser/verify.mjs
 node tests/home-browser/content-verify.mjs
 node tests/home-browser/verify-data.mjs
 node tests/home-browser/activity-verify.mjs
+node tests/home-browser/verify-collections.mjs
+node tests/home-browser/verify-polish.mjs
 ```
 
 The scripts use Chrome on macOS or Playwright's default Chromium elsewhere. Set `CHROME_EXECUTABLE_PATH` to choose a different executable. They block outbound requests, exercise editor and native embed behavior, and save screenshots and reports in the temporary directory. This fixture verifies shared UI behavior; it does not replace a signed-in backend or native desktop smoke test.

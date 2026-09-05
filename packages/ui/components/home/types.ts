@@ -3,7 +3,12 @@ export interface IHomeWidget {
 	type: string;
 	title?: string;
 	description?: string;
-	size: { columns: number; rows: number };
+	size: {
+		columns: number;
+		rows: number;
+		heightMode?: "auto" | "fixed";
+		height?: number;
+	};
 	appearance: { variant: string; accent: string };
 	config: Record<string, unknown>;
 }

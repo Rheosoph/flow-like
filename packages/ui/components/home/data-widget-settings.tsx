@@ -48,7 +48,7 @@ function Field({
 	const id = useId();
 	return (
 		<div className="flex min-w-0 flex-col gap-1.5 text-sm">
-			<label htmlFor={id} className="font-medium">
+			<label htmlFor={id} className="text-xs font-medium">
 				{label}
 			</label>
 			{isValidElement<Record<string, unknown>>(children)
@@ -315,183 +315,187 @@ export function HomeDataWidgetSettings({
 		: [];
 
 	return (
-		<div className="space-y-5">
+		<div className="min-w-0 space-y-5">
 			<p className="text-sm text-muted-foreground">
-				Read live data from an app. Aggregations run on the data source before
-				the result is limited.
+				Choose a data source, then shape it with measures, groups, and filters.
 			</p>
-			<Choice
-				label="App"
-				value={config.appId}
-				options={apps}
-				optional="Choose an app"
-				onChange={(appId) => patch({ ...resetSource, appId })}
-			/>
-			<div className="grid grid-cols-2 gap-3">
+			<div className="space-y-3 rounded-xl border border-border/60 bg-muted/10 p-3">
+				<p className="text-xs font-semibold">Data source</p>
 				<Choice
-					label="Source"
-					value={config.sourceKind}
-					options={[
-						["table", "Native table"],
-						["ontology", "Ontology objects"],
-						["query", "Saved query or view"],
-					]}
-					onChange={(value) =>
-						patch({
-							...resetSource,
-							sourceKind: value as HomeDataConfig["sourceKind"],
-						})
-					}
+					label="App"
+					value={config.appId}
+					options={apps}
+					optional="Choose an app"
+					onChange={(appId) => patch({ ...resetSource, appId })}
 				/>
-				<Choice
-					label="Database"
-					value={config.scope}
-					options={[
-						["project", "Project data"],
-						["personal", "Viewer's personal data"],
-					]}
-					onChange={(value) =>
-						patch({ ...resetSource, scope: value as HomeDataConfig["scope"] })
-					}
-				/>
-			</div>
-			{loading && (
-				<p className="flex items-center gap-2 text-xs text-muted-foreground">
-					<Loader2 className="size-3 animate-spin" />
-					Loading sources…
-				</p>
-			)}
-			{sourceError && (
-				<p role="alert" className="text-sm text-destructive">
-					{sourceError}
-				</p>
-			)}
-			{config.sourceKind === "table" && (
-				<Choice
-					label="Table"
-					value={config.table}
-					options={tables.map((table) => [table, table])}
-					optional="Choose a table"
-					onChange={(table) => patch({ ...resetSource, table })}
-				/>
-			)}
-			{config.sourceKind === "ontology" && (
-				<>
+				<div className="grid grid-cols-2 gap-3">
 					<Choice
-						label="Ontology"
-						value={config.ontologyId}
-						options={ontologies.map((item) => [item.id, item.name])}
-						optional="Choose an ontology"
-						onChange={(ontologyId) => patch({ ...resetSource, ontologyId })}
-					/>
-					<Choice
-						label="Object type"
-						value={config.objectType}
-						options={
-							overlay?.nodes.map((item) => [item.label, item.label]) ?? []
-						}
-						optional="Choose an object type"
-						onChange={(objectType) =>
+						label="Source"
+						value={config.sourceKind}
+						options={[
+							["table", "Native table"],
+							["ontology", "Ontology objects"],
+							["query", "Saved query or view"],
+						]}
+						onChange={(value) =>
 							patch({
-								objectType,
-								groupBy: "",
-								seriesBy: "",
-								fields: [],
-								filters: [],
+								...resetSource,
+								sourceKind: value as HomeDataConfig["sourceKind"],
 							})
 						}
 					/>
-				</>
-			)}
-			{config.sourceKind === "query" && (
-				<>
 					<Choice
-						label="Saved query or view"
-						hint="Measures use this query's result, including any filters or LIMIT in its saved SQL."
-						value={config.queryId}
-						options={queries.map((item) => [
-							item.id,
-							`${item.name}${item.kind === "view" ? " (view)" : ""}`,
-						])}
-						optional="Choose a saved query"
-						onChange={(queryId) => patch({ ...resetSource, queryId })}
+						label="Database"
+						value={config.scope}
+						options={[
+							["project", "Project data"],
+							["personal", "Viewer's personal data"],
+						]}
+						onChange={(value) =>
+							patch({ ...resetSource, scope: value as HomeDataConfig["scope"] })
+						}
 					/>
-					{parameterNames.map((name) => (
-						<div className="grid grid-cols-2 gap-2" key={name}>
-							<Choice
-								label={properties?.[name]?.title || name}
-								value={
-									config.queryParams[name] === "$viewer.id" ? "viewer" : "value"
-								}
-								options={[
-									["value", "Fixed value"],
-									["viewer", "Current user's ID"],
-								]}
-								onChange={(value) =>
-									patch({
-										queryParams: {
-											...config.queryParams,
-											[name]: value === "viewer" ? "$viewer.id" : "",
-										},
-									})
-								}
-							/>
-							{config.queryParams[name] !== "$viewer.id" &&
-								properties?.[name]?.type === "boolean" && (
-									<Choice
-										label="Parameter value"
-										value={
-											config.queryParams[name] === undefined
-												? ""
-												: String(config.queryParams[name])
-										}
-										options={[
-											["true", "True"],
-											["false", "False"],
-										]}
-										optional="Choose"
-										onChange={(value) =>
-											patch({
-												queryParams: {
-													...config.queryParams,
-													[name]: value === "true",
-												},
-											})
-										}
-									/>
-								)}
-							{config.queryParams[name] !== "$viewer.id" &&
-								properties?.[name]?.type !== "boolean" && (
-									<Field label="Parameter value">
-										<Input
-											value={String(config.queryParams[name] ?? "")}
-											onChange={(event) => {
-												const value = event.target.value;
-												const type = properties?.[name]?.type;
+				</div>
+				{loading && (
+					<p className="flex items-center gap-2 text-xs text-muted-foreground">
+						<Loader2 className="size-3 animate-spin" />
+						Loading sources…
+					</p>
+				)}
+				{sourceError && (
+					<p role="alert" className="text-sm text-destructive">
+						{sourceError}
+					</p>
+				)}
+				{config.sourceKind === "table" && (
+					<Choice
+						label="Table"
+						value={config.table}
+						options={tables.map((table) => [table, table])}
+						optional="Choose a table"
+						onChange={(table) => patch({ ...resetSource, table })}
+					/>
+				)}
+				{config.sourceKind === "ontology" && (
+					<>
+						<Choice
+							label="Ontology"
+							value={config.ontologyId}
+							options={ontologies.map((item) => [item.id, item.name])}
+							optional="Choose an ontology"
+							onChange={(ontologyId) => patch({ ...resetSource, ontologyId })}
+						/>
+						<Choice
+							label="Object type"
+							value={config.objectType}
+							options={
+								overlay?.nodes.map((item) => [item.label, item.label]) ?? []
+							}
+							optional="Choose an object type"
+							onChange={(objectType) =>
+								patch({
+									objectType,
+									groupBy: "",
+									seriesBy: "",
+									fields: [],
+									filters: [],
+								})
+							}
+						/>
+					</>
+				)}
+				{config.sourceKind === "query" && (
+					<>
+						<Choice
+							label="Saved query or view"
+							hint="Measures use this query's result, including any filters or LIMIT in its saved SQL."
+							value={config.queryId}
+							options={queries.map((item) => [
+								item.id,
+								`${item.name}${item.kind === "view" ? " (view)" : ""}`,
+							])}
+							optional="Choose a saved query"
+							onChange={(queryId) => patch({ ...resetSource, queryId })}
+						/>
+						{parameterNames.map((name) => (
+							<div className="grid grid-cols-2 gap-2" key={name}>
+								<Choice
+									label={properties?.[name]?.title || name}
+									value={
+										config.queryParams[name] === "$viewer.id"
+											? "viewer"
+											: "value"
+									}
+									options={[
+										["value", "Fixed value"],
+										["viewer", "Current user's ID"],
+									]}
+									onChange={(value) =>
+										patch({
+											queryParams: {
+												...config.queryParams,
+												[name]: value === "viewer" ? "$viewer.id" : "",
+											},
+										})
+									}
+								/>
+								{config.queryParams[name] !== "$viewer.id" &&
+									properties?.[name]?.type === "boolean" && (
+										<Choice
+											label="Parameter value"
+											value={
+												config.queryParams[name] === undefined
+													? ""
+													: String(config.queryParams[name])
+											}
+											options={[
+												["true", "True"],
+												["false", "False"],
+											]}
+											optional="Choose"
+											onChange={(value) =>
 												patch({
 													queryParams: {
 														...config.queryParams,
-														[name]:
-															type === "number" || type === "integer"
-																? Number(value)
-																: type === "boolean"
-																	? value === "true"
-																	: value,
+														[name]: value === "true",
 													},
-												});
-											}}
+												})
+											}
 										/>
-									</Field>
-								)}
-						</div>
-					))}
-				</>
-			)}
-			{columnError && (
-				<p role="alert" className="text-xs text-destructive">
-					{columnError}
-				</p>
-			)}
+									)}
+								{config.queryParams[name] !== "$viewer.id" &&
+									properties?.[name]?.type !== "boolean" && (
+										<Field label="Parameter value">
+											<Input
+												value={String(config.queryParams[name] ?? "")}
+												onChange={(event) => {
+													const value = event.target.value;
+													const type = properties?.[name]?.type;
+													patch({
+														queryParams: {
+															...config.queryParams,
+															[name]:
+																type === "number" || type === "integer"
+																	? Number(value)
+																	: type === "boolean"
+																		? value === "true"
+																		: value,
+														},
+													});
+												}}
+											/>
+										</Field>
+									)}
+							</div>
+						))}
+					</>
+				)}
+				{columnError && (
+					<p role="alert" className="text-xs text-destructive">
+						{columnError}
+					</p>
+				)}
+			</div>
 			<Choice
 				label="Presentation"
 				value={config.visualization}
@@ -543,6 +547,7 @@ export function HomeDataWidgetSettings({
 					<div className="flex items-center justify-between">
 						<span className="text-sm font-medium">Measures</span>
 						<Button
+							type="button"
 							variant="ghost"
 							size="sm"
 							disabled={config.measures.length >= 6}
@@ -644,6 +649,7 @@ export function HomeDataWidgetSettings({
 									</Field>
 								</div>
 								<Button
+									type="button"
 									variant="ghost"
 									size="icon"
 									aria-label={`Remove measure ${index + 1}`}
@@ -820,6 +826,7 @@ export function HomeDataWidgetSettings({
 				<div className="flex items-center justify-between">
 					<span className="text-sm font-medium">Filters</span>
 					<Button
+						type="button"
 						variant="ghost"
 						size="sm"
 						disabled={config.filters.length >= 12}
@@ -914,6 +921,7 @@ export function HomeDataWidgetSettings({
 								</div>
 							)}
 							<Button
+								type="button"
 								variant="ghost"
 								size="sm"
 								onClick={() =>
@@ -1059,6 +1067,7 @@ export function HomeDataWidgetSettings({
 				)}
 			</div>
 			<Button
+				type="button"
 				variant="outline"
 				className="w-full"
 				onClick={() => setPreview((value) => !value)}
@@ -1066,7 +1075,20 @@ export function HomeDataWidgetSettings({
 				{preview ? "Hide preview" : "Preview with my data"}
 			</Button>
 			{preview && (
-				<div className="h-80 rounded-xl border p-3">
+				<div
+					className="rounded-xl border border-border/60 bg-card p-4"
+					style={{
+						height:
+							config.appId &&
+							(config.table || config.objectType || config.queryId)
+								? ["stat", "metricstrip", "progress", "bullet"].includes(
+										config.visualization,
+									)
+									? 180
+									: 280
+								: undefined,
+					}}
+				>
 					<HomeDataWidget widget={widget} />
 				</div>
 			)}

@@ -65,6 +65,9 @@ export type ModelCardVariant = "grid" | "list";
 
 export interface ModelCardProps {
 	bit: IBit;
+	/** Isolates profile and hub queries for embedded collections. */
+	queryScope?: string[];
+	onProfileChange?: () => void | Promise<void>;
 	variant?: ModelCardVariant;
 	onClick?: (bit: IBit) => void;
 	/** Marks the model as user-owned, enabling the private badge + edit/delete. */
@@ -75,6 +78,8 @@ export interface ModelCardProps {
 
 export function ModelCard({
 	bit,
+	queryScope = [],
+	onProfileChange,
 	variant = "grid",
 	onClick,
 	isCustom = false,
@@ -83,7 +88,7 @@ export function ModelCard({
 }: Readonly<ModelCardProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const { hub } = useHub();
+	const { hub } = useHub(queryScope);
 	const download = useDownloadManager((s) => s.download);
 	const onProgress = useDownloadManager((s) => s.onProgress);
 	const isQueued = useDownloadManager((s) => s.isQueued);
@@ -146,19 +151,31 @@ export function ModelCard({
 		backend.bitState.isBitInstalled,
 		backend.bitState,
 		[bit],
+		true,
+		queryScope,
 	);
 	const bitSize: UseQueryResult<number> = useInvoke(
 		backend.bitState.getBitSize,
 		backend.bitState,
 		[bit],
+		true,
+		queryScope,
 	);
 	const currentProfile: UseQueryResult<ISettingsProfile> = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
 		[],
+		true,
+		queryScope,
 	);
 
-	const userInfo = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const userInfo = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		true,
+		queryScope,
+	);
 
 	// The backend-resolved pack size is authoritative: it accounts for artifacts
 	// the bit itself never names (inline MLX manifests, llama.cpp projectors).
@@ -259,6 +276,7 @@ export function ModelCard({
 				await backend.bitState.removeBit(bit, profile);
 			}
 			await refetchCurrentProfile();
+			await onProfileChange?.();
 		} catch (error) {
 			console.error("Failed to update profile models:", error);
 			if (handleUpgradeRequiredError(error, "model-tier")) return;
@@ -275,6 +293,8 @@ export function ModelCard({
 		backend.bitState,
 		refetchCurrentProfile,
 		tierInfo,
+		onProfileChange,
+		t,
 	]);
 
 	const openRepository = useCallback(() => {
@@ -409,8 +429,14 @@ function ModelCardGridVariant({
 	return (
 		<article
 			onClick={onCardClick}
-			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className={`group relative flex h-full cursor-pointer flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3.5 transition-colors hover:border-foreground/25 hover:bg-muted/30 dark:border-white/10 dark:hover:border-white/20 ${
+			onKeyDown={(event) => {
+				if (event.target !== event.currentTarget) return;
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					onCardClick();
+				}
+			}}
+			className={`group relative flex h-full min-w-0 cursor-pointer flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3.5 transition-colors hover:border-foreground/25 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary dark:border-white/10 dark:hover:border-white/20 ${
 				isInProfile ? "border-primary/40 dark:border-primary/40" : ""
 			}`}
 		>
@@ -436,12 +462,18 @@ function ModelCardGridVariant({
 			<div className="flex items-start gap-2.5">
 				<ProviderGlyph bit={bit} size={32} className="shrink-0" />
 				<div className="min-w-0 flex-1">
-					<div
-						className="truncate text-[14px] font-semibold tracking-tight"
+					<button
+						type="button"
+						onClick={(event) => {
+							event.stopPropagation();
+							onCardClick();
+						}}
+						aria-label={`View ${meta.name} model details`}
+						className="block max-w-full truncate rounded text-left text-[14px] font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
 						title={meta.name}
 					>
 						{meta.name}
-					</div>
+					</button>
 					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
 						<span className="truncate">{providerLabel(bit)}</span>
 						{isCustom && (
@@ -453,6 +485,7 @@ function ModelCardGridVariant({
 					</div>
 				</div>
 				<ModelCardDropdown
+					canDownload={!isVirtualBit}
 					isInstalled={isInstalled}
 					isInProfile={isInProfile}
 					hasRepository={!!bit.repository}
@@ -561,8 +594,14 @@ function ModelCardListVariant({
 	return (
 		<div
 			onClick={onCardClick}
-			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className="group relative flex items-center gap-3 rounded-lg border bg-card px-3 py-2 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30"
+			onKeyDown={(event) => {
+				if (event.target !== event.currentTarget) return;
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					onCardClick();
+				}
+			}}
+			className="group relative flex min-w-0 flex-wrap items-center gap-3 rounded-lg border bg-card px-3 py-2 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
 		>
 			{/* Download Overlay */}
 			{progress !== undefined && !isVirtualBit && (
@@ -592,9 +631,19 @@ function ModelCardListVariant({
 			</Avatar>
 
 			{/* Name + Modality */}
-			<div className="flex-1 min-w-0">
+			<div className="min-w-24 flex-1">
 				<div className="flex items-center gap-1.5">
-					<span className="font-medium text-sm truncate">{meta.name}</span>
+					<button
+						type="button"
+						onClick={(event) => {
+							event.stopPropagation();
+							onCardClick();
+						}}
+						aria-label={`View ${meta.name} model details`}
+						className="truncate rounded text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+					>
+						{meta.name}
+					</button>
 					{isInProfile && (
 						<SparklesIcon className="h-3.5 w-3.5 text-primary shrink-0" />
 					)}
@@ -603,7 +652,7 @@ function ModelCardListVariant({
 			</div>
 
 			{/* Badges */}
-			<div className="flex items-center gap-1.5 shrink-0">
+			<div className="flex max-w-full flex-wrap items-center gap-1.5">
 				<ModelStatusBadge
 					isInstalled={isInstalled}
 					isHosted={isHosted}
@@ -645,6 +694,7 @@ function ModelCardListVariant({
 
 			{/* Menu */}
 			<ModelCardDropdown
+				canDownload={!isVirtualBit}
 				isInstalled={isInstalled}
 				isInProfile={isInProfile}
 				hasRepository={!!bit.repository}
@@ -658,6 +708,7 @@ function ModelCardListVariant({
 }
 
 interface ModelCardDropdownProps {
+	canDownload: boolean;
 	isInstalled: boolean;
 	isInProfile: boolean;
 	hasRepository: boolean;
@@ -671,6 +722,7 @@ interface ModelCardDropdownProps {
 }
 
 function ModelCardDropdown({
+	canDownload,
 	isInstalled,
 	isInProfile,
 	hasRepository,
@@ -696,26 +748,28 @@ function ModelCardDropdown({
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-48">
-				<DropdownMenuItem
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleDownload();
-					}}
-				>
-					{isInstalled ? (
-						<>
-							<TrashIcon className="h-4 w-4 mr-2" />
-							{t("remove", "Remove")}
-						</>
-					) : (
-						<>
-							<DownloadCloudIcon className="h-4 w-4 mr-2" />
-							{t("downloadWithSize", "Download ({{size}})", {
-								size: humanFileSize(bitSize),
-							})}
-						</>
-					)}
-				</DropdownMenuItem>
+				{canDownload && (
+					<DropdownMenuItem
+						onClick={(e) => {
+							e.stopPropagation();
+							onToggleDownload();
+						}}
+					>
+						{isInstalled ? (
+							<>
+								<TrashIcon className="h-4 w-4 mr-2" />
+								{t("remove", "Remove")}
+							</>
+						) : (
+							<>
+								<DownloadCloudIcon className="h-4 w-4 mr-2" />
+								{t("downloadWithSize", "Download ({{size}})", {
+									size: humanFileSize(bitSize),
+								})}
+							</>
+						)}
+					</DropdownMenuItem>
+				)}
 				<DropdownMenuItem
 					onClick={(e) => {
 						e.stopPropagation();
@@ -725,7 +779,7 @@ function ModelCardDropdown({
 					{isInProfile ? (
 						<>
 							<XIcon className="h-4 w-4 mr-2" />
-							{`Remove from Profile`}
+							Remove from Profile
 						</>
 					) : (
 						<>
@@ -844,7 +898,7 @@ export function ModalityIcons({
 }: Readonly<{ type: IBitTypes }>): JSX.Element {
 	const { t } = useTranslation("common");
 	const iconClass = "h-3 w-3";
-	const arrowClass = `h-2.5 w-2.5 text-foreground`;
+	const arrowClass = "h-2.5 w-2.5 text-foreground";
 
 	switch (type) {
 		case IBitTypes.ImageGeneration:

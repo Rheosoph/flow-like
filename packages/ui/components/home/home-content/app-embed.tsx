@@ -16,7 +16,11 @@ import { HomeEmpty } from "./shared";
 
 const Runtime = dynamic(() => import("./app-embed-runtime"), {
 	ssr: false,
-	loading: () => <HomeEmpty>Loading app…</HomeEmpty>,
+	loading: () => (
+		<div className="p-4">
+			<HomeEmpty>Loading app…</HomeEmpty>
+		</div>
+	),
 });
 
 export function HomeAppEmbed({ widget, editing }: HomeContentProps) {
@@ -31,9 +35,11 @@ export function HomeAppEmbed({ widget, editing }: HomeContentProps) {
 		!initial.eventId
 	) {
 		return (
-			<HomeEmpty icon={<AppWindow className="size-8 opacity-50" />}>
-				Choose a chat or another app interface in widget settings.
-			</HomeEmpty>
+			<div className="p-4">
+				<HomeEmpty icon={<AppWindow className="size-8 opacity-50" />}>
+					Choose a chat or another app interface in widget settings.
+				</HomeEmpty>
+			</div>
 		);
 	}
 	return (
@@ -73,30 +79,37 @@ function HomeAppEmbedInstance({
 	}, []);
 	if (!target.appId)
 		return (
-			<HomeEmpty icon={<AppWindow className="size-8 opacity-50" />}>
-				Choose an app in widget settings, then select its landing page, a route,
-				or a chat.
-			</HomeEmpty>
+			<div className="p-4">
+				<HomeEmpty icon={<AppWindow className="size-8 opacity-50" />}>
+					Choose an app in widget settings, then select its landing page, a
+					route, or a chat.
+				</HomeEmpty>
+			</div>
 		);
 	return (
 		<div ref={host} className="flex h-full min-h-0 min-w-0 flex-col">
-			<div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
-				<span className="truncate">
-					{title || "App"} ·{" "}
-					{target.eventId ? "App interface" : target.routePath}
-				</span>
+			<div className="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-muted/15 px-4 py-2 text-xs">
+				<div className="flex min-w-0 items-center gap-2.5">
+					<AppWindow className="size-4 shrink-0 text-[var(--home-accent,var(--primary))]" />
+					<span className="truncate font-medium">{title || "App"}</span>
+					<span className="truncate text-[11px] text-muted-foreground">
+						{target.eventId ? "App interface" : target.routePath}
+					</span>
+				</div>
 				<Link
 					href={homeEmbedHref(target)}
-					className="flex shrink-0 items-center gap-1.5 rounded px-1 py-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+					className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				>
 					Open app
 					<ExternalLink className="size-3.5" />
 				</Link>
 			</div>
 			{editing ? (
-				<HomeEmpty icon={<Pause className="size-7 opacity-50" />}>
-					App preview pauses while you edit your home.
-				</HomeEmpty>
+				<div className="p-4">
+					<HomeEmpty icon={<Pause className="size-7 opacity-50" />}>
+						App preview pauses while you edit your home.
+					</HomeEmpty>
+				</div>
 			) : (
 				<Runtime target={target} active={visible} onNavigate={navigate} />
 			)}

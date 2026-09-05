@@ -145,14 +145,16 @@ export function HomePage() {
 					</Button>
 				</div>
 			)}
-			{defaults.isError && !profile.isError && (
-				<div className="flex items-center gap-2 px-5 py-2 text-xs text-muted-foreground">
-					<CloudOff className="h-3.5 w-3.5" />
-					{defaults.data
-						? "Showing the last available default. It will refresh when the connection returns."
-						: "The published default is unavailable. Using the bundled home."}
-				</div>
-			)}
+			{defaults.isError &&
+				!profile.isError &&
+				resolved.source !== "personal" && (
+					<div className="flex items-center gap-2 px-5 py-2 text-xs text-muted-foreground">
+						<CloudOff className="h-3.5 w-3.5" />
+						{defaults.data
+							? "Showing the last available default. It will refresh when the connection returns."
+							: "The published default is unavailable. Using the bundled home."}
+					</div>
+				)}
 			<HomeEditor
 				key={JSON.stringify([origin, viewer, profileId])}
 				draftKey={JSON.stringify(["home", origin, viewer, profileId])}

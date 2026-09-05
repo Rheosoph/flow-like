@@ -5,12 +5,14 @@ import type { IHub } from "../lib";
 import { useBackend } from "../state/backend-state";
 import { useInvoke } from "./use-invoke";
 
-export function useHub() {
+export function useHub(queryScope: string[] = []) {
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
 		[],
+		true,
+		queryScope,
 	);
 	const [hub, setHub] = useState<IHub | undefined>();
 

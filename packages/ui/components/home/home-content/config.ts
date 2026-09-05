@@ -1,5 +1,54 @@
 import type { IHomeWidget } from "../types";
 
+export type HomeAppRendering =
+	| "standard"
+	| "compact"
+	| "list"
+	| "editorial"
+	| "icons"
+	| "carousel";
+
+export const HOME_APP_RENDERINGS: [HomeAppRendering, string][] = [
+	["standard", "Standard library cards"],
+	["compact", "Compact cards"],
+	["list", "List"],
+	["editorial", "Editorial feature"],
+	["icons", "App icons"],
+	["carousel", "Card carousel"],
+];
+
+export const HOME_MODEL_RENDERINGS: ["standard" | "list", string][] = [
+	["standard", "Standard model cards"],
+	["list", "Compact list"],
+];
+
+/** Older layouts stored content rendering in the widget's surface variant. */
+export function homeAppRendering(
+	config: Record<string, unknown>,
+	legacyVariant?: string,
+): HomeAppRendering {
+	const requested = config.rendering ?? legacyVariant;
+	if (requested === "spotlight") return "editorial";
+	return (
+		HOME_APP_RENDERINGS.find(([value]) => value === requested)?.[0] ??
+		"standard"
+	);
+}
+
+export function homeModelRendering(
+	config: Record<string, unknown>,
+	legacyVariant?: string,
+): "standard" | "list" {
+	return (config.rendering ?? legacyVariant) === "list" ? "list" : "standard";
+}
+
+export function homeLinksRendering(
+	config: Record<string, unknown>,
+	legacyVariant?: string,
+): "grid" | "list" {
+	return (config.rendering ?? legacyVariant) === "list" ? "list" : "grid";
+}
+
 export function textConfig(
 	config: Record<string, unknown>,
 	key: string,

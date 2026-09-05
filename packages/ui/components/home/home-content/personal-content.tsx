@@ -8,10 +8,12 @@ import {
 	Box,
 	CalendarDays,
 	CheckCircle2,
+	ChevronDown,
 	FileUp,
 	Library,
 	Link2,
 	Megaphone,
+	Moon,
 	Plus,
 	Sparkles,
 	Sun,
@@ -31,22 +33,17 @@ import { FlowPilotBubbleOrb } from "../../global-chat/flowpilot-bubble-orb";
 import { useFlowPilotOrbState } from "../../global-chat/flowpilot-orb-state";
 import { useHeroComposer } from "../../global-chat/hero-variants/use-hero-composer";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Textarea } from "../../ui/textarea";
 import {
 	type HomeContentProps,
+	homeLinksRendering,
 	safeHomeHref,
 	stringList,
 	textConfig,
 } from "./config";
-import { HomeEmpty, homeItemClass } from "./shared";
+import { HomeEmpty, homeItemClass, homeRowClass } from "./shared";
 
-const Hero = dynamic(
-	() =>
-		import("../../global-chat/hero-variants/hero-bubble").then(
-			(module) => module.HeroSearchBarBubble,
-		),
-	{ ssr: false },
-);
 const Markdown = dynamic(
 	() => import("../../ui/text-editor").then((module) => module.TextEditor),
 	{ ssr: false },
@@ -57,28 +54,46 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 	const composer = useHeroComposer();
 	const openOverlay = useGlobalChatStore((state) => state.openOverlay);
 	const orbState = useFlowPilotOrbState();
-	if (mode === "hero")
-		return (
-			<div className="h-full overflow-auto">
-				<Hero />
-			</div>
-		);
+	const expanded = mode === "card" || mode === "hero";
+	const heading =
+		widget.title &&
+		!["FlowPilot hero", "FlowPilot composer"].includes(widget.title)
+			? widget.title
+			: mode === "hero"
+				? "Bring your next idea to life"
+				: "What would you like to build?";
+	const orb = editing ? (
+		<span className="flex size-14 shrink-0 items-center justify-center rounded-full border border-violet-400/25 bg-gradient-to-br from-violet-400/15 via-blue-400/10 to-pink-400/15 text-violet-400">
+			<Sparkles className="size-5" />
+		</span>
+	) : (
+		<FlowPilotBubbleOrb
+			onClick={openOverlay}
+			orbState={orbState}
+			className={mode === "hero" ? "size-20" : "size-14"}
+		/>
+	);
 	if (mode === "orb")
 		return (
-			<div className="flex h-full items-center justify-center gap-4 p-4">
-				<FlowPilotBubbleOrb
-					onClick={openOverlay}
-					disabled={editing}
-					orbState={orbState}
-				/>
-				<div>
-					<p className="font-semibold">{widget.title || "Ask FlowPilot"}</p>
-					<p className="mt-1 text-xs text-muted-foreground">
-						An idea starts here.
+			<div className="flex min-h-24 items-center gap-5 p-4">
+				{orb}
+				<div className="min-w-0">
+					<p className="text-sm font-semibold">
+						{widget.title && widget.title !== "FlowPilot orb"
+							? widget.title
+							: "FlowPilot"}
+					</p>
+					<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+						Your next idea starts here.
 					</p>
 				</div>
 			</div>
 		);
+	const placeholder = textConfig(
+		widget.config,
+		"placeholder",
+		"Ask FlowPilot to build, explore, or explain…",
+	);
 	return (
 		<form
 			onSubmit={(event) => {
@@ -86,43 +101,68 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 				if (!editing) composer.submit(composer.value);
 			}}
 			className={cn(
-				"flex h-full flex-col justify-center gap-3 p-4",
-				mode === "card" && "p-5",
+				"flex min-w-0 flex-col gap-4",
+				expanded ? "p-5" : "px-1 py-1",
+				mode === "hero" &&
+					"bg-gradient-to-br from-violet-400/[0.06] via-transparent to-blue-400/[0.04] p-6",
 			)}
 		>
-			{mode === "card" && (
-				<div className="mb-1">
-					<Sparkles className="mb-3 size-6 text-primary" />
-					<h3 className="text-xl font-semibold tracking-tight">
-						{widget.title || "What would you like to do?"}
-					</h3>
-					<p className="mt-1 text-sm text-muted-foreground">
-						Build an app, find a package, or work through an idea.
-					</p>
+			{expanded && (
+				<div className="flex min-w-0 items-center gap-6">
+					{orb}
+					<div className="min-w-0">
+						<p className="mb-1 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+							FlowPilot
+						</p>
+						<h3
+							className={cn(
+								"text-lg font-semibold tracking-tight",
+								mode === "hero" && "text-2xl",
+							)}
+						>
+							{heading}
+						</h3>
+						<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+							Build an app, find a package, or work through an idea.
+						</p>
+					</div>
 				</div>
 			)}
-			<div className="flex items-end gap-3 rounded-2xl border border-primary/25 bg-background/60 p-2.5 shadow-sm">
-				{mode !== "card" && (
-					<Sparkles className="mb-2 size-5 shrink-0 text-primary" />
+			<div
+				className={cn(
+					"flex min-w-0 gap-3 rounded-2xl border border-border/70 bg-background/40 p-2.5 transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10",
+					expanded ? "items-end" : "items-center",
 				)}
-				<Textarea
-					value={composer.value}
-					onChange={(event) => composer.setValue(event.target.value)}
-					placeholder={textConfig(
-						widget.config,
-						"placeholder",
-						"Ask FlowPilot to build, explore, or explain…",
-					)}
-					aria-label="Message FlowPilot"
-					rows={mode === "card" ? 3 : 1}
-					className="max-h-40 min-h-9 resize-none border-0 bg-transparent p-1.5 text-sm shadow-none focus-visible:ring-0"
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && !event.shiftKey) {
-							event.preventDefault();
-							if (!editing) composer.submit(composer.value);
-						}
-					}}
-				/>
+			>
+				{!expanded && (
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+						<Sparkles className="size-4" />
+					</span>
+				)}
+				{expanded ? (
+					<Textarea
+						value={composer.value}
+						onChange={(event) => composer.setValue(event.target.value)}
+						placeholder={placeholder}
+						aria-label="Message FlowPilot"
+						rows={mode === "hero" ? 3 : 2}
+						className="max-h-40 min-h-16 min-w-0 resize-none border-0 bg-transparent p-1.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+						onKeyDown={(event) => {
+							if (event.key === "Enter" && !event.shiftKey) {
+								event.preventDefault();
+								if (!editing) composer.submit(composer.value);
+							}
+						}}
+					/>
+				) : (
+					<input
+						value={composer.value}
+						onChange={(event) => composer.setValue(event.target.value)}
+						placeholder={placeholder}
+						aria-label="Message FlowPilot"
+						className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+					/>
+				)}
 				<Button
 					type="submit"
 					size="icon"
@@ -133,20 +173,21 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 					<ArrowUp className="size-4" />
 				</Button>
 			</div>
-			{mode === "card" && (
-				<div className="flex flex-wrap gap-1.5">
+			{expanded && (
+				<div className="flex flex-wrap gap-2">
 					{["Create an app", "Find a package", "Explain a node"].map(
 						(prompt) => (
 							<Button
 								key={prompt}
 								type="button"
 								size="sm"
-								variant="outline"
-								className="h-7 rounded-full text-[11px]"
+								variant="ghost"
+								className="h-7 rounded-full border border-border/60 bg-background/25 px-2.5 text-[11px] font-normal text-muted-foreground hover:text-foreground"
 								disabled={editing}
 								onClick={() => composer.submit(prompt)}
 							>
 								{prompt}
+								<ArrowUpRight className="ml-1 size-3" />
 							</Button>
 						),
 					)}
@@ -172,8 +213,8 @@ export function HomeGreeting({ widget }: HomeContentProps) {
 		auth.user?.profile.given_name ||
 		auth.user?.profile.name?.split(" ")[0];
 	return (
-		<div className="flex h-full items-center justify-between gap-4 px-1 py-2">
-			<div>
+		<div className="flex min-h-24 items-center justify-between gap-4 px-1 py-3">
+			<div className="min-w-0">
 				<p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
 					{now?.toLocaleDateString(undefined, {
 						weekday: "long",
@@ -191,7 +232,11 @@ export function HomeGreeting({ widget }: HomeContentProps) {
 					</p>
 				)}
 			</div>
-			<Sun className="hidden size-7 text-primary/60 sm:block" />
+			{hour >= 18 || hour < 6 ? (
+				<Moon className="size-6 shrink-0 text-primary/50" />
+			) : (
+				<Sun className="size-6 shrink-0 text-primary/50" />
+			)}
 		</div>
 	);
 }
@@ -204,7 +249,7 @@ export const HOME_QUICK_ACTIONS = {
 		href: "",
 	},
 	import: {
-		title: "Import with FlowPilot",
+		title: "Import a flow",
 		description: "Bring a flow or idea into your apps",
 		icon: FileUp,
 		href: "",
@@ -270,7 +315,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 	};
 	return (
 		<>
-			<div className="grid h-full content-center grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
+			<div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))] gap-3">
 				{actions.map((id) => {
 					const action =
 						HOME_QUICK_ACTIONS[id as keyof typeof HOME_QUICK_ACTIONS];
@@ -278,11 +323,11 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 					const Icon = action.icon;
 					const content = (
 						<Fragment key={id}>
-							<Icon className="mb-3 size-5 text-primary" />
-							<span className="block text-sm font-semibold">
-								{action.title}
+							<span className="mb-3 flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+								<Icon className="size-4" />
 							</span>
-							<span className="mt-1 block text-xs text-muted-foreground">
+							<span className="block text-sm font-medium">{action.title}</span>
+							<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
 								{action.description}
 							</span>
 						</Fragment>
@@ -291,7 +336,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 						<Link
 							key={id}
 							href={action.href}
-							className={cn(homeItemClass, "block p-4")}
+							className={cn(homeItemClass, "block h-full p-3.5")}
 						>
 							{content}
 						</Link>
@@ -302,7 +347,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 							disabled={editing}
 							className={cn(
 								homeItemClass,
-								"block p-4 text-left disabled:opacity-60",
+								"block h-full p-3.5 text-left disabled:opacity-60",
 							)}
 							onClick={() => {
 								if (id === "create") setCreating(true);
@@ -377,15 +422,19 @@ export function informationItems(
 
 export function HomeQuickLinks({ widget }: HomeContentProps) {
 	const links = homeLinks(widget.config);
+	const rendering = homeLinksRendering(
+		widget.config,
+		widget.appearance.variant,
+	);
 	if (!links.length)
 		return <HomeEmpty>Add useful links in widget settings.</HomeEmpty>;
 	return (
 		<div
 			className={cn(
-				"h-full overflow-auto p-3",
-				widget.appearance.variant === "grid"
+				"min-w-0",
+				rendering === "grid"
 					? "grid content-start grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-2"
-					: "space-y-2",
+					: "divide-y divide-border/50",
 			)}
 		>
 			{links.map((link) => {
@@ -410,12 +459,18 @@ export function HomeQuickLinks({ widget }: HomeContentProps) {
 						href={href}
 						target={href.startsWith("/") ? undefined : "_blank"}
 						rel={href.startsWith("/") ? undefined : "noopener noreferrer"}
-						className={homeItemClass}
+						className={rendering === "grid" ? homeItemClass : homeRowClass}
 					>
 						{content}
 					</Link>
 				) : (
-					<div key={link.id} className={cn(homeItemClass, "opacity-50")}>
+					<div
+						key={link.id}
+						className={cn(
+							rendering === "grid" ? homeItemClass : homeRowClass,
+							"opacity-50",
+						)}
+					>
 						{content}
 					</div>
 				);
@@ -450,16 +505,16 @@ export function HomeInformation({
 		const days =
 			now === null ? null : Math.ceil((date.getTime() - now) / 86_400_000);
 		return (
-			<div className="flex h-full flex-col justify-center p-5">
-				<CalendarDays className="mb-4 size-6 text-primary" />
-				<p className="text-4xl font-semibold tracking-tight">
-					{days === null ? "…" : Math.abs(days)}
+			<div className="flex min-h-32 flex-col justify-center gap-1">
+				<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+					{days !== null && days < 0 ? "Since the milestone" : "Coming up"}
+				</p>
+				<p className="text-5xl font-semibold tabular-nums tracking-tight">
+					{days === null ? "…" : days === 0 ? "Today" : Math.abs(days)}
 					<span className="ml-2 text-sm font-normal text-muted-foreground">
-						{days !== null && days < 0
-							? "days ago"
-							: days === 0
-								? "days. Today is the day."
-								: "days to go"}
+						{days === 0
+							? ""
+							: `${Math.abs(days ?? 0) === 1 ? "day" : "days"} ${days !== null && days < 0 ? "ago" : "to go"}`}
 					</span>
 				</p>
 				<p className="mt-3 text-sm text-muted-foreground">
@@ -475,10 +530,10 @@ export function HomeInformation({
 		return (
 			<div
 				className={cn(
-					"h-full overflow-auto p-4",
+					"min-w-0",
 					["resources", "facts"].includes(mode)
 						? "grid content-start grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-3"
-						: "space-y-3",
+						: "",
 				)}
 			>
 				{items.map((item, index) => {
@@ -487,7 +542,10 @@ export function HomeInformation({
 						<article
 							key={item.id}
 							className={cn(
-								"rounded-xl border border-border/60 bg-background/30 p-4",
+								"min-w-0",
+								["resources", "facts"].includes(mode)
+									? "rounded-xl bg-muted/35 p-3.5"
+									: "border-b border-border/50 py-3 first:pt-0 last:border-0 last:pb-0",
 								mode === "steps" && "flex items-start gap-3",
 							)}
 						>
@@ -511,7 +569,7 @@ export function HomeInformation({
 									{item.title}
 								</h3>
 								{item.body && (
-									<div className="mt-2 text-sm text-muted-foreground">
+									<div className="mt-1.5 text-xs leading-relaxed text-muted-foreground [&_p]:text-xs [&_p]:leading-relaxed">
 										<Markdown initialContent={item.body} isMarkdown minimal />
 									</div>
 								)}
@@ -537,15 +595,16 @@ export function HomeInformation({
 	}
 	if (mode === "faq")
 		return (
-			<div className="h-full space-y-2 overflow-auto p-4">
+			<div className="divide-y divide-border/50">
 				{items.length ? (
-					items.map((item, index) => (
+					items.map((item) => (
 						<details
 							key={item.id}
-							className="rounded-xl border bg-background/30 p-3"
+							className="group/faq py-3 first:pt-0 last:pb-0"
 						>
-							<summary className="cursor-pointer text-sm font-medium">
+							<summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
 								{item.title}
+								<ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open/faq:rotate-180" />
 							</summary>
 							<div className="pt-2 text-sm text-muted-foreground">
 								<Markdown initialContent={item.body ?? ""} isMarkdown minimal />
@@ -559,8 +618,14 @@ export function HomeInformation({
 		);
 	if (mode === "checklist") {
 		const completed = items.filter((item) => item.checked).length;
+		if (!items.length)
+			return (
+				<HomeEmpty icon={<CheckCircle2 />}>
+					Add a first step in widget settings.
+				</HomeEmpty>
+			);
 		return (
-			<div className="h-full overflow-auto p-4">
+			<div className="min-w-0">
 				<div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
 					<span>
 						{completed} of {items.length} complete
@@ -569,7 +634,7 @@ export function HomeInformation({
 				</div>
 				<div className="mb-4 h-1.5 overflow-hidden rounded-full bg-muted">
 					<div
-						className="h-full rounded-full bg-primary transition-all"
+						className="h-full rounded-full bg-[var(--home-accent,var(--primary))] transition-[width] duration-300 motion-reduce:transition-none"
 						style={{
 							width: `${items.length ? (completed / items.length) * 100 : 0}%`,
 						}}
@@ -578,27 +643,29 @@ export function HomeInformation({
 				{items.map((item, index) => (
 					<label
 						key={item.id}
-						className="flex cursor-pointer items-start gap-3 border-b border-border/50 py-3 last:border-0"
+						htmlFor={`${widget.id}-check-${item.id}`}
+						className="flex cursor-pointer items-start gap-3 rounded-lg px-1 py-2.5 transition-colors hover:bg-muted/40 has-disabled:cursor-default"
 					>
-						<input
-							type="checkbox"
+						<Checkbox
+							id={`${widget.id}-check-${item.id}`}
+							aria-label={item.title}
 							checked={Boolean(item.checked)}
 							disabled={editing || !onUpdate}
-							onChange={(event) =>
+							onCheckedChange={(checked) =>
 								onUpdate?.({
 									...widget.config,
 									items: items.map((entry, entryIndex) =>
 										entryIndex === index
-											? { ...entry, checked: event.target.checked }
+											? { ...entry, checked: checked === true }
 											: entry,
 									),
 								})
 							}
-							className="mt-0.5 size-4 accent-primary"
+							className="mt-0.5"
 						/>
 						<span
 							className={cn(
-								"text-sm",
+								"min-w-0 text-sm leading-relaxed",
 								item.checked && "text-muted-foreground line-through",
 							)}
 						>
@@ -615,14 +682,7 @@ export function HomeInformation({
 	const imageUrl =
 		imageHref && /^(https?:|\/)/.test(imageHref) ? imageHref : undefined;
 	return (
-		<div
-			className={cn(
-				"h-full overflow-auto p-4",
-				prominent && "flex flex-col p-6",
-				mode === "banner" &&
-					"[&_p]:text-lg [&_p]:font-medium [&_p]:leading-relaxed",
-			)}
-		>
+		<div className={cn("min-w-0", prominent && "flex flex-col gap-1")}>
 			{imageUrl && (
 				<HomeInformationImage
 					src={imageUrl}
@@ -640,18 +700,20 @@ export function HomeInformation({
 			{body ? (
 				<div
 					className={cn(
+						mode === "banner" &&
+							"[&_p]:text-lg [&_p]:font-medium [&_p]:leading-relaxed",
 						mode === "quote" && "border-l-2 border-primary/50 pl-4 italic",
 					)}
 				>
 					<Markdown initialContent={body} isMarkdown minimal />
 				</div>
-			) : (
+			) : !imageUrl ? (
 				<HomeEmpty>
 					{mode === "image"
 						? "Choose an image URL and add a description in widget settings."
 						: "Add a note, links, or instructions in widget settings. Markdown formatting is supported."}
 				</HomeEmpty>
-			)}
+			) : null}
 			{mode === "quote" && textConfig(widget.config, "attribution") && (
 				<p className="mt-4 text-xs text-muted-foreground">
 					{textConfig(widget.config, "attribution")}
@@ -685,7 +747,7 @@ function HomeInformationImage({ src, alt }: { src: string; alt: string }) {
 			loading="lazy"
 			referrerPolicy="no-referrer"
 			onError={() => setFailedSrc(src)}
-			className="mb-4 max-h-64 w-full shrink-0 rounded-xl object-cover"
+			className="mb-3 max-h-64 w-full shrink-0 rounded-xl object-cover"
 		/>
 	);
 }

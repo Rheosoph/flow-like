@@ -37,9 +37,16 @@ import { nextHomeSchedule } from "./schedules";
 import {
 	HomeEmpty,
 	HomeQueryState,
-	homeItemClass,
+	HomeSourceNote,
+	homeRowClass,
 	useHomeScope,
 } from "./shared";
+
+function activitySourceLabel(
+	statistics: ReturnType<typeof summarizeHomeExecutions>,
+) {
+	return `${statistics.partial ? "Sample: latest" : "Your account:"} ${statistics.scanned.toLocaleString()} of ${statistics.total.toLocaleString()} records · ${statistics.days === 1 ? "today" : `${statistics.days} days`} (UTC)`;
+}
 
 export function HomeNotifications({ widget, editing }: HomeContentProps) {
 	const backend = useBackend();
@@ -101,8 +108,8 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 		}
 	};
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+		<div className="flex min-w-0 flex-col gap-3">
+			<div className="min-w-0 divide-y divide-border/50">
 				{rows.map((notification) => {
 					const href =
 						safeHomeHref(notification.link ?? "") ?? "/notifications";
@@ -110,9 +117,9 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 						<div
 							key={notification.id}
 							className={cn(
-								homeItemClass,
+								homeRowClass,
 								"items-start",
-								!notification.read && "border-primary/25",
+								!notification.read && "bg-primary/[0.04]",
 							)}
 						>
 							<Bell
@@ -153,7 +160,7 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 			</div>
 			<Link
 				href="/notifications"
-				className="flex shrink-0 items-center justify-end gap-1.5 border-t px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground"
+				className="flex items-center justify-end gap-1.5 border-t border-border/50 pt-3 text-xs text-muted-foreground transition-colors hover:text-foreground"
 			>
 				Open inbox
 				<ArrowUpRight className="size-3.5" />
@@ -216,8 +223,8 @@ export function HomeRunActivity({ widget, editing }: HomeContentProps) {
 			timeZone: "UTC",
 		});
 	return (
-		<figure className="flex h-full min-h-0 flex-col">
-			<figcaption className="flex items-center justify-between gap-3 px-4 pt-3 text-xs">
+		<figure className="flex min-w-0 flex-col gap-3">
+			<figcaption className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
 				<span className="text-muted-foreground">
 					{statistics.days === 1 ? "Today" : `Last ${statistics.days} days`}
 					{" · UTC"}
@@ -226,17 +233,17 @@ export function HomeRunActivity({ widget, editing }: HomeContentProps) {
 					{statistics.rows.length.toLocaleString()} sampled records
 				</span>
 			</figcaption>
-			<div className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-4">
+			<div className="flex min-w-0 flex-col">
 				{statistics.rows.length ? (
 					<>
 						<div
-							className="flex min-h-16 flex-1 items-end gap-1"
+							className="flex h-44 min-h-44 items-end gap-1.5 border-b border-border/60 bg-[linear-gradient(to_top,var(--border)_1px,transparent_1px)] bg-[size:100%_25%]"
 							aria-hidden="true"
 						>
 							{statistics.buckets.map((day) => (
 								<div
 									key={day.day}
-									className="flex h-full min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-t"
+									className="flex h-full min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-t-sm"
 									title={`${formatDay(day.day)}: ${day.count} records, ${day.attentionCount} Error/Fatal`}
 								>
 									<div
@@ -246,7 +253,7 @@ export function HomeRunActivity({ widget, editing }: HomeContentProps) {
 										}}
 									/>
 									<div
-										className="bg-primary/70"
+										className="bg-[var(--home-accent,var(--primary))] opacity-80"
 										style={{
 											height: `${((day.count - day.attentionCount) / maximum) * 100}%`,
 										}}
@@ -270,16 +277,18 @@ export function HomeRunActivity({ widget, editing }: HomeContentProps) {
 				) : (
 					<HomeEmpty>No sampled executions fall in this period.</HomeEmpty>
 				)}
-				<div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
-					<span className="flex items-center gap-1.5">
-						<span className="size-2 rounded-sm bg-primary/70" />
-						Other recorded severities
-					</span>
-					<span className="flex items-center gap-1.5">
-						<span className="size-2 rounded-sm bg-destructive/85" />
-						Error / Fatal
-					</span>
-				</div>
+				{statistics.rows.length > 0 && (
+					<div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+						<span className="flex items-center gap-1.5">
+							<span className="size-2 rounded-sm bg-[var(--home-accent,var(--primary))] opacity-80" />
+							Other recorded severities
+						</span>
+						<span className="flex items-center gap-1.5">
+							<span className="size-2 rounded-sm bg-destructive/85" />
+							Error / Fatal
+						</span>
+					</div>
+				)}
 			</div>
 			<div className="sr-only">
 				<table>
@@ -304,9 +313,9 @@ export function HomeRunActivity({ widget, editing }: HomeContentProps) {
 					</tbody>
 				</table>
 			</div>
-			<p className="shrink-0 border-t px-4 py-2 text-[10px] leading-relaxed text-muted-foreground">
+			<HomeSourceNote label={activitySourceLabel(statistics)}>
 				{homeActivityCoverage(statistics)} Your account on this backend.
-			</p>
+			</HomeSourceNote>
 		</figure>
 	);
 }
@@ -342,8 +351,8 @@ export function HomeExecutionsByApp({ widget, editing }: HomeContentProps) {
 	);
 	const maximum = Math.max(1, ...apps.map((app) => app.count));
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+		<div className="flex min-w-0 flex-col gap-3">
+			<div className="min-w-0 divide-y divide-border/50">
 				{apps.length ? (
 					apps.map((app) => {
 						const content = (
@@ -363,7 +372,7 @@ export function HomeExecutionsByApp({ widget, editing }: HomeContentProps) {
 									aria-hidden="true"
 								>
 									<div
-										className="h-full rounded-full bg-primary/70"
+										className="h-full rounded-full bg-[var(--home-accent,var(--primary))] opacity-80"
 										style={{ width: `${(app.count / maximum) * 100}%` }}
 									/>
 								</div>
@@ -379,12 +388,12 @@ export function HomeExecutionsByApp({ widget, editing }: HomeContentProps) {
 							<Link
 								key={`app:${app.appId}`}
 								href={`/library/config/analytics?id=${encodeURIComponent(app.appId)}`}
-								className={homeItemClass}
+								className={homeRowClass}
 							>
 								{content}
 							</Link>
 						) : (
-							<div key="unassigned" className={homeItemClass}>
+							<div key="unassigned" className={homeRowClass}>
 								{content}
 							</div>
 						);
@@ -393,11 +402,11 @@ export function HomeExecutionsByApp({ widget, editing }: HomeContentProps) {
 					<HomeEmpty>No sampled executions fall in this period.</HomeEmpty>
 				)}
 			</div>
-			<p className="shrink-0 border-t px-4 py-2 text-[10px] leading-relaxed text-muted-foreground">
+			<HomeSourceNote label={activitySourceLabel(statistics)}>
 				{homeActivityCoverage(statistics)} Your account on this backend.
 				{apps.length < statistics.apps.length &&
 					` Showing ${apps.length} of ${statistics.apps.length} app groups.`}
-			</p>
+			</HomeSourceNote>
 		</div>
 	);
 }
@@ -430,8 +439,8 @@ export function HomeAiUsage({ editing }: HomeContentProps) {
 		);
 	const usage = summary.data;
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<div className="grid min-h-0 flex-1 grid-cols-2 content-center gap-x-5 gap-y-4 overflow-auto p-4">
+		<div className="flex min-w-0 flex-col gap-3">
+			<div className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-5 py-1">
 				{[
 					{
 						label: "AI requests",
@@ -450,44 +459,44 @@ export function HomeAiUsage({ editing }: HomeContentProps) {
 						value: homeUsageDollars(usage.total_embedding_price),
 					},
 				].map((stat) => (
-					<div key={stat.label}>
+					<div key={stat.label} className="min-w-0">
 						<p className="text-[11px] text-muted-foreground">{stat.label}</p>
-						<p className="mt-1.5 text-xl font-semibold tabular-nums tracking-tight">
+						<p className="mt-1.5 break-words text-2xl font-semibold tabular-nums tracking-tight">
 							{stat.value}
 						</p>
 					</div>
 				))}
 			</div>
-			<p className="shrink-0 border-t px-4 py-2 text-[10px] leading-relaxed text-muted-foreground">
+			<HomeSourceNote label="Your account · all recorded usage · USD">
 				Account totals reported by this backend across profiles, without a
 				period filter. Recorded cost is in USD.
-			</p>
+			</HomeSourceNote>
 		</div>
 	);
 }
 
 export function HomeNeedsAttention(props: HomeContentProps) {
 	return (
-		<div className="flex h-full min-h-0 flex-col">
+		<div className="flex min-w-0 flex-col gap-3">
 			<section
-				className="flex min-h-0 flex-1 flex-col"
+				className="flex min-w-0 flex-col gap-2"
 				aria-label="Execution records needing review"
 			>
-				<p className="shrink-0 px-4 pt-3 text-xs font-medium">
+				<p className="text-[11px] font-medium text-muted-foreground">
 					Error / Fatal records
 				</p>
-				<div className="min-h-0 flex-1">
+				<div className="min-w-0">
 					<HomeRecentRuns {...props} />
 				</div>
 			</section>
 			<section
-				className="flex min-h-0 flex-1 flex-col border-t"
+				className="flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3"
 				aria-label="Unread workflow notifications"
 			>
-				<p className="shrink-0 px-4 pt-3 text-xs font-medium">
+				<p className="text-[11px] font-medium text-muted-foreground">
 					Unread workflow notifications
 				</p>
-				<div className="min-h-0 flex-1">
+				<div className="min-w-0">
 					<HomeNotifications {...props} />
 				</div>
 			</section>
@@ -567,22 +576,28 @@ export function HomeRunStats({ widget }: HomeContentProps) {
 				},
 			].filter((item) => metric === "overview" || item.id === metric);
 	return (
-		<div className="flex h-full flex-col justify-center p-4">
-			<div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-5">
+		<div className="flex min-w-0 flex-col gap-4 py-1">
+			<div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,110px),1fr))] gap-5">
 				{stats.map((stat) => (
-					<div key={stat.label}>
+					<div key={stat.label} className="min-w-0">
 						<p className="text-xs text-muted-foreground">{stat.label}</p>
-						<p className="mt-2 text-3xl font-semibold tabular-nums tracking-tight">
+						<p className="mt-2 break-words text-3xl font-semibold tabular-nums tracking-tight">
 							{stat.value}
 						</p>
 					</div>
 				))}
 			</div>
-			<p className="mt-4 text-[10px] text-muted-foreground">
+			<HomeSourceNote
+				label={
+					sample
+						? `Your account · latest ${rows.length} records`
+						: "Your account · all recorded usage"
+				}
+			>
 				{sample
 					? `Your latest ${rows.length} recorded executions${executions.data && executions.data.total > rows.length ? ` of ${executions.data.total.toLocaleString()}` : ""}.`
 					: "Your account's recorded usage across profiles on this backend."}
-			</p>
+			</HomeSourceNote>
 		</div>
 	);
 }
@@ -623,8 +638,8 @@ export function HomeRecentRuns({ widget, editing }: HomeContentProps) {
 				.slice(0, limit) ?? [])
 		: (results.data?.items ?? []);
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+		<div className="flex min-w-0 flex-col gap-3">
+			<div className="min-w-0 divide-y divide-border/50">
 				{!rows.length && (
 					<HomeEmpty icon={<Activity className="size-7 opacity-50" />}>
 						{attention
@@ -675,22 +690,28 @@ export function HomeRecentRuns({ widget, editing }: HomeContentProps) {
 						<Link
 							key={run.id}
 							href={`/library/config/analytics?id=${encodeURIComponent(run.app_id)}`}
-							className={homeItemClass}
+							className={homeRowClass}
 						>
 							{contents}
 						</Link>
 					) : (
-						<div key={run.id} className={homeItemClass}>
+						<div key={run.id} className={homeRowClass}>
 							{contents}
 						</div>
 					);
 				})}
 			</div>
-			<p className="shrink-0 border-t px-4 py-2 text-[10px] text-muted-foreground">
+			<HomeSourceNote
+				label={
+					attention && statistics
+						? activitySourceLabel(statistics)
+						: "Your account · recorded log severity"
+				}
+			>
 				{attention && statistics
 					? homeActivityCoverage(statistics)
 					: "Your recorded executions. Badges show the recorded log severity."}
-			</p>
+			</HomeSourceNote>
 		</div>
 	);
 }
@@ -780,14 +801,14 @@ export function HomeSchedules({ widget }: HomeContentProps) {
 		schedules.data?.rows.slice(0, numberConfig(widget.config, "limit", 8)) ??
 		[];
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+		<div className="flex min-w-0 flex-col gap-3">
+			<div className="min-w-0 divide-y divide-border/50">
 				{rows.length ? (
 					rows.map((row) => (
 						<Link
 							key={`${row.appId}:${row.id}`}
 							href={`/library/config/events?id=${encodeURIComponent(row.appId)}`}
-							className={homeItemClass}
+							className={homeRowClass}
 						>
 							<CalendarDays className="size-4 shrink-0 text-primary" />
 							<div className="min-w-0 flex-1">
@@ -817,11 +838,11 @@ export function HomeSchedules({ widget }: HomeContentProps) {
 					<HomeEmpty>No upcoming schedules were found in these apps.</HomeEmpty>
 				)}
 			</div>
-			<p className="shrink-0 border-t px-4 py-2 text-[10px] text-muted-foreground">
+			<HomeSourceNote label="Active app schedules · your local time">
 				Calculated from active app schedules. Times use your device timezone.
 				{Boolean(schedules.data?.unavailable) &&
 					" Some schedules could not be loaded."}
-			</p>
+			</HomeSourceNote>
 		</div>
 	);
 }

@@ -10,7 +10,16 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { useHomeLibrary } from "./home-content/collections";
-import { numberConfig, stringList, textConfig } from "./home-content/config";
+import {
+	HOME_APP_RENDERINGS,
+	HOME_MODEL_RENDERINGS,
+	homeAppRendering,
+	homeLinksRendering,
+	homeModelRendering,
+	numberConfig,
+	stringList,
+	textConfig,
+} from "./home-content/config";
 import {
 	HOME_QUICK_ACTIONS,
 	homeLinks,
@@ -696,6 +705,13 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 		return (
 			<div className="space-y-4">
 				<Choice
+					label="Card style"
+					value={homeAppRendering(config, widget.appearance.variant)}
+					onChange={(value) => update("rendering", value)}
+					choices={HOME_APP_RENDERINGS}
+					hint="Standard uses the same cards as your library. Cards adapt to this widget's width."
+				/>
+				<Choice
 					label="Apps to show"
 					value={textConfig(config, "source", "library")}
 					onChange={(value) => update("source", value)}
@@ -754,6 +770,20 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	if (widget.type === "categories")
 		return (
 			<div className="space-y-2">
+				<Choice
+					label="Category layout"
+					value={
+						textConfig(config, "rendering", widget.appearance.variant) ===
+						"grid"
+							? "grid"
+							: "chips"
+					}
+					onChange={(value) => update("rendering", value)}
+					choices={[
+						["chips", "Category chips"],
+						["grid", "Category tiles"],
+					]}
+				/>
 				<p className="text-xs text-muted-foreground">
 					Choose categories, or leave all unchecked to show every category.
 				</p>
@@ -785,6 +815,31 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 	if (widget.type === "packages" || widget.type === "models")
 		return (
 			<div className="space-y-4">
+				{widget.type === "packages" && (
+					<Choice
+						label="Package layout"
+						value={
+							textConfig(config, "rendering", widget.appearance.variant) ===
+							"grid"
+								? "grid"
+								: "list"
+						}
+						onChange={(value) => update("rendering", value)}
+						choices={[
+							["list", "Package list"],
+							["grid", "Package cards"],
+						]}
+					/>
+				)}
+				{widget.type === "models" && (
+					<Choice
+						label="Card style"
+						value={homeModelRendering(config, widget.appearance.variant)}
+						onChange={(value) => update("rendering", value)}
+						choices={HOME_MODEL_RENDERINGS}
+						hint="Use the model catalog's cards, including model details and profile controls."
+					/>
+				)}
 				{widget.type === "models" && (
 					<Choice
 						label="Model source"
@@ -861,6 +916,15 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 		const links = homeLinks(config);
 		return (
 			<div className="space-y-3">
+				<Choice
+					label="Link layout"
+					value={homeLinksRendering(config, widget.appearance.variant)}
+					onChange={(value) => update("rendering", value)}
+					choices={[
+						["grid", "Link cards"],
+						["list", "Compact list"],
+					]}
+				/>
 				{links.map((link, index) => (
 					<div key={link.id} className="space-y-2 rounded-xl border p-3">
 						<div className="flex items-center justify-between">
