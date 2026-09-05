@@ -28,7 +28,7 @@ Database, one of two modes:
   `SECRET_PREFIX` (or the environment).
 
 Other settings: `SECRET_PREFIX` (SSM prefix for secrets), `CDN_BUCKET_NAME`,
-`CDN_BUCKET_ENDPOINT`, `CDN_BUCKET_ACCESS_KEY_ID`, `SENTRY_ENDPOINT`.
+`CDN_BUCKET_ENDPOINT`, `CDN_BUCKET_ACCESS_KEY_ID`.
 
 See `apps/docs/src/content/docs/self-hosting/aws/database.md` for the full
 DSQL setup, IAM policies and the migration workflow.

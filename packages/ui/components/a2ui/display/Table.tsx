@@ -292,6 +292,7 @@ function SortableHeaderCell({
 }
 
 export function A2UITable({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -680,6 +681,7 @@ export function A2UITable({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("group/table relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
@@ -1011,6 +1013,7 @@ export function A2UITable({
 }
 
 export function A2UITableRow({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<TableRowComponent>) {
@@ -1020,6 +1023,7 @@ export function A2UITableRow({
 
 	return (
 		<tr
+			ref={elementRef}
 			className={cn(
 				resolveStyle(style),
 				selected && "bg-primary/10",
@@ -1037,6 +1041,7 @@ export function A2UITableRow({
 }
 
 export function A2UITableCell({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<TableCellComponent>) {
@@ -1056,6 +1061,7 @@ export function A2UITableCell({
 
 	return (
 		<Tag
+			ref={elementRef}
 			colSpan={colSpan}
 			rowSpan={rowSpan}
 			className={cn(

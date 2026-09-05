@@ -2,7 +2,6 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChevronDownIcon,
@@ -35,6 +34,7 @@ import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
+import { captureTelemetryError } from "../../lib/telemetry/errors";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import { useBackend } from "../../state/backend-state";
@@ -656,9 +656,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			} catch (err) {
 				console.error("[Chat] Failed to respond to interaction:", err);
-				Sentry.captureException(err, {
-					tags: { component: "chat", action: "submit_interaction_response" },
-					extra: { interactionId, appId },
+				captureTelemetryError(err, {
+					culprit: "chat.submit_interaction_response",
 				});
 				toast.error(`Failed to submit response: ${extractErrorMessage(err)}`);
 			}
@@ -1065,9 +1064,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		if (!executionEngine.hasStream(streamId)) {
 			promoteChatDrafts(streamId).catch((error) => {
 				console.error("[Chat] Failed to promote drafts:", error);
-				Sentry.captureException(error, {
-					tags: { component: "chat", action: "promote_drafts" },
-					extra: { appId, sessionId: streamId },
+				captureTelemetryError(error, {
+					culprit: "chat.promote_drafts",
 				});
 			});
 			return;
@@ -1566,9 +1564,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				true, // skipConsentCheck
 			).catch((err) => {
 				console.error("Failed to retry chat message after OAuth:", err);
-				Sentry.captureException(err, {
-					tags: { component: "chat", action: "oauth_retry_send" },
-					extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+				captureTelemetryError(err, {
+					culprit: "chat.oauth_retry_send",
 				});
 				toast.error(`Failed to send message: ${extractErrorMessage(err)}`);
 			});
@@ -1614,9 +1611,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					// Already shown a toast in executeChatMessage guard
 				} else if (!(error as any)?.isOAuthError) {
 					console.error("Error sending message:", error);
-					Sentry.captureException(error, {
-						tags: { component: "chat", action: "send_message" },
-						extra: { appId, eventId: event.id, sessionId: sessionIdParameter },
+					captureTelemetryError(error, {
+						culprit: "chat.send_message",
 					});
 					toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
 				}

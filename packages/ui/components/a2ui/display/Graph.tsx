@@ -117,6 +117,7 @@ function GraphFallback({ height }: { height: string }) {
 }
 
 export function A2UIGraph({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -220,6 +221,7 @@ export function A2UIGraph({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative w-full overflow-hidden rounded-lg border border-border/50",
 				resolveStyle(style),

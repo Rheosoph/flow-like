@@ -17,6 +17,7 @@ import {
 	type CSSProperties,
 	type KeyboardEvent,
 	type MouseEvent,
+	type Ref,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -107,6 +108,7 @@ function finiteDuration(audio: HTMLAudioElement) {
 }
 
 export function AudioPreview({
+	ref,
 	src,
 	title,
 	mimeType,
@@ -123,6 +125,7 @@ export function AudioPreview({
 	showDownload?: boolean;
 	className?: string;
 	style?: CSSProperties;
+	ref?: Ref<HTMLDivElement>;
 	onError?: () => void;
 }>) {
 	const { t } = useTranslation("common");
@@ -287,6 +290,7 @@ export function AudioPreview({
 	if (hasError) {
 		return (
 			<div
+				ref={ref}
 				className={cn(
 					"flex h-full w-full min-h-0 items-center justify-center overflow-auto p-4",
 					className,
@@ -315,6 +319,7 @@ export function AudioPreview({
 
 	return (
 		<div
+			ref={ref}
 			className={cn(
 				"flex h-full w-full min-h-0 items-center justify-center overflow-auto p-4",
 				className,

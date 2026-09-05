@@ -114,6 +114,7 @@ function avatarSizeForVariant(
 }
 
 export function A2UIUserProfile({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<UserProfileComponent>) {
@@ -192,6 +193,7 @@ export function A2UIUserProfile({
 	if (variant === "avatar") {
 		content = (
 			<span
+				ref={elementRef}
 				className={cn(
 					"inline-flex min-w-0 items-center justify-center",
 					muted && "opacity-75",
@@ -212,6 +214,7 @@ export function A2UIUserProfile({
 	} else if (variant === "chip") {
 		content = (
 			<span
+				ref={elementRef}
 				className={cn(
 					"inline-flex max-w-full items-center gap-1.5 rounded-full border bg-background px-1.5 py-1 text-xs shadow-sm",
 					muted ? "text-muted-foreground" : "text-foreground",
@@ -232,6 +235,7 @@ export function A2UIUserProfile({
 	} else if (variant === "card") {
 		content = (
 			<div
+				ref={elementRef}
 				className={cn(
 					"w-full max-w-sm rounded-lg border bg-card p-4 text-card-foreground shadow-sm",
 					rootClassName,
@@ -316,6 +320,7 @@ export function A2UIUserProfile({
 
 		content = (
 			<div
+				ref={elementRef}
 				className={cn(
 					"flex min-w-0 max-w-full items-center gap-3 rounded-lg",
 					isDetailed ? "border bg-card p-3 shadow-sm" : "p-1",

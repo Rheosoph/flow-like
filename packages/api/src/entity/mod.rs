@@ -52,6 +52,7 @@ pub mod invitation;
 pub mod invite_link;
 pub mod join_queue;
 pub mod landing_page;
+pub mod home_default;
 pub mod leaderboard_opt_in;
 pub mod learning_path;
 pub mod learning_path_course;

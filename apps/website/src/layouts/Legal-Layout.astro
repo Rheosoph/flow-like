@@ -3,7 +3,6 @@ import "@flow-like/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { BlogFooter } from "../components/blog-footer";
 import { Header } from "../components/header";
-import PostHog from "../components/posthog.astro";
 
 interface Props {
 	title: string;
@@ -44,8 +43,6 @@ const desc = description ?? "Legal information for Flow-Like";
 		<meta name="twitter:site" content="@greatco_de" />
 		<meta name="twitter:title" content={`${title} | Flow-Like`} />
 		<meta name="twitter:description" content={desc} />
-
-		<PostHog />
 	</head>
 	<body class="min-h-screen bg-background text-foreground overflow-y-auto overflow-x-hidden pt-16">
 		<Header client:load pathname={Astro.url.pathname} />

@@ -25,6 +25,10 @@ pub struct Model {
     pub apps: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub shortcuts: Option<Json>,
+    #[sea_orm(column_name = "homeLayout", column_type = "JsonBinary", nullable)]
+    pub home_layout: Option<Json>,
+    #[sea_orm(column_name = "homeDefaultId", column_type = "Text", nullable)]
+    pub home_default_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub hub: String,
     #[sea_orm(

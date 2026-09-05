@@ -48,8 +48,6 @@ tauri = { version = "2.11.1", features = [
 ] }
 
 anyhow = "1.0.95"
-sentry.workspace = true
-sentry-tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 tracing = { version = "0.1.41", features = ["async-await", "attributes"] }
 

@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIProgress({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<ProgressComponent>) {
@@ -34,6 +35,7 @@ export function A2UIProgress({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-1", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

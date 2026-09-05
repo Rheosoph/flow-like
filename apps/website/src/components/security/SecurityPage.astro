@@ -4,7 +4,6 @@ import "../../styles/website-base.css";
 import { Header } from "../header";
 import { BlogFooter } from "../blog-footer";
 import AmbientGlow from "../ambient-glow.astro";
-import PostHog from "../posthog.astro";
 import { tSecurity } from "../../i18n/locales/pages/security";
 import { buildAlternateLinks, getOgLocale } from "../../lib/seo";
 import { LuShieldCheck, LuBox, LuUsers, LuLock, LuFileSearch, LuPackage, LuHardDrive, LuServer, LuGlobe, LuScale, LuEye, LuFileText, LuArrowRight } from "react-icons/lu";
@@ -80,8 +79,6 @@ const complianceCards = [
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={cover} />
-
-    <PostHog />
 
     <style is:global>
       body {

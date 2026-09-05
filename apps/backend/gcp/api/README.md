@@ -89,7 +89,6 @@ just 404s. Startup enforces the agreement for all four pairs
 
 ```text
 PORT=8080                                   # Cloud Run injects this
-SENTRY_ENDPOINT=<dsn>                       # omit to disable Sentry entirely
 OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4317
 GCP_REQUIRE_OTEL=true                       # makes a missing endpoint fatal
 RUST_LOG=warn

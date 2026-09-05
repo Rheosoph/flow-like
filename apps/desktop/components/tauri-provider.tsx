@@ -1271,6 +1271,8 @@ export function ProfileSyncer({
 						interests: hubProfile.interests,
 						tags: hubProfile.tags,
 						theme: hubProfile.theme,
+						home_layout: hubProfile.home_layout ?? null,
+						home_default_id: hubProfile.home_default_id ?? null,
 						bit_ids: hubProfile.bits,
 						apps: filteredApps,
 						shortcuts: shortcuts,
@@ -1648,6 +1650,10 @@ export function ProfileSyncer({
 									onlineProfile.interests ?? [];
 								localProfile.hub_profile.tags = onlineProfile.tags ?? [];
 								localProfile.hub_profile.theme = onlineProfile.theme ?? null;
+								localProfile.hub_profile.home_layout =
+									onlineProfile.home_layout ?? null;
+								localProfile.hub_profile.home_default_id =
+									onlineProfile.home_default_id ?? null;
 								localProfile.hub_profile.bits = onlineProfile.bit_ids ?? [];
 								localProfile.hub_profile.apps = onlineProfile.apps ?? [];
 								localProfile.hub_profile.hub = onlineProfile.hub;
@@ -1770,7 +1776,17 @@ export function ProfileSyncer({
 			if (syncingRef.current) return;
 			syncProfiles();
 		}, 5 * 60_000);
-		return () => clearInterval(interval);
+		const requestSync = () => {
+			lastSyncAtRef.current = 0;
+			void syncProfiles();
+		};
+		window.addEventListener("flow-like:profile-sync", requestSync);
+		window.addEventListener("online", requestSync);
+		return () => {
+			clearInterval(interval);
+			window.removeEventListener("flow-like:profile-sync", requestSync);
+			window.removeEventListener("online", requestSync);
+		};
 	}, [backend, isAuthenticated, accessToken, hubUrl]);
 
 	return null;

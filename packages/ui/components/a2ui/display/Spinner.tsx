@@ -20,6 +20,7 @@ const sizeMap: Record<string, string> = {
 };
 
 export function A2UISpinner({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<SpinnerComponent>) {
@@ -28,6 +29,7 @@ export function A2UISpinner({
 
 	return (
 		<Loader2
+			ref={elementRef}
 			className={cn("animate-spin", sizeClass, resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		/>

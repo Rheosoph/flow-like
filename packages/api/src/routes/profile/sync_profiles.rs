@@ -37,6 +37,19 @@ pub struct SyncProfileRequest {
     pub apps: Option<Vec<ProfileApp>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
+    #[serde(
+        default,
+        deserialize_with = "super::deserialize_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<Object>)]
+    pub home_layout: Option<Option<Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::deserialize_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub home_default_id: Option<Option<String>>,
     pub hubs: Option<Vec<String>>,
     #[schema(value_type = Option<Object>)]
     pub settings: Option<Settings>,
@@ -116,6 +129,7 @@ pub async fn sync_profiles(
     let mut deleted: Vec<String> = Vec::new();
 
     for profile_req in profiles {
+        super::validate_home_patch(&profile_req.home_layout, &profile_req.home_default_id)?;
         if profile_req.id.trim().is_empty() {
             return Err(ApiError::bad_request("Profile ID is required"));
         }
@@ -157,6 +171,12 @@ pub async fn sync_profiles(
                 active_model.interests = Set(profile_req.interests.clone().map(Into::into));
                 active_model.tags = Set(profile_req.tags.clone().map(Into::into));
                 active_model.theme = Set(profile_req.theme.clone());
+                if let Some(layout) = profile_req.home_layout.clone() {
+                    active_model.home_layout = Set(layout);
+                }
+                if let Some(default_id) = profile_req.home_default_id.clone() {
+                    active_model.home_default_id = Set(default_id);
+                }
                 active_model.bit_ids = Set(profile_req.bit_ids.clone().map(Into::into));
 
                 if let Some(apps) = profile_req.apps {
@@ -330,6 +350,8 @@ pub async fn sync_profiles(
                     bit_ids: Set(profile_req.bit_ids.clone().map(Into::into)),
                     apps: Set(apps.clone()),
                     shortcuts: Set(shortcuts.clone()),
+                    home_layout: Set(profile_req.home_layout.clone().flatten()),
+                    home_default_id: Set(profile_req.home_default_id.clone().flatten()),
                     settings: Set(settings.clone()),
                     hub: Set(default_hub.clone()),
                     hubs: Set(profile_req

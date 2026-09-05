@@ -13,6 +13,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIShape({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<ShapeComponent>) {
@@ -100,6 +101,7 @@ export function A2UIShape({
 
 	return (
 		<svg
+			ref={elementRef}
 			className={cn("absolute", resolveStyle(style))}
 			style={{
 				left: x,

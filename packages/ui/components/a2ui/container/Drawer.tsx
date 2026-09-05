@@ -29,6 +29,7 @@ const sideMap: Record<string, "top" | "bottom" | "left" | "right"> = {
 };
 
 export function A2UIDrawer({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -65,6 +66,7 @@ export function A2UIDrawer({
 	return (
 		<Sheet open={open ?? false} onOpenChange={handleOpenChange}>
 			<SheetContent
+				ref={elementRef}
 				side={resolvedSide}
 				className={cn(resolveStyle(style))}
 				style={resolveInlineStyle(style)}

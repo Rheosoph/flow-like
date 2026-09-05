@@ -6,6 +6,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { useAssetUrl } from "../hooks/use-asset-url";
+import { useElementRef } from "../hooks/use-element-ref";
 import type { BoundValue, LottieComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -20,6 +21,7 @@ function isInlineAnimation(value: string | undefined): value is string {
 }
 
 export function A2UILottie({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<LottieComponent>) {
@@ -33,6 +35,7 @@ export function A2UILottie({
 	const autoplay = useResolved<boolean>(component.autoplay);
 	const speed = useResolved<number>(component.speed);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const [animationData, setAnimationData] = useState<unknown>(null);
 	const [error, setError] = useState<string | null>(null);
 
@@ -105,6 +108,7 @@ export function A2UILottie({
 	if (error) {
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"flex items-center justify-center text-muted-foreground text-sm",
 					resolveStyle(style),
@@ -118,7 +122,7 @@ export function A2UILottie({
 
 	return (
 		<div
-			ref={containerRef}
+			ref={rootRef}
 			className={cn(resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		/>

@@ -98,15 +98,17 @@ function resolveLocale(): string {
 }
 
 function MicroWidgetErrorCard({
+	elementRef,
 	widgetId,
 	message,
 }: {
 	widgetId: string;
 	message: string;
+	elementRef?: ComponentProps["elementRef"];
 }) {
 	const { t } = useTranslation("common");
 	return (
-		<Card className="border-destructive/40 bg-destructive/5">
+		<Card ref={elementRef} className="border-destructive/40 bg-destructive/5">
 			<CardContent className="flex items-start gap-2 p-4 text-sm">
 				<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
 				<div className="min-w-0">
@@ -125,12 +127,14 @@ function MicroWidgetErrorCard({
 }
 
 interface MicroWidgetFrameProps {
+	elementRef?: ComponentProps["elementRef"];
 	component: MicroWidgetInstanceComponent;
 	componentId: string;
 	style?: Style;
 }
 
 function MicroWidgetFrame({
+	elementRef,
 	component,
 	componentId,
 	style,
@@ -444,6 +448,7 @@ function MicroWidgetFrame({
 	if (desktop && !bundleHash) {
 		return (
 			<MicroWidgetErrorCard
+				elementRef={elementRef}
 				widgetId={widgetId}
 				message="The widget bundle hash is missing, so the local bundle cannot be resolved."
 			/>
@@ -451,11 +456,18 @@ function MicroWidgetFrame({
 	}
 
 	if (phase === "error") {
-		return <MicroWidgetErrorCard widgetId={widgetId} message={errorMessage} />;
+		return (
+			<MicroWidgetErrorCard
+				elementRef={elementRef}
+				widgetId={widgetId}
+				message={errorMessage}
+			/>
+		);
 	}
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative w-full overflow-hidden", resolveStyle(style))}
 			style={{ ...resolveInlineStyle(style), height }}
 			data-widget-instance={instanceId}
@@ -490,6 +502,7 @@ function MicroWidgetFrame({
  * mirror into the elements payload as `"{instanceId}/values"`.
  */
 export function A2UIMicroWidget({
+	elementRef,
 	component,
 	componentId,
 	style,
@@ -505,6 +518,7 @@ export function A2UIMicroWidget({
 			}
 		>
 			<MicroWidgetFrame
+				elementRef={elementRef}
 				component={microComponent}
 				componentId={componentId}
 				style={style ?? microComponent.style}

@@ -20,6 +20,7 @@ function getChildIds(children: Children | undefined): string[] {
 }
 
 export function A2UICanvas2D({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -50,6 +51,7 @@ export function A2UICanvas2D({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative", resolveStyle(style))}
 			style={{ width, height, ...resolveInlineStyle(style) }}
 		>

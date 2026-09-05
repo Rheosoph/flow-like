@@ -10,8 +10,6 @@ mod execution;
 
 #[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();
-
     // Default to warn level for CloudWatch logs to reduce noise
     // Explicitly filter out verbose logs from dependencies
     // Can be overridden with RUST_LOG env var
@@ -25,26 +23,9 @@ async fn main() -> Result<(), Error> {
             .add_directive("tower=warn".parse().unwrap())
     });
 
-    let _sentry_guard = if sentry_endpoint.is_empty() {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .init();
-        None
-    } else {
-        let guard = sentry::init((
-            sentry_endpoint,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                traces_sample_rate: 0.3,
-                ..Default::default()
-            },
-        ));
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .with(sentry_tracing::layer())
-            .init();
-        Some(guard)
-    };
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
+        .init();
 
     // Initialize catalog runtime (ONNX execution providers, etc.)
     initialize_catalog();

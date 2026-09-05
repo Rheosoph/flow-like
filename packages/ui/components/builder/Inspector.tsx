@@ -276,7 +276,7 @@ export function Inspector({ className }: InspectorProps) {
 	return (
 		<div
 			className={cn(
-				"flex flex-col h-full bg-background border-l overflow-hidden",
+				"flex flex-col h-full min-w-0 bg-background border-l overflow-hidden",
 				className,
 			)}
 		>
@@ -284,7 +284,10 @@ export function Inspector({ className }: InspectorProps) {
 				<h3 className="font-medium text-sm truncate">
 					{singleSelected ? getComponentType(singleSelected) : ""}
 				</h3>
-				<p className="text-xs text-muted-foreground truncate mt-0.5">
+				<p
+					className="text-xs text-muted-foreground truncate mt-0.5"
+					title={singleSelected?.id}
+				>
 					{t("id", "ID:")} {singleSelected?.id}
 				</p>
 			</div>
@@ -322,7 +325,7 @@ export function Inspector({ className }: InspectorProps) {
 
 				<ScrollArea
 					className="flex-1 min-h-0 min-w-0 max-w-full overflow-hidden"
-					viewportClassName="min-w-0 max-w-full overflow-x-hidden"
+					viewportClassName="min-w-0 max-w-full overflow-x-hidden [&>div]:block!"
 				>
 					<TabsContent
 						value="properties"

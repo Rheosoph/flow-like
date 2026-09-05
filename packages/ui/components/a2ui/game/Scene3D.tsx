@@ -43,6 +43,7 @@ const FIXED_VIEW_POSITIONS: Record<FixedView, [number, number, number]> = {
 };
 
 export function A2UIScene3D({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -89,6 +90,7 @@ export function A2UIScene3D({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative overflow-hidden rounded-lg", resolveStyle(style))}
 			style={{
 				width,

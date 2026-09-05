@@ -7,6 +7,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { useAssetUrl } from "../hooks/use-asset-url";
+import { useElementRef } from "../hooks/use-element-ref";
 import type { BoundValue, ImageComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -25,6 +26,7 @@ const FIT_CLASSES: Record<string, string> = {
 };
 
 export function A2UIImage({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<ImageComponent>) {
@@ -43,6 +45,7 @@ export function A2UIImage({
 	// has a live replacement the registry already knows about. Failure state is
 	// keyed by URL, so pointing the component at another asset clears it.
 	const image = useAssetImage(resolvedSrc);
+	const rootRef = useElementRef(elementRef, image.imgRef);
 
 	// A URL that failed may simply have outlived its signature: ask for a new
 	// one before falling back. The request is rate-limited, so a link that is
@@ -58,6 +61,7 @@ export function A2UIImage({
 	if (!image.canRender && fallback && !isLoading) {
 		return (
 			<img
+				ref={elementRef}
 				src={fallback}
 				alt={alt ?? ""}
 				className={className}
@@ -68,7 +72,7 @@ export function A2UIImage({
 
 	return (
 		<img
-			ref={image.imgRef}
+			ref={rootRef}
 			src={image.src}
 			alt={alt ?? ""}
 			loading={loading ?? "lazy"}

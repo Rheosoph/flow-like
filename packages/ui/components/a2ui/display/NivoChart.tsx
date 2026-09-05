@@ -20,6 +20,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { toEventContextValue } from "../event-context";
+import { useElementRef } from "../hooks/use-element-ref";
 import type {
 	BarChartStyle,
 	BoundValue,
@@ -659,6 +660,7 @@ const CHART_PACKAGES: Record<string, ChartInfo> = {
 };
 
 export function A2UINivoChart({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -666,6 +668,7 @@ export function A2UINivoChart({
 	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const [chartModule, setChartModule] = useState<ChartModule | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -1432,7 +1435,7 @@ export function A2UINivoChart({
 	if (loading) {
 		return (
 			<div
-				ref={containerRef}
+				ref={rootRef}
 				className={cn(
 					"w-full flex flex-col items-center justify-center text-muted-foreground",
 					resolveStyle(style),
@@ -1447,7 +1450,7 @@ export function A2UINivoChart({
 	if (error) {
 		return (
 			<div
-				ref={containerRef}
+				ref={rootRef}
 				className={cn(
 					"w-full flex flex-col items-center justify-center text-destructive p-4",
 					resolveStyle(style),
@@ -1467,7 +1470,7 @@ export function A2UINivoChart({
 
 	return (
 		<div
-			ref={containerRef}
+			ref={rootRef}
 			className={cn(
 				"w-full flex flex-col overflow-hidden",
 				resolveStyle(style),

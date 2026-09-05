@@ -141,6 +141,7 @@ function normalizeFileValue(value: unknown): FileData[] {
 }
 
 export function A2UIFileInput({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -495,6 +496,7 @@ export function A2UIFileInput({
 
 	return (
 		<div
+			ref={elementRef}
 			data-card-action-stop
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}

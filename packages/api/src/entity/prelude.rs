@@ -50,6 +50,7 @@ pub use super::invitation::Entity as Invitation;
 pub use super::invite_link::Entity as InviteLink;
 pub use super::join_queue::Entity as JoinQueue;
 pub use super::landing_page::Entity as LandingPage;
+pub use super::home_default::Entity as HomeDefault;
 pub use super::leaderboard_opt_in::Entity as LeaderboardOptIn;
 pub use super::learning_path::Entity as LearningPath;
 pub use super::learning_path_course::Entity as LearningPathCourse;

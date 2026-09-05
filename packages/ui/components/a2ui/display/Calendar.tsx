@@ -48,6 +48,7 @@ import {
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useElementRef } from "../hooks/use-element-ref";
 import {
 	EventDialog,
 	type EventDialogState,
@@ -249,12 +250,14 @@ function EventContextMenu({
 }
 
 export function A2UICalendar({
+	elementRef,
 	component,
 	componentId,
 	style,
 }: ComponentProps<CalendarComponent>) {
 	const { t } = useTranslation("common");
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 
@@ -532,7 +535,7 @@ export function A2UICalendar({
 
 	return (
 		<div
-			ref={containerRef}
+			ref={rootRef}
 			className={cn(
 				"flex flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm",
 				resolveStyle(style),

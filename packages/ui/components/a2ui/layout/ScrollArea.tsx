@@ -16,6 +16,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIScrollArea({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -33,6 +34,7 @@ export function A2UIScrollArea({
 
 	return (
 		<ScrollArea
+			ref={elementRef}
 			className={cn("h-full w-full", resolveStyle(style))}
 			viewportClassName={viewportClass}
 			orientation={

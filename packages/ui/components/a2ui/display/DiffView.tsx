@@ -18,6 +18,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIDiffView({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<DiffViewComponent>) {
@@ -44,6 +45,7 @@ export function A2UIDiffView({
 
 	return (
 		<DiffViewer
+			ref={elementRef}
 			original={original}
 			modified={modified}
 			mode={mode}

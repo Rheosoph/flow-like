@@ -2,7 +2,6 @@
 
 import { captureTelemetryError } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
-import * as Sentry from "@sentry/nextjs";
 import { AlertTriangle, ArrowLeft, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -18,7 +17,6 @@ export default function Error({
 	const router = useRouter();
 
 	useEffect(() => {
-		Sentry.captureException(error);
 		captureTelemetryError(error, { culprit: "app/error-boundary" });
 	}, [error]);
 

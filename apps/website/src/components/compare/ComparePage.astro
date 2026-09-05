@@ -1,7 +1,6 @@
 ---
 import "@flow-like/flow-like-ui/global.css";
 import "../../styles/website-base.css";
-import PostHog from "../posthog.astro";
 import { Header } from "../header";
 import { BlogFooter } from "../blog-footer";
 
@@ -64,10 +63,6 @@ const cover = "/og.png";
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={desc} />
     <meta name="twitter:image" content={cover} />
-
-    <PostHog />
-
-
   </head>
   <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
     <Header client:load pathname={Astro.url.pathname} />

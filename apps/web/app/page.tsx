@@ -1,32 +1,3 @@
 "use client";
-import { HomeSwimlanes, Skeleton, useBackend } from "@flow-like/flow-like-ui";
-import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 
-export default function Home() {
-	const backend = useBackend();
-	const router = useRouter();
-	const [isCheckingProfiles, setIsCheckingProfiles] = useState(true);
-
-	// For web, we'll skip the profile check for now
-	useEffect(() => {
-		setIsCheckingProfiles(false);
-	}, []);
-
-	if (isCheckingProfiles) {
-		return (
-			<div className="flex min-h-screen items-center justify-center">
-				<Skeleton className="h-[400px] w-[600px]" />
-			</div>
-		);
-	}
-
-	return (
-		// One page-level scroll: hero + swimlanes move together (the swimlanes are flow content).
-		<main className="flex flex-col flex-1 w-full min-h-0 overflow-y-auto">
-			<HeroSearchBarBubble />
-			<HomeSwimlanes />
-		</main>
-	);
-}
+export { HomePage as default } from "@flow-like/flow-like-ui/components/home/home-page";

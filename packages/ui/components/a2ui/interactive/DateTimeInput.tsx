@@ -25,6 +25,7 @@ const inputTypeMap: Record<string, string> = {
 };
 
 export function A2UIDateTimeInput({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -59,6 +60,7 @@ export function A2UIDateTimeInput({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

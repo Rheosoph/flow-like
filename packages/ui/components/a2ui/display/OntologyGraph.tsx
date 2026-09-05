@@ -37,6 +37,7 @@ function Placeholder({ message }: { message: string }) {
 }
 
 export function A2UIOntologyGraph({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -131,6 +132,7 @@ export function A2UIOntologyGraph({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative w-full overflow-hidden rounded-lg border border-border/50",
 				resolveStyle(style),

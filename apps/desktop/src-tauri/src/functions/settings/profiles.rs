@@ -646,6 +646,31 @@ pub async fn profile_update_shortcuts(
     Ok(())
 }
 
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn profile_update_home_layout(
+    app_handle: AppHandle,
+    profile_id: String,
+    layout: Option<flow_like_types::Value>,
+) -> Result<(), TauriFunctionError> {
+    if let Some(layout) = &layout {
+        flow_like::profile::validate_home_layout(layout)
+            .map_err(|message| TauriFunctionError::new(&message))?;
+    }
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+    let profile = settings
+        .profiles
+        .get_mut(&profile_id)
+        .ok_or(anyhow::anyhow!("Profile not found"))?;
+    profile.hub_profile.home_layout = layout;
+    let now = now_iso();
+    profile.hub_profile.updated = now.clone();
+    profile.updated = now;
+    settings.serialize();
+    Ok(())
+}
+
 /// Read a profile icon file and return its bytes
 #[instrument(skip_all)]
 #[tauri::command(async)]

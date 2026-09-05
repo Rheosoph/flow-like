@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIDialogue({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -47,6 +48,7 @@ export function A2UIDialogue({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative p-4 bg-background/95 border rounded-lg shadow-lg",
 				resolveStyle(style),

@@ -16,6 +16,7 @@ import { useTheme } from "next-themes";
 import {
 	type CSSProperties,
 	type ReactNode,
+	type Ref,
 	useEffect,
 	useMemo,
 	useState,
@@ -67,6 +68,7 @@ export interface DiffViewerProps {
 	swapSides?: boolean;
 	className?: string;
 	style?: CSSProperties;
+	ref?: Ref<HTMLDivElement>;
 }
 
 type Tone = "add" | "del" | null;
@@ -119,6 +121,7 @@ function resolveKind(
 }
 
 export function DiffViewer({
+	ref,
 	original,
 	modified,
 	mode: modeProp = "split",
@@ -595,6 +598,7 @@ export function DiffViewer({
 
 	return (
 		<div
+			ref={ref}
 			className={cn(
 				"flex w-full flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm",
 				className,

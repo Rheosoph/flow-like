@@ -1,4 +1,5 @@
 import type { IBit } from "../bit/bit";
+import type { IHomeLayout } from "../../../components/home/types";
 
 export interface IProfile {
 	apps?: IProfileApp[] | null;
@@ -20,6 +21,8 @@ export interface IProfile {
 	name: string;
 	settings?: ISettings;
 	shortcuts?: IProfileShortcut[] | null;
+	home_layout?: IHomeLayout | null;
+	home_default_id?: string | null;
 	tags?: string[];
 	theme?: any;
 	thumbnail?: null | string;

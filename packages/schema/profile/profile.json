@@ -63,6 +63,13 @@
 			},
 			"default": null
 		},
+		"home_layout": {
+			"default": null
+		},
+		"home_default_id": {
+			"type": ["string", "null"],
+			"default": null
+		},
 		"theme": {
 			"default": null
 		},

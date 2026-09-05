@@ -44,6 +44,7 @@ function resolveStringOrBound(
 }
 
 export function A2UITextField({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -135,6 +136,7 @@ export function A2UITextField({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

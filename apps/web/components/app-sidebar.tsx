@@ -414,6 +414,8 @@ function Profiles() {
 						description: newProfileDescription.trim() || null,
 						hub: hubUrl,
 						hubs: [hubUrl],
+						home_default_id:
+							currentProfile.data.hub_profile.home_default_id ?? null,
 					}),
 				},
 			);

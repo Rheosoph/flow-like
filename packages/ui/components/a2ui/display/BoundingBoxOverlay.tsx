@@ -9,6 +9,7 @@ import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { type NormalizedBox, normalizeBoxes } from "../bbox-utils";
 import { useAssetUrl } from "../hooks/use-asset-url";
+import { useElementRef } from "../hooks/use-element-ref";
 import type { BoundValue, BoundingBoxOverlayComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -29,6 +30,7 @@ const DEFAULT_COLORS = [
 ];
 
 export function A2UIBoundingBoxOverlay({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -36,6 +38,7 @@ export function A2UIBoundingBoxOverlay({
 	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const imageRef = useRef<HTMLImageElement>(null);
 
 	const { url: src } = useAssetUrl(useResolved<string>(component.src));
@@ -155,7 +158,7 @@ export function A2UIBoundingBoxOverlay({
 	return (
 		<div
 			data-card-action-stop
-			ref={containerRef}
+			ref={rootRef}
 			className={cn("relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

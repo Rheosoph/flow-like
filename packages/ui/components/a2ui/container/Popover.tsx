@@ -33,6 +33,7 @@ const sideMap: Record<string, "top" | "bottom" | "left" | "right"> = {
 };
 
 export function A2UIPopover({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -69,6 +70,7 @@ export function A2UIPopover({
 		<ShadPopover open={open} onOpenChange={handleOpenChange}>
 			<PopoverTrigger asChild>
 				<span
+					ref={elementRef}
 					className={cn("inline-block cursor-pointer", resolveStyle(style))}
 					style={resolveInlineStyle(style)}
 				>

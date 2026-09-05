@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIHealthBar({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<HealthBarComponent>) {
@@ -36,6 +37,7 @@ export function A2UIHealthBar({
 
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"relative inline-flex items-center justify-center",
 					resolveStyle(style),
@@ -73,6 +75,7 @@ export function A2UIHealthBar({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("w-full", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

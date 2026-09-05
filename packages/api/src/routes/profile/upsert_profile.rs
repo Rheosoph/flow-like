@@ -39,6 +39,19 @@ pub struct ProfileBody {
     pub apps: Option<Vec<ProfileApp>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
+    #[serde(
+        default,
+        deserialize_with = "super::deserialize_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<Object>)]
+    pub home_layout: Option<Option<Value>>,
+    #[serde(
+        default,
+        deserialize_with = "super::deserialize_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub home_default_id: Option<Option<String>>,
     pub hub: Option<String>,
     pub hubs: Option<Vec<String>>,
     #[schema(value_type = Option<Object>)]
@@ -76,6 +89,7 @@ pub async fn upsert_profile(
     Json(profile_body): Json<ProfileBody>,
 ) -> Result<Json<UpsertProfileResponse>, ApiError> {
     let sub = user.sub()?;
+    super::validate_home_patch(&profile_body.home_layout, &profile_body.home_default_id)?;
     if profile_id.trim().is_empty() {
         return Err(ApiError::bad_request("Profile ID is required"));
     }
@@ -121,6 +135,12 @@ pub async fn upsert_profile(
         if let Some(settings) = profile_body.settings {
             let settings = to_value(&settings)?;
             active_model.settings = Set(Some(settings));
+        }
+        if let Some(layout) = profile_body.home_layout {
+            active_model.home_layout = Set(layout);
+        }
+        if let Some(default_id) = profile_body.home_default_id {
+            active_model.home_default_id = Set(default_id);
         }
         if let Some(hubs) = profile_body.hubs {
             active_model.hubs = Set(Some(hubs.into()));
@@ -171,6 +191,8 @@ pub async fn upsert_profile(
         bit_ids,
         apps,
         shortcuts,
+        home_layout,
+        home_default_id,
         hub,
         hubs,
         settings,
@@ -230,6 +252,8 @@ pub async fn upsert_profile(
             bit_ids: Set(bit_ids.clone().map(Into::into)),
             apps: Set(apps.clone()),
             shortcuts: Set(shortcuts.clone()),
+            home_layout: Set(home_layout.clone().flatten()),
+            home_default_id: Set(home_default_id.clone().flatten()),
             settings: Set(settings.clone()),
             hub: Set(hub.clone()),
             hubs: Set(hubs.clone().map(Into::into)),

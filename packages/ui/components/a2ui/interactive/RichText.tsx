@@ -87,6 +87,7 @@ function collectText(node: unknown): string {
 }
 
 export function A2UIRichText({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -226,6 +227,7 @@ export function A2UIRichText({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("flex w-full flex-col gap-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

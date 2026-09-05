@@ -18,9 +18,7 @@ const ORB_STATE_LABEL: Record<string, string> = {
 	working: "FlowPilot is applying changes",
 };
 
-// Routes that already surface FlowPilot themselves, so the floating launcher would be redundant
-// even if something they embed requests it (the chat renders inline app surfaces, and the start
-// page hosts the full hero bubble).
+// Chat already provides FlowPilot. Home requests the launcher when its layout has no assistant widget.
 const HIDDEN_ROUTE_PREFIXES = ["/chat"];
 
 /**
@@ -46,7 +44,6 @@ export function FlowPilotBubbleButton() {
 	const hidden =
 		!visible ||
 		mode === "overlay" ||
-		pathname === "/" ||
 		HIDDEN_ROUTE_PREFIXES.some(
 			(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
 		);

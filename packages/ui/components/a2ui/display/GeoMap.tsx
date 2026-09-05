@@ -65,6 +65,7 @@ function MarkerDot({ color }: { color?: string }) {
 }
 
 export function A2UIGeoMap({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -280,6 +281,7 @@ export function A2UIGeoMap({
 	// We use a fixed height as default that can be overridden via style.
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative w-full", resolveStyle(style))}
 			style={{
 				height: "300px",

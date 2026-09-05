@@ -24,6 +24,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UICard({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -61,6 +62,7 @@ export function A2UICard({
 
 	return (
 		<ShadCard
+			ref={elementRef}
 			className={cn(
 				resolveStyle(style),
 				hoverable && "hover:shadow-lg transition-shadow",

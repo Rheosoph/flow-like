@@ -1,4 +1,5 @@
-@import "tailwindcss";
+/* Keep theme tokens available to classes created after the application build. */
+@import "tailwindcss" theme(static);
 @source "./components/**/*.{ts,tsx}";
 @source "./hooks/**/*.{ts,tsx}";
 @source "./lib/**/*.{ts,tsx}";
@@ -665,7 +666,7 @@
 	}
 }
 
-@theme inline {
+@theme inline static {
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);

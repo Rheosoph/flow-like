@@ -34,6 +34,7 @@ const anchorToTransform: Record<string, string> = {
 };
 
 export function A2UIOverlay({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -43,6 +44,7 @@ export function A2UIOverlay({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

@@ -46,7 +46,11 @@ const alignMap: Record<string, string> = {
 	justify: "text-justify",
 };
 
-export function A2UIText({ component, style }: ComponentProps<TextComponent>) {
+export function A2UIText({
+	elementRef,
+	component,
+	style,
+}: ComponentProps<TextComponent>) {
 	const content = useResolved<string>(component.content);
 	const variant = useResolved<string>(component.variant);
 	const size = useResolved<string>(component.size);
@@ -60,6 +64,7 @@ export function A2UIText({ component, style }: ComponentProps<TextComponent>) {
 
 	return (
 		<Tag
+			ref={elementRef}
 			className={cn(
 				variant && variantMap[variant],
 				size && sizeMap[size],

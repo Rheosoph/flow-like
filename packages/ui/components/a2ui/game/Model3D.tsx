@@ -10,8 +10,10 @@ import {
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
+import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { useAssetUrl } from "../hooks/use-asset-url";
 import type { BoundValue, Model3DComponent } from "../types";
 import { Scene3DProvider, useIsInsideScene3D } from "./Scene3DContext";
@@ -250,10 +252,12 @@ function Model3DInner({ component }: { component: Model3DComponent }) {
 function StandaloneModel3D({
 	component,
 	componentId,
-}: {
-	component: Model3DComponent;
-	componentId: string;
-}) {
+	style,
+	elementRef,
+}: Pick<
+	ComponentProps<Model3DComponent>,
+	"component" | "componentId" | "style" | "elementRef"
+>) {
 	// Viewer options
 	const viewerHeight = useResolved<string>(component.viewerHeight) ?? "100%";
 	const backgroundColor =
@@ -357,11 +361,16 @@ function StandaloneModel3D({
 
 	return (
 		<div
-			className="w-full h-full rounded-lg overflow-hidden"
+			ref={elementRef}
+			className={cn(
+				"w-full h-full rounded-lg overflow-hidden",
+				resolveStyle(style),
+			)}
 			style={{
 				height: heightStyle,
 				backgroundColor:
 					backgroundColor === "transparent" ? undefined : backgroundColor,
+				...resolveInlineStyle(style),
 			}}
 		>
 			<Canvas
@@ -464,13 +473,20 @@ function StandaloneModel3D({
 export function A2UIModel3D({
 	component,
 	componentId,
+	style,
+	elementRef,
 }: ComponentProps<Model3DComponent>) {
 	const isInsideScene3D = useIsInsideScene3D();
 
 	// If not inside Scene3D's Canvas context, create a standalone canvas
 	if (!isInsideScene3D) {
 		return (
-			<StandaloneModel3D component={component} componentId={componentId} />
+			<StandaloneModel3D
+				component={component}
+				componentId={componentId}
+				style={style}
+				elementRef={elementRef}
+			/>
 		);
 	}
 

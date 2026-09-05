@@ -26,6 +26,7 @@ const positionClasses = {
 };
 
 export function A2UICharacterPortrait({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<CharacterPortraitComponent>) {
@@ -41,6 +42,7 @@ export function A2UICharacterPortrait({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative rounded-full overflow-hidden",
 				sizeClasses[size as keyof typeof sizeClasses],

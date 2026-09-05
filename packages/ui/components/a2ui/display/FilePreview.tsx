@@ -89,6 +89,7 @@ function getCodeLanguage(file: string, filename?: string): string {
 }
 
 export function A2UIFilePreview({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<FilePreviewComponent>) {
@@ -155,6 +156,7 @@ export function A2UIFilePreview({
 	if (!src || error) {
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"flex items-center justify-center text-muted-foreground p-4",
 					resolveStyle(style),
@@ -171,6 +173,7 @@ export function A2UIFilePreview({
 	if (fileType === "pdf") {
 		return (
 			<div
+				ref={elementRef}
 				className={cn("w-full h-full flex flex-col", resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 			>
@@ -186,6 +189,7 @@ export function A2UIFilePreview({
 	if (fileType === "image") {
 		return (
 			<img
+				ref={elementRef}
 				src={src}
 				alt={rawFileName(src, filename)}
 				className={cn("w-full h-full", fitClass, resolveStyle(style))}
@@ -199,6 +203,7 @@ export function A2UIFilePreview({
 	if (fileType === "video") {
 		return (
 			<video
+				ref={elementRef}
 				src={src}
 				controls={showControls}
 				preload={loading === "eager" ? "auto" : "metadata"}
@@ -215,6 +220,7 @@ export function A2UIFilePreview({
 		if (audioVariant) {
 			return (
 				<div
+					ref={elementRef}
 					className={cn(
 						"flex h-full w-full items-center justify-center p-4",
 						resolveStyle(style),
@@ -237,6 +243,7 @@ export function A2UIFilePreview({
 		}
 		return (
 			<AudioPreview
+				ref={elementRef}
 				src={src}
 				title={rawFileName(src, filename)}
 				mimeType={mimeType}
@@ -253,6 +260,7 @@ export function A2UIFilePreview({
 		const lang = fileType === "code" ? getCodeLanguage(src, filename) : "";
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"w-full h-full overflow-auto bg-muted/30 rounded",
 					resolveStyle(style),
@@ -273,6 +281,7 @@ export function A2UIFilePreview({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"flex items-center justify-center text-muted-foreground p-4",
 				resolveStyle(style),

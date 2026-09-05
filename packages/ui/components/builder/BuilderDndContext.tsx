@@ -1,31 +1,33 @@
 "use client";
 
 import {
-	type CollisionDetection,
 	DndContext,
 	type DragEndEvent,
-	type DragOverEvent,
+	type DragMoveEvent,
 	type DragStartEvent,
+	MeasuringStrategy,
 	PointerSensor,
-	pointerWithin,
-	rectIntersection,
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
-import { useTranslation } from "@flow-like/locales";
 import { type WidgetContract, contractDefaults } from "@flow-like/widget-sdk";
 import {
 	type ReactNode,
 	createContext,
 	useCallback,
 	useContext,
-	useRef,
+	useMemo,
 	useState,
 } from "react";
 import { useBackend } from "../../state/backend-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import type { A2UIComponent, Children, SurfaceComponent } from "../a2ui/types";
 import { useBuilder } from "./BuilderContext";
+import {
+	createBuilderCollisionDetection,
+	measureBuilderDroppable,
+} from "./builderCollisionDetection";
+import type { DropRect } from "./dropPlacement";
 
 // Drag item types
 export const COMPONENT_DND_TYPE = "a2ui-component";
@@ -54,8 +56,8 @@ export interface WidgetDragData {
 
 /**
  * A widget shipped by a package added to the app (§6.1). Carries the full
- * contract so dropping needs no backend round-trip — the placed
- * `microWidgetInstance` is self-contained.
+ * contract so dropping needs no backend round trip. The placed
+ * `microWidgetInstance` carries its definition.
  */
 export interface PackageWidgetDragData {
 	type: typeof PACKAGE_WIDGET_DND_TYPE;
@@ -78,6 +80,8 @@ export interface DropData {
 	parentId: string;
 	index?: number;
 	isContainer?: boolean;
+	/** Insertion marker in viewport coordinates, for the canvas portal. */
+	indicator?: DropRect;
 }
 
 interface BuilderDndContextType {
@@ -103,52 +107,6 @@ interface BuilderDndProviderProps {
 	setIsDraggingGlobal: (dragging: boolean) => void;
 }
 
-// Custom collision detection that prefers the most deeply nested container
-const customCollisionDetection: CollisionDetection = (args) => {
-	// Get all pointer collisions (cursor is inside these elements)
-	const pointerCollisions = pointerWithin(args);
-
-	if (pointerCollisions.length === 0) {
-		// Fallback to rect intersection if pointer isn't directly over anything
-		return rectIntersection(args);
-	}
-
-	// Sort by specificity:
-	// 1. Drop zones (between-element indicators) get highest priority
-	// 2. Then containers sorted by depth (smaller rect = more nested = higher priority)
-	const sorted = [...pointerCollisions].sort((a, b) => {
-		const aData = a.data?.droppableContainer?.data?.current as
-			| DropData
-			| undefined;
-		const bData = b.data?.droppableContainer?.data?.current as
-			| DropData
-			| undefined;
-
-		const aIsDropZone = aData?.type === "drop-zone";
-		const bIsDropZone = bData?.type === "drop-zone";
-
-		// Drop zones (explicit insertion points) always win
-		if (aIsDropZone && !bIsDropZone) return -1;
-		if (!aIsDropZone && bIsDropZone) return 1;
-
-		// For containers, prefer smaller ones (more deeply nested)
-		// Smaller area = more specific/nested container
-		const aRect = a.data?.droppableContainer?.rect;
-		const bRect = b.data?.droppableContainer?.rect;
-
-		if (aRect && bRect) {
-			const aArea = (aRect.width ?? 0) * (aRect.height ?? 0);
-			const bArea = (bRect.width ?? 0) * (bRect.height ?? 0);
-			// Smaller area = higher priority (return negative)
-			return aArea - bArea;
-		}
-
-		return 0;
-	});
-
-	return sorted.length > 0 ? [sorted[0]] : [];
-};
-
 // Import these from WidgetBuilder to avoid circular deps
 import { createDefaultComponent, getDefaultStyle } from "./componentDefaults";
 
@@ -156,16 +114,23 @@ export function BuilderDndProvider({
 	children,
 	setIsDraggingGlobal,
 }: BuilderDndProviderProps) {
-	const { t } = useTranslation("flow");
 	const [activeId, setActiveId] = useState<string | null>(null);
 	const [activeData, setActiveData] = useState<DragData | null>(null);
 	const [overId, setOverId] = useState<string | null>(null);
 	const [overData, setOverData] = useState<DropData | null>(null);
-	const lastDropZoneRef = useRef<DropData | null>(null);
 
 	const backend = useBackend();
-	const { components, addComponent, updateComponent, addWidgetRef } =
-		useBuilder();
+	const {
+		components,
+		addComponent,
+		updateComponent,
+		addWidgetRef,
+		moveComponent,
+	} = useBuilder();
+	const collisionDetection = useMemo(
+		() => createBuilderCollisionDetection(components),
+		[components],
+	);
 
 	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
@@ -180,95 +145,16 @@ export function BuilderDndProvider({
 			const { active } = event;
 			setActiveId(active.id as string);
 			setActiveData(active.data.current as DragData);
-			lastDropZoneRef.current = null;
 			setIsDraggingGlobal(true);
 		},
 		[setIsDraggingGlobal],
 	);
 
-	const handleDragOver = useCallback((event: DragOverEvent) => {
-		const { over } = event;
-		const nextOverData = over?.data.current as DropData | null;
-		setOverId(over?.id as string | null);
-		setOverData(nextOverData);
-		if (nextOverData?.type === "drop-zone") {
-			lastDropZoneRef.current = nextOverData;
-		}
+	const handleDragOver = useCallback((event: DragMoveEvent) => {
+		const collision = event.collisions?.[0];
+		setOverId(collision ? String(collision.id) : null);
+		setOverData((collision?.data?.dropData as DropData | undefined) ?? null);
 	}, []);
-
-	// Move component from one parent to another
-	const moveComponent = useCallback(
-		(
-			movingId: string,
-			fromParentId: string | null,
-			toParentId: string,
-			toIndex?: number,
-		) => {
-			const toParent = components.get(toParentId);
-			if (!toParent) return;
-
-			const toChildrenData = (
-				toParent.component as unknown as Record<string, unknown>
-			).children as Children | undefined;
-			const toChildren =
-				toChildrenData && "explicitList" in toChildrenData
-					? [...toChildrenData.explicitList]
-					: [];
-
-			if (fromParentId === toParentId) {
-				const currentIndex = toChildren.indexOf(movingId);
-				if (currentIndex === -1) return;
-
-				toChildren.splice(currentIndex, 1);
-				const insertIndex =
-					toIndex !== undefined
-						? toIndex > currentIndex
-							? toIndex - 1
-							: toIndex
-						: toChildren.length;
-				toChildren.splice(insertIndex, 0, movingId);
-
-				updateComponent(toParentId, {
-					component: {
-						...toParent.component,
-						children: { explicitList: toChildren },
-					} as A2UIComponent,
-				});
-			} else {
-				if (fromParentId) {
-					const fromParent = components.get(fromParentId);
-					if (fromParent) {
-						const fromChildrenData = (
-							fromParent.component as unknown as Record<string, unknown>
-						).children as Children | undefined;
-						const fromChildren =
-							fromChildrenData && "explicitList" in fromChildrenData
-								? fromChildrenData.explicitList
-								: [];
-						updateComponent(fromParentId, {
-							component: {
-								...fromParent.component,
-								children: {
-									explicitList: fromChildren.filter((id) => id !== movingId),
-								},
-							} as A2UIComponent,
-						});
-					}
-				}
-
-				const insertIndex = toIndex !== undefined ? toIndex : toChildren.length;
-				toChildren.splice(insertIndex, 0, movingId);
-
-				updateComponent(toParentId, {
-					component: {
-						...toParent.component,
-						children: { explicitList: toChildren },
-					} as A2UIComponent,
-				});
-			}
-		},
-		[components, updateComponent],
-	);
 
 	// Insert widget instance
 	const insertWidgetInstance = useCallback(
@@ -367,7 +253,7 @@ export function BuilderDndProvider({
 	);
 
 	// Insert a package-shipped micro widget instance (self-contained component,
-	// contract + defaults embedded — no widgetRef, no backend fetch).
+	// with its contract and defaults embedded).
 	const insertPackageWidgetInstance = useCallback(
 		(
 			widgetData: PackageWidgetDragData,
@@ -421,7 +307,7 @@ export function BuilderDndProvider({
 
 	const handleDragEnd = useCallback(
 		(event: DragEndEvent) => {
-			const { active, over } = event;
+			const { active } = event;
 
 			// Reset state
 			setActiveId(null);
@@ -433,13 +319,9 @@ export function BuilderDndProvider({
 			if (!active.data.current) return;
 
 			const dragData = active.data.current as DragData;
-			const directDropData = (over?.data.current as DropData | null) ?? null;
-			const dropData =
-				directDropData?.type === "drop-zone"
-					? directDropData
-					: (lastDropZoneRef.current ?? directDropData);
-
-			lastDropZoneRef.current = null;
+			const dropData = event.collisions?.[0]?.data?.dropData as
+				| DropData
+				| undefined;
 
 			if (!dropData) return;
 
@@ -483,12 +365,7 @@ export function BuilderDndProvider({
 					} as A2UIComponent,
 				});
 			} else if (dragData.type === COMPONENT_MOVE_TYPE) {
-				moveComponent(
-					dragData.componentId,
-					dragData.currentParentId,
-					parentId,
-					index,
-				);
+				moveComponent(dragData.componentId, parentId, index);
 			}
 		},
 		[
@@ -507,16 +384,22 @@ export function BuilderDndProvider({
 		setActiveData(null);
 		setOverId(null);
 		setOverData(null);
-		lastDropZoneRef.current = null;
 		setIsDraggingGlobal(false);
 	}, [setIsDraggingGlobal]);
 
 	return (
 		<DndContext
 			sensors={sensors}
-			collisionDetection={customCollisionDetection}
+			collisionDetection={collisionDetection}
+			measuring={{
+				droppable: {
+					strategy: MeasuringStrategy.Always,
+					measure: measureBuilderDroppable,
+				},
+			}}
 			onDragStart={handleDragStart}
 			onDragOver={handleDragOver}
+			onDragMove={handleDragOver}
 			onDragEnd={handleDragEnd}
 			onDragCancel={handleDragCancel}
 		>

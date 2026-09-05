@@ -9,6 +9,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { toEventContextValue } from "../event-context";
+import { useElementRef } from "../hooks/use-element-ref";
 import type {
 	BoundValue,
 	ChartDataSource,
@@ -140,6 +141,7 @@ interface PlotlyGraphDiv extends HTMLDivElement {
 }
 
 export function A2UIPlotlyChart({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -168,6 +170,7 @@ export function A2UIPlotlyChart({
 	// Plotly paints to canvas and cannot read CSS variables, so the chat tokens
 	// are resolved against the chart's own node and re-resolved on theme change.
 	const [themeNode, setThemeNode] = useState<HTMLDivElement | null>(null);
+	const rootRef = useElementRef<HTMLDivElement>(elementRef, setThemeNode);
 	const tokens = useChartTokens(themeNode);
 
 	// Resolve simple props
@@ -446,7 +449,7 @@ export function A2UIPlotlyChart({
 	// would otherwise read back as a theme change.
 	return (
 		<div
-			ref={setThemeNode}
+			ref={rootRef}
 			className={cn("w-full min-h-0", resolveStyle(style))}
 			style={{
 				...resolveInlineStyle(style),

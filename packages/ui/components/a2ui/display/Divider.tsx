@@ -18,6 +18,7 @@ const orientationClasses: Record<string, string> = {
 };
 
 export function A2UIDivider({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<DividerComponent>) {
@@ -28,6 +29,7 @@ export function A2UIDivider({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"bg-border shrink-0",
 				orientationClasses[orientation],

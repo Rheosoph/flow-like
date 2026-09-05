@@ -21,6 +21,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UICheckbox({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -57,6 +58,7 @@ export function A2UICheckbox({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("flex items-center gap-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

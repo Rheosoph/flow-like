@@ -19,6 +19,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIChoiceMenu({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -48,6 +49,7 @@ export function A2UIChoiceMenu({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("p-4", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

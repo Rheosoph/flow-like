@@ -374,10 +374,10 @@ export function WidgetBuilderSurface({
 	}
 
 	return (
-		<div className={cn("flex flex-col h-full min-h-0", className)}>
+		<div className={cn("flex flex-col h-full min-h-0 min-w-0", className)}>
 			{/* Header */}
-			<div className="flex items-center justify-between px-4 py-3 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-				<div className="flex items-center gap-4">
+			<div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 shrink-0">
+				<div className="flex min-w-0 flex-1 basis-64 items-center gap-4">
 					{onClose && (
 						<Button
 							variant="ghost"
@@ -388,25 +388,30 @@ export function WidgetBuilderSurface({
 							<ArrowLeft className="h-4 w-4" />
 						</Button>
 					)}
-					<div>
-						<h1 className="text-lg font-semibold">{widget.name}</h1>
-						<p className="text-sm text-muted-foreground">
+					<div className="min-w-0 flex-1">
+						<h1 className="truncate text-lg font-semibold" title={widget.name}>
+							{widget.name}
+						</h1>
+						<p
+							className="truncate text-sm text-muted-foreground"
+							title={widget.description}
+						>
 							{widget.description ||
 								t("visualWidgetBuilder", "Visual Widget Builder")}
 						</p>
 					</div>
 					{widget.version && (
-						<Badge variant="secondary">
+						<Badge variant="secondary" className="shrink-0">
 							v{widget.version[0]}.{widget.version[1]}.{widget.version[2]}
 						</Badge>
 					)}
 					{readOnly && (
-						<Badge variant="outline">
+						<Badge variant="outline" className="shrink-0">
 							{t("readOnlyVersion", "Read-only version")}
 						</Badge>
 					)}
 				</div>
-				<div className="flex items-center gap-3">
+				<div className="flex flex-wrap items-center gap-3">
 					{/* Auto-save status indicator */}
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">
 						{isSaving ? (
@@ -450,9 +455,11 @@ export function WidgetBuilderSurface({
 			</div>
 
 			{/* Main Content */}
-			<div className="relative flex-1 min-h-0 flex">
+			<div className="relative flex-1 min-h-0 min-w-0 flex">
 				{/* Widget Builder */}
-				<div className={`flex-1 min-h-0 ${showSettings ? "mr-80" : ""}`}>
+				<div
+					className={`flex-1 min-h-0 min-w-0 ${showSettings ? "lg:mr-80" : ""}`}
+				>
 					<WidgetBuilder
 						initialComponents={widget.components}
 						widgetId={widget.id}
@@ -475,7 +482,7 @@ export function WidgetBuilderSurface({
 
 				{/* Settings Panel */}
 				{showSettings && (
-					<div className="w-80 border-l bg-background flex flex-col absolute inset-y-0 right-0 z-10">
+					<div className="w-80 max-w-full min-w-0 border-l bg-background flex flex-col absolute inset-y-0 right-0 z-10">
 						<div className="p-4 border-b flex items-center justify-between">
 							<h2 className="font-semibold">
 								{t("widgetSettings", "Widget Settings")}
@@ -553,9 +560,9 @@ function WidgetSettingsPanel({
 	return (
 		<Tabs
 			defaultValue="general"
-			className="flex min-h-0 w-full flex-1 flex-col gap-0"
+			className="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-0"
 		>
-			<TabsList className="w-full shrink-0 justify-start px-4 pt-2">
+			<TabsList className="w-full h-auto flex-wrap shrink-0 justify-start px-4 pt-2">
 				<TabsTrigger value="general">{t("general", "General")}</TabsTrigger>
 				<TabsTrigger value="events">{t("events", "Events")}</TabsTrigger>
 				<TabsTrigger value="versions">{t("versions", "Versions")}</TabsTrigger>
@@ -596,7 +603,7 @@ function WidgetSettingsPanel({
 							<Badge
 								key={tag}
 								variant="secondary"
-								className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
+								className="max-w-full whitespace-normal [overflow-wrap:anywhere] cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
 								onClick={() => handleRemoveTag(tag)}
 							>{`${tag} ×`}</Badge>
 						))}

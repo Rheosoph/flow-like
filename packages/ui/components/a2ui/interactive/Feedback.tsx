@@ -125,6 +125,7 @@ function getThumbButtonVariant(
 }
 
 export function A2UIFeedback({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -542,6 +543,7 @@ export function A2UIFeedback({
 		return (
 			<>
 				<div
+					ref={elementRef}
 					className={cn(
 						"w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-sm",
 						resolveStyle(style),
@@ -586,6 +588,7 @@ export function A2UIFeedback({
 		return (
 			<>
 				<div
+					ref={elementRef}
 					className={cn(
 						"inline-flex items-center rounded-full border border-border bg-background/95 p-1 shadow-sm ring-1 ring-black/5 dark:ring-white/5",
 						resolveStyle(style),
@@ -604,6 +607,7 @@ export function A2UIFeedback({
 		return (
 			<>
 				<div
+					ref={elementRef}
 					className={cn(
 						"inline-flex items-center gap-3 rounded-md border border-border bg-background px-3 py-2 shadow-sm",
 						resolveStyle(style),
@@ -623,6 +627,7 @@ export function A2UIFeedback({
 	return (
 		<>
 			<div
+				ref={elementRef}
 				className={cn(
 					"inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-2 shadow-sm",
 					resolveStyle(style),

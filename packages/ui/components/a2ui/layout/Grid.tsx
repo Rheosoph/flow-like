@@ -9,6 +9,7 @@ import { resolveChildSpecs } from "../children";
 import type { GridComponent } from "../types";
 
 export function A2UIGrid({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -64,6 +65,7 @@ export function A2UIGrid({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"grid",
 				autoFlow && autoFlowMap[autoFlow],

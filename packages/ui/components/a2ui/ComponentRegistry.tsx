@@ -80,6 +80,8 @@ export interface ComponentProps<T extends A2UIComponent = A2UIComponent> {
 	appId?: string;
 	boardId?: string;
 	style?: Style;
+	/** Attach editor tools to the rendered element without changing its layout. */
+	elementRef?: (element: HTMLElement | SVGElement | null) => void;
 	onAction?: (message: A2UIClientMessage) => void;
 	renderChild: RenderChildFn;
 }

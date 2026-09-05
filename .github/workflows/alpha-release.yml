@@ -55,9 +55,6 @@ jobs:
 
       - name: Build frontend
         working-directory: apps/desktop
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          PUBLIC_SENTRY_ENDPOINT: ${{ secrets.PUBLIC_SENTRY_ENDPOINT }}
         run: bun run build
 
       - name: Upload frontend

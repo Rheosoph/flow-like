@@ -15,6 +15,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIMiniMap({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -40,6 +41,7 @@ export function A2UIMiniMap({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative overflow-hidden rounded-lg border bg-muted",
 				resolveStyle(style),

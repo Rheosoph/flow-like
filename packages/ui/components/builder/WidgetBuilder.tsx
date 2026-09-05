@@ -21,10 +21,6 @@ import {
 import { useAssetSource } from "../../hooks/use-asset-source";
 import { cn } from "../../lib";
 import {
-	DEFAULT_SHORTCUTS,
-	createShortcutManager,
-} from "../../lib/builder/KeyboardShortcuts";
-import {
 	type AssistantWidgetSurface,
 	useAssistantSurface,
 } from "../../state/assistant-surface";
@@ -71,6 +67,7 @@ import { Inspector } from "./Inspector";
 import { ResponsivePreview } from "./ResponsivePreview";
 import { Toolbar } from "./Toolbar";
 import { A2UICopilot } from "./a2ui-copilot";
+import { useBuilderKeyboardShortcuts } from "./useBuilderKeyboardShortcuts";
 export {
 	createDefaultComponent,
 	getDefaultStyle,
@@ -113,10 +110,6 @@ export const CONTAINER_TYPES = new Set([
 // Root component ID constant
 export const ROOT_ID = "root";
 
-const BUILDER_DELETE_SHORTCUTS = DEFAULT_SHORTCUTS.filter(
-	(shortcut) => shortcut.action === "delete",
-);
-
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
 }
@@ -126,7 +119,7 @@ function createRootComponent(): SurfaceComponent {
 	return {
 		id: ROOT_ID,
 		style: {
-			className: `flex-1 h-full overflow-auto`,
+			className: "flex-1 h-full overflow-auto",
 		},
 		component: {
 			type: "column",
@@ -338,37 +331,28 @@ function WidgetBuilderContent({
 	externalAssistant,
 }: WidgetBuilderContentProps) {
 	const { t } = useTranslation("flow");
+	const builder = useBuilder();
 	const {
 		components,
 		selection,
 		addComponent,
 		updateComponent,
 		getComponent,
-		deleteComponents,
 		widgetRefs,
 		actionContext,
 		canvasSettings,
 		setCanvasSettings,
-	} = useBuilder();
+	} = builder;
+	const builderRootRef = useRef<HTMLDivElement>(null);
+	const builderId = useId();
 	const { activeId } = useBuilderDnd();
 	const isDragging = activeId !== null;
 
-	useEffect(() => {
-		const shortcutManager = createShortcutManager((_action, event) => {
-			event.stopPropagation();
-			if (event.repeat || mode !== "edit") return;
-
-			const selectedComponentIds = selection.componentIds.filter(
-				(id) => id !== ROOT_ID,
-			);
-			if (selectedComponentIds.length > 0) {
-				deleteComponents(selectedComponentIds);
-			}
-		}, BUILDER_DELETE_SHORTCUTS);
-
-		shortcutManager.bind();
-		return shortcutManager.unbind;
-	}, [deleteComponents, mode, selection.componentIds]);
+	useBuilderKeyboardShortcuts(
+		builderRootRef,
+		mode === "edit" && !builder.devMode,
+		builder,
+	);
 
 	// Ref for capturing screenshots of the canvas
 	const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -541,14 +525,17 @@ function WidgetBuilderContent({
 	return (
 		<>
 			<div
+				ref={builderRootRef}
+				data-builder-root={builderId}
+				tabIndex={-1}
 				className={cn(
-					"flex flex-col h-full bg-muted/20 overflow-hidden",
+					"flex min-w-0 flex-col h-full bg-muted/20 overflow-hidden",
 					className,
 					isDragging && "select-none",
 				)}
 			>
 				{/* Toolbar */}
-				<div className="flex items-center gap-1 h-10 px-2 border-b bg-background shrink-0">
+				<div className="flex min-w-0 items-center gap-1 h-10 px-2 border-b bg-background shrink-0 overflow-x-auto">
 					<Toolbar
 						onSave={() => {
 							const refsRecord = Object.fromEntries(widgetRefs);
@@ -566,7 +553,7 @@ function WidgetBuilderContent({
 						<Button
 							variant={copilotOpen ? "secondary" : "ghost"}
 							size="sm"
-							className="h-7 px-2 gap-1.5"
+							className="h-7 shrink-0 px-2 gap-1.5"
 							onClick={() => setCopilotOpen(!copilotOpen)}
 						>
 							<SparklesIcon className="h-4 w-4" />
@@ -603,7 +590,7 @@ function WidgetBuilderContent({
 									onValueChange={(v) =>
 										setLeftTab(v as "palette" | "hierarchy")
 									}
-									className="h-full flex flex-col min-h-0"
+									className="h-full flex flex-col min-h-0 min-w-0"
 								>
 									<TabsList className="w-full justify-start rounded-none border-b bg-transparent px-2 shrink-0">
 										<TabsTrigger value="palette" className="gap-1.5">
@@ -939,7 +926,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 	return (
 		<div
 			className={cn(
-				"h-full flex flex-col bg-muted/30 overflow-hidden",
+				"h-full min-w-0 flex flex-col bg-muted/30 overflow-hidden",
 				isDragging && "select-none",
 			)}
 			style={{ userSelect: isDragging ? "none" : undefined }}
@@ -957,7 +944,10 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					selection.componentIds[0] !== ROOT_ID && (
 						<>
 							<ChevronRight className="h-3 w-3" />
-							<span className="text-foreground font-medium">
+							<span
+								className="min-w-0 truncate text-foreground font-medium"
+								title={selection.componentIds[0]}
+							>
 								{components.get(selection.componentIds[0])?.component.type}
 							</span>
 						</>
@@ -1000,7 +990,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 					}}
 					data-canvas-background="true"
 				>
-					{/* Interactive BuilderRenderer - wraps each component */}
+					{/* Editor controls use the rendered elements without adding layout boxes. */}
 					<BuilderRenderer surface={surface} className="w-full min-h-full" />
 
 					{/* Empty state */}

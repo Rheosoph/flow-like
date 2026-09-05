@@ -8,6 +8,11 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
 import type {
+	IHomeDefault,
+	IHomeDefaults,
+	IHomeLayout,
+} from "@flow-like/flow-like-ui/components/home/types";
+import type {
 	INotification,
 	INotificationsOverview,
 	IUserLookup,
@@ -111,6 +116,54 @@ function normalizeProfileShortcut(
 
 export class UserState implements IUserState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	async getHomeDefaults(defaultId?: string): Promise<IHomeDefaults> {
+		const profile = this.backend.profile;
+		if (!profile) throw new Error("Profile context is not available");
+		const query = defaultId
+			? `?default_id=${encodeURIComponent(defaultId)}`
+			: "";
+		return fetcher<IHomeDefaults>(
+			profile,
+			`info/home-defaults${query}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async saveHomeLayout(
+		layout: IHomeLayout | null,
+		profileId?: string,
+	): Promise<void> {
+		const id = profileId ?? (await this.getProfile()).id;
+		if (!id) throw new Error("Profile ID is required");
+		await invoke("profile_update_home_layout", {
+			profileId: id,
+			layout,
+		});
+		window.dispatchEvent(new CustomEvent("flow-like:profile-sync"));
+	}
+
+	async saveHomeDefault(
+		id: string,
+		layout: IHomeLayout | null,
+		expectedRevision?: string | null,
+	): Promise<IHomeDefault | null> {
+		const profile = this.backend.profile;
+		if (!profile) throw new Error("Profile context is not available");
+		return fetcher<IHomeDefault | null>(
+			profile,
+			`admin/home-defaults/${encodeURIComponent(id)}`,
+			{
+				method: "PUT",
+				body: JSON.stringify({
+					layout,
+					expected_revision: expectedRevision ?? null,
+				}),
+			},
+			this.backend.auth,
+		);
+	}
 
 	private hasRemoteAccessToken(): boolean {
 		return Boolean(

@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIMarkdown({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<MarkdownComponent>) {
@@ -23,6 +24,7 @@ export function A2UIMarkdown({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"prose prose-sm dark:prose-invert max-w-none",
 				resolveStyle(style),

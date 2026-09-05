@@ -14,6 +14,4 @@ tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-sentry.workspace = true
-sentry-tracing.workspace = true
 tokio = { version = "1", features = ["full"] }

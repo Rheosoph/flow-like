@@ -1,4 +1,9 @@
 import type {
+	IHomeLayout,
+	IHomeDefault,
+	IHomeDefaults,
+} from "../../../components/home/types";
+import type {
 	IProfile,
 	IProfileApp,
 	IProfileShortcut,
@@ -25,6 +30,22 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 
 export class EmptyUserState implements IUserState {
+	getHomeDefaults(defaultId?: string): Promise<IHomeDefaults> {
+		return Promise.resolve({ main: null, profile: null });
+	}
+	saveHomeLayout(
+		layout: IHomeLayout | null,
+		profileId?: string,
+	): Promise<void> {
+		throw new Error("Home layouts are unavailable.");
+	}
+	saveHomeDefault(
+		id: string,
+		layout: IHomeLayout | null,
+		expectedRevision?: string | null,
+	): Promise<IHomeDefault | null> {
+		throw new Error("Home defaults are unavailable.");
+	}
 	lookupUser(userId: string): Promise<IUserLookup> {
 		throw new Error("Method not implemented.");
 	}

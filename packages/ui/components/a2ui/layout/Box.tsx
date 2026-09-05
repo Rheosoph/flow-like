@@ -10,6 +10,7 @@ import { normalizeSemanticBoxTag } from "../semantic-box-tags";
 import type { BoxComponent } from "../types";
 
 export function A2UIBox({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -24,7 +25,11 @@ export function A2UIBox({
 	const children = resolveChildSpecs(component.children, resolve);
 
 	return (
-		<Tag className={cn(resolveStyle(style))} style={resolveInlineStyle(style)}>
+		<Tag
+			ref={elementRef}
+			className={cn(resolveStyle(style))}
+			style={resolveInlineStyle(style)}
+		>
 			{children.map((child) => (
 				<Fragment key={child.key}>
 					{renderChild(child.id, child.scope)}

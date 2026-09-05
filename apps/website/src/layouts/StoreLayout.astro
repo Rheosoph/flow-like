@@ -3,7 +3,6 @@ import "@flow-like/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { Header } from "../components/header";
 import { BlogFooter } from "../components/blog-footer";
-import PostHog from "../components/posthog.astro";
 
 interface Props {
 	title: string;
@@ -68,8 +67,6 @@ const fullImage = image.startsWith("http") ? image : new URL(image, site).toStri
 		<meta name="twitter:title" content={title} />
 		<meta name="twitter:description" content={description} />
 		<meta name="twitter:image" content={fullImage} />
-
-		<PostHog />
 
 		{jsonLd && (
 			<script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />

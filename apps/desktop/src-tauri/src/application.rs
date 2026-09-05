@@ -348,7 +348,7 @@ pub fn run() {
         // during initialization/event dispatch, re-entering `tracing` from the panic hook can
         // trigger a second panic and abort the process before the original report is preserved.
         // Debug builds already wrote the panic/backtrace directly to stderr above; retain tracing
-        // and Sentry integration for release builds where the subscriber is stable.
+        // for release builds where the subscriber is stable.
         #[cfg(not(debug_assertions))]
         if let Some(location) = info.location() {
             tracing::error!(
@@ -360,10 +360,6 @@ pub fn run() {
             );
         } else {
             tracing::error!(target: "panic", message = %info, "Application panic (no location)");
-        }
-
-        {
-            let _ = sentry::capture_message(&format!("panic: {info}"), sentry::Level::Fatal);
         }
 
         // Anonymous crash capture into the local buffer. No-ops until startup
@@ -553,86 +549,12 @@ pub fn run() {
         println!("Catalog Initialized");
     });
 
-    let sentry_endpoint = std::option_env!("PUBLIC_SENTRY_ENDPOINT");
-    // Defer Sentry init on mobile to improve startup; init immediately elsewhere.
-    let mut _sentry_guard: Option<sentry::ClientInitGuard> = None;
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(all(not(debug_assertions), not(target_os = "ios")))]
     {
-        _sentry_guard = sentry_endpoint.map(|endpoint| {
-            sentry::init((
-                endpoint,
-                sentry::ClientOptions {
-                    release: sentry::release_name!(),
-                    auto_session_tracking: true,
-                    traces_sample_rate: 0.1,
-                    ..Default::default()
-                },
-            ))
-        });
-    }
-    #[cfg(any(target_os = "ios", target_os = "android"))]
-    {
-        tauri::async_runtime::spawn(async move {
-            flow_like_types::tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            if let Some(endpoint) = std::option_env!("PUBLIC_SENTRY_ENDPOINT") {
-                let _ = sentry::init((
-                    endpoint,
-                    sentry::ClientOptions {
-                        release: sentry::release_name!(),
-                        auto_session_tracking: true,
-                        traces_sample_rate: 0.1,
-                        ..Default::default()
-                    },
-                ));
-                tracing::info!("Sentry Tracing Layer Initialized (deferred)");
-            }
-        });
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        #[cfg(target_os = "ios")]
-        { /* iOS Release: oslog is already set up above; Sentry init is deferred. */ }
-
-        #[cfg(target_os = "android")]
-        {
-            // Android Release: Sentry is deferred; logcat captures stdout/stderr natively.
-            match _sentry_guard {
-                Some(_) => {
-                    tracing_subscriber::registry()
-                        .with(tracing_subscriber::fmt::layer())
-                        .with(sentry_tracing::layer())
-                        .init();
-                    tracing::info!("Sentry Tracing Layer Initialized");
-                }
-                None => {
-                    tracing_subscriber::registry()
-                        .with(tracing_subscriber::fmt::layer())
-                        .init();
-                    tracing::info!("Sentry Tracing Layer Not Initialized");
-                }
-            }
-        }
-
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
-        {
-            // Non-iOS Release (macOS/Windows/Linux): stdio fmt layer is OK
-            match _sentry_guard {
-                Some(_) => {
-                    tracing_subscriber::registry()
-                        .with(tracing_subscriber::fmt::layer())
-                        .with(sentry_tracing::layer())
-                        .init();
-                    tracing::info!("Sentry Tracing Layer Initialized");
-                }
-                None => {
-                    tracing_subscriber::registry()
-                        .with(tracing_subscriber::fmt::layer())
-                        .init();
-                    tracing::info!("Sentry Tracing Layer Not Initialized");
-                }
-            }
-        }
+        // iOS release logging is initialized above. Other platforms use stderr.
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .init();
     }
 
     let settings_state_for_sink = settings_state.clone();
@@ -1091,6 +1013,7 @@ pub fn run() {
             functions::settings::profiles::get_profiles,
             functions::settings::profiles::get_profiles_raw,
             functions::settings::profiles::get_default_profiles,
+            functions::settings::profiles::profile_update_home_layout,
             functions::settings::profiles::get_current_profile,
             functions::settings::profiles::get_current_profile_id,
             functions::settings::profiles::set_current_profile,

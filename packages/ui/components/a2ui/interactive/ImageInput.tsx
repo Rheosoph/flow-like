@@ -93,6 +93,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 export function A2UIImageInput({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -566,6 +567,7 @@ export function A2UIImageInput({
 
 	return (
 		<div
+			ref={elementRef}
 			data-card-action-stop
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}

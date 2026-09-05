@@ -2,7 +2,6 @@
 
 import { captureTelemetryError } from "@flow-like/flow-like-ui/lib/telemetry/errors";
 import { useTranslation } from "@flow-like/locales";
-import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 
 export default function GlobalError({
@@ -12,7 +11,6 @@ export default function GlobalError({
 }) {
 	const { t } = useTranslation("common");
 	useEffect(() => {
-		Sentry.captureException(error);
 		captureTelemetryError(error, {
 			level: "fatal",
 			culprit: "app/global-error-boundary",

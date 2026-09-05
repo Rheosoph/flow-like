@@ -17,30 +17,11 @@ use tracing_subscriber::prelude::*;
 
 #[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();
-
     let env_filter = flow_like_api::warn_env_filter();
 
-    let _sentry_guard = if sentry_endpoint.is_empty() {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .init();
-        None
-    } else {
-        let guard = sentry::init((
-            sentry_endpoint,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                traces_sample_rate: 0.3,
-                ..Default::default()
-            },
-        ));
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .with(sentry_tracing::layer())
-            .init();
-        Some(guard)
-    };
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
+        .init();
 
     // Build secret store (AWS Parameter Store + env fallback)
     let secret_prefix = std::env::var("SECRET_PREFIX").ok();

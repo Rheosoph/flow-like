@@ -278,7 +278,6 @@ describe("HTTP screenshot fixture validation", () => {
 		expect(fixture.strict).toBe(true);
 		expect(fixture.routes).toHaveLength(10);
 		expect(fixture.blockedOrigins).toEqual([
-			"https://o4507505692901376.ingest.de.sentry.io",
 			"https://a.basemaps.cartocdn.com",
 			"https://b.basemaps.cartocdn.com",
 			"https://c.basemaps.cartocdn.com",

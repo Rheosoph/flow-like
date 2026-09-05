@@ -24,7 +24,11 @@ function toKebabCase(str: string): string {
 		.toLowerCase();
 }
 
-export function A2UIIcon({ component, style }: ComponentProps<IconComponent>) {
+export function A2UIIcon({
+	elementRef,
+	component,
+	style,
+}: ComponentProps<IconComponent>) {
 	const iconName = useResolved<string>(component.name);
 	const size = useResolved<string | number>(component.size);
 	const color = useResolved<string>(component.color);
@@ -35,6 +39,7 @@ export function A2UIIcon({ component, style }: ComponentProps<IconComponent>) {
 	if (!resolvedIconName || !lucideIconNames.has(resolvedIconName)) {
 		return (
 			<span
+				ref={elementRef}
 				className={cn(
 					"inline-flex items-center justify-center",
 					resolveStyle(style),
@@ -48,6 +53,7 @@ export function A2UIIcon({ component, style }: ComponentProps<IconComponent>) {
 
 	return (
 		<DynamicIcon
+			ref={elementRef}
 			name={resolvedIconName as IconName}
 			className={cn(resolveStyle(style))}
 			style={{

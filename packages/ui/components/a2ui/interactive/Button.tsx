@@ -63,6 +63,7 @@ function LucideIcon({ name, className }: { name: string; className?: string }) {
 }
 
 export function A2UIButton({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -134,6 +135,7 @@ export function A2UIButton({
 
 	return (
 		<Button
+			ref={elementRef}
 			variant={variant}
 			size={size}
 			disabled={disabled || loading}

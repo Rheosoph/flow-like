@@ -7,6 +7,7 @@ import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { SpacerComponent } from "../types";
 
 export function A2UISpacer({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<SpacerComponent>) {
@@ -21,6 +22,7 @@ export function A2UISpacer({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(resolveStyle(style))}
 			style={{
 				...(size ? { width: size, height: size, flexShrink: 0 } : {}),

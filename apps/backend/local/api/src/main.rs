@@ -24,7 +24,6 @@ use flow_like_secrets::{
 };
 use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
-use sentry_tracing::{EventFilter, default_event_filter};
 use socket2::{Domain, Socket, Type};
 use std::{
     io,
@@ -38,41 +37,16 @@ use tracing_subscriber::prelude::*;
 async fn main() {
     dotenv().ok();
 
-    let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();
-
     // Converts closed spans into internal telemetry rows. Stays inert until the
     // exporter is spawned below, and disarms itself when telemetry is disabled.
     let (span_layer, span_exporter) = telemetry_span_layer(SpanExportConfig::from_env());
 
     let env_filter = flow_like_api::info_env_filter();
 
-    let _sentry_guard = if sentry_endpoint.is_empty() {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .with(span_layer)
-            .init();
-        None
-    } else {
-        let sentry_layer =
-            sentry_tracing::layer().event_filter(|metadata| match *metadata.level() {
-                tracing::Level::ERROR => EventFilter::Breadcrumb,
-                _ => default_event_filter(metadata),
-            });
-        let guard = sentry::init((
-            sentry_endpoint,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                traces_sample_rate: 0.3,
-                ..Default::default()
-            },
-        ));
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-            .with(sentry_layer)
-            .with(span_layer)
-            .init();
-        Some(guard)
-    };
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
+        .with(span_layer)
+        .init();
 
     let secret_prefix = std::env::var("SECRET_PREFIX").ok();
     let secret_config =

@@ -100,10 +100,6 @@ async-stream = "0.3"
 eventsource-stream = "0.2"
 # -----
 
-# ----- Sentry (optional) ----
-sentry = { workspace = true, optional = true }
-# -----
-
 # ----- Kubernetes dependencies ----
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
@@ -160,7 +156,6 @@ dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore
 cosmos = ["dep:flow-like-azure-data", "dep:tokio"]
 firestore = ["dep:flow-like-gcp-data", "dep:tokio"]
 s3 = ["aws-config", "aws-sdk-s3"]
-sentry = ["dep:sentry"]
 # Channel transports (`CHANNEL_TRANSPORT`): credential minting + push forwarding per cloud.
 channel-aws = ["aws", "flow-like-channels/aws", "dep:aws-sdk-iotdataplane"]
 channel-azure = ["flow-like-channels/azure"]
@@ -182,7 +177,6 @@ full=[
     "storage-queue",
     "pubsub",
     "s3",
-    "sentry",
     "channel-aws",
     "channel-azure",
     "channel-gcp",

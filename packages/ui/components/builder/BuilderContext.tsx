@@ -1,5 +1,6 @@
 "use client";
 
+import { createId } from "@paralleldrive/cuid2";
 import {
 	type ReactNode,
 	createContext,
@@ -11,16 +12,23 @@ import {
 } from "react";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { A2UIComponent, SurfaceComponent } from "../a2ui/types";
+import {
+	type BuilderClipboard,
+	collectClipboard,
+	pasteClipboard,
+} from "./builderClipboard";
+import { moveComponentInTree } from "./componentTree";
+
+export type { BuilderClipboard } from "./builderClipboard";
 
 export interface BuilderSelection {
 	componentIds: string[];
 	surfaceId?: string;
 }
 
-export interface BuilderClipboard {
+export interface BuilderSnapshot {
 	components: SurfaceComponent[];
-	cut: boolean;
-	rootIds: string[];
+	widgetRefs: Record<string, IWidgetRef>;
 }
 
 export interface TransformState {
@@ -32,9 +40,9 @@ export interface TransformState {
 }
 
 export interface BuilderHistory {
-	past: SurfaceComponent[][];
-	present: SurfaceComponent[];
-	future: SurfaceComponent[][];
+	past: BuilderSnapshot[];
+	present: BuilderSnapshot;
+	future: BuilderSnapshot[];
 }
 
 export interface CanvasSettings {
@@ -82,8 +90,8 @@ export interface BuilderContextType {
 
 	// Clipboard
 	clipboard: BuilderClipboard | null;
-	copy: () => void;
-	cut: () => void;
+	copy: (ids?: string[]) => void;
+	cut: (ids?: string[]) => void;
 	paste: (parentId?: string) => void;
 	duplicate: () => void;
 
@@ -194,12 +202,30 @@ export function BuilderProvider({
 		null,
 	);
 
+	const clipboardRef = useRef(clipboard);
+	clipboardRef.current = clipboard;
+	const [clipboardSourceId] = useState(createId);
+
 	// Load clipboard from localStorage on mount
 	useEffect(() => {
 		try {
 			const stored = localStorage.getItem("a2ui-clipboard");
 			if (stored) {
-				setClipboardState(JSON.parse(stored));
+				const parsed = JSON.parse(stored);
+				if (
+					Array.isArray(parsed?.components) &&
+					parsed.components.every(
+						(component: SurfaceComponent) =>
+							typeof component?.id === "string" &&
+							typeof component.component?.type === "string",
+					) &&
+					Array.isArray(parsed.rootIds) &&
+					parsed.rootIds.every((id: unknown) => typeof id === "string")
+				) {
+					const restored = { ...parsed, cut: false, sourceId: undefined };
+					clipboardRef.current = restored;
+					setClipboardState(restored);
+				}
 			}
 		} catch (e) {
 			console.warn("Failed to load clipboard from localStorage", e);
@@ -208,6 +234,7 @@ export function BuilderProvider({
 
 	// Wrapper to save clipboard to localStorage
 	const setClipboard = useCallback((value: BuilderClipboard | null) => {
+		clipboardRef.current = value;
 		setClipboardState(value);
 		try {
 			if (value) {
@@ -229,7 +256,7 @@ export function BuilderProvider({
 	// History state
 	const [history, setHistory] = useState<BuilderHistory>({
 		past: [],
-		present: initialComponents,
+		present: { components: initialComponents, widgetRefs: initialWidgetRefs },
 		future: [],
 	});
 
@@ -241,6 +268,18 @@ export function BuilderProvider({
 	// Widget refs map - stores widget definitions by instance ID
 	const [widgetRefsMap, setWidgetRefsMap] = useState<Map<string, IWidgetRef>>(
 		() => new Map(Object.entries(initialWidgetRefs)),
+	);
+
+	const componentsRef = useRef(componentsMap);
+	componentsRef.current = componentsMap;
+	const widgetRefsRef = useRef(widgetRefsMap);
+	widgetRefsRef.current = widgetRefsMap;
+	const getSnapshot = useCallback(
+		(): BuilderSnapshot => ({
+			components: Array.from(componentsRef.current.values()),
+			widgetRefs: Object.fromEntries(widgetRefsRef.current),
+		}),
+		[],
 	);
 
 	// Track if this is the first render to avoid calling onChange on mount
@@ -325,12 +364,13 @@ export function BuilderProvider({
 
 	// History methods (defined early since other methods depend on pushHistory)
 	const pushHistory = useCallback(() => {
+		const snapshot = getSnapshot();
 		setHistory((prev) => ({
-			past: [...prev.past, prev.present],
-			present: Array.from(componentsMap.values()),
+			past: [...prev.past, snapshot],
+			present: snapshot,
 			future: [],
 		}));
-	}, [componentsMap]);
+	}, [getSnapshot]);
 
 	// Dev mode methods
 	const getRawJson = useCallback(() => {
@@ -422,303 +462,121 @@ export function BuilderProvider({
 		[selection.componentIds],
 	);
 
-	// Helper to collect a component and all its descendants
-	const collectComponentWithDescendants = useCallback(
-		(componentId: string): SurfaceComponent[] => {
-			const result: SurfaceComponent[] = [];
-			const component = componentsMap.get(componentId);
-			if (!component?.component) return result;
-
-			result.push(component);
-
-			const props = component.component as unknown as Record<string, unknown>;
-			const childIds: string[] = [];
-
-			if ("children" in props && props.children) {
-				const children = props.children as { explicitList?: string[] };
-				if (children.explicitList) {
-					childIds.push(...children.explicitList);
-				}
-			}
-			if ("child" in props && typeof props.child === "string") {
-				childIds.push(props.child);
-			}
-			if (
-				"entryPointChild" in props &&
-				typeof props.entryPointChild === "string"
-			) {
-				childIds.push(props.entryPointChild);
-			}
-			if ("contentChild" in props && typeof props.contentChild === "string") {
-				childIds.push(props.contentChild);
-			}
-
-			for (const childId of childIds) {
-				result.push(...collectComponentWithDescendants(childId));
-			}
-
-			return result;
-		},
-		[componentsMap],
+	// Clipboard snapshots include named content slots and widget definitions.
+	const captureClipboard = useCallback(
+		(cut: boolean, ids?: string[]) =>
+			collectClipboard(
+				componentsRef.current,
+				widgetRefsRef.current,
+				Array.isArray(ids) ? ids : selection.componentIds,
+				cut,
+				clipboardSourceId,
+			),
+		[selection.componentIds, clipboardSourceId],
 	);
 
-	// Helper to find parent of a component
-	const findParentId = useCallback(
-		(childId: string): string | null => {
-			for (const [id, comp] of componentsMap) {
-				if (!comp.component) continue;
-				const props = comp.component as unknown as Record<string, unknown>;
-				if ("children" in props && props.children) {
-					const children = props.children as { explicitList?: string[] };
-					if (children.explicitList?.includes(childId)) {
-						return id;
-					}
-				}
-			}
-			return null;
+	const copy = useCallback(
+		(ids?: string[]) => {
+			const value = captureClipboard(false, ids);
+			if (value) setClipboard(value);
 		},
-		[componentsMap],
+		[captureClipboard, setClipboard],
 	);
 
-	// Clipboard methods
-	const copy = useCallback(() => {
-		// Collect all selected components and their descendants
-		const allComponents: SurfaceComponent[] = [];
-		const rootIds = new Set(selection.componentIds);
+	const cut = useCallback(
+		(ids?: string[]) => {
+			const value = captureClipboard(true, ids);
+			if (value) setClipboard(value);
+		},
+		[captureClipboard, setClipboard],
+	);
 
-		for (const id of selection.componentIds) {
-			const components = collectComponentWithDescendants(id);
-			for (const comp of components) {
-				if (!allComponents.some((c) => c.id === comp.id)) {
-					allComponents.push(comp);
-				}
-			}
-		}
-
-		if (allComponents.length > 0) {
-			setClipboard({
-				components: allComponents,
-				cut: false,
-				rootIds: Array.from(rootIds),
+	const applyClipboard = useCallback(
+		(value: BuilderClipboard, parentId?: string, duplicate = false) => {
+			const previous = getSnapshot();
+			const result = pasteClipboard({
+				components: componentsRef.current,
+				widgetRefs: widgetRefsRef.current,
+				clipboard: value,
+				selectionIds: selection.componentIds,
+				sourceId: clipboardSourceId,
+				parentId,
+				duplicate,
 			});
-		}
-	}, [selection.componentIds, collectComponentWithDescendants]);
-
-	const cut = useCallback(() => {
-		// Collect all selected components and their descendants
-		const allComponents: SurfaceComponent[] = [];
-		const rootIds = new Set(selection.componentIds);
-
-		for (const id of selection.componentIds) {
-			const components = collectComponentWithDescendants(id);
-			for (const comp of components) {
-				if (!allComponents.some((c) => c.id === comp.id)) {
-					allComponents.push(comp);
-				}
+			if (!result) return;
+			if (result.components !== componentsRef.current) {
+				componentsRef.current = result.components;
+				widgetRefsRef.current = result.widgetRefs;
+				setComponentsMap(result.components);
+				setWidgetRefsMap(result.widgetRefs);
+				const present = getSnapshot();
+				setHistory((history) => ({
+					past: [...history.past, previous],
+					present,
+					future: [],
+				}));
 			}
-		}
-
-		if (allComponents.length > 0) {
-			setClipboard({
-				components: allComponents,
-				cut: true,
-				rootIds: Array.from(rootIds),
-			});
-		}
-	}, [selection.componentIds, collectComponentWithDescendants]);
+			if (result.consumedCut) setClipboard(null);
+			setSelection({ componentIds: result.rootIds });
+		},
+		[getSnapshot, selection.componentIds, setClipboard, clipboardSourceId],
+	);
 
 	const paste = useCallback(
 		(parentId?: string) => {
-			if (!clipboard || !parentId) return;
-
-			// Check if parent is a container
-			const parent = componentsMap.get(parentId);
-			if (!parent?.component) return;
-
-			const parentProps = parent.component as unknown as Record<
-				string,
-				unknown
-			>;
-			if (!("children" in parentProps)) return;
-
-			const timestamp = Date.now();
-			const idMapping = new Map<string, string>();
-
-			// Create ID mapping for all components
-			for (const comp of clipboard.components) {
-				idMapping.set(comp.id, `${comp.id}-copy-${timestamp}`);
-			}
-
-			// Deep clone components with new IDs and updated references
-			const newComponents: SurfaceComponent[] = clipboard.components.map(
-				(comp) => {
-					const newId = idMapping.get(comp.id) ?? comp.id;
-					const clonedComponent = JSON.parse(JSON.stringify(comp.component));
-
-					// Update child references in the cloned component
-					const updateRefs = (obj: Record<string, unknown>) => {
-						for (const key in obj) {
-							const value = obj[key];
-							if (typeof value === "string" && idMapping.has(value)) {
-								obj[key] = idMapping.get(value);
-							} else if (Array.isArray(value)) {
-								obj[key] = value.map((v) =>
-									typeof v === "string" && idMapping.has(v)
-										? idMapping.get(v)
-										: v,
-								);
-							} else if (value && typeof value === "object") {
-								updateRefs(value as Record<string, unknown>);
-							}
-						}
-					};
-					updateRefs(clonedComponent as Record<string, unknown>);
-
-					return {
-						...comp,
-						id: newId,
-						component: clonedComponent,
-						style: comp.style
-							? JSON.parse(JSON.stringify(comp.style))
-							: undefined,
-					};
-				},
-			);
-
-			// Get the new IDs for root components
-			const newRootIds = (clipboard.rootIds ?? []).map(
-				(id) => idMapping.get(id) ?? id,
-			);
-
-			setComponentsMap((prev) => {
-				const next = new Map(prev);
-
-				// Add all new components
-				for (const comp of newComponents) {
-					next.set(comp.id, comp);
-				}
-
-				// Add root components to parent's children
-				const parentComp = next.get(parentId);
-				if (parentComp?.component) {
-					const parentCompProps = parentComp.component as unknown as Record<
-						string,
-						unknown
-					>;
-					if ("children" in parentCompProps && parentCompProps.children) {
-						const children = parentCompProps.children as {
-							explicitList?: string[];
-						};
-						if (children.explicitList) {
-							next.set(parentId, {
-								...parentComp,
-								component: {
-									...parentComp.component,
-									children: {
-										explicitList: [...children.explicitList, ...newRootIds],
-									},
-								} as A2UIComponent,
-							});
-						}
-					}
-				}
-
-				// If cut, remove originals from their parents and delete them
-				if (clipboard.cut) {
-					for (const originalId of clipboard.rootIds ?? []) {
-						// Find and update the original parent
-						for (const [id, comp] of next) {
-							if (!comp.component) continue;
-							const props = comp.component as unknown as Record<
-								string,
-								unknown
-							>;
-							if ("children" in props && props.children) {
-								const children = props.children as { explicitList?: string[] };
-								if (children.explicitList?.includes(originalId)) {
-									next.set(id, {
-										...comp,
-										component: {
-											...comp.component,
-											children: {
-												explicitList: children.explicitList.filter(
-													(cid) => cid !== originalId,
-												),
-											},
-										} as A2UIComponent,
-									});
-									break;
-								}
-							}
-						}
-					}
-
-					// Delete all original components
-					for (const comp of clipboard.components) {
-						next.delete(comp.id);
-					}
-				}
-
-				return next;
-			});
-
-			if (clipboard.cut) {
-				setClipboard(null);
-			}
-
-			setSelection({
-				componentIds: newRootIds,
-			});
-
-			pushHistory();
+			if (clipboardRef.current) applyClipboard(clipboardRef.current, parentId);
 		},
-		[clipboard, componentsMap, pushHistory],
+		[applyClipboard],
 	);
 
 	const duplicate = useCallback(() => {
-		if (selection.componentIds.length === 0) return;
-
-		// Find parent of first selected component
-		const parentId = findParentId(selection.componentIds[0]);
-		if (!parentId) return;
-
-		copy();
-		// Need to use setTimeout to ensure clipboard is set before paste
-		setTimeout(() => paste(parentId), 0);
-	}, [copy, paste, selection.componentIds, findParentId]);
+		const value = captureClipboard(false);
+		if (value) applyClipboard(value, undefined, true);
+	}, [captureClipboard, applyClipboard]);
 
 	// Transform methods
 	const setTransform = useCallback((state: Partial<TransformState>) => {
 		setTransformState((prev) => ({ ...prev, ...state }));
 	}, []);
 
+	const restoreSnapshot = useCallback((snapshot: BuilderSnapshot) => {
+		const components = new Map(
+			snapshot.components.map((component) => [component.id, component]),
+		);
+		const refs = new Map(Object.entries(snapshot.widgetRefs));
+		componentsRef.current = components;
+		widgetRefsRef.current = refs;
+		setComponentsMap(components);
+		setWidgetRefsMap(refs);
+		setSelection((selection) => ({
+			...selection,
+			componentIds: selection.componentIds.filter((id) => components.has(id)),
+		}));
+	}, []);
+
 	const undo = useCallback(() => {
 		const newPresent = history.past[history.past.length - 1];
 		if (!newPresent) return;
-
-		setComponentsMap(
-			new Map(newPresent.map((component) => [component.id, component])),
-		);
+		const current = getSnapshot();
+		restoreSnapshot(newPresent);
 		setHistory((prev) => ({
 			past: prev.past.slice(0, -1),
 			present: newPresent,
-			future: [prev.present, ...prev.future],
+			future: [current, ...prev.future],
 		}));
-	}, [history]);
+	}, [history, getSnapshot, restoreSnapshot]);
 
 	const redo = useCallback(() => {
 		const newPresent = history.future[0];
 		if (!newPresent) return;
-
-		setComponentsMap(
-			new Map(newPresent.map((component) => [component.id, component])),
-		);
+		const current = getSnapshot();
+		restoreSnapshot(newPresent);
 		setHistory((prev) => ({
-			past: [...prev.past, prev.present],
+			past: [...prev.past, current],
 			present: newPresent,
 			future: prev.future.slice(1),
 		}));
-	}, [history]);
+	}, [history, getSnapshot, restoreSnapshot]);
 
 	// Component methods
 	const addComponent = useCallback(
@@ -938,10 +796,20 @@ export function BuilderProvider({
 
 	const moveComponent = useCallback(
 		(id: string, newParentId: string, index?: number) => {
-			pushHistory();
-			// Implementation depends on how children are stored
+			const next = moveComponentInTree(componentsMap, id, newParentId, index);
+			if (next === componentsMap) return;
+			const snapshot = getSnapshot();
+			setHistory((previous) => ({
+				past: [...previous.past, snapshot],
+				present: {
+					components: Array.from(next.values()),
+					widgetRefs: Object.fromEntries(widgetRefsRef.current),
+				},
+				future: [],
+			}));
+			setComponentsMap(next);
 		},
-		[pushHistory],
+		[componentsMap, getSnapshot],
 	);
 
 	const getComponent = useCallback(

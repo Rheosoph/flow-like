@@ -325,6 +325,8 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
         theme: model.theme,
+        home_layout: model.home_layout,
+        home_default_id: model.home_default_id,
         bits: model.bit_ids.unwrap_or_default().into(),
         custom_bits: vec![],
         settings: model

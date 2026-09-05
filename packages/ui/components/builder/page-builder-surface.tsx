@@ -461,10 +461,10 @@ export function PageBuilderSurface({
 	}
 
 	return (
-		<div className={cn("flex flex-col h-full min-h-0", className)}>
+		<div className={cn("flex flex-col h-full min-h-0 min-w-0", className)}>
 			{/* Header */}
-			<div className="flex items-center justify-between px-4 py-3 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-				<div className="flex items-center gap-4">
+			<div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 shrink-0">
+				<div className="flex min-w-0 flex-1 basis-64 items-center gap-4">
 					{onClose && (
 						<Button
 							variant="ghost"
@@ -475,20 +475,24 @@ export function PageBuilderSurface({
 							<ArrowLeft className="h-4 w-4" />
 						</Button>
 					)}
-					<div>
-						<h1 className="text-lg font-semibold">{page.name}</h1>
-						<p className="text-sm text-muted-foreground">
+					<div className="min-w-0 flex-1">
+						<h1 className="truncate text-lg font-semibold" title={page.name}>
+							{page.name}
+						</h1>
+						<p className="truncate text-sm text-muted-foreground">
 							{t("visualPageBuilder", "Visual Page Builder")}
 						</p>
 					</div>
 					{page.version && (
-						<Badge variant="secondary">
+						<Badge variant="secondary" className="shrink-0">
 							v{page.version[0]}.{page.version[1]}.{page.version[2]}
 						</Badge>
 					)}
-					<Badge variant="outline">{page.layoutType}</Badge>
+					<Badge variant="outline" className="shrink-0">
+						{page.layoutType}
+					</Badge>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2">
 					{/* Open Flow button */}
 					{boardId && onOpenFlow && (
 						<Button variant="outline" size="sm" onClick={onOpenFlow}>
@@ -525,9 +529,9 @@ export function PageBuilderSurface({
 			</div>
 
 			{/* Main Content */}
-			<div className="flex-1 min-h-0 flex">
+			<div className="flex-1 min-h-0 min-w-0 flex">
 				{/* Page Builder using WidgetBuilder */}
-				<div className="flex-1 min-h-0">
+				<div className="flex-1 min-h-0 min-w-0">
 					<WidgetBuilder
 						initialComponents={page.components}
 						initialWidgetRefs={page.widgetRefs}
@@ -562,7 +566,7 @@ export function PageBuilderSurface({
 
 				{/* Settings Sheet */}
 				<Sheet open={showSettings} onOpenChange={setShowSettings}>
-					<SheetContent className="w-96 sm:max-w-md overflow-hidden flex flex-col">
+					<SheetContent className="w-96 max-w-full sm:max-w-md overflow-hidden flex flex-col">
 						<SheetHeader>
 							<SheetTitle>{t("pageSettings", "Page Settings")}</SheetTitle>
 						</SheetHeader>
@@ -607,8 +611,8 @@ function PageSettingsPanel({
 	};
 
 	return (
-		<Tabs defaultValue="general" className="w-full">
-			<TabsList className="w-full justify-start px-4 pt-2">
+		<Tabs defaultValue="general" className="w-full min-w-0">
+			<TabsList className="w-full h-auto flex-wrap justify-start px-4 pt-2">
 				<TabsTrigger value="general">{t("general", "General")}</TabsTrigger>
 				<TabsTrigger value="behavior">{t("behavior", "Behavior")}</TabsTrigger>
 				<TabsTrigger value="layout">{t("layout", "Layout")}</TabsTrigger>

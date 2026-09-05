@@ -241,14 +241,14 @@ export function WidgetSelector({
 	return (
 		<div
 			className={cn(
-				"flex flex-col h-full bg-background border-r overflow-hidden",
+				"flex flex-col h-full min-w-0 bg-background border-r overflow-hidden",
 				className,
 			)}
 		>
 			{/* Header */}
 			<div className="p-3 border-b shrink-0 space-y-2">
 				<div className="flex items-center justify-between">
-					<div className="flex items-center gap-2">
+					<div className="flex shrink-0 items-center gap-2">
 						<Layers className="h-4 w-4 text-muted-foreground" />
 						<span className="text-sm font-medium">
 							{t("widgets", "Widgets")}
@@ -301,7 +301,10 @@ export function WidgetSelector({
 					</TabsList>
 
 					<TabsContent value="current" className="flex-1 min-h-0 mt-0">
-						<ScrollArea className="h-full">
+						<ScrollArea
+							className="h-full min-w-0"
+							viewportClassName="[&>div]:block!"
+						>
 							<div className="p-2 space-y-1">
 								{filteredCurrentWidgets.length === 0 ? (
 									<div className="p-4 text-center text-sm text-muted-foreground">
@@ -343,7 +346,10 @@ export function WidgetSelector({
 					</TabsContent>
 
 					<TabsContent value="all" className="flex-1 min-h-0 mt-0">
-						<ScrollArea className="h-full">
+						<ScrollArea
+							className="h-full min-w-0"
+							viewportClassName="[&>div]:block!"
+						>
 							<div className="p-2 space-y-1">
 								{filteredOtherWidgets.length === 0 ? (
 									<div className="p-4 text-center text-sm text-muted-foreground">
@@ -361,9 +367,11 @@ export function WidgetSelector({
 											open={!!searchQuery.trim() || openApps.has(group.appId)}
 											onOpenChange={(open) => setAppOpen(group.appId, open)}
 										>
-											<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
-												<span className="truncate">{group.appName}</span>
-												<div className="flex items-center gap-2">
+											<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+												<span className="truncate" title={group.appName}>
+													{group.appName}
+												</span>
+												<div className="flex shrink-0 items-center gap-2">
 													<Badge variant="secondary" className="text-xs">
 														{group.widgets.length}
 													</Badge>
@@ -410,7 +418,10 @@ export function WidgetSelector({
 					</TabsContent>
 				</Tabs>
 			) : (
-				<ScrollArea className="flex-1 min-h-0">
+				<ScrollArea
+					className="flex-1 min-h-0 min-w-0"
+					viewportClassName="[&>div]:block!"
+				>
 					<div className="p-2 space-y-1">
 						{filteredGroupedWidgets.length === 0 ? (
 							<div className="p-4 text-center text-sm text-muted-foreground">
@@ -432,9 +443,11 @@ export function WidgetSelector({
 										open={isOpen}
 										onOpenChange={(open) => setAppOpen(group.appId, open)}
 									>
-										<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
-											<span className="truncate">{group.appName}</span>
-											<div className="flex items-center gap-2">
+										<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+											<span className="truncate" title={group.appName}>
+												{group.appName}
+											</span>
+											<div className="flex shrink-0 items-center gap-2">
 												<Badge variant="secondary" className="text-xs">
 													{group.widgets.length}
 												</Badge>
@@ -486,7 +499,9 @@ export function WidgetSelector({
 			>
 				<DialogContent className="max-w-lg">
 					<DialogHeader>
-						<DialogTitle>{previewWidget?.metadata.name}</DialogTitle>
+						<DialogTitle className="pr-6 [overflow-wrap:anywhere]">
+							{previewWidget?.metadata.name}
+						</DialogTitle>
 					</DialogHeader>
 					{previewWidget && (
 						<div className="space-y-4">
@@ -499,14 +514,18 @@ export function WidgetSelector({
 									/>
 								</div>
 							)}
-							<p className="text-sm text-muted-foreground">
+							<p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
 								{previewWidget.metadata.description ||
 									t("noDescriptionAvailable", "No description available")}
 							</p>
 							{previewWidget.metadata.tags.length > 0 && (
 								<div className="flex flex-wrap gap-1">
 									{previewWidget.metadata.tags.map((tag) => (
-										<Badge key={tag} variant="secondary">
+										<Badge
+											key={tag}
+											variant="secondary"
+											className="max-w-full whitespace-normal [overflow-wrap:anywhere]"
+										>
 											{tag}
 										</Badge>
 									))}
@@ -578,7 +597,7 @@ function WidgetListItem({
 			{...listeners}
 			{...attributes}
 			className={cn(
-				"flex items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none group touch-none",
+				"flex min-w-0 items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none group touch-none",
 				isDragging && "opacity-50",
 			)}
 			onDoubleClick={() => onSelect(widget)}
@@ -596,7 +615,9 @@ function WidgetListItem({
 				</div>
 			)}
 			<div className="flex-1 min-w-0">
-				<p className="truncate font-medium">{widget.metadata.name}</p>
+				<p className="truncate font-medium" title={widget.metadata.name}>
+					{widget.metadata.name}
+				</p>
 				{widget.metadata.description && (
 					<p className="truncate text-xs text-muted-foreground">
 						{widget.metadata.description}
@@ -640,7 +661,7 @@ function WidgetGridItem({
 			{...listeners}
 			{...attributes}
 			className={cn(
-				"flex flex-col rounded border cursor-grab hover:bg-muted active:cursor-grabbing select-none group overflow-hidden touch-none",
+				"flex min-w-0 flex-col rounded border cursor-grab hover:bg-muted active:cursor-grabbing select-none group overflow-hidden touch-none",
 				isDragging && "opacity-50",
 			)}
 			onDoubleClick={() => onSelect(widget)}
@@ -660,7 +681,12 @@ function WidgetGridItem({
 				</div>
 			)}
 			<div className="p-2">
-				<p className="truncate text-sm font-medium">{widget.metadata.name}</p>
+				<p
+					className="truncate text-sm font-medium"
+					title={widget.metadata.name}
+				>
+					{widget.metadata.name}
+				</p>
 			</div>
 		</div>
 	);

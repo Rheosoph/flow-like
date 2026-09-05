@@ -1,3 +1,8 @@
+import type {
+	IHomeLayout,
+	IHomeDefault,
+	IHomeDefaults,
+} from "../../components/home/types";
 import type { IProfile, IProfileApp, IProfileShortcut } from "../../lib";
 import { looksLikeAccountId } from "../../lib/user-display";
 import type { ISettingsProfile } from "../../types";
@@ -276,6 +281,13 @@ export interface IUserTemplateInfo {
 }
 
 export interface IUserState {
+	getHomeDefaults(defaultId?: string): Promise<IHomeDefaults>;
+	saveHomeLayout(layout: IHomeLayout | null, profileId?: string): Promise<void>;
+	saveHomeDefault(
+		id: string,
+		layout: IHomeLayout | null,
+		expectedRevision?: string | null,
+	): Promise<IHomeDefault | null>;
 	lookupUser(userId: string): Promise<IUserLookup>;
 	/**
 	 * Resolves many accounts in one call. Ids that match nothing are absent from

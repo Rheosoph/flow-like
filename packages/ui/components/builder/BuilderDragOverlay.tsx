@@ -73,14 +73,16 @@ function DragPreview({ data }: { data: DragData }) {
 			initial={{ scale: 0.9, opacity: 0, y: 4 }}
 			animate={{ scale: 1, opacity: 1, y: 0 }}
 			className={cn(
-				"inline-flex items-center gap-2 px-3 py-2 rounded-lg shadow-xl text-sm font-medium backdrop-blur-sm",
+				"inline-flex max-w-64 items-center gap-2 px-3 py-2 rounded-lg shadow-xl text-sm font-medium backdrop-blur-sm",
 				isMove
 					? "bg-blue-500/95 text-white shadow-blue-500/30"
 					: "bg-primary/95 text-primary-foreground shadow-primary/30",
 			)}
 		>
-			<span className="text-base">{icon}</span>
-			<span className="capitalize">{label}</span>
+			<span className="shrink-0 text-base">{icon}</span>
+			<span className="min-w-0 truncate capitalize" title={label}>
+				{label}
+			</span>
 		</motion.div>
 	);
 }

@@ -77,6 +77,8 @@ model Profile {
   // JSON with the apps that are part of the profile. Contains the app ID, if it is favorite, pinned and position of the two
   apps      Json?
   shortcuts Json?
+  homeLayout Json?
+  homeDefaultId String?
   bitIds    Json?
   hub       String
   hubs      Json?

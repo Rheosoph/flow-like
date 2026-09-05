@@ -103,3 +103,4 @@ reports
 
 # Prepared native diffusion runtimes and pinned source builds
 apps/desktop/src-tauri/runtimes/stablediffusion/
+design-qa.md

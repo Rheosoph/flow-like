@@ -193,9 +193,15 @@ export function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 export function createShortcutManager(
 	handler: ShortcutHandler,
 	shortcuts = DEFAULT_SHORTCUTS,
+	shouldHandle?: (event: KeyboardEvent) => boolean,
 ) {
 	const handleKeyDown = (event: KeyboardEvent) => {
-		if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) {
+		if (
+			event.defaultPrevented ||
+			event.isComposing ||
+			isEditableKeyboardTarget(event.target) ||
+			(shouldHandle && !shouldHandle(event))
+		) {
 			return;
 		}
 

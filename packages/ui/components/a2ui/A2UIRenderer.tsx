@@ -1,8 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useId, useMemo } from "react";
+import { useCallback, useId, useMemo, useRef } from "react";
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
+import { useRuntimeTailwindStyles } from "../../lib/use-runtime-tailwind";
 import { cn } from "../../lib/utils";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import { ActionProvider } from "./ActionHandler";
@@ -144,6 +145,8 @@ export function A2UIRenderer({
 }: A2UIRendererProps) {
 	const { t } = useTranslation("common");
 	const canvasId = useId();
+	const canvasRef = useRef<HTMLDivElement>(null);
+	useRuntimeTailwindStyles(canvasRef);
 	const components = useMemo(
 		() => surface.components ?? {},
 		[surface.components],
@@ -212,7 +215,7 @@ export function A2UIRenderer({
 
 	if (!rootComponent) {
 		return (
-			<div className={className}>
+			<div ref={canvasRef} className={className}>
 				<div className="text-muted-foreground text-sm">
 					{t("noContentToDisplay", "No content to display")}
 				</div>
@@ -244,6 +247,7 @@ export function A2UIRenderer({
 						scopeSelector={`[data-surface-canvas-id="${canvasId}"]`}
 					/>
 					<div
+						ref={canvasRef}
 						className={cn(backgroundClass, className)}
 						data-surface-canvas-id={canvasId}
 						style={canvasStyle}

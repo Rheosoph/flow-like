@@ -16,6 +16,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIVideo({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<VideoComponent>) {
@@ -42,6 +43,7 @@ export function A2UIVideo({
 	if (error || (!src && !isLoading)) {
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"flex items-center justify-center bg-muted text-muted-foreground",
 					resolveStyle(style),
@@ -55,6 +57,7 @@ export function A2UIVideo({
 
 	return (
 		<video
+			ref={elementRef}
 			src={src}
 			poster={poster}
 			controls={controls ?? true}

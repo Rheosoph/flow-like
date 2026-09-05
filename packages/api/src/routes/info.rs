@@ -6,6 +6,7 @@ pub mod get_profile_templates;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/home-defaults", get(super::admin::home_defaults::get_home_defaults))
         .route("/legal", get(legal_notice))
         .route("/privacy", get(privacy_policy))
         .route("/terms", get(terms_of_service))

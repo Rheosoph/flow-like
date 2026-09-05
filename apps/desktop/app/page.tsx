@@ -1,11 +1,6 @@
 "use client";
-import {
-	HomeSwimlanes,
-	Skeleton,
-	TutorialDialog,
-	useBackend,
-} from "@flow-like/flow-like-ui";
-import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
+import { Skeleton, TutorialDialog, useBackend } from "@flow-like/flow-like-ui";
+import { HomePage } from "@flow-like/flow-like-ui/components/home/home-page";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -63,6 +58,7 @@ export default function Home() {
 		profiles.data,
 		profiles.isLoading,
 		profiles.isError,
+		profiles.refetch,
 		profiles.error,
 		goToOnboarding,
 	]);
@@ -88,11 +84,9 @@ export default function Home() {
 	}
 
 	return (
-		// One page-level scroll: hero + swimlanes move together (the swimlanes are flow content).
-		<main className="flex flex-col flex-1 w-full min-h-0 overflow-y-auto">
+		<div className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
 			<TutorialDialog />
-			<HeroSearchBarBubble />
-			<HomeSwimlanes />
-		</main>
+			<HomePage />
+		</div>
 	);
 }

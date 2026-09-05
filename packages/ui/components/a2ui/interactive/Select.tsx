@@ -44,6 +44,7 @@ function resolveStringOrBound(
 }
 
 export function A2UISelect({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -89,6 +90,7 @@ export function A2UISelect({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

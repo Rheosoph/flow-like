@@ -16,6 +16,36 @@ pub mod get_profiles;
 pub mod sync_profiles;
 pub mod upsert_profile;
 
+/// Keep an omitted patch field distinct from an explicit reset to null.
+pub(crate) fn deserialize_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+pub(crate) fn validate_home_patch(
+    layout: &Option<Option<flow_like_types::Value>>,
+    default_id: &Option<Option<String>>,
+) -> Result<(), ApiError> {
+    if let Some(Some(layout)) = layout {
+        flow_like::profile::validate_home_layout(layout).map_err(ApiError::bad_request)?;
+    }
+    if let Some(Some(id)) = default_id
+        && (id.is_empty()
+            || id.len() > 200
+            || !id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c)))
+    {
+        return Err(ApiError::bad_request("Invalid home default ID"));
+    }
+    Ok(())
+}
+
 /// Profile IDs are user-local keys. Historically the database used a global
 /// primary key, so insert paths still detect unique violations for rolling
 /// deploys and legacy schemas.
@@ -138,4 +168,39 @@ pub fn routes() -> Router<AppState> {
             "/{profile_id}/bits",
             get(get_profile_bits::get_profile_bits),
         )
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::{sync_profiles::SyncProfileRequest, upsert_profile::ProfileBody};
+    use serde_json::json;
+
+    #[test]
+    fn profile_partial_update_preserves_omitted_layout_and_recognizes_reset() {
+        let omitted: ProfileBody = serde_json::from_value(json!({"name":"Renamed"})).unwrap();
+        assert_eq!(omitted.home_layout, None);
+        assert_eq!(omitted.home_default_id, None);
+        let reset: ProfileBody = serde_json::from_value(json!({"home_layout":null})).unwrap();
+        assert_eq!(reset.home_layout, Some(None));
+        assert_eq!(reset.home_default_id, None);
+        let layout = json!({"version":1,"widgets":[]});
+        let custom: ProfileBody =
+            serde_json::from_value(json!({"home_layout":layout,"home_default_id":"template"}))
+                .unwrap();
+        assert_eq!(custom.home_layout, Some(Some(layout)));
+        assert_eq!(custom.home_default_id, Some(Some("template".into())));
+    }
+
+    #[test]
+    fn profile_sync_distinguishes_old_clients_from_reset_and_keeps_lineage() {
+        let omitted: SyncProfileRequest =
+            serde_json::from_value(json!({"id":"id","name":"Name"})).unwrap();
+        assert_eq!(omitted.home_layout, None);
+        let reset: SyncProfileRequest = serde_json::from_value(
+            json!({"id":"id","name":"Name","home_layout":null,"home_default_id":"template"}),
+        )
+        .unwrap();
+        assert_eq!(reset.home_layout, Some(None));
+        assert_eq!(reset.home_default_id, Some(Some("template".into())));
+    }
 }

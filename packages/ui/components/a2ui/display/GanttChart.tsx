@@ -45,6 +45,7 @@ import {
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useElementRef } from "../hooks/use-element-ref";
 import {
 	AssigneeDisplay,
 	PlanningContextMenu,
@@ -140,12 +141,14 @@ type DragState =
 	  };
 
 export function A2UIGantt({
+	elementRef,
 	component,
 	componentId,
 	style,
 }: ComponentProps<GanttComponent>) {
 	const { t } = useTranslation("common");
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const timelineRef = useRef<HTMLDivElement>(null);
 	const listBodyRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLDivElement>(null);
@@ -834,7 +837,7 @@ export function A2UIGantt({
 
 	return (
 		<div
-			ref={containerRef}
+			ref={rootRef}
 			className={cn(
 				"flex flex-col rounded-xl border border-border bg-card text-card-foreground shadow-sm overflow-hidden",
 				resolveStyle(style),

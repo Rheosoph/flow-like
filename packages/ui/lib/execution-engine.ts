@@ -1,8 +1,8 @@
-import * as Sentry from "@sentry/nextjs";
 import type { IBackendState } from "../state/backend-state";
 import type { ILogMetadata, PageTrigger } from "./schema";
 import type { IRunPayload } from "./schema";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
+import { captureTelemetryError } from "./telemetry/errors";
 
 interface ISubscriber {
 	onEvents: (events: IIntercomEvent[]) => void;
@@ -301,12 +301,9 @@ export class ExecutionEngineProvider {
 			})
 			.catch(async (error) => {
 				console.error("Execution error:", error);
-				Sentry.captureException(error, {
-					tags: { component: "execution-engine", action: "execute_event" },
-					extra: {
-						streamId,
-						appId: options.appId,
-						eventId: options.eventId,
+				captureTelemetryError(error, {
+					culprit: "execution-engine.execute_event",
+					context: {
 						accumulatedEvents: stream!.accumulatedEvents.length,
 					},
 				});

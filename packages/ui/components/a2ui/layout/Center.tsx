@@ -9,6 +9,7 @@ import { resolveChildSpecs } from "../children";
 import type { CenterComponent } from "../types";
 
 export function A2UICenter({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -22,6 +23,7 @@ export function A2UICenter({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				inline ? "inline-flex" : "flex",
 				"items-center justify-center",

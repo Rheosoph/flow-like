@@ -7,6 +7,7 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { useAssetUrl } from "../hooks/use-asset-url";
+import { useElementRef } from "../hooks/use-element-ref";
 import type { BoundValue, Hotspot, ImageHotspotComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -16,6 +17,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIImageHotspot({
+	elementRef,
 	component,
 	style,
 	onAction,
@@ -24,6 +26,7 @@ export function A2UIImageHotspot({
 }: ComponentProps<ImageHotspotComponent>) {
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const imageRef = useRef<HTMLImageElement>(null);
 
 	const { url: src } = useAssetUrl(useResolved<string>(component.src));
@@ -188,7 +191,7 @@ export function A2UIImageHotspot({
 	return (
 		<div
 			data-card-action-stop
-			ref={containerRef}
+			ref={rootRef}
 			className={cn("relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

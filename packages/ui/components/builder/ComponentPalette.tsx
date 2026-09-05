@@ -850,7 +850,7 @@ export function ComponentPalette({
 	return (
 		<div
 			className={cn(
-				"flex flex-col h-full bg-background border-r overflow-hidden",
+				"flex flex-col h-full min-w-0 bg-background border-r overflow-hidden",
 				className,
 			)}
 		>
@@ -866,12 +866,15 @@ export function ComponentPalette({
 				</div>
 			</div>
 
-			<ScrollArea className="flex-1 min-h-0">
+			<ScrollArea
+				className="flex-1 min-h-0 min-w-0"
+				viewportClassName="[&>div]:block!"
+			>
 				<div className="p-2 space-y-1">
 					{/* Recently used */}
 					{recentlyUsed.length > 0 && !searchQuery && (
 						<Collapsible defaultOpen>
-							<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+							<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
 								<span>{t("recent", "Recent")}</span>
 								<ChevronRight className="h-4 w-4 transition-transform duration-200 data-[state=open]:rotate-90" />
 							</CollapsibleTrigger>
@@ -905,7 +908,7 @@ export function ComponentPalette({
 								open={openCategories.has(category)}
 								onOpenChange={() => toggleCategory(category)}
 							>
-								<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+								<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
 									<span>{category}</span>
 									<ChevronRight
 										className={cn(
@@ -934,8 +937,8 @@ export function ComponentPalette({
 							open={widgetsSectionOpen}
 							onOpenChange={setWidgetsSectionOpen}
 						>
-							<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
-								<div className="flex items-center gap-2">
+							<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+								<div className="flex shrink-0 items-center gap-2">
 									<Layers className="h-4 w-4" />
 									<span>{t("widgets", "Widgets")}</span>
 								</div>
@@ -973,9 +976,11 @@ export function ComponentPalette({
 													setWidgetProjectOpen(group.appId, open)
 												}
 											>
-												<CollapsibleTrigger className="flex w-full items-center justify-between rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted">
-													<span className="truncate">{group.appName}</span>
-													<div className="flex items-center gap-2">
+												<CollapsibleTrigger className="flex w-full min-w-0 items-center justify-between gap-2 rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted">
+													<span className="truncate" title={group.appName}>
+														{group.appName}
+													</span>
+													<div className="flex shrink-0 items-center gap-2">
 														<Badge
 															variant="secondary"
 															className="h-5 text-[10px]"
@@ -1018,7 +1023,7 @@ export function ComponentPalette({
 												}
 											>
 												<CollapsibleTrigger
-													className="flex w-full items-center justify-between rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+													className="flex w-full min-w-0 items-center justify-between gap-2 rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
 													title={group.packageId}
 												>
 													<span className="flex min-w-0 items-center gap-1.5">
@@ -1027,7 +1032,7 @@ export function ComponentPalette({
 															{group.packageName}
 														</span>
 													</span>
-													<div className="flex items-center gap-2">
+													<div className="flex shrink-0 items-center gap-2">
 														<Badge
 															variant="secondary"
 															className="h-5 text-[10px]"
@@ -1110,7 +1115,7 @@ function ComponentItem({
 			{...attributes}
 			onDoubleClick={() => onDoubleClick(definition.type)}
 			className={cn(
-				"flex items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
+				"flex min-w-0 items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
 				isDragging && "opacity-50",
 			)}
 			title={definition.description}
@@ -1148,7 +1153,7 @@ function PackageWidgetItem({ packageWidget }: PackageWidgetItemProps) {
 			{...listeners}
 			{...attributes}
 			className={cn(
-				"group flex items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
+				"group flex min-w-0 items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
 				isDragging && "opacity-50",
 			)}
 			title={
@@ -1166,7 +1171,9 @@ function PackageWidgetItem({ packageWidget }: PackageWidgetItemProps) {
 			) : (
 				<Layers className="h-4 w-4 text-muted-foreground shrink-0" />
 			)}
-			<span className="truncate">{widget.name}</span>
+			<span className="truncate" title={widget.name}>
+				{widget.name}
+			</span>
 			<Package
 				className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
 				aria-label={t("fromPackagePackageid", "From package {{packageId}}", {
@@ -1202,7 +1209,7 @@ function WidgetItem({ widget, onDragStart }: WidgetItemProps) {
 			{...listeners}
 			{...attributes}
 			className={cn(
-				"flex items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
+				"flex min-w-0 items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
 				isDragging && "opacity-50",
 			)}
 			title={metadata.description ?? undefined}
@@ -1216,7 +1223,9 @@ function WidgetItem({ widget, onDragStart }: WidgetItemProps) {
 			) : (
 				<Layers className="h-4 w-4 text-muted-foreground shrink-0" />
 			)}
-			<span className="truncate">{metadata.name}</span>
+			<span className="truncate" title={metadata.name}>
+				{metadata.name}
+			</span>
 		</div>
 	);
 }

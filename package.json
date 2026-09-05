@@ -24,7 +24,6 @@
 		"@astrojs/cloudflare": "14.2.1",
 		"@hono/node-server": "1.19.13",
 		"@protobufjs/utf8": "1.1.1",
-		"@sentry/nextjs": "^10.38.0",
 		"ajv": "6.15.0",
 		"astro": "7.2.2",
 		"basic-ftp": "5.3.1",

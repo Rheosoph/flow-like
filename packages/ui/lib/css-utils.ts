@@ -1,9 +1,4 @@
-import postcss, {
-	type AtRule,
-	type Declaration,
-	type Root,
-	type Rule,
-} from "postcss";
+import postcss, { type Declaration, type Root, type Rule } from "postcss";
 
 /**
  * Branded type representing CSS that has been sanitized by safeScopedCss.
@@ -94,7 +89,7 @@ export interface SafeScopedCssOptions {
 	scopeRoot?: boolean;
 }
 
-function scopeSelector(
+function scopeSelectorForRule(
 	selector: string,
 	scope: string,
 	options: SafeScopedCssOptions,
@@ -127,52 +122,21 @@ function scopeSelector(
 	return `${scope} ${trimmed}`;
 }
 
-function processRule(
-	rule: Rule,
-	scope: string,
-	insideKeyframes: boolean,
-	options: SafeScopedCssOptions,
-): void {
-	// Sanitize all declarations
-	rule.walkDecls((decl) => sanitizeDeclaration(decl));
-
-	// Scope selectors (unless inside @keyframes)
-	if (!insideKeyframes) {
-		rule.selectors = rule.selectors.map((sel) =>
-			scopeSelector(sel, scope, options),
-		);
+function inheritsSelectorScope(rule: Rule): boolean {
+	let parent: Rule["parent"] | Root["parent"] = rule.parent;
+	while (parent) {
+		// Nested selectors, including implicit descendants, inherit the scoped
+		// parent. Prefixing them again asks for a second canvas inside that parent.
+		if (parent.type === "rule") return true;
+		if (
+			parent.type === "atrule" &&
+			/^(?:-webkit-)?keyframes$/i.test(parent.name)
+		) {
+			return true;
+		}
+		parent = parent.parent;
 	}
-}
-
-function processAtRule(
-	atRule: AtRule,
-	scope: string,
-	options: SafeScopedCssOptions,
-): void {
-	const name = atRule.name.toLowerCase();
-
-	// Remove blocked at-rules
-	if (BLOCKED_AT_RULES.has(name)) {
-		atRule.remove();
-		return;
-	}
-
-	// For keyframes, sanitize but don't scope the internal selectors
-	if (name === "keyframes") {
-		atRule.walkRules((rule) => processRule(rule, scope, true, options));
-		atRule.walkDecls((decl) => sanitizeDeclaration(decl));
-		return;
-	}
-
-	// For media, supports, container, layer - scope the internal rules
-	if (["media", "supports", "container", "layer"].includes(name)) {
-		atRule.walkRules((rule) => processRule(rule, scope, false, options));
-		atRule.walkDecls((decl) => sanitizeDeclaration(decl));
-		return;
-	}
-
-	// For other at-rules (like @font-face), just sanitize declarations
-	atRule.walkDecls((decl) => sanitizeDeclaration(decl));
+	return false;
 }
 
 function normalizeCssInput(css: string): string {
@@ -356,21 +320,16 @@ export function safeScopedCss(
 		);
 	}
 
-	// Process top-level rules
-	root.walkRules((rule) => {
-		// Skip rules inside at-rules (they're handled by processAtRule)
-		if (rule.parent?.type === "atrule") {
-			return;
-		}
-		processRule(rule, scopeSelector, false, options);
-	});
-
-	// Process at-rules
+	// Sanitize every nesting level before scoping each independent selector.
 	root.walkAtRules((atRule) => {
-		// Only process top-level at-rules
-		if (atRule.parent?.type === "root") {
-			processAtRule(atRule, scopeSelector, options);
-		}
+		if (BLOCKED_AT_RULES.has(atRule.name.toLowerCase())) atRule.remove();
+	});
+	root.walkDecls(sanitizeDeclaration);
+	root.walkRules((rule) => {
+		if (inheritsSelectorScope(rule)) return;
+		rule.selectors = rule.selectors.map((selector) =>
+			scopeSelectorForRule(selector, scopeSelector, options),
+		);
 	});
 
 	return root.toString() as SanitizedCSS;

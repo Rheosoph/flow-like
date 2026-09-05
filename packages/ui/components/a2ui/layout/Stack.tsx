@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIStack({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -42,6 +43,7 @@ export function A2UIStack({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"relative",
 				align && alignMap[align],

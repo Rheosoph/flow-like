@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UISkeleton({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<SkeletonComponent>) {
@@ -23,6 +24,7 @@ export function A2UISkeleton({
 
 	return (
 		<Skeleton
+			ref={elementRef}
 			className={cn(rounded && "rounded-full", resolveStyle(style))}
 			style={{
 				width,

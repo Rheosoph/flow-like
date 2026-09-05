@@ -2,7 +2,6 @@
 	"schema": "flow-like.doc-screenshot-http-fixture/v1",
 	"strict": true,
 	"blockedOrigins": [
-		"https://o4507505692901376.ingest.de.sentry.io",
 		"https://a.basemaps.cartocdn.com",
 		"https://b.basemaps.cartocdn.com",
 		"https://c.basemaps.cartocdn.com",

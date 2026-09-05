@@ -28,6 +28,7 @@ function getChildIds(children: Children | undefined): string[] {
 }
 
 export function A2UIModal({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -63,6 +64,7 @@ export function A2UIModal({
 	return (
 		<Dialog open={open ?? false} onOpenChange={handleOpenChange}>
 			<DialogContent
+				ref={elementRef}
 				className={cn(resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 			>

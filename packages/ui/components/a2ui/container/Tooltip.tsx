@@ -33,6 +33,7 @@ const sideMap: Record<string, "top" | "bottom" | "left" | "right"> = {
 };
 
 export function A2UITooltip({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -48,6 +49,7 @@ export function A2UITooltip({
 			<ShadTooltip delayDuration={delayMs ?? 200}>
 				<TooltipTrigger asChild>
 					<span
+						ref={elementRef}
 						className={cn("inline-block", resolveStyle(style))}
 						style={resolveInlineStyle(style)}
 					>

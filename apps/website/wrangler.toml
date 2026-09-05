@@ -6,7 +6,6 @@ compatibility_date = "2026-03-23"
 [vars]
 ENABLE_STORE_SEO = "true"
 REGISTRY_API_URL = "https://api.flow-like.com"
-PUBLIC_POSTHOG_KEY = "phc_1FOoG85fX0bbcvmmVTqu2RwqVyl6ziT3oCEXiM2UfTX"
 
 [assets]
 directory = "./dist/client/"

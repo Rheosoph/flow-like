@@ -1,8 +1,4 @@
-"use client";
-import process from "node:process";
 /** @type {import('next').NextConfig} */
-import { withSentryConfig } from "@sentry/nextjs";
-
 const nextConfig = {
 	output: "export",
 	pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
@@ -39,12 +35,4 @@ const nextConfig = {
 	},
 };
 
-export default withSentryConfig(nextConfig, {
-	org: "good-code",
-	project: "flow-like-desktop",
-
-	// An auth token is required for uploading source maps.
-	authToken: process.env.SENTRY_AUTH_TOKEN,
-
-	silent: false, // Can be used to suppress logs
-});
+export default nextConfig;

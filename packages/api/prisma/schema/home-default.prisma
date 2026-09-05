@@ -1,0 +1,5 @@
+model HomeDefault {
+  id       String @id
+  layout   Json
+  revision String
+}

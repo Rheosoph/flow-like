@@ -2770,6 +2770,8 @@ model Profile {
   // JSON with the apps that are part of the profile. Contains the app ID, if it is favorite, pinned and position of the two
   apps      Json?
   shortcuts Json?
+  homeLayout Json?
+  homeDefaultId String?
   bitIds    Json?
   hub       String
   hubs      Json?
@@ -3449,4 +3451,10 @@ model WasmPackagePurchase {
   @@index([packageId, status])
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
+}
+
+model HomeDefault {
+  id String @id
+  layout Json
+  revision String
 }

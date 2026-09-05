@@ -1,7 +1,3 @@
 "use client";
 
-import { ProfileTemplatesAdminPage } from "../../../../components/admin/profile-templates-admin-page";
-
-export default function AdminUserEditPage() {
-	return <ProfileTemplatesAdminPage manageMode={true} />;
-}
+export { ProfileTemplatesPage as default } from "@flow-like/flow-like-ui/components/profile-templates/profile-templates-page";

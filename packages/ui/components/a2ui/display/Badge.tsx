@@ -24,6 +24,7 @@ const variantMap: Record<
 };
 
 export function A2UIBadge({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<BadgeComponent>) {
@@ -33,6 +34,7 @@ export function A2UIBadge({
 
 	return (
 		<Badge
+			ref={elementRef}
 			variant={variant}
 			className={cn(resolveStyle(style))}
 			style={resolveInlineStyle(style)}

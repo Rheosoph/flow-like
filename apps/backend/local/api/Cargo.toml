@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 flow-like = { workspace = true, features = ["app-runtime"] }
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid", "sentry"] }
+flow-like-api = { workspace = true, features = ["kubernetes", "redis", "cosmos", "azure", "smtp", "sendgrid"] }
 flow-like-secrets.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
@@ -16,8 +16,6 @@ socket2 = "0.6.0"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dotenv.workspace = true
-sentry-tracing.workspace = true
-sentry.workspace = true
 oasgen = {version="0.25.0", features = ["axum"]}
 
 [features]

@@ -14,6 +14,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UISprite({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<SpriteComponent>) {
@@ -39,6 +40,7 @@ export function A2UISprite({
 
 	return (
 		<img
+			ref={elementRef}
 			src={src}
 			alt=""
 			className={cn("absolute pointer-events-auto", resolveStyle(style))}

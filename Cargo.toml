@@ -205,9 +205,6 @@ jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 hyper = {version = "1.5.2", features = ["full", "client"]}
 hyper-util = {version = "0.1.10", features = ["full"]}
 tracing = "0.1.41"
-sentry-tracing = "0.46.2"
-sentry = { version = "0.46.2", default-features = false, features = ["anyhow", "backtrace", "contexts", "debug-images", "panic", "release-health", "reqwest", "rustls", "tokio"] }
-sentry-tower = { version = "0.46.2", features = ["axum", "axum-matched-path"] }
 tower-http = {version="0.6.6", features = ["full"]}
 async-stripe = {version="0.41.0", features = ["runtime-tokio-hyper"]}
 futures-util = "0.3.31"

@@ -9,6 +9,7 @@ import { resolveChildSpecs } from "../children";
 import type { AspectRatioComponent } from "../types";
 
 export function A2UIAspectRatio({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -19,6 +20,7 @@ export function A2UIAspectRatio({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative w-full", resolveStyle(style))}
 			style={{
 				...resolveInlineStyle(style),

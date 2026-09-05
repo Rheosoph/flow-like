@@ -9,9 +9,9 @@ const securityHeaders: Record<string, string> = {
 		"camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()",
 	"Content-Security-Policy": [
 		"default-src 'self'",
-		"script-src 'self' 'unsafe-inline' https://eu-assets.i.posthog.com https://challenges.cloudflare.com",
+		"script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
 		"style-src 'self' 'unsafe-inline'",
-		"connect-src 'self' https://eu.i.posthog.com https://api.github.com https://api.flow-like.com https://650afa0c.sibforms.com",
+		"connect-src 'self' https://api.github.com https://api.flow-like.com https://650afa0c.sibforms.com",
 		"img-src 'self' data: https:",
 		"font-src 'self' data:",
 		"media-src 'self'",

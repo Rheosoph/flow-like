@@ -312,6 +312,7 @@ export function applyRuntimeChildUpdates<T extends WidgetComponentDef>(
  * from widgetRefs (stored on the page) and rendering its component tree.
  */
 export function A2UIWidgetInstance({
+	elementRef,
 	component,
 	componentId,
 	appId: rendererAppId,
@@ -414,6 +415,11 @@ export function A2UIWidgetInstance({
 
 			return (
 				<Renderer
+					elementRef={
+						childId === currentWidgetDef.rootComponentId
+							? elementRef
+							: undefined
+					}
 					key={childId}
 					component={childComponent.component as A2UIComponent}
 					componentId={childId}
@@ -432,6 +438,7 @@ export function A2UIWidgetInstance({
 			);
 		},
 		[
+			elementRef,
 			instanceId,
 			componentId,
 			effectiveAppId,
@@ -446,6 +453,7 @@ export function A2UIWidgetInstance({
 		if (shouldFetch && (fetched.isLoading || fetched.isFetching)) {
 			return (
 				<div
+					ref={elementRef}
 					className="p-4 text-sm text-muted-foreground"
 					data-widget-instance={instanceId}
 					data-widget-id={widgetId}
@@ -455,7 +463,10 @@ export function A2UIWidgetInstance({
 			);
 		}
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
+			<div
+				ref={elementRef}
+				className="p-4 text-sm text-red-500 bg-red-50 rounded"
+			>
 				{t(
 					"widgetInstanceQuotinstanceidquotCouldNotBeResolved",
 					'Widget instance "{{instanceId}}" could not be resolved',
@@ -468,7 +479,10 @@ export function A2UIWidgetInstance({
 
 	if (!renderedWidgetDef.rootComponentId) {
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
+			<div
+				ref={elementRef}
+				className="p-4 text-sm text-red-500 bg-red-50 rounded"
+			>
 				{t(
 					"widgetDefinitionMissingRootcomponentid",
 					"Widget definition missing rootComponentId",

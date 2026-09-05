@@ -40,7 +40,6 @@
 		"@radix-ui/react-tabs": "^1.1.12",
 		"@radix-ui/react-toolbar": "^1.1.10",
 		"@radix-ui/react-tooltip": "^1.2.7",
-		"@sentry/nextjs": "^10.38.0",
 		"@shikijs/colorized-brackets": "^1.26.1",
 		"@shikijs/rehype": "^1.26.1",
 		"@shikijs/transformers": "^1.26.1",

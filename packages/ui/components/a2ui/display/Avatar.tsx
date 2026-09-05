@@ -22,6 +22,7 @@ const sizeClasses: Record<string, string> = {
 };
 
 export function A2UIAvatar({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<AvatarComponent>) {
@@ -33,6 +34,7 @@ export function A2UIAvatar({
 
 	return (
 		<Avatar
+			ref={elementRef}
 			className={cn(sizeClass, resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

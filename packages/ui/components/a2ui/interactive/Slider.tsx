@@ -28,6 +28,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UISlider({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -73,6 +74,7 @@ export function A2UISlider({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-3", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

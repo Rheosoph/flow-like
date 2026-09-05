@@ -15,6 +15,9 @@ use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod home;
+pub use home::validate_home_layout;
+
 fn split_profile_bit_reference(reference: &str) -> Option<(&str, &str)> {
     let (hub, bit_id) = reference.rsplit_once(':')?;
     if hub.trim().is_empty() || bit_id.trim().is_empty() {
@@ -138,6 +141,10 @@ pub struct Profile {
     #[serde(default)]
     pub shortcuts: Option<Vec<ProfileShortcut>>,
     #[serde(default)]
+    pub home_layout: Option<Value>,
+    #[serde(default)]
+    pub home_default_id: Option<String>,
+    #[serde(default)]
     pub theme: Option<Value>,
     pub bits: Vec<String>, // hub:id
     /// User-owned private bits, hydrated per trust boundary: with decrypted
@@ -173,6 +180,8 @@ impl Default for Profile {
             tags: vec![],
             apps: Some(vec![]),
             shortcuts: Some(vec![]),
+            home_layout: None,
+            home_default_id: None,
             theme: None,
             settings: Settings {
                 connection_mode: ConnectionMode::SimpleBezier,

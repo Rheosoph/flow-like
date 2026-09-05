@@ -35,6 +35,7 @@ const underlineStyles: Record<string, string> = {
 };
 
 export function A2UILink({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -150,6 +151,7 @@ export function A2UILink({
 	if (action && isPreviewMode) {
 		return (
 			<button
+				ref={elementRef}
 				type="button"
 				className={baseClasses}
 				style={resolveInlineStyle(style)}
@@ -177,6 +179,7 @@ export function A2UILink({
 	) {
 		return (
 			<a
+				ref={elementRef}
 				href={resolvedHref}
 				target={component.target ?? "_blank"}
 				rel="noopener noreferrer"
@@ -200,6 +203,7 @@ export function A2UILink({
 	// Internal navigation
 	return (
 		<NextLink
+			ref={elementRef}
 			href={resolvedHref}
 			className={baseClasses}
 			style={resolveInlineStyle(style)}

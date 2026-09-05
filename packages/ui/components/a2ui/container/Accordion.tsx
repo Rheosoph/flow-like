@@ -20,6 +20,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIAccordion({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -51,6 +52,7 @@ export function A2UIAccordion({
 
 	return accordionType === "multiple" ? (
 		<ShadAccordion
+			ref={elementRef}
 			type="multiple"
 			defaultValue={defaultExpanded ?? []}
 			onValueChange={handleChange}
@@ -71,6 +73,7 @@ export function A2UIAccordion({
 		</ShadAccordion>
 	) : (
 		<ShadAccordion
+			ref={elementRef}
 			type="single"
 			collapsible
 			defaultValue={defaultExpanded?.[0]}

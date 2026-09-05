@@ -9,6 +9,7 @@ import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { normalizeBoxes } from "../bbox-utils";
 import { useAssetUrl } from "../hooks/use-asset-url";
+import { useElementRef } from "../hooks/use-element-ref";
 import type { BoundValue, ImageLabelerComponent, LabelBox } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -36,6 +37,7 @@ const LABEL_COLORS = [
 ];
 
 export function A2UIImageLabeler({
+	elementRef,
 	component,
 	style,
 	surfaceId,
@@ -45,6 +47,7 @@ export function A2UIImageLabeler({
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useElementRef(elementRef, containerRef);
 	const imageRef = useRef<HTMLImageElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -324,7 +327,7 @@ export function A2UIImageLabeler({
 
 	return (
 		<div
-			ref={containerRef}
+			ref={rootRef}
 			className={cn("flex flex-col gap-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

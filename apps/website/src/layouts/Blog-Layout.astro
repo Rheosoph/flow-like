@@ -3,7 +3,6 @@ import "@flow-like/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { BlogFooter } from "../components/blog-footer";
 import { Header } from "../components/header";
-import PostHog from "../components/posthog.astro";
 import type { CollectionEntry } from "astro:content";
 import { getOgLocale, type HreflangLink } from "../lib/seo";
 
@@ -170,7 +169,6 @@ const ldStructuredData = isArticle
 
 		{tags.length > 0 && <meta name="keywords" content={tags.join(", ")} />}
 		<script type="application/ld+json" is:inline set:html={JSON.stringify(ldStructuredData)} />
-		<PostHog />
 	</head>
 	<body class="flex flex-col min-h-screen bg-background text-foreground bg-dot pt-16">
 		<div class="pointer-events-none fixed inset-0 h-full w-full bg-white bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] -z-[100]"/>

@@ -14,7 +14,7 @@ description = "Flow-Like GCP API Service"
 # credentials through the AWS provider and mint scoped credentials against the
 # wrong cloud, failing at request time rather than at startup. Removing the AWS
 # surface from the build makes "gcp" the only default that can be selected.
-flow-like-api = { workspace = true, default-features = false, features = ["gcp", "secrets-gcp", "firestore", "pubsub", "smtp", "sentry", "channel-gcp"] }
+flow-like-api = { workspace = true, default-features = false, features = ["gcp", "secrets-gcp", "firestore", "pubsub", "smtp", "channel-gcp"] }
 flow-like-secrets.workspace = true
 flow-like-gcp-data.workspace = true
 flow-like-storage.workspace = true
@@ -48,12 +48,6 @@ tonic = { version = "0.14.5", default-features = false, features = [
     "tls-ring",
 ] }
 tracing-opentelemetry.workspace = true
-# The api `sentry` feature only arms the error-reporting middleware's forwarder,
-# and that forwarder returns early while no client is bound to the hub. The
-# client guard has to be constructed in the binary, so the Sentry crates are
-# direct dependencies of this crate rather than transitive ones.
-sentry.workspace = true
-sentry-tracing.workspace = true
 tokio = { workspace = true, features = ["full"] }
 url = "2.5"
 uuid.workspace = true

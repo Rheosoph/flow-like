@@ -15,5 +15,3 @@ tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing-subscriber.workspace = true
-sentry.workspace = true
-sentry-tracing.workspace = true

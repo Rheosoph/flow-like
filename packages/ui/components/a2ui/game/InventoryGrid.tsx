@@ -18,6 +18,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIInventoryGrid({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -41,6 +42,7 @@ export function A2UIInventoryGrid({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("inline-block", resolveStyle(style))}
 			style={{
 				display: "grid",

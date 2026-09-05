@@ -19,6 +19,7 @@ const SANDBOX_SRC_DEFAULT =
 const SANDBOX_SRCDOC_DEFAULT = "allow-scripts";
 
 export function A2UIIframe({
+	elementRef,
 	component,
 	style,
 }: ComponentProps<IframeComponent>) {
@@ -44,6 +45,7 @@ export function A2UIIframe({
 	if (!src && !srcdoc && !isLoading) {
 		return (
 			<div
+				ref={elementRef}
 				className={cn(
 					"flex items-center justify-center bg-muted text-muted-foreground border rounded",
 					resolveStyle(style),
@@ -57,6 +59,7 @@ export function A2UIIframe({
 
 	return (
 		<iframe
+			ref={elementRef}
 			src={useSrcdoc ? undefined : src}
 			srcDoc={useSrcdoc ? srcdoc : undefined}
 			title={title}

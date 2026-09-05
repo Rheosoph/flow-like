@@ -24,6 +24,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UITabs({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -56,6 +57,7 @@ export function A2UITabs({
 
 	return (
 		<ShadTabs
+			ref={elementRef}
 			value={activeTab}
 			onValueChange={handleChange}
 			className={cn(resolveStyle(style))}

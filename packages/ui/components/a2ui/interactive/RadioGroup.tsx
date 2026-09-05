@@ -26,6 +26,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIRadioGroup({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -61,6 +62,7 @@ export function A2UIRadioGroup({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

@@ -17,8 +17,7 @@ import {
 	Unlock,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../../lib";
-import type { A2UIComponent, SurfaceComponent } from "../a2ui/types";
+import { cn } from "../../lib/utils";
 import {
 	ContextMenu,
 	ContextMenuContent,
@@ -35,6 +34,13 @@ import {
 	type DropData,
 } from "./BuilderDndContext";
 import { CONTAINER_TYPES, ROOT_ID } from "./WidgetBuilder";
+import {
+	canAcceptComponentChildren,
+	canReorderComponent,
+	findComponentParent,
+	getComponentChildren,
+	getExplicitChildren,
+} from "./componentTree";
 
 interface TreeNodeData {
 	id: string;
@@ -48,8 +54,6 @@ export interface HierarchyTreeProps {
 	className?: string;
 	rootComponents?: string[];
 }
-
-type HierarchyChildren = { explicitList: string[] } | { referenceId: string };
 
 export function HierarchyTree({
 	className,
@@ -65,8 +69,6 @@ export function HierarchyTree({
 		selection,
 		selectComponent,
 		deleteComponents,
-		addComponent,
-		updateComponent,
 		copy,
 		cut,
 		paste,
@@ -75,139 +77,22 @@ export function HierarchyTree({
 		toggleComponentVisibility,
 	} = useBuilder();
 
-	// Find parent ID helper
 	const findParentId = useCallback(
-		(childId: string): string | null => {
-			for (const [id, comp] of components) {
-				if (!comp.component) continue;
-				const compChildrenData = (
-					comp.component as unknown as Record<string, unknown>
-				).children as HierarchyChildren | undefined;
-				const compChildren =
-					compChildrenData && "explicitList" in compChildrenData
-						? compChildrenData.explicitList
-						: undefined;
-				if (compChildren?.includes(childId)) {
-					return id;
-				}
-			}
-			return null;
-		},
+		(childId: string) => findComponentParent(components, childId),
 		[components],
-	);
-
-	// Move component from one parent to another with optional position
-	const moveComponent = useCallback(
-		(
-			movingId: string,
-			fromParentId: string | null,
-			toParentId: string,
-			position?: { type: "before" | "after" | "inside"; targetId?: string },
-		) => {
-			// Remove from old parent
-			if (fromParentId) {
-				const fromParent = components.get(fromParentId);
-				if (fromParent) {
-					const fromChildrenData = (
-						fromParent.component as unknown as Record<string, unknown>
-					).children as HierarchyChildren | undefined;
-					const fromChildren =
-						fromChildrenData && "explicitList" in fromChildrenData
-							? fromChildrenData.explicitList
-							: [];
-					updateComponent(fromParentId, {
-						component: {
-							...fromParent.component,
-							children: {
-								explicitList: fromChildren.filter((id) => id !== movingId),
-							},
-						} as A2UIComponent,
-					});
-				}
-			}
-
-			// Add to new parent at specific position
-			const toParent = components.get(toParentId);
-			if (toParent) {
-				const toChildrenData = (
-					toParent.component as unknown as Record<string, unknown>
-				).children as HierarchyChildren | undefined;
-				const toChildren =
-					toChildrenData && "explicitList" in toChildrenData
-						? [...toChildrenData.explicitList]
-						: [];
-
-				let newChildren: string[];
-				if (position?.type === "before" && position.targetId) {
-					const idx = toChildren.indexOf(position.targetId);
-					if (idx >= 0) {
-						newChildren = [
-							...toChildren.slice(0, idx),
-							movingId,
-							...toChildren.slice(idx),
-						];
-					} else {
-						newChildren = [...toChildren, movingId];
-					}
-				} else if (position?.type === "after" && position.targetId) {
-					const idx = toChildren.indexOf(position.targetId);
-					if (idx >= 0) {
-						newChildren = [
-							...toChildren.slice(0, idx + 1),
-							movingId,
-							...toChildren.slice(idx + 1),
-						];
-					} else {
-						newChildren = [...toChildren, movingId];
-					}
-				} else {
-					// Default: append at end (inside)
-					newChildren = [...toChildren, movingId];
-				}
-
-				updateComponent(toParentId, {
-					component: {
-						...toParent.component,
-						children: { explicitList: newChildren },
-					} as A2UIComponent,
-				});
-			}
-		},
-		[components, updateComponent],
-	);
-
-	// Add new component to parent
-	const handleAddComponent = useCallback(
-		(newComponent: SurfaceComponent, parentId: string) => {
-			addComponent(newComponent);
-			const parent = components.get(parentId);
-			if (parent) {
-				const parentChildrenData = (
-					parent.component as unknown as Record<string, unknown>
-				).children as HierarchyChildren | undefined;
-				const parentChildren =
-					parentChildrenData && "explicitList" in parentChildrenData
-						? parentChildrenData.explicitList
-						: [];
-				updateComponent(parentId, {
-					component: {
-						...parent.component,
-						children: { explicitList: [...parentChildren, newComponent.id] },
-					} as A2UIComponent,
-				});
-			}
-		},
-		[components, addComponent, updateComponent],
 	);
 
 	// Build tree from components
 	const tree = useMemo(() => {
-		const buildTree = (componentId: string): TreeNodeData | null => {
+		const buildTree = (
+			componentId: string,
+			ancestors = new Set<string>(),
+		): TreeNodeData | null => {
+			if (ancestors.has(componentId)) return null;
 			const component = getComponent(componentId);
 			if (!component || !component.component) return null;
 
-			const props = component.component as unknown as Record<string, unknown>;
-			const childIds: string[] = [];
+			const childIds = getComponentChildren(component);
 
 			// Widget instances are leaf nodes - they reference widget definitions from widgetRefs
 			// We don't traverse into their internal structure
@@ -221,31 +106,11 @@ export function HierarchyTree({
 				};
 			}
 
-			// Extract children based on component structure
-			if ("children" in props && props.children) {
-				const children = props.children as { explicitList?: string[] };
-				if (children.explicitList) {
-					childIds.push(...children.explicitList);
-				}
-			}
-			if ("child" in props && typeof props.child === "string") {
-				childIds.push(props.child);
-			}
-			if (
-				"entryPointChild" in props &&
-				typeof props.entryPointChild === "string"
-			) {
-				childIds.push(props.entryPointChild);
-			}
-			if ("contentChild" in props && typeof props.contentChild === "string") {
-				childIds.push(props.contentChild);
-			}
-
 			return {
 				id: componentId,
 				type: component.component.type,
 				children: childIds
-					.map((id) => buildTree(id))
+					.map((id) => buildTree(id, new Set(ancestors).add(componentId)))
 					.filter((n): n is TreeNodeData => n !== null),
 				locked: lockedNodes.has(componentId),
 				hidden: hiddenComponents.has(componentId),
@@ -256,34 +121,13 @@ export function HierarchyTree({
 		if (rootComponents.length === 0) {
 			// Find components that aren't children of any other component
 			const childIds = new Set<string>();
-			components.forEach((comp) => {
-				if (!comp.component) return;
-				const props = comp.component as unknown as Record<string, unknown>;
-				if ("children" in props && props.children) {
-					const children = props.children as { explicitList?: string[] };
-					if (children.explicitList) {
-						for (const id of children.explicitList) {
-							childIds.add(id);
-						}
-					}
-				}
-				if ("child" in props && typeof props.child === "string") {
-					childIds.add(props.child);
-				}
-				if (
-					"entryPointChild" in props &&
-					typeof props.entryPointChild === "string"
-				) {
-					childIds.add(props.entryPointChild);
-				}
-				if ("contentChild" in props && typeof props.contentChild === "string") {
-					childIds.add(props.contentChild);
-				}
-			});
+			for (const comp of components.values()) {
+				for (const id of getComponentChildren(comp)) childIds.add(id);
+			}
 
 			const roots: TreeNodeData[] = [];
 			const addedRoots = new Set<string>(); // Track added roots to prevent duplicates
-			components.forEach((comp) => {
+			for (const comp of components.values()) {
 				if (!childIds.has(comp.id) && !addedRoots.has(comp.id)) {
 					const node = buildTree(comp.id);
 					if (node) {
@@ -291,7 +135,7 @@ export function HierarchyTree({
 						addedRoots.add(comp.id);
 					}
 				}
-			});
+			}
 			return roots;
 		}
 
@@ -346,20 +190,23 @@ export function HierarchyTree({
 		[tree],
 	);
 
-	// Track last expanded selection to prevent infinite loops
-	const lastExpandedSelectionRef = useRef<string | null>(null);
+	// Reparenting changes the selected component's path without changing its ID.
+	const lastExpandedPathRef = useRef<string | null>(null);
 
 	// Auto-expand tree when a component is selected on canvas
 	useEffect(() => {
-		if (selection.componentIds.length === 0) return;
+		if (selection.componentIds.length === 0) {
+			lastExpandedPathRef.current = null;
+			return;
+		}
 
 		// Get the first selected component
 		const selectedId = selection.componentIds[0];
 
-		// Skip if we already expanded for this selection
-		if (lastExpandedSelectionRef.current === selectedId) return;
-
 		const path = findPathToComponent(selectedId);
+		const pathKey = JSON.stringify(path);
+		if (lastExpandedPathRef.current === pathKey) return;
+		lastExpandedPathRef.current = pathKey;
 
 		if (path.length > 1) {
 			// Check if we actually need to expand any nodes
@@ -375,8 +222,6 @@ export function HierarchyTree({
 				}
 				return next;
 			});
-
-			lastExpandedSelectionRef.current = selectedId;
 		}
 	}, [selection.componentIds, findPathToComponent]);
 
@@ -405,7 +250,7 @@ export function HierarchyTree({
 	}, []);
 
 	const handleSelect = useCallback(
-		(nodeId: string, event: React.MouseEvent) => {
+		(nodeId: string, event: React.MouseEvent | React.KeyboardEvent) => {
 			selectComponent(nodeId, event.shiftKey || event.metaKey || event.ctrlKey);
 		},
 		[selectComponent],
@@ -414,7 +259,7 @@ export function HierarchyTree({
 	return (
 		<div
 			className={cn(
-				"flex flex-col h-full bg-background border-r overflow-hidden",
+				"flex min-w-0 flex-col h-full bg-background border-r overflow-hidden",
 				className,
 			)}
 		>
@@ -430,8 +275,12 @@ export function HierarchyTree({
 				</div>
 			</div>
 
-			<ScrollArea className="flex-1 min-h-0">
-				<div className="p-2">
+			<ScrollArea className="flex-1 min-h-0 min-w-0 [&_[data-radix-scroll-area-viewport]>div]:block!">
+				<div
+					className="p-2"
+					role="tree"
+					aria-label={t("hierarchy", "Hierarchy")}
+				>
 					{filteredTree.length === 0 ? (
 						<div className="text-sm text-muted-foreground text-center py-4">
 							{t("noComponents", "No components")}
@@ -442,7 +291,6 @@ export function HierarchyTree({
 								key={node.id}
 								node={node}
 								depth={0}
-								isExpanded={expandedNodes.has(node.id)}
 								isSelected={selection.componentIds.includes(node.id)}
 								onToggleExpand={toggleExpand}
 								onToggleLock={toggleLock}
@@ -454,8 +302,6 @@ export function HierarchyTree({
 								onPaste={paste}
 								expandedNodes={expandedNodes}
 								selection={selection.componentIds}
-								onMoveComponent={moveComponent}
-								onAddComponent={handleAddComponent}
 								findParentId={findParentId}
 							/>
 						))
@@ -469,36 +315,23 @@ export function HierarchyTree({
 interface TreeNodeProps {
 	node: TreeNodeData;
 	depth: number;
-	isExpanded: boolean;
 	isSelected: boolean;
 	expandedNodes: Set<string>;
 	selection: string[];
 	onToggleExpand: (id: string) => void;
 	onToggleLock: (id: string) => void;
 	onToggleHidden: (id: string) => void;
-	onSelect: (id: string, event: React.MouseEvent) => void;
+	onSelect: (id: string, event: React.MouseEvent | React.KeyboardEvent) => void;
 	onDelete: (id: string) => void;
-	onCopy: () => void;
-	onCut: () => void;
+	onCopy: (ids?: string[]) => void;
+	onCut: (ids?: string[]) => void;
 	onPaste: (parentId?: string) => void;
-	onMoveComponent: (
-		componentId: string,
-		fromParentId: string | null,
-		toParentId: string,
-		position?: { type: "before" | "after" | "inside"; targetId?: string },
-	) => void;
-	onAddComponent: (component: SurfaceComponent, parentId: string) => void;
 	findParentId: (childId: string) => string | null;
 }
-
-type Children = { explicitList: string[] } | { referenceId: string };
-
-type DropPosition = "before" | "after" | "inside" | null;
 
 function TreeNode({
 	node,
 	depth,
-	isExpanded,
 	isSelected,
 	expandedNodes,
 	selection,
@@ -510,37 +343,23 @@ function TreeNode({
 	onCopy,
 	onCut,
 	onPaste,
-	onMoveComponent,
-	onAddComponent,
 	findParentId,
 }: TreeNodeProps) {
 	const { t } = useTranslation("flow");
 	const { components, getWidgetRef } = useBuilder();
-	const [dropPosition, setDropPosition] = useState<DropPosition>(null);
 	const hasChildren = node.children.length > 0;
 	const isNodeExpanded = expandedNodes.has(node.id);
 	const isContainer = CONTAINER_TYPES.has(node.type);
 	const isRoot = node.id === ROOT_ID;
-
-	// Check if targetId is a descendant of sourceId
-	const isDescendant = useCallback(
-		(targetId: string, sourceId: string): boolean => {
-			const target = components.get(targetId);
-			if (!target) return false;
-
-			const targetChildrenData = (
-				target.component as unknown as Record<string, unknown>
-			).children as Children | undefined;
-			const targetChildren =
-				targetChildrenData && "explicitList" in targetChildrenData
-					? targetChildrenData.explicitList
-					: [];
-
-			if (targetChildren.includes(sourceId)) return true;
-			return targetChildren.some((childId) => isDescendant(childId, sourceId));
-		},
-		[components],
+	const canReceiveChildren = canAcceptComponentChildren(
+		components.get(node.id),
 	);
+	const canDrag = !node.locked && canReorderComponent(components, node.id);
+
+	const parentId = findParentId(node.id);
+	const siblingIndex = parentId
+		? getExplicitChildren(components.get(parentId)).indexOf(node.id)
+		: -1;
 
 	// Draggable for moving this node
 	const {
@@ -550,18 +369,18 @@ function TreeNode({
 		isDragging,
 	} = useDraggable({
 		id: `tree-move-${node.id}`,
-		disabled: isRoot || node.locked,
+		disabled: isRoot || !canDrag,
 		data: {
 			type: COMPONENT_MOVE_TYPE,
 			componentId: node.id,
-			currentParentId: findParentId(node.id),
+			currentParentId: parentId,
 		} satisfies ComponentMoveData,
 	});
 
 	// Droppable for receiving components
 	const { setNodeRef: setDropRef, isOver } = useDroppable({
 		id: `tree-drop-${node.id}`,
-		disabled: !isContainer,
+		disabled: !canReceiveChildren,
 		data: {
 			type: "container",
 			parentId: node.id,
@@ -569,43 +388,95 @@ function TreeNode({
 		} satisfies DropData,
 	});
 
-	// For drop, we accept if isContainer and not dropping on self or descendant
-	const canDrop = isContainer;
-
-	// Reset drop position when not hovering
-	const handleMouseLeave = useCallback(() => {
-		setDropPosition(null);
-	}, []);
+	const { setNodeRef: setBeforeRef, isOver: isOverBefore } = useDroppable({
+		id: `tree-before-${node.id}`,
+		disabled: isRoot || siblingIndex < 0,
+		data: {
+			type: "drop-zone",
+			parentId: parentId ?? "",
+			index: siblingIndex,
+		} satisfies DropData,
+	});
+	const { setNodeRef: setAfterRef, isOver: isOverAfter } = useDroppable({
+		id: `tree-after-${node.id}`,
+		disabled: isRoot || siblingIndex < 0,
+		data: {
+			type: "drop-zone",
+			parentId: parentId ?? "",
+			index: siblingIndex + 1,
+		} satisfies DropData,
+	});
 
 	return (
 		<ContextMenu>
-			<ContextMenuTrigger>
+			<ContextMenuTrigger asChild>
 				<div
 					id={`tree-node-${node.id}`}
+					role="treeitem"
+					// biome-ignore lint/a11y/noNoninteractiveTabindex: Tree items are keyboard-focusable selection controls.
+					tabIndex={0}
+					aria-selected={isSelected}
+					aria-expanded={hasChildren ? isNodeExpanded : undefined}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" || event.key === " ") {
+							event.preventDefault();
+							event.stopPropagation();
+							onSelect(node.id, event);
+						}
+					}}
 					ref={(el) => {
 						setDropRef(el);
 					}}
-					onMouseLeave={handleMouseLeave}
 					className={cn(
-						"group relative flex items-center gap-1 px-2 py-1 rounded text-sm cursor-pointer hover:bg-muted transition-colors",
+						"group relative flex min-w-0 max-w-full items-center gap-1 px-2 py-1 rounded text-sm cursor-pointer hover:bg-muted transition-colors",
 						isSelected && "bg-primary/10 text-primary",
 						node.hidden && "opacity-50",
 						isDragging && "opacity-40",
-						isOver && canDrop && "bg-primary/20 ring-1 ring-primary",
+						isOver && canReceiveChildren && "bg-primary/20 ring-1 ring-primary",
 					)}
-					style={{ paddingLeft: `${depth * 16 + 8}px` }}
+					style={{ paddingLeft: `min(${depth * 16 + 8}px, 40%)` }}
+					title={node.id}
 					onClick={(e) => {
 						e.stopPropagation();
 						onSelect(node.id, e);
 					}}
 				>
+					{!isRoot && siblingIndex >= 0 && (
+						<>
+							<span
+								ref={setBeforeRef}
+								className={cn(
+									"pointer-events-none absolute inset-x-0 top-0",
+									canReceiveChildren ? "h-1/4" : "h-1/2",
+								)}
+							>
+								{isOverBefore && (
+									<span className="absolute inset-x-0 top-0 h-0.5 bg-primary" />
+								)}
+							</span>
+							<span
+								ref={setAfterRef}
+								className={cn(
+									"pointer-events-none absolute inset-x-0 bottom-0",
+									canReceiveChildren ? "h-1/4" : "h-1/2",
+								)}
+							>
+								{isOverAfter && (
+									<span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" />
+								)}
+							</span>
+						</>
+					)}
 					{/* Drag handle */}
-					{!isRoot && !node.locked && (
+					{!isRoot && canDrag && (
 						<div
 							ref={setDragRef}
 							{...dragListeners}
 							{...dragAttributes}
-							className="cursor-grab hover:bg-muted-foreground/10 rounded p-0.5 touch-none"
+							aria-label={t("reorderComponent", "Reorder {{id}}", {
+								id: node.id,
+							})}
+							className="shrink-0 cursor-grab hover:bg-muted-foreground/10 rounded p-0.5 touch-none"
 							onClick={(e) => e.stopPropagation()}
 						>
 							<GripVertical className="h-3 w-3 text-muted-foreground" />
@@ -616,7 +487,7 @@ function TreeNode({
 					<button
 						type="button"
 						className={cn(
-							"p-0.5 hover:bg-muted-foreground/10 rounded",
+							"shrink-0 p-0.5 hover:bg-muted-foreground/10 rounded",
 							!hasChildren && "invisible",
 						)}
 						onClick={(e) => {
@@ -632,7 +503,7 @@ function TreeNode({
 					</button>
 
 					{/* Component type/icon */}
-					<span className="truncate flex-1">
+					<span className="min-w-0 truncate flex-1">
 						{node.type === "widgetInstance"
 							? (() => {
 									const comp = components.get(node.id);
@@ -659,14 +530,16 @@ function TreeNode({
 
 					{/* Container indicator */}
 					{isContainer && (
-						<span className="text-xs text-muted-foreground">{`[container]`}</span>
+						<span className="shrink-0 text-xs text-muted-foreground">
+							[container]
+						</span>
 					)}
 
 					{/* Visibility toggle button */}
 					<button
 						type="button"
 						className={cn(
-							"p-0.5 hover:bg-muted-foreground/10 rounded transition-opacity",
+							"shrink-0 p-0.5 hover:bg-muted-foreground/10 rounded transition-opacity",
 							node.hidden ? "opacity-100" : "opacity-0 group-hover:opacity-100",
 						)}
 						onClick={(e) => {
@@ -688,17 +561,23 @@ function TreeNode({
 			</ContextMenuTrigger>
 
 			<ContextMenuContent>
-				<ContextMenuItem onClick={onCopy}>
+				<ContextMenuItem
+					onClick={() => onCopy(isSelected ? selection : [node.id])}
+				>
 					<Copy className="h-4 w-4 mr-2" />
 					{t("copy", "Copy")}
 				</ContextMenuItem>
-				<ContextMenuItem onClick={onCut}>
+				<ContextMenuItem
+					onClick={() => onCut(isSelected ? selection : [node.id])}
+				>
 					<Scissors className="h-4 w-4 mr-2" />
 					{t("cut", "Cut")}
 				</ContextMenuItem>
 				<ContextMenuItem onClick={() => onPaste(node.id)}>
 					<FolderPlus className="h-4 w-4 mr-2" />
-					{t("pasteInto", "Paste into")}
+					{canReceiveChildren
+						? t("pasteInto", "Paste into")
+						: t("paste", "Paste")}
 				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem onClick={() => onToggleLock(node.id)}>
@@ -745,7 +624,6 @@ function TreeNode({
 							key={child.id}
 							node={child}
 							depth={depth + 1}
-							isExpanded={expandedNodes.has(child.id)}
 							isSelected={selection.includes(child.id)}
 							expandedNodes={expandedNodes}
 							selection={selection}
@@ -757,8 +635,6 @@ function TreeNode({
 							onCopy={onCopy}
 							onCut={onCut}
 							onPaste={onPaste}
-							onMoveComponent={onMoveComponent}
-							onAddComponent={onAddComponent}
 							findParentId={findParentId}
 						/>
 					))}

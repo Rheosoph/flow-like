@@ -91,7 +91,7 @@ export function WidgetInstanceInspector({
 	return (
 		<div
 			className={cn(
-				"flex flex-col h-full bg-background border-l overflow-hidden",
+				"flex flex-col h-full min-w-0 bg-background border-l overflow-hidden",
 				className,
 			)}
 		>
@@ -101,12 +101,17 @@ export function WidgetInstanceInspector({
 						<img
 							src={widget.thumbnail}
 							alt=""
-							className="h-8 w-8 rounded object-cover"
+							className="h-8 w-8 shrink-0 rounded object-cover"
 						/>
 					)}
 					<div className="min-w-0">
-						<h3 className="font-medium text-sm truncate">{widget.name}</h3>
-						<p className="text-xs text-muted-foreground truncate">
+						<h3 className="font-medium text-sm truncate" title={widget.name}>
+							{widget.name}
+						</h3>
+						<p
+							className="text-xs text-muted-foreground truncate"
+							title={instance.instanceId}
+						>
 							{instance.instanceId}
 						</p>
 					</div>
@@ -140,7 +145,10 @@ export function WidgetInstanceInspector({
 					</TabsTrigger>
 				</TabsList>
 
-				<ScrollArea className="flex-1 min-h-0">
+				<ScrollArea
+					className="flex-1 min-h-0 min-w-0"
+					viewportClassName="[&>div]:block!"
+				>
 					<TabsContent value="properties" className="m-0 p-4">
 						<CustomizationEditor
 							options={widget.customizationOptions}
@@ -170,8 +178,11 @@ interface WidgetRefBadgeProps {
 function WidgetRefBadge({ widgetRef }: WidgetRefBadgeProps) {
 	return (
 		<div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-			<Link className="h-3 w-3" />
-			<span className="truncate">
+			<Link className="h-3 w-3 shrink-0" />
+			<span
+				className="truncate"
+				title={`${widgetRef.appId}/${widgetRef.widgetId}${widgetRef.version ? `@${widgetRef.version}` : ""}`}
+			>
 				{`${widgetRef.appId}/${widgetRef.widgetId}`}
 				{widgetRef.version && `@${widgetRef.version}`}
 			</span>
@@ -222,7 +233,7 @@ function CustomizationEditor({
 				return (
 					<Collapsible key={groupName} defaultOpen>
 						<CollapsibleTrigger className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground">
-							<span className="capitalize">
+							<span className="capitalize min-w-0 truncate" title={groupName}>
 								{groupName === "default" ? "General" : groupName}
 							</span>
 							<ChevronRight className="h-3 w-3 transition-transform duration-200 data-[state=open]:rotate-90" />
@@ -348,7 +359,9 @@ function CustomizationField({
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-center gap-1">
-				<Label className="text-xs font-medium">{option.label}</Label>
+				<Label className="text-xs font-medium [overflow-wrap:anywhere]">
+					{option.label}
+				</Label>
 				{option.description && (
 					<TooltipProvider>
 						<Tooltip>
@@ -431,28 +444,30 @@ function ActionBindingField({
 
 	return (
 		<Collapsible open={isOpen} onOpenChange={setIsOpen}>
-			<div className="flex items-center justify-between">
-				<CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:text-foreground">
+			<div className="flex min-w-0 items-center justify-between gap-2">
+				<CollapsibleTrigger className="flex min-w-0 items-center gap-2 text-sm font-medium hover:text-foreground">
 					<ChevronRight
 						className={cn(
-							"h-4 w-4 transition-transform duration-200",
+							"h-4 w-4 shrink-0 transition-transform duration-200",
 							isOpen && "rotate-90",
 						)}
 					/>
-					<Play className="h-3 w-3 text-muted-foreground" />
-					<span>{action.label}</span>
+					<Play className="h-3 w-3 shrink-0 text-muted-foreground" />
+					<span className="truncate" title={action.label}>
+						{action.label}
+					</span>
 				</CollapsibleTrigger>
 				{binding ? (
 					<Button
 						variant="ghost"
 						size="icon"
-						className="h-6 w-6"
+						className="h-6 w-6 shrink-0"
 						onClick={() => onChange(null)}
 					>
 						<Unlink className="h-3 w-3" />
 					</Button>
 				) : (
-					<Badge variant="outline" className="text-[10px]">
+					<Badge variant="outline" className="text-[10px] shrink-0">
 						{t("unbound", "Unbound")}
 					</Badge>
 				)}
@@ -460,11 +475,13 @@ function ActionBindingField({
 
 			<CollapsibleContent className="pt-2 pl-6 space-y-3">
 				{action.description && (
-					<p className="text-xs text-muted-foreground">{action.description}</p>
+					<p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+						{action.description}
+					</p>
 				)}
 
 				{action.contextSchema.length > 0 && (
-					<div className="text-xs">
+					<div className="text-xs [overflow-wrap:anywhere]">
 						<span className="text-muted-foreground">
 							{t("context", "Context:")}{" "}
 						</span>
@@ -620,8 +637,8 @@ function InputMappingField({
 
 	return (
 		<div className="flex gap-2 items-start">
-			<div className="flex-1">
-				<Label className="text-xs">{fieldName}</Label>
+			<div className="flex-1 min-w-0">
+				<Label className="text-xs [overflow-wrap:anywhere]">{fieldName}</Label>
 				<div className="flex gap-1 mt-1">
 					<Select
 						value={valueType}

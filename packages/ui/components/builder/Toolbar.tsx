@@ -45,8 +45,16 @@ export function Toolbar({
 	onPageChange,
 }: ToolbarProps) {
 	const { t } = useTranslation("flow");
-	const { copy, cut, paste, selection, deleteComponents, devMode, setDevMode } =
-		useBuilder();
+	const {
+		copy,
+		cut,
+		paste,
+		clipboard,
+		selection,
+		deleteComponents,
+		devMode,
+		setDevMode,
+	} = useBuilder();
 
 	const hasSelection = selection.componentIds.length > 0;
 	const hasPages = pages && pages.length > 0;
@@ -62,7 +70,7 @@ export function Toolbar({
 		<TooltipProvider delayDuration={300}>
 			<div
 				className={cn(
-					"flex items-center gap-1 h-10 px-2 border-b bg-background",
+					"flex shrink-0 items-center gap-1 h-10 px-2 border-b bg-background",
 					className,
 				)}
 			>
@@ -72,6 +80,7 @@ export function Toolbar({
 						<div className="flex items-center gap-2">
 							<FileText className="h-4 w-4 text-muted-foreground" />
 							<select
+								title={pages.find((page) => page.id === currentPageId)?.name}
 								value={currentPageId ?? ""}
 								onChange={(e) => {
 									const selectedId = e.target.value;
@@ -79,7 +88,7 @@ export function Toolbar({
 										onPageChange(selectedId);
 									}
 								}}
-								className="h-7 w-[180px] text-xs px-2 rounded-md border border-input bg-background cursor-pointer"
+								className="h-7 w-[180px] min-w-0 truncate text-xs px-2 rounded-md border border-input bg-background cursor-pointer"
 							>
 								{pages.map((page) => (
 									<option key={page.id} value={page.id}>
@@ -98,14 +107,14 @@ export function Toolbar({
 						icon={Copy}
 						label="Copy"
 						shortcut="⌘C"
-						onClick={copy}
+						onClick={() => copy()}
 						disabled={!hasSelection}
 					/>
 					<ToolbarButton
 						icon={Scissors}
 						label="Cut"
 						shortcut="⌘X"
-						onClick={cut}
+						onClick={() => cut()}
 						disabled={!hasSelection}
 					/>
 					<ToolbarButton
@@ -113,6 +122,7 @@ export function Toolbar({
 						label="Paste"
 						shortcut="⌘V"
 						onClick={() => paste()}
+						disabled={!clipboard?.components.length}
 					/>
 					<ToolbarButton
 						icon={Trash2}
@@ -180,6 +190,7 @@ function ToolbarButton({
 				<Button
 					variant={active ? "secondary" : "ghost"}
 					size="sm"
+					aria-label={label}
 					onClick={onClick}
 					disabled={disabled}
 					className="h-7 w-7 p-0"

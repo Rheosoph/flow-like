@@ -17,6 +17,7 @@ function useResolved<T>(
 }
 
 export function A2UIColumn({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -50,6 +51,7 @@ export function A2UIColumn({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn(
 				"flex flex-col",
 				align && alignMap[align],

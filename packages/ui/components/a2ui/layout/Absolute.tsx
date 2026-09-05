@@ -15,6 +15,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 }
 
 export function A2UIAbsolute({
+	elementRef,
 	component,
 	style,
 	renderChild,
@@ -26,6 +27,7 @@ export function A2UIAbsolute({
 
 	return (
 		<div
+			ref={elementRef}
 			className={cn("relative", resolveStyle(style))}
 			style={{
 				width: width ?? "100%",

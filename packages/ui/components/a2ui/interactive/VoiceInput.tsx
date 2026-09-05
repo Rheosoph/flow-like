@@ -140,6 +140,7 @@ function unsupportedVoiceCaptureMessage(): string {
 }
 
 export function A2UIVoiceInput({
+	elementRef,
 	component,
 	style,
 	componentId,
@@ -649,6 +650,7 @@ export function A2UIVoiceInput({
 
 	return (
 		<div
+			ref={elementRef}
 			data-card-action-stop
 			className={cn("space-y-2", containerStyle)}
 			style={inlineStyle}

@@ -1,3 +1,5 @@
+import type { IHomeLayout } from "@flow-like/flow-like-ui/components/home/types";
+
 export type OnlineProfile = {
 	id: string;
 	name: string;
@@ -7,6 +9,8 @@ export type OnlineProfile = {
 	interests?: string[];
 	tags?: string[];
 	theme?: any;
+	home_layout?: IHomeLayout | null;
+	home_default_id?: string | null;
 	bit_ids?: string[];
 	apps?: any;
 	shortcuts?: Array<{
@@ -37,6 +41,8 @@ export const toLocalProfile = (onlineProfile: OnlineProfile) => ({
 		interests: onlineProfile.interests ?? [],
 		tags: onlineProfile.tags ?? [],
 		theme: onlineProfile.theme ?? null,
+		home_layout: onlineProfile.home_layout ?? null,
+		home_default_id: onlineProfile.home_default_id ?? null,
 		bits: onlineProfile.bit_ids ?? [],
 		apps: onlineProfile.apps ?? [],
 		shortcuts: onlineProfile.shortcuts ?? [],
