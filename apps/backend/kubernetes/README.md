@@ -1,9 +1,11 @@
 # Flow-Like Kubernetes backend
 
 The Helm chart deploys the API, a private RustFS object store, authenticated Redis,
-and an execution manager that prepares single-use gVisor Pods before dispatch.
+and a Rust execution manager that prepares single-use gVisor Pods before dispatch.
 This implementation still needs live cluster isolation and load qualification.
 There is no measured few-millisecond start guarantee.
+The [self-hosting documentation](../../docs/src/content/docs/self-hosting/kubernetes/overview.md)
+covers installation, Helm values, security and day-to-day operation.
 
 ## Prepare an installation
 
@@ -97,6 +99,7 @@ signing key. The environment is discarded after one execution.
 | Value | Effect |
 | --- | --- |
 | `executionManager.replicaCount` | Independent manager partitions and warm reserves |
+| `executionManager.workerThreads` | Async worker threads per manager, default 2; independent of active execution capacity |
 | `executionManager.maxConcurrentExecutions` | Per-manager active execution limit, bounded by available CPU and memory |
 | `executionManager.warmPoolSize` | Additional clean slots to prepare before dispatch |
 | `executionManager.queueBridge.replicaCount` | Number of Redis dispatch consumers |
@@ -186,7 +189,8 @@ To use external S3-compatible storage, set `rustfs.enabled=false`, keep
 `stsEndpoint` and the credential Secret. `runtimeCredentialsProvider` selects the
 STS policy dialect (`rustfs` or `aws`); the actual credential implementation is
 AWS-compatible. The provider must enforce a session policy narrower than the
-issuer's base policy. See the [object-store research](../docker-compose/OBJECT_STORE_RESEARCH.md).
+issuer's base policy. See the [storage verification contract](../docker-compose/object-store/README.md#verification)
+for allowed and denied operations to test against the exact store version.
 
 The isolated gateway currently supports the S3 configuration. Other chart storage
 providers remain available in `trusted_shared` mode.
@@ -212,6 +216,16 @@ Set `redis.enabled=false` and `redis.externalExistingSecret` for an external
 service. Use URL-encoded credentials; the chart never interpolates a raw password
 into a URL. A `rediss://` endpoint uses the client's normal CA verification. Private
 CAs need the application's supported trust-store configuration.
+
+## Execution image upgrades
+
+Before replacing execution images, pause new dispatch and drain managers and queue
+bridges. Build and pin the manager/gateway image together with the executor image
+that contains `/app/execution-slot`. Preserve Redis replay claims, cancellation
+markers and signing keys; reconcile uncertain work before resuming. Do not clear
+claim state or switch queue versions during active delivery. The
+[native supervisor guide](../execution-manager/README.md#build-verify-and-upgrade)
+describes the compatible wire and ownership formats.
 
 ## Database migrations
 
@@ -271,6 +285,6 @@ store to check STS sibling-prefix, copy-source, missing-token, admin and presign
 URL behavior. The test uses only the API and issuer identities and removes its
 unique temporary object prefixes. It does not test expiry, storage failover or
 application throughput. Before exposing tenants, also verify cancellation, network-policy enforcement,
-node loss, queue retention and representative load on the real cluster. Image
-builds and live gVisor/RustFS qualification were unavailable in the implementation
-workspace. Warm slots and Helm rendering tests cannot establish a latency SLA.
+node loss, queue retention and representative load on the real cluster. Use an
+hour-long fixture to verify storage access and terminal callbacks near expiry.
+Warm slots and Helm rendering tests cannot establish a latency SLA.
