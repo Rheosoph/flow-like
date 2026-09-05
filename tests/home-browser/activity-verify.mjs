@@ -65,6 +65,18 @@ try {
 			"Error / Fatal",
 		),
 	);
+
+	const visibleBars = await page
+		.getByTestId("activity-run-activity")
+		.locator('[title$="Error/Fatal"] > div')
+		.evaluateAll(
+			(bars) =>
+				bars.filter((bar) => bar.getBoundingClientRect().height > 1).length,
+		);
+	assert.ok(
+		visibleBars > 0,
+		"Populated activity bars have a visible height under natural content sizing",
+	);
 	await page.screenshot({
 		path: "/private/tmp/home-qa-activity-populated.png",
 		fullPage: true,

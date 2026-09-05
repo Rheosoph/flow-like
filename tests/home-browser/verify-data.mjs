@@ -38,7 +38,11 @@ const chart = (id) => page.getByTestId(`data-${id}`);
 const waitVisual = (id) =>
 	page.waitForFunction(
 		(selector) =>
-			[...document.querySelectorAll(`${selector} svg`)].some((element) => {
+			[
+				...document.querySelectorAll(
+					`${selector} svg, ${selector} [data-home-data-calendar]`,
+				),
+			].some((element) => {
 				const box = element.getBoundingClientRect();
 				return box.width > 100 && box.height > 80;
 			}),
@@ -207,12 +211,8 @@ try {
 		"Saved-query picker binds the viewer parameter while preserving the saved SQL",
 	);
 	await page.getByLabel("Scenario", { exact: true }).selectOption("empty");
-	await chart("bar")
-		.getByText("No data matches these filters.", { exact: true })
-		.waitFor();
-	await chart("stat")
-		.getByText("No data matches these filters.", { exact: true })
-		.waitFor();
+	await chart("bar").getByText("No records yet", { exact: true }).waitFor();
+	await chart("stat").getByText("No records yet", { exact: true }).waitFor();
 	await page.getByLabel("Scenario", { exact: true }).selectOption("error");
 	await chart("bar")
 		.getByText("Data is unavailable", { exact: true })
@@ -228,6 +228,198 @@ try {
 	await waitVisual("sankey");
 	passed.push(
 		"Empty state, permission error, retry and successful recovery remain contained in each widget",
+	);
+	await page.goto("http://127.0.0.1:4318/data-fixture?all=1", {
+		waitUntil: "domcontentloaded",
+	});
+	await page.waitForFunction(
+		() => {
+			const cards = [
+				...document.querySelectorAll('section[data-testid^="data-"]'),
+			];
+			return (
+				cards.length === 32 &&
+				cards.every((card) =>
+					card.querySelector('[data-home-data-state="ready"]'),
+				)
+			);
+		},
+		undefined,
+		{ timeout: 60_000 },
+	);
+	for (const id of ["sankey", "heatmap", "treemap", "funnel", "graph"])
+		await waitVisual(id);
+	await page.waitForFunction(
+		() =>
+			![...document.querySelectorAll("output")].some((element) =>
+				element.textContent?.includes("Loading visualization"),
+			),
+	);
+	assert.equal(
+		await page.getByText("Nothing to display", { exact: true }).count(),
+		0,
+	);
+	assert.equal(
+		await page.getByText("No numeric values to plot", { exact: true }).count(),
+		0,
+	);
+	await page.screenshot({
+		path: "/private/tmp/home-data-polished-all32-desktop.png",
+		fullPage: true,
+	});
+	for (const width of [390, 768]) {
+		await page.setViewportSize({ width, height: 844 });
+		await page.waitForFunction(
+			() => document.documentElement.scrollWidth <= innerWidth + 1,
+		);
+		const overflow = await page
+			.locator('section[data-testid^="data-"]')
+			.evaluateAll((cards) =>
+				cards
+					.filter((card) => card.getBoundingClientRect().width > innerWidth)
+					.map((card) => card.getAttribute("data-testid")),
+			);
+		assert.deepEqual(overflow, []);
+	}
+	await page.setViewportSize({ width: 390, height: 844 });
+	for (const id of [
+		"stat",
+		"calendar",
+		"sankey",
+		"metricstrip",
+		"gauge",
+		"heatmap",
+		"table",
+		"timeline",
+	]) {
+		await chart(id).evaluate((element) =>
+			element.scrollIntoView({ block: "start", behavior: "instant" }),
+		);
+		await page.screenshot({
+			path: `/private/tmp/home-data-polished-${id}-390.png`,
+		});
+	}
+	await page.getByLabel("Scenario", { exact: true }).selectOption("empty");
+	await page.waitForFunction(() =>
+		[...document.querySelectorAll('section[data-testid^="data-"]')].every(
+			(card) => card.querySelector('[data-home-data-state="empty"]'),
+		),
+	);
+	const emptyHeights = await page
+		.locator('section[data-testid^="data-"]')
+		.evaluateAll((cards) =>
+			cards.map((card) => card.getBoundingClientRect().height),
+		);
+	assert.ok(
+		emptyHeights.every((height) => height < 220),
+		`Empty cards must be compact: ${emptyHeights.join(", ")}`,
+	);
+	await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+	await page.screenshot({
+		path: "/private/tmp/home-data-polished-empty-390.png",
+	});
+	passed.push(
+		"All 32 data presentations render at desktop, tablet, and narrow widths; empty cards remain below 220px",
+	);
+	await page.goto("http://127.0.0.1:4318/data-fixture?editor=1", {
+		waitUntil: "domcontentloaded",
+	});
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll(
+				'[data-home-widget] [data-home-data-state="ready"]',
+			).length === 32,
+		undefined,
+		{ timeout: 60_000 },
+	);
+	for (const width of [1480, 768, 390]) {
+		await page.setViewportSize({ width, height: 844 });
+		await page.waitForFunction(
+			() => document.documentElement.scrollWidth <= innerWidth + 1,
+		);
+		await page.waitForFunction(() =>
+			[...document.querySelectorAll("[data-home-widget]")].every((card) => {
+				const root = card.querySelector("[data-home-data-state]");
+				return (
+					root &&
+					card.getBoundingClientRect().bottom >=
+						root.getBoundingClientRect().bottom - 1
+				);
+			}),
+		);
+		const height = await page
+			.locator('[data-home-widget="bar"]')
+			.evaluate((element) => element.getBoundingClientRect().height);
+		assert.ok(
+			height > 280 && height < 440,
+			`Production chart frame height ${height}`,
+		);
+		await page.screenshot({
+			path: `/private/tmp/home-data-production-${width}.png`,
+			fullPage: width === 1480,
+		});
+	}
+	await page.getByLabel("Scenario", { exact: true }).selectOption("empty");
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll(
+				'[data-home-widget] [data-home-data-state="empty"]',
+			).length === 32,
+	);
+	await page.waitForFunction(() =>
+		[...document.querySelectorAll("[data-home-widget]")].every(
+			(card) => card.getBoundingClientRect().height < 230,
+		),
+	);
+	await page.screenshot({
+		path: "/private/tmp/home-data-production-empty-390.png",
+	});
+	await page.getByLabel("Scenario", { exact: true }).selectOption("populated");
+	await page.waitForFunction(
+		() =>
+			document.querySelector(
+				'[data-home-widget="bar"] [data-home-data-state="ready"]',
+			) &&
+			document.querySelector('[data-home-widget="bar"]').getBoundingClientRect()
+				.height > 280,
+	);
+	passed.push(
+		"Production HomeEditor automatically sizes all 32 real data widgets at three widths; empty frames contract and populated charts regain their plot area without clipped content",
+	);
+	for (const id of ["calendar", "metricstrip", "sankey"]) {
+		await page
+			.locator(`[data-home-widget="${id}"]`)
+			.evaluate((element) =>
+				element.scrollIntoView({ block: "start", behavior: "instant" }),
+			);
+		await page.screenshot({
+			path: `/private/tmp/home-data-production-${id}-390.png`,
+		});
+	}
+	await page
+		.getByLabel("Scenario", { exact: true })
+		.selectOption("unconfigured");
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll(
+				'[data-home-widget] [data-home-data-state="unconfigured"]',
+			).length === 32,
+	);
+	await page.waitForFunction(() =>
+		[...document.querySelectorAll("[data-home-widget]")].every(
+			(card) => card.getBoundingClientRect().height < 230,
+		),
+	);
+	assert.equal(
+		await page.getByText("Connect your data", { exact: true }).count(),
+		32,
+	);
+	await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+	await page.screenshot({
+		path: "/private/tmp/home-data-production-unconfigured-390.png",
+	});
+	passed.push(
+		"All 32 unconfigured production widgets show a compact source-selection hint",
 	);
 	assert.deepEqual(errors, []);
 	assert.deepEqual(blocked, []);

@@ -4,7 +4,10 @@ import { chromium } from "playwright-core";
 
 const browser = await chromium.launch({
 	executablePath:
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		process.env.CHROME_EXECUTABLE_PATH ||
+		(process.platform === "darwin"
+			? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+			: undefined),
 	headless: true,
 	args: ["--disable-dev-shm-usage", "--no-sandbox"],
 });
@@ -195,12 +198,23 @@ try {
 		.getByRole("button", { name: /^Move / });
 	await firstMove.focus();
 	await page.keyboard.press("Space");
-	await page.waitForFunction(
-		() =>
-			!!document.querySelector(
-				'button[aria-pressed="true"][aria-roledescription="sortable"]',
-			),
+	await page.locator("[data-home-drag-preview]").waitFor();
+	assert.deepEqual(
+		await order(),
+		originalOrder,
+		"Space pickup preserves order",
 	);
+	await page.keyboard.press("ArrowDown");
+	await page.waitForTimeout(250);
+	await page.keyboard.press("Escape");
+	assert.deepEqual(
+		await order(),
+		originalOrder,
+		"Escape restores keyboard drag order",
+	);
+	await firstMove.focus();
+	await page.keyboard.press("Space");
+	await page.locator("[data-home-drag-preview]").waitFor();
 	await page.keyboard.press("ArrowDown");
 	await page.waitForTimeout(250);
 	await page.keyboard.press("Space");
@@ -224,9 +238,19 @@ try {
 		.getByRole("button", { name: "Resize Report A", exact: true })
 		.focus();
 	await page.keyboard.press("ArrowRight");
-	await embeds.nth(0).getByText("7 × 6", { exact: true }).waitFor();
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll('[data-widget-type="app-embed"]')[0]?.style
+				.gridColumn === "span 7",
+	);
+	assert.equal(await embeds.nth(0).getAttribute("data-height-mode"), "fixed");
 	await page.getByRole("button", { name: "Undo layout change" }).click();
-	await embeds.nth(0).getByText("6 × 6", { exact: true }).waitFor();
+	await page.waitForFunction(
+		() =>
+			document.querySelectorAll('[data-widget-type="app-embed"]')[0]?.style
+				.gridColumn === "span 6",
+	);
+	assert.equal(await embeds.nth(0).getAttribute("data-height-mode"), "auto");
 	report.passed.push("Keyboard resize changes width and undo restores size");
 	await page.getByRole("button", { name: "Layout options" }).click();
 	await page.getByRole("menuitem", { name: "Reset to default" }).click();
@@ -312,7 +336,7 @@ try {
 		"1480px, 768px, and 390px viewports have no page or canvas horizontal overflow",
 	);
 	const firstApp = page
-		.locator('[data-widget-type="app-collection"] a')
+		.locator('[data-widget-type="app-collection"] [role="button"]')
 		.first();
 	assert.ok(
 		(await firstApp.boundingBox()).height >= 64,
@@ -367,6 +391,9 @@ try {
 	assert.equal(await widgets().count(), 4);
 	assert.equal(await page.evaluate(() => window.homeQa.counters.resets), 1);
 	report.passed.push("Save after reset calls the inheritance reset callback");
+	await page.waitForFunction(
+		() => !document.querySelector('[data-sonner-toast][data-visible="true"]'),
+	);
 	await page.getByRole("button", { name: "Customize", exact: true }).click();
 	await page
 		.getByRole("textbox", { name: "Search widgets", exact: true })
@@ -383,6 +410,24 @@ try {
 	await page.mouse.move(into.x + into.width / 2, into.y + into.height / 2, {
 		steps: 15,
 	});
+	await page.locator('[data-home-placeholder="active"]').waitFor();
+	await page.locator("[data-home-drag-preview] [data-widget-type]").waitFor();
+	await page.waitForTimeout(200);
+	const ghostBox = await page.locator("[data-home-drag-preview]").boundingBox();
+	const dropBox = await page
+		.locator('[data-home-placeholder="active"]')
+		.boundingBox();
+	assert.ok(
+		Math.abs(ghostBox.width - dropBox.width) <= 24,
+		"Full-size ghost matches insertion placeholder width",
+	);
+	const previewOrder = await order();
+	await page.waitForTimeout(400);
+	assert.deepEqual(
+		await order(),
+		previewOrder,
+		"Stationary pointer does not oscillate insertion order",
+	);
 	await page.screenshot({
 		path: "/private/tmp/home-qa-catalog-drag.png",
 		fullPage: true,
@@ -392,6 +437,11 @@ try {
 		.getByRole("button", { name: "Configure Milestone", exact: true })
 		.waitFor();
 	assert.equal(await widgets().count(), 5);
+	assert.deepEqual(
+		await order(),
+		previewOrder,
+		"Catalog drop commits the visible insertion order",
+	);
 	await closePanel();
 	const resizeHandle = page.getByRole("button", {
 		name: "Resize Milestone",
@@ -399,6 +449,8 @@ try {
 	});
 	await resizeHandle.scrollIntoViewIfNeeded();
 	const resizeFrom = await resizeHandle.boundingBox();
+	const resizeWidget = widgets().filter({ has: resizeHandle });
+	const initialResizeHeight = (await resizeWidget.boundingBox()).height;
 	const canvasWidth = await page
 		.locator("[data-home-canvas]")
 		.evaluate((element) => element.clientWidth);
@@ -419,18 +471,30 @@ try {
 	const resized = widgets().filter({
 		has: page.getByRole("button", { name: "Configure Milestone", exact: true }),
 	});
-	await resized.getByText("5 × 3", { exact: true }).waitFor();
+	await page.waitForFunction(() =>
+		[...document.querySelectorAll("[data-home-widget]")].some(
+			(element) =>
+				element.querySelector('button[aria-label="Configure Milestone"]') &&
+				element.style.gridColumn === "span 5",
+		),
+	);
+	assert.equal(await resized.getAttribute("data-height-mode"), "fixed");
 	await page.getByRole("button", { name: "Save", exact: true }).click();
 	await page.locator('[data-home-editor][data-editing="false"]').waitFor();
-	assert.deepEqual(
-		await page.evaluate(
-			() =>
-				window.homeQa
-					.getSaved()
-					.widgets.find((widget) => widget.title === "Milestone").size,
-		),
-		{ columns: 5, rows: 3 },
+	const committedSize = await page.evaluate(
+		() =>
+			window.homeQa
+				.getSaved()
+				.widgets.find((widget) => widget.title === "Milestone").size,
 	);
+	assert.equal(committedSize.columns, 5);
+	assert.equal(committedSize.heightMode, "fixed");
+	assert.ok(
+		committedSize.height >= initialResizeHeight + 100 &&
+			committedSize.height <= initialResizeHeight + 160,
+		"Pointer resize commits approximately the requested 136px height increase",
+	);
+
 	report.passed.push(
 		"Pointer catalog drag adds a widget; corner resize commits width and height when saved",
 	);

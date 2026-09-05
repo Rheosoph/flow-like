@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { HomeDataWidget } from "../../packages/ui/components/home/data-widget";
 import { HomeDataWidgetSettings } from "../../packages/ui/components/home/data-widget-settings";
-import type { IHomeWidget } from "../../packages/ui/components/home/types";
+import { HomeEditor } from "../../packages/ui/components/home/home-editor";
+import type {
+	IHomeLayout,
+	IHomeWidget,
+} from "../../packages/ui/components/home/types";
 import {
 	useBackend,
 	useBackendStore,
@@ -128,6 +132,61 @@ const samples = [
 	}),
 ];
 
+const allSamples = [
+	...samples,
+	widget("metricstrip", "metricstrip", {
+		groupBy: "",
+		measures: [
+			{ aggregation: "sum", field: "amount", label: "Revenue" },
+			{ aggregation: "count", field: "", label: "Orders" },
+			{ aggregation: "avg", field: "latency", label: "Latency" },
+		],
+	}),
+	...(["progress", "gauge", "bullet"] as const).map((view) =>
+		widget(view, view, { groupBy: "", target: 1000 }),
+	),
+	widget("horizontal", "horizontal"),
+	widget("line", "line", {
+		groupBy: "date",
+		sortBy: "group",
+		sortDirection: "asc",
+	}),
+	widget("area", "area", {
+		groupBy: "date",
+		sortBy: "group",
+		sortDirection: "asc",
+	}),
+	widget("pie", "pie"),
+	widget("scatter", "scatter", { xField: "amount", yField: "latency" }),
+	widget("histogram", "histogram", {
+		groupBy: "latency",
+		binWidth: 10,
+		measures: [{ aggregation: "count", field: "", label: "Orders" }],
+	}),
+	widget("heatmap", "heatmap", { seriesBy: "status" }),
+	widget("treemap", "treemap"),
+	widget("funnel", "funnel"),
+	widget("waterfall", "waterfall"),
+	...(
+		["table", "list", "cards", "kanban", "record", "comparison"] as const
+	).map((view) =>
+		widget(view, view, {
+			mode: "records",
+			groupBy: "status",
+			fields: ["name", "amount", "department", "status"],
+		}),
+	),
+	widget("timeline", "timeline", {
+		xField: "date",
+		fields: ["name", "amount", "date"],
+	}),
+	widget("graph", "graph", {
+		xField: "department",
+		yField: "status",
+		fields: ["department", "status"],
+	}),
+];
+
 function aggregateFixture(payload: ExecuteSqlPayload) {
 	let rows = sourceRows as Record<string, unknown>[];
 	const owner = payload.params?.owner ?? payload.params?.__home_filter_0;
@@ -135,15 +194,35 @@ function aggregateFixture(payload: ExecuteSqlPayload) {
 		rows = rows.filter((row) => row.owner === owner);
 	if (payload.params?.owner !== undefined)
 		rows = rows.filter((row) => row.owner === payload.params?.owner);
-	if (!payload.sql.includes('AS "__measure_0"')) return { rows, columns };
+	if (!payload.sql.includes('AS "__measure_0"')) {
+		const selection = /^SELECT\s+(.+?)\s+FROM/is.exec(payload.sql)?.[1];
+		const fields =
+			selection && selection !== "*"
+				? [...selection.matchAll(/"([^"]+)"/g)].map((match) => match[1])
+				: columns.map((column) => column.name);
+		return {
+			rows: rows.map((row) =>
+				Object.fromEntries(fields.map((field) => [field, row[field]])),
+			),
+			columns: fields.flatMap((field) =>
+				columns.filter((column) => column.name === field),
+			),
+		};
+	}
+	const histogram = /FLOOR/.test(payload.sql);
+	const binWidth = Number(payload.params?.__home_bin_width ?? 10);
 	const group =
 		/"([^"]+)" AS "__group"/.exec(payload.sql)?.[1] ??
-		(/DATE_TRUNC/.test(payload.sql) ? "date" : "");
+		(/DATE_TRUNC/.test(payload.sql) ? "date" : histogram ? "latency" : "");
 	const series = /"([^"]+)" AS "__series"/.exec(payload.sql)?.[1] ?? "";
 	const grouped = new Map<string, Record<string, unknown>[]>();
 	for (const row of rows) {
 		const key = JSON.stringify([
-			group ? row[group] : null,
+			group
+				? histogram
+					? Math.floor(Number(row[group]) / binWidth) * binWidth
+					: row[group]
+				: null,
 			series ? row[series] : null,
 		]);
 		const list = grouped.get(key) ?? [];
@@ -152,7 +231,10 @@ function aggregateFixture(payload: ExecuteSqlPayload) {
 	}
 	const result = [...grouped.values()].map((items) => {
 		const row: Record<string, unknown> = {};
-		if (group) row.__group = items[0][group];
+		if (group)
+			row.__group = histogram
+				? Math.floor(Number(items[0][group]) / binWidth) * binWidth
+				: items[0][group];
 		if (series) row.__series = items[0][series];
 		const matches = [
 			...payload.sql.matchAll(
@@ -219,6 +301,23 @@ export default function DataFixture() {
 	const scenarioRef = useRef(scenario);
 	scenarioRef.current = scenario;
 	const [lastQuery, setLastQuery] = useState("");
+	const expanded = new URLSearchParams(window.location.search).has("all");
+	const editor = new URLSearchParams(window.location.search).has("editor");
+	const [layout, setLayout] = useState<IHomeLayout>({
+		version: 1,
+		title: "Data overview",
+		widgets: allSamples,
+	});
+	const visibleLayout =
+		scenario === "unconfigured"
+			? {
+					...layout,
+					widgets: layout.widgets.map((item) => ({
+						...item,
+						config: { ...item.config, appId: "" },
+					})),
+				}
+			: layout;
 	const [editable, setEditable] = useState(widget("builder", "bar"));
 	useEffect(() => {
 		const original = initial.current;
@@ -303,69 +402,111 @@ export default function DataFixture() {
 						onChange={(event) => setScenario(event.target.value)}
 					>
 						<option value="populated">Populated</option>
+						{editor && <option value="unconfigured">Unconfigured</option>}
 						<option value="empty">Empty</option>
 						<option value="error">Access error</option>
 					</select>
 				</label>
 			</header>
-			<div
-				style={{
-					display: "grid",
-					gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,360px),1fr))",
-					gap: 16,
-				}}
-			>
-				{samples.map((item) => (
-					<section
-						key={`${scenario}:${item.id}`}
-						data-testid={`data-${item.id}`}
-						className="flex min-w-0 flex-col rounded-xl border bg-card p-4"
-						style={{ height: 360 }}
+			{editor ? (
+				<div data-testid="data-production-editor">
+					<HomeEditor
+						key={scenario}
+						layout={visibleLayout}
+						defaultLayout={layout}
+						onSave={async (next) => setLayout(next)}
+						onReset={async () => {}}
+					/>
+				</div>
+			) : (
+				<>
+					<div
+						style={{
+							display: "grid",
+							gridTemplateColumns:
+								"repeat(auto-fit,minmax(min(100%,360px),1fr))",
+							gap: 16,
+						}}
 					>
-						<h2 className="mb-3 shrink-0 font-semibold">{item.id}</h2>
-						<div className="min-h-0 flex-1">
-							<HomeDataWidget widget={item} />
+						{(expanded ? allSamples : samples).map((item) => (
+							<section
+								key={`${scenario}:${item.id}`}
+								data-testid={`data-${item.id}`}
+								className="flex min-w-0 flex-col rounded-xl border bg-card p-4"
+								style={{
+									height:
+										scenario === "populated"
+											? ["stat", "metricstrip", "progress", "bullet"].includes(
+													String(item.config.visualization),
+												)
+												? 190
+												: 300
+											: undefined,
+								}}
+							>
+								<h2 className="mb-3 shrink-0 text-sm font-semibold">
+									{item.id}
+								</h2>
+								<div className="min-h-0 flex-1">
+									<HomeDataWidget widget={item} />
+								</div>
+							</section>
+						))}
+					</div>
+					<section className="mt-6 rounded-xl border p-4">
+						<h2 className="mb-4 text-lg font-semibold">
+							Configure a real widget
+						</h2>
+						<div
+							style={{
+								display: "grid",
+								gridTemplateColumns:
+									"repeat(auto-fit,minmax(min(100%,360px),1fr))",
+								gap: 24,
+							}}
+						>
+							<div data-testid="data-settings">
+								<HomeDataWidgetSettings
+									widget={editable}
+									onChange={(config) =>
+										setEditable((previous) => ({ ...previous, config }))
+									}
+								/>
+							</div>
+							<div>
+								<div
+									data-testid="data-builder-preview"
+									className="rounded-xl border p-4"
+									style={{
+										height:
+											scenario === "populated"
+												? [
+														"stat",
+														"metricstrip",
+														"progress",
+														"bullet",
+													].includes(String(editable.config.visualization))
+													? 190
+													: 300
+												: undefined,
+									}}
+								>
+									<HomeDataWidget key={scenario} widget={editable} />
+								</div>
+								<details className="mt-4" open>
+									<summary>Last workbench request</summary>
+									<pre
+										data-testid="data-last-query"
+										className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs"
+									>
+										{lastQuery}
+									</pre>
+								</details>
+							</div>
 						</div>
 					</section>
-				))}
-			</div>
-			<section className="mt-6 rounded-xl border p-4">
-				<h2 className="mb-4 text-lg font-semibold">Configure a real widget</h2>
-				<div
-					style={{
-						display: "grid",
-						gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,360px),1fr))",
-						gap: 24,
-					}}
-				>
-					<div data-testid="data-settings">
-						<HomeDataWidgetSettings
-							widget={editable}
-							onChange={(config) =>
-								setEditable((previous) => ({ ...previous, config }))
-							}
-						/>
-					</div>
-					<div>
-						<div
-							data-testid="data-builder-preview"
-							className="rounded-xl border p-4"
-							style={{ height: 360 }}
-						>
-							<HomeDataWidget key={scenario} widget={editable} />
-						</div>
-						<details className="mt-4" open>
-							<summary>Last workbench request</summary>
-							<pre
-								data-testid="data-last-query"
-								className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs"
-							>
-								{lastQuery}
-							</pre>
-						</details>
-					</div>
-				</div>
-			</section>
+				</>
+			)}
 		</main>
 	);
 }

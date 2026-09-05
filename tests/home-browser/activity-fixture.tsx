@@ -194,6 +194,7 @@ export default function ActivityFixture() {
 					display: "grid",
 					gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,380px),1fr))",
 					gap: 16,
+					alignItems: "start",
 				}}
 			>
 				{[
@@ -206,12 +207,11 @@ export default function ActivityFixture() {
 						key={type}
 						data-testid={`activity-${type}`}
 						className="flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card"
-						style={{ height: type === "needs-attention" ? 520 : 360 }}
 					>
-						<h2 className="shrink-0 border-b px-4 py-3 text-base font-semibold">
+						<h2 className="shrink-0 px-4 pb-3 pt-4 text-sm font-semibold">
 							{type}
 						</h2>
-						<div className="min-h-0 flex-1">
+						<div className="min-h-0 px-4 pb-4">
 							<HomeWidgetContent widget={widget(type, days)} />
 						</div>
 					</section>

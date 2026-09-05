@@ -16,9 +16,15 @@ import { MobileHeaderProvider } from "../../packages/ui/components/ui/mobile-hea
 import { Toaster } from "sonner";
 import "../../packages/ui/global.css";
 
+import { personalFixtureLayout } from "./personal-layout";
+
 const DataFixture = lazy(() => import("./data-fixture"));
 const ActivityFixture = lazy(() => import("./activity-fixture"));
+const CollectionsFixture = lazy(() => import("./collections-fixture"));
 const ProfileFixture = lazy(() => import("./profile-fixture"));
+const DefaultFixture = lazy(() => import("./default-fixture"));
+const WorkspaceFixture = lazy(() => import("./workspace-fixture"));
+const PackagesFixture = lazy(() => import("./packages-fixture"));
 
 const at = { secs_since_epoch: 1788566400, nanos_since_epoch: 0 };
 const apps = [
@@ -177,6 +183,7 @@ function Harness() {
 			},
 			userState: {
 				...original.userState,
+				getInfo: async () => ({ name: "Alex Example", tier: "FREE" }),
 				getProfile: async () => profile,
 				getSettingsProfile: async () => ({ hub_profile: profile }),
 				getAllSettingsProfiles: async () => [{ hub_profile: profile }],
@@ -244,25 +251,34 @@ function Harness() {
 		return true;
 	});
 	const [defaultLayout] = useState<any>(() =>
-		new URLSearchParams(location.search).has("default")
-			? createDefaultHomeLayout()
-			: {
-					version: 1,
-					widgets: [
-						createHomeWidget("greeting"),
-						createHomeWidget("flowpilot-bar"),
-						createHomeWidget("recent-apps"),
-						{
-							...createHomeWidget("info"),
-							config: {
-								mode: "markdown",
-								body: "## Your workspace, your way\nKeep useful apps and context close. Choose **Customize** to try the production editor.",
+		new URLSearchParams(location.search).get("showcase") === "personal"
+			? personalFixtureLayout()
+			: new URLSearchParams(location.search).has("default")
+				? createDefaultHomeLayout()
+				: {
+						version: 1,
+						widgets: [
+							createHomeWidget("greeting"),
+							createHomeWidget("flowpilot-bar"),
+							createHomeWidget("recent-apps"),
+							{
+								...createHomeWidget("info"),
+								config: {
+									mode: "markdown",
+									body: "## Your workspace, your way\nKeep useful apps and context close. Choose **Customize** to try the production editor.",
+								},
 							},
-						},
-					],
-				},
+						],
+					},
 	);
-	const [layout, setLayout] = useState(defaultLayout);
+	const persistent = new URLSearchParams(location.search).has("persist");
+	const [layout, setLayout] = useState(() => {
+		const restored = persistent
+			? JSON.parse(sessionStorage.getItem("home-editor-qa-layout") || "null")
+			: null;
+		if (restored) (window as any).homeQa.saved = restored;
+		return restored ?? defaultLayout;
+	});
 	const [editorKey, setEditorKey] = useState(0);
 	(window as any).homeQa.remount = () => setEditorKey((key) => key + 1);
 	return (
@@ -278,6 +294,7 @@ function Harness() {
 				sourceLabel="Fixture profile"
 				onReset={async () => {
 					counters.resets++;
+					if (persistent) sessionStorage.removeItem("home-editor-qa-layout");
 					setLayout(structuredClone(defaultLayout));
 				}}
 				onSave={async (value) => {
@@ -292,6 +309,11 @@ function Harness() {
 						);
 					counters.saves++;
 					(window as any).homeQa.saved = structuredClone(value);
+					if (persistent)
+						sessionStorage.setItem(
+							"home-editor-qa-layout",
+							JSON.stringify(value),
+						);
 					setLayout(value);
 				}}
 			/>
@@ -323,10 +345,18 @@ createRoot(document.getElementById("root")!).render(
 			<TooltipProvider>
 				<MobileHeaderProvider>
 					<Suspense fallback={<p>Loading local fixture…</p>}>
-						{location.pathname.startsWith("/admin/profiles") ? (
+						{location.pathname === "/default-fixture" ? (
+							<DefaultFixture />
+						) : location.pathname === "/workspace-fixture" ? (
+							<WorkspaceFixture />
+						) : location.pathname === "/packages-fixture" ? (
+							<PackagesFixture />
+						) : location.pathname.startsWith("/admin/profiles") ? (
 							<ProfileFixture />
 						) : location.pathname === "/data-fixture" ? (
 							<DataFixture />
+						) : location.pathname === "/collections-fixture" ? (
+							<CollectionsFixture />
 						) : location.pathname === "/activity-fixture" ? (
 							<ActivityFixture />
 						) : (
