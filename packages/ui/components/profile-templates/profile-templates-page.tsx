@@ -196,9 +196,12 @@ function ProfileTemplatesContent({
 							)}
 						</div>
 					) : (
-						<div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-3">
+						<div className="grid items-stretch gap-5 md:grid-cols-2 xl:grid-cols-3">
 							{profiles.map((profile) => (
-								<article key={profile.id} className="group min-w-0 space-y-3">
+								<article
+									key={profile.id}
+									className="group flex min-w-0 flex-col gap-3"
+								>
 									<ProfileTemplatePreview profile={profile} compact />
 									<div className="flex flex-wrap items-center gap-1 px-1">
 										{context.canWrite && (

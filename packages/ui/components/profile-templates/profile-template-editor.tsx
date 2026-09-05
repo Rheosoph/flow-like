@@ -15,7 +15,14 @@ import {
 	X,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import {
+	type ReactNode,
+	Suspense,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import {
 	IConnectionMode,
@@ -65,6 +72,18 @@ const browserUpload: ProfileMediaUpload = async (url, file) => {
 export function ProfileTemplateEditorPage({
 	uploadMedia = browserUpload,
 }: { uploadMedia?: ProfileMediaUpload }) {
+	return (
+		<Suspense
+			fallback={<ProfileTemplateStatus message="Loading profile editor…" />}
+		>
+			<ProfileTemplateEditorRoute uploadMedia={uploadMedia} />
+		</Suspense>
+	);
+}
+
+function ProfileTemplateEditorRoute({
+	uploadMedia,
+}: { uploadMedia: ProfileMediaUpload }) {
 	const context = useProfileTemplates();
 	const params = useSearchParams();
 	const id = params.get("id");
@@ -109,7 +128,11 @@ export function ProfileTemplateEditorPage({
 			initial={
 				id && source
 					? source
-					: createProfileTemplate(context.profile.data.hub, source)
+					: createProfileTemplate(
+							context.profile.data.hub,
+							source,
+							context.profile.data.secure,
+						)
 			}
 			existing={!!id}
 			context={context}

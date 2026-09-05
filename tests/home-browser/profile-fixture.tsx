@@ -152,7 +152,7 @@ export default function ProfileFixture() {
 						const format =
 							new URL(path, location.origin).searchParams.get("format") ??
 							"webp";
-						const mediaPath = `/profile-fixture-media/${state.nextMedia++}.${format}`;
+						const mediaPath = `/profile-fixture-media/${state.nextMedia++}.${format === "jpeg" ? "jpg" : format}`;
 						return {
 							url: `${location.origin}${mediaPath}?signature=fixture`,
 							final_url: `${location.origin}${mediaPath}`,
@@ -167,10 +167,10 @@ export default function ProfileFixture() {
 					qa.lastBitRequest = structuredClone(body);
 					return bits.filter(
 						(bit) =>
-							(!body.query ||
+							(!body.search ||
 								bit.meta.en.name
 									.toLowerCase()
-									.includes(body.query.toLowerCase())) &&
+									.includes(body.search.toLowerCase())) &&
 							(!body.bit_types?.length || body.bit_types.includes(bit.type)),
 					);
 				},

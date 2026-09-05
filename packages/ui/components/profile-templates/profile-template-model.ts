@@ -4,7 +4,11 @@ import {
 	type IProfile,
 } from "../../lib/schema/profile/profile";
 
-export function createProfileTemplate(hub = "", source?: IProfile): IProfile {
+export function createProfileTemplate(
+	hub = "",
+	source?: IProfile,
+	secure = true,
+): IProfile {
 	const now = new Date().toISOString();
 	return {
 		...source,
@@ -14,6 +18,7 @@ export function createProfileTemplate(hub = "", source?: IProfile): IProfile {
 		icon: source?.icon ?? null,
 		thumbnail: source?.thumbnail ?? null,
 		hub: source?.hub ?? hub,
+		secure: source ? (source.secure ?? true) : secure,
 		hubs: [...(source?.hubs ?? [])],
 		bits: [...(source?.bits ?? [])],
 		apps: structuredClone(source?.apps ?? []),

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ArrowLeft, Globe, Users } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { ApiResponseError } from "../../lib/api-error";
@@ -24,6 +24,14 @@ import {
 import type { IHomeDefault, IHomeDefaults, IHomeLayout } from "./types";
 
 export function AdminHomePage() {
+	return (
+		<Suspense fallback={<HomeLoading />}>
+			<AdminHomePageContent />
+		</Suspense>
+	);
+}
+
+function AdminHomePageContent() {
 	const backend = useBackend();
 	const auth = useAuth();
 	const viewer = auth?.user?.profile?.sub

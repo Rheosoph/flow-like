@@ -175,7 +175,86 @@ try {
 			.then((value) => [value.type, value.width, value.height]),
 		["image/webp", 1600, 600],
 	);
+
+	await page.evaluate(() => {
+		const original = HTMLCanvasElement.prototype.toBlob;
+		window.profileQa.restoreEncoder = () => {
+			HTMLCanvasElement.prototype.toBlob = original;
+		};
+		HTMLCanvasElement.prototype.toBlob = function (callback, _type, quality) {
+			window.profileQa.releaseEncoding = () =>
+				original.call(this, callback, "image/png", quality);
+		};
+	});
+	await page
+		.getByLabel("Choose Profile icon file", { exact: true })
+		.setInputFiles({
+			name: "fallback.png",
+			mimeType: "image/png",
+			buffer: png,
+		});
+	await page.waitForFunction(() => !!window.profileQa.releaseEncoding);
+	assert.equal(
+		await page
+			.getByRole("button", { name: "Create profile", exact: true })
+			.isDisabled(),
+		true,
+	);
+	await page.evaluate(() => {
+		window.profileQa.releaseEncoding();
+		window.profileQa.restoreEncoder();
+	});
+	await page.waitForFunction(() => window.profileQa.state.uploads.length === 3);
+	const pngUpload = await page.evaluate(
+		() => window.profileQa.state.uploads[2],
+	);
+	assert.deepEqual(
+		[pngUpload.type, pngUpload.width, pngUpload.height],
+		["image/png", 512, 341],
+	);
+	assert.match(pngUpload.url, /3\.png\?signature=fixture$/);
+	report.passed.push(
+		"WebP encoding and simulated WebKit PNG fallback produce matching MIME and signed filename; Save is disabled throughout decoding and conversion.",
+	);
 	await tab("Bits");
+	await page
+		.getByRole("button", {
+			name: "Include Research language model",
+			exact: true,
+		})
+		.waitFor();
+	await page.getByLabel("Search bits", { exact: true }).fill("embeddings");
+	await page.waitForFunction(
+		() => window.profileQa.lastBitRequest?.search === "embeddings",
+	);
+	await page
+		.getByRole("button", {
+			name: "Include Research language model",
+			exact: true,
+		})
+		.waitFor({ state: "hidden" });
+	await page
+		.getByRole("button", { name: "Include Document embeddings", exact: true })
+		.waitFor();
+	assert.equal(
+		await page.getByRole("button", { name: /^Include / }).count(),
+		1,
+	);
+	await page.getByLabel("Search bits", { exact: true }).clear();
+	await page
+		.getByRole("button", {
+			name: "Include Research language model",
+			exact: true,
+		})
+		.waitFor();
+	assert.equal(
+		await page.getByRole("button", { name: /^Include / }).count(),
+		3,
+	);
+	report.passed.push(
+		"Bit catalogue search sends the API search field, returns one matching embeddings model, and clearing restores all three fixture models.",
+	);
+
 	await page
 		.getByRole("button", {
 			name: "Include Research language model",
@@ -194,7 +273,7 @@ try {
 		.click();
 	await tab("Apps");
 	await page
-		.getByRole("button", { name: "Knowledge Chat", exact: true })
+		.getByRole("checkbox", { name: "Knowledge Chat", exact: true })
 		.click();
 	await page.getByRole("switch", { name: "Favorite", exact: true }).check();
 	await page.getByRole("switch", { name: "Pin", exact: true }).check();
@@ -307,6 +386,55 @@ try {
 	await page.getByLabel("Profile icon URL", { exact: true }).press("Enter");
 	report.passed.push(
 		"Background refetch and save/upload failures preserve drafts and existing images; spoofed image bytes and unsafe image URLs are rejected.",
+	);
+
+	await page
+		.getByLabel("Profile name", { exact: true })
+		.fill("Draft retained during navigation");
+	await page.evaluate(() => {
+		history.pushState({}, "", "/admin/profiles");
+		dispatchEvent(new PopStateEvent("popstate"));
+	});
+	await page
+		.getByRole("heading", { name: "Starter profiles", exact: true })
+		.waitFor();
+	await page.evaluate((id) => {
+		history.pushState({}, "", `/admin/profiles/add?id=${id}`);
+		dispatchEvent(new PopStateEvent("popstate"));
+	}, id);
+	await page.getByLabel("Profile name", { exact: true }).waitFor();
+	assert.equal(
+		await page.getByLabel("Profile name", { exact: true }).inputValue(),
+		"Draft retained during navigation",
+	);
+	await page.getByRole("button", { name: "Cancel", exact: true }).click();
+	await page
+		.getByRole("alertdialog")
+		.getByRole("button", { name: "Keep editing", exact: true })
+		.click();
+	assert.equal(
+		await page.getByLabel("Profile name", { exact: true }).inputValue(),
+		"Draft retained during navigation",
+	);
+	await page.getByRole("button", { name: "Cancel", exact: true }).click();
+	await page
+		.getByRole("alertdialog")
+		.getByRole("button", { name: "Discard changes", exact: true })
+		.click();
+	await page
+		.getByRole("heading", { name: "Starter profiles", exact: true })
+		.waitFor();
+	await page.evaluate((id) => {
+		history.pushState({}, "", `/admin/profiles/add?id=${id}`);
+		dispatchEvent(new PopStateEvent("popstate"));
+	}, id);
+	await page.getByLabel("Profile name", { exact: true }).waitFor();
+	assert.equal(
+		await page.getByLabel("Profile name", { exact: true }).inputValue(),
+		"Research studio updated",
+	);
+	report.passed.push(
+		"Navigation away/back restores scoped drafts; Cancel offers Keep editing or Discard, and explicit discard restores the saved version.",
 	);
 	for (const width of [390, 768, 1480]) {
 		await page.setViewportSize({ width, height: width === 390 ? 844 : 1050 });

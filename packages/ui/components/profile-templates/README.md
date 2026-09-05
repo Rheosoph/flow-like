@@ -2,7 +2,7 @@
 
 Administrators can curate the profiles offered to new users at `/admin/profiles` in the web and desktop apps. The old `/admin/user` and `/admin/user/edit` routes open the same manager.
 
-The manager supports searching, sorting, creating, editing, duplicating, and deleting templates. The editor has a live profile preview and sections for the name, description, icon, cover, tags, interests, bits, apps, hubs, and flow connection style. Included apps retain their favorite and pin settings. Editing a template does not rewrite existing user profiles.
+The manager supports searching, sorting, creating, editing, duplicating, and deleting templates. The editor has a live profile preview and sections for the name, description, icon, cover, tags, interests, bits, apps, hubs, and flow connection style. Included apps retain their favorite and pin settings. Editing a template does not rewrite existing user profiles. Unsaved drafts survive navigation within the running app, scoped to the backend, account, and template. Saving or explicitly discarding clears the draft; reloading the app clears this memory cache.
 
 Each saved template links to `/admin/home?default=<template-id>`. Its home follows the main default until an administrator publishes a template default. Duplicating a template copies its presentation and starting configuration, while its new home initially follows the main default. Personal layouts, shortcuts, and private bits are not copied. A published template home must be reset to follow the main default before deleting its template.
 
@@ -13,3 +13,5 @@ Both apps use the shared editor. Desktop supplies a native HTTP upload function;
 Image upload URLs accept `?format=webp`, `png`, or `jpeg` and use the corresponding extension; requests without a format keep the existing WebP behavior. Template writes use the requested ID and return the saved profile. Validation bounds names to 120 characters, descriptions to 10,000 characters, bits and apps to 500 entries each, and tags, interests, and additional hubs to 50 entries each. Stored apps, settings, and theme values survive template round trips. No new database migration is required for this manager; the default home feature has its own migration.
 
 Run the focused frontend checks with `bun test packages/ui/components/profile-templates`. The responsive browser fixture and verification script live in `tests/home-browser`.
+
+The browser check uses the real list and editor with a local fixture backend. It verifies saved fields, uploads, search, failure recovery, draft restoration, duplication, deletion, and layouts at 390, 768, and 1480 pixels. Run it with `node tests/home-browser/profile-verify.mjs` while the fixture server is running. PNG encoding fallback is simulated in Chrome; this check does not upload to configured storage or run inside the native WebKit view.

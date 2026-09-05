@@ -11,7 +11,7 @@ export function ProfileTemplatePreview({
 }: { profile: IProfile; compact?: boolean }) {
 	return (
 		<div
-			className="overflow-hidden rounded-2xl border bg-card"
+			className={`overflow-hidden rounded-2xl border bg-card ${compact ? "flex-1" : ""}`}
 			data-testid="profile-template-preview"
 		>
 			<div className="relative aspect-[2.4/1] overflow-hidden bg-gradient-to-br from-violet-500/20 via-primary/10 to-orange-400/15">
@@ -68,11 +68,13 @@ export function ProfileTemplatePreview({
 				<div className="flex flex-wrap gap-4 border-t pt-3 text-xs text-muted-foreground">
 					<span className="flex items-center gap-1.5">
 						<Boxes className="h-3.5 w-3.5" />
-						{profile.bits?.length ?? 0} bits
+						{profile.bits?.length ?? 0}{" "}
+						{profile.bits?.length === 1 ? "bit" : "bits"}
 					</span>
 					<span className="flex items-center gap-1.5">
 						<Layers3 className="h-3.5 w-3.5" />
-						{profile.apps?.length ?? 0} apps
+						{profile.apps?.length ?? 0}{" "}
+						{profile.apps?.length === 1 ? "app" : "apps"}
 					</span>
 				</div>
 			</div>

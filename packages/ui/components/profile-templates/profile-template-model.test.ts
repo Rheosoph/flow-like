@@ -69,6 +69,15 @@ function savedTemplate(): IProfile {
 }
 
 describe("profile template model", () => {
+	test("new templates keep the current hub transport while copies keep their source transport", () => {
+		expect(
+			createProfileTemplate("localhost:3000", undefined, false).secure,
+		).toBe(false);
+		expect(createProfileTemplate("hub.example").secure).toBe(true);
+		expect(
+			createProfileTemplate("hub.example", savedTemplate(), true).secure,
+		).toBe(false);
+	});
 	test("duplicating creates a new identity without private models, personal shortcuts, or home overrides", () => {
 		const source = savedTemplate();
 		const copy = createProfileTemplate("fallback.example", source);
