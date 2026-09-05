@@ -31,9 +31,26 @@ jobs:
         with:
           bun-version: 1.3.1
 
+      - name: Cache frontend dependency downloads
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: ${{ runner.temp }}/bun-install-cache
+          key: release-frontend-${{ runner.os }}-${{ runner.arch }}-bun-1.3.1-${{ hashFiles('bun.lock', 'bunfig.toml', 'patches/**') }}
+          restore-keys: |
+            release-frontend-${{ runner.os }}-${{ runner.arch }}-bun-1.3.1-
+
+      - name: Cache Next.js build
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: apps/desktop/.next/cache
+          key: release-next-${{ runner.os }}-${{ runner.arch }}-bun-1.3.1-${{ hashFiles('bun.lock', 'bunfig.toml', 'patches/**') }}-${{ github.sha }}
+          restore-keys: |
+            release-next-${{ runner.os }}-${{ runner.arch }}-bun-1.3.1-${{ hashFiles('bun.lock', 'bunfig.toml', 'patches/**') }}-
+
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
         env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build frontend
@@ -67,9 +84,36 @@ jobs:
         with:
           bun-version: 1.3.1
 
+      - name: Identify Apple MLX toolchain
+        id: mlx-toolchain
+        shell: bash
+        run: |
+          xcodebuild -version > "$RUNNER_TEMP/mlx-toolchain.txt"
+          xcrun --sdk macosx --show-sdk-version >> "$RUNNER_TEMP/mlx-toolchain.txt"
+          xcrun --sdk macosx --show-sdk-build-version >> "$RUNNER_TEMP/mlx-toolchain.txt"
+          xcrun swift --version >> "$RUNNER_TEMP/mlx-toolchain.txt"
+          echo "fingerprint=$(shasum -a 256 "$RUNNER_TEMP/mlx-toolchain.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache unsigned Apple MLX helper
+        id: mlx-cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: |
+            apps/desktop/src-tauri/binaries/mac/arm/flow-like-mlx-service-aarch64-apple-darwin
+            apps/desktop/src-tauri/binaries/mac/arm/mlx-resources
+          # Only exact input matches may skip the helper build.
+          key: release-mlx-${{ runner.os }}-${{ runner.arch }}-arm64-Release-${{ steps.mlx-toolchain.outputs.fingerprint }}-${{ hashFiles('apps/desktop/src-tauri/apple/FlowLikeMLX/**', 'apps/desktop/scripts/prepare-mlx.ts', '.github/workflows/alpha-release.yml') }}
+
       - name: Build Apple MLX helper
+        if: steps.mlx-cache.outputs.cache-hit != 'true'
         working-directory: apps/desktop
         run: bun ./scripts/prepare-mlx.ts --configuration Release
+
+      - name: Verify Apple MLX helper
+        shell: bash
+        run: |
+          test -x apps/desktop/src-tauri/binaries/mac/arm/flow-like-mlx-service-aarch64-apple-darwin
+          test -n "$(find apps/desktop/src-tauri/binaries/mac/arm/mlx-resources -name '*.bundle' -type d -print -quit)"
 
       - name: Upload Apple MLX helper
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -84,7 +128,6 @@ jobs:
   alpha-release:
     needs:
       - prepare-release-frontend
-      - prepare-release-mlx
     permissions:
       contents: write
     strategy:
@@ -92,11 +135,7 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest"
-            mlx: true
-            release_bundle_dir: "target/release/bundle"
-            retry_runner_arch: "ARM64"
-            args: "--config src-tauri/configs/tauri.macos.arm.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
-          - platform: "macos-latest"
+            stablediffusion_platform: "mac-intel"
             cache_key: "macos-x64"
             release_bundle_dir: "target/x86_64-apple-darwin/release/bundle"
             retry_runner_arch: "X64"
@@ -106,6 +145,7 @@ jobs:
           # oldest supported distribution so one artifact also runs on newer
           # glibc versions.
           - platform: "ubuntu-22.04"
+            stablediffusion_platform: "linux-x64"
             cache_key: "linux-x64-glibc-2.35"
             max_glibc_version: "2.35"
             release_bundle_dir: "target/release/bundle"
@@ -118,348 +158,45 @@ jobs:
           # windows-latest currently resolves to the VS 2026 image, which breaks
           # libduckdb-sys 1.3.0's vendored fmt headers.
           - platform: "windows-2022"
+            stablediffusion_platform: "win-x64"
+            cache_key: "windows-x64-msvc"
             release_bundle_dir: "target/release/bundle"
             args: "--config src-tauri/configs/tauri.win.x64.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
-    runs-on: ${{ matrix.platform }}
-    env:
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-    steps:
-      - name: Free Disk Space (Ubuntu)
-        if: runner.os == 'Linux'
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+    uses: ./.github/workflows/release-native.yml
+    with:
+      platform: ${{ matrix.platform }}
+      stablediffusion_platform: ${{ matrix.stablediffusion_platform || '' }}
+      cache_key: ${{ matrix.cache_key || '' }}
+      release_bundle_dir: ${{ matrix.release_bundle_dir }}
+      retry_runner_arch: ${{ matrix.retry_runner_arch || '' }}
+      max_glibc_version: ${{ matrix.max_glibc_version || '' }}
+      args: ${{ matrix.args }}
+    secrets: inherit
 
-      - name: Free Disk Space (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          sudo rm -rf /Users/runner/Library/Android/sdk || true
-          sudo rm -rf /Library/Frameworks/Mono.framework || true
-          sudo rm -rf /usr/local/share/powershell || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
-          df -h
-
-      - name: Free Disk Space (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Remove-Item -Recurse -Force "C:\Android\android-sdk" -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force "C:\Program Files\dotnet\sdk\*" -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force "C:\hostedtoolcache\CodeQL" -ErrorAction SilentlyContinue
-
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 1
-
-      - name: Download frontend
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-frontend
-          path: apps/desktop/out
-
-      - name: Verify frontend
-        if: runner.os != 'Windows'
-        run: test -f apps/desktop/out/index.html
-
-      - name: Verify frontend (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          if (-not (Test-Path -LiteralPath "apps/desktop/out/index.html" -PathType Leaf)) {
-            throw "Downloaded frontend is missing index.html"
-          }
-
-      - name: Download Apple MLX helper
-        if: matrix.mlx == true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-mlx-arm64
-          path: apps/desktop/src-tauri/binaries/mac/arm
-
-      - name: Restore Apple MLX helper permissions
-        if: matrix.mlx == true
-        run: |
-          if [ "$RUNNER_ARCH" != "ARM64" ]; then
-            echo "::error::The native ARM release must run on an Apple Silicon runner."
-            exit 1
-          fi
-          chmod +x apps/desktop/src-tauri/binaries/mac/arm/flow-like-mlx-service-aarch64-apple-darwin
-
-      - name: Decode GoogleService-Info.plist (macOS)
-        if: runner.os == 'macOS'
-        env:
-          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
-        run: |
-          if [ -n "$GOOGLE_SERVICE_INFO_PLIST_BASE64" ]; then
-            mkdir -p apps/desktop/src-tauri/gen/apple/flow-like-desktop_iOS
-            echo "$GOOGLE_SERVICE_INFO_PLIST_BASE64" | base64 --decode > apps/desktop/src-tauri/gen/apple/flow-like-desktop_iOS/GoogleService-Info.plist
-            echo "GoogleService-Info.plist decoded successfully"
-          else
-            echo "GOOGLE_SERVICE_INFO_PLIST_BASE64 not set, skipping"
-          fi
-
-      - name: Decode google-services.json (Linux/macOS)
-        if: runner.os != 'Windows'
-        env:
-          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: |
-          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > apps/desktop/src-tauri/gen/android/app/google-services.json
-            echo "google-services.json decoded successfully"
-          else
-            echo "GOOGLE_SERVICES_JSON_BASE64 not set, skipping"
-          fi
-
-      - name: Decode google-services.json (Windows)
-        if: runner.os == 'Windows'
-        env:
-          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: |
-          if ($env:GOOGLE_SERVICES_JSON_BASE64) {
-            [System.Convert]::FromBase64String($env:GOOGLE_SERVICES_JSON_BASE64) | Set-Content -Path "apps/desktop/src-tauri/gen/android/app/google-services.json" -AsByteStream
-            Write-Host "google-services.json decoded successfully"
-          } else {
-            Write-Host "GOOGLE_SERVICES_JSON_BASE64 not set, skipping"
-          }
-
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils clang libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
-          # Ubuntu 22.04 defaults to GCC 11, but Lance's fp16 kernels require
-          # Clang 6 or newer, or GCC 12 or newer.
-          clang --version
-          echo "CC=clang" >> "$GITHUB_ENV"
-          lib_dir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
-          if [ ! -e "$lib_dir/libOpenCL.so" ] && [ -e "$lib_dir/libOpenCL.so.1" ]; then
-              sudo ln -sf "$lib_dir/libOpenCL.so.1" "$lib_dir/libOpenCL.so"
-          fi
-          test -e "$lib_dir/libOpenCL.so"
-
-      - name: Ensure SPA headers satisfy libspa
-        if: runner.os == 'Linux'
-        shell: bash
-        run: .github/scripts/ensure-spa-headers.sh
-
-      # Runs before the Rust cache so the RUSTFLAGS it exports are part of the
-      # cache key.
-      - name: Prepare ONNX Runtime glibc shim (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: bash .github/scripts/prepare-ort-glibc-compat.sh
-
-      - name: Configure bounded macOS codesign retries
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          codesign_bin="$RUNNER_TEMP/flow-like-codesign-bin"
-          mkdir -p "$codesign_bin"
-          install -m 0755 "$GITHUB_WORKSPACE/.github/scripts/codesign-with-timeout.sh" "$codesign_bin/codesign"
-          echo "$codesign_bin" >> "$GITHUB_PATH"
-
-      - name: Validate Apple Developer Certificate
-        if: runner.os == 'macOS'
-        timeout-minutes: 5
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          FLOW_LIKE_CODESIGN_MAX_ATTEMPTS: 1
-          FLOW_LIKE_CODESIGN_TIMEOUT_SECONDS: 240
-        run: |
-          set -euo pipefail
-
-          if [[ ! "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
-            echo "::error::APPLE_TEAM_ID must be configured as a 10-character Apple Team ID."
-            exit 1
-          fi
-
-          certificate_path="$RUNNER_TEMP/apple-developer-certificate.p12"
-          keychain_path="$RUNNER_TEMP/apple-signing.keychain-db"
-          probe_path="$RUNNER_TEMP/flow-like-codesign-probe"
-
-          original_keychains=()
-          while IFS= read -r keychain; do
-            keychain="${keychain#*\"}"
-            keychain="${keychain%\"}"
-            [ -n "$keychain" ] && original_keychains+=("$keychain")
-          done < <(security list-keychains -d user)
-
-          if [ "${#original_keychains[@]}" -eq 0 ]; then
-            echo "::error::The runner user has no configured keychain search list."
-            exit 1
-          fi
-
-          cleanup() {
-            security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
-            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
-            rm -f "$certificate_path" "$probe_path"
-          }
-          trap cleanup EXIT
-
-          umask 077
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -t 600 -u "$keychain_path"
-          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
-
-          matching_identities="$(
-            security find-identity -v -p codesigning "$keychain_path" |
-              awk -F'"' -v team="$APPLE_TEAM_ID" \
-                '$2 ~ /^Developer ID Application: / && index($2, "(" team ")") { print $2 }'
-          )"
-          identity_count="$(
-            printf '%s\n' "$matching_identities" |
-              awk 'NF { count++ } END { print count + 0 }'
-          )"
-
-          if [ "$identity_count" -ne 1 ]; then
-            echo "::error::Expected exactly one valid Developer ID Application identity for the configured Apple team; found $identity_count."
-            exit 1
-          fi
-
-          cp /usr/bin/true "$probe_path"
-          echo "Running a Developer ID signing and secure-timestamp probe..."
-          codesign --force --options runtime --timestamp \
-            --sign "$matching_identities" \
-            --keychain "$keychain_path" \
-            "$probe_path"
-          /usr/bin/codesign --verify --strict --verbose=2 "$probe_path"
-
-          signature_details="$(/usr/bin/codesign --display --verbose=4 "$probe_path" 2>&1)"
-          if ! grep -q '^Timestamp=' <<< "$signature_details"; then
-            echo "::error::The Apple signing probe completed without a secure timestamp."
-            exit 1
-          fi
-
-          printf 'APPLE_SIGNING_IDENTITY=%s\n' "$matching_identities" >> "$GITHUB_ENV"
-          echo "Apple Developer signing and timestamp probe succeeded."
-
-      - name: Install Protoc
-        uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
-        with:
-          bun-version: 1.3.1
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-        with:
-          toolchain: 1.97.1
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
-        with:
-          workspaces: ". -> target"
-          key: ${{ matrix.cache_key || '' }}
-          cache-on-failure: true
-          # This workspace is much larger than the third-party dependency set;
-          # preserve unchanged first-party crates between release runs too.
-          cache-workspace-crates: ${{ runner.os == 'macOS' }}
-
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure macOS ONNX Runtime
-        if: runner.os == 'macOS'
-        run: |
-          echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
-          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
-
-      - name: Prepare Windows VC runtime DLLs
-        if: runner.os == 'Windows'
-        working-directory: apps/desktop
-        run: bun ./scripts/prepare-windows-prereqs.ts --arch x64
-
-      - name: Prepare AppImage tooling (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: bash .github/scripts/prepare-appimage-tools.sh
-
-      - name: Build and Release
-        id: build_release
-        continue-on-error: true
-        uses: tauri-apps/tauri-action@73fb865345c54760d875b94642314f8c0c894afa # v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          PUBLIC_SENTRY_ENDPOINT: ${{ secrets.PUBLIC_SENTRY_ENDPOINT }}
-          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/apps/desktop/src-tauri/binaries/linux/x64', github.workspace) || '' }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CXXFLAGS_x86_64_pc_windows_msvc: ${{ runner.os == 'Windows' && '/std:c++17' || '' }}
-        with:
-          tagName: beta-v__VERSION__
-          releaseName: "Flow Like - Beta v__VERSION__"
-          releaseBody: ""
-          releaseDraft: true
-          prerelease: true
-          projectPath: "./apps/desktop"
-          tauriScript: "bun tauri"
-          args: ${{ matrix.args }}
-
-      - name: Retry upload on failure
-        if: steps.build_release.outcome == 'failure'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_APP_VERSION: ${{ steps.build_release.outputs.appVersion }}
-          TAURI_ARTIFACT_PATHS: ${{ steps.build_release.outputs.artifactPaths }}
-          TAURI_RELEASE_ID: ${{ steps.build_release.outputs.releaseId }}
-          RELEASE_BUNDLE_DIR: ${{ matrix.release_bundle_dir }}
-          TAURI_RUNNER_ARCH: ${{ matrix.retry_runner_arch || runner.arch }}
-        shell: bash
-        run: bash .github/scripts/retry-release-upload.sh
-
-      - name: Report recovered installer uploads
-        if: steps.build_release.outcome == 'failure'
-        shell: bash
-        run: |
-          echo "::warning::Tauri's initial release upload failed, but all built installer assets were recovered and verified by digest."
-
-      # These run after the upload because tauri-action builds and publishes in
-      # one step. A failure keeps the release as a draft and blocks the updater
-      # metadata job, so incompatible Linux artifacts do not reach the channel.
-      - name: Verify Linux glibc compatibility
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          MAX_GLIBC_VERSION: ${{ matrix.max_glibc_version }}
-          RELEASE_BUNDLE_DIR: ${{ matrix.release_bundle_dir }}
-        run: bash .github/scripts/verify-linux-glibc.sh
-
-      - name: Verify AppImage bundle (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          RELEASE_BUNDLE_DIR: ${{ matrix.release_bundle_dir }}
-        run: bash .github/scripts/verify-appimage-bundle.sh
+  alpha-release-macos-arm:
+    name: Native release (macOS ARM64)
+    needs:
+      - prepare-release-frontend
+      - prepare-release-mlx
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-native.yml
+    with:
+      platform: macos-latest
+      stablediffusion_platform: mac-arm
+      mlx: true
+      cache_key: macos-arm64
+      release_bundle_dir: target/release/bundle
+      retry_runner_arch: ARM64
+      args: --config src-tauri/configs/tauri.macos.arm.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose
+    secrets: inherit
 
   finalize-updater-json:
     name: Finalize updater metadata
-    needs: alpha-release
-    if: ${{ always() && needs['alpha-release'].result == 'success' }}
+    needs:
+      - alpha-release
+      - alpha-release-macos-arm
+    if: ${{ always() && needs['alpha-release'].result == 'success' && needs['alpha-release-macos-arm'].result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -4,23 +4,48 @@ on:
   pull_request:
     branches:
       - dev
+  push:
+    branches:
+      - dev
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  test-application:
-    name: Test Application
+  changes:
+    name: Detect test changes
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      bun: ${{ steps.changes.outputs.bun }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changes
+        id: changes
+
+  rust-tests:
+    name: Rust tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-key: tests-ci
 
-      - name: Run package manager security E2E tests
-        run: bun run test:e2e:package-security
+      - name: Warm Rust test dependencies
+        if: github.event_name == 'push'
+        # Build the same test targets without requiring external test services.
+        run: cargo test --locked --workspace --profile ci --no-run
 
       - name: Run Rust tests
+        if: github.event_name == 'pull_request'
         # Preserve the pre-default-members CI coverage while keeping everyday
         # bare Cargo commands focused on the shared editing surface.
         run: cargo test --locked --workspace --profile ci
@@ -28,3 +53,37 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+
+  package-security:
+    name: Package manager security
+    needs: changes
+    if: needs.changes.outputs.bun == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        with:
+          bun-version: 1.3.1
+      - name: Run package manager security E2E tests
+        run: bun run test:e2e:package-security
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-application:
+    name: Test Application
+    needs: [changes, rust-tests, package-security]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check test results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          JOB_RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          for result in $JOB_RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

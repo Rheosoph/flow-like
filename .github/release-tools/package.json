@@ -1,0 +1,8 @@
+{
+	"name": "flow-like-release-tools",
+	"private": true,
+	"dependencies": {
+		"@tauri-apps/cli": "2.9.6",
+		"dotenv-cli": "8.0.0"
+	}
+}

@@ -4,18 +4,44 @@ on:
   pull_request:
     branches:
       - dev
+  push:
+    branches:
+      - dev
+
+concurrency:
+  group: lint-format-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    name: Detect lint changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      dsql: ${{ steps.changes.outputs.dsql }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changes
+        id: changes
+
   clippy:
     name: Clippy
+    needs: changes
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
+      - name: Check change detection
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-key: clippy-check
 
       - name: Run Clippy
         # Preserve full-workspace CI coverage after introducing developer-focused
@@ -24,24 +50,33 @@ jobs:
 
   fmt:
     name: Format
+    needs: changes
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
+      - name: Check change detection
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/setup-environment
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: 1.97.1
+          components: rustfmt
 
       - name: Check Formatting
         run: cargo fmt --check
 
   dsql-migrations:
     name: DSQL migrations lint
+    needs: changes
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.dsql == 'true')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
+      - name: Check change detection
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@v4
         with:

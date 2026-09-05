@@ -1,0 +1,21 @@
+name: Detect CI changes
+description: Selects CI workloads from the complete Git diff, with all checks enabled when comparison is unavailable.
+
+outputs:
+  rust:
+    description: Whether Rust build inputs changed
+    value: ${{ steps.changes.outputs.rust }}
+  bun:
+    description: Whether package manager policy or dependency manifests changed
+    value: ${{ steps.changes.outputs.bun }}
+  dsql:
+    description: Whether DSQL migrations or their generator changed
+    value: ${{ steps.changes.outputs.dsql }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify changed files
+      id: changes
+      shell: bash
+      run: python3 "$GITHUB_ACTION_PATH/../../scripts/detect-ci-changes.py"

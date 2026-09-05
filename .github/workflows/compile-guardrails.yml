@@ -4,40 +4,101 @@ on:
   pull_request:
     branches:
       - dev
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "**/Cargo.toml"
-      - "**/*.rs"
-      - ".cargo/*.toml"
-      - "rust-toolchain.toml"
-      - ".github/actions/setup-environment/action.yml"
-      - "tools/check-feature-boundaries.sh"
-      - ".github/workflows/compile-guardrails.yml"
+  push:
+    branches:
+      - dev
   workflow_dispatch:
 
 concurrency:
   group: rust-feature-boundaries-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  feature-boundaries:
-    name: Check isolated Rust features
+  changes:
+    name: Detect Rust boundary changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/detect-changes
+        id: changes
+
+  dependency-boundaries:
+    name: Check dependency and feature assertions
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: workspace-${{ runner.arch }}-feature-boundaries-deps
+          cache-targets: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+
+      # Dependency assertions do not compile crates or need desktop libraries.
+      # Run every existing assertion before starting the expensive check jobs.
+      - name: Verify dependency boundaries and product feature composition
+        run: >-
+          ./tools/check-feature-boundaries.sh
+          --mode deps
+          core-contracts
+          dev-default
+          core-flow-metadata
+          core-flow
+          core-model
+          types-contracts
+          types-proto
+          storage-contracts
+          storage-files
+          model-protocol
+          wasm-schema
+          wasm-schema-nodes
+          api-entity
+          catalog-portable
+          catalog-portable-execute
+          catalog-server
+          catalog-server-local-ml
+          catalog-execute
+          catalog-server-execute
+          catalog-executor
+          catalog-local-runtime
+          catalog-modifier-local-ml
+          catalog-modifier-data
+          executor-default
+          executor-server
+          api-remote-catalog
+          api-aws-catalog
+          api-local-ml-catalog
+          wasm-host
+          api-runtime
+
+  lightweight-boundaries:
+    name: Compile lightweight Rust boundaries
+    needs: [changes, dependency-boundaries]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-key: feature-boundaries-light
 
-      # Each boundary is a separate Cargo process. This prevents features from
-      # another workspace package making an incomplete feature declaration pass.
+      # Separate Cargo processes keep feature declarations isolated. The shared
+      # target directory reuses dependencies between checks within this job.
       - name: Check lightweight crate boundaries
         run: >-
           ./tools/check-feature-boundaries.sh
+          --mode check
           --target-dir target/feature-boundaries
           core-contracts
           dev-default
@@ -53,34 +114,43 @@ jobs:
           wasm-schema-nodes
           api-entity
 
+  catalog-boundaries:
+    name: Compile catalog Rust boundaries
+    needs: [changes, dependency-boundaries]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-environment
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-key: feature-boundaries-catalog
+
       - name: Check catalog product bundles
         run: >-
           ./tools/check-feature-boundaries.sh
+          --mode check
           --target-dir target/feature-boundaries
           catalog-portable
           catalog-portable-execute
           catalog-server
 
-      - name: Verify catalog aliases and product feature composition
-        run: >-
-          ./tools/check-feature-boundaries.sh
-          --mode deps
-          catalog-server-local-ml
-          catalog-execute
-          catalog-server-execute
-          catalog-executor
-          catalog-local-runtime
-          catalog-modifier-local-ml
-          catalog-modifier-data
-          executor-default
-          executor-server
-          api-remote-catalog
-          api-aws-catalog
-          api-local-ml-catalog
-
-      - name: Guard the API/WASM host separation
-        run: >-
-          ./tools/check-feature-boundaries.sh
-          --mode deps
-          wasm-host
-          api-runtime
+  feature-boundaries:
+    name: Check isolated Rust features
+    needs: [changes, dependency-boundaries, lightweight-boundaries, catalog-boundaries]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check feature boundary results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          JOB_RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          for result in $JOB_RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

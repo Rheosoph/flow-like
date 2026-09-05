@@ -5,6 +5,10 @@ on:
     branches:
       - dev
 
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cargo-audit:
     name: Cargo Audit
@@ -13,27 +17,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: ./.github/actions/setup-environment
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cache cargo-audit
-        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-        with:
-          path: |
-            ~/.cargo/bin/cargo-audit
-            ~/.cargo/advisory-db
-          key: cargo-audit-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-audit-${{ runner.os }}-
-
       - name: Install cargo-audit
-        run: command -v cargo-audit || cargo install --locked cargo-audit
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        with:
+          tool: cargo-audit@0.22.2
 
       - name: Run Cargo Audit
-        run: |
-          cargo audit --json > cargo-audit-report.json || true
-          cargo audit
+        # Bash pipefail preserves audit failures while retaining the JSON report.
+        shell: bash
+        run: cargo audit --json | tee cargo-audit-report.json
 
       - name: Upload cargo audit report
         if: always()
