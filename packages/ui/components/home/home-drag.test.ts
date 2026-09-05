@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { createHomeWidget } from "./catalog";
 import { homeInsertionIndex, insertHomeWidget } from "./home-drag";
 import {
-	homeGridRowSpan,
 	homeWidgetAutoHeight,
 	homeWidgetHeight,
 	normalizeHomeLayout,
@@ -67,7 +66,7 @@ describe("home drop placement", () => {
 });
 
 describe("home content sizing", () => {
-	it("fits content by default and preserves explicit sizing across serialization", () => {
+	it("uses responsive height by default and preserves explicit sizing across serialization", () => {
 		expect(homeWidgetAutoHeight(widgets[0])).toBe(true);
 		const fixed = {
 			...widgets[0],
@@ -81,7 +80,7 @@ describe("home content sizing", () => {
 		expect(homeWidgetAutoHeight(restored)).toBe(false);
 		expect(homeWidgetHeight(restored)).toBe(288);
 	});
-	it("bounds imported dimensions and snaps height without large row gaps", () => {
+	it("bounds imported dimensions", () => {
 		const restored = normalizeHomeLayout({
 			version: 1,
 			widgets: [
@@ -97,10 +96,5 @@ describe("home content sizing", () => {
 			height: 1240,
 			heightMode: "fixed",
 		});
-		for (const height of [56, 88, 144, 288, 563]) {
-			const actual = homeGridRowSpan(height) * 20 - 16;
-			expect(actual).toBeGreaterThanOrEqual(height);
-			expect(actual - height).toBeLessThan(20);
-		}
 	});
 });

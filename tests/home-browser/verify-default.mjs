@@ -76,11 +76,24 @@ try {
 	report.passed.push(
 		"Greeting resolves Felix from the account response when JWT name claims are absent",
 	);
-	await page.locator('[data-workspace-mode="strip"]').waitFor();
-	await page.locator('[data-workspace-mode="attention"]').waitFor();
+	await page
+		.locator('[data-widget-type="workspace-pulse"] [data-workspace-pulse]')
+		.waitFor();
 	await page.waitForFunction(() => window.defaultHomeQa.calls.history === 1);
-	assert.equal(await page.locator("[data-home-section-heading]").count(), 3);
-	assert.equal(await widgets().count(), 16);
+	assert.equal(await page.locator("[data-home-section-heading]").count(), 1);
+	assert.equal(await widgets().count(), 11);
+	assert.equal(
+		await page
+			.locator(
+				'[data-home-discovery="app-ranking"], [data-home-discovery="app-collection-feature"]',
+			)
+			.count(),
+		0,
+	);
+	assert.equal(
+		await page.locator('[data-widget-type="workspace-pulse"]').count(),
+		1,
+	);
 	const guides = page.locator('[data-widget-type="information"]');
 	assert.equal(
 		await guides
@@ -99,6 +112,10 @@ try {
 		}),
 	);
 	assert.equal(guideRows.length, 3);
+	assert.match(
+		await guides.locator("article").first().innerText(),
+		/Keep an app open here/,
+	);
 	assert.equal(new Set(guideRows.map((row) => row.left)).size, 1);
 	assert.ok(
 		guideRows.every(
@@ -109,10 +126,10 @@ try {
 	assert.equal(
 		await page.evaluate(() => window.defaultHomeQa.calls.history),
 		1,
-		"The profile strip and attention panel share one execution history read",
+		"The workspace overview uses one execution history read",
 	);
 	report.passed.push(
-		"The status strip and attention panel share one account history request, with three editable section headings",
+		"The workspace overview combines metrics and flagged records in one widget, with one editable discovery heading",
 	);
 	for (const scenario of ["returning", "fresh", "offline", "guest"]) {
 		await page
@@ -127,6 +144,22 @@ try {
 			await greeting().filter({ hasText: "Felix" }).waitFor();
 		if (scenario === "offline")
 			await greeting().filter({ hasText: "Cached" }).waitFor();
+		if (scenario === "fresh") {
+			const personal = page.locator('[data-widget-type="app-collection"]');
+			await personal
+				.getByText("Your apps will live here.", { exact: true })
+				.waitFor();
+			assert.equal(
+				await personal
+					.getByRole("link", { name: "Find your first app", exact: true })
+					.getAttribute("href"),
+				"/store/explore/apps",
+			);
+			await page
+				.locator('[data-widget-type="workspace-pulse"]')
+				.getByText("Start with one useful app", { exact: true })
+				.waitFor();
+		}
 		const spotlight = page.locator('[data-home-discovery="app-spotlight"]');
 		if (scenario === "returning" || scenario === "offline") {
 			await spotlight
@@ -149,10 +182,6 @@ try {
 				"/store?id=default-fixture-app-0",
 			);
 		}
-		await page
-			.locator('[data-home-discovery="app-ranking"]')
-			.getByText("By community ratings", { exact: true })
-			.waitFor();
 		for (const theme of scenario === "returning"
 			? ["dark", "light"]
 			: ["dark"]) {
@@ -178,15 +207,17 @@ try {
 						return { y: value.top - top, height: value.height };
 					};
 					return {
-						strip: rect('[data-workspace-mode="strip"]'),
+						actions: rect('[data-widget-type="quick-actions"]'),
+						flowpilot: rect('[data-widget-type="flowpilot"]'),
 						apps: rect('[data-widget-type="app-collection"]'),
 						hero: rect('[data-widget-type="app-spotlight"]'),
 						packages: rect('[data-widget-type="packages"]'),
 					};
 				});
 				assert.ok(
-					geometry.strip.y < 200,
-					"Profile context appears immediately after the greeting",
+					geometry.flowpilot.y < geometry.actions.y &&
+						geometry.actions.y < geometry.apps.y,
+					"FlowPilot and direct creation/import actions appear before personal apps",
 				);
 				assert.ok(
 					geometry.apps.y < geometry.hero.y,
@@ -314,7 +345,7 @@ try {
 		.click();
 	await page.getByLabel("Name", { exact: true }).fill("Sam");
 	await page
-		.locator('[data-home-widget="default-workspace-heading"]')
+		.locator('[data-home-widget="default-discover-heading"]')
 		.getByRole("button", { name: /^Configure / })
 		.click();
 	await page.getByLabel("Title", { exact: true }).fill("My studio");
@@ -332,10 +363,10 @@ try {
 	await page.getByRole("heading", { name: "My studio", exact: true }).waitFor();
 	assert.equal(
 		await page
-			.locator('[data-home-widget="default-workspace-heading"]')
-			.getByRole("link", { name: "Open library", exact: true })
+			.locator('[data-home-widget="default-discover-heading"]')
+			.getByRole("link", { name: "Explore apps", exact: true })
 			.getAttribute("href"),
-		"/library",
+		"/store/explore/apps",
 	);
 	assert.equal(
 		await page.evaluate(
@@ -373,7 +404,7 @@ try {
 		.getByRole("menuitem", { name: "Use Flow-Like starter", exact: true })
 		.click();
 	await greeting().filter({ hasText: "Felix" }).waitFor();
-	assert.equal(await widgets().count(), 16);
+	assert.equal(await widgets().count(), 11);
 	assert.equal(
 		await page.evaluate(
 			() =>
@@ -474,7 +505,7 @@ try {
 		0,
 	);
 	report.passed.push(
-		"Owned apps open their runtime, unowned apps open their store page, and rankings explain their community-rating source",
+		"Owned apps open their runtime and unowned apps open their store page",
 	);
 	report.passed.push(
 		"A genuinely empty catalog and profile shows a usable FlowPilot onboarding hero; unrated apps show no invented rating or download metrics",

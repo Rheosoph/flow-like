@@ -205,11 +205,9 @@ try {
 	});
 	await page.getByRole("button", { name: "Customize", exact: true }).waitFor();
 	await page.waitForFunction(
-		() => document.querySelectorAll("[data-home-widget]").length === 16,
+		() => document.querySelectorAll("[data-home-widget]").length === 11,
 	);
-	await page
-		.getByRole("heading", { name: "Community favorites", exact: true })
-		.waitFor();
+	await page.getByRole("heading", { name: "Your apps", exact: true }).waitFor();
 	for (const width of [1480, 768, 390]) {
 		await page.setViewportSize({ width, height: width === 390 ? 844 : 1050 });
 		await page.locator("[data-home-canvas]").evaluate((element) => {
@@ -231,7 +229,7 @@ try {
 		});
 	}
 	report.passed.push(
-		"Actual default layout renders sixteen catalog widgets at 1480px, 768px, and 390px without horizontal page overflow",
+		"Actual default layout renders eleven catalog widgets at 1480px, 768px, and 390px without horizontal page overflow",
 	);
 	assert.deepEqual(report.errors, []);
 } catch (error) {

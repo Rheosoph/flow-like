@@ -3,19 +3,11 @@ import type { IHomeDefaults, IHomeLayout, IHomeWidget } from "./types";
 export const MAX_HOME_WIDGETS = 80;
 export const HOME_ROW_HEIGHT = 88;
 export const HOME_GRID_GAP = 16;
-export const HOME_GRID_TRACK = 4;
 
 export function homeWidgetHeight(widget: IHomeWidget) {
 	return (
 		widget.size.height ??
 		widget.size.rows * HOME_ROW_HEIGHT + (widget.size.rows - 1) * HOME_GRID_GAP
-	);
-}
-
-export function homeGridRowSpan(height: number) {
-	return Math.max(
-		1,
-		Math.ceil((height + HOME_GRID_GAP) / (HOME_GRID_TRACK + HOME_GRID_GAP)),
 	);
 }
 
@@ -59,7 +51,9 @@ export function normalizeHomeLayout(value: unknown): IHomeLayout | null {
 			size: {
 				columns: clampSize(size.columns, 6),
 				rows: clampSize(size.rows, 3),
-				...(size.heightMode === "auto" || size.heightMode === "fixed"
+				...(size.heightMode === "auto" ||
+				size.heightMode === "content" ||
+				size.heightMode === "fixed"
 					? { heightMode: size.heightMode }
 					: {}),
 				...(typeof size.height === "number" && Number.isFinite(size.height)
@@ -113,6 +107,7 @@ export function responsiveHomeColumns(width: number) {
 }
 
 export function homeWidgetSpan(columns: number, gridColumns: number) {
+	if (gridColumns === 6 && columns >= 4) return columns >= 12 ? 6 : 3;
 	return gridColumns === 1
 		? 1
 		: Math.min(

@@ -137,7 +137,14 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 	const backend = useBackend();
 
 	const stats = useQuery<IErrorStatsResponse>({
-		queryKey: ["admin", "logs", "stats", "dashboard"],
+		queryKey: [
+			"admin",
+			"logs",
+			"stats",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<IErrorStatsResponse>(
@@ -146,11 +153,20 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const series = useQuery<IErrorTimeseriesResponse>({
-		queryKey: ["admin", "logs", "timeseries", "dashboard"],
+		queryKey: [
+			"admin",
+			"logs",
+			"timeseries",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<IErrorTimeseriesResponse>(
@@ -159,7 +175,9 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const change = stats.data?.change_percent ?? null;
@@ -179,6 +197,37 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 				: change < 0
 					? ArrowDownRight
 					: ArrowRight;
+
+	if (stats.isError || series.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">
+						{t("recentErrors", "Recent errors")}
+					</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"errorReportsUnavailable",
+							"Error reports are unavailable. Retry to check recent API failures.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={stats.isFetching || series.isFetching}
+						onClick={() => {
+							if (stats.isError) void stats.refetch();
+							if (series.isError) void series.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
+	}
 
 	return (
 		<Card className="overflow-hidden border-destructive/20">

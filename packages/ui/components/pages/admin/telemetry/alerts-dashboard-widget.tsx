@@ -43,7 +43,13 @@ export function DashboardTelemetryAlertsWidget({
 	const backend = useBackend();
 
 	const events = useQuery<ITelemetryAlertEventsResponse>({
-		queryKey: [...ALERTS_QUERY_KEY, "events", "dashboard"],
+		queryKey: [
+			...ALERTS_QUERY_KEY,
+			"events",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryAlertEventsResponse>(
@@ -52,11 +58,19 @@ export function DashboardTelemetryAlertsWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const rules = useQuery<ITelemetryAlertRulesResponse>({
-		queryKey: [...ALERTS_QUERY_KEY, "rules", "dashboard"],
+		queryKey: [
+			...ALERTS_QUERY_KEY,
+			"rules",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryAlertRulesResponse>(
@@ -65,7 +79,9 @@ export function DashboardTelemetryAlertsWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const metricByRule = useMemo(() => {
@@ -81,6 +97,35 @@ export function DashboardTelemetryAlertsWidget({
 
 	const triggered = events.data?.events ?? [];
 	const unacknowledged = events.data?.unacknowledged ?? 0;
+
+	if (events.isError || rules.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">{t("alerts", "Alerts")}</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"alertStatusUnavailable",
+							"Alert status is unavailable. Retry to check triggered alerts.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={events.isFetching || rules.isFetching}
+						onClick={() => {
+							if (events.isError) void events.refetch();
+							if (rules.isError) void rules.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
+	}
 
 	return (
 		<Card className="overflow-hidden border-primary/20">

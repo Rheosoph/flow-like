@@ -148,7 +148,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 						{widget.title || "Your workspace"}
 					</h2>
 				</div>
-				<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-500 dark:text-violet-400">
+				<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-[var(--home-surface-accent)]">
 					<Activity className="size-4" aria-hidden="true" />
 				</span>
 			</div>
@@ -183,7 +183,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 						<figcaption className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
 							<span>{period} · your account · UTC</span>
 							<span className="flex items-center gap-1.5">
-								<span className="size-1.5 rounded-full bg-violet-400" />
+								<span className="size-1.5 rounded-full bg-[var(--home-accent)]" />
 								Records
 								<span className="ml-1 size-1.5 rounded-full bg-orange-500" />
 								Error / Fatal
@@ -207,7 +207,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 										}}
 									/>
 									<div
-										className="w-full max-w-10 self-center bg-violet-400/85"
+										className="w-full max-w-10 self-center bg-[var(--home-accent)]/85"
 										style={{
 											height: `${((bucket.count - bucket.attentionCount) / maximum) * 100}%`,
 											borderRadius: bucket.attentionCount
@@ -275,7 +275,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 			) : (
 				<>
 					<div className="flex items-center gap-4 rounded-xl bg-violet-500/[0.06] p-4">
-						<div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-background/50 text-violet-500 dark:text-violet-400">
+						<div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-background/50 text-[var(--home-surface-accent)]">
 							<Layers3 className="size-6" aria-hidden="true" />
 						</div>
 						<div className="min-w-0">
@@ -298,7 +298,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 							href={appCount ? "/library" : "/store/explore/apps"}
 							className={actionClass}
 						>
-							<Compass className="size-4 shrink-0 text-violet-500 dark:text-violet-400" />
+							<Compass className="size-4 shrink-0 text-[var(--home-surface-accent)]" />
 							<span className="min-w-0 flex-1">
 								<span className="block text-xs font-medium">
 									{appCount ? "Open your library" : "Find an app"}
@@ -393,7 +393,9 @@ function WorkspacePulseAttention({
 					<span
 						className={cn(
 							"size-2 shrink-0 rounded-full",
-							statistics?.attention.length ? "bg-orange-500" : "bg-violet-400",
+							statistics?.attention.length
+								? "bg-orange-500"
+								: "bg-[var(--home-accent)]",
 						)}
 					/>
 					{title}
@@ -448,7 +450,7 @@ function WorkspacePulseAttention({
 				</div>
 			) : (
 				<div className="flex min-w-0 items-start gap-3 py-1">
-					<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/[0.07] text-violet-500 dark:text-violet-400">
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/[0.07] text-[var(--home-surface-accent)]">
 						{state === "loading" ? (
 							<Loader2 className="size-4 animate-spin" aria-hidden="true" />
 						) : (
@@ -535,7 +537,7 @@ function WorkspacePulseStrip({
 	onRetry: () => void;
 }) {
 	const cellClass =
-		"flex min-w-0 flex-col justify-between gap-2 bg-card px-4 py-3.5 @[800px]/workspace:px-5";
+		"flex min-w-0 flex-col justify-between gap-2 bg-[var(--home-surface-background)] px-4 py-3.5 @[800px]/workspace:px-5";
 	const labelClass =
 		"flex min-w-0 items-center gap-1.5 text-[10px] font-medium uppercase leading-4 tracking-[0.1em] text-muted-foreground";
 	const metricCellClass = cn(cellClass, "justify-start");
@@ -579,7 +581,7 @@ function WorkspacePulseStrip({
 				>
 					<span className={metricLabelClass}>
 						<Layers3
-							className="size-3.5 shrink-0 text-violet-500 dark:text-violet-400"
+							className="size-3.5 shrink-0 text-[var(--home-surface-accent)]"
 							aria-hidden="true"
 						/>
 						Your apps
@@ -606,7 +608,7 @@ function WorkspacePulseStrip({
 						<div className={metricCellClass}>
 							<span className={metricLabelClass}>
 								<Activity
-									className="size-3.5 shrink-0 text-violet-500 dark:text-violet-400"
+									className="size-3.5 shrink-0 text-[var(--home-surface-accent)]"
 									aria-hidden="true"
 								/>
 								{statistics.partial ? "Sampled records" : "Execution records"}
@@ -660,7 +662,7 @@ function WorkspacePulseStrip({
 											/>
 											<div
 												className={cn(
-													"w-full max-w-7 self-center bg-violet-400/85",
+													"w-full max-w-7 self-center bg-[var(--home-accent)]/85",
 													!bucket.attentionCount && "rounded-t-sm",
 												)}
 												style={{
@@ -672,7 +674,7 @@ function WorkspacePulseStrip({
 								</div>
 							) : (
 								<div className="flex min-h-9 items-center gap-2 text-xs font-medium leading-4">
-									<span className="size-1.5 shrink-0 rounded-full bg-violet-400" />
+									<span className="size-1.5 shrink-0 rounded-full bg-[var(--home-accent)]" />
 									No recent records{statistics.partial ? " in sample" : ""}
 								</div>
 							)}
@@ -715,7 +717,7 @@ function WorkspacePulseStrip({
 						<div className={cn(cellClass, "@[280px]/workspace:col-span-2")}>
 							<span className={labelClass}>
 								<Activity
-									className="size-3.5 shrink-0 text-violet-500 dark:text-violet-400"
+									className="size-3.5 shrink-0 text-[var(--home-surface-accent)]"
 									aria-hidden="true"
 								/>
 								Recent activity

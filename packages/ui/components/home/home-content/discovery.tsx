@@ -29,6 +29,7 @@ import { useHomeLibrary } from "./collections";
 import {
 	type HomeContentProps,
 	numberConfig,
+	safeHomeHref,
 	stringList,
 	textConfig,
 } from "./config";
@@ -40,7 +41,7 @@ const compactNumber = new Intl.NumberFormat("en", {
 	maximumFractionDigits: 1,
 });
 const focusClass =
-	"outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+	"outline-none focus-visible:ring-2 focus-visible:ring-[var(--home-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const eyebrowClass =
 	"font-mono text-[10px] font-semibold uppercase tracking-[0.18em]";
 const cardHeadingClass = "text-base font-semibold leading-snug tracking-tight";
@@ -128,16 +129,18 @@ function useDiscoveryApps(
 	});
 	const visible = new Set((profile.data?.apps ?? []).map((app) => app.app_id));
 	const matchesFilters = ([app, meta]: AppPair) =>
-		(!category ||
+		source === "manual" ||
+		((!category ||
 			app.primary_category === category ||
 			app.secondary_category === category) &&
-		(!tag ||
-			meta?.tags.some((value) => value.toLowerCase() === tag.toLowerCase())) &&
-		(source === "manual" ||
-			!query ||
-			`${meta?.name ?? app.id} ${meta?.description ?? ""}`
-				.toLowerCase()
-				.includes(query.toLowerCase()));
+			(!tag ||
+				meta?.tags.some(
+					(value) => value.toLowerCase() === tag.toLowerCase(),
+				)) &&
+			(!query ||
+				`${meta?.name ?? app.id} ${meta?.description ?? ""}`
+					.toLowerCase()
+					.includes(query.toLowerCase())));
 	const localRows = (library.data ?? [])
 		.filter(([app, meta]) => visible.has(app.id) && matchesFilters([app, meta]))
 		.slice(0, limit);
@@ -200,13 +203,17 @@ function AppArtwork({
 	return (
 		<div
 			className={cn(
-				"relative isolate flex aspect-[2/1] w-full max-w-[470px] items-center justify-center overflow-hidden rounded-2xl border border-white/15 bg-white/[0.035] shadow-[0_20px_80px_-20px_rgba(0,0,0,0.7)] @[700px]/discovery:aspect-[4/3]",
+				"relative isolate flex aspect-[2/1] w-full max-w-[470px] items-center justify-center overflow-hidden rounded-2xl border border-[var(--home-surface-border)] bg-[var(--home-surface-item)] shadow-[0_20px_80px_-20px_rgba(0,0,0,0.7)] @[700px]/discovery:aspect-[4/3]",
 				compact && "aspect-[4/3] rounded-xl",
 			)}
 		>
 			<div
 				aria-hidden="true"
-				className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(167,139,250,0.3),transparent_70%)]"
+				className="absolute inset-0"
+				style={{
+					background:
+						"radial-gradient(ellipse at top right, color-mix(in srgb, var(--home-accent) 25%, transparent), transparent 70%)",
+				}}
 			/>
 			{image.canRender ? (
 				<img
@@ -223,7 +230,7 @@ function AppArtwork({
 					size={112}
 					src={meta?.icon}
 					fallback={(meta?.name ?? app.id).slice(0, 2).toUpperCase()}
-					background="linear-gradient(145deg,#8b5cf6,#312e81)"
+					background="linear-gradient(145deg, var(--home-accent), color-mix(in srgb, var(--home-accent) 35%, var(--background)))"
 				/>
 			)}
 		</div>
@@ -238,6 +245,8 @@ function DiscoveryLink({
 	return (
 		<Link
 			href={href}
+			target={href.startsWith("/") ? undefined : "_blank"}
+			rel={href.startsWith("/") ? undefined : "noopener noreferrer"}
 			className={cn(
 				"inline-flex w-fit items-center gap-2 rounded-md text-xs font-semibold",
 				focusClass,
@@ -271,43 +280,57 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 	const heading = app
 		? (meta?.name ?? "Discover this app")
 		: "Build your next big idea.";
-	const description = app
-		? meta?.description || "Open this app and see what you can build with it."
-		: "A helpful assistant. Apps you can make your own. Everything you need to turn an idea into something that works.";
-	const eyebrow = app
-		? fallback || apps.source === "library"
-			? "FROM YOUR LIBRARY"
-			: textConfig(widget.config, "eyebrow", "APP SPOTLIGHT")
-		: "YOUR IDEAS, IN MOTION";
+	const description =
+		widget.description ||
+		(app
+			? meta?.description || "Open this app and see what you can build with it."
+			: "A helpful assistant. Apps you can make your own. Everything you need to turn an idea into something that works.");
+	const eyebrow = textConfig(
+		widget.config,
+		"eyebrow",
+		app
+			? fallback || apps.source === "library"
+				? "FROM YOUR LIBRARY"
+				: "APP SPOTLIGHT"
+			: "YOUR IDEAS, IN MOTION",
+	);
 	return (
 		<section
 			data-home-discovery="app-spotlight"
 			data-home-discovery-mode={compact ? "compact" : "hero"}
-			className="@container/discovery relative isolate overflow-hidden rounded-[20px] border border-violet-400/25 bg-[#10101e] text-[#f6f3ff]"
+			className="@container/discovery relative isolate flex min-w-0 flex-1 flex-col overflow-hidden text-[var(--home-surface-foreground)]"
 		>
-			<div
-				aria-hidden="true"
-				className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_90%_10%,rgba(139,92,246,0.25),transparent_55%),linear-gradient(120deg,rgba(91,33,182,0.14),transparent_70%)]"
-			/>
+			{widget.appearance.variant === "tinted" && (
+				<div
+					aria-hidden="true"
+					className="pointer-events-none absolute inset-0"
+					style={{
+						background:
+							"radial-gradient(ellipse at 90% 10%, color-mix(in srgb, var(--home-accent) 18%, transparent), transparent 65%)",
+					}}
+				/>
+			)}
 			<div
 				className={cn(
-					"relative grid items-center",
+					"relative grid flex-1 items-center",
 					compact
 						? "min-h-[300px] gap-5 p-5 @[540px]/discovery:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] @[540px]/discovery:gap-6 @[540px]/discovery:p-6"
 						: "min-h-[360px] gap-6 p-[clamp(22px,3.5cqw,44px)] @[700px]/discovery:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] @[700px]/discovery:gap-12",
 				)}
 			>
 				<div className="min-w-0">
-					<p
-						className={cn(
-							eyebrowClass,
-							compact
-								? "mb-3 pr-16 text-[#ff8c60] @[540px]/discovery:pr-0"
-								: "mb-4 text-[#ff8c60] @[700px]/discovery:mb-5",
-						)}
-					>
-						{eyebrow}
-					</p>
+					{eyebrow && (
+						<p
+							className={cn(
+								eyebrowClass,
+								compact
+									? "mb-3 pr-16 text-[var(--home-surface-accent)] @[540px]/discovery:pr-0"
+									: "mb-4 text-[var(--home-surface-accent)] @[700px]/discovery:mb-5",
+							)}
+						>
+							{eyebrow}
+						</p>
+					)}
 					<h2
 						className={cn(
 							"text-balance break-words font-bold leading-[1.08] tracking-[-0.035em]",
@@ -321,7 +344,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 					{app && (app.primary_category || updateLabel) && (
 						<p
 							className={cn(
-								"flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-relaxed text-[#b8b1c9]",
+								"flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-relaxed text-[var(--home-surface-muted)]",
 								compact ? "mt-2" : "mt-3",
 							)}
 						>
@@ -340,7 +363,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 					)}
 					<p
 						className={cn(
-							"max-w-[48ch] text-pretty leading-relaxed text-[#b8b1c9]",
+							"max-w-[48ch] text-pretty leading-relaxed text-[var(--home-surface-muted)]",
 							compact
 								? "mt-3 line-clamp-2 text-[13px]"
 								: "mt-4 line-clamp-4 text-[clamp(0.875rem,1.6cqw,1.05rem)] @[700px]/discovery:mt-5",
@@ -359,7 +382,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 								asChild
 								size="lg"
 								className={cn(
-									"rounded-lg bg-[#ff5c25] font-semibold text-[#1b110c] hover:bg-[#ff7547]",
+									"rounded-lg bg-[var(--home-accent)] font-semibold text-[var(--home-accent-foreground)] hover:bg-[var(--home-accent)] hover:brightness-110",
 									compact ? "h-9 px-3 text-xs" : "h-11 px-5",
 								)}
 							>
@@ -384,7 +407,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 								disabled={editing}
 								onClick={openOverlay}
 								className={cn(
-									"rounded-lg bg-[#ff5c25] font-semibold text-[#1b110c] hover:bg-[#ff7547]",
+									"rounded-lg bg-[var(--home-accent)] font-semibold text-[var(--home-accent-foreground)] hover:bg-[var(--home-accent)] hover:brightness-110",
 									compact ? "h-9 px-3 text-xs" : "h-11 px-5",
 								)}
 							>
@@ -395,7 +418,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 						<Link
 							href={app ? exploreHref(widget.config) : "/library"}
 							className={cn(
-								"inline-flex items-center rounded-lg border border-white/20 font-semibold text-[#e2ddeb] transition-colors hover:bg-white/5",
+								"inline-flex items-center rounded-lg border border-[var(--home-surface-border)] font-semibold text-[var(--home-surface-foreground)] transition-colors hover:bg-[var(--home-surface-item-hover)]",
 								compact ? "h-9 px-3 text-xs" : "h-11 px-5 text-sm",
 								focusClass,
 							)}
@@ -428,7 +451,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 									<dt
 										className={cn(
 											compact ? "text-[10px]" : eyebrowClass,
-											"text-[#9790a8]",
+											"text-[var(--home-surface-muted)]",
 											!compact && "mt-1",
 										)}
 									>
@@ -442,10 +465,15 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 									>
 										<Star
 											aria-hidden="true"
-											className="size-4 fill-[#ffca65] text-[#ffca65]"
+											className={cn(
+												"size-4 fill-current",
+												widget.appearance.variant === "solid"
+													? "text-[var(--home-surface-foreground)]"
+													: "text-amber-600 dark:text-amber-400",
+											)}
 										/>
 										{app.avg_rating?.toFixed(1)}
-										<span className="text-xs font-normal text-[#9790a8]">
+										<span className="text-xs font-normal text-[var(--home-surface-muted)]">
 											({compactNumber.format(app.rating_count)})
 										</span>
 									</dd>
@@ -462,7 +490,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 										<dt
 											className={cn(
 												compact ? "text-[10px]" : eyebrowClass,
-												"text-[#9790a8]",
+												"text-[var(--home-surface-muted)]",
 												!compact && "mt-1",
 											)}
 										>
@@ -485,7 +513,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 							type="button"
 							onClick={apps.retry}
 							className={cn(
-								"mt-5 inline-flex items-center gap-1.5 rounded text-xs text-[#b8b1c9] hover:text-white",
+								"mt-5 inline-flex items-center gap-1.5 rounded text-xs text-[var(--home-surface-muted)] hover:text-[var(--home-surface-foreground)]",
 								focusClass,
 							)}
 						>
@@ -497,7 +525,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 						apps.source === "manual" &&
 						!apps.isLoading &&
 						!apps.isError && (
-							<p className="mt-5 text-xs text-[#b8b1c9]">
+							<p className="mt-5 text-xs text-[var(--home-surface-muted)]">
 								Choose a featured app in widget settings.
 							</p>
 						)}
@@ -519,7 +547,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 										type={app.app_type}
 										src={meta?.icon}
 										fallback={(meta?.name ?? app.id).slice(0, 2).toUpperCase()}
-										background="linear-gradient(145deg,#8b5cf6,#312e81)"
+										background="linear-gradient(145deg, var(--home-accent), color-mix(in srgb, var(--home-accent) 35%, var(--background)))"
 									/>
 								</span>
 								<div className="hidden w-full @[540px]/discovery:block">
@@ -540,11 +568,11 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 						>
 							<div
 								aria-hidden="true"
-								className="absolute inset-[8%] rounded-full border border-violet-300/10 bg-violet-400/5 shadow-[0_0_100px_15px_rgba(139,92,246,0.15)]"
+								className="absolute inset-[8%] rounded-full border border-[color-mix(in_srgb,var(--home-accent)_20%,transparent)] bg-[color-mix(in_srgb,var(--home-accent)_5%,transparent)] shadow-[0_0_80px_10px_color-mix(in_srgb,var(--home-accent)_15%,transparent)]"
 							/>
 							<div
 								aria-hidden="true"
-								className="absolute inset-[18%] rounded-full border border-violet-300/15"
+								className="absolute inset-[18%] rounded-full border border-[color-mix(in_srgb,var(--home-accent)_25%,transparent)]"
 							/>
 							<FlowPilotBubbleOrb
 								className={
@@ -581,11 +609,16 @@ export function HomeAppRanking({ widget }: HomeContentProps) {
 	return (
 		<section
 			data-home-discovery="app-ranking"
-			className="flex h-full min-w-0 flex-col p-5"
+			className="flex min-w-0 flex-1 flex-col p-5 text-[var(--home-surface-foreground)]"
 		>
 			<header className="mb-4">
 				{textConfig(widget.config, "eyebrow") && (
-					<p className={cn(eyebrowClass, "mb-2 text-muted-foreground")}>
+					<p
+						className={cn(
+							eyebrowClass,
+							"mb-2 text-[var(--home-surface-muted)]",
+						)}
+					>
 						{textConfig(widget.config, "eyebrow")}
 					</p>
 				)}
@@ -595,22 +628,28 @@ export function HomeAppRanking({ widget }: HomeContentProps) {
 							? "Community favorites"
 							: "Apps to explore")}
 				</h2>
-				<p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+				<p className="mt-1 text-xs text-[var(--home-surface-muted)]">
+					{widget.description || subtitle}
+				</p>
 			</header>
 			{apps.isLoading || apps.isError ? (
-				<HomeQueryState
-					loading={apps.isLoading}
-					error={apps.isError}
-					retry={apps.retry}
-				/>
+				<div className="[&_.text-muted-foreground]:text-[var(--home-surface-muted)]">
+					<HomeQueryState
+						loading={apps.isLoading}
+						error={apps.isError}
+						retry={apps.retry}
+					/>
+				</div>
 			) : !apps.rows.length ? (
-				<HomeEmpty icon={<Layers />}>
-					{apps.source === "manual"
-						? "Choose the apps you want to feature in widget settings."
-						: "Your next useful app is waiting to be discovered."}
-				</HomeEmpty>
+				<div className="[&_.text-muted-foreground]:text-[var(--home-surface-muted)]">
+					<HomeEmpty icon={<Layers />}>
+						{apps.source === "manual"
+							? "Choose the apps you want to feature in widget settings."
+							: "Your next useful app is waiting to be discovered."}
+					</HomeEmpty>
+				</div>
 			) : (
-				<ol className="divide-y divide-border/50">
+				<ol className="divide-y divide-[var(--home-surface-border)]">
 					{apps.rows.map(([app, meta], index) => (
 						<li key={app.id}>
 							<Link
@@ -620,13 +659,13 @@ export function HomeAppRanking({ widget }: HomeContentProps) {
 									if (apps.ownershipLoading) event.preventDefault();
 								}}
 								className={cn(
-									"group flex min-w-0 items-center gap-2.5 rounded-lg py-2.5 transition-colors hover:bg-muted/35",
+									"group flex min-w-0 items-center gap-2.5 rounded-lg py-2.5 transition-colors hover:bg-[var(--home-surface-item-hover)]",
 									focusClass,
 								)}
 							>
 								<span
 									aria-hidden="true"
-									className="w-4 shrink-0 font-mono text-base font-semibold tabular-nums text-muted-foreground/45"
+									className="w-4 shrink-0 font-mono text-base font-semibold tabular-nums text-[var(--home-surface-accent)]"
 								>
 									{index + 1}
 								</span>
@@ -641,25 +680,30 @@ export function HomeAppRanking({ widget }: HomeContentProps) {
 										{meta?.name ?? app.id}
 									</span>
 									{meta?.description && (
-										<span className="mt-0.5 block truncate text-xs leading-relaxed text-muted-foreground">
+										<span className="mt-0.5 block truncate text-xs leading-relaxed text-[var(--home-surface-muted)]">
 											{meta.description}
 										</span>
 									)}
-									<span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+									<span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[var(--home-surface-muted)]">
 										{app.primary_category && (
 											<span>{categoryLabel(app.primary_category)}</span>
 										)}
 										{hasRating(app) && (
 											<span
 												aria-label={`${app.avg_rating?.toFixed(1)} out of 5 from ${app.rating_count} ratings`}
-												className="inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400"
+												className={cn(
+													"inline-flex items-center gap-1 font-medium",
+													widget.appearance.variant === "solid"
+														? "text-[var(--home-surface-foreground)]"
+														: "text-amber-600 dark:text-amber-400",
+												)}
 											>
 												<Star
 													aria-hidden="true"
 													className="size-2.5 fill-current"
 												/>
 												{app.avg_rating?.toFixed(1)}
-												<span className="font-normal text-muted-foreground">
+												<span className="font-normal text-[var(--home-surface-muted)]">
 													({compactNumber.format(app.rating_count)})
 												</span>
 											</span>
@@ -672,10 +716,14 @@ export function HomeAppRanking({ widget }: HomeContentProps) {
 				</ol>
 			)}
 			<DiscoveryLink
-				href={exploreHref(widget.config)}
-				className="mt-auto pt-5 text-muted-foreground hover:text-foreground"
+				href={
+					safeHomeHref(textConfig(widget.config, "href")) ??
+					exploreHref(widget.config)
+				}
+				className="mt-auto pt-5 text-[var(--home-surface-muted)] hover:text-[var(--home-surface-foreground)]"
 			>
-				{apps.source === "library" ? "Open your library" : "Explore apps"}
+				{textConfig(widget.config, "linkLabel") ||
+					(apps.source === "library" ? "Open your library" : "Explore apps")}
 			</DiscoveryLink>
 		</section>
 	);
@@ -695,22 +743,37 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 				: apps.source === "manual"
 					? "Selected apps"
 					: "This profile";
+	const eyebrow = textConfig(widget.config, "eyebrow", "COLLECTION");
+	const headline = textConfig(
+		widget.config,
+		"headline",
+		widget.title ?? "Automate the everyday",
+	);
+	const description = textConfig(
+		widget.config,
+		"description",
+		widget.description ?? "",
+	);
 	return (
 		<section
 			data-home-discovery="app-collection-feature"
-			className="relative flex h-full min-w-0 flex-col overflow-hidden rounded-2xl bg-[#ff5c25] p-5 text-[#251107]"
+			className="relative flex min-w-0 flex-1 flex-col overflow-hidden p-5 text-[var(--home-surface-foreground)]"
 		>
-			<p className={cn(eyebrowClass, "mb-2 text-[#6b260a]")}>
-				{textConfig(widget.config, "eyebrow", "COLLECTION")}
-			</p>
-			<h2 className="max-w-[24ch] text-balance text-[22px] font-semibold leading-tight tracking-tight">
-				{textConfig(widget.config, "headline") ||
-					widget.title ||
-					"Automate the everyday"}
-			</h2>
-			{textConfig(widget.config, "description") && (
-				<p className="mt-2 text-pretty text-xs leading-relaxed text-[#642509]">
-					{textConfig(widget.config, "description")}
+			{eyebrow && (
+				<p
+					className={cn(eyebrowClass, "mb-2 text-[var(--home-surface-accent)]")}
+				>
+					{eyebrow}
+				</p>
+			)}
+			{headline && (
+				<h2 className="max-w-[24ch] text-balance text-[22px] font-semibold leading-tight tracking-tight">
+					{headline}
+				</h2>
+			)}
+			{description && (
+				<p className="mt-2 text-pretty text-xs leading-relaxed text-[var(--home-surface-muted)]">
+					{description}
 				</p>
 			)}
 			<div className="my-4 space-y-2">
@@ -723,7 +786,7 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 							if (apps.ownershipLoading) event.preventDefault();
 						}}
 						className={cn(
-							"group flex min-w-0 items-center gap-3 rounded-xl bg-black/10 p-2.5 transition-colors hover:bg-black/15",
+							"group flex min-w-0 items-center gap-3 rounded-xl bg-[var(--home-surface-item)] p-2.5 transition-colors hover:bg-[var(--home-surface-item-hover)]",
 							focusClass,
 						)}
 					>
@@ -732,14 +795,14 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 							type={app.app_type}
 							src={meta?.icon}
 							fallback={(meta?.name ?? app.id).slice(0, 2).toUpperCase()}
-							background="#b8441b"
+							background="color-mix(in srgb, var(--home-accent) 60%, var(--background))"
 						/>
 						<span className="min-w-0 flex-1">
 							<span className="block truncate text-[13px] font-semibold">
 								{meta?.name ?? app.id}
 							</span>
 							{meta?.description && (
-								<span className="mt-0.5 block truncate text-[11px] leading-relaxed text-[#642509]">
+								<span className="mt-0.5 block truncate text-[11px] leading-relaxed text-[var(--home-surface-muted)]">
 									{meta.description}
 								</span>
 							)}
@@ -751,7 +814,7 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 					</Link>
 				))}
 				{!apps.rows.length && (
-					<div className="rounded-xl bg-black/[0.065] p-4">
+					<div className="rounded-xl bg-[var(--home-surface-item)] p-4">
 						<Layers className="mb-3 size-6 opacity-60" />
 						<p className="text-sm font-medium leading-relaxed">
 							{apps.isLoading
@@ -760,7 +823,7 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 									? "Bring your favorite apps together."
 									: "Less busywork. More room for your ideas."}
 						</p>
-						<p className="mt-2 text-xs leading-relaxed text-[#642509]">
+						<p className="mt-2 text-xs leading-relaxed text-[var(--home-surface-muted)]">
 							{apps.isError
 								? "Explore your library while the store reconnects."
 								: apps.source === "manual"
@@ -771,7 +834,7 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 				)}
 			</div>
 			{apps.rows.length > 0 && (
-				<p className="mb-3 text-[10px] text-[#642509]">
+				<p className="mb-3 text-[10px] text-[var(--home-surface-muted)]">
 					{apps.rows.length}{" "}
 					{apps.rows.length === 1 ? "app shown" : "apps shown"} ·{" "}
 					{selectionMeaning}
@@ -779,14 +842,18 @@ export function HomeAppCollectionFeature({ widget }: HomeContentProps) {
 			)}
 			<div className="mt-auto flex flex-wrap items-center gap-4">
 				<DiscoveryLink
-					href={apps.isError ? "/library" : exploreHref(widget.config)}
-					className="text-[#251107] hover:underline"
+					href={
+						safeHomeHref(textConfig(widget.config, "href")) ??
+						(apps.isError ? "/library" : exploreHref(widget.config))
+					}
+					className="text-[var(--home-surface-accent)] hover:underline"
 				>
-					{apps.isError || apps.source === "library"
-						? "Open your library"
-						: apps.source === "manual"
-							? "Explore more apps"
-							: "Explore the collection"}
+					{textConfig(widget.config, "linkLabel") ||
+						(apps.isError || apps.source === "library"
+							? "Open your library"
+							: apps.source === "manual"
+								? "Explore more apps"
+								: "Explore the collection")}
 				</DiscoveryLink>
 				{apps.isError && (
 					<button
@@ -823,6 +890,7 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 			query,
 		],
 		queryFn: async () => {
+			if (source === "manual" && !modelId) return null;
 			const bits = modelId
 				? [await backend.bitState.getBit(modelId, modelHub || undefined)]
 				: source === "profile"
@@ -860,14 +928,19 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 		: source === "profile"
 			? "In this profile"
 			: "Available in the catalog";
+	const eyebrow = textConfig(widget.config, "eyebrow", "MODEL SPOTLIGHT");
 	return (
 		<section
 			data-home-discovery="model-spotlight"
-			className="flex h-full min-w-0 flex-col p-5"
+			className="flex min-w-0 flex-1 flex-col p-5 text-[var(--home-surface-foreground)]"
 		>
-			<p className={cn(eyebrowClass, "mb-4 text-muted-foreground")}>
-				{textConfig(widget.config, "eyebrow", "MODEL SPOTLIGHT")}
-			</p>
+			{eyebrow && (
+				<p
+					className={cn(eyebrowClass, "mb-4 text-[var(--home-surface-accent)]")}
+				>
+					{eyebrow}
+				</p>
+			)}
 			{bit ? (
 				<>
 					<div className="flex min-w-0 items-center gap-3">
@@ -876,26 +949,29 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 							<h2 className={cn(cardHeadingClass, "break-words")}>
 								{meta?.name ?? bit.id}
 							</h2>
-							<p className="mt-1 text-[11px] text-muted-foreground">
+							<p className="mt-1 text-[11px] text-[var(--home-surface-muted)]">
 								{sourceLabel}
 							</p>
 						</div>
 					</div>
-					<p className="mt-4 line-clamp-3 text-pretty text-xs leading-relaxed text-muted-foreground">
-						{meta?.description ||
+					<p className="mt-4 line-clamp-3 text-pretty text-xs leading-relaxed text-[var(--home-surface-muted)]">
+						{widget.description ||
+							meta?.description ||
 							"Add this model to your profile to use it in your apps and flows."}
 					</p>
-					<dl className="mt-4 divide-y divide-border/50 border-y border-border/50 text-xs">
+					<dl className="mb-4 mt-4 divide-y divide-[var(--home-surface-border)] border-y border-[var(--home-surface-border)] text-xs">
 						{typeof provider === "string" && provider && (
 							<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5">
-								<dt className="text-muted-foreground">Provider</dt>
+								<dt className="text-[var(--home-surface-muted)]">Provider</dt>
 								<dd className="min-w-0 break-words font-medium">
 									{providerLabel(bit)}
 								</dd>
 							</div>
 						)}
 						<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2.5">
-							<dt className="text-muted-foreground">Input → output</dt>
+							<dt className="text-[var(--home-surface-muted)]">
+								Input → output
+							</dt>
 							<dd>
 								<ModalityFlow type={bit.type} />
 							</dd>
@@ -904,7 +980,9 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 							Number.isFinite(contextLength) &&
 							contextLength > 0 && (
 								<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5">
-									<dt className="text-muted-foreground">Context window</dt>
+									<dt className="text-[var(--home-surface-muted)]">
+										Context window
+									</dt>
 									<dd
 										title={`${contextLength.toLocaleString()} tokens`}
 										className="font-medium tabular-nums"
@@ -915,7 +993,7 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 							)}
 						{typeof bit.license === "string" && bit.license && (
 							<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5">
-								<dt className="text-muted-foreground">License</dt>
+								<dt className="text-[var(--home-surface-muted)]">License</dt>
 								<dd
 									className="min-w-0 truncate font-medium"
 									title={bit.license}
@@ -930,7 +1008,7 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 						size="sm"
 						disabled={editing}
 						onClick={() => setDetailOpen(true)}
-						className="mt-4 w-fit rounded-lg"
+						className="mt-auto w-fit rounded-lg border-[var(--home-surface-border)] bg-transparent text-[var(--home-surface-accent)] hover:bg-[var(--home-surface-item-hover)] hover:text-[var(--home-surface-foreground)]"
 					>
 						View model
 						<ArrowUpRight className="size-3" />
@@ -939,22 +1017,24 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 			) : (
 				<>
 					<h2 className={cardHeadingClass}>Find the right model</h2>
-					<p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-						{result.isLoading
-							? "Finding a model for your next idea…"
-							: source === "profile"
-								? "Choose models for this profile to power your chats, images, and workflows."
-								: "Explore models for conversations, images, and more. Choose what works for your app."}
+					<p className="mt-3 text-xs leading-relaxed text-[var(--home-surface-muted)]">
+						{source === "manual" && !modelId
+							? "Choose a model ID in widget settings."
+							: result.isLoading
+								? "Finding a model for your next idea…"
+								: source === "profile"
+									? "Choose models for this profile to power your chats, images, and workflows."
+									: "Explore models for conversations, images, and more. Choose what works for your app."}
 					</p>
 					<div
 						aria-hidden="true"
-						className="my-5 flex size-12 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/10 text-violet-400"
+						className="my-5 flex size-12 items-center justify-center rounded-xl border border-[var(--home-surface-border)] bg-[var(--home-surface-item)] text-[var(--home-surface-accent)]"
 					>
 						<Sparkles className="size-6" />
 					</div>
 					<DiscoveryLink
 						href="/settings/ai"
-						className="mt-auto text-violet-500 dark:text-violet-300"
+						className="mt-auto text-[var(--home-surface-accent)]"
 					>
 						Explore models
 					</DiscoveryLink>
@@ -963,7 +1043,7 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 							type="button"
 							onClick={() => void result.refetch()}
 							className={cn(
-								"mt-3 w-fit rounded text-xs text-muted-foreground underline",
+								"mt-3 w-fit rounded text-xs text-[var(--home-surface-muted)] underline",
 								focusClass,
 							)}
 						>

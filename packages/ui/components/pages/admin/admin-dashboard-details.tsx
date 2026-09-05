@@ -2,22 +2,67 @@
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle, RefreshCw, Save, Scale, Shield } from "lucide-react";
+import {
+	AlertTriangle,
+	CheckCircle,
+	RefreshCw,
+	Save,
+	Scale,
+	Shield,
+} from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, XAxis, YAxis } from "recharts";
+import {
+	Bar,
+	BarChart,
+	CartesianGrid,
+	Cell,
+	ComposedChart,
+	Line,
+	Pie,
+	PieChart,
+	XAxis,
+	YAxis,
+} from "recharts";
 import { useFeatures } from "../../../hooks/use-features";
-import type { IAdminAppUsage, IAdminPaginated, IAdminTechnicalUserUsage, IAdminUsageAlert, IAdminUsageInvocation, IAdminUsageOverview, IAppUsageLimits, IUsageLimitPeriod, IUsageReconciliationResult } from "../../../lib/schema/usage";
+import type {
+	IAdminAppUsage,
+	IAdminPaginated,
+	IAdminTechnicalUserUsage,
+	IAdminUsageAlert,
+	IAdminUsageInvocation,
+	IAdminUsageOverview,
+	IAppUsageLimits,
+	IUsageLimitPeriod,
+	IUsageReconciliationResult,
+} from "../../../lib/schema/usage";
 import { useBackend } from "../../../state/backend-state";
 import type { IProfile } from "../../../types";
-import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card";
-import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "../../ui/chart";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "../../ui/card";
+import {
+	type ChartConfig,
+	ChartContainer,
+	ChartTooltip,
+	ChartTooltipContent,
+} from "../../ui/chart";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../ui/select";
 import { Skeleton } from "../../ui/skeleton";
+import { UserProfileLink } from "../../ui/user-profile-link";
 
 const PERIODS: IUsageLimitPeriod[] = ["weekly", "monthly", "yearly"];
 
@@ -182,14 +227,38 @@ function tokenInputValue(
 
 function toMicroDollars(value: string) {
 	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed < 0) return null;
+	if (!Number.isFinite(parsed) || parsed < 0)
+		throw new Error("Limits must be non-negative numbers");
 	return Math.round(parsed * 1_000_000);
 }
 
 function toTokenLimit(value: string) {
 	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed < 0) return null;
+	if (!Number.isFinite(parsed) || parsed < 0)
+		throw new Error("Limits must be non-negative numbers");
 	return Math.floor(parsed);
+}
+
+function QueryErrorState({
+	message,
+	onRetry,
+	retrying,
+}: { message: string; onRetry: () => void; retrying: boolean }) {
+	const { t } = useTranslation("admin");
+	return (
+		<div
+			role="alert"
+			className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-4 text-sm"
+		>
+			<p className="text-destructive">{message}</p>
+			<Button variant="outline" size="sm" onClick={onRetry} disabled={retrying}>
+				<RefreshCw
+					className={`mr-2 size-3.5 ${retrying ? "animate-spin" : ""}`}
+				/>
+				{t("retry", "Retry")}
+			</Button>
+		</div>
+	);
 }
 
 function EmptyChart({ label }: { label: string }) {
@@ -520,7 +589,7 @@ function SpendMixChart({
 				value: overview?.totals.embeddingPrice ?? 0,
 			},
 		],
-		[overview?.totals.embeddingPrice, overview?.totals.llmPrice],
+		[overview?.totals.embeddingPrice, overview?.totals.llmPrice, t],
 	);
 	const total = data.reduce((sum, item) => sum + item.value, 0);
 
@@ -549,7 +618,24 @@ function SpendMixChart({
 						>
 							<PieChart>
 								<ChartTooltip
-									content={<ChartTooltipContent nameKey="key" hideLabel />}
+									content={
+										<ChartTooltipContent
+											nameKey="key"
+											hideLabel
+											formatter={(value, name) => (
+												<div className="flex w-full items-center justify-between gap-4">
+													<span className="text-muted-foreground">
+														{name === "llm"
+															? "LLM"
+															: t("embeddings", "Embeddings")}
+													</span>
+													<span className="font-mono font-medium tabular-nums">
+														{formatCost(Number(value))}
+													</span>
+												</div>
+											)}
+										/>
+									}
 								/>
 								<Pie
 									data={data}
@@ -572,7 +658,12 @@ function SpendMixChart({
 										<div className="flex items-center gap-2">
 											<span
 												className="h-2.5 w-2.5 rounded-sm"
-												style={{ background: `var(--color-${item.key})` }}
+												style={{
+													background:
+														item.key === "llm"
+															? "var(--chart-1)"
+															: "var(--chart-2)",
+												}}
 											/>
 											<span>{item.name}</span>
 										</div>
@@ -756,6 +847,19 @@ function TechnicalUserLimitEditor({
 			>
 				<Save className="h-4 w-4" />
 			</Button>
+			{mutation.isError && (
+				<p role="alert" className="col-span-full text-xs text-destructive">
+					{t(
+						"saveUsageLimitsFailed",
+						"Could not save limits. Enter non-negative numbers and try again.",
+					)}
+				</p>
+			)}
+			{mutation.isSuccess && (
+				<output className="col-span-full text-xs text-muted-foreground">
+					{t("usageLimitsSaved", "Limits saved.")}
+				</output>
+			)}
 		</div>
 	);
 }
@@ -858,7 +962,7 @@ function TopAppsActivityChart({
 				executions: app.executions,
 				cost: app.totalPrice,
 			})),
-		[overview?.apps],
+		[overview?.apps, t],
 	);
 	const hasData = data.some((item) => item.aiCalls || item.executions);
 
@@ -1053,15 +1157,19 @@ function LimitUtilization({
 					const window = app.limits?.[period];
 					if (!window?.enabled) return null;
 					const costPercent =
-						window.costMicroDollars && window.costMicroDollars > 0
-							? (app.totalPrice / window.costMicroDollars) * 100
-							: null;
+						window.costMicroDollars === null
+							? null
+							: window.costMicroDollars === 0
+								? 100
+								: (app.totalPrice / window.costMicroDollars) * 100;
 					const tokenPercent =
-						window.tokenLimit && window.tokenLimit > 0
-							? (app.totalTokens / window.tokenLimit) * 100
-							: null;
+						window.tokenLimit === null
+							? null
+							: window.tokenLimit === 0
+								? 100
+								: (app.totalTokens / window.tokenLimit) * 100;
 					const utilization = Math.max(costPercent ?? 0, tokenPercent ?? 0);
-					if (!costPercent && !tokenPercent) return null;
+					if (costPercent === null && tokenPercent === null) return null;
 					return {
 						id: app.appId ?? app.appName ?? "unknown",
 						name: app.appName ?? app.appId ?? "Unknown app",
@@ -1069,6 +1177,7 @@ function LimitUtilization({
 						costPercent,
 						tokenPercent,
 						hard: window.hard,
+						warningThresholdPercent: window.warningThresholdPercent,
 					};
 				})
 				.filter((row): row is NonNullable<typeof row> => Boolean(row))
@@ -1097,10 +1206,12 @@ function LimitUtilization({
 					rows.map((row) => {
 						const color =
 							row.utilization >= 100
-								? "hsl(var(--destructive))"
-								: row.utilization >= 80
-									? "hsl(var(--chart-4))"
-									: "hsl(var(--chart-2))";
+								? "var(--destructive)"
+								: row.warningThresholdPercent !== null &&
+										row.warningThresholdPercent > 0 &&
+										row.utilization >= row.warningThresholdPercent
+									? "var(--chart-4)"
+									: "var(--chart-2)";
 						return (
 							<div key={row.id} className="space-y-1.5">
 								<div className="flex items-center justify-between gap-3 text-sm">
@@ -1114,7 +1225,7 @@ function LimitUtilization({
 									<div
 										className="h-full rounded-full"
 										style={{
-											width: `${Math.min(100, Math.max(3, row.utilization))}%`,
+											width: `${Math.min(100, Math.max(0, row.utilization))}%`,
 											backgroundColor: color,
 										}}
 									/>
@@ -1224,6 +1335,19 @@ function LimitEditor({
 			>
 				<Save className="h-4 w-4" />
 			</Button>
+			{mutation.isError && (
+				<p role="alert" className="col-span-full text-xs text-destructive">
+					{t(
+						"saveUsageLimitsFailed",
+						"Could not save limits. Enter non-negative numbers and try again.",
+					)}
+				</p>
+			)}
+			{mutation.isSuccess && (
+				<output className="col-span-full text-xs text-muted-foreground">
+					{t("usageLimitsSaved", "Limits saved.")}
+				</output>
+			)}
 		</div>
 	);
 }
@@ -1311,6 +1435,19 @@ function ManualLimitEditor({
 					{t("save", "Save")}
 				</Button>
 			</div>
+			{mutation.isError && (
+				<p role="alert" className="col-span-full text-xs text-destructive">
+					{t(
+						"saveUsageLimitsFailed",
+						"Could not save limits. Enter non-negative numbers and try again.",
+					)}
+				</p>
+			)}
+			{mutation.isSuccess && (
+				<output className="col-span-full text-xs text-muted-foreground">
+					{t("usageLimitsSaved", "Limits saved.")}
+				</output>
+			)}
 		</div>
 	);
 }
@@ -1318,15 +1455,19 @@ function ManualLimitEditor({
 function UsageOperations({
 	profile,
 	period,
+	accountId,
 }: {
 	profile: IProfile;
 	period: IUsageLimitPeriod;
+	accountId?: string;
 }) {
 	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const alerts = useQuery<IAdminPaginated<IAdminUsageAlert>>({
-		queryKey: ["admin", "usage", "alerts"],
+		queryKey: ["admin", "usage", "alerts", profile.hub, profile.id, accountId],
+		staleTime: 60_000,
+		meta: { persist: false, adminDashboard: true },
 		queryFn: () =>
 			backend.apiState.get<IAdminPaginated<IAdminUsageAlert>>(
 				profile,
@@ -1334,7 +1475,17 @@ function UsageOperations({
 			),
 	});
 	const invocations = useQuery<IAdminPaginated<IAdminUsageInvocation>>({
-		queryKey: ["admin", "usage", "invocations", period],
+		queryKey: [
+			"admin",
+			"usage",
+			"invocations",
+			period,
+			profile.hub,
+			profile.id,
+			accountId,
+		],
+		staleTime: 60_000,
+		meta: { persist: false, adminDashboard: true },
 		queryFn: () =>
 			backend.apiState.get<IAdminPaginated<IAdminUsageInvocation>>(
 				profile,
@@ -1392,6 +1543,33 @@ function UsageOperations({
 					</Button>
 				</CardHeader>
 				<CardContent className="space-y-2">
+					{reconcile.isError && (
+						<p role="alert" className="text-sm text-destructive">
+							{t(
+								"usageReconciliationFailed",
+								"Usage reconciliation failed. Try again.",
+							)}
+						</p>
+					)}
+					{reconcile.isSuccess && (
+						<output className="text-sm text-muted-foreground">
+							{t(
+								"usageReconciliationComplete",
+								"Reconciliation complete. {{count}} pending calls marked as unknown usage.",
+								{ count: reconcile.data.markedUnknownUsage },
+							)}
+						</output>
+					)}
+					{invocations.isError && (
+						<QueryErrorState
+							message={t(
+								"usageLedgerUnavailable",
+								"The usage ledger could not be loaded.",
+							)}
+							onRetry={() => void invocations.refetch()}
+							retrying={invocations.isFetching}
+						/>
+					)}
 					{invocations.isLoading && <Skeleton className="h-32 w-full" />}
 					{invocations.data?.items.map((item) => (
 						<div
@@ -1415,16 +1593,23 @@ function UsageOperations({
 							<div className="text-right">
 								<div className="font-medium">
 									{formatCost(
-										item.costMicroDollars || item.estimatedCostMicroDollars,
+										item.status === "pending" || item.status === "unknown_usage"
+											? item.estimatedCostMicroDollars
+											: item.costMicroDollars,
 									)}
 								</div>
 								<div className="text-xs text-muted-foreground">
 									{formatCount(
-										item.inputTokens +
-											item.outputTokens +
-											item.embeddingTokens || item.estimatedTokens,
+										item.status === "pending" || item.status === "unknown_usage"
+											? item.estimatedTokens
+											: item.inputTokens +
+													item.outputTokens +
+													item.embeddingTokens,
 									)}{" "}
 									tokens
+									{(item.status === "pending" ||
+										item.status === "unknown_usage") &&
+										` (${t("estimated", "estimated")})`}
 								</div>
 							</div>
 						</div>
@@ -1452,6 +1637,24 @@ function UsageOperations({
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2">
+					{acknowledge.isError && (
+						<p role="alert" className="text-sm text-destructive">
+							{t(
+								"usageAlertAcknowledgeFailed",
+								"The alert could not be acknowledged. Try again.",
+							)}
+						</p>
+					)}
+					{alerts.isError && (
+						<QueryErrorState
+							message={t(
+								"usageAlertsUnavailable",
+								"Usage alerts could not be loaded.",
+							)}
+							onRetry={() => void alerts.refetch()}
+							retrying={alerts.isFetching}
+						/>
+					)}
 					{alerts.isLoading && <Skeleton className="h-32 w-full" />}
 					{alerts.data?.items.map((alert) => (
 						<div
@@ -1495,15 +1698,19 @@ function UsageOperations({
 export function UsageOverviewSection({
 	profile,
 	hasAdminAccess,
+	accountId,
 }: {
 	profile: IProfile | undefined;
 	hasAdminAccess: boolean;
+	accountId?: string;
 }) {
 	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const [period, setPeriod] = useState<IUsageLimitPeriod>("monthly");
 	const overview = useQuery<IAdminUsageOverview>({
-		queryKey: ["admin", "usage", period],
+		queryKey: ["admin", "usage", period, profile?.hub, profile?.id, accountId],
+		staleTime: 60_000,
+		meta: { persist: false, adminDashboard: true },
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<IAdminUsageOverview>(
@@ -1515,6 +1722,20 @@ export function UsageOverviewSection({
 	});
 
 	if (!hasAdminAccess) return null;
+
+	if (overview.isError) {
+		return (
+			<QueryErrorState
+				message={t(
+					"usageOverviewUnavailable",
+					"Usage data could not be loaded. Try again to see spend, activity, and limits.",
+				)}
+				onRetry={() => void overview.refetch()}
+				retrying={overview.isFetching}
+			/>
+		);
+	}
+	if (!profile) return <Skeleton className="h-64 w-full" />;
 
 	return (
 		<div className="space-y-4">
@@ -1590,7 +1811,13 @@ export function UsageOverviewSection({
 				/>
 			</div>
 
-			{profile && <UsageOperations profile={profile} period={period} />}
+			{profile && (
+				<UsageOperations
+					profile={profile}
+					period={period}
+					accountId={accountId}
+				/>
+			)}
 
 			<Card>
 				<CardHeader>
@@ -1768,14 +1995,25 @@ interface AiActExportRow {
 
 function AiActConformityPreview({
 	profile,
-}: { profile: IProfile | undefined }) {
+	accountId,
+}: { profile: IProfile | undefined; accountId?: string }) {
 	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const features = useFeatures();
 	const aiActEnabled = features.data?.ai_act === true;
 
 	const inventory = useQuery<AiActExportRow[]>({
-		queryKey: ["admin", "ai-act", "dashboard", "export"],
+		queryKey: [
+			"admin",
+			"ai-act",
+			"dashboard",
+			"export",
+			profile?.hub,
+			profile?.id,
+			accountId,
+		],
+		staleTime: 60_000,
+		meta: { persist: false, adminDashboard: true },
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<AiActExportRow[]>(
@@ -1828,8 +2066,17 @@ function AiActConformityPreview({
 					</Link>
 				</Button>
 			</div>
-			{inventory.isLoading ? (
+			{inventory.isPending ? (
 				<Skeleton className="h-16 w-full" />
+			) : inventory.isError ? (
+				<QueryErrorState
+					message={t(
+						"aiActInventoryUnavailable",
+						"The AI Act inventory could not be loaded.",
+					)}
+					onRetry={() => void inventory.refetch()}
+					retrying={inventory.isFetching}
+				/>
 			) : (
 				<div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
 					<div className="rounded-md border bg-background p-2">
@@ -1881,7 +2128,7 @@ function AiActConformityPreview({
 							{t("avgConformity", "Avg. conformity")}
 						</div>
 						<div className="text-lg font-semibold">
-							{stats.avgConformity ?? "—"}
+							{stats.avgConformity ?? t("notAvailable", "n/a")}
 							{stats.avgConformity !== null && (
 								<span className="text-xs text-muted-foreground">%</span>
 							)}
@@ -1895,14 +2142,29 @@ function AiActConformityPreview({
 
 export function GovernanceScoresSummary({
 	profile,
+	permission,
+	accountId,
 }: {
 	profile: IProfile | undefined;
+	permission?: number;
+	accountId?: string;
 }) {
 	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const summary = useQuery<GovernanceScoresSummaryData>({
-		queryKey: ["admin", "governance", "scores", "summary"],
+		queryKey: [
+			"admin",
+			"governance",
+			"scores",
+			"summary",
+			profile?.hub,
+			profile?.id,
+			permission,
+			accountId,
+		],
+		staleTime: 60_000,
+		meta: { persist: false, adminDashboard: true },
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<GovernanceScoresSummaryData>(
@@ -1938,39 +2200,41 @@ export function GovernanceScoresSummary({
 										: "text-green-500"
 							}`}
 						/>
-						{t("aiInventoryGovernance", "AI Inventory & Governance")}
+						{t("governanceScores", "Governance scores")}
 					</CardTitle>
 					<CardDescription>
 						{t(
-							"euAiActConformityTogetherWithSecurityAndQualityScoresAcrossPublishedApps",
-							"EU AI Act conformity together with security and quality scores across published apps",
+							"securityAndQualityScoresAcrossPublishedApps",
+							"Security and quality scores across published apps.",
 						)}
 					</CardDescription>
 				</div>
 				<Button asChild variant="outline" size="sm">
-					<Link href="/admin/ai-act">
-						{t("viewFullInventory", "View Full Inventory")}
+					<Link href="/admin/governance/scores">
+						{t("viewScores", "View scores")}
 					</Link>
 				</Button>
 			</CardHeader>
 			<CardContent>
-				{summary.isLoading ? (
+				{summary.isPending ? (
 					<Skeleton className="h-32 w-full" />
 				) : summary.error ? (
-					<div className="rounded-md border border-destructive/40 p-4 text-center text-sm text-destructive">
-						{t(
-							"failedToLoadGovernanceScoresPleaseCheckTheApiLogs",
-							"Failed to load governance scores. Please check the API logs.",
+					<QueryErrorState
+						message={t(
+							"governanceScoresUnavailable",
+							"Governance scores could not be loaded.",
 						)}
-					</div>
+						onRetry={() => void summary.refetch()}
+						retrying={summary.isFetching}
+					/>
 				) : summary.data ? (
 					<div className="space-y-4">
-						<AiActConformityPreview profile={profile} />
+						<AiActConformityPreview profile={profile} accountId={accountId} />
 
 						<div className="grid gap-3 sm:grid-cols-3">
 							<div className="rounded-lg border p-3">
 								<div className="text-xs text-muted-foreground">
-									{t("totalApps", "Total Apps")}
+									{t("scoredApps", "Scored apps")}
 								</div>
 								<div className="text-2xl font-semibold">
 									{summary.data.totalApps ?? 0}
@@ -2019,7 +2283,7 @@ export function GovernanceScoresSummary({
 									{summary.data.flaggedApps ?? 0}
 								</div>
 								<div className="text-xs text-muted-foreground">
-									{t("score6", "Score ≤ 6")}
+									{t("score4to6", "Score 4 to 6")}
 								</div>
 							</div>
 						</div>
@@ -2032,7 +2296,7 @@ export function GovernanceScoresSummary({
 								{summary.data.worstApps.map((app) => (
 									<Link
 										key={app.appId}
-										href={`/admin/ai-act?id=${encodeURIComponent(app.appId)}`}
+										href="/admin/governance/scores"
 										className="block"
 									>
 										<div className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm transition-colors hover:border-primary/40">
@@ -2112,4 +2376,3 @@ export function GovernanceScoresSummary({
 		</Card>
 	);
 }
-

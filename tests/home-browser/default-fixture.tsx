@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AuthContext, useAuth } from "react-oidc-context";
-import { createDefaultHomeLayout } from "../../packages/ui/components/home/catalog";
+import {
+	createDefaultHomeLayout,
+	createHomeWidget,
+} from "../../packages/ui/components/home/catalog";
 import { HomeEditor } from "../../packages/ui/components/home/home-editor";
 import type { IHomeLayout } from "../../packages/ui/components/home/types";
 import {
@@ -90,17 +93,88 @@ function DefaultScenario({
 	scenario,
 	original,
 }: { scenario: Scenario; original: IBackendState }) {
-	const [layout, setLayout] = useState<IHomeLayout>(() =>
-		createDefaultHomeLayout(),
-	);
+	const persistedLayoutKey = new URLSearchParams(location.search).has("persist")
+		? `home-default-browser-qa-${scenario}`
+		: undefined;
+	const [layout, setLayout] = useState<IHomeLayout>(() => {
+		const saved = persistedLayoutKey
+			? sessionStorage.getItem(persistedLayoutKey)
+			: null;
+		if (saved) return JSON.parse(saved);
+		const initial = createDefaultHomeLayout();
+		if (
+			new URLSearchParams(location.search).has("customization") ||
+			new URLSearchParams(location.search).get("selection") === "legacy"
+		) {
+			for (const preset of ["app-collection-feature", "app-ranking"]) {
+				if (!initial.widgets.some((widget) => widget.type === preset)) {
+					const widget = createHomeWidget(preset);
+					initial.widgets.push({
+						...widget,
+						id: `customization-${preset}`,
+						size: { ...widget.size, heightMode: "auto" },
+					});
+				}
+			}
+		}
+		if (new URLSearchParams(location.search).get("selection") === "legacy") {
+			const feature = initial.widgets.find(
+				(widget) => widget.type === "app-collection-feature",
+			);
+			if (feature)
+				feature.config = {
+					...feature.config,
+					source: "manual",
+					appIds: ["default-fixture-app-5", "default-fixture-app-0"],
+					category: "Business",
+					query: "Invoice",
+					tag: "finance",
+				};
+		}
+		return initial;
+	});
 	const [ready, setReady] = useState(false);
 	useEffect(() => {
 		const offline = scenario === "offline";
 		const catalog = new URLSearchParams(location.search).get("catalog");
+		const fixtureApps = defaultFixtureApps.map(([app, metadata], index) =>
+			catalog === "varied"
+				? ([
+						{
+							...app,
+							primary_category:
+								index === 5 ? "Utilities" : app.primary_category,
+						},
+						{
+							...metadata,
+							name:
+								index === 0
+									? "Knowledge Chat for the whole team"
+									: metadata.name,
+							description: `${metadata.description} Keep shared context, detailed documents, and recent work together across every project in your workspace.`,
+						},
+					] as (typeof defaultFixtureApps)[number])
+				: ([app, metadata] as (typeof defaultFixtureApps)[number]),
+		);
+		const fixtureModels =
+			catalog === "varied"
+				? defaultFixtureModels.map((model) => ({
+						...model,
+						parameters: { ...model.parameters, license: "Apache 2.0" },
+						meta: {
+							en: {
+								...model.meta.en,
+								name: "Workspace reasoning with documents and images",
+								description:
+									"A model for working through detailed documents, diagrams, shared knowledge, and complex questions from your team's daily work.",
+							},
+						},
+					}))
+				: defaultFixtureModels;
 		const discoverable =
 			catalog === "empty"
 				? []
-				: defaultFixtureApps.map(
+				: fixtureApps.map(
 						([app, meta]) =>
 							[
 								catalog === "unrated"
@@ -116,7 +190,7 @@ function DefaultScenario({
 							] as (typeof defaultFixtureApps)[number],
 					);
 		const authenticated = scenario === "returning" || scenario === "fresh";
-		const localApps = defaultFixtureApps.slice(0, 2).map(
+		const localApps = fixtureApps.slice(0, 2).map(
 			([app, metadata]) =>
 				[
 					{
@@ -129,7 +203,7 @@ function DefaultScenario({
 		);
 		const owned =
 			scenario === "returning"
-				? defaultFixtureApps.slice(0, 4)
+				? fixtureApps.slice(0, 4)
 				: offline
 					? localApps
 					: [];
@@ -228,14 +302,14 @@ function DefaultScenario({
 						.slice(offset, offset + limit);
 				},
 				getApp: async (id: string) => {
-					const app = (offline ? localApps : defaultFixtureApps).find(
+					const app = (offline ? localApps : fixtureApps).find(
 						([app]) => app.id === id,
 					)?.[0];
 					if (!app) throw new Error("Fixture app not found.");
 					return app;
 				},
 				getAppMeta: async (id: string) =>
-					defaultFixtureApps.find(([app]) => app.id === id)?.[1],
+					fixtureApps.find(([app]) => app.id === id)?.[1],
 			},
 			userState: {
 				...original.userState,
@@ -292,12 +366,12 @@ function DefaultScenario({
 			bitState: {
 				...original.bitState,
 				getProfileBits: async () =>
-					scenario === "returning" ? defaultFixtureModels : [],
+					scenario === "returning" ? fixtureModels : [],
 				searchBits: async () => {
 					online();
-					return catalog === "empty" ? [] : defaultFixtureModels;
+					return catalog === "empty" ? [] : fixtureModels;
 				},
-				getBit: async () => defaultFixtureModels[0],
+				getBit: async () => fixtureModels[0],
 				isBitInstalled: async () => true,
 				getBitSize: async () => 0,
 			},
@@ -365,11 +439,14 @@ function DefaultScenario({
 					},
 				});
 				setLayout(next);
+				if (persistedLayoutKey)
+					sessionStorage.setItem(persistedLayoutKey, JSON.stringify(next));
 			}}
 			onReset={async () => {
 				const qa = Reflect.get(window, "defaultHomeQa");
 				qa.calls.resets = (qa.calls.resets ?? 0) + 1;
 				setLayout(createDefaultHomeLayout());
+				if (persistedLayoutKey) sessionStorage.removeItem(persistedLayoutKey);
 			}}
 		/>
 	);

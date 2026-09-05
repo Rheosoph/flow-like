@@ -21,6 +21,20 @@ const layout = (id: string): IHomeLayout => ({
 	],
 });
 describe("profile home layouts", () => {
+	it("preserves responsive row, content-only, and fixed height choices on reload", () => {
+		for (const heightMode of ["auto", "content", "fixed"] as const) {
+			const page = layout(heightMode);
+			page.widgets[0].size = {
+				columns: 4,
+				rows: 3,
+				heightMode,
+				...(heightMode === "fixed" ? { height: 360 } : {}),
+			};
+			expect(
+				normalizeHomeLayout(JSON.parse(JSON.stringify(page)))?.widgets[0].size,
+			).toEqual(page.widgets[0].size);
+		}
+	});
 	it("inherits latest defaults and treats an empty personal page as intentional", () => {
 		const defaults = {
 			main: { id: "main", revision: "2", layout: layout("main") },
@@ -69,7 +83,9 @@ describe("profile home layouts", () => {
 			for (let span = 1; span <= 12; span++)
 				expect(homeWidgetSpan(span, cols)).toBeLessThanOrEqual(cols);
 		}
-		expect(homeWidgetSpan(8, 6)).toBe(4);
+		expect(homeWidgetSpan(8, 6)).toBe(3);
+		expect(homeWidgetSpan(4, 6)).toBe(3);
+		expect(homeWidgetSpan(12, 6)).toBe(6);
 		expect(homeWidgetSpan(3, 1)).toBe(1);
 	});
 	it("reorders without modifying widget identity or embedded configuration", () => {

@@ -92,16 +92,18 @@ import {
 import { HomeDataWidget } from "./data-widget";
 import { HomeDataWidgetSettings } from "./data-widget-settings";
 import {
+	HOME_ACCENTS as ACCENTS,
+	homeAppearanceStyle,
+} from "./home-appearance";
+import {
 	type HomeDragPoint,
 	homeInsertionIndex,
 	insertHomeWidget,
 } from "./home-drag";
 import {
 	HOME_GRID_GAP,
-	HOME_GRID_TRACK,
 	HOME_ROW_HEIGHT,
 	MAX_HOME_WIDGETS,
-	homeGridRowSpan,
 	homeWidgetAutoHeight,
 	homeWidgetHeight,
 	homeWidgetSpan,
@@ -119,15 +121,6 @@ import type {
 	IHomeWidget,
 } from "./types";
 
-const ACCENTS: Record<string, string> = {
-	neutral: "var(--foreground)",
-	violet: "#a78bfa",
-	blue: "#60a5fa",
-	emerald: "#34d399",
-	orange: "#fb713f",
-	amber: "#fbbf24",
-	rose: "#fb7185",
-};
 const CATEGORIES: { id: HomeWidgetCategory | "all"; name: string }[] = [
 	{ id: "all", name: "All widgets" },
 	{ id: "apps", name: "Apps" },
@@ -1263,7 +1256,7 @@ function HomeCanvas({
 					className="grid items-stretch"
 					style={{
 						gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-						gridAutoRows: `${HOME_GRID_TRACK}px`,
+						gridAutoRows: "auto",
 						gap: `${HOME_GRID_GAP}px`,
 					}}
 				>
@@ -1460,16 +1453,13 @@ function HomeWidgetFrame({
 		"model-spotlight",
 		"workspace-pulse",
 	].includes(widget.type);
-	const accent = ACCENTS[widget.appearance.accent] ?? ACCENTS.neutral;
 	const style: CSSProperties = {
-		gridColumn: `span ${Math.max(columns === 6 && ["app-spotlight", "app-ranking", "app-collection-feature", "model-spotlight", "workspace-pulse"].includes(widget.type) ? 3 : 1, homeWidgetSpan(size.columns, columns))}`,
-		gridRow: `span ${homeGridRowSpan(height)}`,
+		...homeAppearanceStyle(widget.appearance),
+		gridColumn: `span ${homeWidgetSpan(size.columns, columns)}`,
 		height: autoHeight ? undefined : height,
+		alignSelf: size.heightMode === "content" ? "start" : undefined,
 		position: "relative",
-		"--home-accent": accent,
 	} as CSSProperties;
-	if (widget.appearance.variant === "tinted")
-		style.backgroundColor = `color-mix(in srgb, ${accent} 9%, var(--card))`;
 	const borderless = widget.appearance.variant === "borderless";
 	return (
 		<section
@@ -1480,7 +1470,7 @@ function HomeWidgetFrame({
 			style={style}
 			data-home-widget={widget.id}
 			data-widget-type={widget.type}
-			data-height-mode={autoHeight ? "auto" : "fixed"}
+			data-height-mode={autoHeight ? (size.heightMode ?? "auto") : "fixed"}
 			data-home-resizing={resize ? "true" : undefined}
 			data-home-placeholder={
 				placeholder ? (activeDrop ? "active" : "outside") : undefined
@@ -1585,6 +1575,7 @@ function HomeWidgetFrame({
 				ref={contentRef}
 				className={cn(
 					"min-w-0",
+					autoHeight && "flex flex-1 flex-col",
 					(!autoHeight || embedHeight) && "flex h-full min-h-0 flex-col",
 				)}
 				style={{ height: embedHeight }}
@@ -1608,6 +1599,7 @@ function HomeWidgetFrame({
 				<div
 					className={cn(
 						"relative min-h-0 min-w-0",
+						autoHeight && "flex flex-1 flex-col",
 						(!autoHeight || embedHeight) && "flex-1 overflow-auto",
 						!ownHeader && "px-5 pb-5",
 						!ownHeader && !widget.title && !widget.description && "pt-5",
@@ -1621,6 +1613,7 @@ function HomeWidgetFrame({
 						<div
 							className={cn(
 								"min-h-0 min-w-0",
+								autoHeight && "flex flex-1 flex-col",
 								(!autoHeight || embedHeight) && "h-full",
 							)}
 							style={{ height: bodyHeight }}
@@ -1874,6 +1867,32 @@ function WidgetInspector({
 	const contentSuppliesTitle = ["app-spotlight", "model-spotlight"].includes(
 		widget.type,
 	);
+	const collectionFeature = widget.type === "app-collection-feature";
+	const editorOnlyTitle =
+		contentSuppliesTitle ||
+		["greeting", "quick-actions"].includes(widget.type) ||
+		(widget.type === "workspace-pulse" && widget.config.mode === "strip") ||
+		(widget.type === "flowpilot" && widget.config.mode === "bar");
+	const supportsDescription = ![
+		"greeting",
+		"quick-actions",
+		"flowpilot",
+		"workspace-pulse",
+		"app-embed",
+	].includes(widget.type);
+	const surfaces = [
+		"card",
+		"borderless",
+		"tinted",
+		...([
+			"app-spotlight",
+			"app-ranking",
+			"app-collection-feature",
+			"model-spotlight",
+		].includes(widget.type)
+			? ["solid"]
+			: []),
+	];
 	return (
 		<div className="min-h-0 flex-1 overflow-y-auto">
 			<div className="space-y-5 p-5">
@@ -1893,12 +1912,28 @@ function WidgetInspector({
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="home-widget-title">
-						{contentSuppliesTitle ? "Widget label" : "Title"}
+						{editorOnlyTitle ? "Editor label" : "Title"}
 					</Label>
 					<Input
 						id="home-widget-title"
-						value={widget.title ?? ""}
-						onChange={(event) => onChange({ title: event.target.value })}
+						value={
+							collectionFeature
+								? String(widget.config.headline ?? widget.title ?? "")
+								: (widget.title ?? "")
+						}
+						onChange={(event) =>
+							onChange({
+								title: event.target.value,
+								...(collectionFeature
+									? {
+											config: {
+												...widget.config,
+												headline: event.target.value,
+											},
+										}
+									: {}),
+							})
+						}
 					/>
 					{contentSuppliesTitle && (
 						<p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -1906,17 +1941,50 @@ function WidgetInspector({
 							comes from the selected app or model.
 						</p>
 					)}
+					{editorOnlyTitle && !contentSuppliesTitle && (
+						<p className="text-[11px] leading-relaxed text-muted-foreground">
+							Identifies this widget in the editor. Configure its displayed
+							content below.
+						</p>
+					)}
 				</div>
-				<div className="space-y-2">
-					<Label htmlFor="home-widget-description">Description</Label>
-					<Textarea
-						id="home-widget-description"
-						value={widget.description ?? ""}
-						onChange={(event) => onChange({ description: event.target.value })}
-						rows={2}
-						placeholder="Add a little context"
-					/>
-				</div>
+				{supportsDescription && (
+					<div className="space-y-2">
+						<Label htmlFor="home-widget-description">
+							{contentSuppliesTitle ? "Description override" : "Description"}
+						</Label>
+						<Textarea
+							id="home-widget-description"
+							value={
+								collectionFeature
+									? String(
+											widget.config.description ?? widget.description ?? "",
+										)
+									: (widget.description ?? "")
+							}
+							onChange={(event) =>
+								onChange({
+									description: event.target.value,
+									...(collectionFeature
+										? {
+												config: {
+													...widget.config,
+													description: event.target.value,
+												},
+											}
+										: {}),
+								})
+							}
+							rows={2}
+							placeholder="Add a little context"
+						/>
+						{contentSuppliesTitle && (
+							<p className="text-[11px] leading-relaxed text-muted-foreground">
+								Leave blank to use the selected app or model's description.
+							</p>
+						)}
+					</div>
+				)}
 				<div className="grid grid-cols-2 gap-3">
 					<div className="space-y-2">
 						<Label htmlFor="home-widget-width">Width</Label>
@@ -1947,7 +2015,7 @@ function WidgetInspector({
 							className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
 							value={
 								homeWidgetAutoHeight(widget)
-									? "auto"
+									? (widget.size.heightMode ?? "auto")
 									: widget.size.height
 										? "custom"
 										: Math.max(widget.size.rows, minimumHomeWidgetRows(widget))
@@ -1956,10 +2024,11 @@ function WidgetInspector({
 								event.target.value !== "custom" &&
 								onChange({
 									size:
-										event.target.value === "auto"
+										event.target.value === "auto" ||
+										event.target.value === "content"
 											? {
 													...widget.size,
-													heightMode: "auto",
+													heightMode: event.target.value as "auto" | "content",
 													height: undefined,
 												}
 											: {
@@ -1971,7 +2040,8 @@ function WidgetInspector({
 								})
 							}
 						>
-							<option value="auto">Fit content</option>
+							<option value="auto">Match row</option>
+							<option value="content">Fit content</option>
 							{widget.size.height && (
 								<option value="custom">{widget.size.height}px</option>
 							)}
@@ -1992,9 +2062,7 @@ function WidgetInspector({
 						id="home-widget-style"
 						className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
 						value={
-							["card", "borderless", "tinted"].includes(
-								widget.appearance.variant,
-							)
+							surfaces.includes(widget.appearance.variant)
 								? widget.appearance.variant
 								: "card"
 						}
@@ -2007,7 +2075,7 @@ function WidgetInspector({
 							})
 						}
 					>
-						{["card", "borderless", "tinted"].map((variant) => (
+						{surfaces.map((variant) => (
 							<option key={variant} value={variant}>
 								{variant.charAt(0).toUpperCase() + variant.slice(1)}
 							</option>

@@ -39,7 +39,14 @@ export function DashboardTelemetryIssuesWidget({
 	const backend = useBackend();
 
 	const issues = useQuery<ITelemetryIssuesResponse>({
-		queryKey: ["admin", "telemetry", "issues", "dashboard"],
+		queryKey: [
+			"admin",
+			"telemetry",
+			"issues",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryIssuesResponse>(
@@ -48,11 +55,20 @@ export function DashboardTelemetryIssuesWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const health = useQuery<ITelemetryReleaseHealthResponse>({
-		queryKey: ["admin", "telemetry", "release-health", "dashboard"],
+		queryKey: [
+			"admin",
+			"telemetry",
+			"release-health",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryReleaseHealthResponse>(
@@ -61,7 +77,9 @@ export function DashboardTelemetryIssuesWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const topIssues = useMemo(
@@ -73,6 +91,37 @@ export function DashboardTelemetryIssuesWidget({
 	);
 
 	const unresolved = issues.data?.total ?? 0;
+
+	if (issues.isError || health.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">
+						{t("issuesReleaseHealth", "Issues & release health")}
+					</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"issueHealthUnavailable",
+							"Issue and release health data is unavailable. Retry to check reported crashes.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={issues.isFetching || health.isFetching}
+						onClick={() => {
+							if (issues.isError) void issues.refetch();
+							if (health.isError) void health.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
+	}
 
 	return (
 		<Card className="overflow-hidden border-primary/20">

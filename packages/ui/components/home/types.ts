@@ -6,7 +6,7 @@ export interface IHomeWidget {
 	size: {
 		columns: number;
 		rows: number;
-		heightMode?: "auto" | "fixed";
+		heightMode?: "auto" | "content" | "fixed";
 		height?: number;
 	};
 	appearance: { variant: string; accent: string };

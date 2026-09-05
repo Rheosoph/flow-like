@@ -56,7 +56,10 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 	const openOverlay = useGlobalChatStore((state) => state.openOverlay);
 	const orbState = useFlowPilotOrbState();
 	const expanded = mode === "card" || mode === "hero";
-	const suggestions = expanded || widget.config.suggestions === true;
+	const suggestions =
+		typeof widget.config.suggestions === "boolean"
+			? widget.config.suggestions
+			: expanded;
 	const heading =
 		widget.title &&
 		!["FlowPilot hero", "FlowPilot composer"].includes(widget.title)
@@ -135,11 +138,11 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 					"flex min-w-0 gap-3 rounded-2xl border border-border/70 bg-background/40 p-2.5 transition-shadow focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10",
 					expanded ? "items-end" : "items-center",
 					widget.config.emphasis === true &&
-						"border-violet-400/30 bg-violet-500/[0.04] p-3.5",
+						"border-[color-mix(in_srgb,var(--home-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--home-accent)_5%,transparent)] p-3.5",
 				)}
 			>
 				{!expanded && (
-					<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--home-accent)_10%,transparent)] text-[var(--home-surface-accent)]">
 						<Sparkles className="size-4" />
 					</span>
 				)}
@@ -170,7 +173,7 @@ export function HomeFlowPilot({ widget, editing }: HomeContentProps) {
 				<Button
 					type="submit"
 					size="icon"
-					className="size-9 shrink-0 rounded-xl"
+					className="size-9 shrink-0 rounded-xl bg-[var(--home-accent)] text-[var(--home-accent-foreground)] hover:bg-[var(--home-accent)] hover:brightness-95"
 					disabled={editing || !composer.canSend}
 					aria-label="Send to FlowPilot"
 				>
@@ -258,9 +261,9 @@ export function HomeGreeting({ widget }: HomeContentProps) {
 				)}
 			</div>
 			{hour >= 18 || hour < 6 ? (
-				<Moon className="size-6 shrink-0 text-primary/50" />
+				<Moon className="size-6 shrink-0 text-[var(--home-surface-accent)] opacity-60" />
 			) : (
-				<Sun className="size-6 shrink-0 text-primary/50" />
+				<Sun className="size-6 shrink-0 text-[var(--home-surface-accent)] opacity-60" />
 			)}
 		</div>
 	);
@@ -358,7 +361,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 						<Fragment key={id}>
 							<span
 								className={cn(
-									"flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary",
+									"flex size-8 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--home-accent)_10%,transparent)] text-[var(--home-surface-accent)]",
 									!toolbar && "mb-3",
 								)}
 							>

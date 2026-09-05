@@ -273,7 +273,7 @@ try {
 		.click();
 	await tab("Apps");
 	await page
-		.getByRole("checkbox", { name: "Knowledge Chat", exact: true })
+		.getByRole("checkbox", { name: /^Knowledge Chat(?: Library)?$/ })
 		.click();
 	await page.getByRole("switch", { name: "Favorite", exact: true }).check();
 	await page.getByRole("switch", { name: "Pin", exact: true }).check();

@@ -1,8 +1,16 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Loader2, Plus, Search, Trash2, X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import {
+	ArrowDown,
+	ArrowUp,
+	Loader2,
+	Plus,
+	Search,
+	Trash2,
+	X,
+} from "lucide-react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { useAppCategoryLabel } from "../../lib/app-category";
 import { APP_CATEGORY_ORDER } from "../../lib/category-meta";
 import { useBackend } from "../../state/backend-state";
@@ -120,12 +128,16 @@ export function HomeAppPicker({
 	multiple = false,
 	label = "App",
 	allowExplore = true,
+	maxItems,
+	ordered = false,
 }: {
 	value: string[];
 	onChange: (ids: string[]) => void;
 	multiple?: boolean;
 	label?: string;
 	allowExplore?: boolean;
+	maxItems?: number;
+	ordered?: boolean;
 }) {
 	const backend = useBackend();
 	const scope = useHomeScope();
@@ -150,25 +162,45 @@ export function HomeAppPicker({
 				0,
 				20,
 			),
-		enabled: allowExplore && search.length >= 2,
+		enabled: allowExplore,
+		staleTime: 60_000,
 	});
-	const apps = useMemo(() => {
-		const combined = new Map(
-			(library.data ?? []).map(([app, metadata]) => [
-				app.id,
-				{ id: app.id, name: metadata?.name ?? app.id },
-			]),
-		);
-		for (const [app, metadata] of results.data ?? [])
-			combined.set(app.id, { id: app.id, name: metadata?.name ?? app.id });
-		return [...combined.values()];
-	}, [library.data, results.data]);
+	const selectedDetails = useQueries({
+		queries: value.map((id) => ({
+			queryKey: ["home", ...scope, "app-picker-name", id],
+			queryFn: () => backend.appState.getAppMeta(id),
+			enabled:
+				!(library.data ?? []).some(([app]) => app.id === id) &&
+				!(results.data ?? []).some(([app]) => app.id === id),
+			staleTime: 60_000,
+		})),
+	});
+	const available = new Map(
+		(library.data ?? []).map(([app, metadata]) => [
+			app.id,
+			{ id: app.id, name: metadata?.name ?? app.id, inLibrary: true },
+		]),
+	);
+	for (const [app, metadata] of allowExplore ? (results.data ?? []) : [])
+		if (!available.has(app.id))
+			available.set(app.id, {
+				id: app.id,
+				name: metadata?.name ?? app.id,
+				inLibrary: false,
+			});
+	const apps = [...available.values()];
+	const nameFor = (id: string) =>
+		available.get(id)?.name ??
+		selectedDetails[value.indexOf(id)]?.data?.name ??
+		id;
 	const filtered = apps.filter(
 		(app) =>
 			!query ||
 			`${app.name} ${app.id}`.toLowerCase().includes(query.toLowerCase()),
 	);
 	const select = (id: string) => {
+		if (multiple && maxItems && value.length >= maxItems && !value.includes(id))
+			return;
 		if (multiple)
 			onChange(
 				value.includes(id)
@@ -177,13 +209,20 @@ export function HomeAppPicker({
 			);
 		else onChange(value[0] === id ? [] : [id]);
 	};
+	const move = (index: number, offset: number) => {
+		const next = [...value];
+		const destination = index + offset;
+		if (destination < 0 || destination >= value.length) return;
+		[next[index], next[destination]] = [next[destination], next[index]];
+		onChange(next);
+	};
 	return (
 		<div className="space-y-2">
 			<Field
 				label={label}
 				hint={
 					allowExplore
-						? "Search your library or find an app by name."
+						? "Browse your library and Explore apps, or search by name."
 						: "Select from this profile's apps."
 				}
 			>
@@ -201,31 +240,68 @@ export function HomeAppPicker({
 				)}
 			</Field>
 			{value.length > 0 && (
-				<div className="flex flex-wrap gap-1.5">
-					{value.map((id) => (
-						<span
+				<ol className="space-y-1.5" aria-label="Selected apps">
+					{value.map((id, index) => (
+						<li
 							key={id}
-							className="flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px]"
+							className="flex min-w-0 items-center gap-2 rounded-md bg-primary/10 px-2 py-1.5 text-xs"
 						>
-							<span className="truncate">
-								{apps.find((app) => app.id === id)?.name ?? id}
+							{ordered && multiple && (
+								<span className="text-[10px] tabular-nums text-muted-foreground">
+									{index + 1}
+								</span>
+							)}
+							<span className="min-w-0 flex-1 truncate" title={nameFor(id)}>
+								{nameFor(id)}
 							</span>
+							{ordered && multiple && value.length > 1 && (
+								<div className="flex shrink-0 items-center">
+									<Button
+										type="button"
+										size="icon"
+										variant="ghost"
+										className="size-6"
+										disabled={index === 0}
+										aria-label={`Move ${nameFor(id)} up`}
+										onClick={() => move(index, -1)}
+									>
+										<ArrowUp className="size-3" />
+									</Button>
+									<Button
+										type="button"
+										size="icon"
+										variant="ghost"
+										className="size-6"
+										disabled={index === value.length - 1}
+										aria-label={`Move ${nameFor(id)} down`}
+										onClick={() => move(index, 1)}
+									>
+										<ArrowDown className="size-3" />
+									</Button>
+								</div>
+							)}
 							<button
 								type="button"
-								aria-label={`Remove ${apps.find((app) => app.id === id)?.name ?? "app"}`}
+								aria-label={`Remove ${nameFor(id)}`}
 								onClick={() =>
 									onChange(value.filter((current) => current !== id))
 								}
-								className="shrink-0 rounded hover:bg-primary/10"
+								className="flex size-6 shrink-0 items-center justify-center rounded hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary"
 							>
 								<X className="size-3" />
 							</button>
-						</span>
+						</li>
 					))}
-				</div>
+				</ol>
+			)}
+			{multiple && (ordered || maxItems) && (
+				<p className="text-[11px] leading-relaxed text-muted-foreground">
+					{maxItems ? `Choose up to ${maxItems} apps. ` : ""}
+					{ordered && "Selected apps appear in the order above."}
+				</p>
 			)}
 			<div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border p-1">
-				{library.isLoading ? (
+				{library.isLoading && !filtered.length ? (
 					<div className="flex items-center gap-2 p-2 text-xs text-muted-foreground">
 						<Loader2 className="size-3 animate-spin" />
 						Loading apps…
@@ -239,10 +315,21 @@ export function HomeAppPicker({
 							<input
 								type="checkbox"
 								checked={value.includes(app.id)}
+								disabled={Boolean(
+									multiple &&
+										maxItems &&
+										value.length >= maxItems &&
+										!value.includes(app.id),
+								)}
 								onChange={() => select(app.id)}
 								className="size-3.5 accent-primary"
 							/>
-							<span className="min-w-0 truncate text-xs">{app.name}</span>
+							<span className="min-w-0 flex-1 truncate text-xs">
+								{app.name}
+							</span>
+							<span className="shrink-0 text-[10px] text-muted-foreground">
+								{app.inLibrary ? "Library" : "Explore"}
+							</span>
 						</label>
 					))
 				) : (
@@ -265,7 +352,7 @@ export function HomeAppPicker({
 					</button>
 				</output>
 			)}
-			{results.isError && (
+			{allowExplore && results.isError && (
 				<output className="block text-xs text-muted-foreground">
 					App search is unavailable. Your loaded library is still shown.
 				</output>
@@ -660,11 +747,14 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 	const model = widget.type === "model-spotlight";
 	const feature = widget.type === "app-collection-feature";
 	const spotlight = widget.type === "app-spotlight";
-	const source = textConfig(
-		config,
-		"source",
-		model ? "explore" : widget.type === "app-ranking" ? "popular" : "new",
-	);
+	const source =
+		model && textConfig(config, "modelId")
+			? "manual"
+			: textConfig(
+					config,
+					"source",
+					model ? "explore" : widget.type === "app-ranking" ? "popular" : "new",
+				);
 	return (
 		<div className="space-y-4">
 			{spotlight && (
@@ -681,12 +771,29 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 			<Choice
 				label={model ? "Model source" : "Apps to feature"}
 				value={source}
-				onChange={(value) => update("source", value)}
+				onChange={(value) =>
+					onChange({
+						...config,
+						source: value,
+						...(value === "manual" && !model
+							? { query: "", category: "", tag: "" }
+							: {}),
+						...(model ? { modelId: "", modelHub: "" } : {}),
+					})
+				}
+				hint={
+					model
+						? undefined
+						: source === "manual"
+							? "You choose the apps and their order. Automatic filters do not apply."
+							: "This collection updates automatically from its source. Choose apps to make your own selection."
+				}
 				choices={
 					model
 						? [
 								["explore", "Explore models"],
 								["profile", "Models in this profile"],
+								["manual", "Exact model"],
 							]
 						: [
 								["new", "Latest apps"],
@@ -696,9 +803,11 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 							]
 				}
 			/>
-			{source === "manual" && (
+			{source === "manual" && !model && (
 				<HomeAppPicker
 					multiple={!spotlight}
+					ordered
+					maxItems={spotlight ? 1 : feature ? 6 : 10}
 					label={spotlight ? "Featured app" : "Featured collection"}
 					value={
 						spotlight
@@ -706,10 +815,19 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 							: stringList(config, "appIds")
 					}
 					onChange={(ids) =>
-						update(
-							spotlight ? "appId" : "appIds",
-							spotlight ? (ids[0] ?? "") : ids,
-						)
+						onChange({
+							...config,
+							appId: spotlight ? (ids[0] ?? "") : "",
+							appIds: spotlight ? [] : ids,
+							...(!spotlight && ids.length > stringList(config, "appIds").length
+								? {
+										limit: Math.max(
+											numberConfig(config, "limit", feature ? 3 : 6),
+											ids.length,
+										),
+									}
+								: {}),
+						})
 					}
 				/>
 			)}
@@ -734,7 +852,7 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 					)}
 				</Field>
 			)}
-			{!model && (
+			{!model && source !== "manual" && (
 				<Choice
 					label="Category"
 					value={textConfig(config, "category")}
@@ -758,32 +876,15 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 					/>
 				)}
 			</Field>
-			{feature && (
-				<>
-					<Field label="Feature headline">
-						{(id) => (
-							<Textarea
-								id={id}
-								rows={2}
-								value={textConfig(config, "headline")}
-								onChange={(event) => update("headline", event.target.value)}
-							/>
-						)}
-					</Field>
-					<Field label="Feature description">
-						{(id) => (
-							<Textarea
-								id={id}
-								rows={2}
-								value={textConfig(config, "description")}
-								onChange={(event) => update("description", event.target.value)}
-							/>
-						)}
-					</Field>
-				</>
-			)}
 			{!spotlight && !model && (
-				<Field label="Number of apps">
+				<Field
+					label="Number of apps"
+					hint={
+						source === "manual"
+							? "Shows the first apps in your selected order, up to this limit."
+							: undefined
+					}
+				>
 					{(id) => (
 						<Input
 							id={id}
@@ -796,36 +897,61 @@ function DiscoverySettings({ widget, onChange }: SettingsProps) {
 					)}
 				</Field>
 			)}
-			{model && (
-				<details className="rounded-lg border border-border/60 p-3 text-xs">
-					<summary className="cursor-pointer font-medium">
-						Choose an exact model
-					</summary>
-					<div className="mt-3 space-y-3">
-						<Field
-							label="Model ID"
-							hint="Optional. Leave blank to follow the source and search above."
-						>
-							{(id) => (
-								<Input
-									id={id}
-									value={textConfig(config, "modelId")}
-									onChange={(event) => update("modelId", event.target.value)}
-								/>
-							)}
-						</Field>
-						<Field label="Model hub">
-							{(id) => (
-								<Input
-									id={id}
-									value={textConfig(config, "modelHub")}
-									onChange={(event) => update("modelHub", event.target.value)}
-									placeholder="Optional hub"
-								/>
-							)}
-						</Field>
-					</div>
-				</details>
+			{model && source === "manual" && (
+				<div className="space-y-3 rounded-lg border border-border/60 p-3 text-xs">
+					<Field
+						label="Model ID"
+						hint="Use the ID of a model in your profile or the model catalog."
+					>
+						{(id) => (
+							<Input
+								id={id}
+								value={textConfig(config, "modelId")}
+								onChange={(event) => update("modelId", event.target.value)}
+							/>
+						)}
+					</Field>
+					<Field label="Model hub">
+						{(id) => (
+							<Input
+								id={id}
+								value={textConfig(config, "modelHub")}
+								onChange={(event) => update("modelHub", event.target.value)}
+								placeholder="Optional hub"
+							/>
+						)}
+					</Field>
+				</div>
+			)}
+			{(feature || widget.type === "app-ranking") && (
+				<>
+					<Field
+						label="Link label"
+						hint="Leave blank to use the source's default action."
+					>
+						{(id) => (
+							<Input
+								id={id}
+								value={textConfig(config, "linkLabel")}
+								onChange={(event) => update("linkLabel", event.target.value)}
+								placeholder="Explore apps"
+							/>
+						)}
+					</Field>
+					<Field
+						label="Link destination"
+						hint="Leave blank to open the selected source. Use an app route or an HTTPS link."
+					>
+						{(id) => (
+							<Input
+								id={id}
+								value={textConfig(config, "href")}
+								onChange={(event) => update("href", event.target.value)}
+								placeholder="/store/explore/apps"
+							/>
+						)}
+					</Field>
+				</>
 			)}
 		</div>
 	);
@@ -893,15 +1019,19 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 						["30", "Last 30 days"],
 					]}
 				/>
-				<label className="flex items-center gap-2 text-xs">
-					<input
-						type="checkbox"
-						className="accent-primary"
-						checked={config.showAttention !== false}
-						onChange={(event) => update("showAttention", event.target.checked)}
-					/>
-					Include records that need attention
-				</label>
+				{textConfig(config, "mode", "card") !== "attention" && (
+					<label className="flex items-center gap-2 text-xs">
+						<input
+							type="checkbox"
+							className="accent-primary"
+							checked={config.showAttention !== false}
+							onChange={(event) =>
+								update("showAttention", event.target.checked)
+							}
+						/>
+						Include records that need attention
+					</label>
+				)}
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					Shows your profile's apps and your account's recorded activity. Local
 					and new profiles get useful starting points.
@@ -926,25 +1056,48 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 						["hero", "Full animated hero"],
 					]}
 				/>
-				<label className="flex items-center gap-2 text-xs">
-					<input
-						type="checkbox"
-						className="accent-primary"
-						checked={config.suggestions === true}
-						onChange={(event) => update("suggestions", event.target.checked)}
-					/>
-					Show prompt suggestions below the bar
-				</label>
-				<Field label="Prompt placeholder">
-					{(id) => (
-						<Input
-							id={id}
-							value={textConfig(config, "placeholder")}
-							onChange={(event) => update("placeholder", event.target.value)}
-							placeholder="Ask FlowPilot to build, explore, or explain…"
-						/>
-					)}
-				</Field>
+				{textConfig(config, "mode", "bar") !== "orb" && (
+					<>
+						<label className="flex items-center gap-2 text-xs">
+							<input
+								type="checkbox"
+								className="accent-primary"
+								checked={
+									typeof config.suggestions === "boolean"
+										? config.suggestions
+										: ["card", "hero"].includes(
+												textConfig(config, "mode", "bar"),
+											)
+								}
+								onChange={(event) =>
+									update("suggestions", event.target.checked)
+								}
+							/>
+							Show prompt suggestions
+						</label>
+						<label className="flex items-center gap-2 text-xs">
+							<input
+								type="checkbox"
+								className="accent-primary"
+								checked={config.emphasis === true}
+								onChange={(event) => update("emphasis", event.target.checked)}
+							/>
+							Emphasize the prompt with the accent color
+						</label>
+						<Field label="Prompt placeholder">
+							{(id) => (
+								<Input
+									id={id}
+									value={textConfig(config, "placeholder")}
+									onChange={(event) =>
+										update("placeholder", event.target.value)
+									}
+									placeholder="Ask FlowPilot to build, explore, or explain…"
+								/>
+							)}
+						</Field>
+					</>
+				)}
 			</div>
 		);
 	if (widget.type === "greeting")
@@ -1027,7 +1180,15 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 				<Choice
 					label="Apps to show"
 					value={textConfig(config, "source", "library")}
-					onChange={(value) => update("source", value)}
+					onChange={(value) =>
+						onChange({
+							...config,
+							source: value,
+							...(value === "manual"
+								? { query: "", category: "", tag: "" }
+								: {}),
+						})
+					}
 					choices={[
 						["library", "This profile's library"],
 						["recent", "Recently updated in this library"],
@@ -1040,43 +1201,48 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 				{textConfig(config, "source") === "manual" && (
 					<HomeAppPicker
 						label="Apps in this collection"
+						ordered
 						value={stringList(config, "appIds")}
 						onChange={(ids) => update("appIds", ids)}
 						multiple
 					/>
 				)}
-				<Field label="Search filter">
-					{(id) => (
-						<Input
-							id={id}
-							value={textConfig(config, "query")}
-							onChange={(event) => update("query", event.target.value)}
-							placeholder="For example, documents"
+				{textConfig(config, "source") !== "manual" && (
+					<>
+						<Field label="Search filter">
+							{(id) => (
+								<Input
+									id={id}
+									value={textConfig(config, "query")}
+									onChange={(event) => update("query", event.target.value)}
+									placeholder="For example, documents"
+								/>
+							)}
+						</Field>
+						<Choice
+							label="Category"
+							value={textConfig(config, "category")}
+							onChange={(value) => update("category", value)}
+							choices={[
+								["", "All categories"],
+								...APP_CATEGORY_ORDER.map(
+									(category) =>
+										[category, categoryLabel(category)] as [string, string],
+								),
+							]}
 						/>
-					)}
-				</Field>
-				<Choice
-					label="Category"
-					value={textConfig(config, "category")}
-					onChange={(value) => update("category", value)}
-					choices={[
-						["", "All categories"],
-						...APP_CATEGORY_ORDER.map(
-							(category) =>
-								[category, categoryLabel(category)] as [string, string],
-						),
-					]}
-				/>
-				<Field label="Tag filter">
-					{(id) => (
-						<Input
-							id={id}
-							value={textConfig(config, "tag")}
-							onChange={(event) => update("tag", event.target.value)}
-							placeholder="Optional tag"
-						/>
-					)}
-				</Field>
+						<Field label="Tag filter">
+							{(id) => (
+								<Input
+									id={id}
+									value={textConfig(config, "tag")}
+									onChange={(event) => update("tag", event.target.value)}
+									placeholder="Optional tag"
+								/>
+							)}
+						</Field>
+					</>
+				)}
 				<Count config={config} update={update} />
 			</div>
 		);

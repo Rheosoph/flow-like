@@ -121,7 +121,7 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const status = useQuery<IChainStatusResponse>({
-		queryKey: ["admin", "logs", "chain-status"],
+		queryKey: ["admin", "logs", "chain-status", profile?.hub, profile?.id],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<IChainStatusResponse>(
@@ -130,7 +130,9 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const data = status.data;
@@ -191,6 +193,36 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 			label: t("idle", "Idle"),
 			icon: <ShieldEllipsis className="h-4 w-4" />,
 		};
+	}
+
+	if (status.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">
+						{t("cryptographicLogs", "Cryptographic logs")}
+					</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"auditStatusUnavailable",
+							"Audit status is unavailable. Retry to check the audit chains.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={status.isFetching}
+						onClick={() => {
+							if (status.isError) void status.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
 	}
 
 	return (

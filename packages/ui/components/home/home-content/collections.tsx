@@ -131,7 +131,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 				([a], [b]) =>
 					b.updated_at.secs_since_epoch - a.updated_at.secs_since_epoch,
 			);
-		if (!remote) {
+		if (!remote && source !== "manual") {
 			if (category)
 				apps = apps.filter(
 					([app]) =>
@@ -177,6 +177,32 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 					if (usesProfile) void profile.refetch();
 				}}
 			/>
+		);
+	if (
+		!rows.length &&
+		["library", "recent"].includes(source) &&
+		!category &&
+		!tag &&
+		!query
+	)
+		return (
+			<HomeEmpty
+				icon={<Layers className="size-7 opacity-50" />}
+				action={
+					<Link
+						href="/store/explore/apps"
+						className="inline-flex rounded-md border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+					>
+						Find your first app
+					</Link>
+				}
+			>
+				<p className="font-medium text-foreground">Your apps will live here.</p>
+				<p className="mt-1">
+					Create an app in your library, or choose one from Explore to add to
+					this profile.
+				</p>
+			</HomeEmpty>
 		);
 	if (!rows.length)
 		return (

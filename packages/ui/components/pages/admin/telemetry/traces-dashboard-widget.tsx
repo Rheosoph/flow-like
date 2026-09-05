@@ -36,7 +36,14 @@ export function DashboardTelemetryTracesWidget({
 	const backend = useBackend();
 
 	const stats = useQuery<ITelemetrySpanStatsResponse>({
-		queryKey: ["admin", "telemetry", "span-stats", "dashboard"],
+		queryKey: [
+			"admin",
+			"telemetry",
+			"span-stats",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetrySpanStatsResponse>(
@@ -45,7 +52,9 @@ export function DashboardTelemetryTracesWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const operations = useMemo(
@@ -62,6 +71,36 @@ export function DashboardTelemetryTracesWidget({
 		(max, operation) => Math.max(max, operation.errorRate),
 		0,
 	);
+
+	if (stats.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">
+						{t("slowOperations", "Slow operations")}
+					</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"traceStatsUnavailable",
+							"Trace statistics are unavailable. Retry to check operation performance.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={stats.isFetching}
+						onClick={() => {
+							if (stats.isError) void stats.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
+	}
 
 	return (
 		<Card className="overflow-hidden border-primary/20">

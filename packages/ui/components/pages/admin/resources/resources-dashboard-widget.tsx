@@ -243,7 +243,7 @@ export function DashboardResourcesWidget({
 	const backend = useBackend();
 
 	const query = useQuery<IAdminResourcesResponse>({
-		queryKey: ["admin", "resources"],
+		queryKey: ["admin", "resources", profile?.hub, profile?.id],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<IAdminResourcesResponse>(
@@ -252,7 +252,9 @@ export function DashboardResourcesWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const resources = useMemo(

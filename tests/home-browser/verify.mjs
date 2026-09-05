@@ -80,7 +80,7 @@ try {
 		.click();
 	await page.getByLabel("Title", { exact: true }).fill("Report A");
 	await page
-		.getByRole("checkbox", { name: "Knowledge Chat", exact: true })
+		.getByRole("checkbox", { name: /^Knowledge Chat(?: Library)?$/ })
 		.check();
 	await page.getByLabel("Open", { exact: true }).selectOption("route");
 	await page.getByLabel("Page route", { exact: true }).fill("/reports");
@@ -94,7 +94,7 @@ try {
 		.click();
 	await page.getByLabel("Title", { exact: true }).fill("Report B");
 	await page
-		.getByRole("checkbox", { name: "Knowledge Chat", exact: true })
+		.getByRole("checkbox", { name: /^Knowledge Chat(?: Library)?$/ })
 		.check();
 	await page.getByLabel("Open", { exact: true }).selectOption("route");
 	await page.getByLabel("Page route", { exact: true }).fill("/reports");

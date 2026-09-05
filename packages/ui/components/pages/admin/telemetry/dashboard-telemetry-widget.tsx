@@ -182,7 +182,14 @@ export function DashboardTelemetryWidget({
 	const backend = useBackend();
 
 	const overview = useQuery<ITelemetryOverviewResponse>({
-		queryKey: ["admin", "telemetry", "overview", "dashboard"],
+		queryKey: [
+			"admin",
+			"telemetry",
+			"overview",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryOverviewResponse>(
@@ -191,11 +198,20 @@ export function DashboardTelemetryWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const series = useQuery<ITelemetryTimeseriesResponse>({
-		queryKey: ["admin", "telemetry", "timeseries", "dashboard"],
+		queryKey: [
+			"admin",
+			"telemetry",
+			"timeseries",
+			"dashboard",
+			profile?.hub,
+			profile?.id,
+		],
 		queryFn: async () => {
 			if (!profile) throw new Error("Profile not loaded");
 			return backend.apiState.get<ITelemetryTimeseriesResponse>(
@@ -204,7 +220,9 @@ export function DashboardTelemetryWidget({
 			);
 		},
 		enabled: !!profile,
+		staleTime: 60_000,
 		refetchInterval: 60_000,
+		meta: { adminDashboard: true, persist: false },
 	});
 
 	const change = useMemo(() => {
@@ -226,6 +244,37 @@ export function DashboardTelemetryWidget({
 	const topEvent = overview.data?.topEvents[0];
 	const isEmpty =
 		!overview.isLoading && (overview.data?.totalEvents ?? 0) === 0;
+
+	if (overview.isError || series.isError) {
+		return (
+			<Card className="border-destructive/20">
+				<CardHeader>
+					<CardTitle className="text-base">
+						{t("telemetry", "Telemetry")}
+					</CardTitle>
+				</CardHeader>
+				<CardContent className="flex flex-wrap items-center justify-between gap-3">
+					<output className="text-sm text-muted-foreground">
+						{t(
+							"telemetryUnavailable",
+							"Telemetry is unavailable. Retry to check product activity.",
+						)}
+					</output>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={overview.isFetching || series.isFetching}
+						onClick={() => {
+							if (overview.isError) void overview.refetch();
+							if (series.isError) void series.refetch();
+						}}
+					>
+						{t("retry", "Retry")}
+					</Button>
+				</CardContent>
+			</Card>
+		);
+	}
 
 	return (
 		<Card className="overflow-hidden border-primary/20">

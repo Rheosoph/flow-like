@@ -76,6 +76,7 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		12,
 		1,
 		"borderless",
+		"violet",
 	),
 	preset(
 		"section-heading",
@@ -110,7 +111,7 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		{ source: "new", eyebrow: "IN THE SPOTLIGHT" },
 		12,
 		4,
-		"borderless",
+		"tinted",
 		"violet",
 	),
 	preset(
@@ -140,7 +141,7 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		},
 		4,
 		3,
-		"borderless",
+		"solid",
 		"orange",
 	),
 	preset(
@@ -164,6 +165,8 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		{ days: 7, showAttention: true },
 		4,
 		4,
+		"card",
+		"violet",
 	),
 	preset(
 		"flowpilot-bar",
@@ -1051,12 +1054,6 @@ export function createDefaultHomeLayout(): IHomeLayout {
 	}[] = [
 		{ preset: "greeting", config: { mode: "masthead" } },
 		{
-			preset: "workspace-pulse",
-			config: { mode: "strip" },
-			columns: 12,
-			variant: "borderless",
-		},
-		{
 			preset: "flowpilot-bar",
 			config: {
 				suggestions: true,
@@ -1066,43 +1063,75 @@ export function createDefaultHomeLayout(): IHomeLayout {
 			},
 		},
 		{
-			preset: "section-heading",
-			id: "workspace-heading",
-			title: "Your workspace",
-			description:
-				"Your apps, the latest changes, and what deserves a closer look.",
-			config: { href: "/library", linkLabel: "Open library" },
+			preset: "quick-actions",
+			config: {
+				actions: ["create", "import", "library", "packages"],
+				layout: "toolbar",
+			},
 		},
 		{
 			preset: "recent-apps",
-			title: "Recently updated apps",
+			title: "Your apps",
+			description: "Recently updated in this profile.",
 			config: {
 				rendering: "compact",
-				limit: 4,
+				limit: 6,
 				showUpdated: true,
 				maxColumns: 2,
 			},
 			columns: 8,
 		},
-		{ preset: "workspace-attention" },
 		{
-			preset: "quick-actions",
-			config: {
-				actions: ["create", "import", "library", "learn"],
-				layout: "toolbar",
-			},
+			preset: "workspace-pulse",
+			title: "Workspace overview",
+			config: { days: 7, showAttention: true },
+			columns: 4,
 		},
 		{
 			preset: "section-heading",
 			id: "discover-heading",
-			title: "Discover your next possibility",
-			description:
-				"Useful apps, community favorites, and models to build with.",
+			title: "Explore and build",
+			description: "Apps and building blocks from your connected catalog.",
 			config: { href: "/store/explore/apps", linkLabel: "Explore apps" },
 		},
+		{ preset: "app-spotlight", columns: 8, config: { mode: "compact" } },
+		{
+			preset: "resource-directory",
+			title: "Make this home yours",
+			columns: 4,
+			config: {
+				layout: "list",
+				items: [
+					{
+						id: "embed",
+						title: "Keep an app open here",
+						body: "In Customize, add Embed an app. Choose a page or chat, then add query parameters if needed.",
+					},
+					{
+						id: "data",
+						title: "Turn data into a daily view",
+						body: "In Customize, add a data widget. Choose a table or ontology, then set your chart, measures, and filters.",
+					},
+					{
+						id: "learn",
+						title: "Build your first flow",
+						body: "Follow a course from your first node to a working app.",
+						href: "/learn",
+					},
+				],
+			},
+		},
+		{
+			preset: "packages",
+			title: "Extend your flows",
+			description: "Packages add nodes, tools, and integrations.",
+			config: { limit: 2, rendering: "compact" },
+			columns: 8,
+		},
+		{ preset: "model-spotlight" },
 		{
 			preset: "categories",
-			title: "",
+			title: "Browse apps by category",
 			config: {
 				categories: [
 					"Productivity",
@@ -1115,60 +1144,6 @@ export function createDefaultHomeLayout(): IHomeLayout {
 				],
 				rendering: "chips",
 			},
-		},
-		{ preset: "app-spotlight", columns: 8, config: { mode: "compact" } },
-		{
-			preset: "app-collection-feature",
-			config: {
-				category: "Utilities",
-				headline: "Connect the dots",
-				eyebrow: "TOOLS THAT WORK TOGETHER",
-				limit: 3,
-			},
-		},
-		{ preset: "app-ranking", config: { limit: 4 } },
-		{ preset: "model-spotlight" },
-		{
-			preset: "resource-directory",
-			title: "Make more of Flow-Like",
-			columns: 4,
-			config: {
-				layout: "list",
-				items: [
-					{
-						id: "learn",
-						title: "Build your first flow",
-						body: "Follow a course from your first node to a working app.",
-						href: "/learn",
-					},
-					{
-						id: "embed",
-						title: "Bring an app onto your home",
-						body: "Add an App embed widget to use an app page or chat right here, with its own query parameters.",
-						href: "/library",
-					},
-					{
-						id: "data",
-						title: "Let your data tell the story",
-						body: "In Customize, add a data widget. Choose a table or ontology, then set your chart, measures, and filters.",
-					},
-				],
-			},
-		},
-		{
-			preset: "section-heading",
-			id: "packages-heading",
-			title: "Build with better blocks",
-			description:
-				"Packages bring new nodes, tools, and integrations to your flows.",
-			config: { href: "/store/packages", linkLabel: "Explore packages" },
-		},
-		{
-			preset: "packages",
-			title: "",
-			config: { limit: 3, rendering: "compact" },
-			columns: 12,
-			variant: "borderless",
 		},
 	];
 	return {
