@@ -147,6 +147,10 @@ catalog-modifier-local-ml
 catalog-modifier-data
 executor-default
 executor-server
+backend-executor-k8s
+backend-executor-aws
+backend-executor-azure
+backend-executor-gcp
 api-remote-catalog
 api-aws-catalog
 api-local-ml-catalog
@@ -273,6 +277,10 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         catalog-modifier-data
         executor-default
         executor-server
+        backend-executor-k8s
+        backend-executor-aws
+        backend-executor-azure
+        backend-executor-gcp
         api-remote-catalog
         api-aws-catalog
         api-local-ml-catalog
@@ -742,7 +750,8 @@ configure_boundary() {
             # Workspace products disable this default and select a named bundle.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-executor)
-            REQUIRED=(flow-like-catalog-onnx)
+            FORBIDDEN=(flow-like flow-like-editor)
+            REQUIRED=(flow-like-runtime flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(portable-metadata package-onnx)
             ;;
@@ -751,10 +760,24 @@ configure_boundary() {
             # metadata for nodes that the remote server cannot execute.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-executor --no-default-features --features server)
-            FORBIDDEN=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            FORBIDDEN=(flow-like flow-like-editor flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            REQUIRED=(flow-like-runtime)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog)
             FORBIDDEN_FEATURES=(portable-metadata package-onnx local-ml)
+            ;;
+        backend-executor-k8s|backend-executor-aws|backend-executor-azure|backend-executor-gcp)
+            # Real executor products must use runtime directly. Checking only
+            # the shared executor crate misses a binary's own facade dependency.
+            DEPENDENCY_ONLY=1
+            case "$boundary" in
+                backend-executor-k8s) CHECK_ARGS=(--package k8s-executor) ;;
+                backend-executor-aws) CHECK_ARGS=(--package aws-executor --package aws-executor-ecs --package aws-executor-async) ;;
+                backend-executor-azure) CHECK_ARGS=(--package azure-executor) ;;
+                backend-executor-gcp) CHECK_ARGS=(--package gcp-executor) ;;
+            esac
+            FORBIDDEN=(flow-like flow-like-editor)
+            REQUIRED=(flow-like-runtime flow-like-executor)
             ;;
         api-remote-catalog)
             # Azure and GCP APIs publish the same catalog as their remote-only

@@ -1,4 +1,5 @@
 // Preserve the bot node types exposed by the existing public modules.
+// Disabled implementations inside block comments are not public types.
 assert_public_bot_paths![
     catalog::discord::channel::CreateThreadNode,
     catalog::discord::channel::GetChannelInfoNode,
@@ -89,7 +90,6 @@ assert_public_bot_paths![
     catalog::telegram::forum::UnpinAllGeneralForumTopicMessagesNode,
     catalog::telegram::games::SendGameNode,
     catalog::telegram::games::SetGameScoreNode,
-    catalog::telegram::games::GetGameHighScoresNode,
     catalog::telegram::games::SetGameScoreInlineNode,
     catalog::telegram::gifts::GetAvailableGiftsNode,
     catalog::telegram::gifts::SendGiftNode,
@@ -114,8 +114,6 @@ assert_public_bot_paths![
     catalog::telegram::invite::CreateChatInviteLinkNode,
     catalog::telegram::invite::EditChatInviteLinkNode,
     catalog::telegram::invite::RevokeChatInviteLinkNode,
-    catalog::telegram::invite::CreateChatSubscriptionInviteLinkNode,
-    catalog::telegram::invite::EditChatSubscriptionInviteLinkNode,
     catalog::telegram::media::SendPhotoNode,
     catalog::telegram::media::SendDocumentNode,
     catalog::telegram::media::SendVideoNode,
@@ -182,5 +180,4 @@ assert_public_bot_paths![
     catalog::telegram::user::ToTelegramUserNode,
     catalog::telegram::user::GetTelegramUserIdNode,
     catalog::telegram::user::GetUserChatBoostsNode,
-    catalog::telegram::user::SetUserEmojiStatusNode,
 ];

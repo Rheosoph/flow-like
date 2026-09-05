@@ -2280,7 +2280,7 @@ impl NodeLogic for GenerateVideoNode {
         );
         node.set_flowscript_name("ai.video", "generate");
         node.add_icon("/flow/icons/video.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
 
         node.add_input_pin(

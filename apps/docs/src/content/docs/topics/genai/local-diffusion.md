@@ -45,7 +45,7 @@ With an endpoint, Flow-Like uses the model already loaded by that server. Model 
 4. Connect **stable-diffusion.cpp Image Options → Options** to **Provider Options** to set dimensions, sampling steps, CFG scale, negative prompt, sampler, scheduler, or seed.
 5. Set Output Path and run the flow.
 
-The result is a PNG file. Defaults are 512 × 512 pixels, 20 steps, and CFG scale 7. Dimensions must be positive multiples of 8 and fit the loaded server's limits. A seed of `-1` selects a random seed; zero is a valid fixed seed. The `auto` sampler and scheduler keep the model's defaults. These are starting values; follow the model's sampling guidance when choosing settings.
+The result is a PNG file. Defaults are 512 × 512 pixels, 20 steps, and CFG scale 7. Dimensions must be positive multiples of 8 and fit the loaded server's limits. Sampling steps must be between 1 and 100. A seed of `-1` selects a random seed; zero is a valid fixed seed. The `auto` sampler and scheduler keep the model's defaults. These are starting values; follow the model's sampling guidance when choosing settings.
 
 ## Generate a video
 

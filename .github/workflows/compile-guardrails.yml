@@ -74,6 +74,10 @@ jobs:
           catalog-modifier-data
           executor-default
           executor-server
+          backend-executor-k8s
+          backend-executor-aws
+          backend-executor-azure
+          backend-executor-gcp
           api-remote-catalog
           api-aws-catalog
           api-local-ml-catalog
