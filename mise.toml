@@ -243,14 +243,14 @@ dir = "libs/wasm-sdk/wasm-sdk-macros"
 run = "cargo publish"
 
 [tasks."publish:wasm:rust"]
-description = "Publish Rust WASM SDK (macros + core)"
-depends = ["publish:wasm:rust:macros"]
+description = "Publish the Rust WASM SDK to crates.io"
 dir = "libs/wasm-sdk/wasm-sdk-rust"
-run = """
-echo "Waiting for crates.io to index macros crate..."
-sleep 30
-cargo publish
-"""
+run = "cargo publish --locked --all-features --registry crates-io"
+
+[tasks."publish:wasm:rust:dry-run"]
+description = "Verify the Rust WASM SDK release for native Rust and Wasm without uploading"
+dir = "libs/wasm-sdk/wasm-sdk-rust"
+run = "cargo publish --locked --all-features --allow-dirty --target host-tuple --target wasm32-wasip2 --dry-run --registry crates-io"
 
 [tasks."test:wasm:rust:lint"]
 description = "Run lint/quality tests for the Rust WASM template nodes"

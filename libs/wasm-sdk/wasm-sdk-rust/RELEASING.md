@@ -1,7 +1,9 @@
 # Publish Rust SDK 0.4.0
 
 Publish `flow-like-wasm-sdk` 0.4.0 before switching the Rust template to its
-crates.io dependency. The macros crate is unchanged and remains at 0.3.7.
+crates.io dependency. Use the repository's `publish:wasm:rust` mise tasks for
+validation and publication. The macros crate is unchanged and remains at the
+already published version 0.3.7.
 
 Run these commands from the Flow-Like repository root with its pinned Rust
 toolchain. The SDK does not depend on Wasmtime; the runtime's Rust minimum is a
@@ -26,14 +28,14 @@ this repository. [Cargo packaging reference](https://doc.rust-lang.org/cargo/com
 
 ```bash
 cargo package --manifest-path libs/wasm-sdk/wasm-sdk-rust/Cargo.toml --locked --allow-dirty --list
-cargo publish --manifest-path libs/wasm-sdk/wasm-sdk-rust/Cargo.toml --locked --allow-dirty --all-features --dry-run --registry crates-io
-cargo publish --manifest-path libs/wasm-sdk/wasm-sdk-rust/Cargo.toml --locked --allow-dirty --all-features --target wasm32-wasip2 --dry-run --registry crates-io
+mise run publish:wasm:rust:dry-run
 ```
 
-These dry runs build the packaged source without uploading. `--allow-dirty`
-lets you validate the reviewed changes before committing them. For publication,
-commit the release files first, or deliberately add `--allow-dirty` to publish
-the reviewed working tree. Cargo otherwise rejects uncommitted package changes.
+The dry-run task builds the packaged source for the native host and
+`wasm32-wasip2`, with all SDK features and the locked dependencies, without
+uploading. It uses `--allow-dirty` so you can validate reviewed changes before
+committing them. Commit the release files before running the publication task;
+Cargo otherwise rejects uncommitted package changes.
 [Cargo publish reference](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
 
 ## Authenticate and publish
@@ -46,11 +48,21 @@ your token at its prompt:
 cargo login --registry crates-io
 ```
 
-Publish only the SDK. This command uploads the version permanently; it cannot
+The publication task uploads only the SDK. The version is permanent and cannot
 be overwritten. [Cargo publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html)
 
 ```bash
-cargo publish --manifest-path libs/wasm-sdk/wasm-sdk-rust/Cargo.toml --locked --all-features --registry crates-io
+mise run publish:wasm:rust
+```
+
+The separate `mise run publish:wasm:rust:macros` task is needed only when the
+macros crate's version changes. Do not run it for this SDK release.
+
+If you deliberately choose to publish reviewed, uncommitted package changes,
+use Cargo directly with `--allow-dirty`:
+
+```bash
+cargo publish --manifest-path libs/wasm-sdk/wasm-sdk-rust/Cargo.toml --locked --all-features --registry crates-io --allow-dirty
 ```
 
 Wait for the registry entry to become available, then verify its exact version:
