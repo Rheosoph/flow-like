@@ -5,277 +5,180 @@ sidebar:
   order: 22
 ---
 
-The Kubernetes API uses object storage for app metadata, user content, and
-execution logs. The Helm chart can wire AWS S3, Azure Blob Storage, Google
-Cloud Storage, Cloudflare R2, or a generic S3-compatible endpoint, but the
-checked-in API image does not currently provide the same end-to-end support
-for every advertised option.
+The chart includes RustFS, a Rust S3-compatible object store, and initializes its
+private metadata, content and log buckets. The API issues temporary credentials
+whose session policy restricts the object prefixes available to each execution.
 
-## Current Provider Status
+## Bundled RustFS
 
-| `storage.provider` | Backing store | Scoped runtime credentials in the checked-in API | Current guidance |
-| --- | --- | --- | --- |
-| `azure` | Azure Blob Storage | Included | Supported by the stock build |
-| `gcp` | Google Cloud Storage | Included | Supported by the stock build |
-| `r2` | R2 through its S3 API | Included | Use an existing Secret that also supplies `R2_API_TOKEN` |
-| `aws` | AWS S3 | The chart supports it, but the Kubernetes API target does not enable the `aws` feature | Rebuild the API with the `aws` feature before selecting it |
-| `s3` | Generic S3-compatible endpoint | Resolves to the AWS runtime-credential implementation, which is absent from the stock build | Not an end-to-end stock-image option |
+`storage.provider=s3` and `rustfs.enabled=true` are the defaults. Setup generates
+separate credentials for:
 
-:::caution[Chart options are not a support guarantee]
-The chart renders `aws` and `s3` configurations, but the current
-`apps/backend/kubernetes/api/Cargo.toml` build omits the API package's `aws`
-feature. The API loads runtime credentials during startup, so those providers
-are rejected before it becomes ready. Enabling the feature is necessary but
-does not make an arbitrary S3-compatible service support AWS STS credential
-scoping.
-:::
-
-## Storage Layout
-
-Configure three logical storage locations:
-
-| Location | Purpose |
+| Identity | Where it is used |
 | --- | --- |
-| Meta | App and board metadata |
-| Content | App files, user files, and workflow data |
-| Logs | Persisted run logs |
+| RustFS root | Storage server and initialization Job only |
+| Application API | Trusted API access to the configured buckets |
+| STS issuer | Temporary-credential issuance with a narrower session policy |
+| Execution session | Only the signed execution's granted storage operations and prefixes |
 
-Create the buckets or containers before installing the chart; the chart does
-not provision them. They may be separate locations or the same physical
-bucket/container referenced by the same name. Meta falls back to content in
-the shared storage configuration when it is omitted, while the chart emits an
-explicit meta value. The optional CDN store also falls back to content.
+The initializer creates three distinct private buckets, IAM users and policies,
+browser CORS, and temporary-content cleanup. It checks existing policy/user drift
+instead of silently replacing access rules. API Pods wait for the release's
+initialization Job before starting.
 
-Execution state is configured separately through the execution-state backend.
-It is not automatically stored in the meta bucket.
+RustFS is pinned to `1.0.0-rc.5` by digest. This chart runs one persistent RustFS
+Pod, with a default 100 GiB PVC. It does not provide storage host failover.
+Multiple API or object-gateway replicas do not change that storage topology.
+Use a separately operated and qualified distributed store when that availability
+boundary is insufficient.
 
-## Azure Blob Storage
-
-The chart can create the runtime Secret from values:
-
-```yaml
-storage:
-  provider: azure
-  azure:
-    accountName: flowlikestorage
-    accountKey: replace-me
-    metaContainer: meta
-    contentContainer: content
-    logContainer: logs
-```
-
-Keep credentials in an uncommitted, access-controlled values file. For a
-pre-created Secret, set `storage.azure.existingSecret` instead. It must expose:
-
-- `STORAGE_PROVIDER=azure`
-- `AZURE_STORAGE_ACCOUNT_NAME`
-- `AZURE_STORAGE_ACCOUNT_KEY`
-- `AZURE_META_CONTAINER`
-- `AZURE_CONTENT_CONTAINER`
-- `AZURE_LOG_CONTAINER`
-
-The account key is also used to mint container-scoped SAS credentials.
-
-## Google Cloud Storage
-
-```yaml
-storage:
-  provider: gcp
-  gcp:
-    projectId: my-project
-    serviceAccountKey: |-
-      {"type":"service_account","project_id":"my-project"}
-    metaBucket: flow-like-meta
-    contentBucket: flow-like-content
-    logBucket: flow-like-logs
-```
-
-`serviceAccountKey` is the service-account JSON text consumed by
-`GOOGLE_APPLICATION_CREDENTIALS_JSON`; Kubernetes `stringData` performs the
-Secret's base64 encoding. Do not base64-encode the JSON a second time.
-
-An existing GCP Secret must expose:
-
-- `STORAGE_PROVIDER=gcp`
-- `GCP_PROJECT_ID`
-- `GOOGLE_APPLICATION_CREDENTIALS_JSON` when the workload cannot use ambient
-  credentials
-- `GCP_META_BUCKET`
-- `GCP_CONTENT_BUCKET`
-- `GCP_LOG_BUCKET`
-
-Select it with:
-
-```yaml
-storage:
-  provider: gcp
-  gcp:
-    existingSecret: flow-like-storage
-```
-
-## Cloudflare R2
-
-R2 uses the AWS-compatible object-store adapter for backing storage and its own
-temporary-credential API for runtime scoping. Create a private environment
-file for the Secret:
-
-```dotenv
-STORAGE_PROVIDER=aws
-RUNTIME_CREDENTIALS_PROVIDER=r2
-R2_ACCOUNT_ID=replace-me
-R2_API_TOKEN=replace-me
-R2_ACCESS_KEY_ID=replace-me
-R2_SECRET_ACCESS_KEY=replace-me
-AWS_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
-AWS_REGION=auto
-AWS_ACCESS_KEY_ID=replace-me
-AWS_SECRET_ACCESS_KEY=replace-me
-AWS_USE_PATH_STYLE=true
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-```
-
-Create the Secret and select it:
-
-```bash
-kubectl -n flow-like create secret generic flow-like-storage \
-  --from-env-file=flow-like-r2.env \
-  --dry-run=client -o yaml \
-  | kubectl apply -f -
-```
-
-```yaml
-storage:
-  provider: r2
-  r2:
-    existingSecret: flow-like-storage
-```
-
-:::caution[R2 chart gap]
-The chart-generated R2 Secret does not currently include `R2_API_TOKEN`.
-Backing-store access can initialize without it, but requests that mint scoped
-temporary credentials fail. Use an existing Secret until that chart contract
-is updated.
-:::
-
-Grant the API token only the account-level R2 permissions required to create
-temporary credentials. Keep the S3 access keys and API token out of checked-in
-values.
-
-## AWS S3
-
-After rebuilding the Kubernetes API with the `flow-like-api/aws` feature, AWS
-storage requires:
-
-- A workload identity or static AWS credentials that can access the configured
-  buckets
-- `RUNTIME_ROLE_ARN`, whose role can be assumed by the API identity
-- An IAM policy on that runtime role that permits the object operations Flow-Like
-  narrows with per-request session policies
-- On buckets encrypted with a customer-managed KMS key: `kms:Decrypt` and
-  `kms:GenerateDataKey` on that key, for both the runtime role and the API
-  identity. Flow-Like mints the matching session grant without configuration;
-  `storage.aws.kmsKeyArn` (or the per-bucket `META_BUCKET_KMS_KEY_ARN`,
-  `CONTENT_BUCKET_KMS_KEY_ARN` and `LOG_BUCKET_KMS_KEY_ARN`) narrows it to named
-  keys. See
-  [Storage Providers](/dev/storage-providers/#buckets-encrypted-with-a-customer-managed-kms-key).
-
-For EKS workload identity, use an existing Secret that omits
-`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` entirely:
-
-```dotenv
-STORAGE_PROVIDER=aws
-AWS_REGION=eu-central-1
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-RUNTIME_ROLE_ARN=arn:aws:iam::123456789012:role/FlowLikeRuntimeRole
-```
-
-```yaml
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/FlowLikeApiRole
-
-storage:
-  provider: aws
-  aws:
-    existingSecret: flow-like-storage
-```
-
-The chart-generated AWS Secret always writes the static credential keys, even
-when their values are empty. An explicit empty value is still a configured
-environment value and can prevent the AWS credential chain from using
-workload identity. Omitting those keys in an existing Secret avoids that
-misconfiguration.
-
-## Generic S3-Compatible Storage
-
-The chart's `s3` block supplies both `S3_*` settings for the Kubernetes storage
-adapter and `AWS_*` aliases used by the shared API layer:
+## Public, internal and STS endpoints
 
 ```yaml
 storage:
   provider: s3
   s3:
-    endpoint: https://objects.example.com
-    region: us-east-1
-    accessKeyId: replace-me
-    secretAccessKey: replace-me
-    metaBucket: flow-like-meta
-    contentBucket: flow-like-content
-    logBucket: flow-like-logs
+    publicEndpoint: https://s3.flow-like.example.com
+    existingSecret: flow-like-storage
+    runtimeCredentialsProvider: rustfs
+    stsSessionTtlSeconds: 7200
     usePathStyle: true
+
+executionManager:
+  objectStoreTlsGateway: true
+
+rustfs:
+  enabled: true
+  existingSecret: flow-like-rustfs-root
+  gateway:
+    ingress:
+      enabled: true
+      className: nginx
+      host: s3.flow-like.example.com
+      tls:
+        - secretName: flow-like-s3-tls
+          hosts:
+            - s3.flow-like.example.com
 ```
 
-This is enough to describe backing-store access after enabling the API's
-`aws` feature. It is not proof that the service supports Flow-Like's scoped
-runtime-credential path: `s3` selects the AWS implementation, which calls AWS
-STS `AssumeRole` and requires `RUNTIME_ROLE_ARN`. Do not treat MinIO or another
-S3-compatible service as end-to-end supported without validating that path.
+Use generated Secret references or replace the names with your managed Secrets.
+With bundled RustFS, the chart derives the internal storage and STS origins.
 
-## Scoped Credentials
+The public object gateway exposes bucket data and blocks root, STS and
+administration routes. The public origin must resolve and be reachable from
+both browsers and Pods. Presigned requests are bound to that host and path;
+preserve them through ingress and TLS termination. A Kubernetes-only Service DNS
+name is unsuitable for browser downloads.
 
-Flow-Like loads a master provider from `RUNTIME_CREDENTIALS_PROVIDER`, falling
-back to `STORAGE_PROVIDER` when the former is absent. Explicit empty values do
-not trigger the fallback and are configuration errors.
+An HTTPS tunnel cannot inspect paths. Set
+`executionManager.objectStoreTlsGateway=true` only when the HTTPS endpoint
+itself enforces the bucket-only boundary. Prefix permissions remain the object
+store's responsibility.
 
-For app and run operations, the API derives temporary credentials narrowed to
-paths such as:
+## Bucket layout and credentials
 
-- `apps/{app_id}/`
-- `users/{user_id}/apps/{app_id}/`
-- `runs/{app_id}/`
-- `tmp/user/{user_id}/apps/{app_id}/`
-- `tmp/global/apps/{app_id}/`
+The isolated manager requires distinct metadata, content and log buckets. Configure
+their names with `storage.s3.metaBucket`, `contentBucket` and `logBucket`.
+Defaults are `flow-like-meta`, `flow-like-content` and `flow-like-logs`.
 
-AWS uses `AssumeRole` with an inline session policy, Azure creates SAS tokens,
-GCP creates signed or token-based scoped access, and R2 calls its temporary
-credentials API. Provider-side IAM remains the outer permission boundary.
+The Secret named by `storage.s3.existingSecret` contains:
 
-## Validate the Configuration
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+STS_ISSUER_ACCESS_KEY
+STS_ISSUER_SECRET_KEY
+```
 
-Render the selected provider before installing:
+The root Secret contains `RUSTFS_ROOT_USER` and `RUSTFS_ROOT_PASSWORD`. Setup
+creates both Secrets and their matching values. Public endpoints, bucket names
+and region belong in Helm values.
+
+The API derives temporary grants for the application's metadata, content,
+temporary files and logs. A gateway origin allowlist alone does not enforce those
+prefixes. The provider must reject access outside the session policy, including
+cross-prefix copy operations and requests missing their session token.
+
+## Credential lifetime
+
+The default session request is 7,200 seconds. A one-hour execution with the
+default queue, startup, terminal, cleanup and credential margin needs at least
+4,140 seconds remaining when credentials are checked out.
+
+The API verifies the provider's returned expiration, including cached credentials.
+For external AWS STS, configure a role session duration that covers the requested
+budget. A role-chained one-hour session cannot cover a full hour of execution
+plus these allowances. The current execution path does not renew credentials
+during a running workflow.
+
+## External S3-compatible storage
+
+To replace RustFS, disable its workload and supply the complete endpoint and
+credential contract:
+
+```yaml
+rustfs:
+  enabled: false
+storage:
+  provider: s3
+  s3:
+    publicEndpoint: https://objects.example.com
+    internalEndpoint: https://objects.internal.example.com
+    stsEndpoint: https://sts.internal.example.com
+    existingSecret: flow-like-storage
+    runtimeCredentialsProvider: rustfs
+    runtimeRoleArn: arn:aws:iam::000000000000:role/flow-like-runtime
+    stsSessionTtlSeconds: 7200
+    usePathStyle: true
+executionManager:
+  objectStoreTlsGateway: true
+```
+
+Replace the example role and endpoints with the provider's actual configuration.
+`runtimeCredentialsProvider` selects the `rustfs` or `aws` STS policy dialect.
+S3 data API compatibility does not establish support for prefix-scoped STS
+sessions; qualify the exact provider, version and policy implementation.
+
+For setup-generated external storage configuration, export
+`RUSTFS_ENABLED=false`, `S3_PUBLIC_ENDPOINT`, `S3_INTERNAL_ENDPOINT`,
+`STS_ENDPOINT_URL`, the four credential variables above, and optionally
+`S3_STS_PROVIDER`, before running setup. The helper does not create external
+buckets or provider IAM resources.
+
+Private external endpoints may need
+`networkPolicy.executionGatewayExtraEgress` for gateways and
+`networkPolicy.controlPlaneExtraEgress` for the API.
+
+## Other provider blocks
+
+The API build includes AWS, Azure, GCP and R2 credential implementations.
+The current isolated chart supports the S3 configuration described above.
+The separate `storage.aws`, `storage.azure`, `storage.gcp` and
+`storage.r2` blocks remain available for explicitly trusted shared execution.
+
+For those provider blocks, use an existing storage Secret matching
+`helm/templates/runtime-secrets.yaml`. R2 additionally needs `R2_API_TOKEN`;
+the generated R2 Secret does not include it. For AWS workload identity, omit
+static key entries entirely rather than setting them to empty strings.
+GCP service-account JSON is passed as JSON text to
+`GOOGLE_APPLICATION_CREDENTIALS_JSON`, without an extra base64 layer.
+
+See [Storage Providers](/dev/storage-providers/) for provider-specific grants,
+including customer-managed AWS KMS keys.
+
+## Verify and recover
 
 ```bash
-helm lint apps/backend/kubernetes/helm \
-  --values flow-like-values.yaml
-
-helm template flow-like apps/backend/kubernetes/helm \
-  --namespace flow-like \
-  --values flow-like-values.yaml
+kubectl get pods,jobs,pvc -n flow-like
+kubectl logs -n flow-like -l app.kubernetes.io/component=object-store-init
+helm test flow-like -n flow-like --logs
 ```
 
-After installation, verify readiness without printing Secret values:
+Run the Helm test against a disposable or backed-up store. It exercises scoped
+STS, sibling-prefix and copy-source denial, missing session tokens, administration
+routes and presigned URLs, then removes its unique temporary prefixes. It does
+not test expiry, failover or application throughput.
 
-```bash
-kubectl get deployment flow-like-api -n flow-like
-kubectl logs deployment/flow-like-api -n flow-like
-```
-
-Startup errors mentioning the provider, master credentials, or a missing
-bucket/container usually indicate either a missing Secret key, an explicit
-empty value, a bucket that was not created, or a provider feature that is not
-present in the API image.
+Preserve the PVC and IAM credentials on upgrade. Investigate initializer drift
+errors before changing users or policies. Restore storage data and credentials
+consistently with the database and retained execution state.

@@ -5,148 +5,107 @@ sidebar:
   order: 40
 ---
 
-The checked-in k3d helper creates a local cluster and registry, builds the
-application images, writes a gitignored Helm values file, and installs the
-chart.
+The k3d helper provides a local Kubernetes workflow for explicitly trusted
+executions. It uses the reusable executor process and does not install gVisor or
+the Cilium isolation boundary. Use the Linux cluster
+[installation path](/self-hosting/kubernetes/installation/) for untrusted tenants.
 
-## Prerequisites
+## Prepare the local environment
 
-Install and start:
+Install Docker, k3d, kubectl, Helm 3, Python 3 and OpenSSL. Allocate resources for
+the API, web, internal database, Redis, RustFS and any enabled monitoring services.
+The helper uses one k3d server and two agents.
 
-- Docker
-- k3d
-- `kubectl`
-- Helm 3
-- OpenSSL
-
-Allocate enough Docker resources for the application, single-node database,
-Redis, and the enabled monitoring stack. Eight GB of memory is a practical
-starting point.
-
-## Configure Storage
-
-From `apps/backend/kubernetes`, create the ignored local environment file:
+From `apps/backend/kubernetes/`:
 
 ```bash
-cp .env.example .env
+export K3D_EXECUTION_MODE=trusted_shared
+export PUBLIC_API_URL=http://localhost:8080
+export PUBLIC_WEB_URL=http://localhost:3001
+export S3_PUBLIC_ENDPOINT=https://s3.dev.example.com
+
+cp flow-like.config.example.json ../../../flow-like.kubernetes.config.json
+export FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json
 ```
 
-Set `STORAGE_PROVIDER` and its credentials. Azure and GCP are the
-straight-through choices for the checked-in API build. The helper also accepts
-`aws` and `s3`, but that API target currently omits the `aws` runtime feature;
-those selections do not produce a ready API without rebuilding it. R2 is
-compiled in, but scoped operations additionally require `R2_API_TOKEN`, which
-the generated local values do not pass through.
+Edit the JSON for the development OIDC provider and public hub settings. The API
+embeds it at build time.
 
-Also configure the meta, content, and logs bucket or container names. The
-setup script validates the selected provider; it does not install a local
-object store or create buckets.
+Replace the S3 example with an origin reachable from both the browser and the
+cluster. Configure that origin to reach the bucket-only object gateway with
+matching TLS and Host handling. The helper requires this value; a local-only port
+or cluster-only DNS name does not meet both clients' needs.
 
-Create the ignored `helm/values-secrets.yaml` override so asynchronous
-requests use the implemented warm HTTP pool:
-
-```yaml
-execution:
-  backend: http
-  asyncBackend: http
-```
-
-The generated `values-local.yaml` inherits the chart's `redis` asynchronous
-default, but the checked-in executor pool does not consume that queue. The
-setup script automatically includes `values-secrets.yaml` when present.
-
-## Create the Cluster
+## Generate and install
 
 ```bash
-cd apps/backend/kubernetes
-./scripts/k3d-setup.sh
+./scripts/dev-bootstrap.sh
+./scripts/dev.sh setup
 ```
 
-The script:
+The bootstrap command writes private Secrets and matching values under
+`.generated/`; it does not modify the cluster. Setup:
 
-1. Creates a k3d cluster with one server and two agents.
-2. Creates a local registry exposed at `localhost:5111`.
-3. Builds and pushes API, web, executor, and migration images.
-4. Generates the `BACKEND_*` execution-key values.
-5. Writes `helm/values-local.yaml`, which is gitignored.
-6. Installs the chart with one internal CockroachDB pod, Redis, the warm
-   executor pool, and the monitoring stack.
+1. Creates the k3d cluster when absent and waits for its nodes.
+2. Builds the application images and imports them directly into k3d.
+3. Reuses the generated configuration, creating it only when absent.
+4. Applies its namespace and Secrets.
+5. Deploys the chart with `trusted_shared`, HTTP asynchronous dispatch and
+   Traefik ingress.
 
-Kata is disabled locally. With the override above, the warm executor pool
-handles both synchronous and asynchronous execution.
+Bundled RustFS is included and its initialization Job creates private buckets.
+The helper no longer relies on an external object store, a local image registry
+or an implicit `.env` file.
 
-## Local Endpoints
+Existing generated files are preserved. Change non-secret settings in the values
+file and rebuild images when public hub or web build settings change.
 
-| Service | Access |
+## Access and inspect
+
+The helper maps host port 8080 to the k3d ingress. Public hosts and paths depend on
+the generated and operator ingress values. Port forwarding provides explicit
+operator access:
+
+| Service | Command |
 | --- | --- |
-| API | `http://localhost:8080` through the k3d load balancer and Traefik |
-| Grafana | `http://localhost:3002` |
-| Web | `kubectl port-forward -n flow-like service/flow-like-web 3001:3001` |
-| Prometheus | `kubectl port-forward -n flow-like service/flow-like-prometheus 9090:9090` |
-| Cockroach SQL | `kubectl port-forward -n flow-like service/flow-like-cockroachdb-public 26257:26257` |
+| API | `kubectl port-forward -n flow-like svc/flow-like-api 8083:8080` |
+| Web | `kubectl port-forward -n flow-like svc/flow-like-web 3001:3001` |
+| Grafana | `kubectl port-forward -n flow-like svc/flow-like-grafana 3000:80` |
+| Prometheus | `kubectl port-forward -n flow-like svc/flow-like-prometheus 9090:9090` |
 
-The generated local values set the Grafana login to `admin` / `admin`. Do not
-reuse that configuration outside local development.
-
-## Rebuild and Inspect
+Use the configured Grafana credential workflow; the helper does not set a shared
+`admin/admin` password.
 
 ```bash
-# Rebuild all local images and restart Deployments
-./scripts/k3d-setup.sh rebuild
-
-# Show cluster, pod, and service status
-./scripts/k3d-setup.sh status
-
-# Inspect the effective values
-helm get values flow-like -n flow-like
-
-# Follow API or executor output
-kubectl logs -f deployment/flow-like-api -n flow-like
-kubectl logs -f deployment/flow-like-executor-pool -n flow-like
-```
-
-The build script reuses the existing cluster and registry. Run the full setup
-again after changing chart resources that a Deployment restart cannot apply.
-
-## Verify Execution Keys
-
-The chart-generated Secret is `flow-like-api-keys` because local values set
-`fullnameOverride: flow-like`:
-
-```bash
-kubectl get secret flow-like-api-keys -n flow-like
-kubectl get deployment flow-like-executor-pool -n flow-like \
-  -o jsonpath='{.spec.template.spec.containers[0].env}'
-```
-
-Avoid printing the private `BACKEND_KEY`. The executor only reads
-`BACKEND_PUB` and `BACKEND_KID`; the API reads all three keys.
-
-## Troubleshooting
-
-```bash
-kubectl get pods -n flow-like
+./scripts/dev.sh status
+kubectl logs deployment/flow-like-api -n flow-like --tail=100
+kubectl logs deployment/flow-like-executor-pool -n flow-like --tail=100
 kubectl get events -n flow-like --sort-by=.lastTimestamp
-helm status flow-like -n flow-like
 ```
 
-Typical causes:
-
-- `ImagePullBackOff`: verify `curl http://localhost:5111/v2/_catalog`, then run
-  the rebuild action.
-- Storage startup failure: check the provider variables in
-  `apps/backend/kubernetes/.env` and confirm the buckets already exist.
-- Pending PVC: inspect the k3d default `StorageClass` and the associated PVC.
-- External request failure: inspect the generated NetworkPolicies and add
-  required egress ports to local values.
-- Migration failure: inspect the Helm release status and recent namespace
-  events; successful hook Jobs can be deleted automatically.
-
-## Remove the Cluster
+## Rebuild and troubleshoot
 
 ```bash
-./scripts/k3d-setup.sh delete
+./scripts/dev.sh rebuild
+helm get values flow-like -n flow-like
+kubectl get pods,jobs,pvc -n flow-like
 ```
 
-This deletes the k3d cluster and its workloads. The local source tree,
-`.env`, generated execution-key PEM files, and Docker build cache remain.
+Rebuild imports new images and reapplies the chart. Common failures are an
+unreachable public object origin, failed migration or bucket initialization,
+insufficient Docker resources, and a PVC that cannot bind. Inspect the corresponding
+Job and Pod events before changing credentials.
+
+For direct helper access, `k3d-setup.sh` accepts the same
+`setup`, `rebuild`, `status` and `delete` actions.
+`K3D_CLUSTER_NAME` and `K8S_NAMESPACE` select the local names.
+
+## Remove the cluster
+
+```bash
+./scripts/dev.sh delete
+```
+
+This deletes the k3d cluster and its workloads. Keep backups of any local data
+you need before deletion. Generated configuration and Docker build cache remain
+in the workspace and host; protect the generated Secrets if reusing them.
