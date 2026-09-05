@@ -2710,5 +2710,8 @@
 	"youtubeVideoThumbnail": "YouTube video thumbnail",
 	"youveOutgrownYourPlan": "You've outgrown your plan",
 	"zoomIn": "Zoom in",
-	"zoomOut": "Zoom out"
+	"zoomOut": "Zoom out",
+	"lengthMatchingPackages": "{{length}} matching packages",
+	"lengthUpdates": "{{length}} updates",
+	"packageViews": "Package views"
 }

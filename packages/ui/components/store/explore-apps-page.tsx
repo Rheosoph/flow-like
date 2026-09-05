@@ -4,11 +4,17 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	ArrowRight,
+	ArrowUpRight,
+	Clock3,
+	Compass,
+	Loader2,
 	PackageOpen,
 	RotateCw,
 	Search,
+	TrendingUp,
 	X,
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
@@ -19,16 +25,11 @@ import {
 	useState,
 } from "react";
 import { useInfiniteInvoke, useInvoke } from "../../hooks/use-invoke";
-import { useIsMobile } from "../../hooks/use-mobile";
 import {
 	CATEGORY_TRANSLATION_KEYS,
 	formatAppCategory,
 } from "../../lib/app-category";
-import {
-	APP_CATEGORY_ORDER,
-	CATEGORY_ICONS,
-	categoryColor,
-} from "../../lib/category-meta";
+import { APP_CATEGORY_ORDER, categoryColor } from "../../lib/category-meta";
 import type { IApp } from "../../lib/schema/app/app";
 import {
 	IAppCategory,
@@ -51,7 +52,8 @@ import {
 	SelectValue,
 } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
-import { ExploreHubHeader } from "./explore-hub-header";
+import { ExploreCategoryFilter } from "./explore-category-filter";
+import { ExploreHubLayout } from "./explore-hub-layout";
 import { SuitesRail } from "./suites";
 
 type SortOption = "popular" | "newest" | "rated" | "updated";
@@ -73,7 +75,7 @@ const SORT_LABEL: Record<SortOption, { key: string; defaultValue: string }> = {
 const SORT_OPTIONS = Object.keys(SORT_MAP) as SortOption[];
 
 const isSortOption = (value: string | null): value is SortOption =>
-	!!value && value in SORT_MAP;
+	!!value && SORT_OPTIONS.includes(value as SortOption);
 
 const isCategory = (value: string | null): value is IAppCategory =>
 	!!value && (Object.values(IAppCategory) as string[]).includes(value);
@@ -97,13 +99,7 @@ export interface ExploreAppsPageProps {
 
 export function ExploreAppsPage(props: Readonly<ExploreAppsPageProps>) {
 	return (
-		<Suspense
-			fallback={
-				<main className="flex flex-col w-full flex-1 min-h-0">
-					<ResultsSkeleton className="px-4 sm:px-8 pt-6" />
-				</main>
-			}
-		>
+		<Suspense fallback={<ExploreAppsSkeleton />}>
 			<ExploreAppsContent {...props} />
 		</Suspense>
 	);
@@ -115,12 +111,13 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const backend = useBackend();
-	const isMobile = useIsMobile();
+	const resultsRef = useRef<HTMLDivElement>(null);
+	const searchRef = useRef<HTMLInputElement>(null);
 
 	const [searchQuery, setSearchQuery] = useState(
 		() => searchParams.get("q") ?? "",
 	);
-	const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
+	const [debouncedQuery, setDebouncedQuery] = useState(searchQuery.trim());
 	const [selectedCategory, setSelectedCategory] = useState<
 		IAppCategory | undefined
 	>(() => {
@@ -135,7 +132,10 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	const userApps = useInvoke(backend.appState.getApps, backend.appState, []);
 
 	useEffect(() => {
-		const timeout = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+		const timeout = setTimeout(
+			() => setDebouncedQuery(searchQuery.trim()),
+			300,
+		);
 		return () => clearTimeout(timeout);
 	}, [searchQuery]);
 
@@ -155,7 +155,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 		const category = searchParams.get("category");
 		const sort = searchParams.get("sort");
 		setSearchQuery(q);
-		setDebouncedQuery(q);
+		setDebouncedQuery(q.trim());
 		setSelectedCategory(isCategory(category) ? category : undefined);
 		setSortKey(isSortOption(sort) ? sort : "popular");
 	}, [searchParams]);
@@ -165,7 +165,10 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 			adoptingRef.current = false;
 			return;
 		}
-		const params = new URLSearchParams();
+		const params = new URLSearchParams(searchParams.toString());
+		params.delete("q");
+		params.delete("category");
+		params.delete("sort");
 		if (debouncedQuery) params.set("q", debouncedQuery);
 		if (selectedCategory) params.set("category", selectedCategory);
 		if (sortKey !== "popular") params.set("sort", sortKey);
@@ -189,8 +192,9 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 		data: searchResults,
 		hasNextPage,
 		fetchNextPage,
-		isFetchingNextPage,
 		isLoading,
+		isFetching,
+		isFetchNextPageError,
 		error,
 		refetch,
 	} = useInfiniteInvoke(backend.appState.searchApps, backend.appState, [
@@ -203,8 +207,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 		undefined,
 	]);
 
-	// Offset pagination can hand the same app back across page boundaries when
-	// the underlying order shifts between fetches — dedupe by id.
+	// Keep each app once when the order shifts between page requests.
 	const combinedApps = useMemo(() => {
 		const seen = new Set<string>();
 		const deduped: AppEntry[] = [];
@@ -234,7 +237,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 
 	const resolveUseHref = useCallback(
 		async (appId: string) => {
-			if (!userAppIds.has(appId) || usableEvents.size === 0) return null;
+			if (!userAppIds.has(appId)) return null;
 
 			const [routes, events] = await Promise.all([
 				backend.routeState.getRoutes(appId, true).catch(() => []),
@@ -276,6 +279,14 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 
 	const isFiltered =
 		!!debouncedQuery || !!selectedCategory || sortKey !== "popular";
+	const hasActiveFilters = isFiltered || !!searchQuery;
+	const isSearching = searchQuery.trim() !== debouncedQuery || isLoading;
+
+	// A new search starts at the top; pagination keeps the reader's position.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Each filter change resets the results viewport.
+	useEffect(() => {
+		resultsRef.current?.scrollTo({ top: 0 });
+	}, [debouncedQuery, selectedCategory, sortKey]);
 
 	const clearFilters = useCallback(() => {
 		setSearchQuery("");
@@ -351,47 +362,62 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 				});
 
 	return (
-		<main className="flex flex-col w-full flex-1 min-h-0">
-			<div
-				className={`pt-6 pb-4 space-y-4 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
-			>
-				<ExploreHubHeader
-					active="apps"
-					subtitle={t(
-						"communityAppsReadyToUseOrFork",
-						"Community apps, ready to use or fork.",
-					)}
-				/>
-
-				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-					<div className="relative w-full sm:flex-1 sm:max-w-lg">
-						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
+		<ExploreHubLayout
+			active="apps"
+			subtitle={t(
+				"exploreAppsSubtitle",
+				"Find community apps to use and make your own.",
+			)}
+			scrollRef={resultsRef}
+			toolbar={
+				<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+					<div className="relative min-w-0 flex-1">
+						{isSearching ? (
+							<Loader2
+								aria-hidden="true"
+								className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-primary"
+							/>
+						) : (
+							<Search
+								aria-hidden="true"
+								className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
+							/>
+						)}
 						<Input
+							ref={searchRef}
+							type="search"
+							aria-label={t("searchCommunityApps", "Search community apps…")}
+							aria-controls="explore-results"
 							placeholder={t("searchCommunityApps", "Search community apps…")}
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+							className="h-12 rounded-xl border-border/60 bg-muted/30 pr-12 pl-12 text-sm shadow-none transition-colors focus-visible:bg-background [&::-webkit-search-cancel-button]:appearance-none"
 						/>
 						{searchQuery && (
 							<button
 								type="button"
 								aria-label={t("clearSearch", "Clear search")}
-								onClick={() => setSearchQuery("")}
-								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
+								onClick={() => {
+									setSearchQuery("");
+									setDebouncedQuery("");
+									searchRef.current?.focus();
+								}}
+								className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
-								<X className="h-4 w-4" />
+								<X aria-hidden="true" className="h-4 w-4" />
 							</button>
 						)}
 					</div>
-
-					<div className="flex items-center gap-2">
+					<div className="flex items-center justify-between gap-2 sm:justify-start">
 						<Select
 							value={sortKey}
-							onValueChange={(value) => setSortKey(value as SortOption)}
+							onValueChange={(value) => {
+								if (isSortOption(value)) setSortKey(value);
+							}}
 						>
 							<SelectTrigger
 								aria-label={t("sortResults", "Sort results")}
-								className="w-auto gap-1.5 rounded-full border-border/40 bg-muted/30 text-sm h-11 sm:h-10"
+								className="min-h-12 min-w-0 max-w-48 flex-1 gap-2 rounded-xl border-border/60 bg-background text-sm sm:w-48 sm:flex-none"
 							>
 								<SelectValue />
 							</SelectTrigger>
@@ -403,58 +429,166 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 								))}
 							</SelectContent>
 						</Select>
-
-						{isFiltered && (
+						<div className="w-28 shrink-0">
 							<Button
 								variant="ghost"
 								size="sm"
-								className="rounded-full h-11 sm:h-9 text-muted-foreground/70 hover:text-foreground"
+								className={`min-h-12 w-full rounded-xl text-muted-foreground ${hasActiveFilters ? "" : "invisible"}`}
+								disabled={!hasActiveFilters}
 								onClick={clearFilters}
 							>
-								<X className="h-3.5 w-3.5 mr-1" />
-								{t("clear", "Clear")}
+								<X aria-hidden="true" className="mr-1 h-3.5 w-3.5" />
+								{t("clearFilters", "Clear filters")}
 							</Button>
-						)}
+						</div>
 					</div>
 				</div>
-
-				<CategoryChips
+			}
+			filters={
+				<ExploreCategoryFilter
 					selected={selectedCategory}
 					onSelect={setSelectedCategory}
-					isMobile={isMobile}
 				/>
-			</div>
-
+			}
+		>
 			<div
-				className={`flex-1 overflow-auto pb-10 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				id="explore-results"
+				className="flex flex-col gap-8"
+				aria-busy={isFetching}
 			>
-				{!isFiltered && <SuitesRail />}
-				{error ? (
-					<Alert variant="destructive" className="mb-4">
+				<output className="sr-only" aria-live="polite">
+					{isSearching
+						? t("loadingApps", "Loading apps…")
+						: error
+							? t(
+									"exploreLoadError",
+									"Apps could not be loaded. Please try again.",
+								)
+							: resultsSummary}
+				</output>
+				{error && !isFetchNextPageError && (
+					<Alert variant="destructive" className="rounded-xl">
 						<AlertCircle className="h-4 w-4" />
-						<AlertDescription className="flex items-center gap-3">
-							{t(
-								"failedToLoadAppsMessage",
-								"Failed to load apps: {{message}}",
-								{ message: error.message },
-							)}
+						<AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+							<span>
+								{t(
+									"exploreLoadError",
+									"Apps could not be loaded. Please try again.",
+								)}
+							</span>
 							<Button
 								variant="outline"
 								size="sm"
-								className="rounded-full"
+								className="rounded-lg"
+								disabled={isFetching}
 								onClick={() => refetch()}
 							>
-								<RotateCw className="h-3.5 w-3.5 mr-1" />
+								<RotateCw
+									aria-hidden="true"
+									className={`mr-1.5 h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`}
+								/>
 								{t("retry", "Retry")}
 							</Button>
 						</AlertDescription>
 					</Alert>
-				) : isLoading ? (
-					<ResultsSkeleton />
+				)}
+				{isLoading ? (
+					<ResultsSkeleton discovery={!isFiltered} />
 				) : combinedApps.length === 0 ? (
-					<ExploreEmpty hasFilters={isFiltered} onClear={clearFilters} />
+					!error && (
+						<ExploreEmpty hasFilters={isFiltered} onClear={clearFilters} />
+					)
 				) : categoryRails ? (
-					<div className="space-y-10">
+					<>
+						<section
+							aria-labelledby="explore-popular-heading"
+							className="space-y-4"
+						>
+							<div className="flex flex-wrap items-center justify-between gap-3">
+								<div>
+									<div className="mb-1 flex items-center gap-2 text-primary">
+										<TrendingUp aria-hidden="true" className="h-4 w-4" />
+										<span className="text-xs font-medium">
+											{t("communityFavorites", "Community favorites")}
+										</span>
+									</div>
+									<h2
+										id="explore-popular-heading"
+										className="text-xl font-semibold tracking-tight sm:text-2xl"
+									>
+										{t("popularRightNow", "Popular right now")}
+									</h2>
+								</div>
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-10 gap-2 rounded-xl"
+									onClick={() => setSortKey("newest")}
+								>
+									<Clock3 aria-hidden="true" className="h-4 w-4" />
+									{t("newArrivals", "New arrivals")}
+									<ArrowUpRight
+										aria-hidden="true"
+										className="h-3.5 w-3.5 text-muted-foreground"
+									/>
+								</Button>
+							</div>
+							<ScrollRail>
+								{combinedApps.slice(0, 6).map(([app, metadata]) => (
+									<div
+										key={app.id}
+										className="w-60 shrink-0 snap-start sm:w-72"
+									>
+										<ExploreAppCard
+											isOwned={userAppIds.has(app.id)}
+											app={app}
+											metadata={metadata}
+											variant="extended"
+											onClick={() => handleAppClick(app.id)}
+											href={appHref(app.id)}
+											className="min-h-80 w-full rounded-2xl"
+										/>
+									</div>
+								))}
+							</ScrollRail>
+						</section>
+					</>
+				) : (
+					<section
+						className="space-y-5"
+						aria-labelledby="explore-results-heading"
+					>
+						<div className="space-y-1">
+							<h2
+								id="explore-results-heading"
+								className="text-xl font-semibold tracking-tight"
+							>
+								{debouncedQuery
+									? t("searchResults", "Search results")
+									: (selectedCategoryLabel ??
+										t(
+											SORT_LABEL[sortKey].key,
+											SORT_LABEL[sortKey].defaultValue,
+										))}
+							</h2>
+							<p className="text-sm text-muted-foreground">{resultsSummary}</p>
+						</div>
+						<ExploreGrid
+							apps={combinedApps}
+							userAppIds={userAppIds}
+							onAppClick={handleAppClick}
+							appHref={appHref}
+						/>
+					</section>
+				)}
+				{!isLoading && combinedApps.length > 0 && categoryRails && (
+					<div className="space-y-7 border-t border-border/50 pt-7">
+						<div className="flex items-center gap-2 text-muted-foreground">
+							<Compass aria-hidden="true" className="h-4 w-4" />
+							<h2 className="text-sm font-medium">
+								{t("exploreByCategory", "Explore by category")}
+							</h2>
+						</div>
 						{categoryRails.map(({ category, label, items }) => (
 							<CategoryRailSection
 								key={category}
@@ -464,94 +598,90 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 								userAppIds={userAppIds}
 								onAppClick={handleAppClick}
 								appHref={appHref}
-								isMobile={isMobile}
 								onSeeAll={() => setSelectedCategory(category)}
 							/>
 						))}
-
-						{hasNextPage && (
-							<LoadMoreButton
-								isFetching={isFetchingNextPage}
-								onFetch={fetchNextPage}
-							/>
-						)}
-					</div>
-				) : (
-					<div className={isMobile ? "space-y-5" : "space-y-6"}>
-						<p className="text-xs text-muted-foreground/60">{resultsSummary}</p>
-
-						<ExploreGrid
-							apps={combinedApps}
-							userAppIds={userAppIds}
-							onAppClick={handleAppClick}
-							appHref={appHref}
-							isMobile={isMobile}
-						/>
-
-						{hasNextPage && (
-							<LoadMoreButton
-								isFetching={isFetchingNextPage}
-								onFetch={fetchNextPage}
-							/>
-						)}
 					</div>
 				)}
+				{isFetchNextPageError && (
+					<Alert variant="destructive" className="rounded-xl">
+						<AlertCircle className="h-4 w-4" />
+						<AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+							<span>
+								{t(
+									"exploreLoadMoreError",
+									"More apps could not be loaded. Your results are still here.",
+								)}
+							</span>
+							<Button
+								variant="outline"
+								size="sm"
+								className="rounded-lg"
+								disabled={isFetching}
+								onClick={() => fetchNextPage()}
+							>
+								<RotateCw
+									aria-hidden="true"
+									className={`mr-1.5 h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`}
+								/>
+								{t("retry", "Retry")}
+							</Button>
+						</AlertDescription>
+					</Alert>
+				)}
+				{hasNextPage && combinedApps.length > 0 && !isFetchNextPageError && (
+					<LoadMoreButton isFetching={isFetching} onFetch={fetchNextPage} />
+				)}
+				{!isFiltered && <SuitesRail />}
 			</div>
-		</main>
+		</ExploreHubLayout>
 	);
 }
 
-function CategoryChips({
-	selected,
-	onSelect,
-	isMobile,
+function ExploreAppCard({
+	app,
+	metadata,
+	isOwned,
+	variant,
+	className,
+	href,
+	onClick,
 }: Readonly<{
-	selected?: IAppCategory;
-	onSelect: (category: IAppCategory | undefined) => void;
-	isMobile: boolean;
+	app: IApp;
+	metadata?: IMetadata;
+	isOwned: boolean;
+	variant: "extended" | "small";
+	className?: string;
+	href: string;
+	onClick: () => void;
 }>) {
-	const { t } = useTranslation("store");
 	return (
-		<div
-			className={
-				isMobile
-					? "flex gap-2 overflow-x-auto scrollbar-hide -mx-4 px-4 pb-1"
-					: "flex flex-wrap gap-1.5"
-			}
+		<Link
+			href={href}
+			aria-label={metadata?.name || app.id}
+			className="block h-full min-w-0 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+			onClick={(event) => {
+				if (
+					event.button !== 0 ||
+					event.metaKey ||
+					event.ctrlKey ||
+					event.shiftKey ||
+					event.altKey
+				)
+					return;
+				event.preventDefault();
+				onClick();
+			}}
 		>
-			{APP_CATEGORY_ORDER.map((category) => {
-				const label = t(
-					CATEGORY_TRANSLATION_KEYS[category],
-					formatAppCategory(category),
-				);
-				const color = categoryColor(category);
-				const Icon = CATEGORY_ICONS[category];
-				const isSelected = selected === category;
-
-				return (
-					<button
-						key={category}
-						type="button"
-						aria-pressed={isSelected}
-						className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 text-xs transition-all ${
-							isMobile ? "py-2.5" : "py-1.5"
-						} ${
-							isSelected
-								? "bg-foreground/10 text-foreground ring-1 ring-foreground/20"
-								: "bg-muted/20 text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground/80"
-						}`}
-						onClick={() => onSelect(isSelected ? undefined : category)}
-					>
-						<Icon
-							className="h-3 w-3 shrink-0"
-							style={{ color, opacity: isSelected ? 1 : 0.7 }}
-						/>
-						{label}
-						{isSelected && <X className="h-3 w-3" />}
-					</button>
-				);
-			})}
-		</div>
+			<AppCard
+				app={app}
+				metadata={metadata}
+				isOwned={isOwned}
+				variant={variant}
+				className={className}
+				href={href}
+			/>
+		</Link>
 	);
 }
 
@@ -562,7 +692,6 @@ function CategoryRailSection({
 	userAppIds,
 	onAppClick,
 	appHref,
-	isMobile,
 	onSeeAll,
 }: Readonly<{
 	category: IAppCategory;
@@ -571,7 +700,6 @@ function CategoryRailSection({
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
 	appHref: (id: string) => string;
-	isMobile: boolean;
 	onSeeAll: () => void;
 }>) {
 	const { t } = useTranslation("store");
@@ -579,21 +707,25 @@ function CategoryRailSection({
 	const color = categoryColor(category);
 
 	return (
-		<section>
+		<section aria-label={label}>
 			<div className="mb-3 flex items-center justify-between gap-3">
 				<div className="flex items-center gap-2 min-w-0">
 					<span
 						className="h-2 w-2 shrink-0 rounded-full"
 						style={{ backgroundColor: color }}
 					/>
-					<h2 className="truncate text-base font-bold tracking-tight text-foreground">
+					<h3 className="truncate text-base font-semibold tracking-tight text-foreground">
 						{label}
-					</h2>
+					</h3>
 				</div>
 				<button
 					type="button"
 					onClick={onSeeAll}
-					className="group/link flex shrink-0 items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+					aria-label={t("seeAllCategoryApps", {
+						category: label,
+						defaultValue: "See all {{category}} apps",
+					})}
+					className="group/link flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				>
 					{t("seeAll", "See all")}
 					<ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5" />
@@ -601,18 +733,15 @@ function CategoryRailSection({
 			</div>
 			<ScrollRail>
 				{apps.map(([app, metadata]) => (
-					<div
-						key={app.id}
-						className={`shrink-0 snap-start ${isMobile ? "w-56" : "w-64"}`}
-					>
-						<AppCard
+					<div key={app.id} className="w-56 shrink-0 snap-start md:w-64">
+						<ExploreAppCard
 							isOwned={userAppIds.has(app.id)}
 							app={app}
 							metadata={metadata}
 							variant="extended"
 							onClick={() => onAppClick(app.id)}
 							href={appHref(app.id)}
-							className="w-full"
+							className="min-h-72 w-full rounded-2xl"
 						/>
 					</div>
 				))}
@@ -626,19 +755,17 @@ function ExploreGrid({
 	userAppIds,
 	onAppClick,
 	appHref,
-	isMobile,
 }: Readonly<{
 	apps: AppEntry[];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
 	appHref: (id: string) => string;
-	isMobile: boolean;
 }>) {
-	if (isMobile) {
-		return (
-			<div className="divide-y divide-border/30">
+	return (
+		<>
+			<div className="divide-y divide-border/30 md:hidden">
 				{apps.map(([app, metadata]) => (
-					<AppCard
+					<ExploreAppCard
 						key={app.id}
 						isOwned={userAppIds.has(app.id)}
 						app={app}
@@ -650,29 +777,26 @@ function ExploreGrid({
 					/>
 				))}
 			</div>
-		);
-	}
-
-	return (
-		<div
-			className="grid gap-3"
-			style={{
-				gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN_W_DESKTOP}px, 1fr))`,
-			}}
-		>
-			{apps.map(([app, metadata]) => (
-				<AppCard
-					key={app.id}
-					isOwned={userAppIds.has(app.id)}
-					app={app}
-					metadata={metadata}
-					variant="extended"
-					onClick={() => onAppClick(app.id)}
-					href={appHref(app.id)}
-					className="w-full"
-				/>
-			))}
-		</div>
+			<div
+				className="hidden gap-3 md:grid"
+				style={{
+					gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${CARD_MIN_W_DESKTOP}px), 1fr))`,
+				}}
+			>
+				{apps.map(([app, metadata]) => (
+					<ExploreAppCard
+						key={app.id}
+						isOwned={userAppIds.has(app.id)}
+						app={app}
+						metadata={metadata}
+						variant="extended"
+						onClick={() => onAppClick(app.id)}
+						href={appHref(app.id)}
+						className="min-h-72 w-full rounded-2xl"
+					/>
+				))}
+			</div>
+		</>
 	);
 }
 
@@ -682,16 +806,16 @@ function ExploreEmpty({
 }: Readonly<{ hasFilters: boolean; onClear: () => void }>) {
 	const { t } = useTranslation("store");
 	return (
-		<div className="flex flex-col items-center justify-center py-32 text-center">
+		<div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/10 px-6 py-16 text-center sm:py-24">
 			<div className="rounded-full bg-muted/30 p-5 mb-5">
-				<PackageOpen className="h-7 w-7 text-muted-foreground/40" />
+				<PackageOpen className="h-7 w-7 text-muted-foreground" />
 			</div>
-			<p className="text-sm text-foreground/60 mb-1">
+			<p className="text-lg font-semibold text-foreground mb-2">
 				{hasFilters
 					? t("noAppsMatchYourFilters", "No apps match your filters")
 					: t("noAppsFound", "No apps found")}
 			</p>
-			<p className="text-xs text-muted-foreground/60 mb-4">
+			<p className="max-w-sm text-sm text-muted-foreground mb-5">
 				{hasFilters
 					? t(
 							"tryAdjustingYourSearchOrFilters",
@@ -730,7 +854,7 @@ function LoadMoreButton({
 				type="button"
 				onClick={onFetch}
 				disabled={isFetching}
-				className="flex items-center gap-1.5 text-xs text-muted-foreground/60 hover:text-foreground px-4 py-1.5 rounded-full border border-border/30 hover:border-border/50 hover:bg-muted/30 transition-colors disabled:opacity-50"
+				className="flex min-h-11 items-center gap-2 rounded-xl border border-border/60 px-6 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-border hover:bg-muted/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 			>
 				{isFetching ? (
 					<>
@@ -745,32 +869,87 @@ function LoadMoreButton({
 	);
 }
 
-const SKELETON_KEYS = {
-	rows: ["row-a", "row-b"],
-	cards: ["card-a", "card-b", "card-c", "card-d", "card-e"],
-};
+const SKELETON_KEYS = [
+	"card-a",
+	"card-b",
+	"card-c",
+	"card-d",
+	"card-e",
+	"card-f",
+];
 
-function ResultsSkeleton({ className }: Readonly<{ className?: string }>) {
+function ResultsSkeleton({
+	discovery = true,
+}: Readonly<{ discovery?: boolean }>) {
 	return (
-		<div className={`space-y-10 ${className ?? ""}`}>
-			{SKELETON_KEYS.rows.map((row) => (
-				<div key={row} className="space-y-3">
-					<Skeleton className="h-5 w-32 rounded" />
-					<div
-						className="grid gap-3"
-						style={{
-							gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN_W_DESKTOP}px, 1fr))`,
-						}}
-					>
-						{SKELETON_KEYS.cards.map((card) => (
-							<Skeleton
-								key={`${row}-${card}`}
-								className="h-[375px] rounded-xl"
-							/>
+		<div aria-hidden="true" className={discovery ? "space-y-4" : "space-y-5"}>
+			<div className="space-y-1">
+				<Skeleton
+					className={discovery ? "h-4 w-32 rounded" : "h-7 w-40 rounded"}
+				/>
+				<Skeleton
+					className={discovery ? "h-7 w-48 rounded sm:h-8" : "h-5 w-56 rounded"}
+				/>
+			</div>
+			{discovery ? (
+				<div className="flex gap-4 overflow-hidden pb-1">
+					{SKELETON_KEYS.map((key) => (
+						<Skeleton
+							key={key}
+							className="h-80 w-60 shrink-0 rounded-2xl sm:w-72"
+						/>
+					))}
+				</div>
+			) : (
+				<>
+					<div className="divide-y divide-border/30 md:hidden">
+						{SKELETON_KEYS.map((key) => (
+							<div key={key} className="flex h-[69px] items-center gap-3 p-3">
+								<Skeleton className="h-11 w-11 shrink-0 rounded-xl" />
+								<div className="flex-1 space-y-2">
+									<Skeleton className="h-4 w-28" />
+									<Skeleton className="h-3 w-full" />
+								</div>
+							</div>
 						))}
 					</div>
-				</div>
-			))}
+					<div
+						className="hidden gap-3 md:grid"
+						style={{
+							gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${CARD_MIN_W_DESKTOP}px), 1fr))`,
+						}}
+					>
+						{SKELETON_KEYS.map((key) => (
+							<Skeleton key={key} className="h-72 rounded-2xl" />
+						))}
+					</div>
+				</>
+			)}
 		</div>
+	);
+}
+
+function ExploreAppsSkeleton() {
+	const { t } = useTranslation("store");
+	return (
+		<ExploreHubLayout
+			active="apps"
+			subtitle={t(
+				"exploreAppsSubtitle",
+				"Find community apps to use and make your own.",
+			)}
+			toolbar={
+				<div className="flex flex-col gap-3 sm:flex-row">
+					<Skeleton className="h-12 flex-1 rounded-xl" />
+					<div className="flex gap-2">
+						<Skeleton className="h-12 min-w-0 flex-1 rounded-xl sm:w-48 sm:flex-none" />
+						<div className="w-28" />
+					</div>
+				</div>
+			}
+			filters={<ExploreCategoryFilter onSelect={() => {}} />}
+		>
+			<ResultsSkeleton />
+		</ExploreHubLayout>
 	);
 }

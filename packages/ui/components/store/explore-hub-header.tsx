@@ -48,45 +48,49 @@ export function ExploreHubHeader({
 	return (
 		<div
 			className={cn(
-				"flex flex-wrap items-end justify-between gap-3",
+				"grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1",
 				className,
 			)}
 		>
-			<div className="space-y-1 min-w-0">
-				<h1 className="text-2xl font-bold tracking-tight text-foreground">
+			<div className="flex min-h-11 min-w-0 items-center">
+				<h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
 					{t("explore", "Explore")}
 				</h1>
-				{subtitle && (
-					<p className="text-sm text-muted-foreground">{subtitle}</p>
+			</div>
+			<div className="flex min-h-11 items-center gap-2">
+				{actions}
+				{(tabs.length > 1 || active === "packages") && (
+					<nav
+						aria-label={t("exploreSections", "Explore sections")}
+						className="inline-flex items-center rounded-full border border-border/40 bg-muted/30 p-1"
+					>
+						{tabs.map((tab) => {
+							const isActive = tab.key === active;
+							return (
+								<Link
+									key={tab.key}
+									href={tab.href}
+									aria-current={isActive ? "page" : undefined}
+									className={cn(
+										"flex min-h-9 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-3.5 sm:text-sm",
+										isActive
+											? "bg-background text-foreground shadow-sm"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									<tab.icon className="h-3.5 w-3.5" />
+									{t(tab.key, tab.label)}
+								</Link>
+							);
+						})}
+					</nav>
 				)}
 			</div>
-			<div className="flex items-center gap-2">
-				{actions}
-				<nav
-					aria-label={t("exploreSections", "Explore sections")}
-					className="inline-flex items-center rounded-full border border-border/40 bg-muted/30 p-1"
-				>
-					{tabs.map((tab) => {
-						const isActive = tab.key === active;
-						return (
-							<Link
-								key={tab.key}
-								href={tab.href}
-								aria-current={isActive ? "page" : undefined}
-								className={cn(
-									"flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
-									isActive
-										? "bg-background text-foreground shadow-sm"
-										: "text-muted-foreground hover:text-foreground",
-								)}
-							>
-								<tab.icon className="h-3.5 w-3.5" />
-								{tab.label}
-							</Link>
-						);
-					})}
-				</nav>
-			</div>
+			{subtitle && (
+				<p className="col-span-2 min-h-10 text-sm text-muted-foreground sm:min-h-5">
+					{subtitle}
+				</p>
+			)}
 		</div>
 	);
 }

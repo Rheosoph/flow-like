@@ -157,9 +157,9 @@ export const defaultFixturePackages: PackageSummary[] = [
 
 export const defaultFixtureModels = [
 	{
-		id: "default-fixture-model",
+		id: "s14lujkm2gut2mwg0zo3imxv",
 		hash: "fixture-model-hash",
-		hub: "fixture-hub",
+		hub: "api.flow-like.com",
 		authors: [],
 		dependencies: [],
 		dependency_tree_hash: "fixture",
@@ -173,7 +173,7 @@ export const defaultFixtureModels = [
 		},
 		meta: {
 			en: {
-				name: "Workspace reasoning",
+				name: "GLM 5",
 				description: "A hosted model for working through documents and ideas.",
 				icon: logo,
 				tags: ["reasoning", "hosted"],

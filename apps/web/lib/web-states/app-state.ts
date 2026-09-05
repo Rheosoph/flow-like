@@ -156,16 +156,12 @@ export class WebAppState implements IAppState {
 			return this.getApps();
 		}
 
-		try {
-			return stabilizeMetadataEntries(
-				await apiGet<[IApp, IMetadata | undefined][]>(
-					`apps/search?${params}`,
-					this.backend.auth,
-				),
-			);
-		} catch {
-			return [];
-		}
+		return stabilizeMetadataEntries(
+			await apiGet<[IApp, IMetadata | undefined][]>(
+				`apps/search?${params}`,
+				this.backend.auth,
+			),
+		);
 	}
 
 	async getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {

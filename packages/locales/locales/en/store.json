@@ -380,5 +380,22 @@
 	"writeAReview": "Write a Review",
 	"yanked": "Yanked",
 	"youMightAlsoLike": "You might also like",
-	"yours": "Yours"
+	"yours": "Yours",
+	"allApps": "All apps",
+	"apps": "Apps",
+	"moreCategories": "More categories",
+	"browseCategories": "Browse categories",
+	"exploreAppsSubtitle": "Find community apps to use and make your own.",
+	"loadingApps": "Loading apps…",
+	"exploreLoadError": "Apps could not be loaded. Please try again.",
+	"exploreLoadMoreError": "More apps could not be loaded. Your results are still here.",
+	"communityFavorites": "Community favorites",
+	"popularRightNow": "Popular right now",
+	"newArrivals": "New arrivals",
+	"exploreByCategory": "Explore by category",
+	"searchResults": "Search results",
+	"seeAllCategoryApps": "See all {{category}} apps",
+	"loadingPackages": "Loading packages…",
+	"packagesCouldNotBeLoaded": "Packages could not be loaded.",
+	"packagesLoadError": "Packages could not be loaded. Please try again."
 }

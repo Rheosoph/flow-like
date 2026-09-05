@@ -371,7 +371,16 @@ function DefaultScenario({
 					online();
 					return catalog === "empty" ? [] : fixtureModels;
 				},
-				getBit: async () => fixtureModels[0],
+				getBit: async (id: string, hub?: string) => {
+					const model =
+						catalog === "empty"
+							? undefined
+							: fixtureModels.find(
+									(model) => model.id === id && (!hub || model.hub === hub),
+								);
+					if (!model) throw new Error("Fixture model not found.");
+					return model;
+				},
 				isBitInstalled: async () => true,
 				getBitSize: async () => 0,
 			},

@@ -40,6 +40,7 @@ export { visibilityLabel, visibilityIcon } from "./visibility";
 export { useStoreData } from "./use-store-data";
 export { ExploreAppsPage } from "./explore-apps-page";
 export { SuitesRail, SuiteCard, SuiteDetail } from "./suites";
+export { ExploreHubLayout } from "./explore-hub-layout";
 export { ExploreHubHeader, type ExploreHubTab } from "./explore-hub-header";
 export {
 	PackagesStorePage,

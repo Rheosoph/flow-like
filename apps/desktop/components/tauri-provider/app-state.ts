@@ -402,19 +402,14 @@ export class AppState implements IAppState {
 			return this.getApps();
 		}
 
-		try {
-			return stabilizeMetadataEntries(
-				await fetcher<[IApp, IMetadata | undefined][]>(
-					this.backend.profile,
-					`apps/search?${new URLSearchParams(queryParams)}`,
-					undefined,
-					this.backend.auth,
-				),
-			);
-		} catch (error) {
-			console.error("Failed to search apps:", error);
-			return [];
-		}
+		return stabilizeMetadataEntries(
+			await fetcher<[IApp, IMetadata | undefined][]>(
+				this.backend.profile,
+				`apps/search?${new URLSearchParams(queryParams)}`,
+				undefined,
+				this.backend.auth,
+			),
+		);
 	}
 
 	async getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {

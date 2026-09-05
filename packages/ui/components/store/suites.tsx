@@ -3,17 +3,14 @@
 import { useTranslation } from "@flow-like/locales";
 import { ArrowLeft, Globe, Layers } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { IGroup, IGroupMember } from "../..";
-import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
-	Badge,
-	Button,
-	useBackend,
-	useInvoke,
-} from "../..";
+import { useInvoke } from "../../hooks/use-invoke";
 import { initials, seedGradient } from "../../lib/seed-gradient";
+import { useBackend } from "../../state/backend-state";
+import type { IGroup, IGroupMember } from "../../state/backend-state/types";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { ScrollRail } from "../ui/scroll-rail";
 
 const DOT_TEXTURE = {
 	backgroundImage:
@@ -31,7 +28,7 @@ export function SuiteCard({
 		<button
 			type="button"
 			onClick={() => onOpen(group)}
-			className="group relative w-[85vw] max-w-80 shrink-0 snap-start text-left rounded-2xl border bg-card overflow-hidden shadow-sm transition-all hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/40"
+			className="group relative w-[85vw] max-w-80 shrink-0 snap-start text-left rounded-2xl border bg-card overflow-hidden shadow-sm transition-all hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 		>
 			<div
 				className="h-24 relative"
@@ -120,16 +117,22 @@ export function SuitesRail() {
 	if (!suites.data) return null;
 
 	return (
-		<section className="space-y-3 mb-8">
-			<div className="flex items-baseline gap-3">
-				<h2 className="text-lg font-semibold tracking-tight">
+		<section
+			className="space-y-4 rounded-2xl border border-border/50 bg-muted/15 p-4 sm:p-5"
+			aria-labelledby="explore-suites-heading"
+		>
+			<div className="flex flex-col gap-1">
+				<h2
+					id="explore-suites-heading"
+					className="text-lg font-semibold tracking-tight"
+				>
 					{t("suitesAmpPlatforms", "Suites & Platforms")}
 				</h2>
 				<span className="text-xs text-muted-foreground">
 					{t("relatedAppsGroupedAsOne", "Related apps, grouped as one")}
 				</span>
 			</div>
-			<div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-3 -mx-1 px-1">
+			<ScrollRail className="p-1">
 				{groups.map((group) => (
 					<SuiteCard
 						key={group.id}
@@ -137,7 +140,7 @@ export function SuitesRail() {
 						onOpen={(g) => router.push(`/store/suite?id=${g.id}`)}
 					/>
 				))}
-			</div>
+			</ScrollRail>
 		</section>
 	);
 }

@@ -69,6 +69,14 @@ try {
 		.getByRole("button", { name: "Customize", exact: true })
 		.waitFor({ timeout: 60_000 });
 	await greeting().filter({ hasText: "Felix" }).waitFor();
+	await page
+		.locator('[data-home-discovery="model-spotlight"]')
+		.getByRole("heading", { name: "GLM 5", exact: true })
+		.waitFor();
+	await page
+		.locator('[data-home-discovery="model-spotlight"]')
+		.getByText("Selected model", { exact: true })
+		.waitFor();
 	assert.ok(
 		(await page.evaluate(() => window.defaultHomeQa.calls.account)) > 0,
 		"Greeting loads the account name when claims omit it",

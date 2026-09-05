@@ -1,10 +1,11 @@
 "use client";
 
 import {
+	Alert,
+	AlertDescription,
 	Badge,
 	Button,
 	EmptyState,
-	ExploreHubHeader,
 	Input,
 	type InstalledPackage,
 	PackageDetailWrapper,
@@ -18,6 +19,7 @@ import {
 	TabsTrigger,
 	useSearch,
 } from "@flow-like/flow-like-ui";
+import { ExploreHubLayout } from "@flow-like/flow-like-ui/components/store/explore-hub-layout";
 import {
 	Avatar,
 	AvatarFallback,
@@ -42,10 +44,19 @@ import {
 	Search,
 	Sparkles,
 	Trash2,
+	X,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+	type ReactNode,
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../hooks/use-package-status";
@@ -95,7 +106,7 @@ function InstalledPackageCard({
 	return (
 		<Link
 			href={`/store/packages?tab=installed&id=${pkg.id}`}
-			className="group relative flex flex-row rounded-lg border border-border/40 border-dashed bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg cursor-pointer"
+			className="group relative flex min-h-32 flex-row rounded-lg border border-border/40 border-dashed bg-card/60 backdrop-blur-sm overflow-hidden transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-lg cursor-pointer"
 		>
 			{/* Left gradient accent */}
 			<div className="relative w-28 shrink-0 overflow-hidden">
@@ -226,8 +237,10 @@ function InstalledPackageCard({
 	);
 }
 
-function InstalledContent() {
+function InstalledContent({ navigation }: { navigation: ReactNode }) {
 	const { t } = useTranslation("common");
+	const { t: storeT } = useTranslation("store");
+	const searchRef = useRef<HTMLInputElement>(null);
 	const queryClient = useQueryClient();
 	const auth = useAuth();
 	const [searchQuery, setSearchQuery] = useState("");
@@ -369,118 +382,221 @@ function InstalledContent() {
 
 	const hasUpdates = (availableUpdates.data?.length ?? 0) > 0;
 
+	const error = registryReady.error ?? installedPackages.error;
+	const isInitialLoading =
+		!error && (registryReady.isPending || installedPackages.isPending);
+	const isBusy =
+		isInitialLoading ||
+		registryReady.isFetching ||
+		installedPackages.isFetching;
+
 	return (
-		<div className="space-y-4">
-			<div className="flex items-center gap-3">
-				<div className="relative flex-1">
-					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
-					<Input
-						placeholder={t(
-							"searchInstalledPackages",
-							"Search installed packages…",
-						)}
-						value={searchQuery}
-						onChange={(e) => setSearchQuery(e.target.value)}
-						className="pl-10 rounded-full bg-muted/30 border-border/20"
-					/>
-				</div>
-				{hasUpdates && (
-					<Button
-						size="sm"
-						onClick={() => updateAllMutation.mutate()}
-						disabled={updateAllMutation.isPending}
-						className="gap-1.5 rounded-full"
-					>
-						{updateAllMutation.isPending ? (
-							<RefreshCw className="h-3.5 w-3.5 animate-spin" />
+		<ExploreHubLayout
+			active="packages"
+			subtitle={storeT(
+				"discoverAndInstallWasmNodePackages",
+				"Discover and install WASM node packages.",
+			)}
+			toolbar={
+				<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+					<div className="relative min-w-0 flex-1">
+						{isBusy ? (
+							<Loader2
+								aria-hidden="true"
+								className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-primary"
+							/>
 						) : (
-							<RefreshCw className="h-3.5 w-3.5" />
+							<Search
+								aria-hidden="true"
+								className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
+							/>
 						)}
-						{t("updateAllLength", "Update All ({{length}})", {
-							length: availableUpdates.data?.length ?? 0,
-						})}
-					</Button>
-				)}
-			</div>
-
-			{installedPackages.data && (
-				<div className="flex gap-4 text-xs text-muted-foreground/60">
-					<span className="flex items-center gap-1">
-						<CheckCircle className="h-3.5 w-3.5 text-green-500" />
-						{t("lengthInstalled", "{{length}} installed", {
-							length: registryPackages.length,
-						})}
-					</span>
-					{hasUpdates && (
-						<span className="flex items-center gap-1">
-							<AlertCircle className="h-3.5 w-3.5 text-yellow-500" />
-							{availableUpdates.data?.length} updates
-						</span>
-					)}
-				</div>
-			)}
-
-			{registryReady.isLoading ||
-			installedPackages.isLoading ||
-			(!registryReady.isSuccess && !registryReady.isError) ? (
-				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-					{INSTALLED_PACKAGE_SKELETON_KEYS.map((key) => (
-						<div
-							key={key}
-							className="flex flex-col rounded-lg border border-border/40 border-dashed bg-card/60 overflow-hidden"
-						>
-							<Skeleton className="h-20 w-full rounded-none" />
-							<div className="px-3.5 pt-5 pb-3 space-y-2">
-								<Skeleton className="h-4 w-28 rounded" />
-								<Skeleton className="h-3 w-full rounded" />
-								<Skeleton className="h-3 w-3/4 rounded" />
-							</div>
-						</div>
-					))}
-				</div>
-			) : filteredPackages.length === 0 ? (
-				<EmptyState
-					icons={[Download, Package, Sparkles]}
-					title={
-						searchQuery
-							? t("noMatchingPackages", "No matching packages")
-							: t(
-									"noRegistryPackagesInstalled",
-									"No registry packages installed",
-								)
-					}
-					description={
-						searchQuery
-							? t("tryADifferentSearchTerm", "Try a different search term")
-							: t(
-									"browseTheExploreTabToFindAndInstallPackages",
-									"Browse the Explore tab to find and install packages",
-								)
-					}
-					className="border border-dashed border-border/30 rounded-2xl bg-muted/5"
-				/>
-			) : (
-				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-					{filteredPackages.map((pkg) => (
-						<InstalledPackageCard
-							key={pkg.id}
-							pkg={pkg}
-							updateAvailable={updatesMap.get(pkg.id)}
-							onUninstall={() => uninstallMutation.mutate(pkg.id)}
-							onUpdate={() =>
-								updateMutation.mutate({
-									packageId: pkg.id,
-									version: updatesMap.get(pkg.id),
-								})
-							}
-							isUpdating={updatingPackages.has(pkg.id)}
-							isUninstalling={uninstallingPackages.has(pkg.id)}
-							compileStatus={packageStatusMap.get(pkg.id)}
+						<Input
+							ref={searchRef}
+							type="search"
+							aria-label={t(
+								"searchInstalledPackages",
+								"Search installed packages…",
+							)}
+							aria-controls="installed-package-results"
+							placeholder={t(
+								"searchInstalledPackages",
+								"Search installed packages…",
+							)}
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							className="h-12 rounded-xl border-border/60 bg-muted/30 pr-12 pl-12 text-sm shadow-none transition-colors focus-visible:bg-background [&::-webkit-search-cancel-button]:appearance-none"
 						/>
-					))}
+					</div>
+					<div className="flex shrink-0 items-center justify-between gap-2 sm:justify-start">
+						<div className="min-w-0 max-w-48 flex-1 sm:w-48 sm:flex-none">
+							<Button
+								size="sm"
+								onClick={() => updateAllMutation.mutate()}
+								disabled={!hasUpdates || updateAllMutation.isPending}
+								className={`h-12 w-full gap-1.5 rounded-xl ${hasUpdates ? "" : "invisible"}`}
+							>
+								<RefreshCw
+									aria-hidden="true"
+									className={`h-4 w-4 ${updateAllMutation.isPending ? "animate-spin" : ""}`}
+								/>
+								{t("updateAllLength", "Update All ({{length}})", {
+									length: availableUpdates.data?.length ?? 0,
+								})}
+							</Button>
+						</div>
+						<div className="w-28 shrink-0">
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={!searchQuery}
+								onClick={() => {
+									setSearchQuery("");
+									searchRef.current?.focus();
+								}}
+								className={`h-12 w-full rounded-xl text-muted-foreground ${searchQuery ? "" : "invisible"}`}
+							>
+								<X aria-hidden="true" className="mr-1 h-3.5 w-3.5" />
+								{storeT("clearFilters", "Clear filters")}
+							</Button>
+						</div>
+					</div>
 				</div>
-			)}
-		</div>
+			}
+			filters={
+				<div className="flex min-h-10 items-center gap-3">{navigation}</div>
+			}
+		>
+			<section
+				id="installed-package-results"
+				className="space-y-5"
+				aria-busy={isBusy}
+			>
+				<output
+					className="flex min-h-5 gap-4 text-sm text-muted-foreground"
+					aria-live="polite"
+				>
+					{isBusy ? (
+						storeT("loadingPackages", "Loading packages…")
+					) : error ? (
+						storeT("packagesCouldNotBeLoaded", "Packages could not be loaded.")
+					) : (
+						<>
+							<span className="flex items-center gap-1.5">
+								<CheckCircle
+									aria-hidden="true"
+									className="h-3.5 w-3.5 text-green-500"
+								/>
+								{searchQuery
+									? t(
+											"lengthMatchingPackages",
+											"{{length}} matching packages",
+											{ length: filteredPackages.length },
+										)
+									: t("lengthInstalled", "{{length}} installed", {
+											length: registryPackages.length,
+										})}
+							</span>
+							{hasUpdates && (
+								<span className="flex items-center gap-1.5">
+									<AlertCircle
+										aria-hidden="true"
+										className="h-3.5 w-3.5 text-yellow-500"
+									/>
+									{t("lengthUpdates", "{{length}} updates", {
+										length: availableUpdates.data?.length,
+									})}
+								</span>
+							)}
+						</>
+					)}
+				</output>
+				{error && (
+					<Alert variant="destructive" className="rounded-xl">
+						<AlertCircle className="h-4 w-4" />
+						<AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+							{storeT(
+								"packagesLoadError",
+								"Packages could not be loaded. Please try again.",
+							)}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={isBusy}
+								onClick={() =>
+									registryReady.error
+										? registryReady.refetch()
+										: installedPackages.refetch()
+								}
+							>
+								{t("retry", "Retry")}
+							</Button>
+						</AlertDescription>
+					</Alert>
+				)}
+				{isInitialLoading ? (
+					<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+						{INSTALLED_PACKAGE_SKELETON_KEYS.map((key) => (
+							<div
+								key={key}
+								className="flex min-h-32 overflow-hidden rounded-lg border border-dashed border-border/40 bg-card/60"
+							>
+								<Skeleton className="w-28 shrink-0 rounded-none" />
+								<div className="flex-1 space-y-2 px-3.5 py-3">
+									<Skeleton className="h-4 w-28 rounded" />
+									<Skeleton className="h-3 w-full rounded" />
+									<Skeleton className="h-3 w-3/4 rounded" />
+									<Skeleton className="mt-3 h-6 w-full rounded" />
+								</div>
+							</div>
+						))}
+					</div>
+				) : filteredPackages.length === 0 ? (
+					!error && (
+						<EmptyState
+							icons={[Download, Package, Sparkles]}
+							title={
+								searchQuery
+									? t("noMatchingPackages", "No matching packages")
+									: t(
+											"noRegistryPackagesInstalled",
+											"No registry packages installed",
+										)
+							}
+							description={
+								searchQuery
+									? t("tryADifferentSearchTerm", "Try a different search term")
+									: t(
+											"browseTheExploreTabToFindAndInstallPackages",
+											"Browse the Explore tab to find and install packages",
+										)
+							}
+							className="rounded-2xl border border-dashed border-border/30 bg-muted/5"
+						/>
+					)
+				) : (
+					<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+						{filteredPackages.map((pkg) => (
+							<InstalledPackageCard
+								key={pkg.id}
+								pkg={pkg}
+								updateAvailable={updatesMap.get(pkg.id)}
+								onUninstall={() => uninstallMutation.mutate(pkg.id)}
+								onUpdate={() =>
+									updateMutation.mutate({
+										packageId: pkg.id,
+										version: updatesMap.get(pkg.id),
+									})
+								}
+								isUpdating={updatingPackages.has(pkg.id)}
+								isUninstalling={uninstallingPackages.has(pkg.id)}
+								compileStatus={packageStatusMap.get(pkg.id)}
+							/>
+						))}
+					</div>
+				)}
+			</section>
+		</ExploreHubLayout>
 	);
 }
 
@@ -519,36 +635,45 @@ function PackagesHub() {
 		return <Skeleton className="h-full w-full" />;
 	}
 
+	const navigation = (
+		<TabsList
+			aria-label={t("packageViews", "Package views")}
+			className="h-10 rounded-xl border border-border/60 bg-muted/30 p-1"
+		>
+			<TabsTrigger value="explore" className="gap-1 rounded-lg px-2 sm:px-3">
+				<Search aria-hidden="true" className="hidden h-3.5 w-3.5 sm:block" />
+				{t("explore", "Explore")}
+			</TabsTrigger>
+			<TabsTrigger value="installed" className="gap-1 rounded-lg px-2 sm:px-3">
+				<Download aria-hidden="true" className="hidden h-3.5 w-3.5 sm:block" />
+				{t("installed", "Installed")}
+			</TabsTrigger>
+		</TabsList>
+	);
+
 	return (
-		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
-			<div className="mx-auto w-full max-w-7xl space-y-6">
-				<ExploreHubHeader
-					active="packages"
-					subtitle="Discover, install, and manage WASM node packages."
+		<Tabs
+			value={tab}
+			onValueChange={setTab}
+			className="min-h-0 w-full flex-1 gap-0"
+		>
+			<TabsContent
+				value="explore"
+				className="m-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+			>
+				<PackageListContent
+					fetcher={fetcher}
+					auth={auth}
+					navigation={navigation}
 				/>
-
-				<Tabs value={tab} onValueChange={setTab}>
-					<TabsList>
-						<TabsTrigger value="explore">
-							<Search className="h-3.5 w-3.5 mr-1.5" />
-							{t("explore", "Explore")}
-						</TabsTrigger>
-						<TabsTrigger value="installed">
-							<Download className="h-3.5 w-3.5 mr-1.5" />
-							{t("installed", "Installed")}
-						</TabsTrigger>
-					</TabsList>
-
-					<TabsContent value="explore" className="mt-6">
-						<PackageListContent fetcher={fetcher} auth={auth} />
-					</TabsContent>
-
-					<TabsContent value="installed" className="mt-6">
-						<InstalledContent />
-					</TabsContent>
-				</Tabs>
-			</div>
-		</main>
+			</TabsContent>
+			<TabsContent
+				value="installed"
+				className="m-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+			>
+				<InstalledContent navigation={navigation} />
+			</TabsContent>
+		</Tabs>
 	);
 }
 

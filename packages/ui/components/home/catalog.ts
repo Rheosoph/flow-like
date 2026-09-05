@@ -1128,7 +1128,14 @@ export function createDefaultHomeLayout(): IHomeLayout {
 			config: { limit: 2, rendering: "compact" },
 			columns: 8,
 		},
-		{ preset: "model-spotlight" },
+		{
+			preset: "model-spotlight",
+			config: {
+				source: "manual",
+				modelId: "s14lujkm2gut2mwg0zo3imxv",
+				modelHub: "api.flow-like.com",
+			},
+		},
 		{
 			preset: "categories",
 			title: "Browse apps by category",

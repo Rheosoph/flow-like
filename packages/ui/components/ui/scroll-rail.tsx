@@ -34,9 +34,19 @@ export function ScrollRail({
 		checkScroll();
 		el.addEventListener("scroll", checkScroll, { passive: true });
 		const ro = new ResizeObserver(checkScroll);
-		ro.observe(el);
+		const observeItems = () => {
+			ro.disconnect();
+			ro.observe(el);
+			for (const child of el.children) ro.observe(child);
+			checkScroll();
+		};
+		// Pagination can increase the content width without resizing the viewport.
+		const mutations = new MutationObserver(observeItems);
+		mutations.observe(el, { childList: true });
+		observeItems();
 		return () => {
 			el.removeEventListener("scroll", checkScroll);
+			mutations.disconnect();
 			ro.disconnect();
 		};
 	}, [checkScroll]);
