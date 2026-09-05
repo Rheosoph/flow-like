@@ -37,7 +37,10 @@ With default chart values, expect:
 |---|---|
 | API | Deployment and ClusterIP Service |
 | Web app | Deployment and ClusterIP Service |
-| Executor pool | Deployment and ClusterIP Service |
+| Execution manager | Rust Deployment and private ClusterIP Service |
+| Queue bridge | Trusted background dispatch Deployment |
+| Execution slots | Dynamic single-use runner and gateway Pod pairs |
+| RustFS | StatefulSet, initializer Job and bucket-only gateway |
 | Redis | Single-replica Deployment, Service named `flow-like-redis-master`, and optional PVC |
 | Internal CockroachDB | Single-replica StatefulSet plus headless and public Services |
 | Database migration | Job |
@@ -151,25 +154,25 @@ kubectl get endpointslice -n flow-like \
   -l kubernetes.io/service-name=flow-like-api
 ```
 
-## Test from inside the cluster
+## Inspect execution capacity
 
 ```bash
-kubectl run flow-like-debug \
-  --image=curlimages/curl \
-  --restart=Never \
-  --rm -it \
-  -n flow-like \
-  -- sh
+kubectl get pods -n flow-like -l app.kubernetes.io/component=execution-sandbox -o wide
+kubectl get pods -n flow-like -l app.kubernetes.io/component=execution-egress -o wide
+kubectl logs deployment/flow-like-execution-manager -n flow-like --tail=100
+kubectl logs deployment/flow-like-queue-bridge -n flow-like --tail=100
+kubectl port-forward service/flow-like-execution-manager 9000:9000 -n flow-like
 ```
 
-Inside the temporary Pod:
+Check `/ready` for supervisor health and `/metrics` for available warm slots.
+The default manager can be reachable while its clean reserve is empty. Dynamic
+runner Pods use gVisor; the reusable executor-pool Deployment appears only in
+`trusted_shared` mode.
 
-```bash
-curl -fsS http://flow-like-api:8080/health/ready
-curl -fsS http://flow-like-api:8080/api/v1/health/db
-```
-
-The Pod is deleted when the interactive session exits.
+An arbitrary debug Pod does not acquire API or gateway access by sharing the
+namespace. Inspect the real caller's labels and NetworkPolicies when testing
+Pod-to-Service connectivity. Do not remove restrictive runner policies to diagnose
+an execution that has not yet terminated.
 
 ## Inspect configuration safely
 
@@ -177,7 +180,6 @@ List names and metadata:
 
 ```bash
 kubectl get configmap,secret -n flow-like
-kubectl describe configmap flow-like-sink-config -n flow-like
 kubectl describe secret flow-like-storage -n flow-like
 ```
 
@@ -212,25 +214,31 @@ Let the HPA own the replica count and adjust the chart's autoscaling values inst
 
 ## Helm operations
 
-From the repository root:
+Inspect the installed release:
 
 ```bash
-# Inspect the installed release
 helm status flow-like -n flow-like
 helm get values flow-like -n flow-like
 helm history flow-like -n flow-like
-
-# Apply checked-in chart changes and your private values
-helm upgrade --install flow-like apps/backend/kubernetes/helm \
-  -n flow-like \
-  --create-namespace \
-  -f values.yaml
-
-# Roll back to a known revision
-helm rollback flow-like <revision> -n flow-like
 ```
 
-Keep credentials in an existing Secret or an ignored secrets-values file. Review rendered changes before applying them to a production cluster.
+Apply updates through the checked-in helper, using the same ordered values files
+as installation:
+
+```bash
+cd apps/backend/kubernetes
+./scripts/deploy.sh -f values-operator.yaml -f .generated/values-images.yaml
+```
+
+The helper checks rendered values and Cilium prerequisites before updating the
+release. Reuse existing Secrets and preserve Redis replay claims. Drain or
+reconcile accepted jobs before queue protocol changes, and allow active managers
+to finish their shutdown period. Rebuild and push pinned manager and executor
+images together when their protocol changes.
+
+A Helm rollback changes Kubernetes resources; it does not restore SQL schema,
+object data or lost Redis claims. Review compatibility and retained execution
+state before returning to an earlier revision.
 
 ## Quick reference
 

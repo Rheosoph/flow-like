@@ -9,72 +9,80 @@ import { LinkCard } from '@astrojs/starlight/components';
 
 <LinkCard
   title="API Reference"
-  description="Inspect the live OpenAPI document and the Kubernetes-specific health surface"
+  description="Inspect the live OpenAPI document and deployment health endpoints"
   href="/self-hosting/kubernetes/api-reference/"
 />
 
-## Overview
-
-The Kubernetes API image hosts the standard Flow-Like API router plus deployment-specific health probes and a separate metrics listener. It does not add a second `/jobs/*` API.
-
-![Flow-Like Kubernetes architecture showing the web and API services, state services, execution choices, optional compiler, and observability](../../../../assets/KubernetesArchitecture.svg)
+The Kubernetes API serves the shared Flow-Like routes, dependency-aware health
+probes and a separate metrics listener. It signs execution dispatches and issues
+scoped credentials; the Rust execution manager supervises the isolated runtime.
 
 ## HTTP surfaces
 
 | Surface | Default port | Purpose |
-|---|---:|---|
-| `/api/v1/*` | 8080 | Standard Flow-Like hub, app, event, execution, registry, sink, and administration routes |
-| `/health/live` | 8080 | Kubernetes liveness probe |
-| `/health/ready` | 8080 | Kubernetes readiness probe |
-| `/health/startup` | 8080 | Kubernetes startup probe |
+| --- | ---: | --- |
+| `/api/v1/*` | 8080 | Hub, app, event, execution, registry and administration routes |
+| `/health/live` | 8080 | Process liveness |
+| `/health/ready` | 8080 | Database, required schema and execution-state readiness |
+| `/health/startup` | 8080 | Process startup probe |
 | `/swagger-ui` | 8080 | Interactive API documentation |
 | `/api-doc/openapi.json` | 8080 | Generated OpenAPI document |
-| `/r/*` and `/m/*` | 8080 | Registered inbound REST and MCP routes; each registration enforces its own authorization |
-| `/metrics` | 9090 | Prometheus metrics listener |
+| `/r/*`, `/m/*` | 8080 | Registered REST and MCP interfaces with per-registration authorization |
+| `/metrics` | 9090 | Prometheus metrics |
 
-The main router's `/api/v1/execution/*` routes report and query runs. Workflow invocation is exposed through app and event routes, then dispatched through the configured execution backend.
+Workflow invocation uses app and event routes. The `/api/v1/execution/*` group
+reports and queries runs; Kubernetes does not add a separate `/jobs/*` API.
 
-## Runtime dependencies
+## Dependencies and startup
 
-| Dependency | Role |
-|---|---|
-| PostgreSQL or CockroachDB | Durable API state, apps, events, runs, and registry metadata |
-| Redis | Shared queue/cache coordination used by the configured backend |
-| Object storage | Content, metadata, and registry artifacts |
-| Executor pool | Runs workflows through the implemented HTTP executor path |
-| Compiler, when enabled | Builds platform-specific WASM artifacts |
+The API depends on SQL for durable platform state, Redis for queue and execution
+coordination, and object storage for metadata, content and artifacts. Bundled
+RustFS is initialized by the chart.
 
-The API constructs the shared Flow-Like router, starts the run sweeper, and initializes object storage before it begins listening.
+API init containers wait for the release's database migration and RustFS
+initialization Jobs when enabled. Startup then validates configuration, explicit
+CORS origins, required API secrets and the execution signing keypair. Readiness
+checks required SQL tables and columns plus the execution-state store within
+two seconds.
 
-The API can create Kubernetes Job objects, but the checked-in executor's
-job-once entrypoint is a placeholder that exits. Treat `kubernetes_job` as an
-incomplete dispatch path, not an alternative runtime dependency.
-
-## Source code
-
-| Component | Location |
-|---|---|
-| Kubernetes entry point | `apps/backend/kubernetes/api/src/main.rs` |
-| Environment configuration | `apps/backend/kubernetes/api/src/config.rs` |
-| Kubernetes probe handlers | `apps/backend/kubernetes/api/src/health.rs` |
-| Metrics listener | `apps/backend/kubernetes/api/src/metrics.rs` |
-| Object-store adapter | `apps/backend/kubernetes/api/src/storage.rs` |
-| Shared API router | `packages/api/src/lib.rs` |
-| Execution dispatch | `packages/api/src/execution/` |
+The default interactive backend is the execution manager's HTTP endpoint.
+Background requests use the Redis queue bridge and the same manager. Both paths
+assign a clean single-use sandbox. The reusable executor pool is reserved for
+explicit `trusted_shared` mode.
 
 ## Configuration
 
-The Helm chart injects:
+The chart injects database and Redis URLs, object-storage settings, execution
+signing keys, manager configuration and service ports. Credentials are selected
+through Secret references. The API's public hub and OIDC settings are embedded
+from `FLOW_LIKE_CONFIG` when its image is built.
 
-- `DATABASE_URL` and `REDIS_URL`;
-- storage provider settings and credentials;
-- execution JWT keys;
-- execution-backend and executor settings;
-- `PORT=8080` and `METRICS_PORT=9090`.
+`api.corsAllowedOrigins` must name the actual browser origins. Model-provider
+Secrets configure the API's hosted-model proxy; they do not enter isolated
+runner Pods.
 
-`PORT` is configurable in the binary, but the chart intentionally fixes the container HTTP port at `8080` and maps the API Service to it. Storage-specific requirements are covered in [Storage Configuration](/self-hosting/kubernetes/storage/).
+Extra runtime settings can use `api.env` and `api.envFrom`. Avoid duplicating
+chart-owned environment names. See
+[Configuration](/self-hosting/kubernetes/configuration/) and
+[Storage](/self-hosting/kubernetes/storage/) for their contracts.
 
-## Access the service locally
+## Scale and drain
+
+The API defaults to one replica with autoscaling disabled. Set
+`api.replicaCount`, or enable `api.autoscaling` and configure its minimum,
+maximum and utilization targets. The chart omits the Deployment replica count
+when the HPA owns it.
+
+Size the SQL connection pool for the largest API replica count and rollout surge.
+API scaling does not increase execution capacity; use
+`executionManager.replicaCount`, its active limit and execution node resources
+for that.
+
+The API handles SIGTERM through graceful HTTP shutdown. Keep edge connection
+timeouts compatible with streaming runs. Manager and queue-bridge drain periods
+separately cover accepted hour-long executions.
+
+## Access and diagnose
 
 ```bash
 kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
@@ -83,38 +91,27 @@ kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
 In another terminal:
 
 ```bash
-curl -fsS http://localhost:8083/health/live
+curl -fsS http://localhost:8083/health/ready
 curl -fsS http://localhost:8083/api/v1/health
-```
-
-Port forwarding is for operator access and development. Use an authenticated Ingress or another controlled edge for persistent external access.
-
-## Scaling
-
-The chart defaults to one API replica with autoscaling disabled.
-
-| Value | Default |
-|---|---:|
-| `api.replicaCount` | 1 |
-| `api.autoscaling.enabled` | `false` |
-| `api.autoscaling.minReplicas` | 1 |
-| `api.autoscaling.maxReplicas` | 10 |
-| CPU target | 70% |
-| Memory target | 80% |
-
-When autoscaling is enabled, the chart omits the Deployment replica count and creates an HPA. Confirm that the cluster metrics API is available before enabling it.
-
-## Logs and rollout status
-
-```bash
 kubectl logs deployment/flow-like-api -n flow-like --tail=100
-kubectl logs deployment/flow-like-api -n flow-like --follow
 kubectl rollout status deployment/flow-like-api -n flow-like
 ```
 
-## Related
+If an API Pod remains in initialization, inspect migration and object-store Jobs.
+If readiness fails after startup, check SQL connectivity, schema and execution
+state. For refused executions, inspect manager warm capacity and queue-bridge
+logs.
 
-- [API Reference](/self-hosting/kubernetes/api-reference/)
-- [kubectl Basics](/self-hosting/kubernetes/kubectl-basics/)
-- [Executor](/self-hosting/kubernetes/executor/)
-- [Configuration](/self-hosting/kubernetes/configuration/)
+## Source map
+
+| Component | Location |
+| --- | --- |
+| Kubernetes API | `apps/backend/kubernetes/api/src/` |
+| Shared API hardening | `apps/backend/shared/api_hardening.rs` |
+| Shared router | `packages/api/src/lib.rs` |
+| Execution dispatch | `packages/api/src/execution/` |
+| Rust supervisor | `apps/backend/execution-manager/src/` |
+
+Continue with [API Reference](/self-hosting/kubernetes/api-reference/) for live
+endpoint discovery and [Monitoring](/self-hosting/kubernetes/monitoring/) for
+the dedicated metrics listener.

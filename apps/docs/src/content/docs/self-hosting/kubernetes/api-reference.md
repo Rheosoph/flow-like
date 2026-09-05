@@ -50,7 +50,7 @@ curl -fsS http://localhost:8083/health/ready
 curl -fsS http://localhost:8083/health/startup
 ```
 
-The current probe handlers report process state. They do not query the database.
+Readiness queries the required SQL tables and columns and checks the execution-state store within two seconds. A dependency failure returns HTTP 503 and removes the Pod from Service endpoints. Liveness and startup remain process checks.
 
 ### Shared API health
 
@@ -115,27 +115,12 @@ curl -fsS http://localhost:9090/metrics
 
 Do not expose the metrics port publicly unless an authenticated monitoring path protects it.
 
-## Test from inside the cluster
+## Network-policy-aware debugging
 
-Start an ephemeral curl Pod:
-
-```bash
-kubectl run flow-like-debug \
-  --image=curlimages/curl \
-  --restart=Never \
-  --rm -it \
-  -n flow-like \
-  -- sh
-```
-
-Inside the Pod:
-
-```bash
-curl -fsS http://flow-like-api:8080/health/ready
-curl -fsS http://flow-like-api:8080/api/v1/health/db
-```
-
-The Service DNS name assumes the Helm release is named `flow-like`.
+An arbitrary debug Pod does not inherit the API caller permissions merely by
+sharing its namespace. Use the operator port forward above for endpoint checks.
+When diagnosing Pod-to-Service traffic, inspect the real caller's labels, Service
+endpoints and matching NetworkPolicies.
 
 ## Common response codes
 

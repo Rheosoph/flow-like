@@ -85,7 +85,7 @@ one. Adjust ingress and load-balancer timeouts when changing execution duration.
 Public, internal and STS origins are distinct settings:
 
 - `storage.s3.publicEndpoint`: signed object URLs used by browsers and runtimes.
-- `storage.s3.internalEndpoint`: API access to storage.
+- `storage.s3.internalEndpoint`: API LanceDB access; ordinary signed object requests use the public origin.
 - `storage.s3.stsEndpoint`: private temporary-credential issuance.
 
 Setup generates separate root, API and STS identities. Keep Secret values out of
@@ -112,8 +112,10 @@ Hosted-model provider credentials belong to the API's authenticated model proxy.
 The chart's `llm.*` Secret references configure that proxy. Runner Pods receive
 execution capabilities, not installation-wide model-provider keys. Grant direct
 HTTPS integrations with exact hostnames in
-`executionManager.allowedHttpsHosts`; add private destination rules through
-`networkPolicy.executionGatewayExtraEgress` when required.
+`executionManager.allowedHttpsHosts`. Integration destinations that resolve to
+private or reserved addresses are rejected even if a NetworkPolicy permits them.
+Use `networkPolicy.executionGatewayExtraEgress` for required private object-store
+endpoints.
 
 For multiple signaling replicas, set `signaling.fanoutMode=redis`, exact browser
 origins in `signaling.allowedOrigins`, and the deployment's WSS endpoint in the

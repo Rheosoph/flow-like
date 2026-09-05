@@ -1,6 +1,6 @@
 ---
 title: Executor
-description: Run the Kubernetes executor as a warm HTTP worker pool
+description: Configure single-use gVisor Pods, warm capacity and the Rust execution manager
 sidebar:
   order: 70
 ---

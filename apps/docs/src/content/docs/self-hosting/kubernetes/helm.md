@@ -110,8 +110,8 @@ temporary-token requirement.
 
 The `llm.*.existingSecret` values configure the API's hosted-model proxy.
 For example, OpenRouter uses `OPENROUTER_API_KEY` and optionally
-`OPENROUTER_ENDPOINT`; OpenAI uses `OPENAI_API_KEY` and optionally
-`OPENAI_ENDPOINT`. These installation-wide keys do not enter isolated runners.
+`OPENROUTER_ENDPOINT`; OpenAI uses `HOSTED_OPENAI_API_KEY` and optionally
+`HOSTED_OPENAI_ENDPOINT`. These installation-wide keys do not enter isolated runners.
 
 ## Images and builds
 

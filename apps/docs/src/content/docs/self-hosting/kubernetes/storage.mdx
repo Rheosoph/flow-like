@@ -127,15 +127,16 @@ storage:
     stsEndpoint: https://sts.internal.example.com
     existingSecret: flow-like-storage
     runtimeCredentialsProvider: rustfs
-    runtimeRoleArn: arn:aws:iam::000000000000:role/flow-like-runtime
     stsSessionTtlSeconds: 7200
     usePathStyle: true
 executionManager:
   objectStoreTlsGateway: true
 ```
 
-Replace the example role and endpoints with the provider's actual configuration.
+Replace the example endpoints with the provider's actual configuration.
 `runtimeCredentialsProvider` selects the `rustfs` or `aws` STS policy dialect.
+Configure `storage.s3.runtimeRoleArn` when selecting AWS AssumeRole; RustFS does
+not require an AWS IAM role.
 S3 data API compatibility does not establish support for prefix-scoped STS
 sessions; qualify the exact provider, version and policy implementation.
 
