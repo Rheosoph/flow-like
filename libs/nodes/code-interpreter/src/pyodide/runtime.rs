@@ -50,7 +50,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use wasmtime::{Linker, Module, Store};
 use wasmtime_wasi::{
-    DirPerms, FilePerms,
+    FsPerms,
     p1::{self, WasiP1Ctx},
     p2::pipe::MemoryOutputPipe,
 };
@@ -215,12 +215,12 @@ fn build_sandbox_wasi_context(
 
     // Only /flow is preopened — workspace access is via the API, not POSIX I/O.
     builder
-        .preopened_dir(exec_path, "/flow", DirPerms::all(), FilePerms::all())
+        .preopened_dir(exec_path, "/flow", FsPerms::ReadWrite)
         .map_err(|e| anyhow::anyhow!("{e:#}"))
         .context("preopened /flow")?;
 
     if network_enabled {
-        builder.inherit_network();
+        builder.inherit_network().allow_tcp(true).allow_udp(true);
     }
 
     Ok(builder.build_p1())
@@ -761,6 +761,53 @@ impl PyodideRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn python_network_option_preserves_protocol_grants_without_enabling_dns() {
+        use wasmtime_wasi::p2::bindings::sockets::{
+            instance_network, ip_name_lookup,
+            network::{ErrorCode, IpAddressFamily},
+            tcp_create_socket, udp_create_socket,
+        };
+        use wasmtime_wasi::sockets::WasiSocketsView;
+
+        for network_enabled in [false, true] {
+            let exec_dir = tempfile::tempdir().unwrap();
+            let mut wasi = build_sandbox_wasi_context(
+                exec_dir.path(),
+                MemoryOutputPipe::new(1024),
+                MemoryOutputPipe::new(1024),
+                network_enabled,
+            )
+            .unwrap();
+            let mut sockets = wasi.sockets();
+            let tcp =
+                tcp_create_socket::Host::create_tcp_socket(&mut sockets, IpAddressFamily::Ipv4);
+            let udp =
+                udp_create_socket::Host::create_udp_socket(&mut sockets, IpAddressFamily::Ipv4)
+                    .await;
+            if network_enabled {
+                tcp.expect("Python's enabled network option should allow TCP");
+                udp.expect("Python's enabled network option should allow UDP");
+            } else {
+                assert_eq!(
+                    tcp.unwrap_err().downcast().unwrap(),
+                    ErrorCode::AccessDenied
+                );
+                assert_eq!(
+                    udp.unwrap_err().downcast().unwrap(),
+                    ErrorCode::AccessDenied
+                );
+            }
+            let network = instance_network::Host::instance_network(&mut sockets).unwrap();
+            let dns =
+                ip_name_lookup::Host::resolve_addresses(&mut sockets, network, "localhost".into());
+            assert_eq!(
+                dns.unwrap_err().downcast().unwrap(),
+                ErrorCode::PermanentResolverFailure
+            );
+        }
+    }
 
     #[test]
     fn preview1_guest_cannot_see_the_host_environment() {

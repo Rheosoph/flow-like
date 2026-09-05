@@ -9,7 +9,7 @@ use wasmtime_wasi::cli::{StdinStream, StdoutStream};
 use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::sockets::SocketAddrUse;
 use wasmtime_wasi::{
-    Deterministic, DirPerms, FilePerms, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder,
+    Deterministic, FsPerms, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder,
 };
 
 /// A WASI context builder that cannot inherit the host process environment.
@@ -73,14 +73,14 @@ impl IsolatedWasiCtxBuilder {
         &mut self,
         host_path: impl AsRef<Path>,
         guest_path: impl AsRef<str>,
-        dir_perms: DirPerms,
-        file_perms: FilePerms,
+        perms: FsPerms,
     ) -> wasmtime::Result<&mut Self> {
-        self.inner
-            .preopened_dir(host_path, guest_path, dir_perms, file_perms)?;
+        self.inner.preopened_dir(host_path, guest_path, perms)?;
         Ok(self)
     }
 
+    /// Allow host network addresses. TCP, UDP, and name lookup each require
+    /// their own explicit protocol grant.
     pub fn inherit_network(&mut self) -> &mut Self {
         self.inner.inherit_network();
         self
@@ -170,5 +170,90 @@ impl HostMonotonicClock for FrozenClock {
 
     fn now(&self) -> u64 {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime::component::{Resource, ResourceTable};
+    use wasmtime_wasi::filesystem::WasiFilesystemCtxView;
+    use wasmtime_wasi::p2::bindings::filesystem::{
+        preopens,
+        types::{DescriptorFlags, ErrorCode, HostDescriptor, OpenFlags, PathFlags},
+    };
+
+    #[tokio::test]
+    async fn preopen_permissions_allow_reads_and_only_grant_writes_when_requested() {
+        for (perms, writable) in [(FsPerms::ReadOnly, false), (FsPerms::ReadWrite, true)] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("existing.txt"), "saved").unwrap();
+            let mut builder = isolated_wasi_ctx_builder();
+            builder.preopened_dir(root.path(), "/flow", perms).unwrap();
+            let mut ctx = builder.build();
+            let mut table = ResourceTable::new();
+            let mut filesystem = WasiFilesystemCtxView {
+                ctx: ctx.filesystem(),
+                table: &mut table,
+            };
+            let (directory, path) = preopens::Host::get_directories(&mut filesystem)
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert_eq!(path, "/flow");
+            let file = HostDescriptor::open_at(
+                &mut filesystem,
+                Resource::new_borrow(directory.rep()),
+                PathFlags::empty(),
+                "existing.txt".into(),
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .await
+            .unwrap();
+            let (contents, _) = HostDescriptor::read(&mut filesystem, file, 16, 0)
+                .await
+                .unwrap();
+            assert_eq!(contents, b"saved");
+            let created = HostDescriptor::open_at(
+                &mut filesystem,
+                Resource::new_borrow(directory.rep()),
+                PathFlags::empty(),
+                "new.txt".into(),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .await;
+            if writable {
+                let file = created.expect("a read-write preopen should allow file creation");
+                HostDescriptor::write(&mut filesystem, file, b"new".to_vec(), 0)
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(root.path().join("new.txt")).unwrap(), b"new");
+            } else {
+                assert_eq!(
+                    created.unwrap_err().downcast().unwrap(),
+                    ErrorCode::NotPermitted
+                );
+                assert!(!root.path().join("new.txt").exists());
+                let truncate = HostDescriptor::open_at(
+                    &mut filesystem,
+                    Resource::new_borrow(directory.rep()),
+                    PathFlags::empty(),
+                    "existing.txt".into(),
+                    OpenFlags::TRUNCATE,
+                    DescriptorFlags::WRITE,
+                )
+                .await;
+                assert_eq!(
+                    truncate.unwrap_err().downcast().unwrap(),
+                    ErrorCode::NotPermitted
+                );
+                assert_eq!(
+                    std::fs::read(root.path().join("existing.txt")).unwrap(),
+                    b"saved"
+                );
+            }
+        }
     }
 }

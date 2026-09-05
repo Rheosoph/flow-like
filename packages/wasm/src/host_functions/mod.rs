@@ -358,6 +358,17 @@ impl HostState {
         self.capabilities.has(cap)
     }
 
+    /// Mint a handle for a guest-owned object without storing the object in the host.
+    /// Standalone invocations have no run owner and cannot create these handles.
+    pub fn new_resource_handle(&self) -> Option<String> {
+        if !self.run_scoped {
+            return None;
+        }
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes).ok()?;
+        Some(format!("obj:{:032x}", u128::from_be_bytes(bytes)))
+    }
+
     /// Set input values before execution
     pub fn set_inputs(&self, inputs: HashMap<String, Value>) {
         *self.inputs.write() = inputs;
@@ -461,5 +472,30 @@ impl HostState {
         *self.error.write() = None;
         self.result_buffer.write().clear();
         self.stream_events.write().clear();
+    }
+}
+
+#[cfg(test)]
+mod resource_handle_tests {
+    use super::*;
+
+    #[test]
+    fn resource_handles_require_run_ownership() {
+        let host = HostState::new(WasmCapabilities::all());
+        assert!(host.new_resource_handle().is_none());
+    }
+
+    #[test]
+    fn resource_handles_are_distinct_without_resource_capabilities() {
+        let mut host = HostState::new(WasmCapabilities::empty());
+        host.run_scoped = true;
+        let mut handles = std::collections::HashSet::new();
+        for _ in 0..128 {
+            let handle = host.new_resource_handle().unwrap();
+            assert_eq!(handle.len(), 36);
+            assert!(handle.starts_with("obj:"));
+            assert!(handle[4..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(handles.insert(handle));
+        }
     }
 }

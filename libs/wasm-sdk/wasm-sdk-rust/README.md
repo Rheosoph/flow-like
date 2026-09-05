@@ -178,6 +178,67 @@ let ts = util::now();
 let r  = util::random();
 ```
 
+## Store arbitrary objects within a run
+
+Use `resources` to keep a Rust object in package memory and pass its string
+handle between nodes. The object can be a parser, buffer, or client, including
+types without `Serialize`, `Send`, or `Sync`. It must be `'static`, so it owns
+its data instead of borrowing temporary memory from a node call.
+
+```rust
+use flow_like_wasm_sdk::resources::{self, ResourceError};
+
+struct TextBuffer {
+    chunks: Vec<String>,
+}
+
+fn example() -> Result<(), ResourceError> {
+    // The creating node outputs this handle through a String pin.
+    let handle = resources::insert(TextBuffer { chunks: vec!["Hello".into()] })?;
+
+    // Later nodes receive the same handle and access the original object.
+    resources::with_mut::<TextBuffer, _>(&handle, |buffer| {
+        buffer.chunks.push(" world".into());
+    })?;
+    let text = resources::with::<TextBuffer, _>(&handle, |buffer| buffer.chunks.concat())?;
+    assert_eq!(text, "Hello world");
+
+    // Removing invalidates the handle and returns ownership for explicit cleanup.
+    let buffer = resources::remove::<TextBuffer>(&handle)?;
+    drop(buffer);
+    Ok(())
+}
+```
+
+Call `resources::close::<T>(&handle)` when removing and dropping the object is
+enough. Access checks the object's Rust type; a wrong type or unavailable handle
+returns `ResourceError`. A closure keeps the borrow within that call, so return
+owned data when writing an output pin. See the
+[registered Create, Append, Read and Close nodes](../../../templates/wasm-node-rust/src/package_objects.rs)
+for a complete flow example. Use this checkout's SDK and matching runtime for
+the registry API.
+
+Objects remain available in reusable export-based packages until removed or the
+run ends. Node structs themselves are constructed again for each invocation;
+store shared objects in `resources` instead of node fields. Different packages,
+runs and security domains have separate registries. Saving a handle in durable
+storage cannot restore the object in a later run. Command-style `wasi:cli/run`
+execution starts with fresh guest memory and cannot preserve this registry
+between commands.
+
+Run teardown reclaims guest memory and closes host and WASI resources. It does
+not execute Rust destructors for objects still retained in guest memory. Use
+`close` during a node call to run `Drop`, or `remove` to take ownership and call
+a client's graceful shutdown method. A TCP or UDP client can use this registry
+if it supports the Wasm target and the package's network grants. Nodes sharing
+raw WASI sockets need compatible WASI network permissions. The registry adds no
+operating-system APIs or permissions and does not drive a guest event loop
+between calls.
+
+Native builds use a thread-local registry for SDK and template tests. It does
+not model the runtime's package or run isolation; changing a test `Context`'s
+`run_id` does not reset that thread's objects.
+
 ## WebSocket resources within a run
 
 Declare `NodePermission::NetworkWebsocket` on each node that uses a socket.

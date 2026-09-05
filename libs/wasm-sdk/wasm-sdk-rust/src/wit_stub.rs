@@ -47,6 +47,20 @@ pub mod flow_like {
         }
 
         pub mod metadata {
+            use std::sync::atomic::{AtomicU64, Ordering};
+
+            static NEXT_RESOURCE_HANDLE: AtomicU64 = AtomicU64::new(0);
+
+            /// Native stubs guarantee uniqueness only within this process.
+            pub fn new_resource_handle() -> Option<String> {
+                NEXT_RESOURCE_HANDLE
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        value.checked_add(1)
+                    })
+                    .ok()
+                    .map(|value| format!("native-obj:{value:016x}"))
+            }
+
             pub fn get_node_id() -> String {
                 "stub-node".into()
             }

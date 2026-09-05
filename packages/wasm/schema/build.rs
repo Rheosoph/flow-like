@@ -56,9 +56,9 @@ mod tests {
     #[test]
     fn extracts_only_the_wasmtime_package_version() {
         let manifest = r#"
-            wasmtime = { version = "47.0.3", default-features = false }
-            wasmtime-wasi = "47.0.3"
+            wasmtime = { version = "48.0.1", default-features = false }
+            wasmtime-wasi = "48.0.1"
         "#;
-        assert_eq!(wasmtime_major_version(manifest), "47");
+        assert_eq!(wasmtime_major_version(manifest), "48");
     }
 }

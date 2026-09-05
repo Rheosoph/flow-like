@@ -5,6 +5,7 @@ use flow_like_types_contracts::dispatch::{
     compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
     CompilationStorageProvider,
 };
+use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 use flow_like_wasm::{WasmConfig, WasmEngine, WasmSecurityConfig};
 use reqwest::{Client, Url};
 use std::collections::{HashMap, HashSet};
@@ -269,6 +270,16 @@ fn validate_job_envelope(
     let mut platforms = HashSet::with_capacity(job.targets.len());
     for target in &job.targets {
         validate_identifier("platform_key", &target.platform_key, 128)?;
+        if target
+            .platform_key
+            .rsplit_once("-wt")
+            .map(|(_, version)| version)
+            != Some(WASMTIME_MAJOR_VERSION)
+        {
+            return Err(invalid_job(format!(
+                "compilation target must use this worker's Wasmtime version (-wt{WASMTIME_MAJOR_VERSION})"
+            )));
+        }
         if !platforms.insert(target.platform_key.as_str()) {
             return Err(invalid_job("compilation target platform is duplicated"));
         }
@@ -910,7 +921,7 @@ mod tests {
     fn azure_job() -> CompilationJob {
         let package_id = "pkg_123";
         let version = "1.2.3";
-        let platform = "linux-x86_64-wt37";
+        let platform = format!("linux-x86_64-wt{WASMTIME_MAJOR_VERSION}");
         CompilationJob {
             job_id: "job_123".to_string(),
             package_id: package_id.to_string(),
@@ -975,6 +986,37 @@ mod tests {
             .replace("/metadata/", "/content/");
         let claims = claims_for(&wrong_path);
         assert!(validate_job_envelope(&wrong_path, &claims, &azure_config()).is_err());
+    }
+
+    #[test]
+    fn compilation_target_version_must_match_worker() {
+        let job = azure_job();
+        assert!(validate_job_envelope(&job, &claims_for(&job), &azure_config()).is_ok());
+
+        let current = WASMTIME_MAJOR_VERSION.parse::<u32>().unwrap();
+        for platform in [
+            format!("linux-x86_64-wt{}", current - 1),
+            format!("linux-x86_64-wt{}", current + 1),
+            "linux-x86_64".to_string(),
+        ] {
+            let mut mismatched = job.clone();
+            let target = &mut mismatched.targets[0];
+            target.cwasm_upload_url = target
+                .cwasm_upload_url
+                .replace(&target.platform_key, &platform);
+            target.checksum_upload_url = target
+                .checksum_upload_url
+                .replace(&target.platform_key, &platform);
+            target.platform_key = platform;
+
+            // Bind the changed envelope so rejection tests the compiler version,
+            // even when the API has authorized every upload URL in this job.
+            let error =
+                validate_job_envelope(&mismatched, &claims_for(&mismatched), &azure_config())
+                    .unwrap_err();
+            assert!(matches!(error, CompilerError::InvalidJob(_)));
+            assert!(error.to_string().contains("worker's Wasmtime version"));
+        }
     }
 
     #[test]

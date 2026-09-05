@@ -587,6 +587,23 @@ fn register_metadata_functions(linker: &mut Linker<StoreData>) -> WasmResult<()>
     linker
         .func_wrap(
             "flowlike_meta",
+            "new_resource_handle",
+            |caller: Caller<'_, StoreData>| -> u64 {
+                let host = &caller.data().host_state;
+                let Some(handle) = host.new_resource_handle() else {
+                    return 0;
+                };
+                let (ptr, len) = host.store_result(handle.as_bytes());
+                pack_ptr_len(ptr, len)
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register new_resource_handle: {}", e))
+        })?;
+
+    linker
+        .func_wrap(
+            "flowlike_meta",
             "get_node_id",
             |caller: Caller<'_, StoreData>| -> u64 {
                 let id = &caller.data().host_state.metadata.node_id;
@@ -2990,6 +3007,50 @@ fn register_emscripten_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .map_err(|e| WasmError::Initialization(format!("Failed to register invoke_vii: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod resource_handle_tests {
+    use super::*;
+    use wasmtime::{Engine, Module, Store};
+
+    #[tokio::test]
+    async fn core_resource_handle_import_checks_scope_and_returns_buffer_strings() {
+        let engine = Engine::default();
+        let module = Module::new(
+            &engine,
+            wat::parse_str(
+                r#"(module
+                    (import "flowlike_meta" "new_resource_handle" (func $new (result i64)))
+                    (export "new_handle" (func $new)))"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut linker = Linker::new(&engine);
+        register_metadata_functions(&mut linker).unwrap();
+        let mut store = Store::new(&engine, StoreData::new(WasmCapabilities::empty()));
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let new_handle = instance
+            .get_typed_func::<(), u64>(&mut store, "new_handle")
+            .unwrap();
+        assert_eq!(new_handle.call_async(&mut store, ()).await.unwrap(), 0);
+        assert!(store.data().host_state.result_buffer.read().is_empty());
+
+        store.data_mut().host_state.run_scoped = true;
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let packed = new_handle.call_async(&mut store, ()).await.unwrap();
+            let offset = (packed >> 32) as usize;
+            let len = (packed & u32::MAX as u64) as usize;
+            let buffer = store.data().host_state.result_buffer.read();
+            let handle = std::str::from_utf8(&buffer[offset..offset + len]).unwrap();
+            assert!(handle.starts_with("obj:"));
+            assert_eq!(len, 36);
+            handles.push(handle.to_string());
+        }
+        assert_ne!(handles[0], handles[1]);
+    }
 }
 
 #[cfg(test)]

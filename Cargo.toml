@@ -282,7 +282,7 @@ sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "47.0.3", default-features = false, features = [
+wasmtime = { version = "48.0.1", default-features = false, features = [
     "anyhow",
     "async",
     "component-model",
@@ -297,8 +297,8 @@ wasmtime = { version = "47.0.3", default-features = false, features = [
     "threads",
     "wit-parser",
 ] }
-wasmtime-wasi = "47.0.3"
-wasmtime-wasi-http = "47.0.3"
+wasmtime-wasi = "48.0.1"
+wasmtime-wasi-http = "48.0.1"
 
 [patch.crates-io]
 # Fix Windows CRT mismatch (upstream hardcodes static CRT /MT,

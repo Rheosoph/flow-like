@@ -56,6 +56,35 @@ wasm_main!();
 Add as many `#[register_node]` structs as you like — they're auto-discovered
 at startup via the `inventory` crate.
 
+## Share a custom object between nodes
+
+The [package object example](src/package_objects.rs) stores a `TextBuffer` in
+Wasm memory. It contains a vector of text chunks and a byte count, with no
+serialization implementation. Nodes exchange a string handle to that object.
+Build with the SDK in this checkout and a matching runtime; the template's
+local SDK dependency selects that SDK automatically.
+
+Wire the execution pins in this order:
+
+```text
+Create Text Buffer -> Append Text Buffer -> Read Text Buffer -> Close Text Buffer
+```
+
+Connect Create Text Buffer's `handle` output to the `handle` input on each of
+the other nodes. Set `initial_text` to `Hello` and Append Text Buffer's `text`
+to ` world`. Read Text Buffer returns `Hello world` and `byte_len` equal to
+`11`. Close Text Buffer drops the object; using its handle afterward fails.
+Execution connections matter because appending and closing change the object.
+
+Replace `TextBuffer` with your own parser, buffer, or client type. The SDK's
+`resources::insert` takes ownership and returns the handle. `resources::with`
+and `resources::with_mut` check the requested Rust type before passing the object
+to a closure. `resources::remove` returns ownership for explicit shutdown;
+`resources::close` removes and drops it. Objects need only be `'static`, meaning
+they cannot borrow temporary data from a node call. They do not need `Serialize`,
+`Send`, or `Sync`. The [Rust SDK reference](../../libs/wasm-sdk/wasm-sdk-rust/README.md#store-arbitrary-objects-within-a-run)
+includes a short API example and lifecycle limits.
+
 ## Share a WebSocket between nodes
 
 The included [WebSocket example](src/websocket_server.rs) starts a listener in
@@ -93,7 +122,7 @@ resources. A flow that should keep listening must keep its run active.
 Within a run, the runtime reuses the package's export-based Wasm instance when
 its security configuration permits reuse. Guest globals and heap objects can
 therefore survive a node return. Nodes in the same package can access those
-objects through a package-level registry, while each invocation receives fresh
+objects through the SDK's `resources` registry, while each invocation receives fresh
 inputs, outputs, logs and permissions. Calls to one instance execute in order.
 The Rust registration macro constructs the node type for each call, so fields
 on the node struct alone do not provide persistent state.
@@ -105,6 +134,13 @@ host cache and sockets. Do not store a pointer, socket handle, or client object
 in durable storage expecting to reuse it in another run. For the distinction
 between reusable exports and command-style components, see the
 [runtime lifecycle notes](../wasm-capability-matrix.md#state-and-resource-lifetime).
+
+Run teardown reclaims guest memory and closes host and WASI resources. It does
+not execute Rust destructors for objects still in the registry. Use `close`
+during a node call to run an object's destructor, or `remove` to take ownership
+and perform a client's graceful protocol shutdown. A retained client must support
+the Wasm target and have the required network permissions. Keeping it in memory
+does not drive its guest event loop between calls.
 
 ## Pin Types
 
@@ -187,6 +223,22 @@ Unit tests run on native (not WASM):
 cargo test --target $(rustc -vV | grep host | awk '{print $2}')
 # or: mise run test
 ```
+
+The native object registry is a thread-local test stub. It lets the example's
+inventory-dispatch test call several nodes on one thread, but does not model
+Flow-Like run ownership or isolate contexts by their `run_id`.
+
+To check the compiled component's object handoff and package/run isolation,
+run these commands from the repository root:
+
+```bash
+cargo build --manifest-path templates/wasm-node-rust/Cargo.toml --target wasm32-wasip2
+cargo test -p flow-like-wasm --test package_object_test -- --include-ignored
+```
+
+The integration test creates objects in separate live instances before checking
+that saved handles cannot access them. It also checks mutation, explicit close,
+and release of the instance when its run ends.
 
 ## Building for Production
 

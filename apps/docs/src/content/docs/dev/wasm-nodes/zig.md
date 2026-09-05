@@ -27,7 +27,7 @@ The build also needs a **WASI preview1 reactor adapter**. The setup task downloa
 
 ```bash
 curl -fsSL -o wasi_snapshot_preview1.reactor.wasm \
-  "https://github.com/bytecodealliance/wasmtime/releases/download/v29.0.1/wasi_snapshot_preview1.reactor.wasm"
+  "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.1/wasi_snapshot_preview1.reactor.wasm"
 ```
 
 ## Important Files

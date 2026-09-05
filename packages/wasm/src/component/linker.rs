@@ -4,12 +4,12 @@ use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
 use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
 use serde_json::Value;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
-use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
-use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
@@ -46,37 +46,58 @@ struct EgressHttpHooks {
     environment: flow_like::flow::execution::ExecutionEnvironment,
 }
 
-impl wasmtime_wasi_http::p2::WasiHttpHooks for EgressHttpHooks {
+impl wasmtime_wasi_http::WasiHttpHooks for EgressHttpHooks {
     fn send_request(
         &mut self,
-        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
-        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
-    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
-    {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+        request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+        options: Option<wasmtime_wasi_http::RequestOptions>,
+        response_complete: Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
+    ) -> Box<
+        dyn Future<
+                Output = Result<
+                    (
+                        hyper::Response<wasmtime_wasi_http::WasiBody>,
+                        Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
+                    ),
+                    wasmtime_wasi_http::Error,
+                >,
+            > + Send,
+    > {
+        use wasmtime_wasi_http::Error;
 
         let environment = self.environment;
-        let handle = wasmtime_wasi::runtime::spawn(async move {
+        Box::new(async move {
             let Some(authority) = request.uri().authority().cloned() else {
-                return Ok(Err(ErrorCode::HttpRequestUriInvalid));
+                return Err(Error::HttpRequestUriInvalid);
             };
             let host = authority
                 .host()
                 .trim_matches(|c| c == '[' || c == ']')
                 .to_string();
-            let port = authority
-                .port_u16()
-                .unwrap_or(if config.use_tls { 443 } else { 80 });
+            let port =
+                authority
+                    .port_u16()
+                    .unwrap_or(if request.uri().scheme_str() == Some("https") {
+                        443
+                    } else {
+                        80
+                    });
             if let Err(e) =
                 flow_like::flow::execution::egress::resolve_socket_addrs(environment, &host, port)
                     .await
             {
                 tracing::warn!("WASI HTTP request to {} refused: {}", authority, e);
-                return Ok(Err(ErrorCode::HttpRequestDenied));
+                return Err(Error::HttpRequestDenied);
             }
-            Ok(wasmtime_wasi_http::p2::default_send_request_handler(request, config).await)
-        });
-        Ok(wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::pending(handle))
+            // Keep Wasmtime's request/response I/O futures attached to its
+            // resource table so dropping the run also closes HTTP connections.
+            Box::into_pin(wasmtime_wasi_http::default_hooks().send_request(
+                request,
+                options,
+                response_complete,
+            ))
+            .await
+        })
     }
 }
 
@@ -110,9 +131,8 @@ pub(super) fn configure_guest_network(
         });
     }
 
-    // Wasmtime enables TCP and UDP protocol use by default (while denying all
-    // addresses). Once an address policy is opened above, absent protocols
-    // must therefore be disabled explicitly to preserve capability precision.
+    // Wasmtime 48 denies socket creation by default. Grant each protocol
+    // explicitly while keeping the address policy above in force.
     builder
         .allow_ip_name_lookup(security.allow_wasi_network || caps.intersects(WasmCapabilities::DNS))
         .allow_tcp(security.allow_wasi_network || caps.intersects(WasmCapabilities::TCP))
@@ -386,6 +406,14 @@ fn register_metadata(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> 
     let mut meta = linker
         .instance("flow-like:node/metadata@0.1.0")
         .map_err(map_err)?;
+
+    meta.func_wrap(
+        "new-resource-handle",
+        |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, ()| {
+            Ok((store.data().host_state.new_resource_handle(),))
+        },
+    )
+    .map_err(map_err)?;
 
     meta.func_wrap(
         "get-node-id",
@@ -1997,6 +2025,409 @@ mod tests {
     use super::*;
     use wasmtime_wasi::cli::WasiCliView;
     use wasmtime_wasi::p2::bindings::cli::environment::Host;
+
+    #[tokio::test]
+    async fn wasi_socket_creation_requires_the_matching_protocol_grant() {
+        use wasmtime_wasi::p2::bindings::sockets::{
+            instance_network, ip_name_lookup,
+            network::{ErrorCode, IpAddress, IpAddressFamily},
+            tcp_create_socket, udp_create_socket,
+        };
+        use wasmtime_wasi::sockets::WasiSocketsView;
+
+        for (caps, tcp_allowed, udp_allowed, dns_allowed) in [
+            (WasmCapabilities::empty(), false, false, false),
+            (WasmCapabilities::HTTP_ALL, false, false, false),
+            (WasmCapabilities::WEBSOCKET, false, false, false),
+            (WasmCapabilities::DNS, false, false, true),
+            (WasmCapabilities::TCP, true, false, false),
+            (WasmCapabilities::UDP, false, true, false),
+            (
+                WasmCapabilities::TCP | WasmCapabilities::UDP,
+                true,
+                true,
+                false,
+            ),
+            (
+                WasmCapabilities::TCP | WasmCapabilities::UDP | WasmCapabilities::DNS,
+                true,
+                true,
+                true,
+            ),
+        ] {
+            let security = WasmSecurityConfig::restrictive().with_capabilities(caps);
+            let mut data = ComponentStoreData::new(&security);
+            let mut sockets = data.sockets();
+            let tcp =
+                tcp_create_socket::Host::create_tcp_socket(&mut sockets, IpAddressFamily::Ipv4);
+            if tcp_allowed {
+                assert!(tcp.is_ok(), "TCP should be allowed for {caps:?}: {tcp:?}");
+            } else {
+                assert_eq!(
+                    tcp.unwrap_err().downcast().unwrap(),
+                    ErrorCode::AccessDenied
+                );
+            }
+            let udp =
+                udp_create_socket::Host::create_udp_socket(&mut sockets, IpAddressFamily::Ipv4)
+                    .await;
+            if udp_allowed {
+                assert!(udp.is_ok(), "UDP should be allowed for {caps:?}: {udp:?}");
+            } else {
+                assert_eq!(
+                    udp.unwrap_err().downcast().unwrap(),
+                    ErrorCode::AccessDenied
+                );
+            }
+            let network = instance_network::Host::instance_network(&mut sockets).unwrap();
+            let resolved =
+                ip_name_lookup::Host::resolve_addresses(&mut sockets, network, "192.0.2.1".into());
+            if dns_allowed {
+                let resolved = resolved.expect("DNS grant should permit numeric address lookup");
+                assert!(matches!(
+                    ip_name_lookup::HostResolveAddressStream::resolve_next_address(
+                        &mut sockets,
+                        resolved,
+                    )
+                    .unwrap(),
+                    Some(IpAddress::Ipv4((192, 0, 2, 1)))
+                ));
+            } else {
+                assert_eq!(
+                    resolved.unwrap_err().downcast().unwrap(),
+                    ErrorCode::PermanentResolverFailure,
+                );
+            }
+        }
+
+        let mut security = WasmSecurityConfig::restrictive();
+        security.allow_wasi_network = true;
+        let mut data = ComponentStoreData::new(&security);
+        let mut sockets = data.sockets();
+        tcp_create_socket::Host::create_tcp_socket(&mut sockets, IpAddressFamily::Ipv4)
+            .expect("the explicit WASI network override should grant TCP");
+        udp_create_socket::Host::create_udp_socket(&mut sockets, IpAddressFamily::Ipv4)
+            .await
+            .expect("the explicit WASI network override should grant UDP");
+        let network = instance_network::Host::instance_network(&mut sockets).unwrap();
+        let resolved =
+            ip_name_lookup::Host::resolve_addresses(&mut sockets, network, "192.0.2.1".into())
+                .expect("the explicit WASI network override should grant DNS");
+        assert!(matches!(
+            ip_name_lookup::HostResolveAddressStream::resolve_next_address(&mut sockets, resolved)
+                .unwrap(),
+            Some(IpAddress::Ipv4((192, 0, 2, 1)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn wasi_tcp_bind_preserves_allowlists_and_server_egress_policy() {
+        use wasmtime::component::Resource;
+        use wasmtime_wasi::p2::bindings::sockets::{
+            instance_network,
+            network::{ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress},
+            tcp, tcp_create_socket,
+        };
+        use wasmtime_wasi::sockets::WasiSocketsView;
+
+        let local = WasmSecurityConfig::default().with_capabilities(WasmCapabilities::TCP);
+        let mut server = local.clone();
+        server.execution_environment = flow_like::flow::execution::ExecutionEnvironment::Server;
+        for (security, allowed) in [
+            (local.clone(), true),
+            (
+                local.clone().with_allowed_hosts(vec!["127.0.0.1".into()]),
+                true,
+            ),
+            (local.with_allowed_hosts(vec!["192.0.2.1".into()]), false),
+            (server, false),
+        ] {
+            let mut data = ComponentStoreData::new(&security);
+            let mut sockets = data.sockets();
+            let socket =
+                tcp_create_socket::Host::create_tcp_socket(&mut sockets, IpAddressFamily::Ipv4)
+                    .unwrap();
+            let network = instance_network::Host::instance_network(&mut sockets).unwrap();
+            let result = tcp::HostTcpSocket::start_bind(
+                &mut sockets,
+                Resource::new_borrow(socket.rep()),
+                network,
+                IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    port: 0,
+                    address: (127, 0, 0, 1),
+                }),
+            )
+            .await;
+            if allowed {
+                result.expect("authorized local TCP bind should succeed");
+                tcp::HostTcpSocket::finish_bind(&mut sockets, socket).unwrap();
+            } else {
+                assert_eq!(
+                    result.unwrap_err().downcast().unwrap(),
+                    ErrorCode::AccessDenied
+                );
+            }
+        }
+    }
+
+    fn wasi_http_start_get(
+        data: &mut ComponentStoreData,
+        authority: String,
+    ) -> wasmtime::component::Resource<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
+        use wasmtime::component::Resource;
+        use wasmtime_wasi_http::p2::bindings::http::{outgoing_handler, types};
+
+        let mut http = data.http();
+        let fields = types::HostFields::new(&mut http).unwrap();
+        let request = types::HostOutgoingRequest::new(&mut http, fields).unwrap();
+        types::HostOutgoingRequest::set_scheme(
+            &mut http,
+            Resource::new_borrow(request.rep()),
+            Some(types::Scheme::Http),
+        )
+        .unwrap()
+        .unwrap();
+        types::HostOutgoingRequest::set_authority(
+            &mut http,
+            Resource::new_borrow(request.rep()),
+            Some(authority),
+        )
+        .unwrap()
+        .unwrap();
+        types::HostOutgoingRequest::set_path_with_query(
+            &mut http,
+            Resource::new_borrow(request.rep()),
+            Some("/probe".into()),
+        )
+        .unwrap()
+        .unwrap();
+        outgoing_handler::Host::handle(&mut http, request, None).unwrap()
+    }
+
+    async fn wasi_http_wait_response(
+        data: &mut ComponentStoreData,
+        pending: wasmtime::component::Resource<
+            wasmtime_wasi_http::p2::types::HostFutureIncomingResponse,
+        >,
+    ) -> Result<
+        wasmtime::component::Resource<wasmtime_wasi_http::p2::types::HostIncomingResponse>,
+        wasmtime_wasi_http::p2::bindings::http::types::ErrorCode,
+    > {
+        use wasmtime_wasi::p2::Pollable;
+        use wasmtime_wasi_http::p2::bindings::http::types;
+
+        let mut http = data.http();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            http.table.get_mut(&pending).unwrap().ready(),
+        )
+        .await
+        .expect("HTTP probe should finish");
+        types::HostFutureIncomingResponse::get(&mut http, pending)
+            .unwrap()
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn wasi_http_get(
+        data: &mut ComponentStoreData,
+        authority: String,
+    ) -> Result<u16, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
+        use wasmtime_wasi_http::p2::bindings::http::types;
+
+        let pending = wasi_http_start_get(data, authority);
+        let response = wasi_http_wait_response(data, pending).await?;
+        Ok(types::HostIncomingResponse::status(&mut data.http(), response).unwrap())
+    }
+
+    #[tokio::test]
+    async fn dropping_component_store_closes_pending_http_and_open_response_bodies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use wasmtime_wasi_http::p2::bindings::http::types;
+
+        for send_headers in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (request_received, received) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert!(read > 0, "HTTP request ended before its headers");
+                    request.extend_from_slice(&buffer[..read]);
+                    assert!(request.len() < 8192);
+                }
+                if send_headers {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\nprefix")
+                        .await
+                        .unwrap();
+                }
+                request_received.send(()).unwrap();
+                stream.read(&mut buffer).await
+            });
+            let security =
+                WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL);
+            let mut data = ComponentStoreData::new(&security);
+            let pending = wasi_http_start_get(&mut data, address.to_string());
+            tokio::time::timeout(std::time::Duration::from_secs(3), received)
+                .await
+                .expect("HTTP request should reach the local server")
+                .unwrap();
+            if send_headers {
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    wasi_http_wait_response(&mut data, pending),
+                )
+                .await
+                .expect("HTTP response headers should arrive")
+                .unwrap();
+                let mut http = data.http();
+                let body = types::HostIncomingResponse::consume(&mut http, response)
+                    .unwrap()
+                    .unwrap();
+                types::HostIncomingBody::stream(&mut http, body)
+                    .unwrap()
+                    .unwrap();
+            }
+            drop(data);
+            let closed = tokio::time::timeout(std::time::Duration::from_secs(3), server)
+                .await
+                .expect("dropping the store should close its HTTP connection")
+                .unwrap();
+            assert!(
+                matches!(closed, Ok(0))
+                    || matches!(closed, Err(ref error) if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    )),
+                "HTTP connection remained active after store drop (headers sent: {send_headers}): {closed:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn wasi_http_sends_authorized_requests_with_the_host_header() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "HTTP request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+                assert!(request.len() < 8192);
+            }
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let security = WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL);
+        assert!(allows_standard_wasi_http(&security));
+        let mut data = ComponentStoreData::new(&security);
+        assert_eq!(
+            wasi_http_get(&mut data, address.to_string()).await.unwrap(),
+            204
+        );
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("get /probe http/1.1\r\n"));
+        assert!(request.contains(&format!("\r\nhost: {address}\r\n")));
+    }
+
+    #[tokio::test]
+    async fn wasi_http_denies_server_loopback_even_with_permissive_guest_metadata() {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let mut security =
+            WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL);
+        security.execution_environment = flow_like::flow::execution::ExecutionEnvironment::Server;
+        let mut data = ComponentStoreData::new(&security);
+        data.host_state.metadata = Default::default();
+        assert!(matches!(
+            wasi_http_get(&mut data, "127.0.0.1:1".into())
+                .await
+                .unwrap_err(),
+            ErrorCode::HttpRequestDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn component_resource_handle_import_checks_scope_and_returns_optional_strings() {
+        let engine = wasmtime::Engine::default();
+        let component = wasmtime::component::Component::new(
+            &engine,
+            wat::parse_str(
+                r#"(component
+                    (type $metadata (instance
+                        (export "new-resource-handle" (func (result (option string))))))
+                    (import "flow-like:node/metadata@0.1.0" (instance $meta (type $metadata)))
+                    (alias export $meta "new-resource-handle" (func $new))
+                    (core module $memory
+                        (memory (export "memory") 1)
+                        (global $next (mut i32) (i32.const 64))
+                        (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                            (local $ptr i32)
+                            global.get $next
+                            local.tee $ptr
+                            local.get 3
+                            i32.add
+                            global.set $next
+                            local.get $ptr))
+                    (core instance $memory (instantiate $memory))
+                    (alias core export $memory "memory" (core memory $mem))
+                    (alias core export $memory "realloc" (core func $realloc))
+                    (core func $lower (canon lower (func $new)
+                        (memory $mem) (realloc $realloc)))
+                    (core module $guest
+                        (import "host" "new" (func $new (param i32)))
+                        (func (export "new") (result i32)
+                            (call $new (i32.const 0))
+                            i32.const 0))
+                    (core instance $guest (instantiate $guest
+                        (with "host" (instance (export "new" (func $lower))))))
+                    (alias core export $guest "new" (core func $guest-new))
+                    (func (export "new-resource-handle") (result (option string))
+                        (canon lift (core func $guest-new) (memory $mem))))"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut linker = Linker::new(&engine);
+        register_metadata(&mut linker).unwrap();
+        let mut store = wasmtime::Store::new(
+            &engine,
+            ComponentStoreData::new(&WasmSecurityConfig::restrictive()),
+        );
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let new_handle = instance
+            .get_typed_func::<(), (Option<String>,)>(&mut store, "new-resource-handle")
+            .unwrap();
+        assert_eq!(
+            new_handle.call_async(&mut store, ()).await.unwrap(),
+            (None,)
+        );
+
+        store.data_mut().host_state.run_scoped = true;
+        let (first,) = new_handle.call_async(&mut store, ()).await.unwrap();
+        let (second,) = new_handle.call_async(&mut store, ()).await.unwrap();
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.len(), 36);
+        assert!(first.starts_with("obj:"));
+        assert_ne!(first, second);
+    }
 
     fn guest_environment(security: &WasmSecurityConfig) -> Vec<(String, String)> {
         let mut data = ComponentStoreData::new(security);

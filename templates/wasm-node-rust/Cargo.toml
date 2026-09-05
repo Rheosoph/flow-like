@@ -11,7 +11,7 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The listener example needs the SDK from this checkout and a matching runtime.
+# The object registry and listener examples need this SDK and a matching runtime.
 # When copying the template, keep this dependency pointed at that SDK source.
 flow-like-wasm-sdk = { version = "0.3.7", path = "../../libs/wasm-sdk/wasm-sdk-rust", features = ["rig"] }
 serde = { version = "1", features = ["derive"] }

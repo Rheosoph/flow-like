@@ -24,6 +24,11 @@ Flow-Like uses [mise](https://mise.jdx.dev/) to pin and run the repository
 toolchain. The root `mise.toml` currently installs Rust, Bun, Node.js 22,
 Python 3.12, and uv.
 
+Host builds use Rust 1.97.1, pinned in `rust-toolchain.toml`, mise, CI, and
+Docker builders. This satisfies Wasmtime 48's [Rust 1.95 minimum](https://github.com/bytecodealliance/wasmtime/blob/v48.0.1/Cargo.toml).
+Use the repository pin when building Flow-Like. Guest WASM packages have
+separate compiler requirements documented in their templates.
+
 ```bash
 mise trust
 mise install

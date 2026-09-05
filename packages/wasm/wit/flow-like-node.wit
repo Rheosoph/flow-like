@@ -37,6 +37,8 @@ interface metadata {
     get-user-id: func() -> string;
     time-now: func() -> u64;
     random: func() -> f64;
+    /// Mint an opaque handle for a guest-owned object during run-scoped execution.
+    new-resource-handle: func() -> option<string>;
     is-streaming: func() -> bool;
     get-log-level: func() -> u8;
 }

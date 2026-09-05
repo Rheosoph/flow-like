@@ -69,6 +69,7 @@ mod context;
 pub mod host;
 pub mod interop;
 pub mod mock;
+pub mod resources;
 
 #[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
 pub mod rig_provider;

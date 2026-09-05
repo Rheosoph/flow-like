@@ -336,6 +336,12 @@ pub fn random() -> f64 {
     metadata::random()
 }
 
+/// Mint an opaque handle for a guest-owned object in the current package and run.
+/// Returns `None` when the host cannot provide run ownership or random bytes.
+pub fn new_resource_handle() -> Option<String> {
+    metadata::new_resource_handle()
+}
+
 // ============================================================================
 // WebSocket
 // ============================================================================

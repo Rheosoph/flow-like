@@ -53,14 +53,30 @@ wasm_main!(); // Must appear exactly once — auto-discovers all #[register_node
 The runtime retains an export-based package instance within one run when its
 security configuration permits reuse. Guest globals and heap objects survive
 calls to that instance; the registration macro still constructs the node type
-for each call. Use a package-level registry for guest-owned clients. Each call
+for each call. Use the SDK's `resources` registry for guest-owned clients. Each call
 receives fresh inputs, outputs, logs and permissions. Changing the security
 domain selects a separate instance and resource registry. Guest state and host
 resource handles cannot cross that boundary.
 
 Guest memory, host cache and open sockets are scoped to the run. They are
-discarded when it completes or is cancelled and are never restored into another
-run. The [WebSocket example](src/websocket_server.rs) passes a listener and
+discarded when it completes, fails or is cancelled and are never restored into
+another run. The [package object example](src/package_objects.rs) uses
+`resources::insert`, `with`, `with_mut` and `close` to share a custom `TextBuffer`
+through string handle pins. Objects need `'static` ownership and can omit
+`Serialize`, `Send` and `Sync`. Type mismatches and unavailable handles return
+`ResourceError`; convert it to a node error with `ctx.fail(error.to_string())`.
+Connect execution pins to establish the order of stateful operations.
+
+Use `resources::remove::<T>` to take ownership for explicit shutdown, or
+`resources::close::<T>` to remove an object and run its destructor during the
+node call. Run teardown reclaims memory and host resources but does not execute
+guest Rust destructors for retained objects. Retaining a client does not drive
+its guest event loop between calls or grant additional networking permissions.
+The native thread-local registry is a test stub; a different `run_id` in a
+native `Context` does not create a new registry. Guest object preservation
+requires reusable exports and is unavailable across `wasi:cli/run` commands.
+
+The [WebSocket example](src/websocket_server.rs) passes a listener and
 accepted connection between nodes using host-owned handles. Every node that
 operates on those handles declares `NodePermission::NetworkWebsocket`.
 

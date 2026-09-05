@@ -102,6 +102,22 @@ released. A later run always starts with fresh live state. Persist application
 data through storage if needed; stored pointer values and socket handles cannot
 restore a client or connection.
 
+The Rust SDK provides a typed `resources` registry for arbitrary guest objects.
+One node calls `resources::insert(value)` and outputs the returned string
+handle. Another calls `resources::with::<T, _>` or `with_mut::<T, _>` to access
+the object, while `remove::<T>` returns ownership and `close::<T>` drops it.
+The object stays in guest memory and needs no serialization or `Send`/`Sync`
+implementation. Handles are valid only for the owning package instance in the
+current run and security domain. See the
+[custom buffer example](../../templates/wasm-node-rust/src/package_objects.rs)
+and [Rust API reference](wasm-sdk-rust/README.md#store-arbitrary-objects-within-a-run).
+Other languages can retain objects in package globals using their own registries.
+
+Run teardown reclaims guest memory and host resources without executing guest
+object destructors. Perform graceful client shutdown during a node call before
+the run ends. A retained socket client still needs target-compatible networking
+APIs and grants; the registry does not drive its guest event loop between calls.
+
 Command-style components executed through `wasi:cli/run` still start with fresh
 guest memory on every command. The in-process command path can share the run's
 host cache and sockets. The external CLI fallback is rejected during run-scoped

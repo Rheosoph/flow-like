@@ -14,6 +14,7 @@
 
 use flow_like_wasm_sdk::*;
 
+mod package_objects;
 mod websocket_server;
 
 // ── Node 1: Repeat Text ────────────────────────────────────────────────
