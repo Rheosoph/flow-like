@@ -1,7 +1,7 @@
-use flow_like_types::Cacheable;
-use flow_like_types::Result;
-use flow_like_types::async_trait;
-use flow_like_types::image::DynamicImage;
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
+use image::DynamicImage;
 use std::sync::Arc;
 
 use crate::embedding::GeneralTextSplitter;
@@ -15,7 +15,7 @@ pub trait ImageEmbeddingModelLogic: Send + Sync + Cacheable + 'static {
         &self,
         capacity: Option<usize>,
         overlap: Option<usize>,
-    ) -> flow_like_types::Result<(GeneralTextSplitter, GeneralTextSplitter)>;
+    ) -> anyhow::Result<(GeneralTextSplitter, GeneralTextSplitter)>;
     async fn text_embed_query(&self, texts: &Vec<String>) -> Result<Vec<Vec<f32>>>;
     async fn text_embed_document(&self, texts: &Vec<String>) -> Result<Vec<Vec<f32>>>;
     async fn image_embed(&self, images: Vec<DynamicImage>) -> Result<Vec<Vec<f32>>>;

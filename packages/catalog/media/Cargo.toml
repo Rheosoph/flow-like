@@ -5,63 +5,32 @@ edition = "2024"
 
 [features]
 default = []
-local-ml = ["flow-like-catalog-core/local-ml"]
-local-tts = ["flow-like/local-tts"]
-local-tts-metal = ["local-tts", "flow-like/local-tts-metal"]
-local-tts-cuda = ["local-tts", "flow-like/local-tts-cuda"]
-local-tts-accelerate = ["local-tts", "flow-like/local-tts-accelerate"]
-local-stt = ["flow-like/local-stt"]
-local-stt-metal = ["local-stt", "flow-like/local-stt-metal"]
-local-stt-cuda = ["local-stt", "flow-like/local-stt-cuda"]
-local-stt-accelerate = ["local-stt", "flow-like/local-stt-accelerate"]
-# Execution feature - enables heavy dependencies for node execution
-execute = [
-    "flow-like-catalog-core/execute",
-    "dep:video-utils-rs",
-    "dep:hayro",
-    "dep:rayon",
-    "dep:nalgebra",
-    "dep:zip",
-    "dep:quick-xml",
-    "dep:lopdf",
-    "dep:pulldown-cmark",
-    "dep:flate2",
-]
+local-ml = ["flow-like-catalog-media-audio/local-ml", "flow-like-catalog-media-document/local-ml", "flow-like-catalog-media-image/local-ml", "flow-like-catalog-media-video/local-ml", "flow-like-catalog-core/local-ml"]
+local-tts = ["flow-like-catalog-media-audio/local-tts"]
+local-tts-metal = ["flow-like-catalog-media-audio/local-tts-metal"]
+local-tts-cuda = ["flow-like-catalog-media-audio/local-tts-cuda"]
+local-tts-accelerate = ["flow-like-catalog-media-audio/local-tts-accelerate"]
+local-stt = ["flow-like-catalog-media-audio/local-stt"]
+local-stt-metal = ["flow-like-catalog-media-audio/local-stt-metal"]
+local-stt-cuda = ["flow-like-catalog-media-audio/local-stt-cuda"]
+local-stt-accelerate = ["flow-like-catalog-media-audio/local-stt-accelerate"]
+execute = ["flow-like-catalog-media-audio/execute", "flow-like-catalog-media-document/execute", "flow-like-catalog-media-image/execute", "flow-like-catalog-media-video/execute", "flow-like-catalog-core/execute"]
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
-flow-like-model-provider.workspace = true
-flow-like-storage = { workspace = true, default-features = false }
-flow-like-catalog-macros.workspace = true
-google-cloud-auth.workspace = true
-ahash.workspace = true
-tracing.workspace = true
 schemars.workspace = true
-futures.workspace = true
-bytes.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
-uuid.workspace = true
-async-trait.workspace = true
-http = "1.4.0"
-ab_glyph = "0.2.29"
-imageproc.workspace = true
-rxing = { version = "0.7.1", features = ["serde", "image"] }
-
-# Media processing dependencies - only included when execute feature is enabled
-nalgebra = { version = "0.34.0", optional = true }
-hayro = { version = "0.5.0", features = ["embed-fonts"], optional = true }
-rayon = { version = "1.11.0", optional = true }
-
-# Document template processing dependencies
-zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
-quick-xml = { version = "0.39.2", features = ["serialize"], optional = true }
-lopdf = { version = "0.39.0", optional = true }
-pulldown-cmark = { version = "0.13.1", optional = true }
-flate2 = { workspace = true, optional = true }
-video-utils-rs = { git = "https://github.com/Rheosoph/video-utils-rs.git", rev = "4b4e380fd719390dd8598120ebfb50566d234d5c", default-features = false, features = ["portable-core", "platform-codecs", "audio-io", "image-io", "preview", "codec-h264-rust", "codec-h265-rust", "codec-av1-rust", "codec-openh264-ffi", "codec-apple", "codec-android", "codec-windows", "codec-gstreamer", "codec-web"], optional = true }
+flow-like-catalog-media-audio.workspace = true
+flow-like-catalog-media-document.workspace = true
+flow-like-catalog-media-image.workspace = true
+flow-like-catalog-media-video.workspace = true
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
+
+[dev-dependencies]
+ahash.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+lopdf = "0.39.0"

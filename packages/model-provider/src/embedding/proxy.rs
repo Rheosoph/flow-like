@@ -1,8 +1,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use flow_like_types::json::{Deserialize, Serialize};
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
+use serde::Deserialize;
+use serde::Serialize;
 use text_splitter::{Characters, ChunkConfig, MarkdownSplitter, TextSplitter};
 
 use crate::provider::EmbeddingModelProvider;
@@ -101,7 +104,7 @@ impl ProxyEmbeddingModel {
         let response = request_builder
             .send()
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to call embedding API: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to call embedding API: {}", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -109,7 +112,7 @@ impl ProxyEmbeddingModel {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(flow_like_types::anyhow!(
+            return Err(anyhow::anyhow!(
                 "Embedding API error ({}): {}",
                 status,
                 error
@@ -119,7 +122,7 @@ impl ProxyEmbeddingModel {
         let embed_response: EmbedResponse = response
             .json()
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to parse embedding response: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse embedding response: {}", e))?;
 
         Ok(embed_response.embeddings)
     }

@@ -18,7 +18,7 @@ pub async fn hybrid_summarize(
     model_name: &str,
     concurrency: usize,
     chunk_capacity: usize,
-) -> flow_like_types::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize)> {
     let total = chunks.len();
     if total == 0 {
         return Ok((initial_summary.to_string(), 0));

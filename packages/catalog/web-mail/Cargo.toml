@@ -1,0 +1,42 @@
+[package]
+name = "flow-like-catalog-web-mail"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = [
+    "flow-like-catalog-core/execute",
+    "dep:async-imap",
+    "dep:tokio-rustls",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+    "dep:async-smtp",
+    "dep:mail-parser",
+    "dep:icalendar",
+    "dep:reqwest",
+]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+futures.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+base64.workspace = true
+async-imap = { version = "0.11.1", default-features = false, features = ["runtime-tokio", "tokio"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
+rustls-pki-types = { version = "1", optional = true }
+webpki-roots = { version = "0.26", optional = true }
+async-smtp = { version = "0.10.2", default-features = false, features = ["runtime-tokio", "tokio"], optional = true }
+mail-parser = { version = "0.11.0", optional = true }
+icalendar = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

@@ -178,7 +178,11 @@ it lets the public `flow-like` default remain backward compatible.
 # Shared engine work
 cargo check-core
 cargo check-core-runtime
+cargo check-runtime
+cargo check-editor
 cargo test-core
+cargo test-runtime
+cargo test-editor
 cargo clippy-core
 
 # File/query storage or the complete database runtime
@@ -207,13 +211,36 @@ cargo test-all
 cargo clippy-all
 ```
 
-Workspace crates inherit a lightweight `flow-like` surface (`flow`) and storage
+Workspace crates inherit a lightweight `flow-like` surface (`flow-metadata`) and storage
 surface (`files,query-parser`) from the root manifest. API/desktop products opt
 into `app-runtime`, while executor products select `flow-runtime,model` and
 catalog execution bundles turn on the database implementation transitively.
 The Cargo aliases hide those details in normal use. This keeps ordinary
 metadata/editor work off the Arrow, Lance, and DataFusion compile path without
 making developers maintain long feature lists.
+
+`flow-like-runtime` owns execution, board models, and host services.
+`flow-like-editor` adds FlowScript reconciliation and copilot services. The public
+`flow-like` crate combines both through re-exports. Catalog implementations use
+the runtime directly, so editor compilation can proceed alongside node compilation.
+
+Catalog implementations compile in domain crates. The standard catalog combines
+UI, values, numbers, text, and runtime nodes; data integrations, web connectors,
+and media processors have their own crates. The existing catalog facades keep
+their public module paths and node order, so application imports do not change.
+When editing one domain, check its implementation directly:
+
+```bash
+cargo check -p flow-like-catalog-std-text --features execute
+cargo check -p flow-like-catalog-data-github --features execute
+cargo check -p flow-like-catalog-media-document --features execute
+```
+
+Shared cache, query-session, and embedding types live below the node collections.
+Keep a shared helper there when another domain needs it. Depending on an entire
+catalog to obtain one helper makes that catalog a prerequisite for compilation.
+See [the catalog crate guide](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/README.md)
+for the boundaries and registration requirements.
 
 Feature boundaries are checked independently so feature unification from an
 unrelated workspace member cannot hide a missing declaration:
@@ -233,12 +260,25 @@ Cargo HTML timing reports; it never runs `cargo clean` or deletes an older run.
 # Compare lightweight and runtime core explicitly
 ./tools/compile-times.sh core core-runtime
 
+# Include code generation and linking, then measure a std node edit in desktop
+./tools/compile-times.sh --command build desktop-std-string
+
+# Match CI's profile without enabling Rust incremental compilation
+./tools/compile-times.sh --command build --profile ci --incremental 0 backend-executor
+
 # Measure the cost of opting a headless server into local ONNX inference
 ./tools/compile-times.sh catalog-server catalog-server-local-ml
 
 # Every listed scenario; allow several gigabytes per fresh scenario
 ./tools/compile-times.sh --all-scenarios
 ```
+
+The runner defaults to `cargo check`. Select `--command build` to include code
+generation and linking. Incremental compilation follows the selected profile
+unless `--incremental 0` or `--incremental 1` overrides it; the runner clears any
+ambient `CARGO_INCREMENTAL` value. The incremental phase touches a source file
+and restores its timestamp. Use a representative code edit separately when
+measuring how much compiler work an implementation change invalidates.
 
 When Clang and LLD are installed on Linux, or when using Rust's LLD linker on
 Windows, opt into the faster linker configuration without changing the shared

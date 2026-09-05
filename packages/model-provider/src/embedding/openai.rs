@@ -1,6 +1,8 @@
 use std::{any::Any, sync::Arc};
 
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 use rig::client::EmbeddingsClient;
 use rig::embeddings::EmbeddingModel;
 use text_splitter::{ChunkConfig, MarkdownSplitter, TextSplitter};
@@ -37,7 +39,7 @@ impl OpenAIEmbeddingModel {
     pub async fn new(
         provider: &EmbeddingModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let openai_config = random_provider(&config.openai_config)?;
         let api_key = openai_config.api_key.clone().unwrap_or_default();
         let _model_id = provider.provider.model_id.clone();
@@ -108,7 +110,7 @@ impl EmbeddingModelLogic for OpenAIEmbeddingModel {
         &self,
         capacity: Option<usize>,
         overlap: Option<usize>,
-    ) -> flow_like_types::Result<(GeneralTextSplitter, GeneralTextSplitter)> {
+    ) -> anyhow::Result<(GeneralTextSplitter, GeneralTextSplitter)> {
         let params = &self.provider;
         let max_tokens = capacity.unwrap_or(params.input_length as usize);
         let max_tokens = std::cmp::min(max_tokens, params.input_length as usize);
@@ -132,7 +134,7 @@ impl EmbeddingModelLogic for OpenAIEmbeddingModel {
 
     async fn text_embed_query(&self, texts: &Vec<String>) -> Result<Vec<Vec<f32>>> {
         let model_id = self.provider.provider.model_id.clone();
-        let model_id = model_id.ok_or(flow_like_types::anyhow!("Model ID is missing"))?;
+        let model_id = model_id.ok_or(anyhow::anyhow!("Model ID is missing"))?;
         let prefixed_array = texts
             .iter()
             .map(|text| format!("{}{}", self.provider.prefix.query, text))
@@ -142,7 +144,7 @@ impl EmbeddingModelLogic for OpenAIEmbeddingModel {
 
     async fn text_embed_document(&self, texts: &Vec<String>) -> Result<Vec<Vec<f32>>> {
         let model_id = self.provider.provider.model_id.clone();
-        let model_id = model_id.ok_or(flow_like_types::anyhow!("Model ID is missing"))?;
+        let model_id = model_id.ok_or(anyhow::anyhow!("Model ID is missing"))?;
         let prefixed_array = texts
             .iter()
             .map(|text| format!("{}{}", self.provider.prefix.paragraph, text))
@@ -158,7 +160,6 @@ impl EmbeddingModelLogic for OpenAIEmbeddingModel {
 #[cfg(test)]
 mod tests {
     use dotenv::dotenv;
-    use flow_like_types::tokio;
 
     use crate::{
         embedding::{EmbeddingModelLogic, openai::OpenAIEmbeddingModel},

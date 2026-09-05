@@ -1,4 +1,5 @@
-use flow_like_types::json::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use schemars::JsonSchema;
 
 /// Primary summarization strategy controlling how chunks are processed.
@@ -50,7 +51,7 @@ impl SummarizationStrategy {
 }
 
 impl TryFrom<&str> for SummarizationStrategy {
-    type Error = flow_like_types::Error;
+    type Error = anyhow::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
@@ -59,7 +60,7 @@ impl TryFrom<&str> for SummarizationStrategy {
             "Hierarchical" => Ok(Self::Hierarchical),
             "Hybrid" => Ok(Self::Hybrid),
             "SlidingWindow" => Ok(Self::SlidingWindow),
-            _ => Err(flow_like_types::anyhow!("Unknown strategy: {}", s)),
+            _ => Err(anyhow::anyhow!("Unknown strategy: {}", s)),
         }
     }
 }
@@ -88,13 +89,13 @@ impl DensificationStrategy {
 }
 
 impl TryFrom<&str> for DensificationStrategy {
-    type Error = flow_like_types::Error;
+    type Error = anyhow::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "None" => Ok(Self::None),
             "ChainOfDensity" => Ok(Self::ChainOfDensity),
-            _ => Err(flow_like_types::anyhow!(
+            _ => Err(anyhow::anyhow!(
                 "Unknown densification strategy: {}",
                 s
             )),

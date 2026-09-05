@@ -1,0 +1,13 @@
+[package]
+name = "flow-like-editor-contracts"
+version = "0.1.0"
+edition = "2024"
+description = "Board editing commands and metadata without Flow runtime dependencies"
+license-file = "../../../LICENSE"
+
+[dependencies]
+flow-like-core-contracts.workspace = true
+flow-like-types-proto.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

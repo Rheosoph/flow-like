@@ -120,19 +120,21 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         let registration_headers: HashMap<String, String> =
             context.evaluate_pin("headers").await.unwrap_or_default();
 
-        let remote_app_id = flow_like_catalog_data::remote_util::validate_path_id(
+        let remote_app_id = flow_like_catalog_data_support::remote_util::validate_path_id(
             &remote_app_id,
             "remote project",
         )?;
-        let event_id =
-            flow_like_catalog_data::remote_util::validate_path_id(&event_id, "remote event")?;
+        let event_id = flow_like_catalog_data_support::remote_util::validate_path_id(
+            &event_id,
+            "remote event",
+        )?;
 
         // Resolve once here to validate access and warm the run cache. The
         // bearer itself is deliberately not serialized into the Agent; it is
         // resolved again (normally a cache hit) immediately before transport
         // construction so a delayed invocation never freezes a near-expiry
         // token.
-        let session = flow_like_catalog_data::remote_util::remote_app_session_for_mcp(
+        let session = flow_like_catalog_data_support::remote_util::remote_app_session_for_mcp(
             context,
             &remote_app_id,
         )

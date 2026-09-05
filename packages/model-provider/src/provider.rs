@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use aws_config::SdkConfig;
-use flow_like_types::{
-    Value,
-    json::{Deserialize, Serialize},
-    rand::{self, Rng},
-};
+use aws_types::SdkConfig;
+use rand::Rng;
 use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
 
 /// Which HTTP API surface a model speaks.
 ///
@@ -337,12 +336,12 @@ pub struct BedrockConfig {
     pub config: SdkConfig,
 }
 
-pub fn random_provider<T>(vec: &[T]) -> flow_like_types::Result<T>
+pub fn random_provider<T>(vec: &[T]) -> anyhow::Result<T>
 where
     T: Clone,
 {
     if vec.is_empty() {
-        return Err(flow_like_types::anyhow!("No Provider found"));
+        return Err(anyhow::anyhow!("No Provider found"));
     }
 
     let index = {

@@ -79,6 +79,27 @@ jobs:
           api-local-ml-catalog
           wasm-host
           api-runtime
+          a2ui-schema
+          editor-contracts
+          types-data-url
+          model-provider
+          catalog-std-execute
+          catalog-std-ui
+          catalog-std-values
+          catalog-std-numbers
+          catalog-std-text
+          catalog-std-runtime
+          catalog-std-support
+          catalog-data-support
+          catalog-data-github
+          catalog-data-google
+          catalog-data-microsoft
+          catalog-data-atlassian
+          catalog-data-notion
+          catalog-data-databricks
+          catalog-data-linkedin
+          catalog-llm-execute
+          catalog-embedding
 
   lightweight-boundaries:
     name: Compile lightweight Rust boundaries
@@ -101,6 +122,9 @@ jobs:
           --mode check
           --target-dir target/feature-boundaries
           core-contracts
+          a2ui-schema
+          editor-contracts
+          types-data-url
           dev-default
           core-flow-metadata
           core-flow

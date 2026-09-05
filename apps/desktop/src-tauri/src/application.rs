@@ -6,6 +6,8 @@
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
 mod deeplink;
+#[cfg(desktop)]
+mod diffusion_runtime;
 mod event_bus;
 mod event_sink;
 mod execution_identity;
@@ -663,6 +665,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            #[cfg(desktop)]
+            diffusion_runtime::configure(app)?;
             #[cfg(debug_assertions)]
             if let Some(url) = flowpilot_e2e_cli_url()
                 && let Some(main) = app.get_webview_window("main")

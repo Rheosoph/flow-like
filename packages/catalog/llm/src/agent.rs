@@ -111,15 +111,15 @@ pub(crate) async fn mcp_transport_config_for_execution(
     ) {
         (None, None) => Ok(mcp_transport_config(config)),
         (Some(remote_app_id), Some(remote_event_id)) => {
-            let remote_app_id = flow_like_catalog_data::remote_util::validate_path_id(
+            let remote_app_id = flow_like_catalog_data_support::remote_util::validate_path_id(
                 remote_app_id,
                 "remote project",
             )?;
-            let remote_event_id = flow_like_catalog_data::remote_util::validate_path_id(
+            let remote_event_id = flow_like_catalog_data_support::remote_util::validate_path_id(
                 remote_event_id,
                 "remote event",
             )?;
-            let session = flow_like_catalog_data::remote_util::remote_app_session_for_mcp(
+            let session = flow_like_catalog_data_support::remote_util::remote_app_session_for_mcp(
                 context,
                 &remote_app_id,
             )

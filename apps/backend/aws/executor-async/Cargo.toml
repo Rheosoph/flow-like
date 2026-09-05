@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 aws_lambda_events = { version = "0.16.0", default-features = false, features = ["sqs"] }
-flow-like = { workspace = true, features = ["flow-runtime", "model"] }
+flow-like = { package = "flow-like-runtime", path = "../../../../packages/core/runtime", default-features = false, features = ["flow-metadata", "flow-runtime", "model"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
 flow-like-types.workspace = true
 flow-like-executor = { workspace = true, features = ["server-local-ml", "channel-aws"] }

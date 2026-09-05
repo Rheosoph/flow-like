@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-local-ml = ["flow-like-catalog-core/local-ml"]
+local-ml = ["flow-like-catalog-core/local-ml", "flow-like-catalog-data-github/local-ml", "flow-like-catalog-data-google/local-ml", "flow-like-catalog-data-microsoft/local-ml", "flow-like-catalog-data-atlassian/local-ml", "flow-like-catalog-data-notion/local-ml", "flow-like-catalog-data-databricks/local-ml", "flow-like-catalog-data-linkedin/local-ml"]
 
 # Execution environment - determines how interactions are handled
 # local: Desktop app with polling-based interactions
@@ -16,7 +16,15 @@ remote = []
 # Execution feature - enables heavy dependencies for node execution
 # APIs that only serve catalog metadata should NOT enable this
 execute = [
+    "flow-like-catalog-data-github/execute",
+    "flow-like-catalog-data-google/execute",
+    "flow-like-catalog-data-microsoft/execute",
+    "flow-like-catalog-data-atlassian/execute",
+    "flow-like-catalog-data-notion/execute",
+    "flow-like-catalog-data-databricks/execute",
+    "flow-like-catalog-data-linkedin/execute",
     "flow-like-catalog-core/execute",
+    "flow-like-catalog-data-support/execute",
     "flow-like-storage/database-runtime",
     "flow-like-storage/graph",
     "flow-like-storage/smb",
@@ -46,7 +54,7 @@ odbc = ["datafusion-table-providers/odbc"]
 # Results are fetched via the REST query API and registered as an in-memory table in the DataFusion session.
 bigquery = ["dep:gcp-bigquery-client"]
 # Federation support - enables query push-down to remote databases
-federation = ["datafusion-table-providers/federation", "flow-like-storage/federation"]
+federation = ["datafusion-table-providers/federation", "flow-like-storage/federation", "flow-like-catalog-data-support/federation"]
 postgres-federation = ["postgres", "datafusion-table-providers/postgres-rustls-federation", "federation"]
 mysql-federation = ["mysql", "datafusion-table-providers/mysql-rustls-federation", "federation"]
 sqlite-federation = ["sqlite", "datafusion-table-providers/sqlite-federation", "federation"]
@@ -62,8 +70,16 @@ full = ["all-lakes", "all-databases", "federation"]
 full-execute = ["full", "execute"]
 
 [dependencies]
+flow-like-catalog-data-github.workspace = true
+flow-like-catalog-data-google.workspace = true
+flow-like-catalog-data-microsoft.workspace = true
+flow-like-catalog-data-atlassian.workspace = true
+flow-like-catalog-data-notion.workspace = true
+flow-like-catalog-data-databricks.workspace = true
+flow-like-catalog-data-linkedin.workspace = true
+flow-like-catalog-data-support.workspace = true
 flow-like-catalog-core.workspace = true
-flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 # Only for `to_camel_case`: SQL param pins are addressed by their FlowScript argument
 # name, and the node validates that two placeholders cannot render to the same one.

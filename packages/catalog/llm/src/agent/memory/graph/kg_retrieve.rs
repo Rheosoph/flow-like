@@ -149,9 +149,11 @@ impl NodeLogic for KgRetrieveNode {
         let top_k: i64 = context.evaluate_pin("top_k").await.unwrap_or(5);
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(200);
 
-        let store =
-            flow_like_catalog_data::data::db::graph::load_graph_store(context, &conn.cache_key)
-                .await?;
+        let store = flow_like_catalog_data_support::data::db::graph::load_graph_store(
+            context,
+            &conn.cache_key,
+        )
+        .await?;
 
         // Step 1: Sample nodes from the given label to get seed IDs.
         // In a full implementation this would do vector search on the node table.

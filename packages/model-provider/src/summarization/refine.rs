@@ -13,7 +13,7 @@ pub async fn refine_summarize(
     initial_summary: &str,
     model: &dyn ModelLogic,
     model_name: &str,
-) -> flow_like_types::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize)> {
     let total = chunks.len();
     if total == 0 {
         return Ok((initial_summary.to_string(), 0));

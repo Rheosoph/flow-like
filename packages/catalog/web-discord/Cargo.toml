@@ -1,0 +1,25 @@
+[package]
+name = "flow-like-catalog-web-discord"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = [
+    "flow-like-catalog-core/execute",
+    "dep:serenity",
+]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+flow-like-catalog-macros.workspace = true
+serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"], optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "flow-like-types-data-url"
+version = "0.1.0"
+edition = "2024"
+description = "Data URL transport and byte helpers without image processing dependencies"
+
+[dependencies]
+anyhow = "1.0.97"
+base64.workspace = true
+mime_guess = "2.0.5"
+reqwest = { workspace = true, features = ["gzip", "brotli", "socks", "http2"] }
+tokio = { workspace = true, features = ["fs"] }

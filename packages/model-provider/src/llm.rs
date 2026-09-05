@@ -1,5 +1,7 @@
-use flow_like_types::async_trait;
-use flow_like_types::{Result, Value, anyhow};
+use async_trait::async_trait;
+use anyhow::Result;
+use serde_json::Value;
+use anyhow::anyhow;
 use futures::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use rig::agent::AgentBuilder;
@@ -164,7 +166,7 @@ fn apply_usage_reporting(
 pub trait ModelLogic: Send + Sync {
     async fn provider(&self) -> Result<ModelConstructor>;
     async fn default_model(&self) -> Option<String>;
-    fn additional_params(&self, _history: &Option<History>) -> Option<flow_like_types::Value> {
+    fn additional_params(&self, _history: &Option<History>) -> Option<serde_json::Value> {
         None
     }
     fn usage_reporting(&self) -> UsageReportingMode {
@@ -612,7 +614,7 @@ impl CompletionModel for DynamicCompletionModel {
 async fn invoke_without_stream<'a>(
     builder: CompletionRequestBuilder<CompletionModelHandle<'a>>,
     model_name: &str,
-    additional_params: Option<flow_like_types::Value>,
+    additional_params: Option<serde_json::Value>,
 ) -> Result<Response> {
     let builder = if let Some(params) = additional_params {
         builder.additional_params(params)
@@ -675,7 +677,7 @@ async fn invoke_with_stream<'a>(
     builder: CompletionRequestBuilder<CompletionModelHandle<'a>>,
     callback: LLMCallback,
     model_name: &str,
-    additional_params: Option<flow_like_types::Value>,
+    additional_params: Option<serde_json::Value>,
 ) -> Result<Response> {
     let builder = if let Some(params) = additional_params {
         builder.additional_params(params)
@@ -787,7 +789,7 @@ async fn invoke_with_stream<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::json::json;
+    use serde_json::json;
 
     #[test]
     fn openai_stream_usage_preserves_existing_stream_options() {

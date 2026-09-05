@@ -8,7 +8,10 @@ use crate::{
     provider::{ModelProvider, ModelProviderConfiguration, VertexConfig},
     response::Response,
 };
-use flow_like_types::{Cacheable, Result, anyhow, async_trait};
+use anyhow::Result;
+use anyhow::anyhow;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 use google_cloud_auth::credentials::{
     CacheableResource, Credentials, CredentialsProvider, EntityTag, service_account,
 };
@@ -56,7 +59,7 @@ impl VertexModel {
     pub async fn new(
         provider: &ModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let vertex_config = if config.vertex_config.is_empty() {
             VertexConfig::default()
         } else {
@@ -77,7 +80,7 @@ impl VertexModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let project_id =
             string_param(&params, "project_id").or_else(|| string_param(&params, "project"));
@@ -196,7 +199,7 @@ impl ModelLogic for VertexModel {
 }
 
 fn string_param(
-    params: &std::collections::HashMap<String, flow_like_types::Value>,
+    params: &std::collections::HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<String> {
     params
@@ -208,7 +211,7 @@ fn string_param(
 }
 
 fn service_account_project_id(service_account_json: &str) -> Option<String> {
-    flow_like_types::json::from_str::<flow_like_types::Value>(service_account_json)
+    serde_json::from_str::<serde_json::Value>(service_account_json)
         .ok()
         .and_then(|value| {
             value
@@ -225,7 +228,7 @@ fn credentials_from_params(
     access_token: Option<&str>,
 ) -> Result<Option<Credentials>> {
     if let Some(service_account_json) = service_account_json {
-        let key = flow_like_types::json::from_str::<flow_like_types::Value>(service_account_json)
+        let key = serde_json::from_str::<serde_json::Value>(service_account_json)
             .map_err(|e| anyhow!("Invalid Vertex service account JSON: {e}"))?;
         let credentials = service_account::Builder::new(key)
             .build()

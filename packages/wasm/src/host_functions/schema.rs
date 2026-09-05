@@ -1,7 +1,7 @@
 use crate::limits::WasmCapabilities;
 use flow_like::bit::Bit;
 use flow_like_catalog_core::{FlowPath, NodeDBConnection, NodeImage};
-use flow_like_catalog_llm::embedding::CachedEmbeddingModel;
+use flow_like_catalog_embedding::CachedEmbeddingModel;
 use once_cell::sync::Lazy;
 use schemars::schema_for;
 use std::collections::HashMap;

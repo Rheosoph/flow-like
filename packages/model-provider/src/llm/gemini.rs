@@ -8,9 +8,11 @@ use crate::{
     provider::{ModelProvider, ModelProviderConfiguration},
     response::Response,
 };
+use anyhow::Result;
+use anyhow::anyhow;
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use flow_like_types::json::to_value;
-use flow_like_types::{Cacheable, Result, anyhow, async_trait};
+use flow_like_types_contracts::Cacheable;
 use rig::completion::CompletionModel;
 use rig::message::DocumentSourceKind;
 use rig::message::{
@@ -22,6 +24,7 @@ use rig::providers::gemini::completion::gemini_api_types::{
     AdditionalParameters, GenerationConfig, ThinkingConfig, ThinkingLevel,
 };
 use rig::{OneOrMany, completion::Message as RigMessage};
+use serde_json::to_value;
 
 fn default_thinking_config() -> ThinkingConfig {
     ThinkingConfig {
@@ -205,7 +208,7 @@ async fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return None;
     }
-    flow_like_types::reqwest::get(url)
+    reqwest::get(url)
         .await
         .ok()?
         .bytes()
@@ -371,7 +374,7 @@ impl GeminiModel {
     pub async fn new(
         provider: &ModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let gemini_config = random_provider(&config.gemini_config)?;
         let api_key = gemini_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
@@ -390,7 +393,7 @@ impl GeminiModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -550,7 +553,7 @@ impl ModelLogic for GeminiModel {
         }
     }
 
-    fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
+    fn additional_params(&self, history: &Option<History>) -> Option<serde_json::Value> {
         // Gemini's AdditionalParameters MUST include generation_config field
         // We need to handle the 'stream' field specially: it comes from History.build_additional_params()
         // but Gemini doesn't accept 'stream' in the request body - it uses different endpoints instead

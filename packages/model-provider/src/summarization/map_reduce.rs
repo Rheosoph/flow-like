@@ -18,7 +18,7 @@ pub async fn map_reduce_summarize(
     model_name: &str,
     concurrency: usize,
     chunk_capacity: usize,
-) -> flow_like_types::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize)> {
     let total = chunks.len();
     if total == 0 {
         return Ok((String::new(), 0));
@@ -87,7 +87,7 @@ pub async fn map_reduce_summarize(
 /// Boxed future of one reduce pass: the merged summary plus the number of LLM calls it cost.
 /// Boxed because [`recursive_reduce`] recurses into itself.
 pub type ReduceFuture<'a> = std::pin::Pin<
-    Box<dyn std::future::Future<Output = flow_like_types::Result<(String, usize)>> + Send + 'a>,
+    Box<dyn std::future::Future<Output = anyhow::Result<(String, usize)>> + Send + 'a>,
 >;
 
 /// Recursively reduces summaries until they fit in a single context window.

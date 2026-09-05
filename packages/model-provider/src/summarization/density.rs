@@ -18,7 +18,7 @@ pub async fn apply_chain_of_density(
     model: &dyn ModelLogic,
     model_name: &str,
     steps: u32,
-) -> flow_like_types::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize)> {
     if summary.is_empty() || steps == 0 {
         return Ok((summary.to_string(), 0));
     }

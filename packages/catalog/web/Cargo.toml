@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-local-ml = ["flow-like-catalog-core/local-ml"]
+local-ml = ["flow-like-catalog-core/local-ml", "flow-like-catalog-web-telegram/local-ml", "flow-like-catalog-web-discord/local-ml", "flow-like-catalog-web-mail/local-ml"]
 
 # Execution environment - determines how server nodes (REST/MCP) behave
 # local: bind a socket and serve in-process (desktop app)
@@ -18,18 +18,14 @@ platform-codecs = ["dep:ndk", "dep:windows"]
 
 # Execution feature - enables heavy dependencies for node execution
 execute = [
+    "flow-like-catalog-web-telegram/execute",
+    "flow-like-catalog-web-discord/execute",
+    "flow-like-catalog-web-mail/execute",
     "flow-like-catalog-core/execute",
-    "dep:htmd",
     "dep:scraper",
-    "dep:async-imap",
     "dep:tokio-rustls",
     "dep:rustls-pki-types",
     "dep:webpki-roots",
-    "dep:async-smtp",
-    "dep:mail-parser",
-    "dep:icalendar",
-    "dep:serenity",
-    "dep:teloxide",
     "dep:tokio-tungstenite",
     "dep:rumqttc",
     "dep:rcgen",
@@ -44,12 +40,13 @@ execute = [
 ]
 
 [dependencies]
+flow-like-catalog-web-telegram.workspace = true
+flow-like-catalog-web-discord.workspace = true
+flow-like-catalog-web-mail.workspace = true
 flow-like-catalog-core.workspace = true
-flow-like = { workspace = true, default-features = false, features = ["flow-metadata"] }
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
-flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, default-features = false }
-flow-like-catalog-macros.workspace = true
 ahash.workspace = true
 tracing.workspace = true
 schemars.workspace = true
@@ -57,28 +54,16 @@ futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 uuid.workspace = true
-async-trait.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
-regex.workspace = true
 base64.workspace = true
 bytes.workspace = true
 urlencoding.workspace = true
 
-# Web/scraping/email dependencies - only included when execute feature is enabled
-htmd = { version = "0.3.0", optional = true }
+# Scraping and shared transport dependencies enabled for execution
 scraper = { version = "0.23.1", optional = true }
-async-imap = { version = "0.11.1", default-features = false, features = ["runtime-tokio", "tokio"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"], optional = true }
 rustls-pki-types = { version = "1", optional = true }
 webpki-roots = { version = "0.26", optional = true }
-async-smtp = { version = "0.10.2", default-features = false, features = ["runtime-tokio", "tokio"], optional = true }
-mail-parser = { version = "0.11.0", optional = true }
-icalendar = { workspace = true, optional = true }
 
-# Discord/Telegram bot integrations - only included when execute feature is enabled
-serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"], optional = true }
-teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"], optional = true }
 
 # WebSocket support
 tokio-tungstenite = { workspace = true, optional = true }

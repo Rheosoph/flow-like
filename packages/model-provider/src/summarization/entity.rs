@@ -21,7 +21,7 @@ impl EntityTracker {
         text: &str,
         model: &dyn ModelLogic,
         model_name: &str,
-    ) -> flow_like_types::Result<()> {
+    ) -> anyhow::Result<()> {
         let max_extract_len = 6000;
         let sample = if text.len() > max_extract_len {
             &text[..max_extract_len]

@@ -1,7 +1,7 @@
 use crate::tokenizer::TokenizerSizer;
-use flow_like_types::Cacheable;
-use flow_like_types::Result;
-use flow_like_types::async_trait;
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 use std::sync::Arc;
 use text_splitter::Characters;
 use text_splitter::{MarkdownSplitter, TextSplitter};

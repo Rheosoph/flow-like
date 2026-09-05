@@ -8,7 +8,7 @@ edition = "2024"
 default = []
 local-ml = ["dep:ort", "dep:fastembed"]
 # Remote ML execution via API proxy (for executors without local model capabilities)
-remote-ml = ["dep:reqwest"]
+remote-ml = []
 # Execution feature - alias for local-ml for consistency across catalog crates
 execute = ["local-ml"]
 
@@ -33,7 +33,16 @@ xnnpack = ["ort/xnnpack"]
 
 [dependencies]
 flow-like-model-protocol.workspace = true
-flow-like-types.workspace = true
+flow-like-types-contracts.workspace = true
+anyhow = "1.0.97"
+async-trait.workspace = true
+async-stream = "0.3.6"
+image = { version = "0.25.6", default-features = false }
+rand = "0.9.0"
+regex.workspace = true
+reqwest-eventsource = "0.6.0"
+tokio = { workspace = true, features = ["io-util", "process", "net", "time", "sync", "macros", "rt"] }
+serde_json.workspace = true
 base64 = "0.22"
 text-splitter = {version = "0.27.0", features = ["markdown", "tokenizers", "tiktoken-rs"]}
 tokenizers = {version="0.22.2", default-features = false, features = ["onig"]}
@@ -42,13 +51,13 @@ futures.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tiktoken-rs = "0.7.0"
-aws-config = { workspace = true, features = ["behavior-version-latest"] }
+aws-types = "1.5.0"
 ndarray.workspace = true
 rig.workspace = true
 rig-vertexai.workspace = true
 google-cloud-auth.workspace = true
 http = "1.4.0"
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "socks", "http2", "multipart"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Upstream ort >= rc.11 carries the iOS static-linking support (pykeio/ort#430) that
@@ -79,4 +88,5 @@ fastembed = { version = "=5.17.2", default-features = false, features = ["image-
 ndk-sys = "0.6"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenv = "0.15.0"

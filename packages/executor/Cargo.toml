@@ -32,7 +32,7 @@ channel-azure = ["flow-like-channels/azure"]
 channel-gcp = ["flow-like-channels/gcp"]
 
 [dependencies]
-flow-like = { workspace = true, features = ["flow-runtime", "model"] }
+flow-like = { package = "flow-like-runtime", path = "../core/runtime", default-features = false, features = ["flow-metadata", "flow-runtime", "model"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true

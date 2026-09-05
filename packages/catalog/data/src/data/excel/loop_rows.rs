@@ -89,11 +89,11 @@ impl NodeLogic for RowLoopNode {
         context.activate_exec_pin_ref(&exec_item).await?;
 
         // Iterate rows
-        for (i, row) in table.rows.iter().enumerate() {
+        for (i, row) in table.rows().iter().enumerate() {
             // Build { header: value } object
             let mut obj: BTreeMap<String, FlowValue> = BTreeMap::new();
-            for col_idx in 0..table.ncols() {
-                let key = table.headers[col_idx].as_ref();
+            for col_idx in 0..table.headers_ref().len() {
+                let key = table.headers_ref()[col_idx].as_ref();
                 let val = row.get(col_idx).unwrap_or(&Cell::Null);
                 obj.insert(key.to_string(), cell_to_json(val));
             }

@@ -77,7 +77,7 @@ impl NodeLogic for GetRowByIndexNode {
             return Err(anyhow!("row_index must be >= 1 (got {row_index_in})"));
         }
 
-        let total_rows = table.nrows();
+        let total_rows = table.row_count();
         let idx0 = (row_index_in as usize).saturating_sub(1);
         if idx0 >= total_rows {
             return Err(anyhow!(
@@ -87,10 +87,10 @@ impl NodeLogic for GetRowByIndexNode {
             ));
         }
 
-        let row = &table.rows[idx0];
+        let row = &table.rows()[idx0];
         let mut obj: BTreeMap<String, Value> = BTreeMap::new();
-        for col_idx in 0..table.ncols() {
-            let key = table.headers[col_idx].as_ref();
+        for col_idx in 0..table.headers_ref().len() {
+            let key = table.headers_ref()[col_idx].as_ref();
             let val = row.get(col_idx).unwrap_or(&Cell::Null);
             obj.insert(key.to_string(), cell_to_json(val));
         }

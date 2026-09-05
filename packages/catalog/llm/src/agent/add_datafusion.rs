@@ -6,7 +6,7 @@ use flow_like::flow::{
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
-use flow_like_catalog_data::data::datafusion::session::DataFusionSession;
+use flow_like_catalog_data_support::data::datafusion::session::DataFusionSession;
 use flow_like_types::{async_trait, json};
 use std::collections::HashMap;
 

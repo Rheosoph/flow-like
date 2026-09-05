@@ -10,7 +10,7 @@ local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda", "
 local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt", "flow-like-executor/local-ml-tensorrt"]
 
 [dependencies]
-flow-like = { workspace = true, features = ["flow-runtime", "model"] }
+flow-like = { package = "flow-like-runtime", path = "../../../../packages/core/runtime", default-features = false, features = ["flow-metadata", "flow-runtime", "model"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["executor-local-ml"] }

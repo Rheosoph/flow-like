@@ -87,9 +87,47 @@ members = [
     "packages/dexie-tauri-adapter/backend",
     "packages/catalog/embedding",
     "packages/core/a2ui-schema",
+    "packages/types/data-url",
+    "packages/core/editor-contracts",
+    "packages/catalog/std-runtime",
+    "packages/catalog/data/notion",
+    "packages/catalog/media-video",
+    "packages/catalog/data/databricks",
+    "packages/catalog/data/microsoft",
+    "packages/catalog/std-numbers",
+    "packages/catalog/data/google",
+    "packages/catalog/web-discord",
+    "packages/catalog/web-telegram",
+    "packages/catalog/data/atlassian",
+    "packages/catalog/media-support",
+    "packages/catalog/data/github",
+    "packages/catalog/web-mail",
+    "packages/catalog/std-ui",
+    "packages/catalog/media-image",
+    "packages/catalog/data/support",
+    "packages/catalog/data/linkedin",
+    "packages/catalog/std-support",
+    "packages/catalog/media-audio",
+    "packages/catalog/std-values",
+    "packages/catalog/media-document",
+    "packages/catalog/std-text",
+    "packages/core/runtime",
+    "packages/core/editor",
 ]
 
 [workspace.dependencies]
+flow-like-editor = { path = "packages/core/editor", default-features = false }
+flow-like-runtime = { path = "packages/core/runtime", default-features = false }
+flow-like-catalog-media-document = { path = "packages/catalog/media-document", default-features = false }
+flow-like-catalog-media-audio = { path = "packages/catalog/media-audio", default-features = false }
+flow-like-catalog-media-image = { path = "packages/catalog/media-image", default-features = false }
+flow-like-catalog-web-mail = { path = "packages/catalog/web-mail", default-features = false }
+flow-like-catalog-media-support = { path = "packages/catalog/media-support", default-features = false }
+flow-like-catalog-web-telegram = { path = "packages/catalog/web-telegram", default-features = false }
+flow-like-catalog-web-discord = { path = "packages/catalog/web-discord", default-features = false }
+flow-like-catalog-media-video = { path = "packages/catalog/media-video", default-features = false }
+flow-like-editor-contracts = { path = "packages/core/editor-contracts", default-features = false }
+flow-like-types-data-url = { path = "packages/types/data-url", default-features = false }
 flow-like-catalog-data-linkedin = { path = "packages/catalog/data/linkedin", default-features = false }
 flow-like-catalog-data-databricks = { path = "packages/catalog/data/databricks", default-features = false }
 flow-like-catalog-data-notion = { path = "packages/catalog/data/notion", default-features = false }

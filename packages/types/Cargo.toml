@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+flow-like-types-data-url.workspace = true
 anyhow = "1.0.97"
 async-stream = "0.3.6"
 async-trait.workspace = true

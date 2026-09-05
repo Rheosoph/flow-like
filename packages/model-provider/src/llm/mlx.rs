@@ -1,6 +1,9 @@
 use std::{any::Any, sync::Arc};
 
-use flow_like_types::{Cacheable, Result, Value, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
+use serde_json::Value;
 
 use super::{
     ModelConstructor, ModelLogic, UsageReportingMode, llamacpp::LlamaCppClient,
@@ -109,7 +112,7 @@ impl ModelLogic for MlxModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::{json::json, tokio};
+    use serde_json::json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
 

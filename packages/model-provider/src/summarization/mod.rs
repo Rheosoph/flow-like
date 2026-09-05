@@ -28,7 +28,7 @@ async fn invoke_llm(
     model_name: &str,
     system_prompt: &str,
     user_prompt: &str,
-) -> flow_like_types::Result<String> {
+) -> anyhow::Result<String> {
     let mut history = History::new(model_name.to_string(), vec![]);
     history.set_system_prompt(system_prompt.to_string());
     history.push_message(HistoryMessage::from_string(Role::User, user_prompt));
@@ -36,7 +36,7 @@ async fn invoke_llm(
     let response = model.invoke(&history, Some(noop_callback())).await?;
     response
         .content()
-        .ok_or_else(|| flow_like_types::anyhow!("No response content from model"))
+        .ok_or_else(|| anyhow::anyhow!("No response content from model"))
 }
 
 /// Summarize raw text using the full pipeline: chunk → strategy → densification.
@@ -47,7 +47,7 @@ pub async fn summarize(
     config: &SummarizationConfig,
     model: &dyn ModelLogic,
     model_name: &str,
-) -> flow_like_types::Result<SummarizationResult> {
+) -> anyhow::Result<SummarizationResult> {
     let chunks = chunking::chunk_text(
         text,
         config.chunking,
@@ -65,7 +65,7 @@ pub async fn summarize_chunks(
     config: &SummarizationConfig,
     model: &dyn ModelLogic,
     model_name: &str,
-) -> flow_like_types::Result<SummarizationResult> {
+) -> anyhow::Result<SummarizationResult> {
     if chunks.is_empty() {
         return Ok(SummarizationResult {
             summary: String::new(),
@@ -196,7 +196,7 @@ async fn run_strategy(
     initial_summary: &str,
     model: &dyn ModelLogic,
     model_name: &str,
-) -> flow_like_types::Result<(String, usize, Vec<SectionSummary>)> {
+) -> anyhow::Result<(String, usize, Vec<SectionSummary>)> {
     match config.strategy {
         SummarizationStrategy::MapReduce => {
             let (summary, calls) = map_reduce::map_reduce_summarize(

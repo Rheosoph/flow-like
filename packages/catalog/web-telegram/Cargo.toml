@@ -1,0 +1,26 @@
+[package]
+name = "flow-like-catalog-web-telegram"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = [
+    "flow-like-catalog-core/execute",
+    "dep:teloxide",
+]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+flow-like-catalog-macros.workspace = true
+chrono.workspace = true
+teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"], optional = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

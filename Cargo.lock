@@ -1848,9 +1848,9 @@ name = "aws-executor-async"
 version = "0.1.0"
 dependencies = [
  "aws_lambda_events 0.16.1",
- "flow-like",
  "flow-like-catalog",
  "flow-like-executor",
+ "flow-like-runtime",
  "flow-like-types",
  "lambda_runtime 0.14.4",
  "mimalloc",
@@ -1866,9 +1866,9 @@ dependencies = [
 name = "aws-executor-ecs"
 version = "0.1.0"
 dependencies = [
- "flow-like",
  "flow-like-catalog",
  "flow-like-executor",
+ "flow-like-runtime",
  "flow-like-types-contracts",
  "mimalloc",
  "sentry",
@@ -8185,56 +8185,16 @@ name = "flow-like"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
- "any-speech-to-text",
- "any-tts",
- "argon2",
- "async-trait",
- "axum 0.8.8",
  "blake3",
- "canonical_json",
- "chacha20poly1305",
- "chrono",
- "dirs-next",
- "flate2",
- "flow-like-a2ui-schema",
- "flow-like-ast",
- "flow-like-core-contracts",
+ "flow-like-editor",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
- "futures 0.3.32",
- "highway",
- "htmd 0.5.4",
- "image",
- "json5",
- "jsonschema",
  "lz4_flex 0.11.6",
- "mime_guess",
- "moka",
- "num_cpus",
- "once_cell",
- "parking_lot",
- "percent-encoding",
- "portpicker",
  "proptest",
- "rayon",
- "rig-core",
  "rkyv 0.8.18",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "strsim",
- "sysinfo",
- "tempfile",
- "thiserror 2.0.18",
  "tokio",
- "tracing",
- "url",
- "utoipa",
- "zeroize",
- "zip 8.5.1",
- "zstd",
 ]
 
 [[package]]
@@ -8248,6 +8208,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8435,11 +8396,11 @@ dependencies = [
  "async-trait",
  "chrono",
  "enigo",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8475,10 +8436,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dirs-next",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "flow-like-wasm",
@@ -8500,9 +8461,9 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
- "flow-like",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8529,12 +8490,20 @@ dependencies = [
  "csv-async",
  "datafusion-table-providers",
  "dirs-next",
- "flow-like",
  "flow-like-ast",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
+ "flow-like-catalog-data-atlassian",
+ "flow-like-catalog-data-databricks",
+ "flow-like-catalog-data-github",
+ "flow-like-catalog-data-google",
+ "flow-like-catalog-data-linkedin",
+ "flow-like-catalog-data-microsoft",
+ "flow-like-catalog-data-notion",
+ "flow-like-catalog-data-support",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-storage-contracts",
  "flow-like-types",
@@ -8561,12 +8530,142 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-catalog-data-atlassian"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-data-databricks"
+version = "0.1.0"
+dependencies = [
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-data-github"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "flow-like-catalog-data-google"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-data-linkedin"
+version = "0.1.0"
+dependencies = [
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+]
+
+[[package]]
+name = "flow-like-catalog-data-microsoft"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "iana-time-zone",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-data-notion"
+version = "0.1.0"
+dependencies = [
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-data-support"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "flow-like-catalog-core",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "schemars 1.2.1",
+ "serde",
+ "tracing",
+ "urlencoding",
+]
+
+[[package]]
 name = "flow-like-catalog-embedding"
 version = "0.1.0"
 dependencies = [
- "flow-like",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
 ]
 
 [[package]]
@@ -8575,10 +8674,10 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8598,13 +8697,13 @@ dependencies = [
  "ahash 0.8.12",
  "async-trait",
  "copilot-sdk",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
- "flow-like-catalog-data",
+ "flow-like-catalog-data-support",
  "flow-like-catalog-embedding",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8632,34 +8731,110 @@ dependencies = [
 name = "flow-like-catalog-media"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "ahash 0.8.12",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-media-audio",
+ "flow-like-catalog-media-document",
+ "flow-like-catalog-media-image",
+ "flow-like-catalog-media-video",
+ "flow-like-runtime",
+ "flow-like-types",
+ "lopdf",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "flow-like-catalog-media-audio"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-media-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-types",
+ "google-cloud-auth",
+ "http 1.4.0",
+ "schemars 1.2.1",
+ "serde",
+]
+
+[[package]]
+name = "flow-like-catalog-media-document"
+version = "0.1.0"
+dependencies = [
  "async-trait",
  "bytes",
  "flate2",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
- "flow-like-catalog-macros",
- "flow-like-model-provider",
- "flow-like-storage",
+ "flow-like-runtime",
  "flow-like-types",
- "futures 0.3.32",
+ "http 1.4.0",
+ "lopdf",
+ "pulldown-cmark 0.13.3",
+ "quick-xml 0.39.2",
+ "schemars 1.2.1",
+ "serde",
+ "zip 8.5.1",
+]
+
+[[package]]
+name = "flow-like-catalog-media-image"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "async-trait",
+ "bytes",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-media-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-types",
  "google-cloud-auth",
  "hayro",
  "http 1.4.0",
  "imageproc",
- "lopdf",
- "nalgebra 0.34.2",
- "pulldown-cmark 0.13.3",
- "quick-xml 0.39.2",
  "rayon",
  "rxing",
  "schemars 1.2.1",
  "serde",
  "tokio",
- "tracing",
- "uuid 1.23.1",
+]
+
+[[package]]
+name = "flow-like-catalog-media-support"
+version = "0.1.0"
+dependencies = [
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-types",
+]
+
+[[package]]
+name = "flow-like-catalog-media-video"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-media-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "google-cloud-auth",
+ "http 1.4.0",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
  "video-utils-rs",
  "zip 8.5.1",
 ]
@@ -8670,12 +8845,12 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
  "flow-like-ordinal",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "fory",
@@ -8712,11 +8887,11 @@ dependencies = [
  "ahash 0.8.12",
  "async-trait",
  "face_id",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8744,11 +8919,11 @@ dependencies = [
  "ahash 0.8.12",
  "async-trait",
  "dirs-next",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
@@ -8769,42 +8944,90 @@ dependencies = [
 name = "flow-like-catalog-std"
 version = "0.1.0"
 dependencies = [
- "aes-gcm 0.10.3",
- "ahash 0.8.12",
- "async-trait",
- "blake3",
- "chacha20poly1305",
- "chrono",
- "chrono-tz",
- "csv",
- "csv-async",
- "fake",
- "fasteval",
- "flate2",
- "flow-like",
- "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
- "flow-like-catalog-data",
- "flow-like-catalog-macros",
- "flow-like-model-provider",
+ "flow-like-catalog-std-numbers",
+ "flow-like-catalog-std-runtime",
+ "flow-like-catalog-std-support",
+ "flow-like-catalog-std-text",
+ "flow-like-catalog-std-ui",
+ "flow-like-catalog-std-values",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
- "htmd 0.5.4",
- "iana-time-zone",
- "jsonschema",
- "md-5 0.11.0",
+ "tokio",
+]
+
+[[package]]
+name = "flow-like-catalog-std-numbers"
+version = "0.1.0"
+dependencies = [
+ "fake",
+ "fasteval",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-std-support",
+ "flow-like-runtime",
+ "flow-like-types",
  "nalgebra 0.34.2",
- "once_cell",
- "pulldown-cmark 0.13.3",
  "rand 0.9.3",
+]
+
+[[package]]
+name = "flow-like-catalog-std-runtime"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "blake3",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-catalog-std-support",
+ "flow-like-runtime",
+ "flow-like-types",
+ "futures 0.3.32",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
+name = "flow-like-catalog-std-support"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-runtime",
+ "flow-like-types",
+]
+
+[[package]]
+name = "flow-like-catalog-std-text"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "ahash 0.8.12",
+ "chacha20poly1305",
+ "chrono",
+ "chrono-tz",
+ "csv-async",
+ "flate2",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-std-support",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "htmd",
+ "md-5 0.11.0",
+ "pulldown-cmark 0.13.3",
  "regex",
  "schemars 1.2.1",
  "serde",
  "sha2 0.11.0",
  "strsim",
  "tokio",
- "tracing",
  "unicode-segmentation",
  "urlencoding",
  "uuid 1.23.1",
@@ -8812,34 +9035,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-catalog-std-ui"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-data-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
+ "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "flow-like-catalog-std-values"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "chrono",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-std-support",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-types",
+ "jsonschema",
+ "schemars 1.2.1",
+ "serde",
+]
+
+[[package]]
 name = "flow-like-catalog-web"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
- "async-imap",
- "async-smtp",
- "async-trait",
  "base64 0.22.1",
  "bytes",
- "chrono",
- "chrono-tz",
- "flow-like",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
- "flow-like-catalog-macros",
- "flow-like-model-provider",
+ "flow-like-catalog-web-discord",
+ "flow-like-catalog-web-mail",
+ "flow-like-catalog-web-telegram",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
  "hmac 0.12.1",
- "htmd 0.3.2",
- "icalendar",
  "jsonwebtoken 10.3.0",
- "mail-parser",
  "ndk",
  "openh264",
  "rcgen",
- "regex",
  "reqwest 0.12.28",
  "retina",
  "rumqttc",
@@ -8847,9 +9099,7 @@ dependencies = [
  "schemars 1.2.1",
  "scraper",
  "serde",
- "serenity",
  "sha2 0.10.9",
- "teloxide",
  "tokio",
  "tokio-rustls 0.26.4",
  "tokio-tungstenite 0.28.0",
@@ -8859,6 +9109,62 @@ dependencies = [
  "uuid 1.23.1",
  "webpki-roots 0.26.11",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "flow-like-catalog-web-discord"
+version = "0.1.0"
+dependencies = [
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-macros",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "serenity",
+ "tokio",
+]
+
+[[package]]
+name = "flow-like-catalog-web-mail"
+version = "0.1.0"
+dependencies = [
+ "async-imap",
+ "async-smtp",
+ "base64 0.22.1",
+ "chrono",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-runtime",
+ "flow-like-types",
+ "futures 0.3.32",
+ "icalendar",
+ "mail-parser",
+ "reqwest 0.12.28",
+ "rustls-pki-types",
+ "schemars 1.2.1",
+ "serde",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "uuid 1.23.1",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "flow-like-catalog-web-telegram"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-catalog-build-helper",
+ "flow-like-catalog-core",
+ "flow-like-catalog-macros",
+ "flow-like-runtime",
+ "flow-like-types",
+ "schemars 1.2.1",
+ "serde",
+ "teloxide",
+ "tokio",
 ]
 
 [[package]]
@@ -9013,6 +9319,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-editor"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "flow-like-ast",
+ "flow-like-core-contracts",
+ "flow-like-editor-contracts",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "htmd",
+ "proptest",
+ "rig-core",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "strsim",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "flow-like-editor-contracts"
+version = "0.1.0"
+dependencies = [
+ "flow-like-core-contracts",
+ "flow-like-types-proto",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flow-like-execution-manager"
 version = "0.1.0"
 dependencies = [
@@ -9063,9 +9408,9 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",
- "flow-like",
  "flow-like-catalog",
  "flow-like-channels",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "flow-like-wasm",
@@ -9117,26 +9462,35 @@ dependencies = [
 name = "flow-like-model-provider"
 version = "0.1.0"
 dependencies = [
- "aws-config",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "aws-types",
  "base64 0.22.1",
  "dotenv",
  "fastembed",
  "flow-like-model-protocol",
- "flow-like-types",
+ "flow-like-types-contracts",
  "futures 0.3.32",
  "google-cloud-auth",
  "http 1.4.0",
+ "image",
  "ndarray 0.17.2",
  "ndk-sys",
  "ort",
+ "rand 0.9.3",
+ "regex",
  "reqwest 0.12.28",
+ "reqwest-eventsource",
  "rig-core",
  "rig-vertexai",
  "schemars 1.2.1",
  "serde",
+ "serde_json",
  "text-splitter",
  "tiktoken-rs 0.7.0",
  "tokenizers 0.22.2",
+ "tokio",
  "tracing",
 ]
 
@@ -9147,6 +9501,61 @@ dependencies = [
  "linfa",
  "ndarray 0.16.1",
  "serde",
+]
+
+[[package]]
+name = "flow-like-runtime"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "any-speech-to-text",
+ "any-tts",
+ "argon2",
+ "async-trait",
+ "axum 0.8.8",
+ "blake3",
+ "canonical_json",
+ "chacha20poly1305",
+ "chrono",
+ "dirs-next",
+ "flate2",
+ "flow-like-a2ui-schema",
+ "flow-like-ast",
+ "flow-like-core-contracts",
+ "flow-like-editor-contracts",
+ "flow-like-model-provider",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "highway",
+ "image",
+ "json5",
+ "jsonschema",
+ "lz4_flex 0.11.6",
+ "mime_guess",
+ "moka",
+ "num_cpus",
+ "once_cell",
+ "parking_lot",
+ "percent-encoding",
+ "portpicker",
+ "proptest",
+ "rayon",
+ "rig-core",
+ "rkyv 0.8.18",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "strsim",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "utoipa",
+ "zeroize",
+ "zip 8.5.1",
+ "zstd",
 ]
 
 [[package]]
@@ -9262,14 +9671,20 @@ dependencies = [
 name = "flow-like-storage-files"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "chrono",
- "flow-like-types",
+ "flow-like-types-contracts",
+ "flow-like-types-data-url",
  "futures 0.3.32",
  "infer 0.19.0",
+ "mime_guess",
  "object_store",
  "percent-encoding",
+ "reqwest 0.12.28",
  "schemars 1.2.1",
  "serde",
  "smb2",
@@ -9291,6 +9706,7 @@ dependencies = [
  "cuid2",
  "dashmap 6.1.0",
  "flow-like-types-contracts",
+ "flow-like-types-data-url",
  "flow-like-types-proto",
  "futures 0.3.32",
  "image",
@@ -9323,6 +9739,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-types-data-url"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "mime_guess",
+ "reqwest 0.12.28",
+ "tokio",
+]
+
+[[package]]
 name = "flow-like-types-proto"
 version = "0.1.0"
 dependencies = [
@@ -9345,10 +9772,10 @@ dependencies = [
  "chrono",
  "dashmap 6.1.0",
  "dirs-next",
- "flow-like",
  "flow-like-catalog-core",
  "flow-like-catalog-embedding",
  "flow-like-model-provider",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "flow-like-wasm-schema",
@@ -9380,7 +9807,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
- "flow-like",
+ "flow-like-runtime",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -11676,22 +12103,12 @@ checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "htmd"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4642ae72538a8d374109c5acf95c603732c736aace63c337ec2d3e42f7095854"
-dependencies = [
- "html5ever 0.35.0",
- "markup5ever_rcdom 0.35.0+unofficial",
-]
-
-[[package]]
-name = "htmd"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eee9b00ee2e599b4f86507157e3db786e7a3319fc225f0e9584151dbea2291d"
 dependencies = [
  "html5ever 0.38.0",
- "markup5ever_rcdom 0.38.0+unofficial",
+ "markup5ever_rcdom",
  "phf 0.13.1",
 ]
 
@@ -11704,18 +12121,7 @@ dependencies = [
  "log",
  "mac",
  "markup5ever 0.14.1",
- "match_token 0.1.0",
-]
-
-[[package]]
-name = "html5ever"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55d958c2f74b664487a2035fe1dadb032c48718a03b63f3ab0b8537db8549ed4"
-dependencies = [
- "log",
- "markup5ever 0.35.0",
- "match_token 0.35.0",
+ "match_token",
 ]
 
 [[package]]
@@ -13181,9 +13587,9 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "base64 0.22.1",
- "flow-like",
  "flow-like-catalog",
  "flow-like-executor",
+ "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
  "futures-util",
@@ -15417,7 +15823,7 @@ dependencies = [
  "futures 0.3.32",
  "hayro",
  "hayro-syntax",
- "htmd 0.5.4",
+ "htmd",
  "icalendar",
  "image",
  "infer 0.19.0",
@@ -15464,36 +15870,13 @@ dependencies = [
 
 [[package]]
 name = "markup5ever"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "311fe69c934650f8f19652b3946075f0fc41ad8757dbb68f1ca14e7900ecc1c3"
-dependencies = [
- "log",
- "tendril 0.4.3",
- "web_atoms 0.1.3",
-]
-
-[[package]]
-name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8983d30f2915feeaaab2d6babdd6bc7e9ed1a00b66b5e6d74df19aa9c0e91862"
 dependencies = [
  "log",
  "tendril 0.5.0",
- "web_atoms 0.2.3",
-]
-
-[[package]]
-name = "markup5ever_rcdom"
-version = "0.35.0+unofficial"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8bcd53df4748257345b8bc156d620340ce0f015ec1c7ef1cff475543888a31d"
-dependencies = [
- "html5ever 0.35.0",
- "markup5ever 0.35.0",
- "tendril 0.4.3",
- "xml5ever 0.35.0",
+ "web_atoms",
 ]
 
 [[package]]
@@ -15505,7 +15888,7 @@ dependencies = [
  "html5ever 0.38.0",
  "markup5ever 0.38.0",
  "tendril 0.5.0",
- "xml5ever 0.38.0",
+ "xml5ever",
 ]
 
 [[package]]
@@ -15528,17 +15911,6 @@ name = "match_token"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88a9689d8d44bf9964484516275f5cd4c9b59457a6940c1d5d0ecbb94510a36b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "match_token"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac84fd3f360fcc43dc5f5d186f02a94192761a080e8bc58621ad4d12296a58cf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -27436,18 +27808,6 @@ dependencies = [
 
 [[package]]
 name = "web_atoms"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57ffde1dc01240bdf9992e3205668b235e59421fd085e8a317ed98da0178d414"
-dependencies = [
- "phf 0.11.3",
- "phf_codegen 0.11.3",
- "string_cache 0.8.9",
- "string_cache_codegen 0.5.4",
-]
-
-[[package]]
-name = "web_atoms"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57a9779e9f04d2ac1ce317aee707aa2f6b773afba7b931222bff6983843b1576"
@@ -28799,16 +29159,6 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
-
-[[package]]
-name = "xml5ever"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee3f1e41afb31a75aef076563b0ad3ecc24f5bd9d12a72b132222664eb76b494"
-dependencies = [
- "log",
- "markup5ever 0.35.0",
-]
 
 [[package]]
 name = "xml5ever"

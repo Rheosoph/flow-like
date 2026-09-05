@@ -1,0 +1,19 @@
+[package]
+name = "flow-like-a2ui-schema"
+version = "0.1.0"
+edition = "2024"
+description = "A2UI schemas and protobuf conversions without Flow runtime dependencies"
+license-file = "../../../LICENSE"
+
+[dependencies]
+flow-like-types-contracts = { workspace = true, features = ["channel"] }
+flow-like-types-proto.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

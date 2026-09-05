@@ -223,7 +223,7 @@ pub(crate) async fn resolve_cached_text_embedding_model(
     let cached = cache.read().await.get(&handle.cache_key).cloned()?;
     let cached = cached
         .as_any()
-        .downcast_ref::<flow_like_catalog_llm::embedding::CachedEmbeddingModelObject>()?;
+        .downcast_ref::<flow_like_catalog_embedding::CachedEmbeddingModelObject>()?;
     cached.text_model.clone()
 }
 

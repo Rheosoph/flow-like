@@ -1,4 +1,4 @@
-use flow_like_types::Value;
+use serde_json::Value;
 
 use super::openai::OpenAIModel;
 use crate::provider::ModelProvider;
@@ -12,7 +12,7 @@ pub struct BedrockModel;
 impl BedrockModel {
     /// Expected params: `api_key` (required), `region` (defaults to
     /// `us-east-1`), optional `endpoint` override, `model_id`.
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<OpenAIModel> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<OpenAIModel> {
         let mut params = provider.params.clone().unwrap_or_default();
 
         let endpoint = params
@@ -50,7 +50,7 @@ impl BedrockModel {
     /// The proxy endpoint is already an OpenAI-compatible API root. It must not
     /// receive the `/openai/v1` normalization used for direct Bedrock runtime
     /// endpoints.
-    pub async fn from_proxy(provider: &ModelProvider) -> flow_like_types::Result<OpenAIModel> {
+    pub async fn from_proxy(provider: &ModelProvider) -> anyhow::Result<OpenAIModel> {
         OpenAIModel::from_provider_chat_completions(provider).await
     }
 }

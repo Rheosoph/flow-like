@@ -55,36 +55,32 @@ impl From<Tokenizer> for TokenizerSizer {
 pub fn load_tokenizer_from_file(
     tokenizer_files: Arc<TokenizerFiles>,
     max_length: usize,
-) -> flow_like_types::Result<TokenizerSizer> {
+) -> anyhow::Result<TokenizerSizer> {
     let base_error_message =
         "Error building TokenizerFiles for UserDefinedEmbeddingModel. Could not read {} file.";
 
     // Serialize each tokenizer file
-    let config: flow_like_types::Value =
-        flow_like_types::json::from_slice(&tokenizer_files.config_file).map_err(|_| {
+    let config: serde_json::Value =
+        serde_json::from_slice(&tokenizer_files.config_file).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 base_error_message.replace("{}", "config.json"),
             )
         })?;
-    let special_tokens_map: flow_like_types::Value = flow_like_types::json::from_slice(
-        &tokenizer_files.special_tokens_map_file,
-    )
-    .map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            base_error_message.replace("{}", "special_tokens_map.json"),
-        )
-    })?;
-    let tokenizer_config: flow_like_types::Value = flow_like_types::json::from_slice(
-        &tokenizer_files.tokenizer_config_file,
-    )
-    .map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            base_error_message.replace("{}", "tokenizer_config.json"),
-        )
-    })?;
+    let special_tokens_map: serde_json::Value =
+        serde_json::from_slice(&tokenizer_files.special_tokens_map_file).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                base_error_message.replace("{}", "special_tokens_map.json"),
+            )
+        })?;
+    let tokenizer_config: serde_json::Value =
+        serde_json::from_slice(&tokenizer_files.tokenizer_config_file).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                base_error_message.replace("{}", "tokenizer_config.json"),
+            )
+        })?;
     let mut tokenizer: tokenizers::Tokenizer = tokenizers::Tokenizer::from_bytes(
         tokenizer_files.tokenizer_file.clone(),
     )
@@ -119,8 +115,8 @@ pub fn load_tokenizer_from_file(
             max_length,
             ..Default::default()
         }))
-        .map_err(flow_like_types::Error::msg)?;
-    if let flow_like_types::Value::Object(root_object) = special_tokens_map {
+        .map_err(anyhow::Error::msg)?;
+    if let serde_json::Value::Object(root_object) = special_tokens_map {
         for (_, value) in root_object.iter() {
             if value.is_string() {
                 tokenizer.add_special_tokens(&[AddedToken {

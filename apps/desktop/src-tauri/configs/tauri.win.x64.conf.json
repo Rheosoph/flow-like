@@ -1,7 +1,10 @@
 {
 	"identifier": "com.flow-like.app",
 	"bundle": {
-		"targets": ["msi", "nsis"],
+		"targets": [
+			"msi",
+			"nsis"
+		],
 		"externalBin": [
 			"binaries/win/x64/llama-server"
 		],
@@ -31,7 +34,12 @@
 			"binaries/win/x64/mtmd.dll": "mtmd.dll",
 			"binaries/win/x64/vcruntime140.dll-x86_64-pc-windows-msvc": "vcruntime140.dll",
 			"binaries/win/x64/vcruntime140_1.dll-x86_64-pc-windows-msvc": "vcruntime140_1.dll",
-			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
+			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
+			"runtimes/stablediffusion/win-x64/": "runtimes/stablediffusion/"
 		}
+	},
+	"build": {
+		"beforeDevCommand": "bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run dev",
+		"beforeBuildCommand": "bun ./scripts/prepare-stablediffusion.ts --platform win-x64 && bun run build"
 	}
 }

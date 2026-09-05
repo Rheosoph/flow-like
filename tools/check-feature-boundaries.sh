@@ -25,6 +25,47 @@ REQUIRED_FEATURES=("")
 TREE_FILE=""
 DEPENDENCY_ONLY=0
 
+# Node collections are compilation leaves. Shared handles may depend on runtime
+# contracts, but must never regain a dependency on one of these collections.
+STD_NODE_PACKAGES=(
+    flow-like-catalog-std-ui
+    flow-like-catalog-std-values
+    flow-like-catalog-std-numbers
+    flow-like-catalog-std-text
+    flow-like-catalog-std-runtime
+)
+DATA_NODE_PACKAGES=(
+    flow-like-catalog-data
+    flow-like-catalog-data-github
+    flow-like-catalog-data-google
+    flow-like-catalog-data-microsoft
+    flow-like-catalog-data-atlassian
+    flow-like-catalog-data-notion
+    flow-like-catalog-data-databricks
+    flow-like-catalog-data-linkedin
+)
+CATALOG_NODE_PACKAGES=(
+    flow-like-catalog
+    flow-like-catalog-std
+    "${STD_NODE_PACKAGES[@]}"
+    "${DATA_NODE_PACKAGES[@]}"
+    flow-like-catalog-web
+    flow-like-catalog-web-discord
+    flow-like-catalog-web-mail
+    flow-like-catalog-web-telegram
+    flow-like-catalog-media
+    flow-like-catalog-media-audio
+    flow-like-catalog-media-document
+    flow-like-catalog-media-image
+    flow-like-catalog-media-video
+    flow-like-catalog-ml
+    flow-like-catalog-onnx
+    flow-like-catalog-llm
+    flow-like-catalog-processing
+    flow-like-catalog-geo
+    flow-like-catalog-automation
+)
+
 usage() {
     cat <<'EOF'
 Usage: tools/check-feature-boundaries.sh [OPTIONS] [BOUNDARY ...]
@@ -57,6 +98,29 @@ EOF
 list_boundaries() {
     cat <<'EOF'
 core-contracts
+a2ui-schema
+editor-contracts
+types-data-url
+model-provider
+catalog-std
+catalog-std-execute
+catalog-std-ui
+catalog-std-values
+catalog-std-numbers
+catalog-std-text
+catalog-std-runtime
+catalog-std-support
+catalog-data-support
+catalog-data-github
+catalog-data-google
+catalog-data-microsoft
+catalog-data-atlassian
+catalog-data-notion
+catalog-data-databricks
+catalog-data-linkedin
+catalog-llm
+catalog-llm-execute
+catalog-embedding
 dev-default
 core-flow-metadata
 core-flow
@@ -160,6 +224,29 @@ esac
 if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
     BOUNDARIES=(
         core-contracts
+        a2ui-schema
+        editor-contracts
+        types-data-url
+        model-provider
+        catalog-std
+        catalog-std-execute
+        catalog-std-ui
+        catalog-std-values
+        catalog-std-numbers
+        catalog-std-text
+        catalog-std-runtime
+        catalog-std-support
+        catalog-data-support
+        catalog-data-github
+        catalog-data-google
+        catalog-data-microsoft
+        catalog-data-atlassian
+        catalog-data-notion
+        catalog-data-databricks
+        catalog-data-linkedin
+        catalog-llm
+        catalog-llm-execute
+        catalog-embedding
         dev-default
         core-flow-metadata
         core-flow
@@ -193,7 +280,7 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
 fi
 
 configure_boundary() {
-    local boundary="$1"
+    local boundary="$1" package selected_package
     CHECK_ARGS=()
     FORBIDDEN=("")
     REQUIRED=("")
@@ -204,7 +291,72 @@ configure_boundary() {
     case "$boundary" in
         core-contracts)
             CHECK_ARGS=(--package flow-like-core-contracts --no-default-features)
-            FORBIDDEN=(flow-like flow-like-storage flow-like-model-provider lancedb datafusion wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-storage flow-like-model-provider lancedb datafusion wasmtime tauri)
+            ;;
+        a2ui-schema|editor-contracts)
+            selected_package="flow-like-$boundary"
+            CHECK_ARGS=(--package "$selected_package" --no-default-features)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage flow-like-model-provider flow-like-catalog-core "${CATALOG_NODE_PACKAGES[@]}" wasmtime tauri)
+            ;;
+        types-data-url)
+            CHECK_ARGS=(--package flow-like-types-data-url --no-default-features)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage flow-like-model-provider "${CATALOG_NODE_PACKAGES[@]}" image imageproc)
+            ;;
+        model-provider)
+            CHECK_ARGS=(--package flow-like-model-provider --no-default-features --features remote-ml)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage "${CATALOG_NODE_PACKAGES[@]}")
+            ;;
+        catalog-std|catalog-std-execute)
+            # Children have isolated execution checks below; these assertions
+            # cover both compatibility-facade feature selections.
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package flow-like-catalog-std --no-default-features)
+            if [ "$boundary" = catalog-std-execute ]; then
+                CHECK_ARGS+=(--features execute)
+            fi
+            FORBIDDEN=(flow-like flow-like-editor "${DATA_NODE_PACKAGES[@]}" flow-like-catalog-llm)
+            REQUIRED=("${STD_NODE_PACKAGES[@]}" flow-like-catalog-std-support)
+            ;;
+        catalog-std-ui|catalog-std-values|catalog-std-numbers|catalog-std-text|catalog-std-runtime)
+            # Checking each child separately prevents sibling feature
+            # unification from hiding an accidental facade or sibling edge.
+            selected_package="flow-like-$boundary"
+            CHECK_ARGS=(--package "$selected_package" --no-default-features --features execute)
+            FORBIDDEN=(flow-like flow-like-editor)
+            for package in "${CATALOG_NODE_PACKAGES[@]}"; do
+                if [ "$package" != "$selected_package" ]; then
+                    FORBIDDEN+=("$package")
+                fi
+            done
+            ;;
+        catalog-std-support|catalog-data-support)
+            CHECK_ARGS=(--package "flow-like-$boundary" --no-default-features --features execute)
+            FORBIDDEN=(flow-like flow-like-editor "${CATALOG_NODE_PACKAGES[@]}")
+            ;;
+        catalog-data-github|catalog-data-google|catalog-data-microsoft|catalog-data-atlassian|catalog-data-notion|catalog-data-databricks|catalog-data-linkedin)
+            # The service implementations move without behavior changes.
+            # Assert each dependency graph independently to protect parallelism.
+            DEPENDENCY_ONLY=1
+            selected_package="flow-like-$boundary"
+            CHECK_ARGS=(--package "$selected_package" --no-default-features --features execute)
+            FORBIDDEN=(flow-like flow-like-editor)
+            for package in "${CATALOG_NODE_PACKAGES[@]}"; do
+                if [ "$package" != "$selected_package" ]; then
+                    FORBIDDEN+=("$package")
+                fi
+            done
+            ;;
+        catalog-llm|catalog-llm-execute)
+            CHECK_ARGS=(--package flow-like-catalog-llm --no-default-features)
+            if [ "$boundary" = catalog-llm-execute ]; then
+                CHECK_ARGS+=(--features execute)
+            fi
+            FORBIDDEN=(flow-like flow-like-editor "${DATA_NODE_PACKAGES[@]}" flow-like-catalog-std "${STD_NODE_PACKAGES[@]}")
+            REQUIRED=(flow-like-catalog-data-support flow-like-catalog-embedding)
+            ;;
+        catalog-embedding)
+            CHECK_ARGS=(--package flow-like-catalog-embedding --no-default-features)
+            FORBIDDEN=(flow-like flow-like-editor "${CATALOG_NODE_PACKAGES[@]}")
             ;;
         dev-default)
             # Keep this list in lockstep with workspace.default-members. It
@@ -283,21 +435,25 @@ configure_boundary() {
             ;;
         types-contracts)
             CHECK_ARGS=(--package flow-like-types-contracts --no-default-features --features cache,dispatch,maintenance)
-            FORBIDDEN=(flow-like flow-like-types flow-like-types-proto flow-like-storage prost lancedb datafusion wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-types-proto flow-like-storage prost lancedb datafusion wasmtime tauri)
             ;;
         types-proto)
             CHECK_ARGS=(--package flow-like-types-proto --no-default-features)
-            FORBIDDEN=(flow-like flow-like-types flow-like-storage lancedb datafusion wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage lancedb datafusion wasmtime tauri)
             ;;
         storage-contracts)
             CHECK_ARGS=(--package flow-like-storage-contracts --no-default-features --features graph,vector)
-            FORBIDDEN=(flow-like flow-like-storage lancedb lance lance-core datafusion object_store wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-storage lancedb lance lance-core datafusion object_store wasmtime tauri)
             ;;
         storage-files)
             # The baseline deliberately leaves SMB opt-in. Object-store cloud
             # clients belong here; Lance, Arrow, and query execution do not.
             CHECK_ARGS=(--package flow-like-storage-files --no-default-features)
             FORBIDDEN=(
+                flow-like
+                flow-like-runtime
+                flow-like-editor
+                flow-like-types
                 flow-like-storage
                 lancedb
                 lance
@@ -316,15 +472,17 @@ configure_boundary() {
             ;;
         model-protocol)
             CHECK_ARGS=(--package flow-like-model-protocol --no-default-features)
-            FORBIDDEN=(flow-like flow-like-model-provider flow-like-storage fastembed ort candle-core tokenizers wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-model-provider flow-like-storage fastembed ort candle-core tokenizers wasmtime tauri)
             ;;
         wasm-schema)
             CHECK_ARGS=(--package flow-like-wasm-schema --no-default-features --features bundle,openapi)
-            FORBIDDEN=(flow-like flow-like-wasm wasmtime wasmtime-wasi wit-parser wasmparser tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-wasm wasmtime wasmtime-wasi wit-parser wasmparser tauri)
             ;;
         wasm-schema-nodes)
             CHECK_ARGS=(--package flow-like-wasm-schema --no-default-features --features bundle,nodes,openapi)
             FORBIDDEN=(
+                flow-like
+                flow-like-editor
                 flow-like-wasm
                 wasmtime
                 wasmtime-wasi
@@ -337,7 +495,7 @@ configure_boundary() {
                 datafusion
                 tauri
             )
-            REQUIRED=(flow-like)
+            REQUIRED=(flow-like-runtime)
             ;;
         wasm-host)
             # Dependency-only guard used by CI: the host legitimately compiles
@@ -345,6 +503,10 @@ configure_boundary() {
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-wasm)
             FORBIDDEN=(
+                flow-like
+                flow-like-editor
+                "${DATA_NODE_PACKAGES[@]}"
+                flow-like-catalog-llm
                 lancedb
                 lance
                 lance-core
@@ -359,10 +521,11 @@ configure_boundary() {
                 smb2-sys
                 libsmb2-sys
             )
+            REQUIRED=(flow-like-runtime flow-like-catalog-embedding)
             ;;
         api-entity)
             CHECK_ARGS=(--package flow-like-api-entity --no-default-features)
-            FORBIDDEN=(flow-like flow-like-api flow-like-storage flow-like-catalog axum tower)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-api flow-like-storage flow-like-catalog axum tower)
             ;;
         api-runtime)
             # The API needs database/catalog runtime code, but registry DTOs

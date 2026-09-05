@@ -1,12 +1,12 @@
+use anyhow::{Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use flow_like_types::{
-    Cacheable, JsonSchema, Result, anyhow, bail, mime_guess,
-    reqwest::{self, Url},
-    utils::data_url::pathbuf_to_data_url,
-};
+use flow_like_types_contracts::Cacheable;
+use flow_like_types_data_url::pathbuf_to_data_url;
 use futures::StreamExt;
 use local_store::LocalObjectStore;
 use object_store::{ObjectMeta, ObjectStore, path::Path, signer::Signer};
+use reqwest::Url;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,

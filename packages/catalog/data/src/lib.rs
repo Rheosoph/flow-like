@@ -20,7 +20,25 @@ pub mod remote_util;
 
 pub use data::*;
 
-include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
+// The shared generator also emits a convenience collector; the facade uses its entries.
+#[allow(dead_code)]
+mod own_registry {
+    include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
+}
+
+/// Collect data nodes in their original source order across the independent packages.
+pub fn collect_nodes() -> Vec<Arc<dyn NodeLogic>> {
+    let mut entries = own_registry::collect_node_entries();
+    entries.extend(flow_like_catalog_data_github::collect_node_entries());
+    entries.extend(flow_like_catalog_data_google::collect_node_entries());
+    entries.extend(flow_like_catalog_data_microsoft::collect_node_entries());
+    entries.extend(flow_like_catalog_data_atlassian::collect_node_entries());
+    entries.extend(flow_like_catalog_data_notion::collect_node_entries());
+    entries.extend(flow_like_catalog_data_databricks::collect_node_entries());
+    entries.extend(flow_like_catalog_data_linkedin::collect_node_entries());
+    entries.sort_by(|left, right| std::path::Path::new(left.0).cmp(std::path::Path::new(right.0)));
+    entries.into_iter().map(|(_, node)| node).collect()
+}
 
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
     collect_nodes()

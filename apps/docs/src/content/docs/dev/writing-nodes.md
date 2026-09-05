@@ -13,7 +13,7 @@ or independently distributed extensions, use
 ## The `NodeLogic` contract
 
 A native node implements `NodeLogic` from
-`packages/core/src/flow/node.rs`:
+`packages/core/runtime/src/flow/node.rs`:
 
 ```rust
 #[async_trait]
@@ -50,7 +50,7 @@ do not rename it after boards have started using the node.
 
 A pure node has no execution pins and must not produce side effects. The runtime
 may evaluate it on demand or cache its result. The integer-add node in
-`packages/catalog/std/src/utils/int/add.rs` is a compact example:
+`packages/catalog/std-numbers/src/utils/int/add.rs` is a compact example:
 
 ```rust
 use flow_like::flow::{
@@ -136,7 +136,7 @@ async fn run(
 }
 ```
 
-See `packages/catalog/std/src/control/branch_node.rs` for the complete
+See `packages/catalog/std-runtime/src/control/branch_node.rs` for the complete
 definition.
 
 ## Reading and writing pins
@@ -208,7 +208,7 @@ async fn on_update(&self, node: &mut Node, board: &Board) {
 }
 ```
 
-See `packages/catalog/std/src/utils/string/format.rs` for the full,
+See `packages/catalog/std-text/src/utils/string/format.rs` for the full,
 duplicate-safe implementation.
 
 `on_update` runs frequently while a board is edited. Keep it deterministic,

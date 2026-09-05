@@ -2,7 +2,9 @@ use std::any::Any;
 
 use super::{ModelConstructor, ModelLogic};
 use crate::provider::ModelProvider;
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 
 use super::llamacpp::LlamaCppClient;
 
@@ -12,7 +14,7 @@ pub struct LMStudioModel {
 }
 
 impl LMStudioModel {
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let model_id = provider.model_id.clone().or_else(|| {
             params

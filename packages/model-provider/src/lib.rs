@@ -4,6 +4,7 @@ pub mod image_embedding;
 pub mod llm;
 pub mod response;
 pub mod response_chunk;
+pub mod stablediffusion;
 pub mod rig_conversion;
 #[cfg(feature = "local-ml")]
 pub use fastembed;

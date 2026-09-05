@@ -1,26 +1,36 @@
 {
-    "identifier": "com.flow-like.app",
-    "build": {
-        "beforeDevCommand": "bun ./scripts/prepare-mlx.ts --configuration Debug && bun run dev",
-        "beforeBuildCommand": "bun ./scripts/prepare-mlx.ts --configuration Release && bun run build"
-    },
-    "bundle": {
-        "externalBin": [
-            "binaries/mac/arm/libggml-base.dylib",
-            "binaries/mac/arm/libggml-blas.dylib",
-            "binaries/mac/arm/libggml-cpu.dylib",
-            "binaries/mac/arm/libggml-metal.dylib",
-            "binaries/mac/arm/libggml-rpc.dylib",
-            "binaries/mac/arm/libggml.dylib",
-            "binaries/mac/arm/libllama.dylib",
-            "binaries/mac/arm/libmtmd.dylib",
-            "binaries/mac/arm/llama-server",
-            "binaries/mac/arm/flow-like-mlx-service"
-        ],
-        "resources": {
-            "icons/Assets.car": "Assets.car",
-            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
-            "binaries/mac/arm/mlx-resources/": ""
-        }
-    }
+	"identifier": "com.flow-like.app",
+	"build": {
+		"beforeDevCommand": "bun ./scripts/prepare-stablediffusion.ts --platform mac-arm && bun ./scripts/prepare-mlx.ts --configuration Debug && bun run dev",
+		"beforeBuildCommand": "bun ./scripts/prepare-stablediffusion.ts --platform mac-arm && bun ./scripts/prepare-mlx.ts --configuration Release && bun run build"
+	},
+	"bundle": {
+		"externalBin": [
+			"binaries/mac/arm/libggml-base.dylib",
+			"binaries/mac/arm/libggml-blas.dylib",
+			"binaries/mac/arm/libggml-cpu.dylib",
+			"binaries/mac/arm/libggml-metal.dylib",
+			"binaries/mac/arm/libggml-rpc.dylib",
+			"binaries/mac/arm/libggml.dylib",
+			"binaries/mac/arm/libllama.dylib",
+			"binaries/mac/arm/libmtmd.dylib",
+			"binaries/mac/arm/llama-server",
+			"binaries/mac/arm/flow-like-mlx-service",
+			"runtimes/stablediffusion/mac-arm/sd-server"
+		],
+		"resources": {
+			"icons/Assets.car": "Assets.car",
+			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
+			"binaries/mac/arm/mlx-resources/": "",
+			"runtimes/stablediffusion/mac-arm/stable-diffusion.cpp.txt": "runtimes/stablediffusion/stable-diffusion.cpp.txt",
+			"runtimes/stablediffusion/mac-arm/ggml.txt": "runtimes/stablediffusion/ggml.txt",
+			"runtimes/stablediffusion/mac-arm/webp-COPYING.txt": "runtimes/stablediffusion/webp-COPYING.txt",
+			"runtimes/stablediffusion/mac-arm/webp-PATENTS.txt": "runtimes/stablediffusion/webp-PATENTS.txt",
+			"runtimes/stablediffusion/mac-arm/webp-AUTHORS.txt": "runtimes/stablediffusion/webp-AUTHORS.txt",
+			"runtimes/stablediffusion/mac-arm/webm-LICENSE.txt": "runtimes/stablediffusion/webm-LICENSE.txt",
+			"runtimes/stablediffusion/mac-arm/webm-PATENTS.txt": "runtimes/stablediffusion/webm-PATENTS.txt",
+			"runtimes/stablediffusion/mac-arm/webm-AUTHORS.txt": "runtimes/stablediffusion/webm-AUTHORS.txt",
+			"runtimes/stablediffusion/mac-arm/runtime.json": "runtimes/stablediffusion/runtime.json"
+		}
+	}
 }

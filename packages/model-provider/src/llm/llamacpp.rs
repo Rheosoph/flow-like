@@ -2,7 +2,9 @@ use std::any::Any;
 
 use super::{ModelConstructor, ModelLogic};
 use crate::provider::ModelProvider;
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 
 mod client;
 pub use client::{CompletionModel, LlamaCppClient};
@@ -15,7 +17,7 @@ pub struct LlamaCppModel {
 }
 
 impl LlamaCppModel {
-    pub async fn new(provider: &ModelProvider, port: u16) -> flow_like_types::Result<Self> {
+    pub async fn new(provider: &ModelProvider, port: u16) -> anyhow::Result<Self> {
         let model_id = provider.model_id.clone();
         let base_url = format!("http://127.0.0.1:{}", port);
 
@@ -29,7 +31,7 @@ impl LlamaCppModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let endpoint = params
             .get("endpoint")

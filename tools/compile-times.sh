@@ -20,6 +20,8 @@ USE_RUSTC_WRAPPER=0
 CARGO_CONFIG=""
 JOBS=""
 PROFILE=""
+CARGO_SUBCOMMAND="check"
+INCREMENTAL_MODE="profile"
 INCREMENTAL_SOURCE_OVERRIDE=""
 
 SCENARIOS=()
@@ -33,14 +35,20 @@ usage() {
     cat <<'EOF'
 Usage: tools/compile-times.sh [OPTIONS] [SCENARIO ...] [-- CARGO_ARGS ...]
 
-Measure cold, warm, and incremental `cargo check` times without cleaning or
+Measure cold, warm, and incremental Cargo times without cleaning or
 reusing the normal workspace target directory. With no scenario, `core` is
 measured. Use `--all-scenarios` for the project baseline set.
 
 Scenarios:
   core              Shared flow/editor surface (`flow-like`, no DB runtime)
   core-runtime      Full application/runtime core
+  runtime           Execution core without editor services
+  editor            FlowScript and copilot services
   desktop           Tauri desktop application (`flow-like-desktop`)
+  desktop-std-string  Desktop after a string node edit
+  desktop-std-ui     Desktop after an A2UI node edit
+  desktop-data-github Desktop after a GitHub integration edit
+  backend-executor  Kubernetes executor (`k8s-executor`)
   catalog-portable  Portable catalog metadata bundle
   catalog-server    Remote-only headless catalog execution bundle
   catalog-server-local-ml
@@ -48,6 +56,8 @@ Scenarios:
   backend-local     One representative backend (`local-api`)
 
 Options:
+  --command COMMAND          check (default) or build, including codegen/linking
+  --incremental MODE         profile (default), 0, or 1; overrides ambient env
   --phase PHASE               cold, warm, incremental, or all (default: all)
   --all-scenarios             Measure every scenario listed above
   --target-root PATH          Build root (default: target/compile-times)
@@ -67,7 +77,9 @@ Options:
 Examples:
   tools/compile-times.sh core
   tools/compile-times.sh --all-scenarios
-  tools/compile-times.sh --phase warm desktop
+  tools/compile-times.sh --command build --phase warm desktop
+  tools/compile-times.sh --command build desktop-std-string
+  tools/compile-times.sh --command build --profile ci --incremental 0 backend-executor
   tools/compile-times.sh --phase incremental catalog-server
   tools/compile-times.sh --cargo-config .cargo/fast-compile.toml core
 
@@ -81,7 +93,13 @@ list_scenarios() {
     cat <<'EOF'
 core
 core-runtime
+runtime
+editor
 desktop
+desktop-std-string
+desktop-std-ui
+desktop-data-github
+backend-executor
 catalog-portable
 catalog-server
 catalog-server-local-ml
@@ -143,13 +161,23 @@ trap 'exit 143' TERM
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --command)
+            [ "$#" -ge 2 ] || fail "--command requires a value"
+            CARGO_SUBCOMMAND="$2"
+            shift 2
+            ;;
+        --incremental)
+            [ "$#" -ge 2 ] || fail "--incremental requires a value"
+            INCREMENTAL_MODE="$2"
+            shift 2
+            ;;
         --phase)
             [ "$#" -ge 2 ] || fail "--phase requires a value"
             PHASE="$2"
             shift 2
             ;;
         --all-scenarios)
-            SCENARIOS=(core core-runtime desktop catalog-portable catalog-server catalog-server-local-ml backend-local)
+            SCENARIOS=(core core-runtime runtime editor desktop desktop-std-string desktop-std-ui desktop-data-github backend-executor catalog-portable catalog-server catalog-server-local-ml backend-local)
             shift
             ;;
         --target-root)
@@ -220,6 +248,16 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+case "$CARGO_SUBCOMMAND" in
+    check|build) ;;
+    *) fail "invalid command '$CARGO_SUBCOMMAND' (expected check or build)" ;;
+esac
+case "$INCREMENTAL_MODE" in
+    profile) unset CARGO_INCREMENTAL ;;
+    0|1) export CARGO_INCREMENTAL="$INCREMENTAL_MODE" ;;
+    *) fail "invalid incremental mode '$INCREMENTAL_MODE' (expected profile, 0, or 1)" ;;
+esac
+
 case "$PHASE" in
     cold|warm|incremental|all) ;;
     *) fail "invalid phase '$PHASE' (expected cold, warm, incremental, or all)" ;;
@@ -263,12 +301,20 @@ configure_scenario() {
     SCENARIO_CARGO_ARGS=()
     case "$scenario" in
         core)
-            SCENARIO_CARGO_ARGS=(--package flow-like --no-default-features --features flow)
-            SCENARIO_SOURCE="$ROOT_DIR/packages/core/src/lib.rs"
+            SCENARIO_CARGO_ARGS=(--package flow-like --no-default-features --features flow-metadata)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/core/runtime/src/lib.rs"
             ;;
         core-runtime)
             SCENARIO_CARGO_ARGS=(--package flow-like --no-default-features --features app-runtime)
-            SCENARIO_SOURCE="$ROOT_DIR/packages/core/src/lib.rs"
+            SCENARIO_SOURCE="$ROOT_DIR/packages/core/runtime/src/lib.rs"
+            ;;
+        runtime)
+            SCENARIO_CARGO_ARGS=(--package flow-like-runtime --no-default-features --features flow-metadata)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/core/runtime/src/lib.rs"
+            ;;
+        editor)
+            SCENARIO_CARGO_ARGS=(--package flow-like-editor)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/core/editor/src/lib.rs"
             ;;
         desktop)
             SCENARIO_CARGO_ARGS=(--package flow-like-desktop)
@@ -276,6 +322,22 @@ configure_scenario() {
             # Touch the implementation included by the desktop binary so this
             # scenario measures a real application edit.
             SCENARIO_SOURCE="$ROOT_DIR/apps/desktop/src-tauri/src/application.rs"
+            ;;
+        desktop-std-string)
+            SCENARIO_CARGO_ARGS=(--package flow-like-desktop)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/catalog/std-text/src/utils/string/trim.rs"
+            ;;
+        desktop-std-ui)
+            SCENARIO_CARGO_ARGS=(--package flow-like-desktop)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/catalog/std-ui/src/a2ui/elements/create_element.rs"
+            ;;
+        desktop-data-github)
+            SCENARIO_CARGO_ARGS=(--package flow-like-desktop)
+            SCENARIO_SOURCE="$ROOT_DIR/packages/catalog/data/github/src/data/github/get_repo.rs"
+            ;;
+        backend-executor)
+            SCENARIO_CARGO_ARGS=(--package k8s-executor)
+            SCENARIO_SOURCE="$ROOT_DIR/apps/backend/kubernetes/executor/src/main.rs"
             ;;
         catalog-portable)
             SCENARIO_CARGO_ARGS=(--package flow-like-catalog --no-default-features --features portable-metadata)
@@ -312,7 +374,7 @@ compose_cargo_command() {
     if [ -n "$CARGO_CONFIG" ]; then
         CARGO_COMMAND+=(--config "$CARGO_CONFIG")
     fi
-    CARGO_COMMAND+=(check --locked --timings)
+    CARGO_COMMAND+=("$CARGO_SUBCOMMAND" --locked --timings)
     CARGO_COMMAND+=("${SCENARIO_CARGO_ARGS[@]}")
     if [ -n "$PROFILE" ]; then
         CARGO_COMMAND+=(--profile "$PROFILE")
@@ -327,7 +389,12 @@ compose_cargo_command() {
 
 print_command() {
     local target_dir="$1"
-    printf '  CARGO_TARGET_DIR=%q CARGO_INCREMENTAL=1 ' "$target_dir"
+    if [ "$INCREMENTAL_MODE" = profile ]; then
+        printf '  env -u CARGO_INCREMENTAL '
+    else
+        printf '  CARGO_INCREMENTAL=%q ' "$INCREMENTAL_MODE"
+    fi
+    printf 'CARGO_TARGET_DIR=%q ' "$target_dir"
     if [ "$USE_RUSTC_WRAPPER" -eq 0 ]; then
         printf 'RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= '
     fi
@@ -364,10 +431,10 @@ run_measured_phase() {
     started="$(now_nanoseconds)"
     set +e
     if [ "$USE_RUSTC_WRAPPER" -eq 1 ]; then
-        CARGO_TARGET_DIR="$target_dir" CARGO_INCREMENTAL=1 \
+        CARGO_TARGET_DIR="$target_dir" \
             "${CARGO_COMMAND[@]}" 2>&1 | tee "$report_dir/$phase.log"
     else
-        CARGO_TARGET_DIR="$target_dir" CARGO_INCREMENTAL=1 RUSTC_WRAPPER= \
+        CARGO_TARGET_DIR="$target_dir" RUSTC_WRAPPER= \
             RUSTC_WORKSPACE_WRAPPER= \
             "${CARGO_COMMAND[@]}" 2>&1 | tee "$report_dir/$phase.log"
     fi
@@ -397,10 +464,10 @@ run_prime() {
 
     mkdir -p "$target_dir" "$report_dir"
     if [ "$USE_RUSTC_WRAPPER" -eq 1 ]; then
-        CARGO_TARGET_DIR="$target_dir" CARGO_INCREMENTAL=1 \
+        CARGO_TARGET_DIR="$target_dir" \
             "${CARGO_COMMAND[@]}" > "$report_dir/prime.log" 2>&1
     else
-        CARGO_TARGET_DIR="$target_dir" CARGO_INCREMENTAL=1 RUSTC_WRAPPER= \
+        CARGO_TARGET_DIR="$target_dir" RUSTC_WRAPPER= \
             RUSTC_WORKSPACE_WRAPPER= \
             "${CARGO_COMMAND[@]}" > "$report_dir/prime.log" 2>&1
     fi
@@ -431,6 +498,8 @@ if [ "$DRY_RUN" -eq 0 ]; then
         echo "run_id=$RUN_ID"
         echo "workspace=$ROOT_DIR"
         echo "phase=$PHASE"
+        echo "command=$CARGO_SUBCOMMAND"
+        echo "incremental=$INCREMENTAL_MODE"
         echo "scenarios=${SCENARIOS[*]}"
         echo "jobs=${JOBS:-auto}"
         echo "profile=${PROFILE:-dev}"

@@ -1,5 +1,5 @@
 {
-	"$comment": "Shared conformance fixture for the board-test grader, discovery and verdict-vs-baseline comparison twins. Loaded by packages/core/src/flow/regression (Rust) and packages/ui/lib/board-tests.test.ts + packages/ui/lib/regression.test.ts (TS). A deliberate rule change on either side must update this file and thereby fail the other side's test.",
+	"$comment": "Shared conformance fixture for the board-test grader, discovery and verdict-vs-baseline comparison twins. Loaded by packages/core/runtime/src/flow/regression (Rust) and packages/ui/lib/board-tests.test.ts + packages/ui/lib/regression.test.ts (TS). A deliberate rule change on either side must update this file and thereby fail the other side's test.",
 	"grading": [
 		{
 			"case": "all assertions pass",

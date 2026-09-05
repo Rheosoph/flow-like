@@ -13,7 +13,7 @@ openapi = ["dep:utoipa", "flow-like?/openapi"]
 [dependencies]
 anyhow = { version = "1", optional = true }
 bitflags.workspace = true
-flow-like = { workspace = true, optional = true }
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = { version = "0.10", optional = true }

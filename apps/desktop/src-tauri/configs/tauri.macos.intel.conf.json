@@ -2,18 +2,32 @@
 	"identifier": "com.flow-like.app",
 	"bundle": {
 		"externalBin": [
-            "binaries/mac/intel/libggml-base.dylib",
-            "binaries/mac/intel/libggml-blas.dylib",
-            "binaries/mac/intel/libggml-cpu.dylib",
-            "binaries/mac/intel/libggml-rpc.dylib",
-            "binaries/mac/intel/libggml.dylib",
-            "binaries/mac/intel/libllama.dylib",
-            "binaries/mac/intel/libmtmd.dylib",
-            "binaries/mac/intel/llama-server"
-        ],
-        "resources": {
-            "icons/Assets.car": "Assets.car",
-            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
-        }
+			"binaries/mac/intel/libggml-base.dylib",
+			"binaries/mac/intel/libggml-blas.dylib",
+			"binaries/mac/intel/libggml-cpu.dylib",
+			"binaries/mac/intel/libggml-rpc.dylib",
+			"binaries/mac/intel/libggml.dylib",
+			"binaries/mac/intel/libllama.dylib",
+			"binaries/mac/intel/libmtmd.dylib",
+			"binaries/mac/intel/llama-server",
+			"runtimes/stablediffusion/mac-intel/sd-server"
+		],
+		"resources": {
+			"icons/Assets.car": "Assets.car",
+			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
+			"runtimes/stablediffusion/mac-intel/stable-diffusion.cpp.txt": "runtimes/stablediffusion/stable-diffusion.cpp.txt",
+			"runtimes/stablediffusion/mac-intel/ggml.txt": "runtimes/stablediffusion/ggml.txt",
+			"runtimes/stablediffusion/mac-intel/webp-COPYING.txt": "runtimes/stablediffusion/webp-COPYING.txt",
+			"runtimes/stablediffusion/mac-intel/webp-PATENTS.txt": "runtimes/stablediffusion/webp-PATENTS.txt",
+			"runtimes/stablediffusion/mac-intel/webp-AUTHORS.txt": "runtimes/stablediffusion/webp-AUTHORS.txt",
+			"runtimes/stablediffusion/mac-intel/webm-LICENSE.txt": "runtimes/stablediffusion/webm-LICENSE.txt",
+			"runtimes/stablediffusion/mac-intel/webm-PATENTS.txt": "runtimes/stablediffusion/webm-PATENTS.txt",
+			"runtimes/stablediffusion/mac-intel/webm-AUTHORS.txt": "runtimes/stablediffusion/webm-AUTHORS.txt",
+			"runtimes/stablediffusion/mac-intel/runtime.json": "runtimes/stablediffusion/runtime.json"
+		}
+	},
+	"build": {
+		"beforeDevCommand": "bun ./scripts/prepare-stablediffusion.ts --platform mac-intel && bun run dev",
+		"beforeBuildCommand": "bun ./scripts/prepare-stablediffusion.ts --platform mac-intel && bun run build"
 	}
 }

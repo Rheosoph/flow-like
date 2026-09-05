@@ -15,7 +15,7 @@ pub async fn hierarchical_summarize(
     model: &dyn ModelLogic,
     model_name: &str,
     chunk_capacity: usize,
-) -> flow_like_types::Result<(String, Vec<SectionSummary>, usize)> {
+) -> anyhow::Result<(String, Vec<SectionSummary>, usize)> {
     let total = chunks.len();
     if total == 0 {
         return Ok((String::new(), vec![], 0));
@@ -107,7 +107,7 @@ async fn balanced_hierarchical(
     model: &dyn ModelLogic,
     model_name: &str,
     chunk_capacity: usize,
-) -> flow_like_types::Result<(String, Vec<SectionSummary>, usize)> {
+) -> anyhow::Result<(String, Vec<SectionSummary>, usize)> {
     let instr = noop_instructions(instructions);
     let sys = format!("{}\n{}", prompts::system_prompt(), entity_context);
     let mut llm_calls = 0usize;
@@ -171,7 +171,7 @@ fn detect_sections(chunks: &[TextChunk]) -> Vec<(String, Vec<TextChunk>)> {
     let mut current_heading = String::from("Introduction");
     let mut current_chunks: Vec<TextChunk> = Vec::new();
 
-    let heading_re = flow_like_types::regex::Regex::new(r"^#{1,4}\s+(.+)").unwrap();
+    let heading_re = regex::Regex::new(r"^#{1,4}\s+(.+)").unwrap();
 
     for chunk in chunks {
         // Check if this chunk starts with a heading

@@ -26,7 +26,7 @@ bundled-python = [
 
 [dependencies]
 flow-like-catalog-core.workspace = true
-flow-like.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../../packages/core/runtime", default-features = false, features = ["flow-metadata"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true

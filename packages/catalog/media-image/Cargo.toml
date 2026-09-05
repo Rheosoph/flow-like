@@ -1,0 +1,31 @@
+[package]
+name = "flow-like-catalog-media-image"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = ["flow-like-catalog-core/execute", "dep:hayro", "dep:rayon"]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+flow-like-model-provider.workspace = true
+google-cloud-auth.workspace = true
+schemars.workspace = true
+bytes.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+async-trait.workspace = true
+http = "1.4.0"
+ab_glyph = "0.2.29"
+imageproc.workspace = true
+rxing = { version = "0.7.1", features = ["serde", "image"] }
+hayro = { version = "0.5.0", features = ["embed-fonts"], optional = true }
+rayon = { version = "1.11.0", optional = true }
+flow-like-catalog-media-support.workspace = true
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

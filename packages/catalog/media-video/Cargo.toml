@@ -1,0 +1,29 @@
+[package]
+name = "flow-like-catalog-media-video"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = ["flow-like-catalog-core/execute", "dep:video-utils-rs", "dep:zip"]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+flow-like-model-provider.workspace = true
+flow-like-storage = { workspace = true, default-features = false }
+google-cloud-auth.workspace = true
+schemars.workspace = true
+bytes.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+async-trait.workspace = true
+http = "1.4.0"
+zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+video-utils-rs = { git = "https://github.com/Rheosoph/video-utils-rs.git", rev = "4b4e380fd719390dd8598120ebfb50566d234d5c", default-features = false, features = ["portable-core", "platform-codecs", "audio-io", "image-io", "preview", "codec-h264-rust", "codec-h265-rust", "codec-av1-rust", "codec-openh264-ffi", "codec-apple", "codec-android", "codec-windows", "codec-gstreamer", "codec-web"], optional = true }
+flow-like-catalog-media-support.workspace = true
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

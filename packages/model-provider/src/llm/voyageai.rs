@@ -6,7 +6,9 @@ use crate::{
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 
 pub struct VoyageAIModel {
     _client: rig::providers::voyageai::Client,
@@ -18,7 +20,7 @@ impl VoyageAIModel {
     pub async fn new(
         provider: &ModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let voyageai_config = random_provider(&config.voyageai_config)?;
         let api_key = voyageai_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
@@ -38,7 +40,7 @@ impl VoyageAIModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -77,7 +79,7 @@ impl ModelLogic for VoyageAIModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
         // VoyageAI only supports embeddings, not completions
-        Err(flow_like_types::anyhow!(
+        Err(anyhow::anyhow!(
             "VoyageAI does not support completion API - it is an embeddings-only provider"
         ))
     }

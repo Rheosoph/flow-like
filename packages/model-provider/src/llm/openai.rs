@@ -8,7 +8,10 @@ use crate::{
     llm::ModelConstructor,
     provider::{ModelApiSurface, ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait, json::json};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
+use serde_json::json;
 
 #[derive(Clone)]
 enum OpenAIClientType {
@@ -37,7 +40,7 @@ impl OpenAIModel {
     pub async fn new(
         provider: &ModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let openai_config = random_provider(&config.openai_config)?;
         let api_key = openai_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
@@ -75,7 +78,7 @@ impl OpenAIModel {
     }
 
     #[allow(clippy::cognitive_complexity)]
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -94,13 +97,11 @@ impl OpenAIModel {
         };
 
         if is_azure && endpoint.is_none() {
-            return Err(flow_like_types::anyhow!(
-                "Azure OpenAI requires an endpoint"
-            ));
+            return Err(anyhow::anyhow!("Azure OpenAI requires an endpoint"));
         }
 
         if is_azure && model_id.is_none() {
-            return Err(flow_like_types::anyhow!(
+            return Err(anyhow::anyhow!(
                 "Azure OpenAI requires a model_id (deployment name)"
             ));
         }
@@ -149,9 +150,7 @@ impl OpenAIModel {
     /// so hosted OpenAI Bits must opt into Rig's completions client explicitly.
     /// Direct OpenAI models keep using [`Self::from_provider`] and the Responses
     /// API.
-    pub async fn from_provider_chat_completions(
-        provider: &ModelProvider,
-    ) -> flow_like_types::Result<Self> {
+    pub async fn from_provider_chat_completions(provider: &ModelProvider) -> anyhow::Result<Self> {
         Ok(Self::from_provider(provider)
             .await?
             .with_api_surface(ModelApiSurface::ChatCompletions))
@@ -166,7 +165,7 @@ impl OpenAIModel {
     pub async fn from_provider_with_surface(
         provider: &ModelProvider,
         surface: ModelApiSurface,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         Ok(Self::from_provider(provider)
             .await?
             .with_api_surface(surface))
@@ -233,7 +232,7 @@ impl ModelLogic for OpenAIModel {
         }
     }
 
-    fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {
+    fn additional_params(&self, history: &Option<History>) -> Option<serde_json::Value> {
         let history = history.as_ref()?;
         let base = history.build_additional_params().ok().flatten();
         let reasoning = history.thinking.map(|thinking| {
@@ -253,7 +252,6 @@ impl ModelLogic for OpenAIModel {
 mod tests {
     use std::collections::HashMap;
 
-    use flow_like_types::tokio;
     use rig::agent::MultiTurnStreamItem;
     use rig::completion::ToolDefinition;
     use rig::completion::{Chat, Message};
@@ -279,15 +277,15 @@ mod tests {
             params: Some(HashMap::from([
                 (
                     "api_key".to_string(),
-                    flow_like_types::Value::String("test-token".to_string()),
+                    serde_json::Value::String("test-token".to_string()),
                 ),
                 (
                     "endpoint".to_string(),
-                    flow_like_types::Value::String("https://proxy.example/api/v1".to_string()),
+                    serde_json::Value::String("https://proxy.example/api/v1".to_string()),
                 ),
                 (
                     "model_id".to_string(),
-                    flow_like_types::Value::String("bit-id".to_string()),
+                    serde_json::Value::String("bit-id".to_string()),
                 ),
             ])),
         }
@@ -606,7 +604,7 @@ mod tests {
             ToolDefinition {
                 name: "get_current_weather".to_string(),
                 description: "Get the current weather in a given location".to_string(),
-                parameters: flow_like_types::json::to_value(schema_for!(WeatherArgs))
+                parameters: serde_json::to_value(schema_for!(WeatherArgs))
                     .expect("Failed to serialize weather args schema"),
             }
         }
@@ -650,7 +648,7 @@ mod tests {
             ToolDefinition {
                 name: "get_forecast".to_string(),
                 description: "Get the forecast for the next N days".to_string(),
-                parameters: flow_like_types::json::to_value(schema_for!(ForecastArgs))
+                parameters: serde_json::to_value(schema_for!(ForecastArgs))
                     .expect("Failed to serialize forecast args schema"),
             }
         }

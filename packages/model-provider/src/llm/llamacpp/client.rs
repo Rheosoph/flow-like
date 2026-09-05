@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use flow_like_types::Value;
-use flow_like_types::json::{self as serde_json, json};
-use flow_like_types::reqwest;
+use serde_json::Value;
+use serde_json::json;
+
 use rig::{
     OneOrMany,
     client::{ClientBuilderError, CompletionClient},
@@ -1902,9 +1902,10 @@ impl completion::CompletionModel for CompletionModel {
         completion_request: CompletionRequest,
     ) -> Result<streaming::StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>
     {
-        use flow_like_types::async_stream::stream;
-        use flow_like_types::futures::StreamExt;
-        use flow_like_types::reqwest_eventsource::{Event, RequestBuilderExt};
+        use async_stream::stream;
+        use futures::StreamExt;
+        use reqwest_eventsource::Event;
+        use reqwest_eventsource::RequestBuilderExt;
         use std::collections::BTreeMap;
 
         let tool_argument_specs = Self::tool_argument_specs(&completion_request.tools);
@@ -2109,7 +2110,7 @@ impl completion::CompletionModel for CompletionModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::tokio;
+
     use rig::client::CompletionClient;
     use rig::completion::{Chat, CompletionModel as _, Message};
     use rig::message::ToolChoice;

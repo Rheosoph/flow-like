@@ -6,7 +6,9 @@ use crate::{
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
-use flow_like_types::{Cacheable, Result, async_trait};
+use anyhow::Result;
+use async_trait::async_trait;
+use flow_like_types_contracts::Cacheable;
 
 pub struct OllamaModel {
     client: rig::providers::ollama::Client,
@@ -18,7 +20,7 @@ impl OllamaModel {
     pub async fn new(
         provider: &ModelProvider,
         config: &ModelProviderConfiguration,
-    ) -> flow_like_types::Result<Self> {
+    ) -> anyhow::Result<Self> {
         let ollama_config = random_provider(&config.ollama_config)?;
         let model_id = provider.model_id.clone();
         let endpoint = ollama_config
@@ -38,7 +40,7 @@ impl OllamaModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> flow_like_types::Result<Self> {
+    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let model_id = params
             .get("model_id")

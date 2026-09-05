@@ -100,3 +100,6 @@ apps/desktop/src-tauri/apple/FlowLikeMLX/.build/
 .tmp-nextrepro
 apps/book/INTERVIEWS.md
 reports
+
+# Prepared native diffusion runtimes and pinned source builds
+apps/desktop/src-tauri/runtimes/stablediffusion/

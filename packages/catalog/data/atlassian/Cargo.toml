@@ -1,0 +1,22 @@
+[package]
+name = "flow-like-catalog-data-atlassian"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+execute = ["flow-like-catalog-core/execute"]
+local-ml = ["flow-like-catalog-core/local-ml"]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+flow-like-catalog-data-support.workspace = true
+base64.workspace = true
+urlencoding.workspace = true
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

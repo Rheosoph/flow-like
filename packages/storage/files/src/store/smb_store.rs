@@ -1,5 +1,6 @@
+use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use flow_like_types::{Bytes, async_trait, sync::Mutex};
 use futures::{StreamExt, stream};
 use object_store::path::Path;
 use object_store::{
@@ -16,6 +17,7 @@ use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 const STORE_NAME: &str = "SMB";
 

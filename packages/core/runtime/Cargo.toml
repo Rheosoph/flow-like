@@ -1,0 +1,116 @@
+[package]
+name = "flow-like-runtime"
+description = "Flow execution, board models, application state, and host services"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rheosoph GmbH"]
+repository = "https://github.com/Rheosoph/flow-like/"
+categories = ["GenAI", "AI", "Productivity"]
+license-file = "../../../LICENSE"
+
+[lib]
+name = "flow_like_runtime"
+crate-type = ["rlib"]
+bench = false
+
+[dependencies]
+flow-like-a2ui-schema.workspace = true
+flow-like-editor-contracts.workspace = true
+flow-like-core-contracts.workspace = true
+flow-like-types.workspace = true
+flow-like-ast.workspace = true
+flow-like-model-provider.workspace = true
+flow-like-storage.workspace = true
+blake3.workspace = true
+rig.workspace = true
+rayon = "1.11.0"
+portpicker = "0.1.1"
+dirs-next.workspace = true
+sysinfo = "0.37.0"
+mime_guess = "2.0.5"
+image = "0.25.6"
+num_cpus = "1.17.0"
+strsim = "0.11.1"
+tempfile = "3.20.0"
+lz4_flex = "0.11.6"
+url = {version = "2.5.4", features = ["serde"]}
+json5 = "0.4.1"
+ahash.workspace = true
+rkyv.workspace = true
+zstd.workspace = true
+moka.workspace = true
+schemars.workspace = true
+jsonschema.workspace = true
+chrono.workspace = true
+futures.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+once_cell = "1.21.3"
+parking_lot = "0.12"
+tracing.workspace = true
+highway = "1.3.0"
+canonical_json = "0.5.0"
+zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+flate2.workspace = true
+chacha20poly1305 = { workspace = true, features = ["stream", "std"] }
+argon2.workspace = true
+zeroize.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+percent-encoding.workspace = true
+utoipa = { version = "5", optional = true }
+any-tts = { version = "0.1.3", default-features = false, optional = true }
+any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", rev = "e043cec6935003ad746454d7df5a1d932f6c8ac5", default-features = false, optional = true }
+
+[dev-dependencies]
+proptest = "1"
+ahash.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+tauri = ["flow-like-storage/tauri"]
+local-ml = ["flow-like-model-provider/local-ml"]
+local-ml-cuda = ["local-ml", "flow-like-model-provider/cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like-model-provider/tensorrt"]
+local-tts = [
+    "dep:any-tts",
+    "any-tts/kokoro",
+    "any-tts/omnivoice",
+    "any-tts/qwen3-tts",
+    "any-tts/vibevoice",
+    "any-tts/voxtral",
+]
+local-tts-metal = ["local-tts", "any-tts/metal"]
+local-tts-cuda = ["local-tts", "any-tts/cuda"]
+local-tts-accelerate = ["local-tts", "any-tts/accelerate"]
+local-stt = [
+    "dep:any-speech-to-text",
+    "any-speech-to-text/whisper",
+    "any-speech-to-text/olmoasr",
+    "any-speech-to-text/qwen3-asr",
+    "any-speech-to-text/opus",
+]
+local-stt-metal = ["local-stt", "any-speech-to-text/metal"]
+local-stt-cuda = ["local-stt", "any-speech-to-text/cuda"]
+local-stt-accelerate = ["local-stt", "any-speech-to-text/accelerate"]
+remote-ml = ["flow-like-model-provider/remote-ml"]
+schema-gen = ["app", "flow-metadata"]
+# Internal metadata consumers use the flow types without pulling in the
+# Lance/Arrow/DataFusion implementation.
+flow-metadata = ["app"]
+# Keep the historical public contract: consumers that enable `flow` receive a
+# working execution runtime, including database-backed log persistence.
+flow = ["flow-runtime"]
+flow-runtime = ["flow-metadata", "flow-like-storage/database-runtime"]
+hub = []
+bit = ["hub"]
+# Model and Bit APIs expose Flow execution context types, so direct model
+# consumers need the metadata surface as part of the public contract.
+model = ["bit", "flow-metadata"]
+app = ["bit", "model", "hub"]
+app-runtime = ["flow-runtime", "app"]
+openapi = ["dep:utoipa"]
+full = ["schema-gen", "app-runtime"]
+default = ["full"]
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+axum.workspace = true

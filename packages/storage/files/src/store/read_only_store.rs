@@ -4,7 +4,8 @@
 //! silently no-oping — a fabricated success would make a shadow-run diff a lie.
 //! All read operations delegate to the wrapped store unchanged.
 
-use flow_like_types::{Bytes, async_trait};
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{

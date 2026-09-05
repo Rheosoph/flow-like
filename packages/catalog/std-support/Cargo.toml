@@ -1,0 +1,14 @@
+[package]
+name = "flow-like-catalog-std-support"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+execute = ["flow-like/flow-runtime"]
+local-ml = ["flow-like/local-ml"]
+
+[dependencies]
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+chrono.workspace = true

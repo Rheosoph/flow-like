@@ -1,31 +1,22 @@
-#![recursion_limit = "256"]
+//! Public Flow-Like API, combining the runtime with FlowScript and copilot services.
+//! Catalog implementations depend on `flow-like-runtime` directly so they can compile
+//! alongside editor services.
 
-pub mod a2ui;
+pub use flow_like_runtime::*;
+
 #[cfg(feature = "flow-metadata")]
-pub mod copilot;
-pub mod credentials;
+pub use flow_like_editor::copilot;
+
 #[cfg(feature = "flow-metadata")]
-pub mod flow;
-pub mod protobuf;
-pub mod state;
-pub mod utils;
+pub mod flow {
+    pub use flow_like_editor::flow::{ast, copilot};
+    pub use flow_like_runtime::flow::*;
+}
 
-#[cfg(feature = "app")]
-pub mod app;
-#[cfg(feature = "bit")]
-pub mod bit;
-#[cfg(feature = "hub")]
-pub mod hub;
-#[cfg(feature = "model")]
-pub mod models;
-#[cfg(feature = "hub")]
-pub mod profile;
-
-#[cfg(feature = "schema-gen")]
-pub mod schema_gen;
-
-pub use flow_like_core_contracts;
-pub use flow_like_model_provider;
-pub use flow_like_storage;
-pub use flow_like_types;
-pub use num_cpus;
+pub mod a2ui {
+    #[cfg(feature = "flow-metadata")]
+    pub use flow_like_editor::a2ui::copilot;
+    #[cfg(feature = "flow-metadata")]
+    pub use flow_like_editor::a2ui::copilot::*;
+    pub use flow_like_runtime::a2ui::*;
+}

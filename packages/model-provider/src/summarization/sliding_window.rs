@@ -22,7 +22,7 @@ pub async fn sliding_window_summarize(
     model_name: &str,
     memory_budget_ratio: f32,
     chunk_capacity: usize,
-) -> flow_like_types::Result<(String, usize)> {
+) -> anyhow::Result<(String, usize)> {
     let total = chunks.len();
     if total == 0 {
         return Ok((initial_memory.to_string(), 0));

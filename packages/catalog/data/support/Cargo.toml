@@ -1,0 +1,23 @@
+[package]
+name = "flow-like-catalog-data-support"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml"]
+execute = ["flow-like-catalog-core/execute", "flow-like-storage/database-runtime", "flow-like-storage/graph"]
+federation = ["flow-like-storage/federation"]
+
+[dependencies]
+flow-like-catalog-core.workspace = true
+flow-like = { package = "flow-like-runtime", path = "../../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+flow-like-storage = { workspace = true, default-features = false }
+schemars.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+chrono.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+futures.workspace = true
+urlencoding.workspace = true

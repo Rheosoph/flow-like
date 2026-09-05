@@ -1,17 +1,15 @@
 // ---------- HTTP(S) ----------
 
-use crate::store::mime_guess::mime;
+use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose};
-use flow_like_types::{
-    Bytes, Result, anyhow,
-    mime_guess::{self},
-    reqwest::{self, Url},
-};
+use bytes::Bytes;
+use mime_guess::mime;
 use object_store::{ObjectStore, PutPayload, path::Path};
+use reqwest::Url;
 use std::sync::Arc;
 
 pub async fn put_http(parsed: Url, store: Arc<dyn ObjectStore>) -> Result<(Path, usize)> {
-    let client = flow_like_types::reqwest::Client::new();
+    let client = reqwest::Client::new();
     let resp = client.get(parsed.clone()).send().await?;
     let status = resp.status();
     if !status.is_success() {

@@ -1,0 +1,30 @@
+[package]
+name = "flow-like-catalog-std-ui"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-ml = ["flow-like-catalog-core/local-ml", "flow-like-catalog-data-support/local-ml"]
+execute = [
+    "flow-like-catalog-core/execute",
+    "flow-like-catalog-data-support/execute",
+]
+
+[dependencies]
+flow-like-catalog-core = { workspace = true, default-features = false }
+flow-like = { package = "flow-like-runtime", path = "../../core/runtime", default-features = false, features = ["flow-metadata"] }
+flow-like-types = { workspace = true }
+flow-like-catalog-data-support = { workspace = true, default-features = false }
+flow-like-model-provider = { workspace = true }
+flow-like-storage = { workspace = true, default-features = false }
+ahash = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+uuid = { workspace = true, features = ["v7"] }
+urlencoding = { workspace = true }
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true
