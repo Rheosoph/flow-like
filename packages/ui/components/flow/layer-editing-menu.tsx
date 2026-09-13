@@ -48,10 +48,7 @@ import {
 	describeCacheLifetime,
 } from "../../lib";
 import { GEOMETRY_BOARD_FORMAT_VERSION } from "../../lib/board-format";
-import {
-	defaultValueFromType,
-	encodedTypeDefault,
-} from "../../lib/flow-defaults";
+import { encodedTypeDefault } from "../../lib/flow-defaults";
 import {
 	type IBoard,
 	type ILayer,
@@ -159,14 +156,22 @@ const retypedDefault = (
 	valueType: IValueType,
 	dataType: IVariableType,
 ): Partial<PinEdit> => {
-	if (!pin.options?.optional) return { default_value: null };
+	const unsetDefault =
+		pin.options?.sensitive &&
+		(pin.data_type === IVariableType.Geometry ||
+			dataType === IVariableType.Geometry)
+			? (convertJsonToUint8Array(null) ?? null)
+			: null;
+	if (!pin.options?.optional) return { default_value: unsetDefault };
 	if (dataType === IVariableType.Execution) {
 		return {
-			default_value: null,
+			default_value: unsetDefault,
 			options: { ...pin.options, optional: false },
 		};
 	}
-	return { default_value: encodedTypeDefault(valueType, dataType) };
+	return {
+		default_value: encodedTypeDefault(valueType, dataType) ?? unsetDefault,
+	};
 };
 
 const reindex = <T extends { index: number }>(arr: T[]) =>
@@ -1281,7 +1286,15 @@ const SortablePinRow: React.FC<{
 				<PinOptionsButton
 					pin={pin}
 					onApply={(opts) => onEdit(pin.id, { options: opts })}
-					onSchemaChange={(schema) => onEdit(pin.id, { schema })}
+					onSchemaChange={(schema) =>
+						onEdit(pin.id, {
+							schema,
+							...(pin.data_type === IVariableType.Geometry &&
+							(schema ?? null) !== (pin.schema ?? null)
+								? { default_value: convertJsonToUint8Array(null) }
+								: {}),
+						})
+					}
 				/>
 			</div>
 		</div>
@@ -1339,11 +1352,7 @@ const PinOptionalSection: React.FC<{
 			secret: false,
 			editable: true,
 			default_value:
-				pin.default_value ??
-				convertJsonToUint8Array(
-					defaultValueFromType(pin.value_type, pin.data_type),
-				) ??
-				null,
+				pin.default_value ?? encodedTypeDefault(pin.value_type, pin.data_type),
 		}),
 		[
 			pin.id,

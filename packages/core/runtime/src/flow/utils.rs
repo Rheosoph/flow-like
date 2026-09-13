@@ -220,6 +220,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn null_geometry_pin_defaults_are_unset_but_runtime_values_are_validated() {
+        for value_type in [
+            ValueType::Normal,
+            ValueType::Array,
+            ValueType::HashSet,
+            ValueType::HashMap,
+        ] {
+            let mut node = crate::flow::node::Node::new("geo", "Geometry", "", "");
+            let pin = node.add_input_pin("geometry", "Geometry", "", VariableType::Geometry);
+            pin.set_value_type(value_type)
+                .set_default_value(Some(Value::Null));
+            let pin = Arc::new(InternalPin::new(pin, false));
+            assert!(!pin.has_default());
+            for error in [
+                evaluate_pin_value(pin.clone(), &None).await.unwrap_err(),
+                evaluate_pin_value_reference(pin.clone()).await.unwrap_err(),
+            ] {
+                assert!(error.to_string().contains("has no value"), "{error}");
+            }
+            pin.set_value(Value::Null).await;
+            assert!(evaluate_pin_value(pin.clone(), &None).await.is_err());
+            assert!(evaluate_pin_value_reference(pin).await.is_err());
+        }
+    }
+
+    #[tokio::test]
     async fn geometry_input_validates_generic_sources_and_overrides() {
         use flow_like_types::geometry::{GeometryKind, marker};
         let source = internal_pin(0);

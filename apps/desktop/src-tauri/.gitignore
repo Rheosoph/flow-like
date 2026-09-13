@@ -6,3 +6,5 @@ lib
 bin
 tmp
 GoogleService-Info.plist
+/binaries/apple-native/
+/apple/FlowLikeNative/.build/

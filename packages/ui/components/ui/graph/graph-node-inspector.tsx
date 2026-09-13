@@ -31,7 +31,6 @@ import type {
 import { accountIdFromValue } from "../../../state/backend-state/user-state";
 import { Badge } from "../badge";
 import { Button } from "../button";
-import { Checkbox } from "../checkbox";
 import { GeometryCell } from "../geometry-cell";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { RelativeTime } from "../relative-time";
@@ -91,7 +90,7 @@ export type ValueKind =
 	| "object"
 	| "unknown";
 
-export { inferValueKind, PropertyValue, FieldFilter, CopyButton };
+export { inferValueKind, PropertyValue, PropertyRow, FieldFilter, CopyButton };
 
 /**
  * `propKey` is what makes an epoch integer readable: an ontology property is
@@ -210,7 +209,8 @@ function CopyButton({ text }: { text: string }) {
 		<button
 			type="button"
 			onClick={handleCopy}
-			className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-accent shrink-0"
+			className="shrink-0 rounded p-1 text-muted-foreground opacity-60 transition-opacity hover:bg-accent hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+			aria-label={t("copyValue", "Copy value")}
 			title={t("copyValue", "Copy value")}
 		>
 			{copied ? (
@@ -251,11 +251,15 @@ function PropertyValue({
 			);
 		case "boolean":
 			return (
-				<div className="group flex items-center justify-between">
-					<div className="flex items-center gap-2">
-						<Checkbox checked={value as boolean} disabled className="h-4 w-4" />
-						<span className="text-sm">{value ? "true" : "false"}</span>
-					</div>
+				<div className="group flex min-w-0 items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs font-medium">
+						{value ? (
+							<Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+						) : (
+							<X className="h-3.5 w-3.5 text-muted-foreground" />
+						)}
+						{value ? "true" : "false"}
+					</span>
 					<CopyButton text={display} />
 				</div>
 			);
@@ -263,8 +267,8 @@ function PropertyValue({
 		case "vector": {
 			const arr = ensureNumericArray(value);
 			return (
-				<div className="group space-y-1.5">
-					<div className="flex items-center justify-between">
+				<div className="group min-w-0 space-y-1.5">
+					<div className="flex min-w-0 items-center justify-between gap-2">
 						<Badge variant="outline" className="text-[10px] px-1.5 py-0">
 							{t("dimsdVector", "{{dims}}d vector", { dims })}
 						</Badge>
@@ -277,8 +281,8 @@ function PropertyValue({
 
 		case "number":
 			return (
-				<div className="group flex items-center justify-between">
-					<span className="text-sm font-mono">
+				<div className="group flex min-w-0 items-start justify-between gap-2">
+					<span className="min-w-0 text-sm font-mono [overflow-wrap:anywhere]">
 						{typeof value === "number" ? value.toLocaleString() : String(value)}
 					</span>
 					<CopyButton text={display} />
@@ -287,16 +291,19 @@ function PropertyValue({
 
 		case "date":
 			return (
-				<div className="group flex items-center justify-between">
-					<RelativeTime value={value} className="text-sm" />
+				<div className="group flex min-w-0 items-center justify-between gap-2">
+					<RelativeTime value={value} className="min-w-0 text-sm" />
 					<CopyButton text={String(value)} />
 				</div>
 			);
 
 		case "user":
 			return (
-				<div className="group flex items-center justify-between gap-2">
-					<UserInlineTag userId={String(value).trim()} className="text-sm" />
+				<div className="group flex min-w-0 items-center justify-between gap-2">
+					<UserInlineTag
+						userId={String(value).trim()}
+						className="min-w-0 text-sm"
+					/>
 					<CopyButton text={String(value)} />
 				</div>
 			);
@@ -306,9 +313,9 @@ function PropertyValue({
 			const json = JSON.stringify(value, null, 2);
 			const isLong = json.length > 200;
 			return (
-				<div className="group relative">
+				<div className="group relative min-w-0">
 					<pre
-						className={`text-xs font-mono break-all whitespace-pre-wrap bg-muted/30 rounded p-1.5 ${isLong ? "max-h-32 overflow-y-auto" : ""}`}
+						className={`max-w-full whitespace-pre-wrap rounded bg-muted/30 p-2 pr-7 text-xs font-mono [overflow-wrap:anywhere] ${isLong ? "max-h-48 overflow-y-auto" : ""}`}
 					>
 						{json}
 					</pre>
@@ -322,8 +329,10 @@ function PropertyValue({
 		default: {
 			const isLong = display.length > 120;
 			return (
-				<div className="group flex items-start justify-between gap-1">
-					<p className={`text-sm break-all ${isLong ? "line-clamp-3" : ""}`}>
+				<div className="group flex min-w-0 items-start justify-between gap-2">
+					<p
+						className={`min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere] ${compact && isLong ? "line-clamp-3" : ""}`}
+					>
 						{display}
 					</p>
 					<CopyButton text={display} />
@@ -349,12 +358,13 @@ function FieldFilter({
 				<Button
 					variant="ghost"
 					size="icon"
-					className="h-7 w-7"
+					className="relative h-8 w-8"
+					aria-label={t("filterVisibleFields", "Filter visible fields")}
 					title={t("filterVisibleFields", "Filter visible fields")}
 				>
 					<Filter className="h-4 w-4" />
 					{hiddenFields.size > 0 && (
-						<span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-primary text-[8px] text-primary-foreground flex items-center justify-center">
+						<span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] text-primary-foreground">
 							{hiddenFields.size}
 						</span>
 					)}
@@ -369,7 +379,8 @@ function FieldFilter({
 						<button
 							key={field}
 							type="button"
-							className="w-full flex items-center gap-2 px-2 py-1 rounded text-sm hover:bg-accent transition-colors text-left"
+							className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors hover:bg-accent"
+							aria-pressed={!hiddenFields.has(field)}
 							onClick={() => onToggle(field)}
 						>
 							{hiddenFields.has(field) ? (
@@ -378,11 +389,7 @@ function FieldFilter({
 								<Eye className="h-3.5 w-3.5 text-foreground shrink-0" />
 							)}
 							<span
-								className={
-									hiddenFields.has(field)
-										? "text-muted-foreground line-through"
-										: ""
-								}
+								className={`min-w-0 [overflow-wrap:anywhere] ${hiddenFields.has(field) ? "text-muted-foreground line-through" : ""}`}
 							>
 								{field}
 							</span>
@@ -400,12 +407,12 @@ function PropertyRow({
 	metadata,
 }: { propKey: string; value: unknown; metadata?: Record<string, string> }) {
 	return (
-		<div className="rounded-md bg-muted/50 px-3 py-2">
-			<div className="flex items-center justify-between mb-0.5">
-				<p className="text-[10px] font-medium text-muted-foreground">
+		<div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+			<div className="mb-1.5 flex min-w-0 items-start justify-between gap-2">
+				<p className="min-w-0 text-[11px] font-medium text-muted-foreground [overflow-wrap:anywhere]">
 					{propKey}
 				</p>
-				<span className="text-[9px] text-muted-foreground/60">
+				<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
 					{inferValueKind(value, propKey, metadata).kind}
 				</span>
 			</div>
@@ -503,24 +510,26 @@ export function GraphNodeInspector({
 	const collapsedOthers = prominent.length > 0 && !showAllProps;
 
 	return (
-		<div className="w-80 shrink-0 bg-background border-l flex flex-col h-full min-h-0 overflow-hidden animate-in slide-in-from-right-5 duration-200">
-			<div className="flex items-center justify-between p-4 border-b shrink-0">
-				<div className="flex items-center gap-2 min-w-0">
+		<div className="flex h-full min-h-0 w-80 min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-l bg-background animate-in slide-in-from-right-5 duration-200">
+			<div className="flex shrink-0 items-start justify-between gap-3 border-b bg-muted/20 p-4">
+				<div className="flex min-w-0 flex-1 items-start gap-3">
 					<div
-						className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-sm"
+						className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm"
 						style={{ backgroundColor: node.style?.color ?? "#64748b" }}
 					>
-						<Icon className="h-3.5 w-3.5 text-white" />
+						<Icon className="h-4 w-4 text-white" />
 					</div>
 					<div className="min-w-0">
-						<h3 className="font-semibold text-sm truncate">
+						<h3 className="text-sm font-semibold leading-snug [overflow-wrap:anywhere]">
 							{titleAccountId ? (
 								<UserInlineTag userId={titleAccountId} className="text-sm" />
 							) : (
 								headerTitle
 							)}
 						</h3>
-						<p className="text-xs text-muted-foreground">{node.label}</p>
+						<p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+							{node.label}
+						</p>
 					</div>
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
@@ -534,26 +543,31 @@ export function GraphNodeInspector({
 					<Button
 						variant="ghost"
 						size="icon"
-						className="h-7 w-7"
+						className="h-8 w-8"
+						aria-label={t("close", "Close")}
 						onClick={onClose}
 					>
 						<X className="h-4 w-4" />
 					</Button>
 				</div>
 			</div>
-			<ScrollArea className="flex-1 min-h-0">
-				<div className="space-y-4 p-4">
+			<ScrollArea
+				className="min-h-0 min-w-0 flex-1"
+				viewportClassName="[&>div]:!block [&>div]:w-full [&>div]:min-w-0"
+			>
+				<div className="w-full min-w-0 space-y-5 p-4">
 					{/* Explore actions */}
 					{(onExpand ||
+						onGuidedExpand ||
 						onFindPath ||
 						onFocus ||
 						(hasChildren && (onExpandChildren || onCollapseChildren))) && (
-						<div className="flex flex-wrap gap-1.5">
+						<div className="grid min-w-0 grid-cols-2 gap-2">
 							{onFocus && (
 								<Button
 									variant={focused ? "default" : "outline"}
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={() => onFocus(focused ? null : 1)}
 									title={t(
 										"showOnlyThisObjectAndItsNeighbors",
@@ -568,7 +582,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={() => onFocus(2)}
 									title={t(
 										"widenTheFocusToTwoHops",
@@ -583,7 +597,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={() => onExpand(1)}
 									title={t(
 										"expandNeighborsShiftclick",
@@ -598,7 +612,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={() => onExpand(2)}
 									title={t(
 										"expandNeighborsUpTo2HopsAway",
@@ -613,7 +627,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={onGuidedExpand}
 									title={t(
 										"chooseRelationshipsAndALimitBeforeExpanding",
@@ -628,7 +642,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={onExpandChildren}
 									title={t(
 										"expandContainmentChildren",
@@ -643,7 +657,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={onCollapseChildren}
 									title={t(
 										"collapseContainmentChildren",
@@ -658,7 +672,7 @@ export function GraphNodeInspector({
 								<Button
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 text-xs"
+									className="h-auto min-h-8 min-w-0 justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 									onClick={() => onFindPath(node)}
 									title="Find a path from this object to another"
 								>
@@ -675,13 +689,13 @@ export function GraphNodeInspector({
 							<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
 								{t("actions", "Actions")}
 							</p>
-							<div className="flex flex-wrap gap-1.5">
+							<div className="flex min-w-0 flex-wrap gap-2">
 								{actions.map((action) => (
 									<Button
 										key={action.id}
 										variant="outline"
 										size="sm"
-										className="h-7 gap-1.5 text-xs"
+										className="h-auto min-h-8 min-w-0 max-w-full justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-xs [overflow-wrap:anywhere]"
 										onClick={() => onRunAction(action, node)}
 										title={action.description ?? action.name}
 									>
@@ -697,9 +711,12 @@ export function GraphNodeInspector({
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
 							ID
 						</p>
-						<p className="text-xs font-mono break-all text-muted-foreground">
-							{node.id}
-						</p>
+						<div className="group flex min-w-0 items-start justify-between gap-2">
+							<p className="min-w-0 text-xs font-mono leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+								{node.id}
+							</p>
+							<CopyButton text={node.id} />
+						</div>
 					</div>
 					{visibleEntries.length > 0 && (
 						<div>
@@ -759,7 +776,7 @@ export function GraphNodeInspector({
 						<p className="text-xs text-muted-foreground italic">
 							{t(
 								"allFieldsHiddenUseTheFilterToShowThem",
-								"All fields hidden — use the filter to show them",
+								"All fields hidden. Use the filter to show them.",
 							)}
 						</p>
 					)}
@@ -777,7 +794,8 @@ export function GraphNodeInspector({
 									<button
 										type="button"
 										key={`${conn.direction}-${conn.label}-${conn.targetId}-${i}`}
-										className="w-full rounded-md bg-muted/50 px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent transition-colors text-left cursor-pointer"
+										className="flex w-full min-w-0 items-start gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-left text-xs transition-colors hover:bg-accent disabled:cursor-default disabled:hover:bg-muted/20"
+										disabled={!onConnectionClick}
 										onClick={() => onConnectionClick?.(conn.targetId)}
 									>
 										<span
@@ -785,17 +803,21 @@ export function GraphNodeInspector({
 										>
 											{conn.direction === "outgoing" ? "→" : "←"}
 										</span>
-										<span className="font-medium text-muted-foreground shrink-0">
-											{conn.label}
+										<span className="min-w-0 flex-1 space-y-1">
+											<span className="block text-[10px] font-medium text-muted-foreground [overflow-wrap:anywhere]">
+												{conn.label}
+											</span>
+											{conn.targetAccountId ? (
+												<UserInlineTag
+													userId={conn.targetAccountId}
+													className="min-w-0 text-xs"
+												/>
+											) : (
+												<span className="block leading-relaxed [overflow-wrap:anywhere]">
+													{conn.targetCaption}
+												</span>
+											)}
 										</span>
-										{conn.targetAccountId ? (
-											<UserInlineTag
-												userId={conn.targetAccountId}
-												className="text-xs"
-											/>
-										) : (
-											<span className="truncate">{conn.targetCaption}</span>
-										)}
 									</button>
 								))}
 							</div>

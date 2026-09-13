@@ -6389,7 +6389,7 @@ declare namespace path {
      * Creates a child path from a parent path
      * @node child @receiver parent_path @alias child
      * @param parentPath — Parent FlowPath (receiver: `this` in `x.child(...)`)
-     * @param childName — Name of the child
+     * @param childName — Name of the child, as typed or as listed by the store
      * @returns path — Child Path
      */
     function child(this: FlowPath, { parentPath: Struct, childName: string }): Struct;
@@ -6398,7 +6398,7 @@ declare namespace path {
      * Gets the file extension from a path
      * @node extension @receiver path @alias extension
      * @param path — FlowPath (receiver: `this` in `x.extension(...)`)
-     * @returns extension — File Extension
+     * @returns extension — File extension with percent-encoding removed (e.g. 'doküment')
      */
     function extension(this: FlowPath, { path: Struct }): string;
 
@@ -6407,7 +6407,7 @@ declare namespace path {
      * @node filename @receiver path @alias filename
      * @param path — FlowPath (receiver: `this` in `x.filename(...)`)
      * @param removeExtension (optional) — Remove Extension from the Path
-     * @returns filename — Filename
+     * @returns filename — Human-readable filename with percent-encoding removed (e.g. 'Übersicht (2)#1.pdf')
      */
     function filename(this: FlowPath, { path: Struct, removeExtension?: bool }): string;
 
@@ -6415,7 +6415,7 @@ declare namespace path {
      * Reconstructs a FlowPath from a raw path string using the store reference from a base path
      * @node from_raw_path @alias fromRawPath
      * @param basePath — FlowPath to get the store reference from
-     * @param rawPath — The raw path string to reconstruct
+     * @param rawPath — The path string to reconstruct, either human-readable or percent-encoded as listed by the store
      * @returns path — Reconstructed FlowPath
      */
     function fromRawPath({ basePath: Struct, rawPath: string }): Struct;
@@ -6430,10 +6430,10 @@ declare namespace path {
     function parent(this: FlowPath, { path: Struct }): Struct;
 
     /**
-     * Gets the raw path string
+     * Gets the human-readable path string
      * @node raw_path @receiver path @alias rawPath
      * @param path — FlowPath (receiver: `this` in `x.rawPath(...)`)
-     * @returns rawPath — Raw Path String
+     * @returns rawPath — Human-readable path string with percent-encoding removed (e.g. 'Übersicht (2)#1.pdf')
      */
     function rawPath(this: FlowPath, { path: Struct }): string;
 

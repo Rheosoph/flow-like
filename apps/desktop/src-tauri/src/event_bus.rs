@@ -3,8 +3,9 @@ use crate::{
     utils::{UiEmitTarget, local_execution_environment},
 };
 use flow_like::app::App;
+use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
-use flow_like::flow::execution::{InternalRun, LogMeta};
+use flow_like::flow::execution::{InternalRun, LogMeta, UserExecutionContext};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::Path;
 use flow_like::hub::Hub;
@@ -59,9 +60,36 @@ impl EventBusEvent {
         app_handle: &AppHandle,
         flow_like_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
+        self.execute_with_authority(app_handle, flow_like_state, None)
+            .await
+    }
+
+    /// Native geofences resolve current Event and caller authority before unattended execution.
+    pub(crate) async fn execute_authorized(
+        &self,
+        app_handle: &AppHandle,
+        flow_like_state: Arc<FlowLikeState>,
+        event: Event,
+        identity: UserExecutionContext,
+    ) -> flow_like_types::Result<Option<LogMeta>> {
+        self.execute_with_authority(app_handle, flow_like_state, Some((event, identity)))
+            .await
+    }
+
+    async fn execute_with_authority(
+        &self,
+        app_handle: &AppHandle,
+        flow_like_state: Arc<FlowLikeState>,
+        authority: Option<(Event, UserExecutionContext)>,
+    ) -> flow_like_types::Result<Option<LogMeta>> {
         let started = Arc::new(AtomicBool::new(false));
         match self
-            .execute_inner(app_handle, flow_like_state.clone(), started.clone())
+            .execute_inner(
+                app_handle,
+                flow_like_state.clone(),
+                started.clone(),
+                authority,
+            )
             .await
         {
             Ok(meta) => Ok(meta),
@@ -122,6 +150,7 @@ impl EventBusEvent {
         app_handle: &AppHandle,
         flow_like_state: Arc<FlowLikeState>,
         started: Arc<AtomicBool>,
+        authority: Option<(Event, UserExecutionContext)>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
         let execution_state = Arc::new(flow_like_state.for_execution_run());
 
@@ -129,7 +158,10 @@ impl EventBusEvent {
             return Err(flow_like_types::anyhow!("App not found"));
         };
 
-        let loaded_event = app.get_event(&self.event_id, None).await?;
+        let (loaded_event, resolved_identity) = match authority {
+            Some((event, identity)) => (event, Some(identity)),
+            None => (app.get_event(&self.event_id, None).await?, None),
+        };
         let payload = RunPayload {
             id: loaded_event.node_id.clone(),
             payload: self.payload.to_owned(),
@@ -229,15 +261,19 @@ impl EventBusEvent {
         // Sink registrations authenticate with a PAT, which is not a JWT, so
         // the subject the run derived from it is the `local` placeholder.
         // Resolving against the hub recovers the PAT owner and their real role.
-        crate::execution_identity::apply_local_run_identity(
-            &mut internal_run,
-            &app.visibility,
-            &self.app_id,
-            self.token.as_deref(),
-            &profile.hub_profile.hub,
-            &flow_like_state,
-        )
-        .await;
+        if let Some(identity) = resolved_identity {
+            internal_run.set_resolved_user_context(identity).await;
+        } else {
+            crate::execution_identity::apply_local_run_identity(
+                &mut internal_run,
+                &app.visibility,
+                &self.app_id,
+                self.token.as_deref(),
+                &profile.hub_profile.hub,
+                &flow_like_state,
+            )
+            .await;
+        }
 
         let run_id = internal_run.run.lock().await.id.clone();
 

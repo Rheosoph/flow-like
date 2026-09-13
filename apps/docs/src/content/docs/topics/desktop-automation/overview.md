@@ -100,6 +100,12 @@ The Computer catalog includes:
 - text and image clipboard getters and setters;
 - **Wait** for deliberate pauses between interactions.
 
+**Set Clipboard Text** and **Set Clipboard Image** also work outside desktop automation. They use the device API when the Event runs locally and ask the invoking frontend to copy the result when it runs remotely. Their automation session input is optional, and existing session connections still pass through. Clipboard readers continue to require local desktop execution.
+
+A remote write needs a live client invocation. A scheduled or API-only run has no user clipboard to address. The write follows its success output only after the client acknowledges it; otherwise it follows the error output with a structured error. Browsers may show a **Copy result** button when they require a fresh click. Requests expire when their client timeout elapses or the run ends and are never executed from saved run output.
+
+The optional **Keep on device** and **Expire after** inputs use iOS clipboard protections. A host that cannot enforce these options returns an error. Text is limited to 1 MiB and images to 16 MiB of PNG data. Writing clipboard content does not send a paste keystroke to another application.
+
 Use [Natural Mouse Move](/nodes/automation/computer/mouse/computer-natural-mouse-move/) when the path itself matters. Use [Mouse Click](/nodes/automation/computer/mouse/computer-mouse-click/) or [Click At Position](/nodes/automation/rpa/rpa-click-at-position/) only after resolving the correct coordinates for the current session.
 
 ## Screen capture and visual targeting

@@ -5,7 +5,6 @@ import {
 	Activity,
 	AlertCircle,
 	ArrowUpRight,
-	Bell,
 	CalendarDays,
 	Check,
 	CheckCircle2,
@@ -16,6 +15,7 @@ import { Fragment, useMemo } from "react";
 import { toast } from "sonner";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { NotificationIcon } from "../../notifications/notification-icon";
 import { Button } from "../../ui/button";
 import {
 	hasAttentionSeverity,
@@ -111,11 +111,11 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 								!notification.read && "bg-primary/[0.04]",
 							)}
 						>
-							<Bell
-								className={cn(
-									"mt-0.5 size-4 shrink-0",
-									notification.read ? "text-muted-foreground" : "text-primary",
-								)}
+							<NotificationIcon
+								icon={notification.icon}
+								appId={notification.app_id}
+								read={notification.read}
+								className="mt-0.5 size-5"
 							/>
 							<Link
 								href={href}

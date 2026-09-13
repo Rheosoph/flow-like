@@ -20,6 +20,7 @@ import type {
 } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useEffect, useMemo } from "react";
+import { sinkSupportsEventExecution } from "../../../lib/event-definitions";
 
 /** Map event types to their corresponding sink type for hub lookup */
 const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
@@ -152,17 +153,6 @@ export function EventTypeConfiguration({
 
 	if (foundConfig?.eventTypes.length <= 1) return null;
 
-	const matchesExecutionMode = (
-		availability: "local" | "remote" | "both",
-	): boolean => {
-		if (!eventExecutionMode) return true;
-		if (availability === "both") return true;
-		if (eventExecutionMode === IEventExecutionMode.Local) {
-			return availability === "local";
-		}
-		return availability === "remote";
-	};
-
 	// Filter event types to only those that have at least one available sink
 	// AND match the event's execution mode (a Remote event must not offer
 	// local-only types like IMAP/Discord).
@@ -176,7 +166,14 @@ export function EventTypeConfiguration({
 				staticCfg,
 			);
 			if (sinkConfig === null) return false;
-			return matchesExecutionMode(sinkConfig.availability);
+			return sinkSupportsEventExecution(
+				{
+					...sinkConfig,
+					dispatchesRemoteEvents: staticCfg?.dispatchesRemoteEvents,
+				},
+				eventExecutionMode,
+				canExecuteLocally,
+			);
 		}
 		return true;
 	});

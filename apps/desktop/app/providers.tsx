@@ -23,7 +23,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/query-persister";
 import { I18nProvider } from "@flow-like/locales";
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
@@ -31,6 +31,7 @@ import DownloadNotificationProvider from "../components/download-notification-pr
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
+import { NativeIntegrationProvider } from "../components/native-integration-provider";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
@@ -154,7 +155,6 @@ export function Providers({
 								disableTransitionOnChange
 							>
 								<TooltipProvider>
-									<Toaster />
 									<ToastProvider />
 									<TauriProvider>
 										<DownloadNotificationProvider />
@@ -163,6 +163,7 @@ export function Providers({
 											<OAuthCallbackHandler>
 												<OAuthExecutionProvider>
 													<DesktopAuthProvider>
+														<Toaster />
 														<PendingInviteRedeemer />
 														<NotificationProvider />
 														<RuntimeVariablesProviderComponent>
@@ -171,6 +172,9 @@ export function Providers({
 																	<SpotlightWrapper>
 																		<TelemetryProvider>
 																			<ThemeLoader />
+																			<Suspense fallback={null}>
+																				<NativeIntegrationProvider />
+																			</Suspense>
 																			<AppSidebar>{children}</AppSidebar>
 																			<GlobalToolBridge />
 																			<GlobalChatOverlay />

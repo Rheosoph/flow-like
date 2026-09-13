@@ -186,6 +186,32 @@ test("node titles and edge details use the same resolved account identity", asyn
 	).toBe(true);
 }, 30_000);
 
+test("guided expansion remains available without quick expansion", async () => {
+	const { container, render } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	let expansions = 0;
+	await render(
+		<GraphNodeInspector
+			node={{
+				id: "RSSFeed:1",
+				label: "RSSFeed",
+				caption: "News feed",
+				props: {},
+			}}
+			onClose={() => {}}
+			onGuidedExpand={() => {
+				expansions += 1;
+			}}
+		/>,
+	);
+	const expand = [...container.querySelectorAll("button")].find((button) =>
+		button.textContent.includes("Expand with"),
+	);
+	expect(expand).toBeDefined();
+	await act(async () => expand?.click());
+	expect(expansions).toBe(1);
+}, 30_000);
+
 test("canvas labels and React captions share cached identities and batch unresolved accounts", async () => {
 	const { container, render } = await setup();
 	const { GraphNodeCaption, useGraphAccountLabels } = await import(

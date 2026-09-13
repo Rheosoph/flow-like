@@ -356,8 +356,8 @@ export function GraphViewer({
 	const autoExpandedSearchQueryRef = useRef<string | null>(null);
 
 	/**
-	 * Focus is two-stage, Bloom-style: `dim` keeps the rest of the graph as
-	 * grayed-out context, `hide` removes it and gives the survivors the stage.
+	 * Focus isolates a neighborhood by default. Dimmed context is available
+	 * from the focus controls when the surrounding graph is useful.
 	 */
 	const [focus, setFocus] = useState<{
 		nodeId: string;
@@ -977,12 +977,11 @@ export function GraphViewer({
 				setFocus(null);
 				return;
 			}
-			// Dim first: the rest of the graph stays as grayed context, and hiding
-			// it is a second, explicit step in the banner.
+			// Focus gives this neighborhood the stage immediately.
 			setFocus((prev) => ({
 				nodeId: selectedNode.id,
 				depth,
-				mode: prev?.nodeId === selectedNode.id ? prev.mode : "dim",
+				mode: prev?.nodeId === selectedNode.id ? prev.mode : "hide",
 			}));
 		},
 		[selectedNode],
@@ -990,7 +989,7 @@ export function GraphViewer({
 
 	const focusNodeById = useCallback((nodeId: string) => {
 		setFocus((prev) =>
-			prev?.nodeId === nodeId ? null : { nodeId, depth: 1, mode: "dim" },
+			prev?.nodeId === nodeId ? null : { nodeId, depth: 1, mode: "hide" },
 		);
 	}, []);
 
@@ -1917,10 +1916,10 @@ export function GraphViewer({
 
 						{/* The focus banner is the only exit, so it always stays on top. */}
 						{focus && focusedNodeIds && (
-							<div className="absolute left-1/2 top-3 z-30 -translate-x-1/2">
-								<div className="flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+							<div className="absolute inset-x-3 top-3 z-30 flex justify-center">
+								<div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border border-primary/40 bg-background/95 px-3 py-2 text-xs shadow-sm">
 									<Crosshair className="h-3.5 w-3.5 text-primary" />
-									<span className="whitespace-nowrap">
+									<span className="min-w-0 break-words [overflow-wrap:anywhere]">
 										{focus.mode === "dim"
 											? t("highlightingCountOfTotalObjectsAroundName", {
 													defaultValue_one:

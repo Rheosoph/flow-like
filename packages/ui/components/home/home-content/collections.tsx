@@ -5,6 +5,7 @@ import { Layers } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { useRecentApps } from "../../../hooks/use-recent-apps";
 import { useAppCategoryLabel } from "../../../lib/app-category";
 import {
 	APP_CATEGORY_ORDER,
@@ -50,6 +51,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 	const backend = useBackend();
 	const scope = useHomeScope();
 	const library = useHomeLibrary();
+	const recentApps = useRecentApps(scope);
 	const source = textConfig(widget.config, "source", "library");
 	const category = textConfig(widget.config, "category");
 	const tag = textConfig(widget.config, "tag");
@@ -126,11 +128,14 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 					([a], [b]) => (favorites.get(a.id) ?? 0) - (favorites.get(b.id) ?? 0),
 				);
 		}
-		if (source === "recent")
-			apps.sort(
-				([a], [b]) =>
-					b.updated_at.secs_since_epoch - a.updated_at.secs_since_epoch,
+		if (source === "recent") {
+			const order = new Map(
+				recentApps.map((entry, index) => [entry.appId, index]),
 			);
+			apps = apps
+				.filter(([app]) => order.has(app.id))
+				.sort(([a], [b]) => order.get(a.id)! - order.get(b.id)!);
+		}
 		if (!remote && source !== "manual") {
 			if (category)
 				apps = apps.filter(
@@ -151,6 +156,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 		}
 		return apps.slice(0, limit);
 	}, [
+		recentApps,
 		remote,
 		usesProfile,
 		source,
@@ -178,13 +184,24 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 				}}
 			/>
 		);
-	if (
-		!rows.length &&
-		["library", "recent"].includes(source) &&
-		!category &&
-		!tag &&
-		!query
-	)
+	if (!rows.length && source === "recent" && !category && !tag && !query)
+		return (
+			<HomeEmpty
+				icon={<Layers className="size-7 opacity-50" />}
+				action={
+					<Link
+						href="/library"
+						className="inline-flex rounded-md border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted"
+					>
+						Open your library
+					</Link>
+				}
+			>
+				Open an app to see it here. Recently used apps are tracked on this
+				device for the current profile and account.
+			</HomeEmpty>
+		);
+	if (!rows.length && source === "library" && !category && !tag && !query)
 		return (
 			<HomeEmpty
 				icon={<Layers className="size-7 opacity-50" />}

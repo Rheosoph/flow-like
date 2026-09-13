@@ -250,6 +250,12 @@ const TRIGGER_LABELS: Record<
 	string,
 	{ label: string; icon: string; blurb: string }
 > = {
+	geolocation: {
+		label: "Location region",
+		icon: "globe",
+		blurb:
+			"The circular region to monitor, which crossings trigger this Event, and this device's location permission.",
+	},
 	cron: {
 		label: "Schedule",
 		icon: "clock",
@@ -433,6 +439,26 @@ const FLOW_STEPS: IEventGuideStep[] = [
 ];
 
 const EVENT_GUIDES: Record<string, IEventGuideStep[]> = {
+	geolocation: [
+		...FLOW_STEPS,
+		{
+			id: "choose-region",
+			title: "Choose a region center and radius",
+			why: "The Event fires when the device crosses this circular boundary.",
+			section: "trigger",
+			auto: (config) =>
+				typeof config.latitude === "number" &&
+				typeof config.longitude === "number" &&
+				typeof config.radius === "number" &&
+				config.radius >= 100,
+		},
+		{
+			id: "grant-location",
+			title: "Grant location access on this device",
+			why: "Saving an Event never grants OS permission. Background monitoring needs a separate deliberate permission action.",
+			section: "trigger",
+		},
+	],
 	cron: [
 		{
 			id: "when",
@@ -806,6 +832,10 @@ const PAGE_GUIDANCE: Record<string, ISectionGuidance> = {
 };
 
 const TRIGGER_GUIDANCE: Record<string, ISectionGuidance> = {
+	geolocation: {
+		mistake:
+			"A region crossing reports the configured center and transition. It does not measure the device's exact position. Background delivery depends on OS permissions and the device's region limit.",
+	},
 	cron: {
 		what: "Decides when the flow runs, and against which clock.",
 		mistake:

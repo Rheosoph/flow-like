@@ -86,6 +86,7 @@ assets/*
 # Local build outputs are also excluded when AWS builds use this repository.
 **/*.tsbuildinfo
 **/.gradle/
+**/.build/
 **/_build/
 **/build/
 .codacy/

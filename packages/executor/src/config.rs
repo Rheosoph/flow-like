@@ -1,3 +1,4 @@
+use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -29,6 +30,10 @@ pub struct ExecutorConfig {
     terminal_status_ack_required: bool,
     #[serde(skip)]
     completion_observer: Option<fn(&str, f64)>,
+    #[serde(skip)]
+    execution_deadline: Option<tokio::time::Instant>,
+    #[serde(skip)]
+    cancellation: Option<CancellationToken>,
 }
 
 fn default_batch_interval_ms() -> u64 {
@@ -60,6 +65,8 @@ impl Default for ExecutorConfig {
             execution_timeout_secs: default_execution_timeout_secs(),
             terminal_status_ack_required: false,
             completion_observer: None,
+            execution_deadline: None,
+            cancellation: None,
         }
     }
 }
@@ -90,6 +97,8 @@ impl ExecutorConfig {
                 .unwrap_or_else(default_execution_timeout_secs),
             terminal_status_ack_required: false,
             completion_observer: None,
+            execution_deadline: None,
+            cancellation: None,
         }
     }
 
@@ -114,6 +123,26 @@ impl ExecutorConfig {
     pub fn with_required_terminal_status_ack(mut self) -> Self {
         self.terminal_status_ack_required = true;
         self
+    }
+
+    /// Bound setup, lease acquisition and execution by the invocation's clock.
+    /// The runtime cancels this token at the deadline and allows cleanup to finish.
+    pub fn with_execution_deadline(
+        mut self,
+        deadline: tokio::time::Instant,
+        cancellation: CancellationToken,
+    ) -> Self {
+        self.execution_deadline = Some(deadline);
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn execution_deadline(&self) -> Option<tokio::time::Instant> {
+        self.execution_deadline
+    }
+
+    pub(crate) fn cancellation(&self) -> Option<CancellationToken> {
+        self.cancellation.clone()
     }
 
     pub(crate) fn terminal_status_ack_required(&self) -> bool {
@@ -151,5 +180,20 @@ mod tests {
         assert!(ExecutorConfig::default()
             .with_required_terminal_status_ack()
             .terminal_status_ack_required());
+    }
+
+    #[test]
+    fn invocation_deadlines_are_shared_by_clones_but_never_serialized() {
+        let token = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let config = ExecutorConfig::default().with_execution_deadline(deadline, token.clone());
+        let cloned = config.clone();
+        token.cancel();
+        assert_eq!(cloned.execution_deadline(), Some(deadline));
+        assert!(cloned.cancellation().unwrap().is_cancelled());
+        let decoded: ExecutorConfig =
+            serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+        assert!(decoded.execution_deadline().is_none());
+        assert!(decoded.cancellation().is_none());
     }
 }

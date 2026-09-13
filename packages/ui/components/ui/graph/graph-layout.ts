@@ -561,6 +561,8 @@ export function relaxOverlaps(
 	}
 
 	for (let index = 0; index < count; index += 1) {
+		// Pins never moved in collision space. Avoid a lossy coordinate round trip.
+		if (pinned[index]) continue;
 		const collisionPosition = { x: xs[index], y: ys[index] };
 		const graphPosition = coordinateMapper?.toGraph(collisionPosition);
 		const fallbackX = readCoordinate(graph, nodeIds[index], "x");

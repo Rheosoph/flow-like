@@ -126,9 +126,13 @@ use flow_like_storage::Path as StorePath;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::channel::ChannelGrant;
 use flow_like_types::create_id;
-#[cfg(feature = "lambda")]
-use flow_like_types::dispatch::DIRECT_LAMBDA_INVOKE_API_ID;
+#[cfg(any(feature = "lambda", test))]
+use flow_like_types::dispatch::lambda_tenant_id;
 use flow_like_types::dispatch::{CompiledArtifactRef, ETAG_BOUND_LATEST_VERSION_SENTINEL};
+#[cfg(feature = "lambda")]
+use flow_like_types::dispatch::{
+    DIRECT_LAMBDA_INVOKE_API_ID, LAMBDA_ASYNC_INLINE_PAYLOAD_BYTES, LAMBDA_ASYNC_MAX_PAYLOAD_BYTES,
+};
 
 use super::compiled_artifacts::EnsuredArtifact;
 
@@ -233,6 +237,11 @@ pub struct DispatchConfig {
     pub executor_url: Option<String>,
     /// AWS Lambda function name/ARN (for Lambda backends)
     pub lambda_function_name: Option<String>,
+    /// Dedicated native asynchronous Lambda. When absent, LambdaInvoke keeps
+    /// the legacy API Gateway envelope sent to lambda_function_name.
+    pub lambda_async_function_name: Option<String>,
+    /// Platform key for the dedicated asynchronous executor's WASM artifacts.
+    pub lambda_async_platform: Option<String>,
     /// AWS region for Lambda
     pub lambda_region: Option<String>,
     /// Kubernetes namespace (for KubernetesJob backend)
@@ -273,6 +282,14 @@ impl DispatchConfig {
             async_backend: ExecutionBackend::async_from_env(),
             executor_url: std::env::var("EXECUTOR_URL").ok(),
             lambda_function_name: std::env::var("LAMBDA_EXECUTOR_FUNCTION").ok(),
+            lambda_async_function_name: std::env::var("LAMBDA_ASYNC_EXECUTOR_FUNCTION")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            lambda_async_platform: std::env::var("LAMBDA_ASYNC_EXECUTOR_PLATFORM")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
             lambda_region: std::env::var("AWS_REGION")
                 .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
                 .ok(),
@@ -471,19 +488,31 @@ pub type ArtifactEnsurer = Arc<
 
 /// How long the presigned artifact URL stays valid: long enough to outlive the
 /// queue a payload may sit in, exactly like the claim-check URL for the payload
-/// itself. Direct transports run immediately and get an hour.
+/// itself. LambdaInvoke also queues work, so it gets the same delivery window
+/// as SQS. Synchronous transports get an hour.
 fn artifact_url_ttl(backend: &ExecutionBackend) -> std::time::Duration {
     match backend {
         #[cfg(feature = "storage-queue")]
         ExecutionBackend::AzureQueue => crate::storage_queue::CLAIM_CHECK_URL_TTL,
         #[cfg(feature = "pubsub")]
         ExecutionBackend::PubSub => pubsub::CLAIM_CHECK_URL_TTL,
-        ExecutionBackend::Sqs | ExecutionBackend::SqsEventBridge => {
-            std::time::Duration::from_secs(86_400)
-        }
+        ExecutionBackend::Sqs
+        | ExecutionBackend::SqsEventBridge
+        | ExecutionBackend::LambdaInvoke => std::time::Duration::from_secs(86_400),
         _ => std::time::Duration::from_secs(3_600),
     }
 }
+
+pub type WasmPackageResolver = Arc<
+    dyn Fn(
+            String,
+            String,
+        ) -> futures::future::BoxFuture<
+            'static,
+            Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
+        > + Send
+        + Sync,
+>;
 
 /// Unified job dispatcher
 #[derive(Clone)]
@@ -491,6 +520,7 @@ pub struct Dispatcher {
     config: Arc<DispatchConfig>,
     staging_bucket: Option<Arc<FlowLikeStore>>,
     artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
+    async_wasm_package_resolver: std::sync::OnceLock<WasmPackageResolver>,
     channels: Option<Arc<ChannelIssuer>>,
     #[cfg(feature = "lambda")]
     lambda_client: Option<aws_sdk_lambda::Client>,
@@ -567,6 +597,7 @@ impl Dispatcher {
             config: Arc::new(config),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
+            async_wasm_package_resolver: std::sync::OnceLock::new(),
             channels: None,
             #[cfg(feature = "lambda")]
             lambda_client,
@@ -584,6 +615,7 @@ impl Dispatcher {
             config: Arc::new(config),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
+            async_wasm_package_resolver: std::sync::OnceLock::new(),
             channels: None,
             #[cfg(feature = "lambda")]
             lambda_client: None,
@@ -605,6 +637,10 @@ impl Dispatcher {
     /// construction; later calls are ignored.
     pub fn set_artifact_ensurer(&self, ensurer: ArtifactEnsurer) {
         let _ = self.artifact_ensurer.set(ensurer);
+    }
+
+    pub fn set_async_wasm_package_resolver(&self, resolver: WasmPackageResolver) {
+        let _ = self.async_wasm_package_resolver.set(resolver);
     }
 
     /// Presign the assured artifact for the executor. SigV4 signing is local
@@ -766,6 +802,17 @@ impl Dispatcher {
         mut request: DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
         validate_runtime_variable_transport(&backend, &request)?;
+        if backend == ExecutionBackend::LambdaInvoke
+            && self.config.lambda_async_function_name.is_some()
+            && let Some(platform) = self.config.lambda_async_platform.as_ref()
+        {
+            let resolver = self.async_wasm_package_resolver.get().ok_or_else(|| {
+                DispatchError::Configuration(
+                    "native asynchronous Lambda requires its WASM platform resolver".into(),
+                )
+            })?;
+            request.wasm_packages = resolver(request.app_id.clone(), platform.clone()).await;
+        }
         self.attach_channel(&mut request).await;
         let ensured = self.ensure_artifact(&request).await?;
         request.artifact = Some(self.sign_artifact(&ensured, &backend).await?);
@@ -937,29 +984,51 @@ impl Dispatcher {
         Ok(Some(tenant_id))
     }
 
-    /// Dispatch via AWS Lambda SDK invocation (async, fire-and-forget)
+    /// Dispatch through Lambda's native asynchronous delivery queue.
     #[cfg(feature = "lambda")]
     async fn dispatch_lambda_invoke(
         &self,
         job_id: &str,
         request: &DispatchRequest,
     ) -> Result<DispatchResponse, DispatchError> {
-        let function_name = self.config.lambda_function_name.as_ref().ok_or_else(|| {
-            DispatchError::Configuration("LAMBDA_EXECUTOR_FUNCTION not configured".into())
-        })?;
+        let native = self.config.lambda_async_function_name.is_some();
+        let function_name = self
+            .config
+            .lambda_async_function_name
+            .as_ref()
+            .or(self.config.lambda_function_name.as_ref())
+            .ok_or_else(|| {
+                DispatchError::Configuration(
+                    "LAMBDA_ASYNC_EXECUTOR_FUNCTION or LAMBDA_EXECUTOR_FUNCTION must be configured"
+                        .into(),
+                )
+            })?;
 
         let client = self
             .lambda_client
             .as_ref()
             .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
 
-        let body = build_executor_payload(job_id, request)?;
-        // Wrap in API Gateway v2 event format for lambda_http compatibility
-        let apigw_event = wrap_as_apigw_v2_event("/execute", body);
-        let payload = serde_json::to_vec(&apigw_event)
-            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
-
         let tenant_id = self.lambda_tenant_id_for(request)?;
+        if native && tenant_id.is_none() {
+            return Err(DispatchError::Configuration(
+                "the native asynchronous executor requires LAMBDA_TENANT_ISOLATION=sub".into(),
+            ));
+        }
+
+        let body = build_executor_payload(job_id, request)?;
+        let payload = if native {
+            self.stage_native_lambda_payload(job_id, body).await?
+        } else {
+            // Preserve the existing lambda_http executor's wire format.
+            serde_json::to_vec(&wrap_as_apigw_v2_event("/execute", body))
+                .map_err(|e| DispatchError::Serialization(e.to_string()))?
+        };
+        if payload.len() > LAMBDA_ASYNC_MAX_PAYLOAD_BYTES {
+            return Err(DispatchError::Configuration(
+                "asynchronous Lambda event exceeds 1 MiB; configure the native asynchronous executor to stage large payloads".into(),
+            ));
+        }
 
         let mut invoke = client
             .invoke()
@@ -970,16 +1039,63 @@ impl Dispatcher {
             invoke = invoke.tenant_id(tenant_id);
         }
 
-        invoke
+        let response = invoke
             .send()
             .await
             .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
+        if response.status_code() != 202 {
+            return Err(DispatchError::Lambda(format!(
+                "asynchronous Lambda invocation returned unexpected status {}",
+                response.status_code()
+            )));
+        }
 
         Ok(DispatchResponse {
             job_id: job_id.to_string(),
             status: "invoked".into(),
             backend: "lambda_invoke".into(),
         })
+    }
+
+    #[cfg(feature = "lambda")]
+    async fn stage_native_lambda_payload(
+        &self,
+        job_id: &str,
+        body: serde_json::Value,
+    ) -> Result<Vec<u8>, DispatchError> {
+        let payload =
+            serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
+        if payload.len() <= LAMBDA_ASYNC_INLINE_PAYLOAD_BYTES {
+            return Ok(payload);
+        }
+        // Matches the executor's default bounded remote-payload reader.
+        if payload.len() > 64 * 1024 * 1024 {
+            return Err(DispatchError::Configuration(
+                "native asynchronous execution payload exceeds 64 MiB".into(),
+            ));
+        }
+        let staging = self.staging_bucket.as_ref().ok_or_else(|| {
+            DispatchError::Configuration(
+                "a staging store is required for large asynchronous Lambda payloads".into(),
+            )
+        })?;
+        let path = StorePath::from(format!("tmp/lambda/{job_id}.json"));
+        staging
+            .put(&path, payload)
+            .await
+            .map_err(|e| DispatchError::Lambda(format!("failed to stage Lambda payload: {e}")))?;
+        let remote_url = staging
+            .sign(
+                "GET",
+                &path,
+                artifact_url_ttl(&ExecutionBackend::LambdaInvoke),
+            )
+            .await
+            .map_err(|e| DispatchError::Lambda(format!("failed to sign Lambda payload: {e}")))?;
+        serde_json::to_vec(&flow_like_types::dispatch::DispatchPayloadRef::Remote {
+            remote_url: remote_url.to_string(),
+        })
+        .map_err(|e| DispatchError::Serialization(e.to_string()))
     }
 
     /// Dispatch via AWS Lambda SDK streaming invocation
@@ -1799,22 +1915,6 @@ async fn attach_executor_iam_auth(
 #[cfg(any(feature = "lambda", test))]
 const LAMBDA_TENANT_ISOLATION_VAR: &str = "LAMBDA_TENANT_ISOLATION";
 
-/// Domain separator mixed into every tenant digest.
-///
-/// `storage_path_segment` already derives its disambiguating suffix from a bare
-/// `blake3::hash(sub)`, so an undomained digest here would open with the same
-/// twelve hex characters as that subject's storage path and let either value
-/// confirm the other. The `v1` names the derivation: changing it re-tenants
-/// every caller and buys a full round of cold starts, so it has to be a
-/// deliberate edit rather than an incidental one.
-#[cfg(any(feature = "lambda", test))]
-const LAMBDA_TENANT_ID_DOMAIN: &str = "flow-like:lambda-tenant:v1:";
-
-/// Hex characters kept from the tenant digest. 32 is 128 bits, far past the
-/// point where two subjects could collide into one execution environment.
-#[cfg(any(feature = "lambda", test))]
-const LAMBDA_TENANT_ID_HEX_CHARS: usize = 32;
-
 /// Whether `LAMBDA_TENANT_ISOLATION` asks for per-subject execution
 /// environments.
 ///
@@ -1852,31 +1952,6 @@ static LAMBDA_TENANT_ISOLATION: std::sync::LazyLock<Result<bool, String>> =
     std::sync::LazyLock::new(|| {
         lambda_tenant_isolation_enabled(std::env::var(LAMBDA_TENANT_ISOLATION_VAR).ok().as_deref())
     });
-
-/// The `X-Amz-Tenant-Id` value Lambda routes an execution by.
-///
-/// The subject is hashed rather than passed through. AWS accepts only
-/// `[a-zA-Z0-9._:/=+\-@ ]` in a tenant id, which excludes the `|` that
-/// federated subjects such as `auth0|123` carry and that `validate_path_component`
-/// deliberately admits; a raw subject would also land in the `tenantId` field of
-/// CloudWatch platform events, readable by anyone holding log access; and a
-/// digest is case-stable where AWS leaves tenant-id matching undocumented.
-///
-/// The derivation is total. Every subject yields a valid id, including the
-/// `sink:` and `inbound:` placeholders that five of the dispatch routes
-/// substitute when no user is attached — those isolate per sink and per event
-/// definition rather than per user, which is the intended reading of a run that
-/// has no user, not a defect.
-#[cfg(any(feature = "lambda", test))]
-fn lambda_tenant_id(subject: &str) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(LAMBDA_TENANT_ID_DOMAIN.as_bytes());
-    hasher.update(subject.as_bytes());
-    format!(
-        "u{}",
-        &hasher.finalize().to_hex()[..LAMBDA_TENANT_ID_HEX_CHARS]
-    )
-}
 
 /// Render an AWS SDK failure with its full source chain.
 ///
@@ -3607,6 +3682,75 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lambda")]
+    #[tokio::test]
+    async fn native_lambda_uses_the_worker_envelope_without_an_http_wrapper() {
+        use flow_like_types::dispatch::DispatchPayloadRef;
+
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        let body = serde_json::to_value(executor_payload(
+            "job-native",
+            &dispatch_request(DispatchTrigger::User),
+        ))
+        .unwrap();
+        let bytes = dispatcher
+            .stage_native_lambda_payload("job-native", body.clone())
+            .await
+            .unwrap();
+        let DispatchPayloadRef::Inline(payload) = serde_json::from_slice(&bytes).unwrap() else {
+            panic!("small events must reach the native handler inline");
+        };
+        assert_eq!(serde_json::to_value(payload).unwrap(), body);
+        assert_eq!(
+            artifact_url_ttl(&ExecutionBackend::LambdaInvoke),
+            std::time::Duration::from_secs(86_400)
+        );
+    }
+
+    #[cfg(feature = "lambda")]
+    #[tokio::test]
+    async fn native_lambda_stages_large_events_without_changing_the_signed_body() {
+        use flow_like_storage::object_store::{ObjectStoreExt, memory::InMemory};
+        use flow_like_types::dispatch::DispatchPayloadRef;
+
+        let store = Arc::new(InMemory::new());
+        let mut dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        dispatcher.staging_bucket = Some(Arc::new(FlowLikeStore::Memory(store.clone())));
+        let mut request = dispatch_request(DispatchTrigger::User);
+        request.payload = Some(serde_json::json!({
+            "input": "x".repeat(LAMBDA_ASYNC_INLINE_PAYLOAD_BYTES)
+        }));
+        let body = serde_json::to_value(executor_payload("job-large", &request)).unwrap();
+        let event = dispatcher
+            .stage_native_lambda_payload("job-large", body.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<DispatchPayloadRef>(&event).unwrap(),
+            DispatchPayloadRef::Remote { .. }
+        ));
+        assert!(event.len() < LAMBDA_ASYNC_MAX_PAYLOAD_BYTES);
+        let staged = store
+            .get(&StorePath::from("tmp/lambda/job-large.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&staged).unwrap(),
+            body
+        );
+
+        let missing_store = Dispatcher::from_config(DispatchConfig::default());
+        assert!(matches!(
+            missing_store
+                .stage_native_lambda_payload("job-large", body)
+                .await,
+            Err(DispatchError::Configuration(_))
+        ));
+    }
+
     #[tokio::test]
     async fn the_signed_artifact_travels_in_the_executor_payload() {
         use flow_like_storage::object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
@@ -3783,7 +3927,7 @@ mod tests {
                 is_aws_tenant_id(&tenant),
                 "{subject:?} produced a tenant id AWS would reject: {tenant:?}"
             );
-            assert_eq!(tenant.len(), 1 + LAMBDA_TENANT_ID_HEX_CHARS);
+            assert_eq!(tenant.len(), 33);
             assert_eq!(
                 tenant,
                 lambda_tenant_id(subject),

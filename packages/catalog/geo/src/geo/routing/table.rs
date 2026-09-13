@@ -4,11 +4,11 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
+
+use crate::geo::pins::geometry_input;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::geo::GeoCoordinate;
 
 #[cfg(feature = "execute")]
 use crate::geo::routing::osrm::build_coordinate_string;
@@ -43,6 +43,7 @@ impl NodeLogic for OsrmTableNode {
             "Computes travel time and distance matrices between coordinates using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "osrmTable");
         node.add_icon("/flow/icons/table.svg");
 
@@ -52,16 +53,15 @@ impl NodeLogic for OsrmTableNode {
             "Initiate the matrix request",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinates",
-            "Coordinates",
-            "List of coordinates to include in the matrix",
-            VariableType::Struct,
+
+        geometry_input(
+            &mut node,
+            "geometries",
+            "Geometries",
+            "Ordered Point geometries",
+            Some(GeometryKind::Point),
         )
-        .set_schema::<GeoCoordinate>()
-        .set_value_type(ValueType::Array)
-        .set_options(PinOptions::new().set_enforce_schema(true).build())
-        .set_default_value(Some(json!([])));
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin(
             "profile",
@@ -181,7 +181,7 @@ impl NodeLogic for OsrmTableNode {
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
 
-        let coordinates: Vec<GeoCoordinate> = context.evaluate_pin("coordinates").await?;
+        let coordinates = crate::geo::pins::coordinates_input(context, "geometries").await?;
         let profile: String = context.evaluate_pin("profile").await?;
         let sources: Vec<i64> = context.evaluate_pin("sources").await?;
         let destinations: Vec<i64> = context.evaluate_pin("destinations").await?;

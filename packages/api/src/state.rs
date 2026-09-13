@@ -127,13 +127,20 @@ fn keyed_local_lock(
 fn scoped_credential_minimum_lifetime(
     mode: &CredentialsAccess,
 ) -> flow_like_types::Result<chrono::Duration> {
+    let minimum_lifetime = native_async_credential_lifetime(
+        mode,
+        std::env::var("ASYNC_EXECUTION_BACKEND").ok().as_deref(),
+        std::env::var("LAMBDA_ASYNC_EXECUTOR_FUNCTION")
+            .ok()
+            .as_deref(),
+    );
     if std::env::var("EXECUTION_ISOLATION_MODE").as_deref() != Ok("per_run")
         || !matches!(
             mode,
             CredentialsAccess::ServerExecute | CredentialsAccess::ShadowExecute
         )
     {
-        return Ok(chrono::Duration::seconds(120));
+        return Ok(minimum_lifetime);
     }
     let timeout = std::env::var("EXECUTION_TIMEOUT_SECONDS")
         .or_else(|_| std::env::var("EXECUTOR_TIMEOUT_SECS"))
@@ -142,12 +149,40 @@ fn scoped_credential_minimum_lifetime(
         std::env::var("EXECUTION_QUEUE_MAX_WAIT_SECONDS").unwrap_or_else(|_| "300".into());
     let margin =
         std::env::var("EXECUTION_CREDENTIAL_MARGIN_SECONDS").unwrap_or_else(|_| "120".into());
-    execution_credential_lifetime(
+    let isolated_lifetime = execution_credential_lifetime(
         &timeout,
         &queue_wait,
         &margin,
         crate::execution::queue::supervision_grace_seconds()?,
-    )
+    )?;
+    Ok(minimum_lifetime.max(isolated_lifetime))
+}
+
+fn native_async_credential_lifetime(
+    mode: &CredentialsAccess,
+    async_backend: Option<&str>,
+    native_function: Option<&str>,
+) -> chrono::Duration {
+    let native_dispatch = async_backend.is_some_and(|backend| {
+        backend.eq_ignore_ascii_case("lambda_invoke") || backend.eq_ignore_ascii_case("lambda_sdk")
+    }) && native_function.is_some_and(|function| !function.trim().is_empty());
+    if native_dispatch
+        && matches!(
+            mode,
+            CredentialsAccess::ServerExecute
+                | CredentialsAccess::ShadowExecute
+                | CredentialsAccess::InvokeNone
+                | CredentialsAccess::InvokeRead
+                | CredentialsAccess::InvokeWrite
+        )
+    {
+        // Native async deployment caps event age and hard execution at 900s
+        // each. Keep another 60s for dispatch preparation and clock skew.
+        // Both cached grants and freshly minted sessions must cover this window.
+        chrono::Duration::seconds(900 + 900 + 60)
+    } else {
+        chrono::Duration::seconds(120)
+    }
 }
 
 fn execution_credential_lifetime(
@@ -2059,8 +2094,9 @@ mod tests {
     use super::{
         OpenIdValidationSettings, board_mutation_lock_id, board_mutation_lock_key,
         cached_openid_is_current, course_attempt_lock_id, entra_tenant_from_issuer,
-        execution_credential_lifetime, flow_ir_draft_store_key, validate_jwk_for_header,
-        validate_jwks_set, validate_mcp_openid_claims, validate_openid_claims,
+        execution_credential_lifetime, flow_ir_draft_store_key, native_async_credential_lifetime,
+        validate_jwk_for_header, validate_jwks_set, validate_mcp_openid_claims,
+        validate_openid_claims,
     };
     use flow_like_types::Value;
     use jsonwebtoken::{
@@ -2167,6 +2203,81 @@ mod tests {
         assert!(crate::credentials::RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
         grant.expiration = Some(chrono::Utc::now() + chrono::Duration::hours(2));
         assert!(!crate::credentials::RuntimeCredentials::Aws(grant).expires_soon(required));
+    }
+
+    #[test]
+    fn native_async_grants_cover_queue_age_and_execution_for_every_invoke_mode() {
+        use crate::credentials::CredentialsAccess;
+        for mode in [
+            CredentialsAccess::ServerExecute,
+            CredentialsAccess::ShadowExecute,
+            CredentialsAccess::InvokeNone,
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+        ] {
+            for backend in ["lambda_invoke", "LAMBDA_INVOKE", "lambda_sdk"] {
+                assert_eq!(
+                    native_async_credential_lifetime(&mode, Some(backend), Some("worker"))
+                        .num_seconds(),
+                    1860
+                );
+            }
+        }
+        for (backend, function) in [
+            (None, Some("worker")),
+            (Some("lambda_stream"), Some("worker")),
+            (Some("sqs_event_bridge"), Some("worker")),
+            (Some("lambda_invoke"), None),
+            (Some("lambda_invoke"), Some("  ")),
+        ] {
+            assert_eq!(
+                native_async_credential_lifetime(
+                    &CredentialsAccess::ServerExecute,
+                    backend,
+                    function,
+                )
+                .num_seconds(),
+                120
+            );
+        }
+        assert_eq!(
+            native_async_credential_lifetime(
+                &CredentialsAccess::ReadApp,
+                Some("lambda_invoke"),
+                Some("worker"),
+            )
+            .num_seconds(),
+            120
+        );
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn native_async_rejects_near_expiry_cached_and_short_fresh_grants() {
+        use crate::credentials::{CredentialsAccess, RuntimeCredentials};
+        let required = native_async_credential_lifetime(
+            &CredentialsAccess::InvokeRead,
+            Some("lambda_invoke"),
+            Some("worker"),
+        );
+        let mut grant = crate::credentials::aws_credentials::AwsRuntimeCredentials::new(
+            "meta",
+            "content",
+            "logs",
+            "us-east-1",
+        );
+        // Unknown expiration also fails the native post-mint lifetime check.
+        assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
+        for remaining_seconds in [121, 900, 1800] {
+            grant.expiration =
+                Some(chrono::Utc::now() + chrono::Duration::seconds(remaining_seconds));
+            assert!(RuntimeCredentials::Aws(grant.clone()).expires_soon(required));
+        }
+        grant.expiration = Some(chrono::Utc::now() + chrono::Duration::seconds(3600));
+        assert!(!RuntimeCredentials::Aws(grant).expires_soon(required));
+        // The existing post-mint check applies whenever the required lifetime
+        // exceeds the ordinary cache's 120-second refresh margin.
+        assert!(required > chrono::Duration::seconds(120));
     }
 
     #[test]

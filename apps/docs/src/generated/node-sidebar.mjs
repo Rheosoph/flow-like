@@ -5691,6 +5691,10 @@ export const generatedNodeSidebar = [
         "slug": "nodes/events/events-generic"
       },
       {
+        "label": "Location Event",
+        "slug": "nodes/events/events-location"
+      },
+      {
         "label": "Simple Event",
         "slug": "nodes/events/events-simple"
       },
@@ -6619,6 +6623,54 @@ export const generatedNodeSidebar = [
       {
         "label": "Overview",
         "slug": "nodes/ui"
+      },
+      {
+        "label": "Audio",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/ui/audio"
+          },
+          {
+            "label": "Play Sound",
+            "slug": "nodes/ui/audio/ui-play-sound"
+          }
+        ]
+      },
+      {
+        "label": "Camera",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/ui/camera"
+          },
+          {
+            "label": "Capture Camera Audio",
+            "slug": "nodes/ui/camera/a2ui-camera-capture-audio"
+          },
+          {
+            "label": "Capture Camera Frame",
+            "slug": "nodes/ui/camera/a2ui-camera-capture"
+          },
+          {
+            "label": "Capture Camera Input",
+            "slug": "nodes/ui/camera/a2ui-camera-capture-input"
+          },
+          {
+            "label": "Control Camera",
+            "slug": "nodes/ui/camera/a2ui-camera-control"
+          },
+          {
+            "label": "Read Camera Image",
+            "slug": "nodes/ui/camera/a2ui-camera-read-image"
+          },
+          {
+            "label": "Update Camera Overlays",
+            "slug": "nodes/ui/camera/a2ui-camera-update-overlays"
+          }
+        ]
       },
       {
         "label": "Component",
@@ -9343,12 +9395,72 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry"
               },
               {
+                "label": "Affine Transform Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-affine-transform"
+              },
+              {
+                "label": "Clip Line by Polygon (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-clip-line"
+              },
+              {
+                "label": "Closest Point",
+                "slug": "nodes/web/geo/geometry/geometry-closest-point"
+              },
+              {
+                "label": "Concave Hull",
+                "slug": "nodes/web/geo/geometry/geometry-concave-hull"
+              },
+              {
+                "label": "Decode Geohash",
+                "slug": "nodes/web/geo/geometry/geometry-decode-geohash"
+              },
+              {
+                "label": "Decode Polyline",
+                "slug": "nodes/web/geo/geometry/geometry-decode-polyline"
+              },
+              {
+                "label": "Densify LineString (Degrees)",
+                "slug": "nodes/web/geo/geometry/geometry-densify-planar"
+              },
+              {
+                "label": "Densify LineString (Meters)",
+                "slug": "nodes/web/geo/geometry/geometry-densify-geodesic"
+              },
+              {
+                "label": "Dissolve Geometries (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-unary-union"
+              },
+              {
+                "label": "Encode Polyline",
+                "slug": "nodes/web/geo/geometry/geometry-encode-polyline"
+              },
+              {
                 "label": "Extract Legacy Location Point",
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-location"
               },
               {
                 "label": "Extract Legacy Route Geometry",
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-route"
+              },
+              {
+                "label": "GeoJSON Feature Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-feature-geometry"
+              },
+              {
+                "label": "GeoJSON FeatureCollection Geometries",
+                "slug": "nodes/web/geo/geometry/geometry-feature-collection-geometries"
+              },
+              {
+                "label": "Geodesic Bearing",
+                "slug": "nodes/web/geo/geometry/geometry-geodesic-bearing"
+              },
+              {
+                "label": "Geodesic Circle",
+                "slug": "nodes/web/geo/geometry/geometry-geodesic-circle"
+              },
+              {
+                "label": "Geodesic Destination",
+                "slug": "nodes/web/geo/geometry/geometry-geodesic-destination"
               },
               {
                 "label": "Geometry Area (Square Degrees)",
@@ -9359,8 +9471,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-geodesic-area"
               },
               {
+                "label": "Geometry Boundary",
+                "slug": "nodes/web/geo/geometry/geometry-boundary"
+              },
+              {
                 "label": "Geometry Bounds",
                 "slug": "nodes/web/geo/geometry/geometry-bounds"
+              },
+              {
+                "label": "Geometry Buffer (Degrees)",
+                "slug": "nodes/web/geo/geometry/geometry-planar-buffer"
               },
               {
                 "label": "Geometry Centroid (Planar)",
@@ -9375,8 +9495,36 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-convex-hull"
               },
               {
+                "label": "Geometry Covered By (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-covered-by"
+              },
+              {
+                "label": "Geometry Covers (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-covers"
+              },
+              {
+                "label": "Geometry Crosses (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-crosses"
+              },
+              {
+                "label": "Geometry Difference (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-difference"
+              },
+              {
+                "label": "Geometry Disjoint (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-disjoint"
+              },
+              {
                 "label": "Geometry Distance (Degrees)",
                 "slug": "nodes/web/geo/geometry/geometry-planar-distance"
+              },
+              {
+                "label": "Geometry Envelope",
+                "slug": "nodes/web/geo/geometry/geometry-envelope"
+              },
+              {
+                "label": "Geometry Hausdorff Distance (Vertices)",
+                "slug": "nodes/web/geo/geometry/geometry-hausdorff-distance"
               },
               {
                 "label": "Geometry Intersection (Planar)",
@@ -9395,20 +9543,84 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-geodesic-length"
               },
               {
+                "label": "Geometry N",
+                "slug": "nodes/web/geo/geometry/geometry-n"
+              },
+              {
+                "label": "Geometry Overlaps (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-overlaps"
+              },
+              {
+                "label": "Geometry Parts",
+                "slug": "nodes/web/geo/geometry/geometry-parts"
+              },
+              {
+                "label": "Geometry Point N",
+                "slug": "nodes/web/geo/geometry/geometry-point-n"
+              },
+              {
+                "label": "Geometry Points",
+                "slug": "nodes/web/geo/geometry/geometry-points"
+              },
+              {
                 "label": "Geometry Position Count",
                 "slug": "nodes/web/geo/geometry/geometry-num-points"
+              },
+              {
+                "label": "Geometry Relate Pattern (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-relate-pattern"
+              },
+              {
+                "label": "Geometry Shortest Connection (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-shortest-line"
+              },
+              {
+                "label": "Geometry Symmetric Difference (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-symmetric-difference"
+              },
+              {
+                "label": "Geometry Topologically Equals (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-topologically-equals"
+              },
+              {
+                "label": "Geometry Touches (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-touches"
               },
               {
                 "label": "Geometry Type",
                 "slug": "nodes/web/geo/geometry/geometry-type"
               },
               {
+                "label": "Geometry Union (Planar)",
+                "slug": "nodes/web/geo/geometry/geometry-union"
+              },
+              {
+                "label": "Geometry Validation Errors",
+                "slug": "nodes/web/geo/geometry/geometry-validation-errors"
+              },
+              {
+                "label": "Geometry Validity Reason",
+                "slug": "nodes/web/geo/geometry/geometry-validity-reason"
+              },
+              {
                 "label": "Geometry Within (Planar)",
                 "slug": "nodes/web/geo/geometry/geometry-within"
               },
               {
+                "label": "Geometry Within Distance (Degrees)",
+                "slug": "nodes/web/geo/geometry/geometry-d-within"
+              },
+              {
                 "label": "Geometry to GeoJSON",
                 "slug": "nodes/web/geo/geometry/geometry-to-geojson"
+              },
+              {
+                "label": "Geometry to Multi",
+                "slug": "nodes/web/geo/geometry/geometry-to-multi"
+              },
+              {
+                "label": "Geometry to Single",
+                "slug": "nodes/web/geo/geometry/geometry-to-single"
               },
               {
                 "label": "Geometry to WKB",
@@ -9419,7 +9631,35 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-to-wkt"
               },
               {
-                "label": "Legacy Boundary to Polygon",
+                "label": "Geometry to Web Mercator",
+                "slug": "nodes/web/geo/geometry/geometry-to-web-mercator"
+              },
+              {
+                "label": "H3 Cell Boundary Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-h3-cell-boundary"
+              },
+              {
+                "label": "H3 Cells to Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-h3-cells-to-geometry"
+              },
+              {
+                "label": "Interpolate Geodesic Point",
+                "slug": "nodes/web/geo/geometry/geometry-geodesic-interpolate"
+              },
+              {
+                "label": "Interpolate Point on LineString",
+                "slug": "nodes/web/geo/geometry/geometry-interpolate-line"
+              },
+              {
+                "label": "Is Geometry Empty",
+                "slug": "nodes/web/geo/geometry/geometry-is-empty"
+              },
+              {
+                "label": "Is Geometry Topologically Valid",
+                "slug": "nodes/web/geo/geometry/geometry-is-topologically-valid"
+              },
+              {
+                "label": "Legacy Boundary to Geometry",
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-boundary"
               },
               {
@@ -9427,12 +9667,104 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-coordinate"
               },
               {
+                "label": "Legacy Geo Adapter",
+                "slug": "nodes/web/geo/geometry/geometry-legacy-adapter"
+              },
+              {
                 "label": "Legacy H3 Polygons to MultiPolygon",
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-polygons"
               },
               {
+                "label": "LineString End Point",
+                "slug": "nodes/web/geo/geometry/geometry-end-point"
+              },
+              {
+                "label": "LineString Fréchet Distance (Degrees)",
+                "slug": "nodes/web/geo/geometry/geometry-planar-frechet-distance"
+              },
+              {
+                "label": "LineString Fréchet Distance (Meters)",
+                "slug": "nodes/web/geo/geometry/geometry-geodesic-frechet-distance"
+              },
+              {
+                "label": "LineString Is Closed",
+                "slug": "nodes/web/geo/geometry/geometry-line-is-closed"
+              },
+              {
+                "label": "LineString Is Ring",
+                "slug": "nodes/web/geo/geometry/geometry-line-is-ring"
+              },
+              {
+                "label": "LineString Start Point",
+                "slug": "nodes/web/geo/geometry/geometry-start-point"
+              },
+              {
+                "label": "LineString Substring",
+                "slug": "nodes/web/geo/geometry/geometry-line-substring"
+              },
+              {
+                "label": "Locate Point on LineString",
+                "slug": "nodes/web/geo/geometry/geometry-locate-point"
+              },
+              {
+                "label": "Make Envelope",
+                "slug": "nodes/web/geo/geometry/geometry-make-envelope"
+              },
+              {
+                "label": "Make GeoJSON Feature",
+                "slug": "nodes/web/geo/geometry/geometry-make-feature"
+              },
+              {
+                "label": "Make GeoJSON FeatureCollection",
+                "slug": "nodes/web/geo/geometry/geometry-make-feature-collection"
+              },
+              {
+                "label": "Make GeometryCollection",
+                "slug": "nodes/web/geo/geometry/geometry-make-geometry-collection"
+              },
+              {
+                "label": "Make LineString",
+                "slug": "nodes/web/geo/geometry/geometry-make-line-string"
+              },
+              {
+                "label": "Make MultiLineString",
+                "slug": "nodes/web/geo/geometry/geometry-make-multi-line-string"
+              },
+              {
+                "label": "Make MultiPoint",
+                "slug": "nodes/web/geo/geometry/geometry-make-multi-point"
+              },
+              {
+                "label": "Make MultiPolygon",
+                "slug": "nodes/web/geo/geometry/geometry-make-multi-polygon"
+              },
+              {
                 "label": "Make Point",
                 "slug": "nodes/web/geo/geometry/geometry-make-point"
+              },
+              {
+                "label": "Make Polygon",
+                "slug": "nodes/web/geo/geometry/geometry-make-polygon"
+              },
+              {
+                "label": "Merge Connected Lines",
+                "slug": "nodes/web/geo/geometry/geometry-merge-connected-lines"
+              },
+              {
+                "label": "Minimum Rotated Bounding Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-minimum-rotated-rectangle"
+              },
+              {
+                "label": "Number of Geometries",
+                "slug": "nodes/web/geo/geometry/geometry-num-geometries"
+              },
+              {
+                "label": "Number of Interior Rings",
+                "slug": "nodes/web/geo/geometry/geometry-num-interior-rings"
+              },
+              {
+                "label": "Orient Polygon Rings",
+                "slug": "nodes/web/geo/geometry/geometry-orient-polygon-rings"
               },
               {
                 "label": "Parse GeoJSON Geometry",
@@ -9459,12 +9791,92 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-x"
               },
               {
+                "label": "Point on Surface",
+                "slug": "nodes/web/geo/geometry/geometry-point-on-surface"
+              },
+              {
+                "label": "Point to Geohash",
+                "slug": "nodes/web/geo/geometry/geometry-encode-geohash"
+              },
+              {
+                "label": "Point to H3 Cell",
+                "slug": "nodes/web/geo/geometry/geometry-point-to-h3-cell"
+              },
+              {
                 "label": "Point to Legacy Coordinate",
                 "slug": "nodes/web/geo/geometry/geometry-to-legacy-coordinate"
               },
               {
+                "label": "Polygon Exterior Ring",
+                "slug": "nodes/web/geo/geometry/geometry-exterior-ring"
+              },
+              {
+                "label": "Polygon Interior Rings",
+                "slug": "nodes/web/geo/geometry/geometry-interior-rings"
+              },
+              {
+                "label": "Polygon to H3 Cells",
+                "slug": "nodes/web/geo/geometry/geometry-polygon-to-h3-cells"
+              },
+              {
+                "label": "Remove Repeated Points",
+                "slug": "nodes/web/geo/geometry/geometry-remove-repeated-points"
+              },
+              {
+                "label": "Repair Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-repair"
+              },
+              {
+                "label": "Reverse LineString",
+                "slug": "nodes/web/geo/geometry/geometry-reverse-line"
+              },
+              {
+                "label": "Rotate Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-rotate"
+              },
+              {
+                "label": "Scale Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-scale"
+              },
+              {
                 "label": "Simplify Geometry (Planar)",
                 "slug": "nodes/web/geo/geometry/geometry-simplify"
+              },
+              {
+                "label": "Simplify Geometry (Topology-Aware VW)",
+                "slug": "nodes/web/geo/geometry/geometry-simplify-vw-preserve"
+              },
+              {
+                "label": "Simplify Geometry (Visvalingam-Whyatt)",
+                "slug": "nodes/web/geo/geometry/geometry-simplify-vw"
+              },
+              {
+                "label": "Skew Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-skew"
+              },
+              {
+                "label": "Smooth Geometry (Chaikin)",
+                "slug": "nodes/web/geo/geometry/geometry-smooth-chaikin"
+              },
+              {
+                "label": "Snap Geometry to Grid",
+                "slug": "nodes/web/geo/geometry/geometry-snap-to-grid"
+              },
+              {
+                "label": "Split LineString at Antimeridian",
+                "slug": "nodes/web/geo/geometry/geometry-split-line-antimeridian"
+              },
+              {
+                "label": "Split LineString at Point",
+                "slug": "nodes/web/geo/geometry/geometry-split-line-at-point"
+              },
+              {
+                "label": "Translate Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-translate"
+              },
+              {
+                "label": "Triangulate Polygon",
+                "slug": "nodes/web/geo/geometry/geometry-triangulate"
               },
               {
                 "label": "Update Legacy Route Geometry",
@@ -9497,6 +9909,14 @@ export const generatedNodeSidebar = [
               {
                 "label": "Validate Polygon",
                 "slug": "nodes/web/geo/geometry/geometry-cast-polygon"
+              },
+              {
+                "label": "Web Mercator to Geometry",
+                "slug": "nodes/web/geo/geometry/geometry-from-web-mercator"
+              },
+              {
+                "label": "Wrap Geometry Longitude",
+                "slug": "nodes/web/geo/geometry/geometry-wrap-longitude"
               }
             ]
           },
@@ -9555,6 +9975,20 @@ export const generatedNodeSidebar = [
               {
                 "label": "Lat/Lng to H3 Cell",
                 "slug": "nodes/web/geo/h3/h3-latlng-to-cell"
+              }
+            ]
+          },
+          {
+            "label": "Location",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/web/geo/location"
+              },
+              {
+                "label": "Get Current Location",
+                "slug": "nodes/web/geo/location/geo-get-current-location"
               }
             ]
           },

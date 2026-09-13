@@ -460,7 +460,12 @@ export function VariableOverlay({
 									schema={draft.schema}
 									refs={refs}
 									disabled={!editable}
-									onChange={(schema) => patch({ schema, default_value: null })}
+									onChange={(schema) =>
+										patch({
+											schema,
+											default_value: convertJsonToUint8Array(null),
+										})
+									}
 								/>
 							)}
 							<small className="block text-[0.8rem] text-muted-foreground">

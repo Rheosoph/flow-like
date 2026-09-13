@@ -240,6 +240,19 @@ declare namespace events {
     function generic(): Struct;
 
     /**
+     * Starts when the device enters or leaves a configured circular region. Configure foreground or background monitoring in the Event settings.
+     * @node events_location @alias eventsLocation
+     * @returns region — Center of the monitored circle as a WGS 84 Point. This is not a measured device position
+     * @returns radiusMeters — Radius of the monitored circle in meters
+     * @returns transition — enter or exit
+     * @returns timestamp — Time the native system delivered the transition, in Unix milliseconds
+     * @returns transitionId — Stable identifier for deduplicating retried transition deliveries
+     * @returns payload — Native region transition and its Event identifiers
+     * @impure has side effects / drives control flow
+     */
+    function location(): { region: geometry<Point>, radiusMeters: float, transition: string, timestamp: float, transitionId: string, payload: Struct };
+
+    /**
      * A simple event without input or output
      * @node events_simple @alias eventsSimple
      * @impure has side effects / drives control flow

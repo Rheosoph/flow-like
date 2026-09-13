@@ -7,6 +7,9 @@ use std::sync::Arc;
 pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 
 pub mod a2ui;
+pub mod audio;
+mod audio_source;
+pub mod clipboard;
 
 include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));
 

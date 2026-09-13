@@ -143,6 +143,12 @@ fn repair_catalog_pin_schemas(
 ) {
     let node_name = placed_node.name.clone();
     for placed_pin in placed_node.pins.values_mut() {
+        // Adapter pin contracts come from its selected conversion mode.
+        if node_name == "geometry_legacy_adapter"
+            && matches!(placed_pin.name.as_str(), "value" | "converted" | "source")
+        {
+            continue;
+        }
         let Some(catalog_pin) = catalog_node.pins.values().find(|catalog_pin| {
             catalog_pin.name == placed_pin.name && catalog_pin.pin_type == placed_pin.pin_type
         }) else {
@@ -321,7 +327,11 @@ pub async fn sync_board_node_schemas(
     // Dynamic nodes commonly resolve schema refs only once. Expand every valid chain before
     // invoking `on_update`; the cleanup pass afterwards compacts them back to one-hop refs.
     expand_board_schema_refs(board, &refs);
+    let blocked = super::migrate_geo_geometry::migrate_geo_geometry(board, registry);
     let sync_node = |node: &mut Node, registry: &crate::state::FlowNodeRegistryInner| {
+        if blocked.contains(&node.id) {
+            return;
+        }
         let catalog_node = match registry.get_node(&node.name) {
             Ok(n) => n,
             Err(_) => return,
@@ -390,6 +400,11 @@ fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
         by_name.entry(pin.name.as_str()).or_default().push(pin);
     }
     for pin in placed_node.pins.values_mut() {
+        if placed_node.name == "geometry_legacy_adapter"
+            && matches!(pin.name.as_str(), "value" | "converted" | "source")
+        {
+            continue;
+        }
         let Some([catalog_pin]) = by_name.get(pin.name.as_str()).map(Vec::as_slice) else {
             continue;
         };

@@ -28,16 +28,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 COPY . .
 
+# Copy the binary before releasing the shared cache lock; caches may be evicted.
 RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-registry,target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
     --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
     source "$HOME"/.cargo/env && \
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
-    cargo build --locked --release --manifest-path=apps/backend/aws/file-tracker/Cargo.toml 2>&1
-
-RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-target,target=/app/target/,sharing=locked cp target/release/file-tracker /app/file-tracker
-
-RUN strip --strip-all /app/file-tracker
+    cargo build --locked --release --manifest-path=apps/backend/aws/file-tracker/Cargo.toml 2>&1 && \
+    cp target/release/file-tracker /app/file-tracker && \
+    strip --strip-all /app/file-tracker
 
 ARG CRDB_CA_URL
 RUN if [ -n "$CRDB_CA_URL" ]; then \

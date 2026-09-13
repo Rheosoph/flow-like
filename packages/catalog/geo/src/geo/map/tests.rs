@@ -1,3 +1,50 @@
+#[cfg(test)]
+mod geometry_definitions {
+    use super::super::get_map_image::GetMapImageNode;
+    use flow_like::flow::{node::NodeLogic, variable::VariableType};
+    use flow_like_types::geometry::{GeometryKind, marker};
+
+    #[test]
+    fn map_image_accepts_point_geometry_without_coordinate_input() {
+        let node = GetMapImageNode::new().get_node();
+        assert_eq!(node.version, Some(2));
+        let geometry = node.get_pin_by_name("geometry").unwrap();
+        assert_eq!(geometry.data_type, VariableType::Geometry);
+        assert_eq!(
+            geometry.schema.as_deref(),
+            Some(marker(GeometryKind::Point))
+        );
+        assert!(!geometry.is_optional());
+        assert!(geometry.default_value.is_none());
+        assert!(node.get_pin_by_name("coordinate").is_none());
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod geometry_execution {
+    use crate::geo::{
+        map::get_map_image::GetMapImageNode,
+        pins::{coordinate_input, tests::execution_context},
+    };
+    use flow_like_types::json::json;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn map_center_requires_point_geometry() {
+        let mut context = execution_context(Arc::new(GetMapImageNode::new())).await;
+        assert!(coordinate_input(&context, "geometry").await.is_err());
+        context
+            .set_pin_value(
+                "geometry",
+                json!({"type":"Point","coordinates":[13.405,52.52]}),
+            )
+            .await
+            .unwrap();
+        let point = coordinate_input(&context, "geometry").await.unwrap();
+        assert_eq!((point.latitude, point.longitude), (52.52, 13.405));
+    }
+}
+
 #[cfg(all(test, feature = "execute"))]
 mod map_tests {
     use crate::geo::GeoCoordinate;

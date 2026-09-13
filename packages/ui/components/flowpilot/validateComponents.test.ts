@@ -10,6 +10,10 @@ import {
 } from "../a2ui/component-prop-manifest";
 import type { SurfaceComponent } from "../a2ui/types";
 import {
+	createDefaultComponent,
+	normalizeComponent,
+} from "../builder/componentDefaults";
+import {
 	BASE_PROPS,
 	KNOWN_PROPS,
 	MAX_CUSTOM_CSS_CHARS,
@@ -21,6 +25,38 @@ import {
 const ALLOWED_RUNTIME_ONLY_PROPS: Record<string, readonly string[]> = {
 	widgetInstance: ["inlineWidgetDef"],
 };
+
+describe("camera audio configuration", () => {
+	test("new and legacy cameras keep microphone capture off by default", () => {
+		for (const component of [
+			createDefaultComponent("cameraView"),
+			normalizeComponent({ type: "cameraView" }),
+		]) {
+			expect(component).toMatchObject({
+				audioEnabled: { literalBool: false },
+				audioBufferSeconds: { literalNumber: 60 },
+			});
+		}
+	});
+
+	test("builder normalization and generated UI validation preserve audio settings", () => {
+		for (const settings of [
+			{
+				audioEnabled: { literalBool: true },
+				audioBufferSeconds: { literalNumber: 300 },
+			},
+			{
+				audioEnabled: { path: "/camera/enableAudio" },
+				audioBufferSeconds: { path: "/camera/historySeconds" },
+			},
+		]) {
+			const component = normalizeComponent({ type: "cameraView", ...settings });
+			expect(component).toMatchObject(settings);
+			const result = validateComponents([{ id: "camera", component }]);
+			expect(result.components[0]?.component).toMatchObject(settings);
+		}
+	});
+});
 
 describe("KNOWN_PROPS drift protection", () => {
 	test("has an entry for every component type in the A2UIComponent union", () => {

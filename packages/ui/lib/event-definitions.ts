@@ -8,6 +8,21 @@ export type EventSinkAvailability = "local" | "remote" | "both";
 export interface EventSinkDefinition {
 	availability: EventSinkAvailability;
 	description?: string;
+	/** The trigger stays on this device but can invoke a Remote Event. */
+	dispatchesRemoteEvents?: boolean;
+}
+
+export function sinkSupportsEventExecution(
+	sink: EventSinkDefinition | null | undefined,
+	mode?: "Local" | "Remote",
+	canUseLocalSink = false,
+): boolean {
+	if (sink?.availability === "local" && sink.dispatchesRemoteEvents)
+		return canUseLocalSink;
+	if (!sink || !mode || sink.availability === "both") return true;
+	return mode === "Local"
+		? sink.availability === "local"
+		: sink.availability === "remote";
 }
 
 export interface EventDefinition {
@@ -30,6 +45,29 @@ export function isChatEventType(eventType: string): boolean {
  * imports so host tools, validators, and tests can use the catalog without loading React.
  */
 export const EVENT_DEFINITIONS: EventDefinitionMapping = {
+	events_location: {
+		defaultEventType: "geolocation",
+		eventTypes: ["geolocation"],
+		withSink: ["geolocation"],
+		configs: {
+			geolocation: {
+				sink_type: "geolocation",
+				latitude: 0,
+				longitude: 0,
+				radius: 100,
+				trigger_on: "Both",
+				background: false,
+			},
+		},
+		sinkAvailability: {
+			geolocation: {
+				availability: "local",
+				dispatchesRemoteEvents: true,
+				description:
+					"This device monitors the region and invokes the Event locally or on its configured server.",
+			},
+		},
+	},
 	events_chat: {
 		configs: {
 			simple_chat: {

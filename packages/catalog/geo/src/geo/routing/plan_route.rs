@@ -1,17 +1,16 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
+
+use crate::geo::pins::{geometry_input, geometry_output};
 #[cfg(feature = "execute")]
 use serde::Deserialize;
 
-use crate::geo::{
-    GeoCoordinate,
-    routing::osrm::{RouteGeometry, RouteResult},
-};
+use crate::geo::routing::osrm::RouteResult;
 
 #[cfg(feature = "execute")]
 use crate::geo::routing::osrm::{OsrmRoute, build_coordinate_string, map_osrm_routes};
@@ -35,6 +34,7 @@ impl NodeLogic for PlanRouteNode {
             "Plans a route between two points using the OSRM routing service. Returns turn-by-turn directions, distance, and duration.",
             "Web/Geo/Routing",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "planRoute");
         node.add_icon("/flow/icons/map.svg");
 
@@ -44,31 +44,30 @@ impl NodeLogic for PlanRouteNode {
             "Initiate route planning",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "start",
+
+        geometry_input(
+            &mut node,
+            "start_geometry",
             "Start",
-            "Starting coordinate for the route",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
-
-        node.add_input_pin(
-            "end",
+            "Starting Point geometry for the route",
+            Some(GeometryKind::Point),
+        );
+        geometry_input(
+            &mut node,
+            "end_geometry",
             "End",
-            "Ending coordinate for the route",
-            VariableType::Struct,
+            "Ending Point geometry for the route",
+            Some(GeometryKind::Point),
+        );
+        geometry_input(
+            &mut node,
+            "waypoint_geometries",
+            "Waypoint Geometries",
+            "Optional intermediate Point geometries in visit order",
+            Some(GeometryKind::Point),
         )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
-
-        node.add_input_pin(
-            "waypoints",
-            "Waypoints",
-            "Optional intermediate waypoints to pass through",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
+        .set_value_type(ValueType::Array)
+        .set_options(PinOptions::new().set_optional(true).build())
         .set_default_value(Some(json!([])));
 
         node.add_input_pin(
@@ -138,13 +137,21 @@ impl NodeLogic for PlanRouteNode {
             VariableType::Float,
         );
 
-        node.add_output_pin(
-            "geometry",
-            "Geometry",
-            "Route geometry as array of coordinates",
-            VariableType::Struct,
+        geometry_output(
+            &mut node,
+            "geometry_out",
+            "Route Geometry",
+            "Primary route as a LineString geometry. Unset when no route is found.",
+            Some(GeometryKind::LineString),
+        );
+        geometry_output(
+            &mut node,
+            "route_geometries",
+            "Route Geometries",
+            "LineString geometries for all returned routes, with the primary route first.",
+            Some(GeometryKind::LineString),
         )
-        .set_schema::<RouteGeometry>();
+        .set_value_type(ValueType::Array);
 
         node.set_scores(
             NodeScores::new()
@@ -165,10 +172,12 @@ impl NodeLogic for PlanRouteNode {
 
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
+        crate::geo::pins::clear_output(context, "route_geometries").await?;
 
-        let start: GeoCoordinate = context.evaluate_pin("start").await?;
-        let end: GeoCoordinate = context.evaluate_pin("end").await?;
-        let waypoints: Vec<GeoCoordinate> = context.evaluate_pin("waypoints").await?;
+        let start = crate::geo::pins::coordinate_input(context, "start_geometry").await?;
+        let end = crate::geo::pins::coordinate_input(context, "end_geometry").await?;
+        let waypoints = crate::geo::pins::coordinates_input(context, "waypoint_geometries").await?;
         let profile: String = context.evaluate_pin("profile").await?;
         let alternatives: bool = context.evaluate_pin("alternatives").await?;
 
@@ -212,6 +221,7 @@ impl NodeLogic for PlanRouteNode {
         }
 
         let routes = map_osrm_routes(body.routes.unwrap_or_default());
+        crate::geo::routing::osrm::set_route_geometries(context, &routes).await?;
 
         let primary_route = routes.first().cloned().unwrap_or_default();
         let alt_routes: Vec<RouteResult> = routes.into_iter().skip(1).collect();
@@ -225,9 +235,6 @@ impl NodeLogic for PlanRouteNode {
             .await?;
         context
             .set_pin_value("duration", json!(primary_route.duration))
-            .await?;
-        context
-            .set_pin_value("geometry", json!(primary_route.geometry))
             .await?;
 
         context.deactivate_exec_pin("exec_error").await?;

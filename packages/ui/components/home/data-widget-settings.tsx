@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { getApiOrigin } from "../../lib/api-url";
+import { NATIVE_CHART_TYPES } from "../../lib/native-widget";
 import { useBackend } from "../../state/backend-state";
 import type { GraphOverlay } from "../../state/backend-state/graph-state";
 import type {
@@ -109,13 +110,17 @@ const filterNames = {
 export function HomeDataWidgetSettings({
 	widget,
 	onChange,
+	native = false,
 }: {
 	widget: IHomeWidget;
 	onChange: (config: Record<string, unknown>) => void;
+	native?: boolean;
 }) {
 	const backend = useBackend();
 	const auth = useAuth();
 	const config = normalizeHomeDataConfig(widget.config);
+	const scalar =
+		native && ["stat", "progress", "gauge"].includes(config.visualization);
 	const patch = (updates: Partial<HomeDataConfig>) =>
 		onChange({ ...config, ...updates });
 	const [apps, setApps] = useState<[string, string][]>([]);
@@ -143,11 +148,21 @@ export function HomeDataWidgetSettings({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: A profile switch must refresh available apps even when its backend instance is reused.
 	useEffect(() => {
 		let active = true;
-		void backend.appState
-			.getApps()
-			.then((items) => {
+		void Promise.all([
+			backend.appState.getApps(),
+			native ? backend.userState.getProfile() : Promise.resolve(undefined),
+		])
+			.then(([items, profile]) => {
 				if (active)
-					setApps(items.map(([app, meta]) => [app.id, meta?.name || app.id]));
+					setApps(
+						items
+							.filter(
+								([app]) =>
+									!native ||
+									profile?.apps?.some((visible) => visible.app_id === app.id),
+							)
+							.map(([app, meta]) => [app.id, meta?.name || app.id]),
+					);
 			})
 			.catch(() => {
 				if (active) setSourceError("Your apps could not be loaded.");
@@ -155,7 +170,7 @@ export function HomeDataWidgetSettings({
 		return () => {
 			active = false;
 		};
-	}, [backend.appState, sourceIdentity]);
+	}, [backend.appState, backend.userState, sourceIdentity, native]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Sources must reload when a reused backend changes profiles.
 	useEffect(() => {
 		let active = true;
@@ -499,7 +514,7 @@ export function HomeDataWidgetSettings({
 			<Choice
 				label="Presentation"
 				value={config.visualization}
-				options={HOME_DATA_VISUALIZATIONS}
+				options={native ? NATIVE_CHART_TYPES : HOME_DATA_VISUALIZATIONS}
 				onChange={(value) => {
 					const visualization = value as HomeDataConfig["visualization"];
 					const records = [
@@ -516,6 +531,13 @@ export function HomeDataWidgetSettings({
 					].includes(visualization);
 					patch({
 						visualization,
+						...(native && ["stat", "progress", "gauge"].includes(visualization)
+							? {
+									groupBy: "",
+									seriesBy: "",
+									measures: config.measures.slice(0, 1),
+								}
+							: {}),
 						mode: records ? "records" : "aggregate",
 						...(visualization === "calendar"
 							? {
@@ -550,7 +572,7 @@ export function HomeDataWidgetSettings({
 							type="button"
 							variant="ghost"
 							size="sm"
-							disabled={config.measures.length >= 6}
+							disabled={config.measures.length >= (scalar ? 1 : 6)}
 							onClick={() =>
 								patch({
 									measures: [
@@ -709,54 +731,55 @@ export function HomeDataWidgetSettings({
 					onChange={(xField) => patch({ xField })}
 				/>
 			)}
-			{(config.mode === "aggregate" || config.visualization === "kanban") && (
-				<>
-					<Choice
-						label={
-							config.visualization === "histogram"
-								? "Numeric field to bin"
-								: config.visualization === "kanban"
-									? "Status column"
-									: "Group by"
-						}
-						value={config.groupBy}
-						options={fields}
-						optional="No grouping"
-						onChange={(groupBy) => patch({ groupBy })}
-					/>
-					{config.mode === "aggregate" &&
-						config.groupBy &&
-						config.visualization !== "histogram" && (
+			{!scalar &&
+				(config.mode === "aggregate" || config.visualization === "kanban") && (
+					<>
+						<Choice
+							label={
+								config.visualization === "histogram"
+									? "Numeric field to bin"
+									: config.visualization === "kanban"
+										? "Status column"
+										: "Group by"
+							}
+							value={config.groupBy}
+							options={fields}
+							optional="No grouping"
+							onChange={(groupBy) => patch({ groupBy })}
+						/>
+						{config.mode === "aggregate" &&
+							config.groupBy &&
+							config.visualization !== "histogram" && (
+								<Choice
+									label="Date grouping"
+									value={config.timeBucket}
+									options={[
+										["none", "Use original value"],
+										["day", "Day"],
+										["week", "Week"],
+										["month", "Month"],
+										["quarter", "Quarter"],
+										["year", "Year"],
+									]}
+									hint="Date grouping expects a timestamp, date, or ISO date string. Dates are grouped in UTC."
+									onChange={(timeBucket) =>
+										patch({
+											timeBucket: timeBucket as HomeDataConfig["timeBucket"],
+										})
+									}
+								/>
+							)}
+						{config.mode === "aggregate" && (
 							<Choice
-								label="Date grouping"
-								value={config.timeBucket}
-								options={[
-									["none", "Use original value"],
-									["day", "Day"],
-									["week", "Week"],
-									["month", "Month"],
-									["quarter", "Quarter"],
-									["year", "Year"],
-								]}
-								hint="Date grouping expects a timestamp, date, or ISO date string. Dates are grouped in UTC."
-								onChange={(timeBucket) =>
-									patch({
-										timeBucket: timeBucket as HomeDataConfig["timeBucket"],
-									})
-								}
+								label="Split into series"
+								value={config.seriesBy}
+								options={fields}
+								optional="No series"
+								onChange={(seriesBy) => patch({ seriesBy })}
 							/>
 						)}
-					{config.mode === "aggregate" && (
-						<Choice
-							label="Split into series"
-							value={config.seriesBy}
-							options={fields}
-							optional="No series"
-							onChange={(seriesBy) => patch({ seriesBy })}
-						/>
-					)}
-				</>
-			)}
+					</>
+				)}
 			{config.visualization === "histogram" && (
 				<Field label="Bin width">
 					<Input
@@ -937,8 +960,8 @@ export function HomeDataWidgetSettings({
 					);
 				})}
 				<p className="text-xs text-muted-foreground">
-					All conditions must match. “Current user's ID” resolves when each
-					person opens their home.
+					All conditions must match. “Current user's ID” resolves for the person
+					viewing this widget.
 				</p>
 			</div>
 			<div className="grid grid-cols-2 gap-3">
@@ -995,24 +1018,26 @@ export function HomeDataWidgetSettings({
 					<Input
 						type="number"
 						min={1}
-						max={500}
+						max={native ? 120 : 500}
 						value={config.limit}
 						onChange={(event) => patch({ limit: Number(event.target.value) })}
 					/>
 				</Field>
-				<Choice
-					label="Refresh"
-					value={String(config.refreshSeconds)}
-					options={[
-						["0", "On open / manually"],
-						["30", "Every 30 seconds"],
-						["60", "Every minute"],
-						["300", "Every 5 minutes"],
-						["900", "Every 15 minutes"],
-						["3600", "Every hour"],
-					]}
-					onChange={(value) => patch({ refreshSeconds: Number(value) })}
-				/>
+				{!native && (
+					<Choice
+						label="Refresh"
+						value={String(config.refreshSeconds)}
+						options={[
+							["0", "On open / manually"],
+							["30", "Every 30 seconds"],
+							["60", "Every minute"],
+							["300", "Every 5 minutes"],
+							["900", "Every 15 minutes"],
+							["3600", "Every hour"],
+						]}
+						onChange={(value) => patch({ refreshSeconds: Number(value) })}
+					/>
+				)}
 				<Choice
 					label="Number format"
 					value={config.format}
@@ -1050,7 +1075,13 @@ export function HomeDataWidgetSettings({
 				{["stat", "metricstrip", "progress", "gauge", "bullet"].includes(
 					config.visualization,
 				) && (
-					<Field label="Optional target">
+					<Field
+						label={
+							native && ["progress", "gauge"].includes(config.visualization)
+								? "Target"
+								: "Optional target"
+						}
+					>
 						<Input
 							type="number"
 							value={config.target ?? ""}
@@ -1066,15 +1097,17 @@ export function HomeDataWidgetSettings({
 					</Field>
 				)}
 			</div>
-			<Button
-				type="button"
-				variant="outline"
-				className="w-full"
-				onClick={() => setPreview((value) => !value)}
-			>
-				{preview ? "Hide preview" : "Preview with my data"}
-			</Button>
-			{preview && (
+			{!native && (
+				<Button
+					type="button"
+					variant="outline"
+					className="w-full"
+					onClick={() => setPreview((value) => !value)}
+				>
+					{preview ? "Hide preview" : "Preview with my data"}
+				</Button>
+			)}
+			{!native && preview && (
 				<div
 					className="rounded-xl border border-border/60 bg-card p-4"
 					style={{

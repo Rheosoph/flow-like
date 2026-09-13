@@ -24,8 +24,18 @@ pub async fn resolve_wasm_packages(
     state: &AppState,
     app_id: &str,
 ) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
-    let registry = state.wasm_registry.as_ref()?;
     let target = executor_target_platform();
+    resolve_wasm_packages_for_platform(state, app_id, &target).await
+}
+
+/// Resolve packages for the executor receiving this run. Background and live
+/// executors can use different CPU architectures in the same deployment.
+pub async fn resolve_wasm_packages_for_platform(
+    state: &AppState,
+    app_id: &str,
+    target: &str,
+) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
+    let registry = state.wasm_registry.as_ref()?;
 
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
@@ -83,7 +93,7 @@ pub async fn resolve_wasm_packages(
                 .map(Vec::as_slice)
                 .unwrap_or_default()
                 .iter()
-                .any(|platform| platform == &target);
+                .any(|platform| platform == target);
 
         if !compiled_for_target {
             had_errors = true;
@@ -116,7 +126,7 @@ pub async fn resolve_wasm_packages(
         };
 
         match registry
-            .sign_cwasm_url(&pkg.package_id, &pkg.version, &target)
+            .sign_cwasm_url(&pkg.package_id, &pkg.version, target)
             .await
         {
             Ok((cwasm_url, cwasm_checksum)) => {

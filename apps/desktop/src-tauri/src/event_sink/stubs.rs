@@ -158,44 +158,6 @@ impl EventSink for crate::event_sink::web_watcher::WebWatcherSink {
     }
 }
 
-// GeoLocation Sink
-#[async_trait::async_trait]
-impl EventSink for crate::event_sink::geolocation::GeoLocationSink {
-    async fn start(&self, _app_handle: &AppHandle, _db: DbConnection) -> Result<()> {
-        tracing::warn!("GeoLocationSink not yet fully implemented");
-        Ok(())
-    }
-
-    async fn stop(&self, _app_handle: &AppHandle, _db: DbConnection) -> Result<()> {
-        Ok(())
-    }
-
-    async fn on_register(
-        &self,
-        _app_handle: &AppHandle,
-        registration: &EventRegistration,
-        _db: DbConnection,
-    ) -> Result<()> {
-        tracing::info!(
-            "Registered geofence: ({}, {}) -> event {} (NOT IMPLEMENTED)",
-            self.latitude,
-            self.longitude,
-            registration.event_id
-        );
-        Ok(())
-    }
-
-    async fn on_unregister(
-        &self,
-        _app_handle: &AppHandle,
-        registration: &EventRegistration,
-        _db: DbConnection,
-    ) -> Result<()> {
-        tracing::info!("Unregistered geofence: {}", registration.event_id);
-        Ok(())
-    }
-}
-
 // GitHub Sink
 #[async_trait::async_trait]
 impl EventSink for crate::event_sink::github::GitHubSink {

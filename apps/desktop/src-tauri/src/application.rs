@@ -6,11 +6,11 @@
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
 mod deeplink;
+#[cfg(desktop)]
+mod diffusion_runtime;
 #[cfg(debug_assertions)]
 mod e2e_isolation;
 mod e2e_runtime;
-#[cfg(desktop)]
-mod diffusion_runtime;
 mod event_bus;
 mod event_sink;
 mod execution_identity;
@@ -606,6 +606,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            functions::native::setup(app.handle());
             #[cfg(desktop)]
             diffusion_runtime::configure(app)?;
             #[cfg(debug_assertions)]
@@ -1025,6 +1026,18 @@ pub fn run() {
             e2e_runtime::intake_e2e_runtime_status,
             restart_app,
             deeplink::deeplink_replay_pending,
+            functions::native::native_publish_snapshot,
+            functions::native::native_clear_snapshot,
+            functions::native::native_take_actions,
+            functions::native::native_pending_actions,
+            functions::native::native_ack_action,
+            functions::native::native_publish_app_icons,
+            functions::native::native_complete_action,
+            functions::native::native_read_shared_file,
+            functions::native::native_write_clipboard,
+            functions::native::native_get_location,
+            functions::native::native_cancel_location,
+            functions::native::native_geofence_permission,
             functions::file::get_path_meta,
             functions::ai::invoke::stream_chat_completion,
             functions::ai::invoke::chat_completion,
@@ -1335,6 +1348,7 @@ pub fn run() {
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
             functions::notifications::get_pending_notification_tap,
+            functions::notifications::prepare_notification_attachment,
             functions::device_id::get_stable_device_id,
             functions::feedback::upsert_offline_feedback,
             functions::feedback::get_offline_feedback,

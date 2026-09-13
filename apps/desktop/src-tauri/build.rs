@@ -268,6 +268,39 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
+    if target_os == "macos" {
+        for path in [
+            "apple/FlowLikeNative/Sources",
+            "apple/FlowLikeNative/Extensions",
+            "apple/FlowLikeNative/Package.swift",
+            "apple/FlowLikeNative/FlowLikeNative.xcodeproj/project.pbxproj",
+        ] {
+            println!("cargo:rerun-if-changed={path}");
+        }
+        println!("cargo:rerun-if-changed=../scripts/prepare-native-apple.ts");
+        println!("cargo:rerun-if-changed=../scripts/apple-bundle-version.py");
+        println!("cargo:rerun-if-changed=tauri.conf.json");
+        println!("cargo:rerun-if-changed=tauri.macos.conf.json");
+        println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+        println!("cargo:rerun-if-env-changed=APPLE_SIGNING_IDENTITY");
+        let mut command = std::process::Command::new("bun");
+        command.arg("../scripts/prepare-native-apple.ts");
+        if std::env::var("PROFILE").as_deref() == Ok("release") {
+            command.arg("--release");
+        }
+        let status = command
+            .status()
+            .expect("bun is required to build Apple native integrations");
+        assert!(status.success(), "Apple native integration build failed");
+        let frameworks = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("binaries/apple-native");
+        println!("cargo:rustc-link-search=framework={}", frameworks.display());
+        println!("cargo:rustc-link-lib=framework=FlowLikeNative");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+        // `tauri dev` runs the binary outside an application bundle.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", frameworks.display());
+    }
+
     // Flow-Like's worker-heavy desktop runtime needs an 8 MiB main-thread
     // stack on Windows. Scope the option to the final MSVC desktop executable:
     // a global RUSTFLAGS value would rebuild every dependency with a different
@@ -291,6 +324,30 @@ fn main() {
             "_flow_like_mlx_generate",
             "_flow_like_mlx_is_available",
             "_flow_like_mlx_unload",
+            "_flow_like_native_publish_snapshot",
+            "_flow_like_native_clear_snapshot",
+            "_flow_like_native_take_actions",
+            "_flow_like_native_pending_actions",
+            "_flow_like_native_ack_action",
+            "_flow_like_native_publish_app_icons",
+            "_flow_like_native_complete_action",
+            "_flow_like_native_free_string",
+            "_flow_like_native_set_action_callback",
+            "_flow_like_native_set_inactive_callback",
+            "_flow_like_native_write_clipboard",
+            "_flow_like_native_shared_files_directory",
+            "_flow_like_native_get_location",
+            "_flow_like_native_cancel_location",
+            "_flow_like_native_set_location_background_callback",
+            "_flow_like_native_scope",
+            "_flow_like_native_sync_geofences",
+            "_flow_like_native_geofence_permission",
+            "_flow_like_native_set_geofence_callback",
+            "_flow_like_native_set_geofence_expiration_callback",
+            "_flow_like_native_geofence_background_time_remaining",
+            "_flow_like_native_geofence_foreground",
+            "_flow_like_native_take_geofence_events",
+            "_flow_like_native_ack_geofence_events",
         ] {
             println!("cargo:rustc-link-arg-cdylib=-Wl,-U,{symbol}");
         }

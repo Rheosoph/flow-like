@@ -31,6 +31,10 @@ import {
 	showProgressToast,
 	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
+import {
+	cancelDeviceCommands,
+	withDeviceCommandBridge,
+} from "@flow-like/flow-like-ui/lib/device-bridge";
 import type {
 	IEventAlias,
 	IEventCorpusResult,
@@ -1024,6 +1028,37 @@ export class EventState implements IEventState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
+	): Promise<ILogMetadata | undefined> {
+		beforeDispatch?.();
+		return withDeviceCommandBridge(
+			{ appId, eventId, executionTarget: "local" },
+			cb,
+			(bridgeCallback) =>
+				this.executeEventInternal(
+					appId,
+					eventId,
+					payload,
+					streamState,
+					onEventId,
+					bridgeCallback,
+					skipConsentCheck,
+					pageTrigger,
+					beforeDispatch,
+				),
+		);
+	}
+
+	private async executeEventInternal(
+		appId: string,
+		eventId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		onEventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined> {
 		// Substitution is per dispatch path, never shared: the native command
 		// re-derives the revision from the LOCAL board, while the server answers
@@ -1041,6 +1076,7 @@ export class EventState implements IEventState {
 				onEventId,
 				cb,
 				remoteTrigger,
+				beforeDispatch,
 			);
 		const localDynamicPageAction = isLocalDynamicPageTrigger(pageTrigger);
 
@@ -1206,6 +1242,7 @@ export class EventState implements IEventState {
 			board,
 		);
 		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
+		beforeDispatch?.();
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
@@ -1267,6 +1304,7 @@ export class EventState implements IEventState {
 			if (cb) cb(events);
 		};
 
+		beforeDispatch?.();
 		const token = this.backend.auth?.user?.access_token;
 
 		let metadata: ILogMetadata | undefined;
@@ -1327,6 +1365,35 @@ export class EventState implements IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
+	): Promise<ILogMetadata | undefined> {
+		beforeDispatch?.();
+		return withDeviceCommandBridge(
+			{ appId, eventId, executionTarget: "remote" },
+			cb,
+			(bridgeCallback) =>
+				this.executeEventRemoteInternal(
+					appId,
+					eventId,
+					payload,
+					streamState,
+					onEventId,
+					bridgeCallback,
+					pageTrigger,
+					beforeDispatch,
+				),
+		);
+	}
+
+	private async executeEventRemoteInternal(
+		appId: string,
+		eventId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		onEventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined> {
 		if (isLocalDynamicPageTrigger(pageTrigger)) {
 			throw new Error(
@@ -1341,6 +1408,7 @@ export class EventState implements IEventState {
 		let foundRunId = false;
 
 		try {
+			beforeDispatch?.();
 			await streamFetcher<IIntercomEvent>(
 				this.backend.profile,
 				`apps/${appId}/events/${eventId}/invoke`,
@@ -1428,7 +1496,9 @@ export class EventState implements IEventState {
 		eventId: string,
 		method: string,
 		params?: Record<string, unknown>,
+		beforeDispatch?: () => void,
 	): Promise<Record<string, unknown>> {
+		beforeDispatch?.();
 		if (
 			!this.backend.profile ||
 			!this.backend.auth?.isAuthenticated ||
@@ -1454,6 +1524,7 @@ export class EventState implements IEventState {
 	}
 
 	async cancelExecution(runId: string): Promise<void> {
+		cancelDeviceCommands(runId);
 		await invoke("cancel_execution", {
 			runId: runId,
 		});

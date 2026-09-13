@@ -28,6 +28,8 @@ import {
 	isUsableRuntimeEvent,
 	resolveRouteMapping,
 } from "../../lib/runtime-route";
+import { getApiOrigin } from "../../lib/api-url";
+import { recordRecentApp } from "../../lib/recent-apps";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { escapeCssAttributeValue } from "../../lib/chat-appearance";
@@ -786,6 +788,24 @@ export function UsePageContent({
 		if (effectiveRouteEvent) return effectiveRouteEvent;
 		return resolvedCurrentEvent;
 	}, [effectiveRouteEvent, resolvedCurrentEvent]);
+
+	const recentUseScope = JSON.stringify([
+		getApiOrigin(backend.profile),
+		backend.profile?.id ?? "",
+		(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
+	]);
+	const lastTrackedApp = useRef("");
+	useEffect(() => {
+		if (!active || !appId) {
+			lastTrackedApp.current = "";
+			return;
+		}
+		if (!activeEvent?.active || authCheckPending) return;
+		const key = `${recentUseScope}:${appId}`;
+		if (lastTrackedApp.current === key) return;
+		lastTrackedApp.current = key;
+		recordRecentApp(JSON.parse(recentUseScope), appId);
+	}, [active, appId, activeEvent?.active, authCheckPending, recentUseScope]);
 
 	const pageEvent = useMemo(() => {
 		if (effectiveRouteEvent?.default_page_id) return effectiveRouteEvent;

@@ -705,6 +705,30 @@ export interface ImageInputComponent extends ComponentBase {
 	showPreview?: BoundValue;
 }
 
+export interface CameraViewComponent extends ComponentBase {
+	type: "cameraView";
+	/** Current camera session, microphone state, and the last captured frame. */
+	value?: BoundValue;
+	label?: BoundValue;
+	disabled?: BoundValue;
+	facingMode?: BoundValue;
+	deviceId?: BoundValue;
+	mirrored?: BoundValue;
+	fit?: BoundValue;
+	/** Zero disables sampling. Positive intervals are clamped to at least 250 ms. */
+	intervalMs?: BoundValue;
+	maxWidth?: BoundValue;
+	quality?: BoundValue;
+	/** Offer microphone capture on an explicit user start. Defaults to false. */
+	audioEnabled?: BoundValue;
+	/** Recent audio retained in memory, in whole seconds from 1 to 300. Defaults to 60. */
+	audioBufferSeconds?: BoundValue;
+	/** CameraOverlayUpdate, including the matching sessionId and frameId. */
+	overlays?: BoundValue;
+	/** Preview-only grayscale, sepia, blur, brightness and contrast. */
+	effects?: BoundValue;
+}
+
 export interface VoiceInputComponent extends ComponentBase {
 	type: "voiceInput";
 	value: BoundValue;
@@ -1819,6 +1843,7 @@ export type A2UIComponent =
 	| DateTimeInputComponent
 	| FileInputComponent
 	| ImageInputComponent
+	| CameraViewComponent
 	| VoiceInputComponent
 	| LinkComponent
 	| CardComponent
@@ -1879,6 +1904,16 @@ export interface Surface {
 
 // Messages
 export type A2UIServerMessage =
+	| {
+			/** Consumed by the live invocation bridge before UI state or history. */
+			type: "deviceCommand";
+			request_id: string;
+			app_id: string;
+			command: string;
+			args: Record<string, unknown>;
+			timeout_ms: number;
+			channel: IChannelHandle;
+	  }
 	| {
 			type: "beginRendering";
 			surfaceId: string;

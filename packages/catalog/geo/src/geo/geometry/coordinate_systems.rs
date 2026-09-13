@@ -58,13 +58,13 @@ fn definition(operation: Operation) -> Node {
             "geometry_wrap_longitude",
             "wrapLongitude",
             "Wrap Geometry Longitude",
-            "Canonicalizes every longitude of a Point or MultiPoint to the half-open interval [-180, 180), mapping positive 180 to negative 180. Connected geometries are rejected because wrapping a single vertex would tear them across the antimeridian.",
+            "Converts a GeoJSON-like Point, MultiPoint, or point-only GeometryCollection Struct with arbitrary finite longitudes into Geometry. Longitudes are wrapped to the half-open interval [-180, 180), while latitudes must already be within [-90, 90]. Connected geometries are rejected because wrapping individual vertices would tear them across the antimeridian.",
         ),
         GeodesicCircle => (
             "geometry_geodesic_circle",
             "geodesicCircle",
             "Geodesic Circle",
-            "Approximates a WGS 84 geodesic circle around a Point. Antimeridian crossings are split into valid polygon parts, and circles that contain a pole are rejected.",
+            "Approximates a WGS 84 geodesic circle around a Point using 3 through 1024 segments. Antimeridian crossings are split into valid polygon parts, and circles that contain a pole are rejected.",
         ),
     };
 
@@ -95,8 +95,14 @@ fn definition(operation: Operation) -> Node {
             geometry_output(&mut node, None);
         }
         WrapLongitude => {
-            geometry_input(&mut node, "geometry", None);
+            node.add_input_pin(
+                "geometry",
+                "geometry",
+                "GeoJSON-like Point, MultiPoint, or point-only GeometryCollection Struct with finite longitudes and WGS 84 latitudes",
+                VariableType::Struct,
+            );
             geometry_output(&mut node, None);
+            node.set_receiver("");
         }
         GeodesicCircle => {
             geometry_input(&mut node, "origin", Some(GeometryKind::Point));
@@ -109,7 +115,7 @@ fn definition(operation: Operation) -> Node {
             node.add_input_pin(
                 "segments",
                 "segments",
-                "Number of polygon segments from 3 through 4096",
+                "Number of polygon segments from 3 through 1024",
                 VariableType::Integer,
             );
             geometry_output(&mut node, None);
@@ -146,7 +152,11 @@ async fn run_operation(
                 .await?,
         );
     }
-    for (name, value) in runtime::execute(operation, &flow_like_types::Value::Object(values))? {
+    let outputs = super::cpu::run(move || {
+        runtime::execute(operation, &flow_like_types::Value::Object(values))
+    })
+    .await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -195,8 +205,34 @@ implement_node!(GeometryWrapLongitudeNode, Operation::WrapLongitude);
 pub struct GeometryGeodesicCircleNode;
 implement_node!(GeometryGeodesicCircleNode, Operation::GeodesicCircle);
 
+#[cfg(test)]
+mod definition_tests {
+    use super::*;
+
+    #[test]
+    fn wrap_longitude_is_a_struct_to_geometry_boundary() {
+        let node = definition(Operation::WrapLongitude);
+        let input = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "geometry")
+            .expect("geometry input");
+        let output = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "geometry_out")
+            .expect("geometry output");
+
+        assert_eq!(input.data_type, VariableType::Struct);
+        assert_eq!(output.data_type, VariableType::Geometry);
+        assert_eq!(node.receiver.as_deref(), Some(""));
+        assert_eq!(node.flowscript_receiver(), None);
+    }
+}
+
 #[cfg(feature = "execute")]
 mod runtime {
+    use super::super::check_topology_validation;
     use super::Operation;
     use flow_like_geometry::{from_geo, to_geo};
     use flow_like_types::{
@@ -209,16 +245,19 @@ mod runtime {
     };
     use geo::{
         BooleanOps, Coord, Destination, Distance, Geodesic, Geometry, MapCoords, MultiPolygon,
-        Point, Polygon, Rect, Translate, Validation,
+        Point, Polygon, Rect, Translate,
     };
     use std::f64::consts::PI;
 
     const WEB_MERCATOR_CRS: &str = "EPSG:3857";
+    const WGS84_CRS: &str = "EPSG:4326";
     const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
     const MAX_MERCATOR_LATITUDE: f64 = 85.051_128_779_806_6;
     const MAX_MERCATOR_COORDINATE: f64 = 20_037_508.342_789_244;
     const MAX_CIRCLE_RADIUS_METERS: f64 = 10_000_000.0;
-    const MAX_CIRCLE_SEGMENTS: usize = 4096;
+    // Polygon validation is quadratic in ring segments. This leaves enough
+    // room for the extra clipping edges created by an antimeridian split.
+    const MAX_CIRCLE_SEGMENTS: usize = 1024;
 
     macro_rules! ensure {
         ($condition:expr, $($message:tt)*) => {
@@ -259,15 +298,15 @@ mod runtime {
         let position = value
             .as_array()
             .filter(|position| position.len() == 2)
-            .ok_or_else(|| anyhow!("A projected position requires exactly x and y"))?;
+            .ok_or_else(|| anyhow!("A geometry position requires exactly two coordinates"))?;
         let x = position[0]
             .as_f64()
             .filter(|coordinate| coordinate.is_finite())
-            .ok_or_else(|| anyhow!("Projected x must be finite"))?;
+            .ok_or_else(|| anyhow!("Geometry x coordinate must be finite"))?;
         let y = position[1]
             .as_f64()
             .filter(|coordinate| coordinate.is_finite())
-            .ok_or_else(|| anyhow!("Projected y must be finite"))?;
+            .ok_or_else(|| anyhow!("Geometry y coordinate must be finite"))?;
         Ok((x, y))
     }
 
@@ -313,10 +352,11 @@ mod runtime {
                 (longitude, latitude)
             }
             Transform::WrapLongitude => {
-                let longitude = if x == 180.0 {
-                    -180.0
+                let modulo = x.rem_euclid(360.0);
+                let longitude = if modulo >= 180.0 {
+                    modulo - 360.0
                 } else {
-                    (x + 180.0).rem_euclid(360.0) - 180.0
+                    modulo
                 };
                 (longitude, y)
             }
@@ -367,24 +407,28 @@ mod runtime {
         let mut object: Map<String, Value> = value
             .as_object()
             .cloned()
-            .ok_or_else(|| anyhow!("Projected geometry must be an object"))?;
+            .ok_or_else(|| anyhow!("Geometry must be an object"))?;
         let kind: GeometryKind = object
             .get("type")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Projected geometry requires a type"))?
+            .ok_or_else(|| anyhow!("Geometry requires a type"))?
             .parse()?;
         object.remove("bbox");
         if let Some(crs) = object.remove("crs") {
+            let expected = match transform {
+                Transform::InverseMercator => WEB_MERCATOR_CRS,
+                Transform::ForwardMercator | Transform::WrapLongitude => WGS84_CRS,
+            };
             ensure!(
-                crs.as_str() == Some(WEB_MERCATOR_CRS),
-                "Projected geometry crs must be EPSG:3857"
+                crs.as_str() == Some(expected),
+                "Geometry crs must be {expected}"
             );
         }
 
         if let Some(nesting) = coordinate_nesting(kind) {
             let coordinates = object
                 .get("coordinates")
-                .ok_or_else(|| anyhow!("Projected {kind} requires coordinates"))?;
+                .ok_or_else(|| anyhow!("{kind} requires coordinates"))?;
             object.insert(
                 "coordinates".into(),
                 transform_nested(coordinates, nesting, transform, positions)?,
@@ -393,7 +437,7 @@ mod runtime {
             let geometries = object
                 .get("geometries")
                 .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("Projected GeometryCollection requires geometries"))?;
+                .ok_or_else(|| anyhow!("GeometryCollection requires geometries"))?;
             object.insert(
                 "geometries".into(),
                 Value::Array(
@@ -412,13 +456,58 @@ mod runtime {
     fn checked_size(value: &Value) -> Result<()> {
         ensure!(
             flow_like_types::json::to_vec(value)?.len() <= MAX_GEOMETRY_BYTES,
-            "Projected geometry exceeds the Geometry byte limit"
+            "Geometry exceeds the byte limit"
         );
         Ok(())
     }
 
+    fn checked_geometry(value: &Value) -> Result<Value> {
+        let value = canonicalize_geometry(value, None)?;
+        check_topology_validation(&to_geo(&value)?, "Invalid geometry topology")?;
+        Ok(value)
+    }
+
+    fn remove_wgs84_crs(value: &Value, depth: usize) -> Result<Value> {
+        ensure!(
+            depth <= MAX_GEOMETRY_DEPTH,
+            "Geometry exceeds the depth limit"
+        );
+        let mut object = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow!("Geometry must be an object"))?;
+        let kind: GeometryKind = object
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Geometry requires a type"))?
+            .parse()?;
+        if let Some(crs) = object.remove("crs") {
+            ensure!(
+                crs.as_str() == Some(WGS84_CRS),
+                "Geometry crs must be {WGS84_CRS}"
+            );
+        }
+        if kind == GeometryKind::GeometryCollection {
+            let geometries = object
+                .get("geometries")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("GeometryCollection requires geometries"))?;
+            object.insert(
+                "geometries".into(),
+                Value::Array(
+                    geometries
+                        .iter()
+                        .map(|geometry| remove_wgs84_crs(geometry, depth + 1))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            );
+        }
+        Ok(Value::Object(object))
+    }
+
     fn to_web_mercator(value: &Value) -> Result<Value> {
-        let canonical = canonicalize_geometry(value, None)?;
+        checked_size(value)?;
+        let canonical = checked_geometry(&remove_wgs84_crs(value, 0)?)?;
         let mut positions = 0;
         let mut projected =
             transform_geometry(&canonical, Transform::ForwardMercator, 0, &mut positions)?;
@@ -438,13 +527,17 @@ mod runtime {
         );
         let mut positions = 0;
         let geometry = transform_geometry(value, Transform::InverseMercator, 0, &mut positions)?;
-        canonicalize_geometry(&geometry, None).map_err(Into::into)
+        checked_geometry(&geometry)
     }
 
     /// Wrapping is only sound where positions are independent. Shifting a single
     /// vertex of a connected geometry from +180 to -180 turns the implied edge
     /// into a 359 degree span under the planar convention this catalog uses.
-    fn ensure_wrappable(value: &Value) -> Result<()> {
+    fn ensure_wrappable(value: &Value, depth: usize) -> Result<()> {
+        ensure!(
+            depth <= MAX_GEOMETRY_DEPTH,
+            "Geometry exceeds the depth limit"
+        );
         let kind: GeometryKind = value
             .get("type")
             .and_then(Value::as_str)
@@ -457,7 +550,7 @@ mod runtime {
                 .and_then(Value::as_array)
                 .ok_or_else(|| anyhow!("GeometryCollection requires geometries"))?
                 .iter()
-                .try_for_each(ensure_wrappable),
+                .try_for_each(|geometry| ensure_wrappable(geometry, depth + 1)),
             kind => bail!(
                 "Wrapping longitude per position would tear a {kind} across the antimeridian; wrap a Point or MultiPoint, or split the geometry at the antimeridian first"
             ),
@@ -465,15 +558,15 @@ mod runtime {
     }
 
     fn wrap_longitude(value: &Value) -> Result<Value> {
-        let canonical = canonicalize_geometry(value, None)?;
-        ensure_wrappable(&canonical)?;
+        checked_size(value)?;
+        ensure_wrappable(value, 0)?;
         let mut positions = 0;
-        let wrapped = transform_geometry(&canonical, Transform::WrapLongitude, 0, &mut positions)?;
-        canonicalize_geometry(&wrapped, None).map_err(Into::into)
+        let wrapped = transform_geometry(value, Transform::WrapLongitude, 0, &mut positions)?;
+        checked_geometry(&wrapped)
     }
 
     fn circle_origin(value: &Value) -> Result<Point<f64>> {
-        match to_geo(value)? {
+        match to_geo(&checked_geometry(value)?)? {
             Geometry::Point(point) => Ok(point),
             _ => bail!("A geodesic circle requires a Point origin"),
         }
@@ -566,9 +659,7 @@ mod runtime {
         } else {
             Geometry::MultiPolygon(MultiPolygon::new(parts))
         };
-        geometry
-            .check_validation()
-            .map_err(|error| anyhow!("The geodesic circle is not a valid polygon: {error}"))?;
+        check_topology_validation(&geometry, "The geodesic circle is not a valid polygon")?;
         let encoded = canonicalize_geometry(&from_geo(&geometry)?, None)?;
         checked_size(&encoded)?;
         Ok(encoded)
@@ -667,6 +758,23 @@ mod runtime {
             assert_eq!(restored["type"], "Point");
             assert!((restored["coordinates"][0].as_f64().unwrap() - 13.404954).abs() < 1e-9);
             assert!((restored["coordinates"][1].as_f64().unwrap() - 52.520008).abs() < 1e-9);
+
+            assert!(
+                to_web_mercator(&json!({
+                    "type": "Point",
+                    "coordinates": [13.404954, 52.520008],
+                    "crs": "EPSG:4326"
+                }))
+                .is_ok()
+            );
+            assert!(
+                to_web_mercator(&json!({
+                    "type": "Point",
+                    "coordinates": [13.404954, 52.520008],
+                    "crs": "EPSG:3857"
+                }))
+                .is_err()
+            );
         }
 
         #[test]
@@ -680,6 +788,17 @@ mod runtime {
                 )
                 .is_err()
             );
+            assert!(
+                from_web_mercator(&json!({
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [0.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0],
+                        [1000.0, 0.0], [0.0, 0.0]
+                    ]],
+                    "crs": "EPSG:3857"
+                }))
+                .is_err()
+            );
         }
 
         #[test]
@@ -688,13 +807,50 @@ mod runtime {
                 Operation::WrapLongitude,
                 json!({"geometry": {
                     "type": "MultiPoint",
-                    "coordinates": [[180.0, 10.0], [-180.0, 10.0], [-0.5, 10.0]]
+                    "coordinates": [
+                        [180.0, 10.0], [-180.0, 10.0], [-0.5, 10.0],
+                        [540.0, 10.0], [-541.0, 10.0]
+                    ]
                 }}),
                 "geometry_out",
             );
             assert_eq!(
                 wrapped["coordinates"],
-                json!([[-180.0, 10.0], [-180.0, 10.0], [-0.5, 10.0]])
+                json!([
+                    [-180.0, 10.0],
+                    [-180.0, 10.0],
+                    [-0.5, 10.0],
+                    [-180.0, 10.0],
+                    [179.0, 10.0]
+                ])
+            );
+
+            let very_large = wrap_longitude(&point(f64::MAX, 10.0)).expect("finite longitude");
+            let longitude = very_large["coordinates"][0]
+                .as_f64()
+                .expect("wrapped longitude");
+            assert!((-180.0..180.0).contains(&longitude));
+        }
+
+        #[test]
+        fn wrap_longitude_enforces_wgs84_latitude_and_crs() {
+            assert!(wrap_longitude(&point(540.0, 90.0)).is_ok());
+            assert!(wrap_longitude(&point(540.0, 90.000_001)).is_err());
+            assert!(
+                wrap_longitude(&json!({
+                    "type": "Point",
+                    "coordinates": [540.0, 10.0],
+                    "crs": "EPSG:4326"
+                }))
+                .is_ok()
+            );
+            assert!(
+                wrap_longitude(&json!({
+                    "type": "Point",
+                    "coordinates": [540.0, 10.0],
+                    "crs": "EPSG:3857"
+                }))
+                .is_err()
             );
         }
 
@@ -789,6 +945,7 @@ mod runtime {
             assert!(circle(point(0.0, 0.0), 1_000.0, 2).is_err());
             assert!(circle(point(0.0, 0.0), 1_000.0, MAX_CIRCLE_SEGMENTS as i64 + 1).is_err());
             assert!(circle(point(0.0, 0.0), 1_000.0, 3).is_ok());
+            assert!(circle(point(180.0, 0.0), 1_000.0, MAX_CIRCLE_SEGMENTS as i64).is_ok());
             assert!(
                 circle(
                     json!({"type": "LineString", "coordinates": [[0.0, 0.0], [1.0, 1.0]]}),

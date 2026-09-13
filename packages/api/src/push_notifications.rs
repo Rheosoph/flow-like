@@ -5,6 +5,7 @@ use crate::{
             NotificationType, PushNotificationTargetPlatform, PushNotificationTargetProvider,
         },
     },
+    notification_images::prepare_notification_icon,
     routes::app::events::db::decrypt_token,
     state::AppState,
 };
@@ -60,6 +61,39 @@ pub struct DispatchNotificationInput {
     pub notification_type: NotificationType,
     pub source_run_id: Option<String>,
     pub source_node_id: Option<String>,
+}
+
+/// Provider acceptance does not confirm that a device displayed the notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PushDispatchStatus {
+    Disabled,
+    NoTargets,
+    Accepted,
+    Partial,
+    Failed,
+    /// An existing record was reused without a new push attempt; its earlier outcome is unknown.
+    Deduplicated,
+}
+
+impl PushDispatchStatus {
+    pub fn is_success(self) -> bool {
+        !matches!(self, Self::Partial | Self::Failed | Self::Deduplicated)
+    }
+
+    fn from_counts(accepted: usize, failed: usize) -> Self {
+        match (accepted, failed) {
+            (0, 0) => Self::NoTargets,
+            (_, 0) => Self::Accepted,
+            (0, _) => Self::Failed,
+            _ => Self::Partial,
+        }
+    }
+}
+
+pub struct DispatchNotificationResult {
+    pub id: String,
+    pub push_status: PushDispatchStatus,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -141,6 +175,17 @@ pub async fn dispatch_notification(
     state: &AppState,
     input: DispatchNotificationInput,
 ) -> Result<String, sea_orm::DbErr> {
+    Ok(dispatch_notification_with_status(state, input).await?.id)
+}
+
+pub async fn dispatch_notification_with_status(
+    state: &AppState,
+    mut input: DispatchNotificationInput,
+) -> Result<DispatchNotificationResult, sea_orm::DbErr> {
+    let prepared_icon = prepare_notification_icon(state, &input.user_id, input.icon.as_deref())
+        .await
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    input.icon = prepared_icon.stored_icon;
     if input.source_run_id.is_some() || input.source_node_id.is_some() {
         let cutoff = chrono::Utc::now().fixed_offset()
             - chrono::Duration::seconds(NOTIFICATION_DEDUPE_WINDOW_SECONDS);
@@ -187,7 +232,10 @@ pub async fn dispatch_notification(
                 source_node_id = ?input.source_node_id,
                 "Reusing recently-created matching notification"
             );
-            return Ok(notification.id);
+            return Ok(DispatchNotificationResult {
+                id: notification.id,
+                push_status: PushDispatchStatus::Deduplicated,
+            });
         }
     }
 
@@ -210,16 +258,24 @@ pub async fn dispatch_notification(
 
     notification.insert(&state.db).await?;
 
-    if let Err(error) = push_to_user(state, &notification_id, &input).await {
-        tracing::warn!(
-            error = %error,
-            notification_id = %notification_id,
-            user_id = %input.user_id,
-            "Failed to dispatch push notification"
-        );
-    }
+    input.icon = prepared_icon.push_icon;
+    let push_status = match push_to_user(state, &notification_id, &input).await {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                notification_id = %notification_id,
+                user_id = %input.user_id,
+                "Failed to dispatch push notification"
+            );
+            PushDispatchStatus::Failed
+        }
+    };
 
-    Ok(notification_id)
+    Ok(DispatchNotificationResult {
+        id: notification_id,
+        push_status,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -325,14 +381,16 @@ async fn push_to_user(
     state: &AppState,
     notification_id: &str,
     input: &DispatchNotificationInput,
-) -> flow_like_types::Result<()> {
+) -> flow_like_types::Result<PushDispatchStatus> {
     let config = &state.platform_config.push_notifications;
     if !config.enabled {
-        return Ok(());
+        return Ok(PushDispatchStatus::Disabled);
     }
 
     let Some(provider) = configured_provider(config) else {
-        return Ok(());
+        return Err(flow_like_types::anyhow!(
+            "Push notifications are enabled without a provider"
+        ));
     };
 
     let stale_cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
@@ -347,12 +405,15 @@ async fn push_to_user(
         .all(&state.db)
         .await?;
 
+    let mut accepted = 0;
+    let mut failed = 0;
     for target in targets {
         if !is_target_allowed(config, &target.platform) {
             continue;
         }
 
         let Some(token) = decrypt_token(&target.token_encrypted, &state.encryption_key) else {
+            failed += 1;
             tracing::warn!(target_id = %target.id, "Failed to decrypt push token");
             continue;
         };
@@ -388,6 +449,7 @@ async fn push_to_user(
         };
 
         if let Err(error) = result {
+            failed += 1;
             let message = error.to_string();
             if should_invalidate_target(&message) {
                 record_invalidation_failure(state, &target.id, &message).await?;
@@ -400,14 +462,17 @@ async fn push_to_user(
                 failure_count = target.failure_count,
                 "Push target send failed"
             );
-        } else if target.failure_count > 0 {
+        } else {
+            accepted += 1;
             // Successful delivery clears the consecutive-failure streak so a
             // healthy device never accumulates toward the disable threshold.
-            reset_failure_count(state, &target.id).await?;
+            if target.failure_count > 0 {
+                reset_failure_count(state, &target.id).await?;
+            }
         }
     }
 
-    Ok(())
+    Ok(PushDispatchStatus::from_counts(accepted, failed))
 }
 
 fn is_target_allowed(
@@ -422,25 +487,154 @@ fn is_target_allowed(
     }
 }
 
-fn is_absolute_http_url(value: &str) -> bool {
-    value.starts_with("https://") || value.starts_with("http://")
+const MAX_PUSH_PAYLOAD_BYTES: usize = 4096;
+const MAX_PUSH_IMAGE_URL_BYTES: usize = 2048;
+
+fn is_push_image_url(value: &str) -> bool {
+    if value.len() > MAX_PUSH_IMAGE_URL_BYTES {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            !ip.is_private()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+                && !ip.is_broadcast()
+                && !ip.is_multicast()
+                && !ip.is_documentation()
+                && ip.octets()[0] != 0
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && !ip.is_multicast()
+                && ip.to_ipv4_mapped().is_none()
+        }
+        Err(_) => host.contains('.'),
+    }
 }
 
 fn notification_image_url(input: &DispatchNotificationInput) -> Option<&str> {
     input
         .image
         .as_deref()
-        .filter(|url| is_absolute_http_url(url))
-        .or_else(|| {
-            input
-                .icon
-                .as_deref()
-                .filter(|url| is_absolute_http_url(url))
-        })
+        .filter(|url| is_push_image_url(url))
+        .or_else(|| input.icon.as_deref().filter(|url| is_push_image_url(url)))
+}
+
+fn push_text(value: &str, max_bytes: usize) -> &str {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn remove_payload_keys(value: &mut serde_json::Value, keys: &[&str]) {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|key, _| !keys.contains(&key.as_str()));
+        for child in object.values_mut() {
+            remove_payload_keys(child, keys);
+        }
+    }
+}
+
+fn shorten_payload_preview(value: &mut serde_json::Value, title_bytes: usize, body_bytes: usize) {
+    if let Some(object) = value.as_object_mut() {
+        for (key, child) in object.iter_mut() {
+            if let Some(text) = child.as_str() {
+                let limit = match key.as_str() {
+                    "title" => Some(title_bytes),
+                    "body" => Some(body_bytes),
+                    _ => None,
+                };
+                if let Some(limit) = limit {
+                    *child = serde_json::json!(push_text(text, limit));
+                }
+            } else {
+                shorten_payload_preview(child, title_bytes, body_bytes);
+            }
+        }
+    }
+}
+
+/// Preserve routing when media and text previews compete for the payload budget.
+fn fit_push_payload(mut payload: serde_json::Value) -> flow_like_types::Result<serde_json::Value> {
+    if serde_json::to_vec(&payload)?.len() <= MAX_PUSH_PAYLOAD_BYTES {
+        return Ok(payload);
+    }
+    remove_payload_keys(
+        &mut payload,
+        &["icon", "image", "fcm_options", "mutable-content"],
+    );
+    for (title_bytes, body_bytes) in [(128, 512), (64, 128)] {
+        if serde_json::to_vec(&payload)?.len() <= MAX_PUSH_PAYLOAD_BYTES {
+            return Ok(payload);
+        }
+        shorten_payload_preview(&mut payload, title_bytes, body_bytes);
+    }
+    if serde_json::to_vec(&payload)?.len() > MAX_PUSH_PAYLOAD_BYTES {
+        return Err(flow_like_types::anyhow!(
+            "Push payload exceeds 4096 bytes while preserving notification routing"
+        ));
+    }
+    Ok(payload)
+}
+
+#[cfg(any(feature = "aws", feature = "azure", test))]
+fn apns_payload(
+    input: &DispatchNotificationInput,
+    data: HashMap<String, String>,
+) -> flow_like_types::Result<serde_json::Value> {
+    let mut payload = serde_json::json!({
+        "aps": {
+            "alert": {
+                "title": push_text(&input.title, 256),
+                "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
+            },
+            "sound": "default",
+        }
+    });
+    if let Some(map) = payload.as_object_mut() {
+        for (key, value) in data {
+            map.insert(key, serde_json::Value::String(value));
+        }
+    }
+    if let Some(image) = notification_image_url(input) {
+        payload["aps"]["mutable-content"] = serde_json::json!(1);
+        payload["image"] = serde_json::json!(image);
+    }
+    fit_push_payload(payload)
 }
 
 fn should_invalidate_target(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
+    if lower.starts_with("[invalid-push-target]") {
+        return true;
+    }
+    // Generic FCM INVALID_ARGUMENT also describes payload errors.
+    if lower.starts_with("fcm ") {
+        return false;
+    }
     lower.contains("unregistered")
         || lower.contains("not registered")
         || lower.contains("invalid registration")
@@ -448,9 +642,6 @@ fn should_invalidate_target(message: &str) -> bool {
         || lower.contains("endpointdisabled")
         || lower.contains("endpoint is disabled")
         || lower.contains("invalid token")
-        // FCM payload shape errors use a different message prefix; only disable
-        // targets when the structured FCM error classifier marked the token bad.
-        || lower.contains("fcm error invalid_argument")
         || lower.contains("sender_id_mismatch")
 }
 
@@ -594,7 +785,7 @@ async fn send_via_fcm(
         fcm.project_id
     );
 
-    let body = fcm_message_body(config, target, token, notification_id, input);
+    let body = fcm_message_body(config, target, token, notification_id, input)?;
 
     const MAX_RETRIES: u32 = 2;
     let mut attempt = 0;
@@ -613,7 +804,7 @@ async fn send_via_fcm(
         match outcome {
             FcmOutcome::Success => return Ok(()),
             FcmOutcome::InvalidateTarget(reason) => {
-                return Err(flow_like_types::anyhow!("{}", reason));
+                return Err(flow_like_types::anyhow!("[invalid-push-target] {}", reason));
             }
             FcmOutcome::Transient(status, text) => {
                 attempt += 1;
@@ -641,15 +832,17 @@ fn fcm_message_body(
     token: &str,
     notification_id: &str,
     input: &DispatchNotificationInput,
-) -> serde_json::Value {
+) -> flow_like_types::Result<serde_json::Value> {
     let data = notification_data(notification_id, target, input);
     let apns_data = data.clone();
 
     let mut notification_obj = serde_json::json!({
-        "title": input.title,
-        "body": input.description.clone().unwrap_or_default(),
+        "title": push_text(&input.title, 256),
+        "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
     });
-    if let Some(image_url) = notification_image_url(input) {
+    if target.platform != PushNotificationTargetPlatform::Ios
+        && let Some(image_url) = notification_image_url(input)
+    {
         notification_obj["image"] = serde_json::Value::String(image_url.to_string());
     }
 
@@ -710,9 +903,12 @@ fn fcm_message_body(
         }
 
         body["message"]["apns"] = apns;
+        // The native client reads custom fields from APNs userInfo. Keeping a
+        // second copy in FCM data wastes the notification's payload budget.
+        body["message"].as_object_mut().unwrap().remove("data");
     }
 
-    body
+    fit_push_payload(body)
 }
 
 async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
@@ -723,7 +919,10 @@ async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
 
     let status_code = status.as_u16();
     let text = response.text().await.unwrap_or_default();
+    classify_fcm_error(status_code, text)
+}
 
+fn classify_fcm_error(status_code: u16, text: String) -> FcmOutcome {
     let fcm_error_code = serde_json::from_str::<FcmErrorResponse>(&text)
         .ok()
         .and_then(|r| r.error)
@@ -739,9 +938,7 @@ async fn classify_fcm_response(response: reqwest::Response) -> FcmOutcome {
     };
 
     match fcm_error_code.as_deref() {
-        Some("UNREGISTERED") | Some("INVALID_ARGUMENT") | Some("SENDER_ID_MISMATCH") => {
-            FcmOutcome::InvalidateTarget(reason)
-        }
+        Some("UNREGISTERED") | Some("SENDER_ID_MISMATCH") => FcmOutcome::InvalidateTarget(reason),
         _ if matches!(status_code, 429 | 500 | 503) => FcmOutcome::Transient(status_code, reason),
         _ => FcmOutcome::Permanent(reason),
     }
@@ -765,7 +962,9 @@ fn notification_string_data(
 ) -> HashMap<String, String> {
     let mut data = HashMap::new();
     data.insert("notification_id".to_string(), notification_id.to_string());
-    data.insert("device_id".to_string(), target.device_id.clone());
+    if target.device_id.len() <= 256 {
+        data.insert("device_id".to_string(), target.device_id.clone());
+    }
     data.insert(
         "notification_type".to_string(),
         match &input.notification_type {
@@ -780,9 +979,8 @@ fn notification_string_data(
     if let Some(link) = &input.link {
         data.insert("link".to_string(), link.clone());
     }
-    if let Some(icon) = &input.icon {
-        data.insert("icon".to_string(), icon.clone());
-    }
+    // Icons belong in the media fields. Inline image bytes cannot fit push payloads;
+    // the authenticated history endpoint supplies the persistent notification icon.
     if let Some(run_id) = &input.source_run_id {
         data.insert("source_run_id".to_string(), run_id.clone());
     }
@@ -894,15 +1092,12 @@ fn aws_sns_payload(
     input: &DispatchNotificationInput,
     data: HashMap<String, String>,
 ) -> flow_like_types::Result<String> {
-    let default_body = input
-        .description
-        .clone()
-        .unwrap_or_else(|| input.title.clone());
+    let default_body = push_text(input.description.as_deref().unwrap_or(&input.title), 1024);
     let payload = match target.platform {
         PushNotificationTargetPlatform::Android => {
             let mut notification = serde_json::json!({
-                "title": input.title,
-                "body": input.description.clone().unwrap_or_default(),
+                "title": push_text(&input.title, 256),
+                "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
             });
 
             if let Some(channel_id) = &target.channel_id {
@@ -914,28 +1109,14 @@ fn aws_sns_payload(
 
             serde_json::json!({
                 "default": default_body,
-                "GCM": serde_json::to_string(&serde_json::json!({
+                "GCM": serde_json::to_string(&fit_push_payload(serde_json::json!({
                     "notification": notification,
                     "data": data,
-                }))?,
+                }))?)?,
             })
         }
         PushNotificationTargetPlatform::Ios => {
-            let mut apns = serde_json::json!({
-                "aps": {
-                    "alert": {
-                        "title": input.title,
-                        "body": input.description.clone().unwrap_or_default(),
-                    },
-                    "sound": "default",
-                }
-            });
-
-            if let Some(map) = apns.as_object_mut() {
-                for (key, value) in data {
-                    map.insert(key, serde_json::Value::String(value));
-                }
-            }
+            let apns = apns_payload(input, data)?;
 
             serde_json::json!({
                 "default": default_body,
@@ -1083,37 +1264,27 @@ fn azure_message_payload(
     match target.platform {
         PushNotificationTargetPlatform::Android => {
             let mut notification = serde_json::json!({
-                "title": input.title,
-                "body": input.description.clone().unwrap_or_default(),
+                "title": push_text(&input.title, 256),
+                "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
             });
             if let Some(image_url) = notification_image_url(input) {
                 notification["image"] = serde_json::Value::String(image_url.to_string());
             }
 
-            Ok(serde_json::to_string(&serde_json::json!({
-                "message": {
-                    "notification": notification,
-                    "data": data,
-                }
-            }))?)
+            Ok(serde_json::to_string(&fit_push_payload(
+                serde_json::json!({
+                    "message": {
+                        "notification": notification,
+                        "data": data,
+                    }
+                }),
+            )?)?)
         }
         PushNotificationTargetPlatform::Ios => {
-            let mut apns = serde_json::json!({
-                "aps": {
-                    "alert": {
-                        "title": input.title,
-                        "body": input.description.clone().unwrap_or_default(),
-                    },
-                    "sound": "default",
-                }
-            });
-
-            if let Some(map) = apns.as_object_mut() {
-                for (key, value) in data {
-                    map.insert(key, value);
-                }
-            }
-
+            let apns = apns_payload(
+                input,
+                notification_string_data(notification_id, target, input),
+            )?;
             Ok(serde_json::to_string(&apns)?)
         }
         PushNotificationTargetPlatform::Desktop => Err(flow_like_types::anyhow!(
@@ -1339,7 +1510,8 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
-        );
+        )
+        .unwrap();
 
         let message = message_object(&body);
         let android = message.get("android").expect("android options are present");
@@ -1359,15 +1531,13 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
-        );
+        )
+        .unwrap();
 
         let message = message_object(&body);
         assert!(!message.contains_key("android"));
         assert!(message.contains_key("apns"));
-        assert_eq!(
-            message["data"]["link"],
-            "flow-like://notification/target-id"
-        );
+        assert!(!message.contains_key("data"));
         assert_eq!(
             message["apns"]["payload"]["link"],
             "flow-like://notification/target-id"
@@ -1383,7 +1553,8 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
-        );
+        )
+        .unwrap();
 
         let message = message_object(&body);
         assert!(!message.contains_key("android"));
@@ -1391,12 +1562,247 @@ mod tests {
     }
 
     #[test]
-    fn fcm_invalid_argument_error_marks_target_invalid() {
+    fn invalid_argument_payload_errors_do_not_disable_devices() {
+        let response = serde_json::json!({"error": {
+            "message": "Android message is too big",
+            "details": [{"errorCode": "INVALID_ARGUMENT"}],
+        }})
+        .to_string();
+        let FcmOutcome::Permanent(reason) = classify_fcm_error(400, response) else {
+            panic!("a payload error must not invalidate a registration");
+        };
+        assert!(!should_invalidate_target(&reason));
+        assert!(matches!(
+            classify_fcm_error(
+                404,
+                r#"{"error":{"details":[{"errorCode":"UNREGISTERED"}]}}"#.to_string()
+            ),
+            FcmOutcome::InvalidateTarget(_)
+        ));
         assert!(should_invalidate_target(
-            "FCM error INVALID_ARGUMENT: token is invalid (HTTP 400)"
+            "[invalid-push-target] FCM error UNREGISTERED"
         ));
-        assert!(!should_invalidate_target(
-            "FCM request failed with status 400: {\"status\":\"INVALID_ARGUMENT\"}"
+    }
+
+    #[test]
+    fn image_urls_must_be_public_https_addresses() {
+        for rejected in [
+            "data:image/png;base64,aaaa",
+            "asset://localhost/tmp/test.png",
+            "http://asset.localhost/test.png",
+            "https://localhost/test.png",
+            "https://asset.localhost/test.png",
+            "https://device.local/test.png",
+            "https://127.0.0.1/test.png",
+            "https://10.0.0.1/test.png",
+            "https://[::1]/test.png",
+            "https://[::ffff:127.0.0.1]/test.png",
+            "https://name:password@example.com/test.png",
+        ] {
+            assert!(!is_push_image_url(rejected), "must reject {rejected}");
+        }
+        assert!(is_push_image_url(
+            "https://cdn.example.com/image.png?signature=abc"
         ));
+        assert!(!is_push_image_url(&format!(
+            "https://cdn.example.com/{}.png",
+            "a".repeat(2048)
+        )));
+    }
+
+    #[test]
+    fn inline_images_never_enter_push_payloads() {
+        let mut input = notification_input();
+        input.image = None;
+        input.icon = Some(format!("data:image/png;base64,{}", "a".repeat(50_000)));
+        let target = target(PushNotificationTargetPlatform::Ios);
+        let body = fcm_message_body(&push_config(), &target, "token", "id", &input).unwrap();
+        let encoded = serde_json::to_string(&body).unwrap();
+        assert!(!encoded.contains("base64"));
+        assert!(body["message"]["data"].get("icon").is_none());
+        assert!(body["message"]["apns"].get("fcm_options").is_none());
+    }
+
+    #[test]
+    fn fcm_ios_image_uses_one_media_url_and_mutable_content() {
+        let mut input = notification_input();
+        input.icon = input.image.take();
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "token",
+            "id",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            body["message"]["apns"]["payload"]["aps"]["mutable-content"],
+            1
+        );
+        assert_eq!(
+            body["message"]["apns"]["fcm_options"]["image"],
+            "https://cdn.example.com/image.png"
+        );
+        assert!(body["message"]["notification"].get("image").is_none());
+        assert_eq!(
+            serde_json::to_string(&body)
+                .unwrap()
+                .matches("https://cdn.example.com/image.png")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn large_optional_content_cannot_exceed_push_limit() {
+        let mut input = notification_input();
+        input.title = "é".repeat(1000);
+        input.description = Some("a".repeat(10_000));
+        input.image = Some(format!("https://cdn.example.com/{}.png", "a".repeat(1800)));
+        input.link = Some(format!("/{}", "a".repeat(1000)));
+        for platform in [
+            PushNotificationTargetPlatform::Ios,
+            PushNotificationTargetPlatform::Android,
+        ] {
+            let body =
+                fcm_message_body(&push_config(), &target(platform), "token", "id", &input).unwrap();
+            assert!(serde_json::to_vec(&body).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
+            assert!(
+                !body["message"]["notification"]["title"]
+                    .as_str()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert!(
+            fcm_message_body(
+                &push_config(),
+                &target(PushNotificationTargetPlatform::Ios),
+                &"a".repeat(5000),
+                "id",
+                &input
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn long_routes_are_preserved_or_rejected_explicitly() {
+        let mut input = notification_input();
+        input.description = Some("preview ".repeat(500));
+        input.link = Some(format!(
+            "/use?id=app-id&route=/config&value={}",
+            "a".repeat(2600)
+        ));
+        for platform in [
+            PushNotificationTargetPlatform::Ios,
+            PushNotificationTargetPlatform::Android,
+        ] {
+            let target = target(platform.clone());
+            let body = fcm_message_body(&push_config(), &target, "token", "id", &input).unwrap();
+            let data = if platform == PushNotificationTargetPlatform::Ios {
+                &body["message"]["apns"]["payload"]
+            } else {
+                &body["message"]["data"]
+            };
+            assert_eq!(data["link"].as_str(), input.link.as_deref());
+            assert_eq!(data["app_id"], "app-id");
+            assert_eq!(data["source_run_id"], "run-id");
+            assert!(serde_json::to_vec(&body).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
+        }
+        input.link = Some(format!("/use?value={}", "a".repeat(5000)));
+        assert!(
+            fcm_message_body(
+                &push_config(),
+                &target(PushNotificationTargetPlatform::Ios),
+                "token",
+                "id",
+                &input
+            )
+            .is_err()
+        );
+        assert!(
+            apns_payload(
+                &input,
+                notification_string_data(
+                    "id",
+                    &target(PushNotificationTargetPlatform::Ios),
+                    &input
+                )
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn apns_payload_includes_image_for_native_providers() {
+        let input = notification_input();
+        let payload = apns_payload(&input, HashMap::new()).unwrap();
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        assert_eq!(payload["image"], "https://cdn.example.com/image.png");
+        assert!(serde_json::to_vec(&payload).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn sns_apple_payloads_include_mutable_image_attachment() {
+        let input = notification_input();
+        let target = target(PushNotificationTargetPlatform::Ios);
+        let payload: serde_json::Value = serde_json::from_str(
+            &aws_sns_payload(
+                &target,
+                &input,
+                notification_string_data("id", &target, &input),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for platform in ["APNS", "APNS_SANDBOX"] {
+            let apns: serde_json::Value =
+                serde_json::from_str(payload[platform].as_str().unwrap()).unwrap();
+            assert_eq!(apns["aps"]["mutable-content"], 1);
+            assert_eq!(apns["image"], "https://cdn.example.com/image.png");
+        }
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn azure_apple_payload_includes_mutable_image_attachment() {
+        let payload: serde_json::Value = serde_json::from_str(
+            &azure_message_payload(
+                &target(PushNotificationTargetPlatform::Ios),
+                "id",
+                &notification_input(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        assert_eq!(payload["image"], "https://cdn.example.com/image.png");
+    }
+
+    #[test]
+    fn delivery_summary_distinguishes_partial_failure_and_no_targets() {
+        assert_eq!(
+            PushDispatchStatus::from_counts(0, 0),
+            PushDispatchStatus::NoTargets
+        );
+        assert_eq!(
+            PushDispatchStatus::from_counts(2, 0),
+            PushDispatchStatus::Accepted
+        );
+        assert_eq!(
+            PushDispatchStatus::from_counts(0, 2),
+            PushDispatchStatus::Failed
+        );
+        assert_eq!(
+            PushDispatchStatus::from_counts(1, 1),
+            PushDispatchStatus::Partial
+        );
+        assert!(!PushDispatchStatus::Partial.is_success());
+        assert!(!PushDispatchStatus::Failed.is_success());
+        assert!(!PushDispatchStatus::Deduplicated.is_success());
+        assert!(PushDispatchStatus::Disabled.is_success());
+        assert!(PushDispatchStatus::NoTargets.is_success());
     }
 }

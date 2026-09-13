@@ -4,7 +4,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
+
+use crate::geo::pins::{geometry_input, geometry_output};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +46,7 @@ impl NodeLogic for OsrmTripNode {
             "Plans the shortest round trip through multiple coordinates using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "osrmTrip");
         node.add_icon("/flow/icons/route.svg");
 
@@ -53,16 +56,15 @@ impl NodeLogic for OsrmTripNode {
             "Initiate the trip planning request",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinates",
-            "Coordinates",
-            "Ordered coordinates for the trip",
-            VariableType::Struct,
+
+        geometry_input(
+            &mut node,
+            "geometries",
+            "Geometries",
+            "Ordered Point geometries",
+            Some(GeometryKind::Point),
         )
-        .set_schema::<GeoCoordinate>()
-        .set_value_type(ValueType::Array)
-        .set_options(PinOptions::new().set_enforce_schema(true).build())
-        .set_default_value(Some(json!([])));
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin(
             "profile",
@@ -171,14 +173,22 @@ impl NodeLogic for OsrmTripNode {
             VariableType::Float,
         );
 
-        node.add_output_pin(
-            "geometry",
-            "Geometry",
-            "Trip geometry as array of coordinates",
-            VariableType::Struct,
+        geometry_output(
+            &mut node,
+            "geometry_out",
+            "Route Geometry",
+            "Primary route as a LineString geometry. Unset when no route is found.",
+            Some(GeometryKind::LineString),
+        );
+        geometry_output(
+            &mut node,
+            "route_geometries",
+            "Route Geometries",
+            "LineString geometries for all returned routes, with the primary route first.",
+            Some(GeometryKind::LineString),
         )
-        .set_schema::<GeoCoordinate>()
         .set_value_type(ValueType::Array);
+        geometry_output(&mut node, "waypoint_geometries", "Waypoint Geometries", "Snapped Point geometries in the same order as Waypoints. Use waypoint_index in Waypoints for the optimized visit order.", Some(GeometryKind::Point)).set_value_type(ValueType::Array);
 
         node.set_scores(
             NodeScores::new()
@@ -199,8 +209,11 @@ impl NodeLogic for OsrmTripNode {
 
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
+        crate::geo::pins::clear_output(context, "route_geometries").await?;
+        crate::geo::pins::clear_output(context, "waypoint_geometries").await?;
 
-        let coordinates: Vec<GeoCoordinate> = context.evaluate_pin("coordinates").await?;
+        let coordinates = crate::geo::pins::coordinates_input(context, "geometries").await?;
         let profile: RouteProfile = context.evaluate_pin("profile").await?;
         let roundtrip: bool = context.evaluate_pin("roundtrip").await?;
         let source: String = context.evaluate_pin("source").await?;
@@ -255,6 +268,7 @@ impl NodeLogic for OsrmTripNode {
         }
 
         let trips = map_osrm_routes(body.trips.unwrap_or_default());
+        crate::geo::routing::osrm::set_route_geometries(context, &trips).await?;
         let primary = trips.first().cloned().unwrap_or_default();
         let waypoints = body
             .waypoints
@@ -269,6 +283,14 @@ impl NodeLogic for OsrmTripNode {
             })
             .collect::<Vec<TripWaypoint>>();
 
+        let waypoint_geometries = waypoints
+            .iter()
+            .map(|waypoint| crate::geo::pins::point_geometry(&waypoint.coordinate))
+            .collect::<flow_like_types::Result<Vec<_>>>()?;
+        context
+            .set_pin_value("waypoint_geometries", json!(waypoint_geometries))
+            .await?;
+
         context.set_pin_value("trip", json!(primary)).await?;
         context.set_pin_value("trips", json!(trips)).await?;
         context.set_pin_value("waypoints", json!(waypoints)).await?;
@@ -277,9 +299,6 @@ impl NodeLogic for OsrmTripNode {
             .await?;
         context
             .set_pin_value("duration", json!(primary.duration))
-            .await?;
-        context
-            .set_pin_value("geometry", json!(primary.geometry))
             .await?;
 
         context.deactivate_exec_pin("exec_error").await?;
@@ -309,7 +328,7 @@ struct OsrmTripResponse {
 #[derive(Deserialize)]
 struct OsrmWaypoint {
     name: String,
-    location: Vec<f64>,
+    location: [f64; 2],
     distance: Option<f64>,
     hint: Option<String>,
     waypoint_index: Option<usize>,

@@ -1,6 +1,7 @@
 //! Geo catalog for Flow-Like
 //!
 //! This crate contains geolocation-related nodes:
+//! - Device location and region Events
 //! - Map image fetching
 //! - Geocoding (forward and reverse)
 //! - Route planning

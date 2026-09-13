@@ -7,6 +7,7 @@ import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
 import { formatEventTypeLabel } from "../../lib/event-type-label";
+import { sinkSupportsEventExecution } from "../../lib/event-definitions";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
@@ -703,16 +704,13 @@ export function EventForm({
 
 							if (!nodeEventConfig) return null;
 
-							const isLocalEvent =
-								formData.execution_mode === IEventExecutionMode.Local;
 							const visibleTypes = nodeEventConfig.eventTypes.filter((type) => {
 								if (!nodeEventConfig.withSink?.includes(type)) return true;
-								const availability =
-									nodeEventConfig.sinkAvailability?.[type]?.availability;
-								if (!availability || availability === "both") return true;
-								return isLocalEvent
-									? availability === "local"
-									: availability === "remote";
+								return sinkSupportsEventExecution(
+									nodeEventConfig.sinkAvailability?.[type],
+									formData.execution_mode,
+									canExecuteLocally,
+								);
 							});
 
 							if (visibleTypes.length <= 1) return null;

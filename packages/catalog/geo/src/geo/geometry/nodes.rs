@@ -136,14 +136,14 @@ fn definition(operation: Operation) -> Node {
         FromBoundary => (
             "geometry_from_legacy_boundary",
             "fromLegacyBoundary",
-            "Legacy Boundary to Polygon",
-            "Converts the coordinate vector emitted by H3 Cell Boundary into a Polygon. Closes the ring and validates topology.",
+            "Legacy Boundary to Geometry",
+            "Converts the coordinate vector emitted by H3 Cell Boundary into Geometry. Closes the ring, validates topology, and returns a split MultiPolygon for a transmeridian cell.",
         ),
         FromPolygons => (
             "geometry_from_legacy_polygons",
             "fromLegacyPolygons",
             "Legacy H3 Polygons to MultiPolygon",
-            "Converts the existing H3 polygon vector, preserving exterior and interior rings and closing each ring.",
+            "Converts the existing H3 polygon vector, preserving exterior and interior rings, closing each ring, and splitting transmeridian outlines.",
         ),
         FromRoute => (
             "geometry_from_legacy_route",
@@ -368,7 +368,7 @@ fn definition(operation: Operation) -> Node {
             // The legacy H3 boundary payload is a vector despite its scalar Struct pin declaration.
             data_input(&mut node, "boundary", VariableType::Struct)
                 .set_schema::<crate::geo::GeoCoordinate>();
-            geometry_output(&mut node, Some(GeometryKind::Polygon));
+            geometry_output(&mut node, None);
         }
         FromPolygons => {
             data_input(&mut node, "polygons", VariableType::Struct)
@@ -544,9 +544,11 @@ async fn run_operation(
                 .await?,
         );
     }
-    for (name, value) in
-        super::operations::execute(operation, &flow_like_types::Value::Object(values))?
-    {
+    let outputs = super::cpu::run(move || {
+        super::operations::execute(operation, &flow_like_types::Value::Object(values))
+    })
+    .await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -791,7 +793,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn geometry_nodes_register_fixed_subtypes_and_retain_legacy_boundaries() {
+    fn geometry_nodes_register_fixed_subtypes_and_retain_legacy_adapters() {
         let catalog = crate::get_catalog();
         let nodes: Vec<Node> = catalog.iter().map(|logic| logic.get_node()).collect();
         let ids: std::collections::HashSet<_> =
@@ -815,7 +817,7 @@ mod tests {
                 .iter()
                 .filter(|node| node.name.starts_with("geometry_"))
                 .count(),
-            39,
+            131,
             "the generated registry must include every Geometry node"
         );
         for kind in GeometryKind::ALL {
@@ -837,23 +839,163 @@ mod tests {
         }
         let point = definition(Operation::MakePoint);
         assert!(point.pins.values().all(|pin| pin.default_value.is_none()));
-        let old = nodes
+        let boundary = nodes
             .iter()
             .find(|node| node.name == "h3_cell_to_boundary")
             .unwrap();
-        let old_pin = old
+        let boundary_pin = boundary
             .pins
             .values()
-            .find(|pin| pin.name == "boundary")
+            .find(|pin| pin.name == "geometry_out")
             .unwrap();
+        assert_eq!(boundary_pin.data_type, VariableType::Geometry);
+        assert!(boundary.get_pin_by_name("boundary").is_none());
         let adapter = definition(Operation::FromBoundary);
         let input = adapter
             .pins
             .values()
             .find(|pin| pin.name == "boundary")
             .unwrap();
-        assert_eq!(old_pin.data_type, VariableType::Struct);
-        assert_eq!(old_pin.value_type, input.value_type);
-        assert_eq!(old_pin.schema, input.schema);
+        assert_eq!(input.data_type, VariableType::Struct);
+        assert_eq!(input.value_type, ValueType::Normal);
+        assert!(input.schema.is_some());
+    }
+
+    #[cfg(feature = "execute")]
+    mod execution {
+        use super::*;
+        use ahash::AHashMap;
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{LogLevel, internal_node::InternalNode, internal_pin::InternalPin},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::{
+            json::json,
+            sync::{Mutex, RwLock},
+        };
+        use std::sync::{Arc, Weak};
+
+        async fn execution_context(logic: Arc<dyn NodeLogic>) -> ExecutionContext {
+            let node = logic.get_node();
+            let mut pins = AHashMap::new();
+            let mut names = AHashMap::<String, Vec<Arc<InternalPin>>>::new();
+            for pin in node.pins.values() {
+                let internal = Arc::new(InternalPin::new(pin, false));
+                names
+                    .entry(pin.name.clone())
+                    .or_default()
+                    .push(internal.clone());
+                pins.insert(pin.id.clone(), internal);
+            }
+            let current = Arc::new(InternalNode::new(node, pins, logic, names));
+            for pin in current.pins.iter() {
+                pin.init_node(Arc::downgrade(&current));
+                pin.init_connected_to(Vec::new());
+                pin.init_depends_on(Vec::new());
+            }
+            ExecutionContext::new(
+                Arc::new(AHashMap::from_iter([(
+                    current.node_id().to_owned(),
+                    current.clone(),
+                )])),
+                &Weak::new(),
+                &Arc::new(FlowLikeState::new(
+                    FlowLikeConfig::new(),
+                    HTTPClient::new_without_refetch(),
+                )),
+                &current,
+                &Arc::new(Mutex::new(AHashMap::new())),
+                &Arc::new(RwLock::new(AHashMap::new())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile::default()),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                None,
+                Arc::new(AHashMap::new()),
+                None,
+            )
+            .await
+        }
+
+        async fn run_concurrent_geometry_nodes(flavor: tokio::runtime::RuntimeFlavor) {
+            use super::super::super::linear_analysis::GeometryHausdorffDistanceNode;
+
+            let flavor = &flavor;
+            let logics: [Arc<dyn NodeLogic>; 2] = [
+                Arc::new(GeometryPlanarDistanceNode),
+                Arc::new(GeometryHausdorffDistanceNode),
+            ];
+            let jobs = (0..16).map(|index| {
+                let logic = logics[index % logics.len()].clone();
+                async move {
+                    let mut context = execution_context(logic.clone()).await;
+                    let points = |y: f64| {
+                        json!({
+                            "type":"MultiPoint",
+                            "coordinates":(0..192)
+                                .map(|position| [position as f64 / 100.0,y])
+                                .collect::<Vec<_>>()
+                        })
+                    };
+                    let expected = index as f64 + 1.0;
+                    context.set_pin_value("a", points(0.0)).await.unwrap();
+                    context.set_pin_value("b", points(expected)).await.unwrap();
+                    logic.run(&mut context).await.unwrap();
+                    assert_eq!(
+                        context.evaluate_pin::<f64>("distance").await.unwrap(),
+                        expected
+                    );
+
+                    // Invalid pin values must fail before computation and remain ordinary errors.
+                    let a_pin = context.get_pin_by_name("a").await.unwrap();
+                    context.override_pin_value(
+                        &a_pin.id,
+                        json!({"type":"Point","coordinates":[181.0,0.0]}),
+                    );
+                    let error = logic.run(&mut context).await.unwrap_err().to_string();
+                    assert!(error.contains("longitude"), "{error}");
+                    assert!(!error.contains("panicked"), "{error}");
+
+                    // Empty geometry passes pin validation and fails inside the CPU worker.
+                    context
+                        .set_pin_value("a", json!({"type":"MultiPoint","coordinates":[]}))
+                        .await
+                        .unwrap();
+                    let error = logic.run(&mut context).await.unwrap_err().to_string();
+                    assert!(error.contains("Empty geometries"), "{error}");
+                    assert!(!error.contains("panicked"), "{error}");
+
+                    context.set_pin_value("a", points(0.0)).await.unwrap();
+                    context
+                        .set_pin_value("b", points(expected + 1.0))
+                        .await
+                        .unwrap();
+                    logic.run(&mut context).await.unwrap();
+                    assert_eq!(
+                        context.evaluate_pin::<f64>("distance").await.unwrap(),
+                        expected + 1.0
+                    );
+                    assert_eq!(&tokio::runtime::Handle::current().runtime_flavor(), flavor);
+                }
+            });
+            futures::future::join_all(jobs).await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn geometry_node_pins_and_errors_work_on_current_thread_tokio() {
+            run_concurrent_geometry_nodes(tokio::runtime::RuntimeFlavor::CurrentThread).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn geometry_node_pins_and_errors_work_on_multithread_tokio() {
+            run_concurrent_geometry_nodes(tokio::runtime::RuntimeFlavor::MultiThread).await;
+        }
     }
 }

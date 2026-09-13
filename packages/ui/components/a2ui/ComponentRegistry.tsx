@@ -55,6 +55,7 @@ import { A2UIFeedback } from "./interactive/Feedback";
 import { A2UIFileInput } from "./interactive/FileInput";
 import { A2UIImageHotspot } from "./interactive/ImageHotspot";
 import { A2UIImageInput } from "./interactive/ImageInput";
+import { A2UICameraView } from "./interactive/CameraView";
 import { A2UIImageLabeler } from "./interactive/ImageLabeler";
 import { A2UILink } from "./interactive/Link";
 import { A2UIRadioGroup } from "./interactive/RadioGroup";
@@ -205,6 +206,7 @@ const builtInRenderers = {
 	imageLabeler: A2UIImageLabeler as ComponentRenderer,
 	imageHotspot: A2UIImageHotspot as ComponentRenderer,
 	imageInput: A2UIImageInput as ComponentRenderer,
+	cameraView: A2UICameraView as ComponentRenderer,
 	voiceInput: A2UIVoiceInput as ComponentRenderer,
 	link: A2UILink as ComponentRenderer,
 

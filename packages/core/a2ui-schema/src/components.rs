@@ -66,6 +66,7 @@ pub enum A2UIComponentType {
     DateTimeInput(DateTimeInputProps),
     FileInput(FileInputProps),
     ImageInput(ImageInputProps),
+    CameraView(CameraViewProps),
     VoiceInput(VoiceInputProps),
     Link(LinkProps),
     ImageLabeler(ImageLabelerProps),
@@ -853,6 +854,42 @@ pub struct ImageInputProps {
     pub aspect_ratio: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_preview: Option<BoundValue>,
+}
+
+/// A user-started camera whose lifetime is bounded by its visible screen.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraViewProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facing_mode: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirrored: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<BoundValue>,
+    /// Offer microphone capture on an explicit user start. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_enabled: Option<BoundValue>,
+    /// Recent audio retained in memory, in whole seconds from 1 to 300. Defaults to 60.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_buffer_seconds: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlays: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effects: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2046,6 +2083,35 @@ pub struct GanttProps {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn camera_audio_settings_preserve_literal_and_dynamic_bindings() {
+        for settings in [
+            json!({ "audioEnabled": { "literalBool": true }, "audioBufferSeconds": { "literalNumber": 60.0 } }),
+            json!({ "audioEnabled": { "path": "/camera/enableAudio" }, "audioBufferSeconds": { "path": "/camera/historySeconds" } }),
+        ] {
+            let mut wire = settings.clone();
+            wire["type"] = json!("cameraView");
+            let component: A2UIComponentType =
+                serde_json::from_value(wire).expect("camera audio bindings should deserialize");
+            let serialized = serde_json::to_value(component).unwrap();
+            assert_eq!(serialized["audioEnabled"], settings["audioEnabled"]);
+            assert_eq!(
+                serialized["audioBufferSeconds"],
+                settings["audioBufferSeconds"]
+            );
+        }
+
+        let legacy: A2UIComponentType =
+            serde_json::from_value(json!({ "type": "cameraView" })).unwrap();
+        let serialized = serde_json::to_value(legacy).unwrap();
+        assert!(serialized.get("audioEnabled").is_none());
+        assert!(serialized.get("audioBufferSeconds").is_none());
+
+        let schema = serde_json::to_value(schemars::schema_for!(CameraViewProps)).unwrap();
+        assert!(schema["properties"]["audioEnabled"].is_object());
+        assert!(schema["properties"]["audioBufferSeconds"].is_object());
+    }
 
     #[test]
     fn frontend_component_variants_deserialize_on_the_rust_boundary() {

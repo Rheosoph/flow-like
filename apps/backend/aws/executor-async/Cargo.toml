@@ -2,15 +2,15 @@
 name = "aws-executor-async"
 version = "0.1.0"
 edition = "2024"
+description = "Tenant-isolated AWS Lambda worker for asynchronous workflow execution"
 
 [dependencies]
-aws_lambda_events = { version = "0.16.0", default-features = false, features = ["sqs"] }
-flow-like-runtime = { workspace = true, features = ["flow-metadata", "flow-runtime", "model"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["server-local-ml"] }
+flow-like-types-contracts = { workspace = true, features = ["dispatch"] }
 flow-like-types.workspace = true
 flow-like-executor = { workspace = true, features = ["server-local-ml", "channel-aws"] }
 mimalloc.workspace = true
-lambda_runtime = {version="0.14.1", features = ["anyhow"]}
+lambda_runtime = { version = "1.1.2", features = ["anyhow"] }
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

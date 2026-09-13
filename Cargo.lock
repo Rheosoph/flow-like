@@ -1554,12 +1554,11 @@ dependencies = [
 name = "aws-executor-async"
 version = "0.1.0"
 dependencies = [
- "aws_lambda_events 0.16.1",
  "flow-like-catalog",
  "flow-like-executor",
- "flow-like-runtime",
  "flow-like-types",
- "lambda_runtime 0.14.4",
+ "flow-like-types-contracts",
+ "lambda_runtime 1.1.2",
  "mimalloc",
  "serde",
  "serde_json",
@@ -8182,6 +8181,7 @@ dependencies = [
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
+ "flow-like-catalog-std-ui",
  "flow-like-model-provider",
  "flow-like-runtime",
  "flow-like-storage",
@@ -8468,6 +8468,7 @@ dependencies = [
  "geo 0.31.0",
  "geohash",
  "h3o",
+ "rayon",
  "schemars 1.2.1",
  "serde",
  "tokio",
@@ -8825,6 +8826,9 @@ name = "flow-like-catalog-std-ui"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "anyhow",
+ "arboard",
+ "chrono",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-data-support",
@@ -13908,7 +13912,6 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edb1a631df22d6d81314268a94fda06ab15b3fa1fcea660e7c5c162caa8fba6b"
 dependencies = [
- "anyhow",
  "async-stream",
  "base64 0.22.1",
  "bytes",

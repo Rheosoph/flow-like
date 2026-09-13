@@ -404,7 +404,11 @@ async fn run_operation(
                 .await?,
         );
     }
-    for (name, value) in runtime::execute(operation, &flow_like_types::Value::Object(values))? {
+    let outputs = super::cpu::run(move || {
+        runtime::execute(operation, &flow_like_types::Value::Object(values))
+    })
+    .await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -603,6 +607,7 @@ pub(crate) use runtime::mixed_dimension_intersection;
 
 #[cfg(feature = "execute")]
 mod runtime {
+    use super::super::{check_topology_validation, cpu};
     use super::AdvancedOperation;
     use flow_like_geometry::{from_geo, to_geo};
     use flow_like_types::{
@@ -615,14 +620,22 @@ mod runtime {
         ChaikinSmoothing, Closest, ClosestPoint, ConcaveHull, Coord, CoordsIter, Destination,
         Distance, Euclidean, Geodesic, Geometry, GeometryCollection, InteriorPoint,
         InterpolateLine, InterpolatePoint, Intersects, Kernel, Length, Line, LineString,
-        MinimumRotatedRect, MultiPoint, MultiPolygon, Orientation, Point, Polygon, Relate,
-        RemoveRepeatedPoints, Rotate, Scale, SimplifyVw, SimplifyVwPreserve, Skew, Translate,
-        TriangulateEarcut, Validation,
-        algorithm::kernels::RobustKernel,
+        MinimumRotatedRect, MultiLineString, MultiPoint, MultiPolygon, Orientation, Point, Polygon,
+        Relate, RemoveRepeatedPoints, Rotate, Scale, SimplifyVw, SimplifyVwPreserve, Skew,
+        Translate, TriangulateEarcut,
+        algorithm::{kernels::RobustKernel, unary_union},
         line_intersection::{LineIntersection, line_intersection},
+    };
+    use std::{
+        collections::HashSet,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     const MAX_INTERSECTION_COMPARISONS: usize = 2_000_000;
+    const INTERSECTION_BATCH_SIZE: usize = 256;
 
     macro_rules! ensure {
         ($condition:expr, $($message:tt)*) => {
@@ -654,9 +667,7 @@ mod runtime {
 
     fn checked_geometry(value: &Value) -> Result<Geometry<f64>> {
         let geometry = to_geo(&canonicalize_geometry(value, None)?)?;
-        geometry
-            .check_validation()
-            .map_err(|error| anyhow!("Invalid geometry for spatial operation: {error}"))?;
+        check_topology_validation(&geometry, "Invalid geometry for spatial operation")?;
         Ok(geometry)
     }
 
@@ -675,9 +686,7 @@ mod runtime {
     }
 
     fn encoded_geometry(geometry: Geometry<f64>) -> Result<Value> {
-        geometry
-            .check_validation()
-            .map_err(|error| anyhow!("Spatial operation produced invalid geometry: {error}"))?;
+        check_topology_validation(&geometry, "Spatial operation produced invalid geometry")?;
         canonicalize_geometry(&from_geo(&geometry)?, None).map_err(Into::into)
     }
 
@@ -795,19 +804,28 @@ mod runtime {
         Ok(result)
     }
 
-    fn line_is_ring(line: &LineString<f64>) -> bool {
+    fn line_is_ring(line: &LineString<f64>) -> Result<bool> {
         if line.0.len() < 4 || line.0.first() != line.0.last() {
-            return false;
+            return Ok(false);
         }
         let segments: Vec<_> = line.lines().collect();
-        for (i, first) in segments.iter().enumerate() {
+        let comparisons = segments
+            .len()
+            .saturating_mul(segments.len().saturating_sub(1))
+            / 2;
+        ensure!(
+            comparisons <= MAX_INTERSECTION_COMPARISONS,
+            "Ring validation exceeds the segment comparison limit"
+        );
+        let has_invalid_intersection = cpu::any_indexed(segments.len(), comparisons, |i| {
+            let first = segments[i];
             for (j, second) in segments.iter().enumerate().skip(i + 1) {
                 let adjacent = j == i + 1 || (i == 0 && j + 1 == segments.len());
-                let Some(intersection) = line_intersection(*first, *second) else {
+                let Some(intersection) = line_intersection(first, *second) else {
                     continue;
                 };
                 if !adjacent {
-                    return false;
+                    return true;
                 }
                 match intersection {
                     LineIntersection::SinglePoint {
@@ -820,14 +838,15 @@ mod runtime {
                             first.end
                         };
                         if is_proper || intersection != expected {
-                            return false;
+                            return true;
                         }
                     }
-                    LineIntersection::Collinear { .. } => return false,
+                    LineIntersection::Collinear { .. } => return true,
                 }
             }
-        }
-        true
+            false
+        });
+        Ok(!has_invalid_intersection)
     }
 
     fn locate_point(line: &LineString<f64>, point: Point<f64>) -> f64 {
@@ -858,15 +877,28 @@ mod runtime {
         best_along / total
     }
 
+    fn point_at_line_ratio(
+        line: &LineString<f64>,
+        ratio: f64,
+        missing_message: &str,
+    ) -> Result<Point<f64>> {
+        if ratio == 0.0 {
+            return Ok(Point(line.0[0]));
+        }
+        if ratio == 1.0 {
+            return Ok(Point(*line.0.last().expect("validated LineString")));
+        }
+        Euclidean
+            .point_at_ratio_from_start(line, ratio)
+            .ok_or_else(|| anyhow!("{missing_message}"))
+    }
+
     fn line_substring(line: &LineString<f64>, start: f64, end: f64) -> Result<LineString<f64>> {
         let total = Euclidean.length(line);
         ensure!(total > 0.0, "A zero-length LineString has no substring");
-        let start_point = Euclidean
-            .point_at_ratio_from_start(line, start)
-            .ok_or_else(|| anyhow!("LineString has no interpolated start point"))?;
-        let end_point = Euclidean
-            .point_at_ratio_from_start(line, end)
-            .ok_or_else(|| anyhow!("LineString has no interpolated end point"))?;
+        let start_point =
+            point_at_line_ratio(line, start, "LineString has no interpolated start point")?;
+        let end_point = point_at_line_ratio(line, end, "LineString has no interpolated end point")?;
         let mut result = vec![start_point.0];
         let mut traversed = 0.0;
         for segment in line.lines() {
@@ -880,7 +912,7 @@ mod runtime {
             result.push(end_point.0);
         }
         ensure!(
-            result.len() >= 2 && result.first() != result.last(),
+            result.len() >= 2 && result.iter().skip(1).any(|coord| coord != &result[0]),
             "Substring collapsed to a single position"
         );
         Ok(LineString::new(result))
@@ -925,31 +957,128 @@ mod runtime {
         Ok(LineString::new(output))
     }
 
+    fn smoothed_line_position_count(line: &LineString<f64>, iterations: usize) -> usize {
+        if line.0.is_empty() || iterations == 0 {
+            return line.0.len();
+        }
+        let closed = line.0.first() == line.0.last();
+        (0..iterations).fold(line.0.len(), |count, _| {
+            if closed {
+                count.saturating_sub(1).saturating_mul(2).saturating_add(1)
+            } else {
+                count.saturating_mul(2)
+            }
+        })
+    }
+
+    fn smoothed_position_count(geometry: &Geometry<f64>, iterations: usize) -> usize {
+        match geometry {
+            Geometry::LineString(line) => smoothed_line_position_count(line, iterations),
+            Geometry::MultiLineString(lines) => lines.0.iter().fold(0usize, |count, line| {
+                count.saturating_add(smoothed_line_position_count(line, iterations))
+            }),
+            Geometry::Polygon(polygon) => std::iter::once(polygon.exterior())
+                .chain(polygon.interiors())
+                .fold(0usize, |count, ring| {
+                    count.saturating_add(smoothed_line_position_count(ring, iterations))
+                }),
+            Geometry::MultiPolygon(polygons) => polygons.0.iter().fold(0usize, |count, polygon| {
+                count.saturating_add(
+                    std::iter::once(polygon.exterior())
+                        .chain(polygon.interiors())
+                        .fold(0usize, |count, ring| {
+                            count.saturating_add(smoothed_line_position_count(ring, iterations))
+                        }),
+                )
+            }),
+            Geometry::GeometryCollection(collection) => {
+                collection.0.iter().fold(0usize, |count, member| {
+                    count.saturating_add(smoothed_position_count(member, iterations))
+                })
+            }
+            other => other.coords_iter().count(),
+        }
+    }
+
+    fn smooth_geometry(geometry: Geometry<f64>, iterations: usize) -> Geometry<f64> {
+        match geometry {
+            Geometry::GeometryCollection(collection) => {
+                Geometry::GeometryCollection(GeometryCollection::new_from(
+                    collection
+                        .0
+                        .into_iter()
+                        .map(|member| smooth_geometry(member, iterations))
+                        .collect(),
+                ))
+            }
+            other => other.chaikin_smoothing(iterations),
+        }
+    }
+
     fn triangulate(geometry: Geometry<f64>) -> Result<Geometry<f64>> {
         let polygons: Vec<Polygon<f64>> = match geometry {
             Geometry::Polygon(polygon) => vec![polygon],
             Geometry::MultiPolygon(polygons) => polygons.0,
             _ => bail!("Triangulate requires Polygon or MultiPolygon"),
         };
-        let mut triangles = Vec::new();
-        for polygon in polygons {
-            triangles.extend(
-                polygon
-                    .earcut_triangles()
-                    .into_iter()
-                    .map(|triangle| Geometry::Polygon(triangle.to_polygon())),
-            );
-        }
+        // Every triangle contributes four positions including its closing vertex.
+        let triangle_bound = polygons.iter().fold(0usize, |count, polygon| {
+            let vertices = std::iter::once(polygon.exterior())
+                .chain(polygon.interiors())
+                .fold(0usize, |vertices, ring| {
+                    vertices.saturating_add(ring.0.len().saturating_sub(1))
+                });
+            let holes = polygon
+                .interiors()
+                .iter()
+                .filter(|ring| !ring.0.is_empty())
+                .count();
+            count.saturating_add(
+                vertices
+                    .saturating_add(holes.saturating_mul(2))
+                    .saturating_sub(2),
+            )
+        });
+        ensure!(
+            triangle_bound <= MAX_GEOMETRY_POSITIONS / 4,
+            "Triangulation would exceed the Geometry position limit"
+        );
+        let work = polygons.iter().fold(0usize, |work, polygon| {
+            let vertices = polygon.coords_count();
+            work.saturating_add(vertices.saturating_mul(vertices))
+        });
+        let triangles = cpu::map_ordered(&polygons, work, |_, polygon| {
+            polygon
+                .earcut_triangles()
+                .into_iter()
+                .map(|triangle| Geometry::Polygon(triangle.to_polygon()))
+                .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .flatten()
+        .collect();
         Ok(Geometry::GeometryCollection(GeometryCollection::new_from(
             triangles,
         )))
+    }
+
+    fn has_line_extent(coordinates: &[Coord<f64>]) -> bool {
+        coordinates
+            .first()
+            .is_some_and(|first| coordinates.iter().skip(1).any(|coord| coord != first))
     }
 
     fn split_antimeridian(line: LineString<f64>) -> Result<Geometry<f64>> {
         let mut parts: Vec<LineString<f64>> = Vec::new();
         let mut current = vec![line.0[0]];
         for pair in line.0.windows(2) {
-            let start = pair[0];
+            let mut start = pair[0];
+            if let Some(previous) = current.last().copied()
+                && previous.y == start.y
+                && (previous.x - start.x).abs() == 360.0
+            {
+                start = previous;
+            }
             let end = pair[1];
             let delta = end.x - start.x;
             if delta.abs() <= 180.0 {
@@ -965,16 +1094,28 @@ mod runtime {
                 (end.x - 360.0, -180.0, 180.0)
             };
             let denominator = unwrapped_end - start.x;
-            ensure!(
-                denominator != 0.0,
-                "A segment joining 180 and -180 degrees has an ambiguous direction"
-            );
-            let ratio = (boundary - start.x) / denominator;
-            if !(0.0..=1.0).contains(&ratio) || ratio == 0.0 || ratio == 1.0 {
-                current.push(end);
+            if denominator == 0.0 {
+                let rebased_end = Coord {
+                    x: start.x,
+                    y: end.y,
+                };
+                if current.last() != Some(&rebased_end) {
+                    current.push(rebased_end);
+                }
                 continue;
             }
-            let latitude = start.y + ratio * (end.y - start.y);
+            let ratio = (boundary - start.x) / denominator;
+            ensure!(
+                (0.0..=1.0).contains(&ratio),
+                "Antimeridian crossing could not be resolved"
+            );
+            let latitude = if ratio == 0.0 {
+                start.y
+            } else if ratio == 1.0 {
+                end.y
+            } else {
+                start.y + ratio * (end.y - start.y)
+            };
             let first_boundary = Coord {
                 x: boundary,
                 y: latitude,
@@ -983,21 +1124,36 @@ mod runtime {
                 x: opposite,
                 y: latitude,
             };
+            if ratio == 0.0 {
+                if has_line_extent(&current) {
+                    parts.push(LineString::new(std::mem::take(&mut current)));
+                }
+                current = vec![second_boundary];
+                if current.last() != Some(&end) {
+                    current.push(end);
+                }
+                continue;
+            }
             if current.last() != Some(&first_boundary) {
                 current.push(first_boundary);
             }
             ensure!(
-                current.len() >= 2 && current.first() != current.last(),
+                has_line_extent(&current),
                 "Antimeridian split produced a collapsed line part"
             );
+            parts.push(LineString::new(std::mem::take(&mut current)));
+            current = vec![second_boundary];
+            if ratio != 1.0 && current.last() != Some(&end) {
+                current.push(end);
+            }
+        }
+        if has_line_extent(&current) {
             parts.push(LineString::new(current));
-            current = vec![second_boundary, end];
         }
         ensure!(
-            current.len() >= 2 && current.first() != current.last(),
-            "Antimeridian split produced a collapsed line part"
+            !parts.is_empty(),
+            "Antimeridian split produced no nonzero line parts"
         );
-        parts.push(LineString::new(current));
         Ok(Geometry::MultiLineString(geo::MultiLineString::new(parts)))
     }
 
@@ -1060,7 +1216,7 @@ mod runtime {
             }
             IsRing => {
                 let line = checked_line(input(inputs, "geometry")?)?;
-                Ok(vec![("result", json!(line_is_ring(&line)))])
+                Ok(vec![("result", json!(line_is_ring(&line)?))])
             }
             InterpolateLine => {
                 let ratio = number(inputs, "ratio")?;
@@ -1069,9 +1225,8 @@ mod runtime {
                     "Ratio must be between zero and one"
                 );
                 let line = checked_line(input(inputs, "geometry")?)?;
-                let point = Euclidean
-                    .point_at_ratio_from_start(&line, ratio)
-                    .ok_or_else(|| anyhow!("LineString has no interpolated point"))?;
+                let point =
+                    point_at_line_ratio(&line, ratio, "LineString has no interpolated point")?;
                 geometry_result(point.into())
             }
             LocatePoint => {
@@ -1186,13 +1341,11 @@ mod runtime {
                 let geometry = checked_geometry(input(inputs, "geometry")?)?;
                 let iterations = nonnegative_integer(inputs, "iterations")?;
                 ensure!(iterations <= 16, "Smoothing supports at most 16 iterations");
-                let multiplier = 1usize << iterations;
                 ensure!(
-                    geometry.coords_iter().count().saturating_mul(multiplier)
-                        <= MAX_GEOMETRY_POSITIONS,
+                    smoothed_position_count(&geometry, iterations) <= MAX_GEOMETRY_POSITIONS,
                     "Smoothing would exceed the Geometry position limit"
                 );
-                geometry_result(geometry.chaikin_smoothing(iterations))
+                geometry_result(smooth_geometry(geometry, iterations))
             }
             SplitAntimeridian => split_antimeridian(checked_line(input(inputs, "geometry")?)?)
                 .and_then(geometry_result),
@@ -1200,18 +1353,42 @@ mod runtime {
     }
 
     #[derive(Default)]
+    struct IntersectionCounters {
+        comparisons: AtomicUsize,
+        emitted_positions: AtomicUsize,
+    }
+
+    #[derive(Clone, Default)]
     struct IntersectionBudget {
-        comparisons: usize,
+        counters: Arc<IntersectionCounters>,
     }
 
     impl IntersectionBudget {
-        fn comparison(&mut self) -> Result<()> {
-            self.comparisons += 1;
-            ensure!(
-                self.comparisons <= MAX_INTERSECTION_COMPARISONS,
-                "Mixed-dimensional intersection exceeds the segment comparison limit"
-            );
-            Ok(())
+        fn reserve(counter: &AtomicUsize, count: usize, limit: usize) -> Result<()> {
+            counter
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                    used.checked_add(count).filter(|next| *next <= limit)
+                })
+                .map(|_| ())
+                .map_err(|_| anyhow!(
+                    "Mixed-dimensional intersection exceeds its segment comparison or Geometry position limit"
+                ))
+        }
+
+        fn comparisons(&mut self, count: usize) -> Result<()> {
+            Self::reserve(
+                &self.counters.comparisons,
+                count,
+                MAX_INTERSECTION_COMPARISONS,
+            )
+        }
+
+        fn emit_positions(&mut self, count: usize) -> Result<()> {
+            Self::reserve(
+                &self.counters.emitted_positions,
+                count,
+                MAX_GEOMETRY_POSITIONS,
+            )
         }
     }
 
@@ -1238,16 +1415,97 @@ mod runtime {
         }
     }
 
-    fn push_unique_point(points: &mut Vec<Point<f64>>, point: Point<f64>) {
-        if !points.contains(&point) {
-            points.push(point);
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct CoordKey(u64, u64);
+
+    fn coord_key(coord: Coord<f64>) -> CoordKey {
+        let bits = |value: f64| if value == 0.0 { 0.0 } else { value }.to_bits();
+        CoordKey(bits(coord.x), bits(coord.y))
+    }
+
+    fn canonical_line_key(line: &LineString<f64>) -> Vec<CoordKey> {
+        let forward: Vec<_> = line.0.iter().copied().map(coord_key).collect();
+        let reverse: Vec<_> = forward.iter().copied().rev().collect();
+        forward.min(reverse)
+    }
+
+    fn canonical_ring_key(ring: &LineString<f64>) -> Vec<CoordKey> {
+        let mut coordinates: Vec<_> = ring.0.iter().copied().map(coord_key).collect();
+        if coordinates.len() > 1 && coordinates.first() == coordinates.last() {
+            coordinates.pop();
+        }
+        if coordinates.is_empty() {
+            return coordinates;
+        }
+        let rotate_from_minimum = |coordinates: &[CoordKey]| {
+            let start = coordinates
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, coordinate)| **coordinate)
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+            coordinates[start..]
+                .iter()
+                .chain(&coordinates[..start])
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        let forward = rotate_from_minimum(&coordinates);
+        coordinates.reverse();
+        forward.min(rotate_from_minimum(&coordinates))
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    enum IntersectionGeometryKey {
+        Point(CoordKey),
+        LineString(Vec<CoordKey>),
+        Polygon(Vec<Vec<CoordKey>>),
+    }
+
+    fn intersection_geometry_key(geometry: &Geometry<f64>) -> Option<IntersectionGeometryKey> {
+        match geometry {
+            Geometry::Point(point) => Some(IntersectionGeometryKey::Point(coord_key(point.0))),
+            Geometry::LineString(line) => Some(IntersectionGeometryKey::LineString(
+                canonical_line_key(line),
+            )),
+            Geometry::Polygon(polygon) => {
+                let exterior = canonical_ring_key(polygon.exterior());
+                let mut interiors: Vec<_> =
+                    polygon.interiors().iter().map(canonical_ring_key).collect();
+                interiors.sort();
+                let mut rings = Vec::with_capacity(interiors.len() + 1);
+                rings.push(exterior);
+                rings.extend(interiors);
+                Some(IntersectionGeometryKey::Polygon(rings))
+            }
+            _ => None,
         }
     }
 
-    fn push_unique_line(lines: &mut Vec<LineString<f64>>, line: LineString<f64>) {
-        if !lines.contains(&line) {
+    fn push_unique_point(
+        points: &mut Vec<Point<f64>>,
+        seen: &mut HashSet<CoordKey>,
+        point: Point<f64>,
+        budget: &mut IntersectionBudget,
+    ) -> Result<()> {
+        if seen.insert(coord_key(point.0)) {
+            budget.emit_positions(1)?;
+            points.push(point);
+        }
+        Ok(())
+    }
+
+    fn push_unique_line(
+        lines: &mut Vec<LineString<f64>>,
+        seen: &mut HashSet<Vec<CoordKey>>,
+        line: LineString<f64>,
+        budget: &mut IntersectionBudget,
+    ) -> Result<()> {
+        if seen.insert(canonical_line_key(&line)) {
+            budget.emit_positions(line.0.len())?;
             lines.push(line);
         }
+        Ok(())
     }
 
     fn record_line_intersection(
@@ -1255,21 +1513,27 @@ mod runtime {
         second: Line<f64>,
         points: &mut Vec<Point<f64>>,
         lines: &mut Vec<LineString<f64>>,
-    ) {
+        point_keys: &mut HashSet<CoordKey>,
+        line_keys: &mut HashSet<Vec<CoordKey>>,
+        budget: &mut IntersectionBudget,
+    ) -> Result<()> {
         match line_intersection(first, second) {
             Some(LineIntersection::SinglePoint { intersection, .. }) => {
-                push_unique_point(points, intersection.into());
+                push_unique_point(points, point_keys, intersection.into(), budget)?;
             }
             Some(LineIntersection::Collinear { intersection }) => {
                 if intersection.start != intersection.end {
                     push_unique_line(
                         lines,
+                        line_keys,
                         LineString::new(vec![intersection.start, intersection.end]),
-                    );
+                        budget,
+                    )?;
                 }
             }
             None => {}
         }
+        Ok(())
     }
 
     fn intersection_parameter(line: Line<f64>, coord: Coord<f64>) -> f64 {
@@ -1289,19 +1553,42 @@ mod runtime {
         b: &LineString<f64>,
         budget: &mut IntersectionBudget,
     ) -> Result<Vec<Geometry<f64>>> {
+        budget.comparisons(
+            a.0.len()
+                .saturating_sub(1)
+                .saturating_mul(b.0.len().saturating_sub(1)),
+        )?;
         let mut points = Vec::new();
         let mut lines = Vec::new();
+        let mut point_keys = HashSet::new();
+        let mut line_keys = HashSet::new();
         for first in a.lines() {
             for second in b.lines() {
-                budget.comparison()?;
-                record_line_intersection(first, second, &mut points, &mut lines);
+                record_line_intersection(
+                    first,
+                    second,
+                    &mut points,
+                    &mut lines,
+                    &mut point_keys,
+                    &mut line_keys,
+                    budget,
+                )?;
             }
         }
-        points.retain(|point| !lines.iter().any(|line| line.intersects(point)));
+        let mut uncovered_points = Vec::with_capacity(points.len());
+        'point: for point in points {
+            for line in &lines {
+                budget.comparisons(line.coords_count().max(1))?;
+                if line.intersects(&point) {
+                    continue 'point;
+                }
+            }
+            uncovered_points.push(point);
+        }
         Ok(lines
             .into_iter()
             .map(Geometry::LineString)
-            .chain(points.into_iter().map(Geometry::Point))
+            .chain(uncovered_points.into_iter().map(Geometry::Point))
             .collect())
     }
 
@@ -1317,22 +1604,38 @@ mod runtime {
         budget: &mut IntersectionBudget,
     ) -> Result<Vec<Geometry<f64>>> {
         let boundary: Vec<_> = polygon_boundary(polygon).collect();
+        budget.comparisons(
+            line.0
+                .len()
+                .saturating_sub(1)
+                .saturating_mul(boundary.len()),
+        )?;
         let mut output_lines: Vec<LineString<f64>> = Vec::new();
         let mut contact_points: Vec<Point<f64>> = Vec::new();
+        let mut contact_point_keys = HashSet::new();
 
         for segment in line.lines() {
             let mut ratios = vec![0.0, 1.0];
             for edge in &boundary {
-                budget.comparison()?;
                 match line_intersection(segment, *edge) {
                     Some(LineIntersection::SinglePoint { intersection, .. }) => {
                         ratios.push(intersection_parameter(segment, intersection).clamp(0.0, 1.0));
-                        push_unique_point(&mut contact_points, intersection.into());
+                        push_unique_point(
+                            &mut contact_points,
+                            &mut contact_point_keys,
+                            intersection.into(),
+                            budget,
+                        )?;
                     }
                     Some(LineIntersection::Collinear { intersection }) => {
                         for coord in [intersection.start, intersection.end] {
                             ratios.push(intersection_parameter(segment, coord).clamp(0.0, 1.0));
-                            push_unique_point(&mut contact_points, coord.into());
+                            push_unique_point(
+                                &mut contact_points,
+                                &mut contact_point_keys,
+                                coord.into(),
+                                budget,
+                            )?;
                         }
                     }
                     None => {}
@@ -1351,27 +1654,37 @@ mod runtime {
                 let start = at(pair[0]);
                 let end = at(pair[1]);
                 let midpoint = Point::from(at((pair[0] + pair[1]) / 2.0));
+                budget.comparisons(boundary.len())?;
                 if polygon.intersects(&midpoint) {
                     if let Some(previous) = output_lines.last_mut()
                         && previous.0.last() == Some(&start)
                     {
                         if previous.0.last() != Some(&end) {
+                            budget.emit_positions(1)?;
                             previous.0.push(end);
                         }
                     } else {
+                        budget.emit_positions(2)?;
                         output_lines.push(LineString::new(vec![start, end]));
                     }
                 }
             }
         }
 
-        contact_points.retain(|point| {
-            polygon.intersects(point) && !output_lines.iter().any(|line| line.intersects(point))
-        });
+        let mut uncovered_points = Vec::with_capacity(contact_points.len());
+        'point: for point in contact_points {
+            for line in &output_lines {
+                budget.comparisons(line.coords_count().max(1))?;
+                if line.intersects(&point) {
+                    continue 'point;
+                }
+            }
+            uncovered_points.push(point);
+        }
         Ok(output_lines
             .into_iter()
             .map(Geometry::LineString)
-            .chain(contact_points.into_iter().map(Geometry::Point))
+            .chain(uncovered_points.into_iter().map(Geometry::Point))
             .collect())
     }
 
@@ -1380,37 +1693,71 @@ mod runtime {
         b: &Polygon<f64>,
         budget: &mut IntersectionBudget,
     ) -> Result<Vec<Geometry<f64>>> {
-        let area =
-            MultiPolygon::new(vec![a.clone()]).intersection(&MultiPolygon::new(vec![b.clone()]));
         let left_boundary: Vec<_> = polygon_boundary(a).collect();
         let right_boundary: Vec<_> = polygon_boundary(b).collect();
+        budget.comparisons(left_boundary.len().saturating_mul(right_boundary.len()))?;
+        let area =
+            MultiPolygon::new(vec![a.clone()]).intersection(&MultiPolygon::new(vec![b.clone()]));
+        budget.emit_positions(area.coords_count())?;
         let mut points = Vec::new();
         let mut lines = Vec::new();
+        let mut point_keys = HashSet::new();
+        let mut line_keys = HashSet::new();
         for first in left_boundary {
             for second in &right_boundary {
-                budget.comparison()?;
-                record_line_intersection(first, *second, &mut points, &mut lines);
+                record_line_intersection(
+                    first,
+                    *second,
+                    &mut points,
+                    &mut lines,
+                    &mut point_keys,
+                    &mut line_keys,
+                    budget,
+                )?;
             }
         }
-        points.retain(|point| !lines.iter().any(|line| line.intersects(point)));
+        let mut uncovered_points = Vec::with_capacity(points.len());
+        'point: for point in points {
+            for line in &lines {
+                budget.comparisons(line.coords_count().max(1))?;
+                if line.intersects(&point) {
+                    continue 'point;
+                }
+            }
+            uncovered_points.push(point);
+        }
         let mut boundary_parts: Vec<_> = lines
             .into_iter()
             .map(Geometry::LineString)
-            .chain(points.into_iter().map(Geometry::Point))
+            .chain(uncovered_points.into_iter().map(Geometry::Point))
             .collect();
-        boundary_parts.retain(|part| match part {
-            Geometry::Point(point) => !area.0.iter().any(|polygon| polygon.intersects(point)),
-            Geometry::LineString(line) => !area
-                .0
-                .iter()
-                .any(|polygon| polygon.relate(line).is_covers()),
-            _ => true,
-        });
+        let mut uncovered_boundary_parts = Vec::with_capacity(boundary_parts.len());
+        'part: for part in boundary_parts.drain(..) {
+            for polygon in &area.0 {
+                let comparison_cost = match &part {
+                    Geometry::Point(_) => polygon.coords_count(),
+                    Geometry::LineString(line) => {
+                        polygon.coords_count().saturating_mul(line.coords_count())
+                    }
+                    _ => 1,
+                };
+                budget.comparisons(comparison_cost.max(1))?;
+                let covered = match &part {
+                    Geometry::Point(point) => polygon.intersects(point),
+                    Geometry::LineString(line) => polygon.relate(line).is_covers(),
+                    _ => false,
+                };
+                if covered {
+                    continue 'part;
+                }
+            }
+            uncovered_boundary_parts.push(part);
+        }
         Ok(area
             .0
             .into_iter()
             .map(Geometry::Polygon)
-            .chain(boundary_parts)
+            .chain(uncovered_boundary_parts)
             .collect())
     }
 
@@ -1420,11 +1767,15 @@ mod runtime {
         budget: &mut IntersectionBudget,
     ) -> Result<Vec<Geometry<f64>>> {
         match (a, b) {
-            (Geometry::Point(point), other) | (other, Geometry::Point(point)) => Ok(other
-                .intersects(point)
-                .then_some(Geometry::Point(*point))
-                .into_iter()
-                .collect()),
+            (Geometry::Point(point), other) | (other, Geometry::Point(point)) => {
+                budget.comparisons(other.coords_count().max(1))?;
+                if other.intersects(point) {
+                    budget.emit_positions(1)?;
+                    Ok(vec![Geometry::Point(*point)])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             (Geometry::LineString(a), Geometry::LineString(b)) => line_line_parts(a, b, budget),
             (Geometry::LineString(line), Geometry::Polygon(polygon))
             | (Geometry::Polygon(polygon), Geometry::LineString(line)) => {
@@ -1435,41 +1786,130 @@ mod runtime {
         }
     }
 
-    fn assemble_intersection(mut parts: Vec<Geometry<f64>>) -> Geometry<f64> {
-        let mut unique = Vec::new();
-        for part in parts.drain(..) {
-            if !unique.contains(&part) {
-                unique.push(part);
+    fn assemble_intersection(
+        parts: Vec<Geometry<f64>>,
+        budget: &mut IntersectionBudget,
+    ) -> Result<Geometry<f64>> {
+        let mut keys = HashSet::new();
+        let mut points = Vec::new();
+        let mut lines = Vec::new();
+        let mut polygons = Vec::new();
+        let mut positions = 0usize;
+        for part in parts {
+            let Some(key) = intersection_geometry_key(&part) else {
+                continue;
+            };
+            if keys.insert(key) {
+                positions = positions.saturating_add(part.coords_count());
+                ensure!(
+                    positions <= MAX_GEOMETRY_POSITIONS,
+                    "Intersection exceeds the Geometry position limit"
+                );
+                match part {
+                    Geometry::Point(point) => points.push(point),
+                    Geometry::LineString(line) => lines.push(line),
+                    Geometry::Polygon(polygon) => polygons.push(polygon),
+                    _ => unreachable!(),
+                }
             }
         }
-        let polygons: Vec<_> = unique
-            .iter()
-            .filter_map(|part| match part {
-                Geometry::Polygon(polygon) => Some(polygon.clone()),
-                _ => None,
-            })
-            .collect();
-        let lines: Vec<_> = unique
-            .iter()
-            .filter_map(|part| match part {
-                Geometry::LineString(line) => Some(line.clone()),
-                _ => None,
-            })
-            .collect();
-        unique.retain(|part| match part {
-            Geometry::Point(point) => {
-                !polygons.iter().any(|polygon| polygon.intersects(point))
-                    && !lines.iter().any(|line| line.intersects(point))
+
+        if polygons.len() > 1 {
+            let polygon_pairs = polygons
+                .len()
+                .saturating_mul(polygons.len().saturating_sub(1))
+                / 2;
+            budget.comparisons(polygon_pairs)?;
+            polygons = unary_union(polygons.iter()).0;
+            ensure!(
+                polygons.iter().fold(0usize, |count, polygon| count
+                    .saturating_add(polygon.coords_count()))
+                    <= MAX_GEOMETRY_POSITIONS,
+                "Dissolved intersection exceeds the Geometry position limit"
+            );
+        }
+
+        let mut uncovered_lines = Vec::with_capacity(lines.len());
+        'line: for line in lines {
+            for polygon in &polygons {
+                budget.comparisons(
+                    polygon
+                        .coords_count()
+                        .saturating_mul(line.coords_count())
+                        .max(1),
+                )?;
+                if polygon.relate(&line).is_covers() {
+                    continue 'line;
+                }
             }
-            Geometry::LineString(line) => !polygons
-                .iter()
-                .any(|polygon| polygon.relate(line).is_covers()),
-            _ => true,
-        });
-        match unique.len() {
-            0 => Geometry::GeometryCollection(GeometryCollection::empty()),
-            1 => unique.pop().expect("one intersection part"),
-            _ => Geometry::GeometryCollection(GeometryCollection::new_from(unique)),
+            uncovered_lines.push(line);
+        }
+
+        let mut uncovered_points = Vec::with_capacity(points.len());
+        'point: for point in points {
+            for polygon in &polygons {
+                budget.comparisons(polygon.coords_count().max(1))?;
+                if polygon.intersects(&point) {
+                    continue 'point;
+                }
+            }
+            for line in &uncovered_lines {
+                budget.comparisons(line.coords_count().max(1))?;
+                if line.intersects(&point) {
+                    continue 'point;
+                }
+            }
+            uncovered_points.push(point);
+        }
+
+        let final_positions = polygons
+            .iter()
+            .fold(0usize, |count, polygon| {
+                count.saturating_add(polygon.coords_count())
+            })
+            .saturating_add(uncovered_lines.iter().fold(0usize, |count, line| {
+                count.saturating_add(line.coords_count())
+            }))
+            .saturating_add(uncovered_points.len());
+        ensure!(
+            final_positions <= MAX_GEOMETRY_POSITIONS,
+            "Intersection exceeds the Geometry position limit"
+        );
+        let component_count = polygons
+            .len()
+            .saturating_add(uncovered_lines.len())
+            .saturating_add(uncovered_points.len());
+        match component_count {
+            0 => Ok(Geometry::GeometryCollection(GeometryCollection::empty())),
+            1 if !polygons.is_empty() => Ok(Geometry::Polygon(
+                polygons.pop().expect("one polygon intersection part"),
+            )),
+            1 if !uncovered_lines.is_empty() => Ok(Geometry::LineString(
+                uncovered_lines.pop().expect("one line intersection part"),
+            )),
+            1 => Ok(Geometry::Point(
+                uncovered_points.pop().expect("one point intersection part"),
+            )),
+            count if polygons.len() == count => {
+                Ok(Geometry::MultiPolygon(MultiPolygon::new(polygons)))
+            }
+            count if uncovered_lines.len() == count => Ok(Geometry::MultiLineString(
+                MultiLineString::new(uncovered_lines),
+            )),
+            count if uncovered_points.len() == count => {
+                Ok(Geometry::MultiPoint(MultiPoint::new(uncovered_points)))
+            }
+            _ => {
+                let members = polygons
+                    .into_iter()
+                    .map(Geometry::Polygon)
+                    .chain(uncovered_lines.into_iter().map(Geometry::LineString))
+                    .chain(uncovered_points.into_iter().map(Geometry::Point))
+                    .collect();
+                Ok(Geometry::GeometryCollection(GeometryCollection::new_from(
+                    members,
+                )))
+            }
         }
     }
 
@@ -1489,12 +1929,43 @@ mod runtime {
         );
         let mut budget = IntersectionBudget::default();
         let mut parts = Vec::new();
-        for a in &left {
-            for b in &right {
-                parts.extend(atomic_intersection(a, b, &mut budget)?);
+        let mut part_positions = 0usize;
+        let pair_count = left.len().saturating_mul(right.len());
+        let left_positions: Vec<_> = left.iter().map(CoordsIter::coords_count).collect();
+        let right_positions: Vec<_> = right.iter().map(CoordsIter::coords_count).collect();
+        for start in (0..pair_count).step_by(INTERSECTION_BATCH_SIZE) {
+            let end = pair_count.min(start + INTERSECTION_BATCH_SIZE);
+            let work = (start..end).fold(0usize, |work, index| {
+                work.saturating_add(
+                    left_positions[index / right.len()]
+                        .saturating_mul(right_positions[index % right.len()])
+                        .max(1),
+                )
+            });
+            // Workers share one budget, charging before each bounded action. Batches
+            // bound task overhead, and indexed collection preserves component order.
+            let results = cpu::map_indices(end - start, work, |offset| {
+                let index = start + offset;
+                atomic_intersection(
+                    &left[index / right.len()],
+                    &right[index % right.len()],
+                    &mut budget.clone(),
+                )
+            });
+            for pair_parts in results {
+                let pair_parts = pair_parts?;
+                let pair_positions = pair_parts.iter().fold(0usize, |count, part| {
+                    count.saturating_add(part.coords_count())
+                });
+                part_positions = part_positions.saturating_add(pair_positions);
+                ensure!(
+                    part_positions <= MAX_GEOMETRY_POSITIONS,
+                    "Intersection exceeds the Geometry position limit"
+                );
+                parts.extend(pair_parts);
             }
         }
-        Ok(assemble_intersection(parts))
+        assemble_intersection(parts, &mut budget)
     }
 
     #[cfg(test)]
@@ -1520,6 +1991,148 @@ mod runtime {
                 .find(|(name, _)| *name == output)
                 .unwrap()
                 .1
+        }
+
+        fn circular_ring(vertices: usize, offset: f64) -> LineString<f64> {
+            let mut coordinates: Vec<_> = (0..vertices)
+                .map(|index| {
+                    let angle = std::f64::consts::TAU * index as f64 / vertices as f64;
+                    Coord {
+                        x: offset + angle.cos(),
+                        y: angle.sin(),
+                    }
+                })
+                .collect();
+            coordinates.push(coordinates[0]);
+            LineString::new(coordinates)
+        }
+
+        fn crossing_line_sets(count: usize) -> (Geometry<f64>, Geometry<f64>) {
+            let horizontal = (0..count)
+                .map(|index| {
+                    LineString::new(
+                        (0..=64)
+                            .map(|x| Coord {
+                                x: x as f64,
+                                y: index as f64 + 0.5,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            let vertical = (0..count)
+                .map(|index| {
+                    LineString::new(
+                        (0..=64)
+                            .map(|y| Coord {
+                                x: index as f64 + 0.5,
+                                y: y as f64,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            (
+                Geometry::MultiLineString(MultiLineString::new(horizontal)),
+                Geometry::MultiLineString(MultiLineString::new(vertical)),
+            )
+        }
+
+        #[tokio::test]
+        async fn parallel_ring_checks_and_triangulation_match_serial_results() {
+            let ring = circular_ring(512, 0.0);
+            let mut crossing = ring.clone();
+            crossing.0.swap(64, 320);
+            let expected_ring = line_is_ring(&ring).unwrap();
+            let expected_crossing = line_is_ring(&crossing).unwrap();
+            assert!(expected_ring);
+            assert!(!expected_crossing);
+            let polygon_set = Geometry::MultiPolygon(MultiPolygon::new(
+                (0..4)
+                    .map(|index| Polygon::new(circular_ring(128, index as f64 * 4.0), vec![]))
+                    .collect(),
+            ));
+            let expected_triangles = triangulate(polygon_set.clone()).unwrap();
+            let (actual_ring, actual_crossing, actual_triangles) = cpu::run(move || {
+                Ok((
+                    line_is_ring(&ring)?,
+                    line_is_ring(&crossing)?,
+                    triangulate(polygon_set)?,
+                ))
+            })
+            .await
+            .unwrap();
+            assert_eq!(actual_ring, expected_ring);
+            assert_eq!(actual_crossing, expected_crossing);
+            assert_eq!(actual_triangles, expected_triangles);
+        }
+
+        #[tokio::test]
+        async fn parallel_component_intersections_keep_serial_order_and_aggregate_limits() {
+            let (left, right) = crossing_line_sets(12);
+            let expected = mixed_dimension_intersection(left.clone(), right.clone()).unwrap();
+            assert!(matches!(&expected, Geometry::MultiPoint(points) if points.0.len() == 144));
+            let actual = cpu::run(move || mixed_dimension_intersection(left, right))
+                .await
+                .unwrap();
+            assert_eq!(actual, expected);
+
+            let (left, right) = crossing_line_sets(32);
+            let serial_error =
+                mixed_dimension_intersection(left.clone(), right.clone()).unwrap_err();
+            let parallel_error = cpu::run(move || mixed_dimension_intersection(left, right))
+                .await
+                .unwrap_err();
+            assert!(serial_error.to_string().contains("limit"));
+            assert_eq!(parallel_error.to_string(), serial_error.to_string());
+        }
+
+        #[tokio::test]
+        async fn parallel_intersections_share_the_entire_output_budget() {
+            let budget = IntersectionBudget::default();
+            let counters = budget.counters.clone();
+            let accepted = cpu::run(move || {
+                Ok(cpu::map_indices(64, MAX_INTERSECTION_COMPARISONS, |_| {
+                    budget
+                        .clone()
+                        .emit_positions(MAX_GEOMETRY_POSITIONS / 32)
+                        .is_ok()
+                }))
+            })
+            .await
+            .unwrap();
+            assert_eq!(accepted.iter().filter(|accepted| **accepted).count(), 32);
+            assert_eq!(
+                counters.emitted_positions.load(Ordering::Relaxed),
+                MAX_GEOMETRY_POSITIONS
+            );
+        }
+
+        #[test]
+        fn ring_and_triangulation_reject_excess_work_before_parallel_allocation() {
+            assert!(
+                line_is_ring(&circular_ring(2_002, 0.0))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("comparison limit")
+            );
+            let polygon = Polygon::new(
+                LineString::from(vec![
+                    (0.0, 0.0),
+                    (1.0, 0.0),
+                    (1.0, 1.0),
+                    (0.0, 1.0),
+                    (0.0, 0.0),
+                ]),
+                vec![],
+            );
+            let polygons = MultiPolygon::new(vec![polygon; MAX_GEOMETRY_POSITIONS / 8 + 1]);
+            assert!(
+                triangulate(Geometry::MultiPolygon(polygons))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("position limit")
+            );
         }
 
         #[test]
@@ -1575,6 +2188,14 @@ mod runtime {
                 ),
                 0.75
             );
+            assert_eq!(
+                result(
+                    AdvancedOperation::InterpolateLine,
+                    json!({"geometry":source,"ratio":1.0}),
+                    "geometry_out"
+                ),
+                point(2.0, 2.0)
+            );
             let substring = result(
                 AdvancedOperation::LineSubstring,
                 json!({"geometry":source,"start_ratio":0.25,"end_ratio":0.75}),
@@ -1583,6 +2204,15 @@ mod runtime {
             assert_eq!(
                 substring["coordinates"],
                 json!([[1.0, 0.0], [2.0, 0.0], [2.0, 1.0]])
+            );
+            let closed = line(json!([[0, 0], [2, 0], [2, 2], [0, 0]]));
+            assert_eq!(
+                result(
+                    AdvancedOperation::LineSubstring,
+                    json!({"geometry":closed,"start_ratio":0.0,"end_ratio":1.0}),
+                    "geometry_out",
+                )["coordinates"],
+                json!([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 0.0]])
             );
             let dense = result(
                 AdvancedOperation::DensifyPlanar,
@@ -1654,6 +2284,36 @@ mod runtime {
             assert_eq!(split["coordinates"].as_array().unwrap().len(), 2);
             assert_eq!(split["coordinates"][0][1], json!([180.0, 5.0]));
             assert_eq!(split["coordinates"][1][0], json!([-180.0, 5.0]));
+
+            let crossing_from_boundary = result(
+                AdvancedOperation::SplitAntimeridian,
+                json!({"geometry":line(json!([[-170,0],[-180,1],[170,2]]))}),
+                "geometry_out",
+            );
+            assert_eq!(
+                crossing_from_boundary["coordinates"],
+                json!([[[-170.0, 0.0], [-180.0, 1.0]], [[180.0, 1.0], [170.0, 2.0]]])
+            );
+
+            let crossing_to_boundary = result(
+                AdvancedOperation::SplitAntimeridian,
+                json!({"geometry":line(json!([[170,0],[-180,1],[-170,2]]))}),
+                "geometry_out",
+            );
+            assert_eq!(
+                crossing_to_boundary["coordinates"],
+                json!([[[170.0, 0.0], [180.0, 1.0]], [[-180.0, 1.0], [-170.0, 2.0]]])
+            );
+
+            let equivalent_boundary_endpoints = result(
+                AdvancedOperation::SplitAntimeridian,
+                json!({"geometry":line(json!([[180,0],[-180,1]]))}),
+                "geometry_out",
+            );
+            assert_eq!(
+                equivalent_boundary_endpoints["coordinates"],
+                json!([[[180.0, 0.0], [180.0, 1.0]]])
+            );
         }
 
         #[test]
@@ -1677,6 +2337,35 @@ mod runtime {
                 "geometry_out",
             );
             assert!(smoothed["coordinates"].as_array().unwrap().len() > 3);
+
+            let collection = json!({
+                "type":"GeometryCollection",
+                "geometries":[line(json!([[0,0],[1,1],[2,0]])), point(3.0,4.0)]
+            });
+            let smoothed_collection = result(
+                AdvancedOperation::Smooth,
+                json!({"geometry":collection,"iterations":1}),
+                "geometry_out",
+            );
+            assert_eq!(smoothed_collection["type"], "GeometryCollection");
+            assert_eq!(
+                smoothed_collection["geometries"][0]["coordinates"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                6
+            );
+            assert_eq!(smoothed_collection["geometries"][1], point(3.0, 4.0));
+
+            let point_set = json!({"type":"MultiPoint","coordinates":[[0,0],[1,1]]});
+            assert_eq!(
+                result(
+                    AdvancedOperation::Smooth,
+                    json!({"geometry":point_set,"iterations":16}),
+                    "geometry_out",
+                ),
+                json!({"type":"MultiPoint","coordinates":[[0.0,0.0],[1.0,1.0]]})
+            );
         }
 
         #[test]
@@ -1705,10 +2394,65 @@ mod runtime {
                 checked_geometry(&touching).unwrap(),
             )
             .unwrap();
-            assert!(matches!(
-                shared_edge,
-                Geometry::LineString(_) | Geometry::GeometryCollection(_)
-            ));
+            assert!(matches!(shared_edge, Geometry::LineString(_)));
+        }
+
+        #[test]
+        fn mixed_intersection_deduplicates_dissolves_and_uses_homogeneous_outputs() {
+            let points = json!({
+                "type":"MultiPoint",
+                "coordinates":[[1,1],[3,3],[5,5]]
+            });
+            let point_result = mixed_dimension_intersection(
+                checked_geometry(&points).unwrap(),
+                checked_geometry(&square()).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(point_result, Geometry::MultiPoint(_)));
+
+            let lines = json!({
+                "type":"MultiLineString",
+                "coordinates":[[[-1,1],[1,1]],[[-1,3],[1,3]]]
+            });
+            let line_result = mixed_dimension_intersection(
+                checked_geometry(&lines).unwrap(),
+                checked_geometry(&square()).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(line_result, Geometry::MultiLineString(_)));
+
+            let duplicate_lines = json!({
+                "type":"GeometryCollection",
+                "geometries":[
+                    line(json!([[0,0],[2,0]])),
+                    line(json!([[2,0],[0,0]]))
+                ]
+            });
+            let deduplicated = mixed_dimension_intersection(
+                checked_geometry(&duplicate_lines).unwrap(),
+                checked_geometry(&line(json!([[0, 0], [2, 0]]))).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(deduplicated, Geometry::LineString(_)));
+
+            let overlapping_polygons = json!({
+                "type":"GeometryCollection",
+                "geometries":[
+                    {"type":"Polygon","coordinates":[[[0,0],[3,0],[3,3],[0,3],[0,0]]]},
+                    {"type":"Polygon","coordinates":[[[2,0],[5,0],[5,3],[2,3],[2,0]]]}
+                ]
+            });
+            let mask = json!({
+                "type":"Polygon",
+                "coordinates":[[[-1,-1],[6,-1],[6,4],[-1,4],[-1,-1]]]
+            });
+            let dissolved = mixed_dimension_intersection(
+                checked_geometry(&overlapping_polygons).unwrap(),
+                checked_geometry(&mask).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(&dissolved, Geometry::Polygon(_)));
+            assert!(encoded_geometry(dissolved).is_ok());
         }
     }
 }

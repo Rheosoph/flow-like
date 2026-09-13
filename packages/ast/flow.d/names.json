@@ -8,6 +8,60 @@
     "class": null,
     "category": "UI/Surface"
   },
+  "a2ui_camera_capture": {
+    "qualified": "ui::captureCameraFrame",
+    "namespace": "ui",
+    "alias": "captureCameraFrame",
+    "flat": "a2uiCameraCapture",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
+  "a2ui_camera_capture_audio": {
+    "qualified": "ui::captureCameraAudio",
+    "namespace": "ui",
+    "alias": "captureCameraAudio",
+    "flat": "a2uiCameraCaptureAudio",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
+  "a2ui_camera_capture_input": {
+    "qualified": "ui::captureCameraInput",
+    "namespace": "ui",
+    "alias": "captureCameraInput",
+    "flat": "a2uiCameraCaptureInput",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
+  "a2ui_camera_control": {
+    "qualified": "ui::controlCamera",
+    "namespace": "ui",
+    "alias": "controlCamera",
+    "flat": "a2uiCameraControl",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
+  "a2ui_camera_read_image": {
+    "qualified": "ui::readCameraImage",
+    "namespace": "ui",
+    "alias": "readCameraImage",
+    "flat": "a2uiCameraReadImage",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
+  "a2ui_camera_update_overlays": {
+    "qualified": "ui::updateCameraOverlays",
+    "namespace": "ui",
+    "alias": "updateCameraOverlays",
+    "flat": "a2uiCameraUpdateOverlays",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Camera"
+  },
   "a2ui_chart_data_agent": {
     "qualified": "ui::chartDataAgent",
     "namespace": "ui",
@@ -7739,6 +7793,15 @@
     "class": null,
     "category": "Events/Generic"
   },
+  "events_location": {
+    "qualified": "events::location",
+    "namespace": "events",
+    "alias": "location",
+    "flat": "eventsLocation",
+    "receiver": null,
+    "class": null,
+    "category": "Events"
+  },
   "events_simple": {
     "qualified": "events::simple",
     "namespace": "events",
@@ -9368,6 +9431,15 @@
     "class": "NodeDBConnection",
     "category": "Data/Database/Search"
   },
+  "geo_get_current_location": {
+    "qualified": "geo::getCurrentLocation",
+    "namespace": "geo",
+    "alias": "getCurrentLocation",
+    "flat": "geoGetCurrentLocation",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Location"
+  },
   "geo_get_map_image": {
     "qualified": "geo::getMapImage",
     "namespace": "geo",
@@ -9448,6 +9520,24 @@
     "receiver": null,
     "class": null,
     "category": "Web/Geo/Search"
+  },
+  "geometry_affine_transform": {
+    "qualified": "geometry::affineTransform",
+    "namespace": "geometry",
+    "alias": "affineTransform",
+    "flat": "geometryAffineTransform",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_boundary": {
+    "qualified": "geometry::boundary",
+    "namespace": "geometry",
+    "alias": "boundary",
+    "flat": "geometryBoundary",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
   },
   "geometry_bounds": {
     "qualified": "geometry::bounds",
@@ -9530,6 +9620,33 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_clip_line": {
+    "qualified": "geometry::clipLine",
+    "namespace": "geometry",
+    "alias": "clipLine",
+    "flat": "geometryClipLine",
+    "receiver": "line",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_closest_point": {
+    "qualified": "geometry::closestPoint",
+    "namespace": "geometry",
+    "alias": "closestPoint",
+    "flat": "geometryClosestPoint",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_concave_hull": {
+    "qualified": "geometry::concaveHull",
+    "namespace": "geometry",
+    "alias": "concaveHull",
+    "flat": "geometryConcaveHull",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_contains": {
     "qualified": "geometry::contains",
     "namespace": "geometry",
@@ -9546,6 +9663,159 @@
     "flat": "geometryConvexHull",
     "receiver": "geometry",
     "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_covered_by": {
+    "qualified": "geometry::coveredBy",
+    "namespace": "geometry",
+    "alias": "coveredBy",
+    "flat": "geometryCoveredBy",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_covers": {
+    "qualified": "geometry::covers",
+    "namespace": "geometry",
+    "alias": "covers",
+    "flat": "geometryCovers",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_crosses": {
+    "qualified": "geometry::crosses",
+    "namespace": "geometry",
+    "alias": "crosses",
+    "flat": "geometryCrosses",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_d_within": {
+    "qualified": "geometry::dWithin",
+    "namespace": "geometry",
+    "alias": "dWithin",
+    "flat": "geometryDWithin",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_decode_geohash": {
+    "qualified": "geometry::decodeGeohash",
+    "namespace": "geometry",
+    "alias": "decodeGeohash",
+    "flat": "geometryDecodeGeohash",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_decode_polyline": {
+    "qualified": "geometry::decodePolyline",
+    "namespace": "geometry",
+    "alias": "decodePolyline",
+    "flat": "geometryDecodePolyline",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_densify_geodesic": {
+    "qualified": "geometry::densifyGeodesic",
+    "namespace": "geometry",
+    "alias": "densifyGeodesic",
+    "flat": "geometryDensifyGeodesic",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_densify_planar": {
+    "qualified": "geometry::densifyPlanar",
+    "namespace": "geometry",
+    "alias": "densifyPlanar",
+    "flat": "geometryDensifyPlanar",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_difference": {
+    "qualified": "geometry::booleanDifference",
+    "namespace": "geometry",
+    "alias": "booleanDifference",
+    "flat": "geometryDifference",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_disjoint": {
+    "qualified": "geometry::disjoint",
+    "namespace": "geometry",
+    "alias": "disjoint",
+    "flat": "geometryDisjoint",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_encode_geohash": {
+    "qualified": "geometry::encodeGeohash",
+    "namespace": "geometry",
+    "alias": "encodeGeohash",
+    "flat": "geometryEncodeGeohash",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_encode_polyline": {
+    "qualified": "geometry::encodePolyline",
+    "namespace": "geometry",
+    "alias": "encodePolyline",
+    "flat": "geometryEncodePolyline",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_end_point": {
+    "qualified": "geometry::endPoint",
+    "namespace": "geometry",
+    "alias": "endPoint",
+    "flat": "geometryEndPoint",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_envelope": {
+    "qualified": "geometry::envelope",
+    "namespace": "geometry",
+    "alias": "envelope",
+    "flat": "geometryEnvelope",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_exterior_ring": {
+    "qualified": "geometry::exteriorRing",
+    "namespace": "geometry",
+    "alias": "exteriorRing",
+    "flat": "geometryExteriorRing",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_feature_collection_geometries": {
+    "qualified": "geometry::featureCollectionGeometries",
+    "namespace": "geometry",
+    "alias": "featureCollectionGeometries",
+    "flat": "geometryFeatureCollectionGeometries",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_feature_geometry": {
+    "qualified": "geometry::featureGeometry",
+    "namespace": "geometry",
+    "alias": "featureGeometry",
+    "flat": "geometryFeatureGeometry",
+    "receiver": null,
+    "class": null,
     "category": "Web/Geo/Geometry"
   },
   "geometry_from_geojson": {
@@ -9602,6 +9872,15 @@
     "class": null,
     "category": "Web/Geo/Geometry"
   },
+  "geometry_from_web_mercator": {
+    "qualified": "geometry::fromWebMercator",
+    "namespace": "geometry",
+    "alias": "fromWebMercator",
+    "flat": "geometryFromWebMercator",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_from_wkb": {
     "qualified": "geometry::fromWkb",
     "namespace": "geometry",
@@ -9629,6 +9908,33 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_geodesic_bearing": {
+    "qualified": "geometry::geodesicBearing",
+    "namespace": "geometry",
+    "alias": "geodesicBearing",
+    "flat": "geometryGeodesicBearing",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_geodesic_circle": {
+    "qualified": "geometry::geodesicCircle",
+    "namespace": "geometry",
+    "alias": "geodesicCircle",
+    "flat": "geometryGeodesicCircle",
+    "receiver": "origin",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_geodesic_destination": {
+    "qualified": "geometry::geodesicDestination",
+    "namespace": "geometry",
+    "alias": "geodesicDestination",
+    "flat": "geometryGeodesicDestination",
+    "receiver": "origin",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_geodesic_distance": {
     "qualified": "geometry::geodesicDistance",
     "namespace": "geometry",
@@ -9638,11 +9944,74 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_geodesic_frechet_distance": {
+    "qualified": "geometry::geodesicFrechetDistance",
+    "namespace": "geometry",
+    "alias": "geodesicFrechetDistance",
+    "flat": "geometryGeodesicFrechetDistance",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_geodesic_interpolate": {
+    "qualified": "geometry::geodesicInterpolate",
+    "namespace": "geometry",
+    "alias": "geodesicInterpolate",
+    "flat": "geometryGeodesicInterpolate",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_geodesic_length": {
     "qualified": "geometry::geodesicLength",
     "namespace": "geometry",
     "alias": "geodesicLength",
     "flat": "geometryGeodesicLength",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_h3_cell_boundary": {
+    "qualified": "geometry::h3CellBoundary",
+    "namespace": "geometry",
+    "alias": "h3CellBoundary",
+    "flat": "geometryH3CellBoundary",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_h3_cells_to_geometry": {
+    "qualified": "geometry::h3CellsToGeometry",
+    "namespace": "geometry",
+    "alias": "h3CellsToGeometry",
+    "flat": "geometryH3CellsToGeometry",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_hausdorff_distance": {
+    "qualified": "geometry::hausdorffDistance",
+    "namespace": "geometry",
+    "alias": "hausdorffDistance",
+    "flat": "geometryHausdorffDistance",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_interior_rings": {
+    "qualified": "geometry::interiorRings",
+    "namespace": "geometry",
+    "alias": "interiorRings",
+    "flat": "geometryInteriorRings",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_interpolate_line": {
+    "qualified": "geometry::interpolateLine",
+    "namespace": "geometry",
+    "alias": "interpolateLine",
+    "flat": "geometryInterpolateLine",
     "receiver": "geometry",
     "class": "geometry",
     "category": "Web/Geo/Geometry"
@@ -9665,6 +10034,141 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_is_empty": {
+    "qualified": "geometry::isEmpty",
+    "namespace": "geometry",
+    "alias": "isEmpty",
+    "flat": "geometryIsEmpty",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_is_topologically_valid": {
+    "qualified": "geometry::isTopologicallyValid",
+    "namespace": "geometry",
+    "alias": "isTopologicallyValid",
+    "flat": "geometryIsTopologicallyValid",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_legacy_adapter": {
+    "qualified": "geometry::legacyAdapter",
+    "namespace": "geometry",
+    "alias": "legacyAdapter",
+    "flat": "geometryLegacyAdapter",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_line_is_closed": {
+    "qualified": "geometry::isClosed",
+    "namespace": "geometry",
+    "alias": "isClosed",
+    "flat": "geometryLineIsClosed",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_line_is_ring": {
+    "qualified": "geometry::isRing",
+    "namespace": "geometry",
+    "alias": "isRing",
+    "flat": "geometryLineIsRing",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_line_substring": {
+    "qualified": "geometry::lineSubstring",
+    "namespace": "geometry",
+    "alias": "lineSubstring",
+    "flat": "geometryLineSubstring",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_locate_point": {
+    "qualified": "geometry::locatePoint",
+    "namespace": "geometry",
+    "alias": "locatePoint",
+    "flat": "geometryLocatePoint",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_envelope": {
+    "qualified": "geometry::makeEnvelope",
+    "namespace": "geometry",
+    "alias": "makeEnvelope",
+    "flat": "geometryMakeEnvelope",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_feature": {
+    "qualified": "geometry::makeFeature",
+    "namespace": "geometry",
+    "alias": "makeFeature",
+    "flat": "geometryMakeFeature",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_feature_collection": {
+    "qualified": "geometry::makeFeatureCollection",
+    "namespace": "geometry",
+    "alias": "makeFeatureCollection",
+    "flat": "geometryMakeFeatureCollection",
+    "receiver": "geometries",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_geometry_collection": {
+    "qualified": "geometry::makeGeometryCollection",
+    "namespace": "geometry",
+    "alias": "makeGeometryCollection",
+    "flat": "geometryMakeGeometryCollection",
+    "receiver": "geometries",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_line_string": {
+    "qualified": "geometry::makeLineString",
+    "namespace": "geometry",
+    "alias": "makeLineString",
+    "flat": "geometryMakeLineString",
+    "receiver": "points",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_multi_line_string": {
+    "qualified": "geometry::makeMultiLineString",
+    "namespace": "geometry",
+    "alias": "makeMultiLineString",
+    "flat": "geometryMakeMultiLineString",
+    "receiver": "lines",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_multi_point": {
+    "qualified": "geometry::makeMultiPoint",
+    "namespace": "geometry",
+    "alias": "makeMultiPoint",
+    "flat": "geometryMakeMultiPoint",
+    "receiver": "points",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_make_multi_polygon": {
+    "qualified": "geometry::makeMultiPolygon",
+    "namespace": "geometry",
+    "alias": "makeMultiPolygon",
+    "flat": "geometryMakeMultiPolygon",
+    "receiver": "polygons",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_make_point": {
     "qualified": "geometry::makePoint",
     "namespace": "geometry",
@@ -9674,11 +10178,92 @@
     "class": null,
     "category": "Web/Geo/Geometry"
   },
+  "geometry_make_polygon": {
+    "qualified": "geometry::makePolygon",
+    "namespace": "geometry",
+    "alias": "makePolygon",
+    "flat": "geometryMakePolygon",
+    "receiver": "exterior",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_merge_connected_lines": {
+    "qualified": "geometry::mergeConnectedLines",
+    "namespace": "geometry",
+    "alias": "mergeConnectedLines",
+    "flat": "geometryMergeConnectedLines",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_minimum_rotated_rectangle": {
+    "qualified": "geometry::minimumRotatedRectangle",
+    "namespace": "geometry",
+    "alias": "minimumRotatedRectangle",
+    "flat": "geometryMinimumRotatedRectangle",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_n": {
+    "qualified": "geometry::geometryN",
+    "namespace": "geometry",
+    "alias": "geometryN",
+    "flat": "geometryN",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_num_geometries": {
+    "qualified": "geometry::numGeometries",
+    "namespace": "geometry",
+    "alias": "numGeometries",
+    "flat": "geometryNumGeometries",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_num_interior_rings": {
+    "qualified": "geometry::numInteriorRings",
+    "namespace": "geometry",
+    "alias": "numInteriorRings",
+    "flat": "geometryNumInteriorRings",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_num_points": {
     "qualified": "geometry::numPoints",
     "namespace": "geometry",
     "alias": "numPoints",
     "flat": "geometryNumPoints",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_orient_polygon_rings": {
+    "qualified": "geometry::orientPolygonRings",
+    "namespace": "geometry",
+    "alias": "orientPolygonRings",
+    "flat": "geometryOrientPolygonRings",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_overlaps": {
+    "qualified": "geometry::overlaps",
+    "namespace": "geometry",
+    "alias": "overlaps",
+    "flat": "geometryOverlaps",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_parts": {
+    "qualified": "geometry::parts",
+    "namespace": "geometry",
+    "alias": "parts",
+    "flat": "geometryParts",
     "receiver": "geometry",
     "class": "geometry",
     "category": "Web/Geo/Geometry"
@@ -9692,11 +10277,29 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_planar_buffer": {
+    "qualified": "geometry::planarBuffer",
+    "namespace": "geometry",
+    "alias": "planarBuffer",
+    "flat": "geometryPlanarBuffer",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_planar_distance": {
     "qualified": "geometry::planarDistance",
     "namespace": "geometry",
     "alias": "planarDistance",
     "flat": "geometryPlanarDistance",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_planar_frechet_distance": {
+    "qualified": "geometry::planarFrechetDistance",
+    "namespace": "geometry",
+    "alias": "planarFrechetDistance",
+    "flat": "geometryPlanarFrechetDistance",
     "receiver": "a",
     "class": "geometry",
     "category": "Web/Geo/Geometry"
@@ -9710,12 +10313,201 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_point_n": {
+    "qualified": "geometry::pointN",
+    "namespace": "geometry",
+    "alias": "pointN",
+    "flat": "geometryPointN",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_point_on_surface": {
+    "qualified": "geometry::pointOnSurface",
+    "namespace": "geometry",
+    "alias": "pointOnSurface",
+    "flat": "geometryPointOnSurface",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_point_to_h3_cell": {
+    "qualified": "geometry::pointToH3Cell",
+    "namespace": "geometry",
+    "alias": "pointToH3Cell",
+    "flat": "geometryPointToH3Cell",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_points": {
+    "qualified": "geometry::points",
+    "namespace": "geometry",
+    "alias": "points",
+    "flat": "geometryPoints",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_polygon_to_h3_cells": {
+    "qualified": "geometry::polygonToH3Cells",
+    "namespace": "geometry",
+    "alias": "polygonToH3Cells",
+    "flat": "geometryPolygonToH3Cells",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_relate_pattern": {
+    "qualified": "geometry::relatePattern",
+    "namespace": "geometry",
+    "alias": "relatePattern",
+    "flat": "geometryRelatePattern",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_remove_repeated_points": {
+    "qualified": "geometry::removeRepeatedPoints",
+    "namespace": "geometry",
+    "alias": "removeRepeatedPoints",
+    "flat": "geometryRemoveRepeatedPoints",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_repair": {
+    "qualified": "geometry::repair",
+    "namespace": "geometry",
+    "alias": "repair",
+    "flat": "geometryRepair",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_reverse_line": {
+    "qualified": "geometry::reverseLine",
+    "namespace": "geometry",
+    "alias": "reverseLine",
+    "flat": "geometryReverseLine",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_rotate": {
+    "qualified": "geometry::rotate",
+    "namespace": "geometry",
+    "alias": "rotate",
+    "flat": "geometryRotate",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_scale": {
+    "qualified": "geometry::scale",
+    "namespace": "geometry",
+    "alias": "scale",
+    "flat": "geometryScale",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_shortest_line": {
+    "qualified": "geometry::shortestLine",
+    "namespace": "geometry",
+    "alias": "shortestLine",
+    "flat": "geometryShortestLine",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_simplify": {
     "qualified": "geometry::simplify",
     "namespace": "geometry",
     "alias": "simplify",
     "flat": "geometrySimplify",
     "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_simplify_vw": {
+    "qualified": "geometry::simplifyVw",
+    "namespace": "geometry",
+    "alias": "simplifyVw",
+    "flat": "geometrySimplifyVw",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_simplify_vw_preserve": {
+    "qualified": "geometry::simplifyVwPreserve",
+    "namespace": "geometry",
+    "alias": "simplifyVwPreserve",
+    "flat": "geometrySimplifyVwPreserve",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_skew": {
+    "qualified": "geometry::skew",
+    "namespace": "geometry",
+    "alias": "skew",
+    "flat": "geometrySkew",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_smooth_chaikin": {
+    "qualified": "geometry::smoothChaikin",
+    "namespace": "geometry",
+    "alias": "smoothChaikin",
+    "flat": "geometrySmoothChaikin",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_snap_to_grid": {
+    "qualified": "geometry::snapToGrid",
+    "namespace": "geometry",
+    "alias": "snapToGrid",
+    "flat": "geometrySnapToGrid",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_split_line_antimeridian": {
+    "qualified": "geometry::splitLineAntimeridian",
+    "namespace": "geometry",
+    "alias": "splitLineAntimeridian",
+    "flat": "geometrySplitLineAntimeridian",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_split_line_at_point": {
+    "qualified": "geometry::splitLineAtPoint",
+    "namespace": "geometry",
+    "alias": "splitLineAtPoint",
+    "flat": "geometrySplitLineAtPoint",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_start_point": {
+    "qualified": "geometry::startPoint",
+    "namespace": "geometry",
+    "alias": "startPoint",
+    "flat": "geometryStartPoint",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_symmetric_difference": {
+    "qualified": "geometry::symmetricDifference",
+    "namespace": "geometry",
+    "alias": "symmetricDifference",
+    "flat": "geometrySymmetricDifference",
+    "receiver": "a",
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
@@ -9746,6 +10538,33 @@
     "class": null,
     "category": "Web/Geo/Geometry"
   },
+  "geometry_to_multi": {
+    "qualified": "geometry::toMulti",
+    "namespace": "geometry",
+    "alias": "toMulti",
+    "flat": "geometryToMulti",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_to_single": {
+    "qualified": "geometry::toSingle",
+    "namespace": "geometry",
+    "alias": "toSingle",
+    "flat": "geometryToSingle",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_to_web_mercator": {
+    "qualified": "geometry::toWebMercator",
+    "namespace": "geometry",
+    "alias": "toWebMercator",
+    "flat": "geometryToWebMercator",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_to_wkb": {
     "qualified": "geometry::toWkb",
     "namespace": "geometry",
@@ -9764,11 +10583,83 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_topologically_equals": {
+    "qualified": "geometry::topologicallyEquals",
+    "namespace": "geometry",
+    "alias": "topologicallyEquals",
+    "flat": "geometryTopologicallyEquals",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_touches": {
+    "qualified": "geometry::touches",
+    "namespace": "geometry",
+    "alias": "touches",
+    "flat": "geometryTouches",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_translate": {
+    "qualified": "geometry::translate",
+    "namespace": "geometry",
+    "alias": "translate",
+    "flat": "geometryTranslate",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_triangulate": {
+    "qualified": "geometry::triangulate",
+    "namespace": "geometry",
+    "alias": "triangulate",
+    "flat": "geometryTriangulate",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_type": {
     "qualified": "geometry::type",
     "namespace": "geometry",
     "alias": "type",
     "flat": "geometryType",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_unary_union": {
+    "qualified": "geometry::unaryUnion",
+    "namespace": "geometry",
+    "alias": "unaryUnion",
+    "flat": "geometryUnaryUnion",
+    "receiver": "geometries",
+    "class": "array",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_union": {
+    "qualified": "geometry::booleanUnion",
+    "namespace": "geometry",
+    "alias": "booleanUnion",
+    "flat": "geometryUnion",
+    "receiver": "a",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_validation_errors": {
+    "qualified": "geometry::validationErrors",
+    "namespace": "geometry",
+    "alias": "validationErrors",
+    "flat": "geometryValidationErrors",
+    "receiver": "geometry",
+    "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_validity_reason": {
+    "qualified": "geometry::validityReason",
+    "namespace": "geometry",
+    "alias": "validityReason",
+    "flat": "geometryValidityReason",
     "receiver": "geometry",
     "class": "geometry",
     "category": "Web/Geo/Geometry"
@@ -9780,6 +10671,15 @@
     "flat": "geometryWithin",
     "receiver": "a",
     "class": "geometry",
+    "category": "Web/Geo/Geometry"
+  },
+  "geometry_wrap_longitude": {
+    "qualified": "geometry::wrapLongitude",
+    "namespace": "geometry",
+    "alias": "wrapLongitude",
+    "flat": "geometryWrapLongitude",
+    "receiver": null,
+    "class": null,
     "category": "Web/Geo/Geometry"
   },
   "geometry_x": {
@@ -14128,6 +15028,15 @@
     "receiver": null,
     "class": null,
     "category": "Web/UDP"
+  },
+  "ui_play_sound": {
+    "qualified": "ui::playSound",
+    "namespace": "ui",
+    "alias": "playSound",
+    "flat": "uiPlaySound",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Audio"
   },
   "union": {
     "qualified": "set::union",

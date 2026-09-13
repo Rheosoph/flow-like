@@ -688,7 +688,11 @@ pub async fn upsert_event(
                         event.id,
                         e
                     );
-                    // Don't fail the entire upsert if sink registration fails
+                    if event.event_type == "geolocation" {
+                        return Err(TauriFunctionError::new(&format!(
+                            "Location Event was saved, but device monitoring could not be updated: {e}"
+                        )));
+                    }
                 }
             }
             Err(e) => {
@@ -704,6 +708,11 @@ pub async fn upsert_event(
                     "Event {} will need to be registered with sink manager later",
                     event.id
                 );
+                if event.event_type == "geolocation" {
+                    return Err(TauriFunctionError::new(&format!(
+                        "Location Event was saved, but device monitoring is unavailable: {e}"
+                    )));
+                }
             }
         }
 

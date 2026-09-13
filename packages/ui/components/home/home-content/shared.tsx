@@ -13,7 +13,7 @@ export function useHomeScope() {
 	return [
 		getApiOrigin(backend.profile),
 		backend.profile?.id ?? "",
-		auth.user?.profile.sub ?? "local",
+		(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
 	];
 }
 

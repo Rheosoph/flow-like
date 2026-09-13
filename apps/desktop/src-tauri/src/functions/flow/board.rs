@@ -680,7 +680,7 @@ async fn replay_local_history(
         *board = original_board;
         return Err(error.into());
     }
-    save_board_with_rollback(&mut board, store, Some(original_board)).await?;
+    save_board_with_rollback(&mut board, store, original_board).await?;
 
     let sync = match sync {
         Some(request) => match local_board_sync_diff(
@@ -808,20 +808,18 @@ async fn execute_local_commands(
         &app_id, &board_id,
     )
     .map_err(|error| TauriFunctionError::new(&error))?;
-    let original_board = requires_remote_delivery.then(|| board.clone());
+    // Saving validates derived pin contracts too. Keep offline boards recoverable when
+    // an edit is rejected after node updates have already changed the cached board.
+    let original_board = board.clone();
     let commands = match board.execute_commands(commands, flow_like_state).await {
         Ok(commands) => commands,
         Err(error) => {
-            if let Some(original_board) = original_board {
-                *board = original_board;
-            }
+            *board = original_board;
             return Err(error.into());
         }
     };
     if requires_remote_delivery && let Err(error) = validate_remote_command_batch_size(&commands) {
-        if let Some(original_board) = original_board {
-            *board = original_board;
-        }
+        *board = original_board;
         return Err(TauriFunctionError::new(&error));
     }
 
@@ -918,10 +916,9 @@ pub async fn apply_flowscript(
         &app_id, &board_id,
     )
     .map_err(|error| TauriFunctionError::new(&error))?;
-    // A shared board must be deliverable as one server transaction. Keep an exact snapshot so an
-    // unexpectedly large executed/undo receipt can be rejected without leaving the native board
-    // ahead of Hub (or falling back to setup/connection chunks).
-    let original_board = requires_remote_delivery.then(|| board.clone());
+    // Both offline and shared boards must recover from failed validation or persistence.
+    // Shared boards also need to fit into one remote command transaction.
+    let original_board = board.clone();
     let apply_result = match module_id {
         Some(module_id) => {
             apply_flowscript_to_board_file(
@@ -952,9 +949,7 @@ pub async fn apply_flowscript(
     let result = match apply_result {
         Ok(result) => result,
         Err(error) => {
-            if let Some(original_board) = original_board {
-                *board = original_board;
-            }
+            *board = original_board;
             return Err(error.into());
         }
     };
@@ -962,9 +957,7 @@ pub async fn apply_flowscript(
     if requires_remote_delivery
         && let Err(error) = validate_remote_command_batch_size(&result.commands)
     {
-        if let Some(original_board) = original_board {
-            *board = original_board;
-        }
+        *board = original_board;
         return Err(TauriFunctionError::new(&error));
     }
 
@@ -978,15 +971,11 @@ pub async fn apply_flowscript(
 async fn save_board_with_rollback(
     board: &mut Board,
     store: Arc<dyn ObjectStore>,
-    original_board: Option<Board>,
+    original_board: Board,
 ) -> Result<(), TauriFunctionError> {
     let Err(save_error) = board.save(Some(store.clone())).await else {
         return Ok(());
     };
-    let Some(original_board) = original_board else {
-        return Err(save_error.into());
-    };
-
     *board = original_board;
     if let Err(restore_error) = board.save(Some(store)).await {
         return Err(TauriFunctionError::new(&format!(
@@ -1062,6 +1051,46 @@ fn validate_remote_command_batch_size_with_limits(
 mod tests {
     use super::*;
     use flow_like::flow::board::commands::nodes::copy_paste::CopyPasteCommand;
+
+    #[tokio::test]
+    async fn failed_geometry_save_restores_the_cached_board_and_allows_the_next_edit() {
+        use flow_like::{
+            flow::variable::VariableType,
+            flow_like_storage::{Path, object_store::memory::InMemory},
+        };
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut board = Board::new_detached(Some("offline-board".into()), Path::from("boards"));
+        board
+            .nodes
+            .insert("original".into(), Node::new("test", "Original", "", ""));
+        board.save(Some(store.clone())).await.unwrap();
+        let original = board.clone();
+        let mut invalid = Node::new("geometry_test", "Invalid Geometry", "", "");
+        invalid
+            .add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
+            .set_default_value(Some(serde_json::json!("stale string literal")));
+        board.nodes.insert("invalid".into(), invalid);
+
+        assert!(
+            save_board_with_rollback(&mut board, store.clone(), original)
+                .await
+                .is_err()
+        );
+        assert_eq!(board.nodes.len(), 1);
+        assert!(board.nodes.contains_key("original"));
+        board.validate_geometry_contracts().unwrap();
+
+        let original = board.clone();
+        board.nodes.get_mut("original").unwrap().friendly_name = "Next edit".into();
+        save_board_with_rollback(&mut board, store.clone(), original)
+            .await
+            .unwrap();
+        assert_eq!(board.nodes["original"].friendly_name, "Next edit");
+        Board::load_proto(store, &Path::from("boards"), &board.id, None)
+            .await
+            .unwrap();
+    }
 
     fn command_with_payload(id: usize, bytes: usize) -> GenericCommand {
         let mut command =

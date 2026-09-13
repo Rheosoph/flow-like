@@ -1,0 +1,145 @@
+name: FlowLikeNative
+options:
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  FlowLikeNative:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: VVT9DYMA6M
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: false
+    CLANG_ENABLE_MODULES: true
+    ENABLE_DEBUG_DYLIB: false
+aggregateTargets:
+  FlowLikeNativeMac:
+    targets: [FlowLikeNative, FlowLikeWidgets_macOS, FlowLikeShare_macOS]
+    scheme: {}
+targets:
+  FlowLikeNative:
+    type: framework
+    platform: macOS
+    sources: [Sources/FlowLikeNative]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.Native
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: false
+        DEFINES_MODULE: true
+        APPLICATION_EXTENSION_API_ONLY: true
+        BUILD_LIBRARY_FOR_DISTRIBUTION: true
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @loader_path/../Frameworks"
+    scheme: {}
+  FlowLikeWidgets_macOS:
+    type: app-extension
+    platform: macOS
+    sources: [Extensions/Widgets]
+    dependencies:
+      - target: FlowLikeNative
+        embed: false
+    info:
+      path: Extensions/Widgets/Info-macOS.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleDisplayName: Flow Like
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Extensions/Widgets/Widgets-macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [group.com.flow-like.app]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.widgets
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../../../Frameworks"
+    scheme: {}
+  FlowLikeShare_macOS:
+    type: app-extension
+    platform: macOS
+    sources: [Extensions/Share]
+    dependencies:
+      - target: FlowLikeNative
+        embed: false
+    info:
+      path: Extensions/Share/Info-macOS.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleDisplayName: Send to Flow Like
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 8
+              NSExtensionActivationSupportsImageWithMaxCount: 8
+              NSExtensionActivationSupportsFileWithMaxCount: 8
+    entitlements:
+      path: Extensions/Share/Share-macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [group.com.flow-like.app]
+        com.apple.security.files.user-selected.read-only: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.share
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../../../Frameworks"
+    scheme: {}
+  FlowLikeWidgets_iOS:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/Widgets/FlowLikeWidgets.swift, Sources/FlowLikeNative/Intents.swift]
+    dependencies:
+      - package: FlowLikeNative
+    entitlements:
+      path: Extensions/Widgets/Widgets-iOS.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.flow-like.app]
+    settings:
+      base:
+        INFOPLIST_FILE: "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.widgets
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FLOW_LIKE_INTENTS_HOST"
+    preBuildScripts:
+      - name: Match Containing App Version
+        script: >-
+          python3 "${PROJECT_DIR}/../../../scripts/apple-bundle-version.py"
+          --config "${PROJECT_DIR}/../../tauri.conf.json" --platform iOS
+          --container-info "${PROJECT_DIR}/../../gen/apple/flow-like-desktop_iOS/Info.plist"
+          --template "${PROJECT_DIR}/Extensions/Widgets/Info-iOS.plist"
+          --output "${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist"
+        basedOnDependencyAnalysis: false
+        outputFiles: ["$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"]
+    scheme: {}
+  FlowLikeShare_iOS:
+    type: app-extension
+    platform: iOS
+    sources: [Extensions/Share/ShareViewController.swift]
+    dependencies:
+      - package: FlowLikeNative
+    entitlements:
+      path: Extensions/Share/Share-iOS.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.flow-like.app]
+    settings:
+      base:
+        INFOPLIST_FILE: "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.share
+    preBuildScripts:
+      - name: Match Containing App Version
+        script: >-
+          python3 "${PROJECT_DIR}/../../../scripts/apple-bundle-version.py"
+          --config "${PROJECT_DIR}/../../tauri.conf.json" --platform iOS
+          --container-info "${PROJECT_DIR}/../../gen/apple/flow-like-desktop_iOS/Info.plist"
+          --template "${PROJECT_DIR}/Extensions/Share/Info-iOS.plist"
+          --output "${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist"
+        basedOnDependencyAnalysis: false
+        outputFiles: ["$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"]
+    scheme: {}

@@ -12,6 +12,7 @@ function component(type: A2UIComponent["type"]): A2UIComponent {
 describe("component event manifest", () => {
 	test("covers every built-in component that currently dispatches configured actions", () => {
 		const expected: Record<string, string[]> = {
+			cameraView: ["ready", "capture", "frame", "error", "overlayClick"],
 			boundingBoxOverlay: ["boxClick"],
 			button: ["click"],
 			feedback: ["submit"],
@@ -43,6 +44,7 @@ describe("component event manifest", () => {
 				"markerDragEnd",
 				"routeClick",
 				"locate",
+				"locateError",
 				"viewportChange",
 			],
 			graph: ["nodeClick", "edgeClick"],
@@ -84,6 +86,7 @@ describe("component event manifest", () => {
 			{ id: "markerDragEnd", legacyFallback: true },
 			{ id: "routeClick", legacyFallback: true },
 			{ id: "locate", legacyFallback: true },
+			{ id: "locateError", legacyFallback: false },
 			{ id: "viewportChange", legacyFallback: false },
 		]);
 	});

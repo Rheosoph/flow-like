@@ -1,4 +1,21 @@
 use serde_json::Value;
+use tauri::Manager;
+
+#[path = "notification_attachments.rs"]
+mod attachments;
+
+#[tauri::command]
+pub async fn prepare_notification_attachment(
+    app: tauri::AppHandle,
+    source: String,
+) -> Result<String, String> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|_| "Image cache is unavailable")?;
+    let scope = app.asset_protocol_scope();
+    attachments::prepare(&source, cache_root, |path| scope.is_allowed(path)).await
+}
 
 /// A pending tap older than this is considered stale and discarded. The window
 /// must be long enough to cover a slow cold-start (Tauri init + Next.js boot

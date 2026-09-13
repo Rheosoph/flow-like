@@ -3,7 +3,7 @@ use flow_like::flow::{
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +34,7 @@ impl NodeLogic for CellsToMultiPolygonNode {
             "Converts a set of H3 cells to polygon boundaries. Returns the outline(s) of the cell set, merging adjacent cells.",
             "Web/Geo/H3",
         );
+        node.set_version(2);
         node.set_flowscript_name("h3", "cellsToMultiPolygon");
         node.add_icon("/flow/icons/hexagon.svg");
 
@@ -46,18 +47,18 @@ impl NodeLogic for CellsToMultiPolygonNode {
         .set_value_type(flow_like::flow::pin::ValueType::Array)
         .set_default_value(Some(json!([])));
 
-        node.add_output_pin(
-            "polygons",
-            "Polygons",
-            "Array of polygons representing the merged cell boundaries",
-            VariableType::Struct,
-        )
-        .set_schema::<Polygon>();
+        crate::geo::pins::geometry_output(
+            &mut node,
+            "geometry_out",
+            "Geometry",
+            "Merged cell boundaries as a MultiPolygon, split at the antimeridian",
+            Some(GeometryKind::MultiPolygon),
+        );
 
         node.add_output_pin(
             "polygon_count",
             "Polygon Count",
-            "Number of separate polygons (disconnected regions)",
+            "Number of polygons in Geometry, including pieces split at the antimeridian",
             VariableType::Integer,
         );
 
@@ -80,6 +81,7 @@ impl NodeLogic for CellsToMultiPolygonNode {
         use h3o::{CellIndex, geom::SolventBuilder};
         use std::str::FromStr;
 
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
         let cell_strs: Vec<String> = context.evaluate_pin("cells").await?;
 
         let cells: Vec<CellIndex> = cell_strs
@@ -89,7 +91,10 @@ impl NodeLogic for CellsToMultiPolygonNode {
 
         if cells.is_empty() {
             context
-                .set_pin_value("polygons", json!(Vec::<Polygon>::new()))
+                .set_pin_value(
+                    "geometry_out",
+                    json!({"type":"MultiPolygon","coordinates":[]}),
+                )
                 .await?;
             context.set_pin_value("polygon_count", json!(0)).await?;
             return Ok(());
@@ -100,36 +105,13 @@ impl NodeLogic for CellsToMultiPolygonNode {
             .dissolve(cells)
             .map_err(|e| flow_like_types::anyhow!("Failed to create polygon: {}", e))?;
 
-        let polygons: Vec<Polygon> = multi_poly
-            .0
-            .iter()
-            .map(|poly| {
-                let exterior: Vec<GeoCoordinate> = poly
-                    .exterior()
-                    .coords()
-                    .map(|c| GeoCoordinate::new(c.y, c.x))
-                    .collect();
+        let geometry = crate::geo::geometry::integrations::h3_multipolygon_geometry(multi_poly)?;
+        let polygon_count = geometry["coordinates"]
+            .as_array()
+            .expect("validated MultiPolygon coordinates")
+            .len() as i64;
 
-                let interiors: Vec<Vec<GeoCoordinate>> = poly
-                    .interiors()
-                    .iter()
-                    .map(|ring| {
-                        ring.coords()
-                            .map(|c| GeoCoordinate::new(c.y, c.x))
-                            .collect()
-                    })
-                    .collect();
-
-                Polygon {
-                    exterior,
-                    interiors,
-                }
-            })
-            .collect();
-
-        let polygon_count = polygons.len() as i64;
-
-        context.set_pin_value("polygons", json!(polygons)).await?;
+        context.set_pin_value("geometry_out", geometry).await?;
         context
             .set_pin_value("polygon_count", json!(polygon_count))
             .await?;

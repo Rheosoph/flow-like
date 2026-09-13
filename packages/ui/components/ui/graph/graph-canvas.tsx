@@ -50,13 +50,10 @@ import type { ClusterModel } from "./graph-clusters";
 import {
 	type ConnectivityPartition,
 	DEFAULT_NODE_SIZE,
-	GRAPH_LABEL_LEFT_INSET,
-	GRAPH_LABEL_RIGHT_INSET,
 	type GraphLayoutMode,
 	type LayoutPosition as GraphPosition,
 	type ViewportDimensions,
 	applyClusterLayout,
-	computeLabelExtents,
 	computeSeedSpread,
 	computeViewportNodeSizeCap,
 	createAnchoredPosition,
@@ -73,8 +70,13 @@ import {
 	relaxOverlaps,
 } from "./graph-layout";
 import { loadGraphScene, saveGraphScene } from "./graph-position-store";
+import { graphRgba } from "./graph-render-color";
 import { getIconDataUri } from "./icon-svg";
-import { drawNodeHover, drawNodeLabel } from "./label-renderer";
+import {
+	drawNodeHover,
+	drawNodeLabel,
+	resetNodeLabelLayout,
+} from "./label-renderer";
 import { getGraphTheme, invalidateGraphTheme } from "./theme-colors";
 
 const IconNodeProgram = createNodeCompoundProgram([
@@ -305,7 +307,6 @@ const MIN_PERSISTENT_LABEL_STAGE_HEIGHT = 280;
 const COMPACT_STAGE_LABEL_NODE_LIMIT = 6;
 /** Keeps viewport settling inside the same camera frame after auto-rescale. */
 const VIEWPORT_COLLISION_INSET = 8;
-const LABEL_FIT_PASSES = 4;
 
 /**
  * Shrinks nodes as the sample grows, because `autoRescale` fits the whole layout
@@ -351,13 +352,6 @@ function maxNodeSize(
  */
 const LABEL_THRESHOLD_HEADROOM = 0.8;
 
-function hexToRgba(hex: string, alpha: number): string {
-	const r = Number.parseInt(hex.slice(1, 3), 16);
-	const g = Number.parseInt(hex.slice(3, 5), 16);
-	const b = Number.parseInt(hex.slice(5, 7), 16);
-	return `rgba(${r},${g},${b},${alpha})`;
-}
-
 function getBaseEdgeAlpha(nodeCount: number): number {
 	if (nodeCount >= HUGE_THRESHOLD) return 0.08;
 	if (nodeCount >= LARGE_THRESHOLD) return 0.22;
@@ -365,22 +359,10 @@ function getBaseEdgeAlpha(nodeCount: number): number {
 }
 
 const CONTEXT_DIM_EDGE_SIZE = 0.75;
-const CONTEXT_DIM_EDGE_ALPHA = 0.06;
-const CONTEXT_DIM_NODE_AMOUNT = 0.88;
+const CONTEXT_DIM_EDGE_ALPHA = 0.025;
+const CONTEXT_DIM_NODE_ALPHA = 0.05;
 /** Dimmed nodes also shrink, so the focus reads as depth and not just as colour. */
 const CONTEXT_DIM_NODE_SCALE = 0.75;
-
-function dimTowardBackground(color: string): string {
-	const theme = getGraphTheme();
-	const [bgR, bgG, bgB] = theme.bgRgb;
-	const hex = colorToHex(color);
-	const r = Number.parseInt(hex.slice(1, 3), 16);
-	const g = Number.parseInt(hex.slice(3, 5), 16);
-	const b = Number.parseInt(hex.slice(5, 7), 16);
-	const mix = (channel: number, target: number) =>
-		Math.round(channel + (target - channel) * CONTEXT_DIM_NODE_AMOUNT);
-	return `rgb(${mix(r, bgR)},${mix(g, bgG)},${mix(b, bgB)})`;
-}
 
 function getNodeChunkSize(nodeCount: number): number {
 	if (nodeCount >= HUGE_THRESHOLD) return 300;
@@ -520,9 +502,9 @@ function getRelaxBatchIterations(nodeCount: number): number {
 }
 
 /**
- * Guarantees the spacing the simulation only approximates, then parks detached
- * nodes beside the core. Shared by the inline and worker layout paths so both
- * finish in the same readable state.
+ * Separates node circles, then parks detached nodes beside the core. Caption
+ * collisions are handled in screen space by the label renderer; reserving every
+ * caption's width in graph coordinates stretches the layout horizontally.
  */
 async function finishLayoutAsync(
 	graph: Graph,
@@ -533,7 +515,6 @@ async function finishLayoutAsync(
 	const { connected, isolated } = partition;
 	const totalIterations = defaultRelaxIterations(connected.length);
 	const batchIterations = getRelaxBatchIterations(connected.length);
-	const labelExtents = computeLabelExtents(graph, connected);
 	let completed = 0;
 
 	while (completed < totalIterations) {
@@ -542,7 +523,6 @@ async function finishLayoutAsync(
 		const batch = Math.min(batchIterations, totalIterations - completed);
 		const performed = relaxOverlaps(graph, connected, {
 			iterations: batch,
-			labelExtents,
 		});
 		completed += batch;
 
@@ -557,7 +537,13 @@ async function finishLayoutAsync(
 	}
 
 	if (isCancelled()) return;
-	placeDetachedNodes(graph, isolated, getLayoutBounds(graph, connected));
+	placeDetachedNodes(
+		graph,
+		isolated.filter(
+			(nodeId) => graph.getNodeAttribute(nodeId, "pinned") !== true,
+		),
+		getLayoutBounds(graph, connected),
+	);
 }
 
 async function applyLayoutAsync(
@@ -901,7 +887,7 @@ async function buildGraphAsync(
 			graph.addEdge(edge.source, edge.target, {
 				label: edge.label,
 				size: (isHuge ? 0.3 : isLarge ? 0.6 : 1) * edgeWidth,
-				color: hexToRgba(edgeHex, getBaseEdgeAlpha(nodeCount)),
+				color: graphRgba(edgeHex, getBaseEdgeAlpha(nodeCount)),
 				originalColor: edgeHex,
 				type: "arrow",
 				edgeId: edge.id,
@@ -1018,7 +1004,6 @@ async function buildGraphAsync(
 		const preservedIds = Array.from(nodeIds);
 		relaxOverlaps(graph, preservedIds, {
 			iterations: PRESERVE_RELAX_ITERATIONS,
-			labelExtents: computeLabelExtents(graph, preservedIds),
 		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
@@ -1047,13 +1032,9 @@ async function buildGraphAsync(
 			),
 			"layout",
 		);
-		const clusterLabelExtents = computeLabelExtents(graph, [...nodeIds]);
+		// Keep group geometry independent of caption length. The label renderer
+		// resolves text collisions in the actual viewport.
 		await applyClusterLayout(graph, clusters.clusters, {
-			labelExtents: clusterLabelExtents,
-			// On graphs small enough for dense captions the groups also get more
-			// clearance and a gentle whole-stage pass against cross-group label hits.
-			clusterGap: clusterLabelExtents ? 48 : undefined,
-			globalRelaxIterations: clusterLabelExtents ? 10 : 0,
 			onProgress: (fraction) => {
 				publish(
 					base + LAYOUT_PROGRESS_WEIGHT * fraction,
@@ -1442,6 +1423,36 @@ function GraphEvents({
 }) {
 	const sigma = useSigma();
 	const registerEvents = useRegisterEvents();
+	useLayoutEffect(() => {
+		const resetLabels = () => {
+			const context = sigma.getCanvases().labels?.getContext("2d");
+			if (!context) return;
+			resetNodeLabelLayout(context, () => {
+				const bounds: { x: number; y: number; size: number }[] = [];
+				const stage = sigma.getDimensions();
+				sigma.getGraph().forEachNode((nodeId) => {
+					const data = sigma.getNodeDisplayData(nodeId);
+					if (!data || data.hidden || !data.label) return;
+					const position = sigma.framedGraphToViewport(data);
+					const size = sigma.scaleSize(data.size);
+					if (
+						position.x + size < 0 ||
+						position.x - size > stage.width ||
+						position.y + size < 0 ||
+						position.y - size > stage.height
+					)
+						return;
+					bounds.push({ ...position, size });
+				});
+				return bounds;
+			});
+		};
+		sigma.on("beforeRender", resetLabels);
+		resetLabels();
+		return () => {
+			sigma.off("beforeRender", resetLabels);
+		};
+	}, [sigma]);
 	const dragRef = useRef<{
 		node: string;
 		startX: number;
@@ -1665,7 +1676,6 @@ function SigmaViewportManager({
 						visibleNodeIds.push(nodeId);
 					}
 				});
-				const visibleNodeSet = new Set(visibleNodeIds);
 				updateHighlightSizing(
 					highlightRef.current,
 					currentGraph.order,
@@ -1675,63 +1685,9 @@ function SigmaViewportManager({
 				sigma.setCustomBBox(null);
 				sigma.refresh();
 
-				// Sigma fits node centres, while captions stay screen-sized. Extend the
-				// fitted box just enough to keep the captions Sigma chose away from the
-				// right control rail. The renderer still has a side-switch fallback for
-				// labels revealed later by hover or selection.
+				// Labels choose a fitting side and cull collisions in screen space.
+				// Keep the camera frame based on node geometry, not estimated captions.
 				let viewportBounds = sigma.getBBox();
-				const expandBoundsForDisplayedLabels = () => {
-					const displayedLabelIds = [...sigma.getNodeDisplayedLabels()].filter(
-						(nodeId) => visibleNodeSet.has(nodeId),
-					);
-					const labelExtents = computeLabelExtents(
-						currentGraph,
-						displayedLabelIds,
-						{ labelSize: sigma.getSetting("labelSize") },
-					);
-					if (!labelExtents) return false;
-
-					const rightBoundary = Math.max(
-						GRAPH_LABEL_LEFT_INSET,
-						stage.width - GRAPH_LABEL_RIGHT_INSET,
-					);
-					let rightOverflow = 0;
-					for (const nodeId of displayedLabelIds) {
-						const extent = labelExtents.get(nodeId);
-						if (!extent) continue;
-						const attrs = currentGraph.getNodeAttributes(nodeId);
-						const position = sigma.graphToViewport({
-							x: attrs.x as number,
-							y: attrs.y as number,
-						});
-						const radius = getRenderedNodeSize(
-							nodeId,
-							attrs,
-							highlightRef.current,
-						);
-						rightOverflow = Math.max(
-							rightOverflow,
-							position.x + radius + extent - rightBoundary,
-						);
-					}
-					if (rightOverflow <= 1) return false;
-
-					viewportBounds = expandGraphBoundsByViewportInsets(
-						viewportBounds,
-						{
-							right: Math.min(stage.width * 0.35, rightOverflow * 2 + 4),
-						},
-						sigma.getGraphToViewportRatio(),
-					);
-					return true;
-				};
-				for (let pass = 0; pass < LABEL_FIT_PASSES; pass += 1) {
-					sigma.setCustomBBox(viewportBounds);
-					sigma.refresh();
-					if (!expandBoundsForDisplayedLabels()) break;
-				}
-				sigma.setCustomBBox(viewportBounds);
-				sigma.refresh();
 
 				if (!settleOverlaps || visibleNodeIds.length < 2) return;
 
@@ -1757,9 +1713,6 @@ function SigmaViewportManager({
 					if (disposed || remainingPasses <= 0) return;
 					remainingPasses -= 1;
 					try {
-						const displayedLabelIds = [
-							...sigma.getNodeDisplayedLabels(),
-						].filter((nodeId) => visibleNodeSet.has(nodeId));
 						relaxOverlaps(currentGraph, visibleNodeIds, {
 							iterations:
 								currentGraph.order >= HUGE_THRESHOLD
@@ -1769,11 +1722,6 @@ function SigmaViewportManager({
 										: currentGraph.order >= 500
 											? 4
 											: 8,
-							labelExtents: computeLabelExtents(
-								currentGraph,
-								displayedLabelIds,
-								{ labelSize: sigma.getSetting("labelSize") },
-							),
 							coordinateMapper: {
 								fromGraph: (position) => sigma.graphToViewport(position),
 								toGraph: (position) => sigma.viewportToGraph(position),
@@ -1785,12 +1733,23 @@ function SigmaViewportManager({
 									highlightRef.current,
 								),
 						});
-						sigma.refresh();
-						for (let pass = 0; pass < 2; pass += 1) {
-							if (!expandBoundsForDisplayedLabels()) break;
+						// Collision separation can move nodes outside the frozen frame.
+						// Include their new bounds so every circle stays in the frame.
+						const settledBounds = getLayoutBounds(currentGraph, visibleNodeIds);
+						if (settledBounds) {
+							viewportBounds = {
+								x: [
+									Math.min(viewportBounds.x[0], settledBounds.minX),
+									Math.max(viewportBounds.x[1], settledBounds.maxX),
+								],
+								y: [
+									Math.min(viewportBounds.y[0], settledBounds.minY),
+									Math.max(viewportBounds.y[1], settledBounds.maxY),
+								],
+							};
 							sigma.setCustomBBox(viewportBounds);
-							sigma.refresh();
 						}
+						sigma.refresh();
 						if (remainingPasses > 0) {
 							settleFrame = window.requestAnimationFrame(settleInViewport);
 						}
@@ -2117,25 +2076,9 @@ function SigmaLayoutApplier({
 					iterations,
 					settings: getFA2Settings(partition.connected.length, graph.size),
 				});
-				relaxOverlaps(graph, partition.connected, {
-					labelExtents: computeLabelExtents(graph, partition.connected),
-				});
+				relaxOverlaps(graph, partition.connected);
 				placeDetachedNodes(graph, partition.isolated, coreBounds());
 				break;
-			}
-		}
-
-		if (
-			command.mode === "circular" ||
-			command.mode === "radial" ||
-			command.mode === "hierarchy"
-		) {
-			const labelExtents = computeLabelExtents(graph, partition.connected);
-			if (labelExtents) {
-				relaxOverlaps(graph, partition.connected, {
-					iterations: 6,
-					labelExtents,
-				});
 			}
 		}
 
@@ -2444,30 +2387,6 @@ export function GraphCanvas({
 	useEffect(() => {
 		void layoutRunKey;
 		const nextData = data;
-		let previousPositions = snapshotGraphPositions(graphRef.current);
-		// The first build of a persisted scene starts from the stored arrangement
-		// instead of a fresh layout — the preserve path then keeps it.
-		let restoredScene = false;
-		if (
-			previousPositions.size === 0 &&
-			storedScene &&
-			!storedSceneAppliedRef.current
-		) {
-			storedSceneAppliedRef.current = true;
-			previousPositions = storedScene.positions;
-			restoredScene = true;
-		}
-		// A regrouping has to relayout. Raising the node limit keeps enough old
-		// positions to clear the preserve threshold, which would otherwise swallow
-		// the new grouping and leave a stale-but-plausible arrangement on screen.
-		// The one exception is the build that restored a stored scene: its epoch
-		// change is bookkeeping, not a regroup, and forcing a layout there would
-		// discard the arrangement the reader saved.
-		const clusterEpoch = clusters?.epoch ?? null;
-		const regrouped = clusterEpoch !== lastClusterEpochRef.current;
-		lastClusterEpochRef.current = clusterEpoch;
-		const forceLayout = forceLayoutRef.current || (regrouped && !restoredScene);
-		forceLayoutRef.current = false;
 		let cancelled = false;
 
 		if (
@@ -2490,6 +2409,30 @@ export function GraphCanvas({
 				cancelled = true;
 			};
 		}
+
+		let previousPositions = snapshotGraphPositions(graphRef.current);
+		// The first build of a persisted scene starts from the stored arrangement
+		// instead of a fresh layout — the preserve path then keeps it.
+		let restoredScene = false;
+		if (
+			previousPositions.size === 0 &&
+			storedScene &&
+			!storedSceneAppliedRef.current
+		) {
+			previousPositions = storedScene.positions;
+			restoredScene = true;
+		}
+		// A regrouping has to relayout. Raising the node limit keeps enough old
+		// positions to clear the preserve threshold, which would otherwise swallow
+		// the new grouping and leave a stale-but-plausible arrangement on screen.
+		// The one exception is the build that restored a stored scene: its epoch
+		// change is bookkeeping, not a regroup, and forcing a layout there would
+		// discard the arrangement the reader saved.
+		const clusterEpoch = clusters?.epoch ?? null;
+		const regrouped = clusterEpoch !== lastClusterEpochRef.current;
+		const migratingScene = restoredScene && storedScene?.needsLayout;
+		const forceLayout =
+			forceLayoutRef.current || migratingScene || (regrouped && !restoredScene);
 
 		setPreparationState({
 			phase: "building",
@@ -2526,6 +2469,19 @@ export function GraphCanvas({
 			);
 
 			if (!buildResult || cancelled) return;
+
+			if (restoredScene) storedSceneAppliedRef.current = true;
+			lastClusterEpochRef.current = clusterEpoch;
+			forceLayoutRef.current = false;
+			if (migratingScene && storedScene) {
+				// Group and detached-node layouts can place pins along with their
+				// group. A cache migration must keep the user's exact coordinates.
+				for (const nodeId of storedScene.pinned) {
+					const position = storedScene.positions.get(nodeId);
+					if (!position || !buildResult.graph.hasNode(nodeId)) continue;
+					buildResult.graph.mergeNodeAttributes(nodeId, position);
+				}
+			}
 
 			// A pin on a node the new sample no longer contains is dead weight.
 			if (pinnedNodesRef.current.size > 0) {
@@ -2711,7 +2667,7 @@ export function GraphCanvas({
 		graph.forEachEdge((edge) => {
 			if (!graph.getEdgeAttribute(edge, "usesDefaultColor")) return;
 			graph.setEdgeAttribute(edge, "originalColor", edgeHex);
-			graph.setEdgeAttribute(edge, "color", hexToRgba(edgeHex, edgeAlpha));
+			graph.setEdgeAttribute(edge, "color", graphRgba(edgeHex, edgeAlpha));
 		});
 	}, [graph, themeTick]);
 
@@ -2775,8 +2731,8 @@ export function GraphCanvas({
 		);
 	}
 
-	// Recompute neighbor sets when selectedNodeId changes
-	useEffect(() => {
+	// Set selection context before child passive effects refresh the renderer.
+	useLayoutEffect(() => {
 		if (!graph) {
 			highlightRef.current.neighborSet = null;
 			highlightRef.current.connectedEdgeSet = null;
@@ -2920,12 +2876,14 @@ export function GraphCanvas({
 			// the icon program draws the white glyph over the disc at full opacity,
 			// so a node whose colour was faded still reads as bright and in focus.
 			const pushToBackground = () => {
-				const dim = dimTowardBackground(origColor);
+				const dim = graphRgba(colorToHex(origColor), CONTEXT_DIM_NODE_ALPHA);
 				res.color = dim;
 				res.borderColor = dim;
 				res.type = "circle";
 				res.image = undefined;
 				res.label = "";
+				res.forceLabel = false;
+				res.highlighted = false;
 				res.zIndex = 0;
 			};
 
@@ -2937,7 +2895,13 @@ export function GraphCanvas({
 
 			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
 				if (!hl.highlightedNodeIds.has(node)) pushToBackground();
-				else pullToForeground(2);
+				else {
+					pullToForeground(node === hl.selectedNodeId ? 3 : 2);
+					if (node === hl.selectedNodeId) {
+						res.highlighted = true;
+						res.forceLabel = true;
+					}
+				}
 				return res;
 			}
 
@@ -3005,20 +2969,21 @@ export function GraphCanvas({
 				const isHighlighted = hasEdgeHighlight
 					? Boolean(edgeId && hl.highlightedEdgeIds?.has(edgeId))
 					: Boolean(
-							hl.highlightedNodeIds?.has(src) ||
+							hl.highlightedNodeIds?.has(src) &&
 								hl.highlightedNodeIds?.has(tgt),
 						);
 				if (!isHighlighted) {
-					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
+					res.color = graphRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;
 					res.forceLabel = false;
 					return res;
 				}
-				res.color = hexToRgba(origColor, 0.5);
+				res.color = graphRgba(origColor, 0.5);
 				res.size = 1;
-				res.label = storedLabel;
-				res.forceLabel = true;
+				res.forceLabel =
+					hasEdgeHighlight || isHoveredEdge || edgeId === hl.selectedEdgeKey;
+				res.label = res.forceLabel ? storedLabel : undefined;
 				return res;
 			}
 
@@ -3028,12 +2993,12 @@ export function GraphCanvas({
 						src,
 						"originalColor",
 					) as string;
-					res.color = hexToRgba(srcNodeColor, 0.7);
+					res.color = graphRgba(colorToHex(srcNodeColor), 0.7);
 					res.size = 1.5;
 					res.zIndex = 1;
 					res.forceLabel = false;
 				} else {
-					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
+					res.color = graphRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;
 					res.forceLabel = false;
@@ -3042,21 +3007,21 @@ export function GraphCanvas({
 					res.label = storedLabel;
 					res.forceLabel = true;
 					res.size = 2;
-					res.color = hexToRgba(origColor, 0.9);
+					res.color = graphRgba(origColor, 0.9);
 					res.zIndex = 2;
 				}
 			} else if (isHoveredEdge) {
 				res.label = storedLabel;
 				res.forceLabel = true;
 				res.size = 1.5;
-				res.color = hexToRgba(origColor, 0.7);
+				res.color = graphRgba(origColor, 0.7);
 				res.zIndex = 1;
 			}
 
 			if (hl.selectedEdgeKey && edgeId === hl.selectedEdgeKey) {
 				res.size = 2.5;
 				res.zIndex = 2;
-				res.color = hexToRgba(origColor, 0.9);
+				res.color = graphRgba(origColor, 0.9);
 				res.label = storedLabel;
 				res.forceLabel = true;
 			}
@@ -3082,7 +3047,7 @@ export function GraphCanvas({
 
 		return {
 			defaultNodeColor: defaultNode,
-			defaultEdgeColor: hexToRgba(defaultEdgeHex, getBaseEdgeAlpha(nodeCount)),
+			defaultEdgeColor: graphRgba(defaultEdgeHex, getBaseEdgeAlpha(nodeCount)),
 			defaultNodeType: isLarge ? "circle" : "bordered-image",
 			nodeProgramClasses: {
 				"bordered-image": IconNodeProgram,
@@ -3101,6 +3066,9 @@ export function GraphCanvas({
 			hideLabelsOnMove: isLarge,
 			hideEdgesOnMove: isHuge,
 			edgeLabelSize: 10,
+			edgeLabelColor: {
+				color: `rgb(${getGraphTheme().fgRgb.join(",")})`,
+			},
 			labelSize: isHuge ? 10 : isLarge ? 11 : 12,
 			// A rendered-pixel cutoff, so it tracks the same fit scale the nodes get:
 			// left fixed while every node shrinks, it would cull the captions that

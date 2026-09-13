@@ -1,12 +1,11 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
 
-use crate::geo::GeoCoordinate;
+use crate::geo::pins::geometry_input;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -27,17 +26,17 @@ impl NodeLogic for LatLngToCellNode {
             "Converts a geographic coordinate to an H3 cell index at the specified resolution. H3 is a hierarchical hexagonal grid system.",
             "Web/Geo/H3",
         );
+        node.set_version(2);
         node.set_flowscript_name("h3", "latlngToCell");
         node.add_icon("/flow/icons/hexagon.svg");
 
-        node.add_input_pin(
-            "coordinate",
-            "Coordinate",
-            "The geographic coordinate (latitude, longitude)",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        geometry_input(
+            &mut node,
+            "geometry",
+            "Geometry",
+            "Point to index as an H3 cell",
+            Some(GeometryKind::Point),
+        );
 
         node.add_input_pin(
             "resolution",
@@ -72,7 +71,7 @@ impl NodeLogic for LatLngToCellNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use h3o::{CellIndex, LatLng, Resolution};
 
-        let coordinate: GeoCoordinate = context.evaluate_pin("coordinate").await?;
+        let coordinate = crate::geo::pins::coordinate_input(context, "geometry").await?;
         let resolution: i64 = context.evaluate_pin("resolution").await?;
         let resolution = resolution.clamp(0, 15) as u8;
 

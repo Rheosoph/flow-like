@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = []
+local-clipboard = ["dep:arboard"]
 local-ml = ["flow-like-catalog-core/local-ml", "flow-like-catalog-data-support/local-ml"]
 execute = [
     "flow-like-catalog-core/execute",
@@ -19,6 +20,8 @@ flow-like-catalog-data-support = { workspace = true, default-features = false }
 flow-like-model-provider = { workspace = true }
 flow-like-storage = { workspace = true, default-features = false }
 ahash = { workspace = true }
+anyhow = "1.0.95"
+chrono = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 futures = { workspace = true }
@@ -28,3 +31,6 @@ urlencoding = { workspace = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
+
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+arboard = { version = "3.5", optional = true }

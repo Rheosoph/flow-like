@@ -1158,26 +1158,6 @@ declare namespace computer {
      */
     function clipboardGetText({ session: Struct }): { sessionOut: Struct, text: string, hasText: bool };
 
-    /**
-     * Sets an image to the system clipboard
-     * @node computer_clipboard_set_image @alias computerClipboardSetImage
-     * @param session — Computer session handle
-     * @param image — Image to copy to clipboard (NodeImage)
-     * @returns sessionOut — Computer session handle (pass-through)
-     * @impure has side effects / drives control flow
-     */
-    function clipboardSetImage({ session: Struct, image: Struct }): Struct;
-
-    /**
-     * Sets text content to the system clipboard
-     * @node computer_clipboard_set_text @alias computerClipboardSetText
-     * @param session — Computer session handle
-     * @param text — Text to copy to clipboard
-     * @returns sessionOut — Computer session handle (pass-through)
-     * @impure has side effects / drives control flow
-     */
-    function clipboardSetText({ session: Struct, text: string }): Struct;
-
     // === Automation/Computer/Display ===
 
     /**

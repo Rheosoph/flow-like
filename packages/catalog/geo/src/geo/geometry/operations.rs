@@ -1,4 +1,5 @@
 use super::nodes::Operation;
+use super::{check_topology_validation, ensure_geometry_pair_budget};
 use flow_like_geometry::{from_geo, from_wkb, from_wkt, to_geo, to_wkb, to_wkt};
 use flow_like_types::{
     Result, Value, anyhow, bail,
@@ -6,8 +7,9 @@ use flow_like_types::{
     json::json,
 };
 use geo::{
-    Area, BoundingRect, Centroid, Contains, ConvexHull, CoordsIter, Distance, Euclidean, Geodesic,
-    GeodesicArea, Geometry, Intersects, Length, LineString, Simplify, Validation,
+    Area, BooleanOps, BoundingRect, Centroid, Contains, ConvexHull, Coord, CoordsIter, Distance,
+    Euclidean, Geodesic, GeodesicArea, Geometry, Intersects, Length, LineString, MapCoords,
+    MultiPolygon, Polygon, Rect, Simplify,
 };
 
 macro_rules! ensure {
@@ -35,15 +37,11 @@ fn text<'a>(inputs: &'a Value, name: &str) -> Result<&'a str> {
 }
 fn checked_geometry(value: &Value) -> Result<Geometry<f64>> {
     let geometry = to_geo(&canonicalize_geometry(value, None)?)?;
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Invalid geometry for spatial operation: {error}"))?;
+    check_topology_validation(&geometry, "Invalid geometry for spatial operation")?;
     Ok(geometry)
 }
 fn encoded_geometry(geometry: Geometry<f64>) -> Result<Value> {
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Spatial operation produced invalid geometry: {error}"))?;
+    check_topology_validation(&geometry, "Spatial operation produced invalid geometry")?;
     Ok(canonicalize_geometry(&from_geo(&geometry)?, None)?)
 }
 fn finite_number(value: f64) -> Result<Value> {
@@ -93,6 +91,105 @@ fn legacy_polygon(value: &Value) -> Result<Value> {
         }
     }
     Ok(Value::Array(rings))
+}
+
+fn split_legacy_h3_polygon(polygon: Polygon<f64>) -> Result<Vec<Polygon<f64>>> {
+    let crosses_antimeridian = polygon
+        .exterior()
+        .0
+        .windows(2)
+        .any(|edge| (edge[0].x - edge[1].x).abs() > 180.0);
+    if !crosses_antimeridian {
+        return Ok(vec![polygon]);
+    }
+
+    let shifted = polygon.map_coords(|coordinate| Coord {
+        x: if coordinate.x < 0.0 {
+            coordinate.x + 360.0
+        } else {
+            coordinate.x
+        },
+        y: coordinate.y,
+    });
+    check_topology_validation(&shifted, "Invalid transmeridian legacy H3 polygon")?;
+    let western_window =
+        Rect::new(Coord { x: 180.0, y: -90.0 }, Coord { x: 360.0, y: 90.0 }).to_polygon();
+    let eastern_window =
+        Rect::new(Coord { x: 0.0, y: -90.0 }, Coord { x: 180.0, y: 90.0 }).to_polygon();
+
+    let mut parts = shifted
+        .intersection(&western_window)
+        .0
+        .into_iter()
+        .map(|part| {
+            part.map_coords(|coordinate| Coord {
+                x: if (coordinate.x - 180.0).abs() <= 1e-6 {
+                    -180.0
+                } else {
+                    (coordinate.x - 360.0).clamp(-180.0, 180.0)
+                },
+                y: coordinate.y.clamp(-90.0, 90.0),
+            })
+        })
+        .collect::<Vec<_>>();
+    parts.extend(
+        shifted
+            .intersection(&eastern_window)
+            .0
+            .into_iter()
+            .map(|part| {
+                part.map_coords(|coordinate| Coord {
+                    x: coordinate.x.clamp(0.0, 180.0),
+                    y: coordinate.y.clamp(-90.0, 90.0),
+                })
+            }),
+    );
+    ensure!(
+        !parts.is_empty(),
+        "Legacy H3 polygon produced no parts inside WGS 84 bounds"
+    );
+    Ok(parts)
+}
+
+/// Legacy H3 boundaries are unclosed latitude/longitude vectors. h3o emits
+/// transmeridian cells with vertices on both sides of +/-180, so split those
+/// cells before returning a planar GeoJSON geometry.
+fn legacy_boundary_geometry(value: &Value) -> Result<Geometry<f64>> {
+    let ring = closed_legacy_ring(value)?;
+    let polygon = Polygon::new(
+        ring.iter()
+            .map(|position| Coord {
+                x: position[0].as_f64().unwrap(),
+                y: position[1].as_f64().unwrap(),
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        Vec::new(),
+    );
+    check_topology_validation(&polygon, "Invalid legacy H3 boundary")?;
+    let mut parts = split_legacy_h3_polygon(polygon)?;
+    Ok(if parts.len() == 1 {
+        Geometry::Polygon(parts.remove(0))
+    } else {
+        Geometry::MultiPolygon(MultiPolygon::new(parts))
+    })
+}
+
+fn legacy_h3_multipolygon(value: &Value) -> Result<Geometry<f64>> {
+    let polygons = value
+        .as_array()
+        .ok_or_else(|| anyhow!("Expected the legacy H3 polygon array"))?;
+    let mut parts = Vec::new();
+    for polygon in polygons {
+        let value = json!({"type":"Polygon", "coordinates":legacy_polygon(polygon)?});
+        let Geometry::Polygon(polygon) =
+            to_geo(&canonicalize_geometry(&value, Some(GeometryKind::Polygon))?)?
+        else {
+            unreachable!("the constructed legacy value is a Polygon");
+        };
+        parts.extend(split_legacy_h3_polygon(polygon)?);
+    }
+    Ok(Geometry::MultiPolygon(MultiPolygon::new(parts)))
 }
 fn coordinate_object(position: &Value) -> Value {
     json!({"latitude":position[1], "longitude":position[0]})
@@ -243,17 +340,10 @@ pub(super) fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'sta
                 coordinate_object(&value["coordinates"]),
             )])
         }
-        FromBoundary => {
-            let value = json!({"type":"Polygon", "coordinates":[closed_legacy_ring(input(inputs, "boundary")?)?]});
-            encoded_geometry(checked_geometry(&value)?).and_then(geometry_output)
-        }
-        FromPolygons => {
-            let polygons = input(inputs, "polygons")?
-                .as_array()
-                .ok_or_else(|| anyhow!("Expected the legacy H3 polygon array"))?;
-            let value = json!({"type":"MultiPolygon", "coordinates":polygons.iter().map(legacy_polygon).collect::<Result<Vec<_>>>()?});
-            encoded_geometry(checked_geometry(&value)?).and_then(geometry_output)
-        }
+        FromBoundary => encoded_geometry(legacy_boundary_geometry(input(inputs, "boundary")?)?)
+            .and_then(geometry_output),
+        FromPolygons => encoded_geometry(legacy_h3_multipolygon(input(inputs, "polygons")?)?)
+            .and_then(geometry_output),
         FromRoute => {
             let route = input(inputs, "route")?;
             let geometry = route.get("geometry").unwrap_or(route);
@@ -330,6 +420,13 @@ pub(super) fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'sta
         Contains | Intersects | Within => {
             let a = checked_geometry(input(inputs, "a")?)?;
             let b = checked_geometry(input(inputs, "b")?)?;
+            let operation_name = match operation {
+                Contains => "Geometry contains predicate",
+                Intersects => "Geometry intersects predicate",
+                Within => "Geometry within predicate",
+                _ => unreachable!(),
+            };
+            ensure_geometry_pair_budget(&a, &b, operation_name)?;
             Ok(vec![(
                 "result",
                 json!(match operation {
@@ -378,6 +475,7 @@ pub(super) fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'sta
                 };
                 Geodesic.distance(a, b)
             } else {
+                ensure_geometry_pair_budget(&a, &b, "Planar geometry distance")?;
                 Euclidean.distance(&a, &b)
             };
             Ok(vec![("distance", finite_number(distance)?)])
@@ -403,6 +501,7 @@ pub(super) fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'sta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::Validation;
 
     fn result(op: Operation, inputs: Value, output: &str) -> Value {
         execute(op, &inputs)
@@ -554,6 +653,42 @@ mod tests {
         let location = json!({"coordinate":coordinate,"display_name":"Berlin","osm_id":42});
         let outputs = execute(Operation::FromLocation, &json!({"location":location})).unwrap();
         assert_eq!(outputs[1].1, location);
+    }
+
+    #[test]
+    fn legacy_h3_boundary_splits_at_the_antimeridian() {
+        use std::str::FromStr;
+
+        let cell = h3o::CellIndex::from_str("840d9edffffffff").unwrap();
+        let h3_boundary = cell.boundary();
+        let boundary = Value::Array(
+            h3_boundary
+                .iter()
+                .map(|coordinate| {
+                    json!({
+                        "latitude":coordinate.lat(),
+                        "longitude":coordinate.lng()
+                    })
+                })
+                .collect(),
+        );
+        let geometry = result(
+            Operation::FromBoundary,
+            json!({"boundary":boundary.clone()}),
+            "geometry_out",
+        );
+        assert_eq!(geometry["type"], "MultiPolygon");
+        assert_eq!(geometry["coordinates"].as_array().unwrap().len(), 2);
+        assert!(to_geo(&geometry).unwrap().is_valid());
+
+        let dissolved = result(
+            Operation::FromPolygons,
+            json!({"polygons":[{"exterior":boundary,"interiors":[]}]}),
+            "geometry_out",
+        );
+        assert_eq!(dissolved["type"], "MultiPolygon");
+        assert_eq!(dissolved["coordinates"].as_array().unwrap().len(), 2);
+        assert!(to_geo(&dissolved).unwrap().is_valid());
     }
 
     #[test]

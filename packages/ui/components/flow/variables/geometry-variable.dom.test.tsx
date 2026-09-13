@@ -1,9 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { GEOMETRY_BOARD_FORMAT_VERSION } from "../../../lib/board-format";
 import { geometryMarker } from "../../../lib/geometry";
+import {
+	IValueType,
+	type IVariable,
+	IVariableType,
+} from "../../../lib/schema/flow/variable";
+import { convertJsonToUint8Array } from "../../../lib/uint8";
 import type { IBackendState } from "../../../state/backend-state";
+
+mock.module("../../ui/geometry-editor-map", () => ({ default: () => null }));
 
 async function setup() {
 	const window = new Window();
@@ -40,14 +48,92 @@ async function setup() {
 }
 
 const buttonByText = (container: { querySelectorAll: any }, text: string) =>
-	[...(container.querySelectorAll("button") as ArrayLike<HTMLButtonElement>)].find(
-		(button) => button.textContent?.trim() === text,
-	);
+	[
+		...(container.querySelectorAll("button") as ArrayLike<HTMLButtonElement>),
+	].find((button) => button.textContent?.trim() === text);
 
-const numberInputs = (container: { querySelectorAll: any }) =>
-	[...(container.querySelectorAll('input[type="number"]') as ArrayLike<HTMLInputElement>)];
+const numberInputs = (container: { querySelectorAll: any }) => [
+	...(container.querySelectorAll(
+		'input[type="number"]',
+	) as ArrayLike<HTMLInputElement>),
+];
 
 describe("Geometry editor rendering", () => {
+	test("hydrates geometry defaults without sending an update command", async () => {
+		const { container, root } = await setup();
+		const { VariablesMenuEdit } = await import("./variables-menu-edit");
+		const updates: IVariable[] = [];
+		const variable: IVariable = {
+			id: "location",
+			name: "Location",
+			data_type: IVariableType.Geometry,
+			value_type: IValueType.Normal,
+			default_value: null,
+			exposed: false,
+			secret: true,
+			editable: true,
+		};
+		const render = async (next: IVariable) => {
+			await act(async () =>
+				root.render(
+					<VariablesMenuEdit
+						variable={next}
+						updateVariable={async (updated) => {
+							updates.push(updated);
+						}}
+					/>,
+				),
+			);
+		};
+		const input = () => container.querySelector('input[type="password"]');
+		await render(variable);
+		expect(input()?.value).toBe("");
+		const point = { type: "Point", coordinates: [13, 52] };
+		await render({
+			...variable,
+			default_value: convertJsonToUint8Array(point),
+		});
+		expect(input()?.value).toBe(JSON.stringify(point));
+		await render(variable);
+		expect(input()?.value).toBe("");
+		expect(updates).toEqual([]);
+		await act(async () => root.unmount());
+	});
+
+	test("clearing a secret geometry sends an explicit null default", async () => {
+		const { container, root } = await setup();
+		const { GeometryVariable } = await import("./geometry-variable");
+		const updates: IVariable[] = [];
+		const variable: IVariable = {
+			id: "location",
+			name: "Location",
+			data_type: IVariableType.Geometry,
+			value_type: IValueType.Normal,
+			default_value: convertJsonToUint8Array({
+				type: "Point",
+				coordinates: [13, 52],
+			}),
+			exposed: false,
+			secret: true,
+			editable: true,
+		};
+		await act(async () =>
+			root.render(
+				<GeometryVariable
+					variable={variable}
+					onChange={(updated) => updates.push(updated)}
+				/>,
+			),
+		);
+		await act(async () =>
+			buttonByText(container, "Show geometry value")?.click(),
+		);
+		await act(async () => buttonByText(container, "Clear")?.click());
+		expect(updates).toHaveLength(1);
+		expect(updates[0].default_value).toEqual(convertJsonToUint8Array(null));
+		await act(async () => root.unmount());
+	});
+
 	test("falls back to JSON with the subtype error and preserves the invalid draft", async () => {
 		const { container, root, GeometryValueInput } = await setup();
 		await act(async () => {
@@ -143,7 +229,9 @@ describe("Geometry editor rendering", () => {
 			],
 		});
 		expect(numberInputs(container)).toHaveLength(6);
-		const remove = container.querySelectorAll('button[aria-label="Remove vertex"]');
+		const remove = container.querySelectorAll(
+			'button[aria-label="Remove vertex"]',
+		);
 		expect(remove).toHaveLength(3);
 		await act(async () => (remove[0] as HTMLButtonElement).click());
 		await act(async () => {

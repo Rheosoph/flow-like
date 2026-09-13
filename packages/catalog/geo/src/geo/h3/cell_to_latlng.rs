@@ -3,8 +3,9 @@ use flow_like::flow::{
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
 
+#[cfg(feature = "execute")]
 use crate::geo::GeoCoordinate;
 
 #[crate::register_node]
@@ -26,6 +27,7 @@ impl NodeLogic for CellToLatLngNode {
             "Converts an H3 cell index to the geographic coordinate of its center point.",
             "Web/Geo/H3",
         );
+        node.set_version(2);
         node.set_flowscript_name("h3", "cellToLatlng");
         node.add_icon("/flow/icons/hexagon.svg");
 
@@ -37,13 +39,13 @@ impl NodeLogic for CellToLatLngNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "coordinate",
-            "Coordinate",
-            "The center coordinate of the H3 cell",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>();
+        crate::geo::pins::geometry_output(
+            &mut node,
+            "geometry_out",
+            "Geometry",
+            "Point at the center of the H3 cell",
+            Some(GeometryKind::Point),
+        );
 
         node.set_long_running(false);
         node.set_scores(
@@ -64,6 +66,7 @@ impl NodeLogic for CellToLatLngNode {
         use h3o::{CellIndex, LatLng};
         use std::str::FromStr;
 
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
         let cell_str: String = context.evaluate_pin("cell").await?;
 
         let cell = CellIndex::from_str(&cell_str)
@@ -73,9 +76,11 @@ impl NodeLogic for CellToLatLngNode {
         let coordinate = GeoCoordinate::new(latlng.lat(), latlng.lng());
 
         context
-            .set_pin_value("coordinate", json!(coordinate))
+            .set_pin_value(
+                "geometry_out",
+                crate::geo::pins::point_geometry(&coordinate)?,
+            )
             .await?;
-
         Ok(())
     }
 
