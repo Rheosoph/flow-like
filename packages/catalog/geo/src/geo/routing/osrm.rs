@@ -71,7 +71,7 @@ pub struct OsrmRoute {
 
 #[derive(Deserialize)]
 pub struct OsrmGeometry {
-    pub coordinates: Vec<Vec<f64>>,
+    pub coordinates: Vec<[f64; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -95,7 +95,7 @@ pub struct OsrmManeuver {
     #[serde(rename = "type")]
     pub r#type: String,
     pub modifier: Option<String>,
-    pub location: Vec<f64>,
+    pub location: [f64; 2],
 }
 
 pub fn map_osrm_routes(routes: Vec<OsrmRoute>) -> Vec<RouteResult> {
@@ -156,4 +156,28 @@ pub fn map_osrm_routes(routes: Vec<OsrmRoute>) -> Vec<RouteResult> {
             }
         })
         .collect()
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn set_route_geometries(
+    context: &mut flow_like::flow::execution::context::ExecutionContext,
+    routes: &[RouteResult],
+) -> flow_like_types::Result<()> {
+    use flow_like_types::json::json;
+
+    let geometries = routes
+        .iter()
+        .map(|route| crate::geo::pins::line_geometry(&route.geometry.points))
+        .collect::<flow_like_types::Result<Vec<_>>>()?;
+    if let Some(primary) = geometries.first() {
+        context
+            .set_pin_value("geometry_out", primary.clone())
+            .await?;
+    } else {
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
+    }
+    context
+        .set_pin_value("route_geometries", json!(geometries))
+        .await?;
+    Ok(())
 }

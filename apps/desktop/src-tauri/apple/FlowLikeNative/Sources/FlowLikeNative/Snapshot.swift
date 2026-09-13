@@ -191,6 +191,7 @@ public struct NativeSnapshot: Codable, Sendable {
     public var apps: [NativeApp]
     public var activePage: NativePage?
     public var webOrigin: String?
+    public var customWidgets: [NativeCustomWidget]? = nil
 
     public var isCurrent: Bool {
         guard version == 1, !scope.isEmpty, let expiry = Self.date(expiresAt) else { return false }

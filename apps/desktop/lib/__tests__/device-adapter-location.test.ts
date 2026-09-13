@@ -159,6 +159,40 @@ describe("native location adapter", () => {
 		});
 		expect(native.invoke).toHaveBeenCalledOnce();
 	});
+	test("a stalled native request times out, cancels its ID, and leaves the next request usable", async () => {
+		platform("iPhone");
+		let finish!: () => void;
+		native.invoke.mockImplementation((command) =>
+			command === "native_get_location"
+				? new Promise((resolve) => {
+						finish = () => resolve(fix());
+					})
+				: Promise.resolve(),
+		);
+		const pending = executeDeviceCommand(
+			"location.current",
+			{ timeoutMs: 100 },
+			context,
+		);
+		await expect(pending).rejects.toMatchObject({ code: "timeout" });
+		const requestId = native.invoke.mock.calls.find(
+			([command]) => command === "native_get_location",
+		)?.[1].requestId;
+		expect(requestId).toBeTypeOf("string");
+		expect(native.invoke).toHaveBeenCalledWith("native_cancel_location", {
+			requestId,
+		});
+		finish();
+		native.invoke.mockImplementation(async (command) =>
+			command === "native_get_location" ? fix() : undefined,
+		);
+		await expect(
+			executeDeviceCommand("location.current", {}, context),
+		).resolves.toMatchObject({
+			geometry: { type: "Point", coordinates: [13.4, 52.5] },
+		});
+		expect(native.invoke.mock.lastCall?.[1].requestId).not.toBe(requestId);
+	});
 	test("non-Apple desktops use the same cancellable browser watch", async () => {
 		let success!: PositionCallback;
 		const clearWatch = vi.fn();

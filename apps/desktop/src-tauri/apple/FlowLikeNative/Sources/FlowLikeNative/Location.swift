@@ -72,6 +72,16 @@ public typealias NativeLocationCallback = @convention(c) (UnsafePointer<CChar>?,
 
 @available(iOSApplicationExtension, unavailable)
 @available(macOSApplicationExtension, unavailable)
+@MainActor private func nativeLocationCanRequestAuthorization() -> Bool {
+    #if os(iOS)
+    UIApplication.shared.applicationState == .active
+    #else
+    NSApplication.shared.isActive
+    #endif
+}
+
+@available(iOSApplicationExtension, unavailable)
+@available(macOSApplicationExtension, unavailable)
 @MainActor func nativeLocationHiddenNotifications() -> [Notification.Name] {
     #if os(iOS)
     [UIApplication.didEnterBackgroundNotification]
@@ -128,28 +138,62 @@ public typealias NativeLocationCallback = @convention(c) (UnsafePointer<CChar>?,
 
 @available(iOSApplicationExtension, unavailable)
 @available(macOSApplicationExtension, unavailable)
-@MainActor private final class NativeLocationRequest: NSObject, @preconcurrency CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
+@MainActor protocol NativeLocationManaging: AnyObject {
+    var delegate: CLLocationManagerDelegate? { get set }
+    var desiredAccuracy: CLLocationAccuracy { get set }
+    var allowsBackgroundLocationUpdates: Bool { get set }
+    var authorizationStatus: CLAuthorizationStatus { get }
+    var location: CLLocation? { get }
+    func requestWhenInUseAuthorization()
+    func startUpdatingLocation()
+    func stopUpdatingLocation()
+}
+
+@available(iOSApplicationExtension, unavailable)
+@available(macOSApplicationExtension, unavailable)
+extension CLLocationManager: NativeLocationManaging {}
+
+@available(iOSApplicationExtension, unavailable)
+@available(macOSApplicationExtension, unavailable)
+@MainActor final class NativeLocationRequest: NSObject, @preconcurrency CLLocationManagerDelegate {
+    private let manager: NativeLocationManaging
     private let options: NativeLocationOptions
-    private let startedAt = Date()
+    private let startedAt: Date
+    private let deadline: Date
+    private let now: () -> Date
+    private let isForeground: @MainActor () -> Bool
+    private let canRequestAuthorization: @MainActor () -> Bool
     private let completion: ([String: Any]) -> Void
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var finished = false
+    private var started = false
     private var authorizationRequested = false
     private var locationRequested = false
 
-    init(options: NativeLocationOptions, completion: @escaping ([String: Any]) -> Void) {
+    init(options: NativeLocationOptions, manager: NativeLocationManaging = CLLocationManager(),
+         now: @escaping () -> Date = Date.init,
+         isForeground: @escaping @MainActor () -> Bool = { nativeLocationScreenVisible() },
+         canRequestAuthorization: @escaping @MainActor () -> Bool = { nativeLocationCanRequestAuthorization() },
+         completion: @escaping ([String: Any]) -> Void) {
+        self.manager = manager
         self.options = options
+        self.now = now
+        self.isForeground = isForeground
+        self.canRequestAuthorization = canRequestAuthorization
+        startedAt = now()
+        deadline = startedAt.addingTimeInterval(options.remainingTime(at: startedAt))
         self.completion = completion
         super.init()
-        manager.delegate = self
         manager.desiredAccuracy = options.highAccuracy ? kCLLocationAccuracyBest : kCLLocationAccuracyHundredMeters
         manager.allowsBackgroundLocationUpdates = false
     }
 
     func start() {
-        let timer = Timer(timeInterval: options.remainingTime(at: startedAt), repeats: false) { [weak self] _ in
+        guard !started, !finished else { return }
+        started = true
+        guard checkRequestState() else { return }
+        let timer = Timer(timeInterval: deadline.timeIntervalSince(now()), repeats: false) { [weak self] _ in
             Task { @MainActor in self?.fail("timeout", "The location request timed out.") }
         }
         self.timer = timer
@@ -162,62 +206,88 @@ public typealias NativeLocationCallback = @convention(c) (UnsafePointer<CChar>?,
         for inactive in nativeLocationHiddenNotifications() {
             observers.append(NotificationCenter.default.addObserver(forName: inactive, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
-                    if !nativeLocationScreenVisible() { self?.fail("inactive", "The location request stopped when Flow Like was hidden.") }
+                    if let self, !self.isForeground() { self.fail("inactive", "The location request stopped when Flow Like was hidden.") }
                 }
             })
         }
         observers.append(NotificationCenter.default.addObserver(forName: active, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.updateAuthorization() }
         })
+        manager.delegate = self
         updateAuthorization()
     }
 
-    private func updateAuthorization() {
-        guard !finished, NativeLocationService.isForeground else { return }
+    func updateAuthorization() {
+        guard started, checkRequestState() else { return }
         switch manager.authorizationStatus {
         case .notDetermined:
-            if !authorizationRequested {
+            // iOS can ignore a prompt during app activation. Wait for didBecomeActive
+            // before recording that authorization has been requested.
+            if !authorizationRequested, canRequestAuthorization() {
                 authorizationRequested = true
                 manager.requestWhenInUseAuthorization()
             }
-        case .denied, .restricted:
-            fail("permission_denied", "Location access is not allowed for Flow Like.")
-        default:
+        case .denied:
+            fail("permission_denied", "Allow location access for Flow Like in system Settings, then run the workflow again.")
+        case .restricted:
+            fail("permission_denied", "Location access is restricted by this device's settings.")
+        case .authorizedAlways, .authorizedWhenInUse:
             guard !locationRequested else { return }
             locationRequested = true
             if options.maximumAgeMs > 0, let cached = manager.location,
-               let fix = nativeLocationFix(cached, startedAt: startedAt, maximumAgeMs: options.maximumAgeMs, now: Date()) {
+               let fix = nativeLocationFix(cached, startedAt: startedAt, maximumAgeMs: options.maximumAgeMs, now: now()) {
                 finish(["ok": true, "value": fix])
             } else {
-                manager.requestLocation()
+                // Core Location may first deliver a cached fix or a temporary error.
+                // Keep updates active until a valid fix arrives or this request ends.
+                manager.startUpdatingLocation()
             }
+        @unknown default:
+            fail("permission_denied", "Location authorization is unavailable. Check location access in system Settings.")
         }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) { updateAuthorization() }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard NativeLocationService.isForeground else {
+        receiveLocations(locations)
+    }
+
+    private func checkRequestState() -> Bool {
+        guard !finished else { return false }
+        guard isForeground() else {
             fail("inactive", "Open Flow Like to receive the requested location.")
-            return
+            return false
         }
-        guard Date() < startedAt.addingTimeInterval(options.remainingTime(at: startedAt)) else {
+        guard now() < deadline else {
             fail("timeout", "The location request has expired.")
-            return
+            return false
         }
+        return true
+    }
+
+    func receiveLocations(_ locations: [CLLocation]) {
+        guard checkRequestState() else { return }
+        let receivedAt = now()
         guard let fix = locations.reversed().compactMap({
-            nativeLocationFix($0, startedAt: startedAt, maximumAgeMs: options.maximumAgeMs, now: Date())
+            nativeLocationFix($0, startedAt: startedAt, maximumAgeMs: options.maximumAgeMs, now: receivedAt)
         }).first else {
-            fail("position_unavailable", "A current location with valid accuracy is unavailable.")
             return
         }
         finish(["ok": true, "value": fix])
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        let denied = (error as? CLError)?.code == .denied
+        receiveError(error)
+    }
+
+    func receiveError(_ error: Error) {
+        guard checkRequestState() else { return }
+        let code = (error as? CLError)?.code
+        if code == .locationUnknown { return }
+        let denied = code == .denied
         fail(denied ? "permission_denied" : "position_unavailable",
-             denied ? "Location access is not allowed for Flow Like." : "Your current location could not be determined.")
+             denied ? "Allow location access for Flow Like in system Settings, then run the workflow again." : "Your current location could not be determined.")
     }
 
     func fail(_ code: String, _ message: String) { finish(NativeLocationFailure(code, message).reply) }

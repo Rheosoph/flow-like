@@ -165,3 +165,207 @@ mod routing_tests {
         assert_eq!(geometry[2].longitude, 13.42);
     }
 }
+
+#[cfg(all(test, feature = "execute"))]
+mod geometry_tests {
+    use super::super::{
+        match_trace::OsrmMatchTraceNode,
+        nearest::OsrmNearestNode,
+        osrm::{OsrmRoute, build_coordinate_string, map_osrm_routes, set_route_geometries},
+        plan_route::PlanRouteNode,
+        table::OsrmTableNode,
+        trip::OsrmTripNode,
+    };
+    use crate::geo::pins::{coordinates_input, tests::execution_context};
+    use flow_like::flow::{node::NodeLogic, pin::ValueType, variable::VariableType};
+    use flow_like_types::{
+        Value,
+        geometry::{GeometryKind, marker},
+        json::json,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn routing_spatial_pins_use_geometry_without_legacy_coordinate_pins() {
+        let definitions = [
+            (
+                PlanRouteNode::new().get_node(),
+                vec![
+                    ("start_geometry", ValueType::Normal, false),
+                    ("end_geometry", ValueType::Normal, false),
+                    ("waypoint_geometries", ValueType::Array, true),
+                ],
+                vec!["start", "end", "waypoints", "geometry"],
+            ),
+            (
+                OsrmNearestNode::new().get_node(),
+                vec![("geometry", ValueType::Normal, false)],
+                vec!["coordinate"],
+            ),
+            (
+                OsrmTableNode::new().get_node(),
+                vec![("geometries", ValueType::Array, false)],
+                vec!["coordinates"],
+            ),
+            (
+                OsrmTripNode::new().get_node(),
+                vec![("geometries", ValueType::Array, false)],
+                vec!["coordinates", "geometry"],
+            ),
+            (
+                OsrmMatchTraceNode::new().get_node(),
+                vec![("geometries", ValueType::Array, false)],
+                vec!["coordinates"],
+            ),
+        ];
+        for (node, inputs, removed_names) in definitions {
+            assert_eq!(node.version, Some(2));
+            for (index, (name, container, optional)) in inputs.into_iter().enumerate() {
+                let geometry = node.get_pin_by_name(name).unwrap();
+                assert_eq!(geometry.data_type, VariableType::Geometry);
+                assert_eq!(
+                    geometry.schema.as_deref(),
+                    Some(marker(GeometryKind::Point))
+                );
+                assert_eq!(geometry.value_type, container);
+                assert_eq!(geometry.is_optional(), optional);
+                assert_eq!(geometry.index, index as u16 + 2);
+                if optional {
+                    assert_eq!(geometry.default_value.as_deref(), Some(b"[]".as_slice()));
+                } else {
+                    assert!(geometry.default_value.is_none());
+                }
+            }
+            for name in removed_names {
+                assert!(
+                    node.get_pin_by_name(name).is_none(),
+                    "{} still exposes {name}",
+                    node.name
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_geometry_arrays_require_points_and_preserve_order() {
+        let definitions: Vec<Arc<dyn NodeLogic>> = vec![
+            Arc::new(OsrmTableNode::new()),
+            Arc::new(OsrmTripNode::new()),
+            Arc::new(OsrmMatchTraceNode::new()),
+        ];
+        for logic in definitions {
+            let mut context = execution_context(logic).await;
+            assert!(coordinates_input(&context, "geometries").await.is_err());
+            context
+                .set_pin_value(
+                    "geometries",
+                    json!([
+                        {"type":"Point","coordinates":[13.405,52.52]},
+                        {"type":"Point","coordinates":[-74.0,40.7]},
+                    ]),
+                )
+                .await
+                .unwrap();
+            let points = coordinates_input(&context, "geometries").await.unwrap();
+            assert_eq!(build_coordinate_string(&points), "13.405,52.52;-74,40.7");
+            context
+                .set_pin_value("geometries", json!([]))
+                .await
+                .unwrap();
+            assert!(
+                coordinates_input(&context, "geometries")
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let pin = context.get_pin_by_name("geometries").await.unwrap();
+            context.override_pin_value(pin.id(), json!([null]));
+            assert!(coordinates_input(&context, "geometries").await.is_err());
+        }
+    }
+
+    fn service_routes() -> Vec<OsrmRoute> {
+        flow_like_types::json::from_value(json!([
+            {"distance":100.0,"duration":20.0,"geometry":{"coordinates":[[13.405,52.52],[13.41,52.53]]},"legs":[],"weight_name":"routability"},
+            {"distance":150.0,"duration":25.0,"geometry":{"coordinates":[[13.405,52.52],[13.42,52.54],[13.41,52.53]]},"legs":[],"weight_name":"routability"}
+        ])).unwrap()
+    }
+
+    #[tokio::test]
+    async fn service_routes_produce_linestrings_and_empty_results_clear_primary() {
+        let definitions: Vec<Arc<dyn NodeLogic>> = vec![
+            Arc::new(PlanRouteNode::new()),
+            Arc::new(OsrmTripNode::new()),
+            Arc::new(OsrmMatchTraceNode::new()),
+        ];
+        for logic in definitions {
+            let mut context = execution_context(logic).await;
+            let routes = map_osrm_routes(service_routes());
+            set_route_geometries(&mut context, &routes).await.unwrap();
+            let primary: Value = context.evaluate_pin("geometry_out").await.unwrap();
+            assert_eq!(
+                primary,
+                json!({"type":"LineString","coordinates":[[13.405,52.52],[13.41,52.53]]})
+            );
+            let lines: Vec<Value> = context.evaluate_pin("route_geometries").await.unwrap();
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0], primary);
+            assert_eq!(lines[1]["coordinates"][1], json!([13.42, 52.54]));
+            set_route_geometries(&mut context, &[]).await.unwrap();
+            assert!(context.evaluate_pin::<Value>("geometry_out").await.is_err());
+            assert_eq!(
+                context
+                    .evaluate_pin::<Value>("route_geometries")
+                    .await
+                    .unwrap(),
+                json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_osrm_positions_return_parse_errors() {
+        let mut routes = flow_like_types::json::to_value(json!({
+            "distance":100.0,"duration":20.0,"geometry":{"coordinates":[[13.405],[13.41,52.53]]},"legs":[],"weight_name":"routability"
+        })).unwrap();
+        assert!(flow_like_types::json::from_value::<OsrmRoute>(routes.clone()).is_err());
+        routes["geometry"]["coordinates"][0] = json!([13.405, 52.52]);
+        assert!(flow_like_types::json::from_value::<OsrmRoute>(routes).is_ok());
+    }
+
+    #[tokio::test]
+    async fn geometry_only_route_inputs_are_evaluated_and_failed_retry_clears_lines() {
+        let logic = Arc::new(PlanRouteNode::new());
+        let mut context = execution_context(logic.clone()).await;
+        context
+            .set_pin_value(
+                "start_geometry",
+                json!({"type":"Point","coordinates":[13.405,52.52]}),
+            )
+            .await
+            .unwrap();
+        context
+            .set_pin_value(
+                "end_geometry",
+                json!({"type":"Point","coordinates":[13.41,52.53]}),
+            )
+            .await
+            .unwrap();
+        context
+            .set_pin_value("profile", json!("invalid"))
+            .await
+            .unwrap();
+        set_route_geometries(&mut context, &map_osrm_routes(service_routes()))
+            .await
+            .unwrap();
+        let error = logic.run(&mut context).await.unwrap_err();
+        assert!(error.to_string().contains("Unsupported profile"), "{error}");
+        assert!(context.evaluate_pin::<Value>("geometry_out").await.is_err());
+        assert!(
+            context
+                .evaluate_pin::<Value>("route_geometries")
+                .await
+                .is_err()
+        );
+    }
+}

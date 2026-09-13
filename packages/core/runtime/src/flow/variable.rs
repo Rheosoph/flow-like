@@ -306,16 +306,20 @@ pub fn validate_typed_value(
             let values = value.as_array().ok_or_else(|| {
                 flow_like_types::anyhow!("Geometry Array/HashSet requires an array")
             })?;
-            for value in values {
-                flow_like_types::geometry::validate_geometry(value, kind)?;
+            for (index, value) in values.iter().enumerate() {
+                flow_like_types::geometry::validate_geometry(value, kind).map_err(|error| {
+                    flow_like_types::anyhow!("Geometry member [{index}]: {error}")
+                })?;
             }
         }
         ValueType::HashMap => {
             let values = value
                 .as_object()
                 .ok_or_else(|| flow_like_types::anyhow!("Geometry HashMap requires an object"))?;
-            for value in values.values() {
-                flow_like_types::geometry::validate_geometry(value, kind)?;
+            for (key, value) in values {
+                flow_like_types::geometry::validate_geometry(value, kind).map_err(|error| {
+                    flow_like_types::anyhow!("Geometry member [{key:?}]: {error}")
+                })?;
             }
         }
     }
@@ -425,26 +429,42 @@ impl crate::flow::board::Board {
                 &variable.value_type,
                 variable.schema.as_deref(),
                 variable.default_value.as_deref(),
-            )?;
+            )
+            .map_err(|error| flow_like_types::anyhow!("Variable '{}': {error}", variable.name))?;
         }
         let pins = self
             .nodes
             .values()
-            .flat_map(|node| node.pins.values())
-            .chain(self.layers.values().flat_map(|layer| layer.pins.values()))
+            .flat_map(|node| {
+                node.pins
+                    .values()
+                    .map(|pin| (node.friendly_name.as_str(), pin))
+            })
+            .chain(
+                self.layers
+                    .values()
+                    .flat_map(|layer| layer.pins.values().map(|pin| (layer.name.as_str(), pin))),
+            )
             .chain(
                 self.layers
                     .values()
                     .flat_map(|layer| layer.nodes.values())
-                    .flat_map(|node| node.pins.values()),
+                    .flat_map(|node| {
+                        node.pins
+                            .values()
+                            .map(|pin| (node.friendly_name.as_str(), pin))
+                    }),
             );
-        for pin in pins {
+        for (owner, pin) in pins {
             check(
                 &pin.data_type,
                 &pin.value_type,
                 pin.schema.as_deref(),
                 pin.default_value.as_deref(),
-            )?;
+            )
+            .map_err(|error| {
+                flow_like_types::anyhow!("Pin '{}' on '{}': {error}", pin.friendly_name, owner)
+            })?;
         }
         Ok(())
     }

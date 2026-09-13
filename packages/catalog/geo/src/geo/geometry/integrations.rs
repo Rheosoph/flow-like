@@ -733,6 +733,27 @@ fn normalize_h3_dissolve(geometry: geo::MultiPolygon<f64>) -> Result<geo::MultiP
 }
 
 #[cfg(feature = "execute")]
+pub(crate) fn h3_boundary_geometry(cell: h3o::CellIndex) -> Result<Value> {
+    // h3o splits transmeridian cells so planar edges do not span the world.
+    let mut polygons = geo::MultiPolygon::from(cell);
+    let geometry = if polygons.0.len() == 1 {
+        geo::Geometry::Polygon(polygons.0.remove(0))
+    } else {
+        geo::Geometry::MultiPolygon(polygons)
+    };
+    canonical(&from_geo(&geometry)?, None)
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn h3_multipolygon_geometry(geometry: geo::MultiPolygon<f64>) -> Result<Value> {
+    let geometry = normalize_h3_dissolve(geometry)?;
+    canonical(
+        &from_geo(&geo::Geometry::MultiPolygon(geometry))?,
+        Some(GeometryKind::MultiPolygon),
+    )
+}
+
+#[cfg(feature = "execute")]
 fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Value)>> {
     use Operation::*;
     match operation {
@@ -881,16 +902,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .ok_or_else(|| anyhow!("cell must be a string"))?;
             let cell = h3o::CellIndex::from_str(cell)
                 .map_err(|error| anyhow!("Invalid H3 cell: {error}"))?;
-            // h3o's geometry conversion splits transmeridian cells at +/-180.
-            // Building a ring directly from `CellIndex::boundary` would instead
-            // create a nearly world-spanning planar edge between the two sides.
-            let mut polygons = geo::MultiPolygon::from(cell);
-            let geometry = if polygons.0.len() == 1 {
-                geo::Geometry::Polygon(polygons.0.remove(0))
-            } else {
-                geo::Geometry::MultiPolygon(polygons)
-            };
-            let geometry = canonical(&from_geo(&geometry)?, None)?;
+            let geometry = h3_boundary_geometry(cell)?;
             Ok(vec![("geometry_out", geometry)])
         }
         H3CellsToGeometry => {
@@ -905,11 +917,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .build()
                 .dissolve(cells)
                 .map_err(|error| anyhow!("Failed to dissolve H3 cells: {error}"))?;
-            let geometry = normalize_h3_dissolve(geometry)?;
-            let geometry = canonical(
-                &from_geo(&geo::Geometry::MultiPolygon(geometry))?,
-                Some(GeometryKind::MultiPolygon),
-            )?;
+            let geometry = h3_multipolygon_geometry(geometry)?;
             Ok(vec![("geometry_out", geometry)])
         }
         PolygonToH3Cells => {

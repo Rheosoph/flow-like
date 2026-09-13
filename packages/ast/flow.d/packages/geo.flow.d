@@ -34,18 +34,17 @@ declare namespace geo {
      * @param timeoutSeconds (optional) — Seconds allowed for permission and location acquisition, from 1 to 120
      * @returns geometry — WGS 84 Point in longitude, latitude order
      * @returns location — Measurement with accuracy in meters, timestamp in Unix milliseconds, optional altitude in meters, speed in meters per second, and heading in degrees
-     * @returns coordinate — Latitude and longitude for existing Geo nodes
      * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function getCurrentLocation({ highAccuracy?: bool, maximumAgeSeconds?: int, timeoutSeconds?: int }): { geometry: geometry<Point>, location: Struct, coordinate: Struct, error: Struct };
+    function getCurrentLocation({ highAccuracy?: bool, maximumAgeSeconds?: int, timeoutSeconds?: int }): { geometry: geometry<Point>, location: Struct, error: Struct };
 
     // === Web/Geo/Map ===
 
     /**
      * Fetches a static map image for the given coordinates using OpenStreetMap tiles. Returns a satellite/standard map image centered on the location.
      * @node geo_get_map_image @alias geoGetMapImage
-     * @param coordinate — The geographic coordinate (latitude, longitude) to center the map on
+     * @param geometry — Point at the map center
      * @param zoom (optional) — Map zoom level (1-19). Higher values show more detail. Default: 15
      * @param width (optional) — Image width in pixels. Default: 512
      * @param height (optional) — Image height in pixels. Default: 512
@@ -53,14 +52,14 @@ declare namespace geo {
      * @returns image — The fetched map image
      * @impure has side effects / drives control flow
      */
-    function getMapImage({ coordinate: Struct, zoom?: int, width?: int, height?: int, style?: string }): Struct;
+    function getMapImage({ geometry: geometry<Point>, zoom?: int, width?: int, height?: int, style?: string }): Struct;
 
     // === Web/Geo/Routing ===
 
     /**
      * Snaps noisy GPS traces to the road network using OSRM map matching.
      * @node geo_osrm_match_trace @alias geoOsrmMatchTrace
-     * @param coordinates (optional) — Ordered GPS coordinates to match
+     * @param geometries — Ordered Point geometries
      * @param profile (optional) — Transportation mode: Car, Bike, or Foot
      * @param timestamps (optional) — Optional UNIX timestamps for each coordinate (seconds)
      * @param radiuses (optional) — Optional search radiuses in meters for each coordinate
@@ -70,27 +69,31 @@ declare namespace geo {
      * @returns matchings — Matched routes for the trace
      * @returns primaryMatching — Primary matched route
      * @returns tracepoints — Tracepoints mapped to the road network
+     * @returns geometryOut — Primary route as a LineString geometry. Unset when no route is found.
+     * @returns routeGeometries — LineString geometries for all returned routes, with the primary route first.
      * @impure has side effects / drives control flow
      */
-    function osrmMatchTrace({ coordinates?: Struct[], profile?: Struct, timestamps?: int[], radiuses?: float[], gaps?: string, tidy?: bool, baseUrl?: string }): { matchings: Struct[], primaryMatching: Struct, tracepoints: Struct[] };
+    function osrmMatchTrace({ geometries: geometry<Point>[], profile?: Struct, timestamps?: int[], radiuses?: float[], gaps?: string, tidy?: bool, baseUrl?: string }): { matchings: Struct[], primaryMatching: Struct, tracepoints: Struct[], geometryOut: geometry<LineString>, routeGeometries: geometry<LineString>[] };
 
     /**
      * Finds the nearest routable point(s) to a coordinate using OSRM.
      * @node geo_osrm_nearest @alias geoOsrmNearest
-     * @param coordinate — The coordinate to snap to the road network
+     * @param geometry — Point geometry to snap to the road network
      * @param profile (optional) — Transportation mode: Car, Bike, or Foot
      * @param number (optional) — Maximum number of nearest points to return (1-50)
      * @param baseUrl (optional) — OSRM server base URL
      * @returns nearest — The closest routable point
      * @returns waypoints — List of nearest routable points
+     * @returns geometryOut — Closest routable Point geometry. Unset when no point is found.
+     * @returns waypointGeometries — Nearest routable Point geometries in the same order as Waypoints.
      * @impure has side effects / drives control flow
      */
-    function osrmNearest({ coordinate: Struct, profile?: Struct, number?: int, baseUrl?: string }): { nearest: Struct, waypoints: Struct[] };
+    function osrmNearest({ geometry: geometry<Point>, profile?: Struct, number?: int, baseUrl?: string }): { nearest: Struct, waypoints: Struct[], geometryOut: geometry<Point>, waypointGeometries: geometry<Point>[] };
 
     /**
      * Computes travel time and distance matrices between coordinates using OSRM.
      * @node geo_osrm_table @alias geoOsrmTable
-     * @param coordinates (optional) — List of coordinates to include in the matrix
+     * @param geometries — Ordered Point geometries
      * @param profile (optional) — Transportation mode: Car, Bike, or Foot
      * @param sources (optional) — Optional indices of source coordinates
      * @param destinations (optional) — Optional indices of destination coordinates
@@ -102,7 +105,7 @@ declare namespace geo {
      * @returns result — Matrix result containing durations and distances
      * @impure has side effects / drives control flow
      */
-    function osrmTable({ coordinates?: Struct[], profile?: string, sources?: int[], destinations?: int[], includeDurations?: bool, includeDistances?: bool, baseUrl?: string }): { durations: Struct[], distances: Struct[], result: Struct };
+    function osrmTable({ geometries: geometry<Point>[], profile?: string, sources?: int[], destinations?: int[], includeDurations?: bool, includeDistances?: bool, baseUrl?: string }): { durations: Struct[], distances: Struct[], result: Struct };
 
     /**
      * Fetches vector map tiles (MVT) from an OSRM server.
@@ -122,7 +125,7 @@ declare namespace geo {
     /**
      * Plans the shortest round trip through multiple coordinates using OSRM.
      * @node geo_osrm_trip @alias geoOsrmTrip
-     * @param coordinates (optional) — Ordered coordinates for the trip
+     * @param geometries — Ordered Point geometries
      * @param profile (optional) — Transportation mode: Car, Bike, or Foot
      * @param roundtrip (optional) — Return to the starting point
      * @param source (optional) — Source location: any, first, or last
@@ -133,40 +136,44 @@ declare namespace geo {
      * @returns waypoints — Optimized trip waypoints
      * @returns distance — Total trip distance in meters
      * @returns duration — Total trip duration in seconds
-     * @returns geometry — Trip geometry as array of coordinates
+     * @returns geometryOut — Primary route as a LineString geometry. Unset when no route is found.
+     * @returns routeGeometries — LineString geometries for all returned routes, with the primary route first.
+     * @returns waypointGeometries — Snapped Point geometries in the same order as Waypoints. Use waypoint_index in Waypoints for the optimized visit order.
      * @impure has side effects / drives control flow
      */
-    function osrmTrip({ coordinates?: Struct[], profile?: Struct, roundtrip?: bool, source?: string, destination?: string, baseUrl?: string }): { trip: Struct, trips: Struct[], waypoints: Struct[], distance: float, duration: float, geometry: Struct[] };
+    function osrmTrip({ geometries: geometry<Point>[], profile?: Struct, roundtrip?: bool, source?: string, destination?: string, baseUrl?: string }): { trip: Struct, trips: Struct[], waypoints: Struct[], distance: float, duration: float, geometryOut: geometry<LineString>, routeGeometries: geometry<LineString>[], waypointGeometries: geometry<Point>[] };
 
     /**
      * Plans a route between two points using the OSRM routing service. Returns turn-by-turn directions, distance, and duration.
      * @node geo_plan_route @alias geoPlanRoute
-     * @param start — Starting coordinate for the route
-     * @param end — Ending coordinate for the route
-     * @param waypoints (optional) — Optional intermediate waypoints to pass through
+     * @param startGeometry — Starting Point geometry for the route
+     * @param endGeometry — Ending Point geometry for the route
+     * @param waypointGeometries (optional) — Optional intermediate Point geometries in visit order
      * @param profile (optional) — Transportation mode: Car, Bike, or Foot
      * @param alternatives (optional) — Request alternative routes
      * @returns route — The primary calculated route
      * @returns alternativesOut — Alternative routes if requested
      * @returns distance — Total route distance in meters
      * @returns duration — Estimated travel time in seconds
-     * @returns geometry — Route geometry as array of coordinates
+     * @returns geometryOut — Primary route as a LineString geometry. Unset when no route is found.
+     * @returns routeGeometries — LineString geometries for all returned routes, with the primary route first.
      * @impure has side effects / drives control flow
      */
-    function planRoute({ start: Struct, end: Struct, waypoints?: Struct, profile?: string, alternatives?: bool }): { route: Struct, alternativesOut: Struct, distance: float, duration: float, geometry: Struct };
+    function planRoute({ startGeometry: geometry<Point>, endGeometry: geometry<Point>, waypointGeometries?: geometry<Point>[], profile?: string, alternatives?: bool }): { route: Struct, alternativesOut: Struct, distance: float, duration: float, geometryOut: geometry<LineString>, routeGeometries: geometry<LineString>[] };
 
     // === Web/Geo/Search ===
 
     /**
      * Converts geographic coordinates to a human-readable address using the Nominatim service (OpenStreetMap).
      * @node geo_reverse_geocode @alias geoReverseGeocode
-     * @param coordinate — The geographic coordinate (latitude, longitude) to look up
+     * @param geometry — Point to look up
      * @param zoom (optional) — Level of detail for the address (0-18). Higher = more specific. Default: 18
      * @returns result — The reverse geocoding result with address details
      * @returns displayName — The full formatted address string
+     * @returns geometryOut — Point returned by the geocoding service
      * @impure has side effects / drives control flow
      */
-    function reverseGeocode({ coordinate: Struct, zoom?: int }): { result: Struct, displayName: string };
+    function reverseGeocode({ geometry: geometry<Point>, zoom?: int }): { result: Struct, displayName: string, geometryOut: geometry<Point> };
 
     /**
      * Searches for a location by name or address using the Nominatim geocoding service (OpenStreetMap). Returns matching locations with coordinates.
@@ -176,9 +183,11 @@ declare namespace geo {
      * @param countryCodes (optional) — Optional comma-separated list of country codes to limit search (e.g., 'de,at,ch')
      * @returns results — Array of search results with coordinates
      * @returns firstResult — The first/best matching result (if any)
+     * @returns geometryOut — Point for the first match. Unset when no location matches.
+     * @returns geometries — Points for all matches, in the same order as Results
      * @impure has side effects / drives control flow
      */
-    function searchLocation({ query?: string, limit?: int, countryCodes?: string }): { results: Struct[], firstResult: Struct };
+    function searchLocation({ query?: string, limit?: int, countryCodes?: string }): { results: Struct[], firstResult: Struct, geometryOut: geometry<Point>, geometries: geometry<Point>[] };
 }
 
 declare namespace geometry {
@@ -732,6 +741,16 @@ declare namespace geometry {
      * @returns result — Whether the geometry satisfies OGC topology rules
      */
     function isTopologicallyValid(this: geometry, { geometry: geometry }): bool;
+
+    /**
+     * Preserves connections to historical coordinate and route data when a saved board upgrades to Geometry pins.
+     * @node geometry_legacy_adapter @alias geometryLegacyAdapter
+     * @param mode (optional) — Historical payload conversion
+     * @param value — Value to convert
+     * @param source (optional) — Original H3 cell or cells used to preserve historical boundaries
+     * @returns converted — Converted historical value or Geometry
+     */
+    function legacyAdapter({ mode?: string, value: Struct, source?: any }): geometry<Point>;
 
     /**
      * Extracts the part of a LineString between two planar length ratios. Ratios must satisfy 0 <= start < end <= 1.
@@ -1333,10 +1352,10 @@ declare namespace h3 {
      * Returns the polygon boundary (vertices) of an H3 cell. Useful for visualization and geospatial operations.
      * @node h3_cell_to_boundary @alias h3CellToBoundary
      * @param cell (optional) — H3 cell index as a hexadecimal string
-     * @returns boundary — Array of coordinates representing the cell boundary (closed polygon)
+     * @returns geometryOut — Cell boundary as a Polygon, or MultiPolygon when it crosses the antimeridian
      * @returns vertexCount — Number of vertices (typically 6 for hexagons, 5 for pentagons)
      */
-    function cellToBoundary({ cell?: string }): { boundary: Struct, vertexCount: int };
+    function cellToBoundary({ cell?: string }): { geometryOut: geometry, vertexCount: int };
 
     /**
      * Returns all child cells at a finer resolution that fit within the given cell.
@@ -1352,9 +1371,9 @@ declare namespace h3 {
      * Converts an H3 cell index to the geographic coordinate of its center point.
      * @node h3_cell_to_latlng @alias h3CellToLatlng
      * @param cell (optional) — H3 cell index as a hexadecimal string
-     * @returns coordinate — The center coordinate of the H3 cell
+     * @returns geometryOut — Point at the center of the H3 cell
      */
-    function cellToLatlng({ cell?: string }): Struct;
+    function cellToLatlng({ cell?: string }): geometry<Point>;
 
     /**
      * Returns the parent cell at a coarser resolution. The parent contains the given cell.
@@ -1370,10 +1389,10 @@ declare namespace h3 {
      * Converts a set of H3 cells to polygon boundaries. Returns the outline(s) of the cell set, merging adjacent cells.
      * @node h3_cells_to_multi_polygon @alias h3CellsToMultiPolygon
      * @param cells (optional) — Array of H3 cell indices
-     * @returns polygons — Array of polygons representing the merged cell boundaries
-     * @returns polygonCount — Number of separate polygons (disconnected regions)
+     * @returns geometryOut — Merged cell boundaries as a MultiPolygon, split at the antimeridian
+     * @returns polygonCount — Number of polygons in Geometry, including pieces split at the antimeridian
      */
-    function cellsToMultiPolygon({ cells?: string[] }): { polygons: Struct, polygonCount: int };
+    function cellsToMultiPolygon({ cells?: string[] }): { geometryOut: geometry<MultiPolygon>, polygonCount: int };
 
     /**
      * Compacts a set of H3 cells by replacing groups of cells with their parent when all children are present. Reduces the number of cells while covering the same area.
@@ -1427,9 +1446,9 @@ declare namespace h3 {
     /**
      * Converts a geographic coordinate to an H3 cell index at the specified resolution. H3 is a hierarchical hexagonal grid system.
      * @node h3_latlng_to_cell @alias h3LatlngToCell
-     * @param coordinate — The geographic coordinate (latitude, longitude)
+     * @param geometry — Point to index as an H3 cell
      * @param resolution (optional) — H3 resolution (0-15). Higher = smaller cells. 0 = ~4,357,449 km², 15 = ~0.9 m²
      * @returns cell — H3 cell index as a hexadecimal string
      */
-    function latlngToCell({ coordinate: Struct, resolution?: int }): string;
+    function latlngToCell({ geometry: geometry<Point>, resolution?: int }): string;
 }

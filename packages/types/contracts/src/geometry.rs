@@ -244,7 +244,17 @@ fn validate_object(
     positions: &mut usize,
 ) -> Result<(), GeometryError> {
     let object = value.as_object().ok_or_else(|| {
-        GeometryError("Geometry requires a GeoJSON geometry object; null is unset".into())
+        let received = match value {
+            Value::Null => "null (unset)",
+            Value::Bool(_) => "a boolean",
+            Value::Number(_) => "a number",
+            Value::String(_) => "a string",
+            Value::Array(_) => "an array",
+            Value::Object(_) => unreachable!(),
+        };
+        GeometryError(format!(
+            "Geometry requires a GeoJSON geometry object; received {received}"
+        ))
     })?;
     if object.contains_key("crs") {
         return Err(GeometryError(
@@ -498,6 +508,22 @@ mod tests {
             r#"{"$id":"flow:geometry","x-geometry":"Point","type":"object"}"#,
         ] {
             assert!(kind_from_schema(marker).is_err());
+        }
+    }
+
+    #[test]
+    fn non_object_errors_identify_the_value_type_without_exposing_values() {
+        for (value, received) in [
+            (Value::Null, "null (unset)"),
+            (json!("private text"), "a string"),
+            (json!(false), "a boolean"),
+            (json!(42), "a number"),
+            (json!([]), "an array"),
+        ] {
+            assert_eq!(
+                validate_geometry(&value, None).unwrap_err().to_string(),
+                format!("Geometry requires a GeoJSON geometry object; received {received}")
+            );
         }
     }
 

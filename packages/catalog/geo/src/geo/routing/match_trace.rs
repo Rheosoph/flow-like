@@ -4,7 +4,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
+
+use crate::geo::pins::{geometry_input, geometry_output};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +48,7 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Snaps noisy GPS traces to the road network using OSRM map matching.",
             "Web/Geo/Routing",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "osrmMatchTrace");
         node.add_icon("/flow/icons/route.svg");
 
@@ -55,16 +58,15 @@ impl NodeLogic for OsrmMatchTraceNode {
             "Initiate the trace matching request",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinates",
-            "Coordinates",
-            "Ordered GPS coordinates to match",
-            VariableType::Struct,
+
+        geometry_input(
+            &mut node,
+            "geometries",
+            "Geometries",
+            "Ordered Point geometries",
+            Some(GeometryKind::Point),
         )
-        .set_schema::<GeoCoordinate>()
-        .set_value_type(ValueType::Array)
-        .set_options(PinOptions::new().set_enforce_schema(true).build())
-        .set_default_value(Some(json!([])));
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin(
             "profile",
@@ -161,6 +163,22 @@ impl NodeLogic for OsrmMatchTraceNode {
         .set_schema::<Tracepoint>()
         .set_value_type(ValueType::Array);
 
+        geometry_output(
+            &mut node,
+            "geometry_out",
+            "Route Geometry",
+            "Primary route as a LineString geometry. Unset when no route is found.",
+            Some(GeometryKind::LineString),
+        );
+        geometry_output(
+            &mut node,
+            "route_geometries",
+            "Route Geometries",
+            "LineString geometries for all returned routes, with the primary route first.",
+            Some(GeometryKind::LineString),
+        )
+        .set_value_type(ValueType::Array);
+
         node.set_scores(
             NodeScores::new()
                 .set_privacy(7)
@@ -180,8 +198,10 @@ impl NodeLogic for OsrmMatchTraceNode {
 
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
+        crate::geo::pins::clear_output(context, "route_geometries").await?;
 
-        let coordinates: Vec<GeoCoordinate> = context.evaluate_pin("coordinates").await?;
+        let coordinates = crate::geo::pins::coordinates_input(context, "geometries").await?;
         let profile: RouteProfile = context.evaluate_pin("profile").await?;
         let timestamps: Vec<i64> = context.evaluate_pin("timestamps").await?;
         let radiuses: Vec<f64> = context.evaluate_pin("radiuses").await?;
@@ -254,6 +274,7 @@ impl NodeLogic for OsrmMatchTraceNode {
         }
 
         let matchings = map_osrm_routes(body.matchings.unwrap_or_default());
+        crate::geo::routing::osrm::set_route_geometries(context, &matchings).await?;
         let primary = matchings.first().cloned().unwrap_or_default();
 
         let tracepoints = body
@@ -308,7 +329,7 @@ struct OsrmMatchResponse {
 #[derive(Deserialize)]
 struct OsrmTracepoint {
     name: String,
-    location: Vec<f64>,
+    location: [f64; 2],
     hint: Option<String>,
     distance: Option<f64>,
     matchings_index: Option<usize>,

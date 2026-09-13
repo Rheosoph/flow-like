@@ -1,3 +1,197 @@
+#[cfg(test)]
+mod geometry_definitions {
+    use crate::geo::h3::{
+        cell_to_boundary::CellToBoundaryNode, cell_to_latlng::CellToLatLngNode,
+        cells_to_multi_polygon::CellsToMultiPolygonNode, latlng_to_cell::LatLngToCellNode,
+    };
+    use flow_like::flow::{node::NodeLogic, variable::VariableType};
+    use flow_like_types::geometry::{GeometryKind, marker};
+
+    #[test]
+    fn h3_spatial_pins_use_geometry_only() {
+        let input = LatLngToCellNode::new().get_node();
+        assert_eq!(input.version, Some(2));
+        let geometry = input.get_pin_by_name("geometry").unwrap();
+        assert_eq!(geometry.data_type, VariableType::Geometry);
+        assert_eq!(
+            geometry.schema.as_deref(),
+            Some(marker(GeometryKind::Point))
+        );
+        assert!(geometry.default_value.is_none());
+        assert!(!geometry.is_optional());
+        assert!(input.get_pin_by_name("coordinate").is_none());
+
+        let nodes = [
+            (
+                CellToLatLngNode::new().get_node(),
+                "coordinate",
+                Some(GeometryKind::Point),
+            ),
+            (CellToBoundaryNode::new().get_node(), "boundary", None),
+            (
+                CellsToMultiPolygonNode::new().get_node(),
+                "polygons",
+                Some(GeometryKind::MultiPolygon),
+            ),
+        ];
+        for (node, legacy_name, kind) in nodes {
+            assert_eq!(node.version, Some(2));
+            assert!(node.get_pin_by_name(legacy_name).is_none());
+            assert!(
+                node.pins
+                    .values()
+                    .all(|pin| pin.data_type != VariableType::Struct)
+            );
+            let geometry = node.get_pin_by_name("geometry_out").unwrap();
+            assert_eq!(geometry.data_type, VariableType::Geometry);
+            assert_eq!(geometry.schema.as_deref(), kind.map(marker));
+        }
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod geometry_execution {
+    use crate::geo::{
+        h3::{
+            cell_to_boundary::CellToBoundaryNode, cell_to_latlng::CellToLatLngNode,
+            cells_to_multi_polygon::CellsToMultiPolygonNode, latlng_to_cell::LatLngToCellNode,
+        },
+        pins::tests::execution_context,
+    };
+    use flow_like::flow::node::NodeLogic;
+    use flow_like_types::{Value, geometry::canonicalize_geometry, json::json};
+    use h3o::{CellIndex, LatLng, Resolution};
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn h3_accepts_point_geometry_and_rejects_missing_or_wrong_geometry() {
+        let logic: Arc<dyn NodeLogic> = Arc::new(LatLngToCellNode::new());
+        let mut context = execution_context(logic.clone()).await;
+        assert!(logic.run(&mut context).await.is_err());
+
+        context
+            .set_pin_value(
+                "geometry",
+                json!({"type":"Point","coordinates":[13.405,52.52]}),
+            )
+            .await
+            .unwrap();
+        logic.run(&mut context).await.unwrap();
+        assert_eq!(
+            context.evaluate_pin::<String>("cell").await.unwrap(),
+            LatLng::new(52.52, 13.405)
+                .unwrap()
+                .to_cell(Resolution::Nine)
+                .to_string()
+        );
+
+        context
+            .get_pin_by_name("geometry")
+            .await
+            .unwrap()
+            .set_value(json!({"type":"LineString","coordinates":[[0.0,0.0],[1.0,1.0]]}))
+            .await;
+        assert!(
+            logic.run(&mut context).await.is_err(),
+            "a Point is required for H3 indexing"
+        );
+    }
+
+    #[tokio::test]
+    async fn h3_center_geometry_connects_to_index_and_clears_after_failure() {
+        let logic: Arc<dyn NodeLogic> = Arc::new(CellToLatLngNode::new());
+        let mut context = execution_context(logic.clone()).await;
+        context
+            .set_pin_value("cell", json!("891f1d48947ffff"))
+            .await
+            .unwrap();
+        logic.run(&mut context).await.unwrap();
+        let coordinate = LatLng::from(CellIndex::from_str("891f1d48947ffff").unwrap());
+        let geometry: Value = context.evaluate_pin("geometry_out").await.unwrap();
+        assert_eq!(
+            geometry,
+            json!({"type":"Point","coordinates":[coordinate.lng(),coordinate.lat()]})
+        );
+        let index_logic: Arc<dyn NodeLogic> = Arc::new(LatLngToCellNode::new());
+        let mut index_context = execution_context(index_logic.clone()).await;
+        let source = context.get_pin_by_name("geometry_out").await.unwrap();
+        index_context
+            .get_pin_by_name("geometry")
+            .await
+            .unwrap()
+            .init_depends_on(vec![Arc::downgrade(&source)]);
+        index_logic.run(&mut index_context).await.unwrap();
+        assert_eq!(
+            index_context.evaluate_pin::<String>("cell").await.unwrap(),
+            "891f1d48947ffff"
+        );
+        context
+            .set_pin_value("cell", json!("invalid"))
+            .await
+            .unwrap();
+        assert!(logic.run(&mut context).await.is_err());
+        assert!(
+            context
+                .get_pin_by_name("geometry_out")
+                .await
+                .unwrap()
+                .get_raw_value()
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn h3_nodes_emit_valid_antimeridian_geometry() {
+        let logics: [Arc<dyn NodeLogic>; 2] = [
+            Arc::new(CellToBoundaryNode::new()),
+            Arc::new(CellsToMultiPolygonNode::new()),
+        ];
+        for (index, logic) in logics.into_iter().enumerate() {
+            let mut context = execution_context(logic.clone()).await;
+            let (name, value) = if index == 0 {
+                ("cell", json!("840d9edffffffff"))
+            } else {
+                ("cells", json!(["840d9edffffffff"]))
+            };
+            context.set_pin_value(name, value).await.unwrap();
+            logic.run(&mut context).await.unwrap();
+            let geometry: Value = context.evaluate_pin("geometry_out").await.unwrap();
+            canonicalize_geometry(&geometry, None).unwrap();
+            assert_eq!(geometry["type"], "MultiPolygon");
+            assert_eq!(geometry["coordinates"].as_array().unwrap().len(), 2);
+            for polygon in geometry["coordinates"].as_array().unwrap() {
+                let ring = polygon[0].as_array().unwrap();
+                assert!(ring.windows(2).all(|edge| {
+                    (edge[0][0].as_f64().unwrap() - edge[1][0].as_f64().unwrap()).abs() <= 180.0
+                }));
+            }
+            if index == 1 {
+                assert_eq!(
+                    context.evaluate_pin::<i64>("polygon_count").await.unwrap(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_h3_cell_list_emits_empty_multipolygon() {
+        let logic: Arc<dyn NodeLogic> = Arc::new(CellsToMultiPolygonNode::new());
+        let mut context = execution_context(logic.clone()).await;
+        logic.run(&mut context).await.unwrap();
+        assert_eq!(
+            context.evaluate_pin::<Value>("geometry_out").await.unwrap(),
+            json!({"type":"MultiPolygon","coordinates":[]})
+        );
+        assert_eq!(
+            context.evaluate_pin::<i64>("polygon_count").await.unwrap(),
+            0
+        );
+    }
+}
+
 #[cfg(all(test, feature = "execute"))]
 mod h3_tests {
     use crate::geo::GeoCoordinate;

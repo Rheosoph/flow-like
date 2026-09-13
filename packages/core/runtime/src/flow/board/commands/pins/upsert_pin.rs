@@ -58,7 +58,10 @@ impl Command for UpsertPinCommand {
                 &pin.value_type,
                 schema,
                 pin.default_value.as_deref(),
-            )?;
+            )
+            .map_err(|error| {
+                flow_like_types::anyhow!("Pin '{}': {error}", self.pin.friendly_name)
+            })?;
         }
         Ok(())
     }
@@ -82,7 +85,10 @@ impl Command for UpsertPinCommand {
                 &self.pin.value_type,
                 self.pin.schema.as_deref(),
                 self.pin.default_value.as_deref(),
-            )?;
+            )
+            .map_err(|error| {
+                flow_like_types::anyhow!("Pin '{}': {error}", self.pin.friendly_name)
+            })?;
         }
 
         if self.pin.data_type == VariableType::Struct

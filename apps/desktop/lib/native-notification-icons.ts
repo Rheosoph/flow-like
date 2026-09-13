@@ -1,6 +1,7 @@
 import {
 	type NotificationIconSource,
 	notificationIconCandidates,
+	notificationIconSource,
 } from "@flow-like/flow-like-ui/lib/notification-icon";
 import dynamicIconImports from "lucide-react/dynamicIconImports";
 import {
@@ -88,6 +89,7 @@ export function createNativeNotificationIconResolver(
 		fetch?: NativeIconFetch;
 		rasterize?: (blob: Blob, signal: AbortSignal) => Promise<string>;
 		lucide?: (name: string) => Promise<Blob>;
+		fallback?: boolean;
 	} = {},
 ) {
 	const fetchIcon = options.fetch ?? globalThis.fetch;
@@ -155,10 +157,14 @@ export function createNativeNotificationIconResolver(
 				Array.from({ length: Math.min(4, entries.length) }, async () => {
 					while (index < entries.length) {
 						const source = entries[index++];
-						for (const candidate of notificationIconCandidates(
-							source.icon ?? undefined,
-							source.appIcon ?? undefined,
-						)) {
+						const explicit = notificationIconSource(source.icon);
+						const candidates =
+							options.fallback === false
+								? explicit
+									? [explicit]
+									: []
+								: notificationIconCandidates(source.icon, source.appIcon);
+						for (const candidate of candidates) {
 							assertActive(signal);
 							if (candidate.kind === "emoji") {
 								result[source.id] = { text: candidate.value };

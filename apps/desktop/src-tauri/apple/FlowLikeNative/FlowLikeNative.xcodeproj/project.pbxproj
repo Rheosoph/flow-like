@@ -25,24 +25,26 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
-		E0911A3C28EF4A53BD292C01 /* ActionResults.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0911A3C28EF4A53BD292C02 /* ActionResults.swift */; };
-		F0911A3C28EF4A53BD292C01 /* AppIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0911A3C28EF4A53BD292C02 /* AppIcons.swift */; };
 		0439A960076446FDE913F50A /* Info-iOS.plist in Resources */ = {isa = PBXBuildFile; fileRef = B6FFB8ABD94250929BE1A4B9 /* Info-iOS.plist */; };
 		0729F49152F60513DB4E3B57 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA82390B8228CFFBEE45A347 /* ShareViewController.swift */; };
 		0C195C69CBCFED84C19CCC79 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA82390B8228CFFBEE45A347 /* ShareViewController.swift */; };
 		0D734A90945020879BD496FA /* Location.swift in Sources */ = {isa = PBXBuildFile; fileRef = A540E9F415A70ABED9BFF7D3 /* Location.swift */; };
+		0E380D172FEB7E80E7ACAA62 /* WidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 532C81B26112D2DA474AE10D /* WidgetContent.swift */; };
 		10A7682006218FC5011A968B /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B68AC0328B073590DF1BD39 /* Snapshot.swift */; };
-		D0941A3C28EF4A53BD292C01 /* WidgetContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0941A3C28EF4A53BD292C02 /* WidgetContent.swift */; };
 		2446DBBE4CA6B56601086B89 /* Geofences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D0E393A00360F1F8DB4DF1 /* Geofences.swift */; };
+		2682AC5B354E66C06DD1D31D /* ActionResults.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE922AFABCE32B3F84FDA161 /* ActionResults.swift */; };
 		3015D5F9FF5913987CB9A2DD /* RunActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876529F938A827D35A2B5765 /* RunActivity.swift */; };
+		32CAC5E3E45902F411FEDD0F /* NativeCustomWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABEF65B54C31A02B99823CBF /* NativeCustomWidgets.swift */; };
 		423F8CC93999C72B1131501C /* FlowLikeWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37DDB6DF4A3F21C35ACFAC7B /* FlowLikeWidgets.swift */; };
 		63FA2E73D2005B66DCC50A4B /* NativeActionNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4049E0FC607AEA15618DE694 /* NativeActionNotifier.swift */; };
 		642D8DAAEDFC3027EDB45E99 /* ActivityBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07B9BCFE973893E69CE2B9D /* ActivityBridge.swift */; };
 		64D83DD53DFC568ABFD90632 /* SystemIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56AA41BF250F1F6799C9D60 /* SystemIntegration.swift */; };
 		67E696D4630E11AE5598B6CC /* Info-iOS.plist in Resources */ = {isa = PBXBuildFile; fileRef = 096D979797F0DAF58CF04119 /* Info-iOS.plist */; };
+		7340F85ED02CDF2C920CB0C6 /* NotificationIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4C35658F72528D390A5F015 /* NotificationIcons.swift */; };
 		867D4EFF7AF8E337D499CC51 /* FlowLikeNative.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5AD8D5FCA49C622E6C134F63 /* FlowLikeNative.framework */; };
 		9572E2546F2857E1FA0E40AC /* FlowLikeNative in Frameworks */ = {isa = PBXBuildFile; productRef = CD5D87B0EC888B5F44AC2D42 /* FlowLikeNative */; };
 		99C9E9142752B653462A2D5A /* GeofenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DA1DE73F929BEA68885DB8 /* GeofenceStore.swift */; };
+		A1336D7925D53443BC3D7AB6 /* AppIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A708413E3811BBA282C3B3 /* AppIcons.swift */; };
 		B3543E56EF578B27D784D0D8 /* CBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D3552550A5268ACB5D2C106 /* CBridge.swift */; };
 		C7918E87A11EFEBF25996E77 /* FlowLikeNative.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5AD8D5FCA49C622E6C134F63 /* FlowLikeNative.framework */; };
 		CF2D7738285E8C51F318FA40 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3156864FB05B536664665A8 /* Intents.swift */; };
@@ -92,8 +94,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		E0911A3C28EF4A53BD292C02 /* ActionResults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionResults.swift; sourceTree = "<group>"; };
-		F0911A3C28EF4A53BD292C02 /* AppIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIcons.swift; sourceTree = "<group>"; };
+		01A708413E3811BBA282C3B3 /* AppIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIcons.swift; sourceTree = "<group>"; };
 		096D979797F0DAF58CF04119 /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		0D3552550A5268ACB5D2C106 /* CBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CBridge.swift; sourceTree = "<group>"; };
 		1034AE31825D00A51E1E4941 /* FlowLikeWidgets_macOS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FlowLikeWidgets_macOS.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -105,7 +106,7 @@
 		4049E0FC607AEA15618DE694 /* NativeActionNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeActionNotifier.swift; sourceTree = "<group>"; };
 		475D1C5627521D3955AA0623 /* GeofenceLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeofenceLease.swift; sourceTree = "<group>"; };
 		4B68AC0328B073590DF1BD39 /* Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
-		D0941A3C28EF4A53BD292C02 /* WidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetContent.swift; sourceTree = "<group>"; };
+		532C81B26112D2DA474AE10D /* WidgetContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetContent.swift; sourceTree = "<group>"; };
 		5AD8D5FCA49C622E6C134F63 /* FlowLikeNative.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = FlowLikeNative.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		5F6B48F2C128E64E113E9FB8 /* FlowLikeWidgets_iOS.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = FlowLikeWidgets_iOS.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6D805064A4A585E8B6F4EEB6 /* Widgets-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Widgets-iOS.entitlements"; sourceTree = "<group>"; };
@@ -114,6 +115,7 @@
 		876529F938A827D35A2B5765 /* RunActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunActivity.swift; sourceTree = "<group>"; };
 		A540E9F415A70ABED9BFF7D3 /* Location.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Location.swift; sourceTree = "<group>"; };
 		AA82390B8228CFFBEE45A347 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		ABEF65B54C31A02B99823CBF /* NativeCustomWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCustomWidgets.swift; sourceTree = "<group>"; };
 		AC78D4B28AEF9030F76CABA8 /* Widgets-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Widgets-macOS.entitlements"; sourceTree = "<group>"; };
 		B07B9BCFE973893E69CE2B9D /* ActivityBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityBridge.swift; sourceTree = "<group>"; };
 		B3156864FB05B536664665A8 /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
@@ -121,6 +123,8 @@
 		B6FFB8ABD94250929BE1A4B9 /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		D15BE8185D129FAFED47D52C /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		D3056EEC379F1C685EA8AE4A /* FlowLikeShare_iOS.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = FlowLikeShare_iOS.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D4C35658F72528D390A5F015 /* NotificationIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationIcons.swift; sourceTree = "<group>"; };
+		EE922AFABCE32B3F84FDA161 /* ActionResults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionResults.swift; sourceTree = "<group>"; };
 		F2EDFB48BB58BBDFDF6EC13A /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		FD1BA254DE4B039F47C25C64 /* Share-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Share-macOS.entitlements"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -235,7 +239,9 @@
 		E52CB3ECEFD312B535CA0EB5 /* FlowLikeNative */ = {
 			isa = PBXGroup;
 			children = (
+				EE922AFABCE32B3F84FDA161 /* ActionResults.swift */,
 				B07B9BCFE973893E69CE2B9D /* ActivityBridge.swift */,
+				01A708413E3811BBA282C3B3 /* AppIcons.swift */,
 				0D3552550A5268ACB5D2C106 /* CBridge.swift */,
 				475D1C5627521D3955AA0623 /* GeofenceLease.swift */,
 				28D0E393A00360F1F8DB4DF1 /* Geofences.swift */,
@@ -243,13 +249,13 @@
 				B3156864FB05B536664665A8 /* Intents.swift */,
 				A540E9F415A70ABED9BFF7D3 /* Location.swift */,
 				4049E0FC607AEA15618DE694 /* NativeActionNotifier.swift */,
+				ABEF65B54C31A02B99823CBF /* NativeCustomWidgets.swift */,
 				32E150C1D4C2089F42232978 /* NativeStore.swift */,
+				D4C35658F72528D390A5F015 /* NotificationIcons.swift */,
 				876529F938A827D35A2B5765 /* RunActivity.swift */,
 				4B68AC0328B073590DF1BD39 /* Snapshot.swift */,
-				D0941A3C28EF4A53BD292C02 /* WidgetContent.swift */,
-				E0911A3C28EF4A53BD292C02 /* ActionResults.swift */,
-				F0911A3C28EF4A53BD292C02 /* AppIcons.swift */,
 				B56AA41BF250F1F6799C9D60 /* SystemIntegration.swift */,
+				532C81B26112D2DA474AE10D /* WidgetContent.swift */,
 			);
 			path = FlowLikeNative;
 			sourceTree = "<group>";
@@ -499,7 +505,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2682AC5B354E66C06DD1D31D /* ActionResults.swift in Sources */,
 				642D8DAAEDFC3027EDB45E99 /* ActivityBridge.swift in Sources */,
+				A1336D7925D53443BC3D7AB6 /* AppIcons.swift in Sources */,
 				B3543E56EF578B27D784D0D8 /* CBridge.swift in Sources */,
 				D3F3808C2C4CECFA2645F7ED /* GeofenceLease.swift in Sources */,
 				99C9E9142752B653462A2D5A /* GeofenceStore.swift in Sources */,
@@ -507,13 +515,13 @@
 				D8F50B492139C7FEB053F795 /* Intents.swift in Sources */,
 				0D734A90945020879BD496FA /* Location.swift in Sources */,
 				63FA2E73D2005B66DCC50A4B /* NativeActionNotifier.swift in Sources */,
+				32CAC5E3E45902F411FEDD0F /* NativeCustomWidgets.swift in Sources */,
 				DE97791C7BD72228784CBF65 /* NativeStore.swift in Sources */,
+				7340F85ED02CDF2C920CB0C6 /* NotificationIcons.swift in Sources */,
 				3015D5F9FF5913987CB9A2DD /* RunActivity.swift in Sources */,
 				10A7682006218FC5011A968B /* Snapshot.swift in Sources */,
-				D0941A3C28EF4A53BD292C01 /* WidgetContent.swift in Sources */,
-				E0911A3C28EF4A53BD292C01 /* ActionResults.swift in Sources */,
-				F0911A3C28EF4A53BD292C01 /* AppIcons.swift in Sources */,
 				64D83DD53DFC568ABFD90632 /* SystemIntegration.swift in Sources */,
+				0E380D172FEB7E80E7ACAA62 /* WidgetContent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -83,14 +83,28 @@ segments and polygon ring perimeters. Geodesic area accepts polygons smaller tha
 half the Earth and subtracts holes. Geodesic bearing, destination, interpolation,
 densification, circles, and discrete LineString Fréchet distance are also available.
 
-Existing H3, routing, search, and map nodes retain their original pins. Adapter
-nodes convert their coordinate, boundary, polygon, route, and location payloads.
-Geometry-native H3 nodes also convert Points to cells, cells to boundary or dissolved
-polygon Geometry, and Polygon or MultiPolygon Geometry to bounded cell coverage.
+Reverse Geocode, Get Map Image, Lat/Lng to H3 Cell, and OSRM Nearest accept a Point
+through their Geometry input. Route planning accepts start and end Points plus
+optional waypoint Points. The OSRM table, trace matching, and trip nodes accept
+ordered Point arrays. Search and reverse geocoding return Points; H3 boundary
+nodes return polygons; routing nodes return route LineStrings and waypoint Points
+alongside their existing result objects.
+
+Geo nodes exchange spatial values through Geometry pins. Location measurements,
+addresses, and route details remain available as result objects. There are no
+duplicate coordinate Struct pins on these nodes.
+
+When an older board is loaded, saved coordinate literals are converted to
+Geometry. Connections to existing Struct data use conversion adapters so that
+older data sources and consumers keep their original shape. Explicit adapters
+also remain available for stored coordinate, boundary, polygon, route, and
+location payloads.
+
+Geometry-native H3 nodes also convert Polygon or MultiPolygon Geometry to bounded
+cell coverage.
 H3 coverage follows the profile's direct longitude edges. A region intended to cross
 the antimeridian must already be represented as split polygon parts.
-Route and location adapters retain the surrounding result so properties remain
-available to downstream nodes.
+Route and location result objects retain their properties for downstream nodes.
 
 ## Tables and SQL
 

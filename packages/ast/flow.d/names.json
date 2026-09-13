@@ -10052,6 +10052,15 @@
     "class": "geometry",
     "category": "Web/Geo/Geometry"
   },
+  "geometry_legacy_adapter": {
+    "qualified": "geometry::legacyAdapter",
+    "namespace": "geometry",
+    "alias": "legacyAdapter",
+    "flat": "geometryLegacyAdapter",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Geo/Geometry"
+  },
   "geometry_line_is_closed": {
     "qualified": "geometry::isClosed",
     "namespace": "geometry",

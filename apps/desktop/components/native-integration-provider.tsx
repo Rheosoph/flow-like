@@ -6,6 +6,7 @@ import {
 	completeNativeAction,
 	nativeActionErrorOutcome,
 } from "@flow-like/flow-like-ui/lib/native-action-result";
+import type { NativeCustomWidget } from "@flow-like/flow-like-ui/lib/native-widget";
 import {
 	RECENT_APPS_CHANGED,
 	readRecentApps,
@@ -24,6 +25,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { createNativeAppIconPublisher } from "../lib/native-app-icons";
+import { createNativeCustomWidgetPublisher } from "../lib/native-custom-widgets";
 import {
 	NativeEventInteractionRequired,
 	executeNativeEventWithResult,
@@ -127,6 +129,7 @@ export function NativeIntegrationProvider() {
 		let draining = false;
 		let drainRequested = false;
 		let baseSnapshot: NativeSnapshot | undefined;
+		let customWidgets: NativeCustomWidget[] = [];
 		let activeSignature = "";
 		const handling = new Set<string>();
 		const handled = new Set<string>();
@@ -183,7 +186,7 @@ export function NativeIntegrationProvider() {
 			const runs = engine.getActiveExecutions(scope);
 			activeSignature = JSON.stringify(runs);
 			const snapshot = withNativeActivePage(
-				withNativeActiveRuns(baseSnapshot, runs),
+				withNativeActiveRuns({ ...baseSnapshot, customWidgets }, runs),
 				navigation.current.pathname,
 				navigation.current.query,
 				navigation.current.webOrigin || undefined,
@@ -192,6 +195,17 @@ export function NativeIntegrationProvider() {
 				invoke("native_publish_snapshot", { snapshot }),
 			);
 		};
+		const customWidgetPublisher = createNativeCustomWidgetPublisher({
+			backend,
+			scope,
+			viewerId: auth.isAuthenticated ? auth.user?.profile.sub : undefined,
+			isCurrent: current,
+			publish: async (widgets) => {
+				customWidgets = widgets;
+				await publish();
+			},
+		});
+		customWidgetPublisher.start();
 		publishCurrentPage.current = publish;
 		const refresh = (): Promise<void> => {
 			if (refreshPromise) return refreshPromise;
@@ -509,6 +523,7 @@ export function NativeIntegrationProvider() {
 			stopped = true;
 			icons.dispose();
 			notificationIcons.dispose();
+			customWidgetPublisher.dispose();
 			if (publishCurrentPage.current === publish)
 				publishCurrentPage.current = undefined;
 			window.clearInterval(timer);
@@ -518,7 +533,14 @@ export function NativeIntegrationProvider() {
 			unsubscribeRuns();
 			void unlisten.then((off) => off());
 		};
-	}, [identityReady, auth.isAuthenticated, scope, backend, engine]);
+	}, [
+		identityReady,
+		auth.isAuthenticated,
+		auth.user?.profile.sub,
+		scope,
+		backend,
+		engine,
+	]);
 	const request = identityReady
 		? mcpRequests.find((request) => request.scope === scope)
 		: undefined;

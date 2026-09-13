@@ -317,10 +317,18 @@ export async function readBrowserLocation(
 									}),
 								);
 							} catch (error) {
+								// A watch can deliver its cached fix before a fresh reading.
+								if (
+									error instanceof DeviceError &&
+									error.code === "stale_location"
+								)
+									return;
 								finish(error);
 							}
 						},
 						(error) => {
+							// Acquisition errors can recover while this watch remains active.
+							if (error.code === 2) return;
 							const code =
 								error.code === 1
 									? "permission_denied"

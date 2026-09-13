@@ -793,7 +793,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn geometry_nodes_register_fixed_subtypes_and_retain_legacy_boundaries() {
+    fn geometry_nodes_register_fixed_subtypes_and_retain_legacy_adapters() {
         let catalog = crate::get_catalog();
         let nodes: Vec<Node> = catalog.iter().map(|logic| logic.get_node()).collect();
         let ids: std::collections::HashSet<_> =
@@ -817,7 +817,7 @@ mod tests {
                 .iter()
                 .filter(|node| node.name.starts_with("geometry_"))
                 .count(),
-            130,
+            131,
             "the generated registry must include every Geometry node"
         );
         for kind in GeometryKind::ALL {
@@ -839,24 +839,26 @@ mod tests {
         }
         let point = definition(Operation::MakePoint);
         assert!(point.pins.values().all(|pin| pin.default_value.is_none()));
-        let old = nodes
+        let boundary = nodes
             .iter()
             .find(|node| node.name == "h3_cell_to_boundary")
             .unwrap();
-        let old_pin = old
+        let boundary_pin = boundary
             .pins
             .values()
-            .find(|pin| pin.name == "boundary")
+            .find(|pin| pin.name == "geometry_out")
             .unwrap();
+        assert_eq!(boundary_pin.data_type, VariableType::Geometry);
+        assert!(boundary.get_pin_by_name("boundary").is_none());
         let adapter = definition(Operation::FromBoundary);
         let input = adapter
             .pins
             .values()
             .find(|pin| pin.name == "boundary")
             .unwrap();
-        assert_eq!(old_pin.data_type, VariableType::Struct);
-        assert_eq!(old_pin.value_type, input.value_type);
-        assert_eq!(old_pin.schema, input.schema);
+        assert_eq!(input.data_type, VariableType::Struct);
+        assert_eq!(input.value_type, ValueType::Normal);
+        assert!(input.schema.is_some());
     }
 
     #[cfg(feature = "execute")]

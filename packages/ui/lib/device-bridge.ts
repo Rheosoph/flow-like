@@ -379,10 +379,18 @@ export function createDeviceCommandSession(
 					now() + request.timeoutMs,
 				);
 				const timeout = setTimeout(
-					() => job.abort(),
+					() =>
+						job.abort(new DeviceError("timeout", "Device request timed out")),
 					Math.max(0, deadline - now()),
 				);
 				const abort = () => job.abort();
+				const interruptionError = () =>
+					job.signal.reason instanceof DeviceError
+						? job.signal.reason
+						: new DeviceError(
+								"cancelled",
+								"Device request expired or its run ended",
+							);
 				controller.signal.addEventListener("abort", abort, { once: true });
 				void (async () => {
 					let response: DeviceReply;
@@ -397,13 +405,7 @@ export function createDeviceCommandSession(
 							);
 						const execute = options.execute ?? executeDeviceCommand;
 						const interrupted = new Promise<never>((_resolve, reject) => {
-							onAbort = () =>
-								reject(
-									new DeviceError(
-										"cancelled",
-										"Device request expired or its run ended",
-									),
-								);
+							onAbort = () => reject(interruptionError());
 							job.signal.addEventListener("abort", onAbort, { once: true });
 							if (job.signal.aborted) onAbort();
 						});
@@ -417,13 +419,7 @@ export function createDeviceCommandSession(
 							interrupted,
 						]);
 						response = job.signal.aborted
-							? {
-									ok: false,
-									error: {
-										code: "cancelled",
-										message: "Device request expired or its run ended",
-									},
-								}
+							? deviceFailure(interruptionError())
 							: { ok: true, value };
 					} catch (error) {
 						response = deviceFailure(error);

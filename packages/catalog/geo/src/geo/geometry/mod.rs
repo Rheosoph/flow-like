@@ -6,6 +6,7 @@ pub mod coordinate_systems;
 #[cfg(feature = "execute")]
 mod cpu;
 pub mod integrations;
+pub mod legacy;
 pub mod linear_analysis;
 pub mod nodes;
 #[cfg(feature = "execute")]

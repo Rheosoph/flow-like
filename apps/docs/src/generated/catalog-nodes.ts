@@ -152873,6 +152873,81 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/web/geo/geometry/geometry-legacy-adapter",
+    "packageName": "geo",
+    "name": "geometry_legacy_adapter",
+    "friendlyName": "Legacy Geo Adapter",
+    "description": "Preserves connections to historical coordinate and route data when a saved board upgrades to Geometry pins.",
+    "category": "Web/Geo/Geometry",
+    "categoryPath": [
+      "Web",
+      "Geo",
+      "Geometry"
+    ],
+    "categorySlug": "nodes/web/geo/geometry",
+    "icon": "/flow/icons/map.svg",
+    "pins": [
+      {
+        "name": "mode",
+        "friendlyName": "Conversion",
+        "description": "Historical payload conversion",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "coordinate_to_point",
+        "index": 1,
+        "options": {
+          "validValues": [
+            "coordinate_to_point",
+            "coordinates_to_points",
+            "waypoints_to_points",
+            "point_to_coordinate",
+            "geometry_to_route",
+            "geometry_to_trip_route",
+            "h3_boundary",
+            "h3_polygons"
+          ]
+        }
+      },
+      {
+        "name": "value",
+        "friendlyName": "Value",
+        "description": "Value to convert",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+        "index": 2
+      },
+      {
+        "name": "source",
+        "friendlyName": "Original Source",
+        "description": "Original H3 cell or cells used to preserve historical boundaries",
+        "pinType": "Input",
+        "dataType": "Generic",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "converted",
+        "friendlyName": "Converted",
+        "description": "Converted historical value or Geometry",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 1
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 1,
+    "flags": [],
+    "version": 1,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/web/geo/geometry/geometry-from-legacy-polygons",
     "packageName": "geo",
     "name": "geometry_from_legacy_polygons",
@@ -155901,13 +155976,12 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "boundary",
-        "friendlyName": "Boundary",
-        "description": "Array of coordinates representing the cell boundary (closed polygon)",
+        "name": "geometry_out",
+        "friendlyName": "Geometry",
+        "description": "Cell boundary as a Polygon, or MultiPolygon when it crosses the antimeridian",
         "pinType": "Output",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
         "index": 1
       },
       {
@@ -155923,6 +155997,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 1,
     "outputCount": 2,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156099,19 +156174,20 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "The center coordinate of the H3 cell",
+        "name": "geometry_out",
+        "friendlyName": "Geometry",
+        "description": "Point at the center of the H3 cell",
         "pinType": "Output",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
         "index": 1
       }
     ],
     "inputCount": 1,
     "outputCount": 1,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156150,19 +156226,19 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "polygons",
-        "friendlyName": "Polygons",
-        "description": "Array of polygons representing the merged cell boundaries",
+        "name": "geometry_out",
+        "friendlyName": "Geometry",
+        "description": "Merged cell boundaries as a MultiPolygon, split at the antimeridian",
         "pinType": "Output",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Polygon\",\"type\":\"object\",\"properties\":{\"exterior\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"interiors\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}}},\"required\":[\"exterior\",\"interiors\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"MultiPolygon\"}",
         "index": 1
       },
       {
         "name": "polygon_count",
         "friendlyName": "Polygon Count",
-        "description": "Number of separate polygons (disconnected regions)",
+        "description": "Number of polygons in Geometry, including pieces split at the antimeridian",
         "pinType": "Output",
         "dataType": "Integer",
         "valueType": "Normal",
@@ -156172,6 +156248,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 1,
     "outputCount": 2,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156536,17 +156613,14 @@ export const catalogNodes: CatalogNode[] = [
     },
     "pins": [
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "The geographic coordinate (latitude, longitude)",
+        "name": "geometry",
+        "friendlyName": "Geometry",
+        "description": "Point to index as an H3 cell",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 1,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 1
       },
       {
         "name": "resolution",
@@ -156571,6 +156645,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 2,
     "outputCount": 1,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156676,30 +156751,21 @@ export const catalogNodes: CatalogNode[] = [
         "index": 4
       },
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "Latitude and longitude for existing Geo nodes",
-        "pinType": "Output",
-        "dataType": "Struct",
-        "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 5
-      },
-      {
         "name": "error",
         "friendlyName": "Error",
         "description": "Structured error code and message",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "index": 6
+        "index": 5
       }
     ],
     "inputCount": 4,
-    "outputCount": 6,
+    "outputCount": 5,
     "flags": [
       "Long running"
     ],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156737,17 +156803,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "The geographic coordinate (latitude, longitude) to center the map on",
+        "name": "geometry",
+        "friendlyName": "Geometry",
+        "description": "Point at the map center",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "zoom",
@@ -156829,6 +156892,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 6,
     "outputCount": 3,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156866,18 +156930,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinates",
-        "friendlyName": "Coordinates",
-        "description": "Ordered GPS coordinates to match",
+        "name": "geometries",
+        "friendlyName": "Geometries",
+        "description": "Ordered Point geometries",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Array",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "defaultValue": [],
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "profile",
@@ -156993,11 +157053,32 @@ export const catalogNodes: CatalogNode[] = [
         "valueType": "Array",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Tracepoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]},\"matchings_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"waypoint_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"alternatives_count\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0}},\"required\":[\"name\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
         "index": 5
+      },
+      {
+        "name": "geometry_out",
+        "friendlyName": "Route Geometry",
+        "description": "Primary route as a LineString geometry. Unset when no route is found.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+        "index": 6
+      },
+      {
+        "name": "route_geometries",
+        "friendlyName": "Route Geometries",
+        "description": "LineString geometries for all returned routes, with the primary route first.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+        "index": 7
       }
     ],
     "inputCount": 8,
-    "outputCount": 5,
+    "outputCount": 7,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157035,17 +157116,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "The coordinate to snap to the road network",
+        "name": "geometry",
+        "friendlyName": "Geometry",
+        "description": "Point geometry to snap to the road network",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "profile",
@@ -157115,11 +157193,32 @@ export const catalogNodes: CatalogNode[] = [
         "valueType": "Array",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NearestWaypoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"distance\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
         "index": 4
+      },
+      {
+        "name": "geometry_out",
+        "friendlyName": "Nearest Geometry",
+        "description": "Closest routable Point geometry. Unset when no point is found.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 5
+      },
+      {
+        "name": "waypoint_geometries",
+        "friendlyName": "Waypoint Geometries",
+        "description": "Nearest routable Point geometries in the same order as Waypoints.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 6
       }
     ],
     "inputCount": 5,
-    "outputCount": 4,
+    "outputCount": 6,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157157,18 +157256,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinates",
-        "friendlyName": "Coordinates",
-        "description": "List of coordinates to include in the matrix",
+        "name": "geometries",
+        "friendlyName": "Geometries",
+        "description": "Ordered Point geometries",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Array",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "defaultValue": [],
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "profile",
@@ -157289,6 +157384,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 8,
     "outputCount": 5,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157467,18 +157563,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinates",
-        "friendlyName": "Coordinates",
-        "description": "Ordered coordinates for the trip",
+        "name": "geometries",
+        "friendlyName": "Geometries",
+        "description": "Ordered Point geometries",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Array",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "defaultValue": [],
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "profile",
@@ -157612,19 +157704,40 @@ export const catalogNodes: CatalogNode[] = [
         "index": 7
       },
       {
-        "name": "geometry",
-        "friendlyName": "Geometry",
-        "description": "Trip geometry as array of coordinates",
+        "name": "geometry_out",
+        "friendlyName": "Route Geometry",
+        "description": "Primary route as a LineString geometry. Unset when no route is found.",
         "pinType": "Output",
-        "dataType": "Struct",
-        "valueType": "Array",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
         "index": 8
+      },
+      {
+        "name": "route_geometries",
+        "friendlyName": "Route Geometries",
+        "description": "LineString geometries for all returned routes, with the primary route first.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+        "index": 9
+      },
+      {
+        "name": "waypoint_geometries",
+        "friendlyName": "Waypoint Geometries",
+        "description": "Snapped Point geometries in the same order as Waypoints. Use waypoint_index in Waypoints for the optimized visit order.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 10
       }
     ],
     "inputCount": 7,
-    "outputCount": 8,
+    "outputCount": 10,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157662,39 +157775,33 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "start",
+        "name": "start_geometry",
         "friendlyName": "Start",
-        "description": "Starting coordinate for the route",
+        "description": "Starting Point geometry for the route",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
-        "name": "end",
+        "name": "end_geometry",
         "friendlyName": "End",
-        "description": "Ending coordinate for the route",
+        "description": "Ending Point geometry for the route",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 3,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 3
       },
       {
-        "name": "waypoints",
-        "friendlyName": "Waypoints",
-        "description": "Optional intermediate waypoints to pass through",
+        "name": "waypoint_geometries",
+        "friendlyName": "Waypoint Geometries",
+        "description": "Optional intermediate Point geometries in visit order",
         "pinType": "Input",
-        "dataType": "Struct",
-        "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
         "defaultValue": [],
         "index": 4
       },
@@ -157782,19 +157889,30 @@ export const catalogNodes: CatalogNode[] = [
         "index": 6
       },
       {
-        "name": "geometry",
-        "friendlyName": "Geometry",
-        "description": "Route geometry as array of coordinates",
+        "name": "geometry_out",
+        "friendlyName": "Route Geometry",
+        "description": "Primary route as a LineString geometry. Unset when no route is found.",
         "pinType": "Output",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteGeometry\",\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
         "index": 7
+      },
+      {
+        "name": "route_geometries",
+        "friendlyName": "Route Geometries",
+        "description": "LineString geometries for all returned routes, with the primary route first.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+        "index": 8
       }
     ],
     "inputCount": 6,
-    "outputCount": 7,
+    "outputCount": 8,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157832,17 +157950,14 @@ export const catalogNodes: CatalogNode[] = [
         "index": 1
       },
       {
-        "name": "coordinate",
-        "friendlyName": "Coordinate",
-        "description": "The geographic coordinate (latitude, longitude) to look up",
+        "name": "geometry",
+        "friendlyName": "Geometry",
+        "description": "Point to look up",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Geometry",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 2
       },
       {
         "name": "zoom",
@@ -157890,11 +158005,22 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "index": 4
+      },
+      {
+        "name": "geometry_out",
+        "friendlyName": "Result Geometry",
+        "description": "Point returned by the geocoding service",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 5
       }
     ],
     "inputCount": 3,
-    "outputCount": 4,
+    "outputCount": 5,
     "flags": [],
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157998,11 +158124,32 @@ export const catalogNodes: CatalogNode[] = [
         "valueType": "Normal",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"SearchResult\",\"type\":\"object\",\"properties\":{\"display_name\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"place_type\":{\"type\":\"string\"},\"importance\":{\"type\":\"number\",\"format\":\"double\"},\"bounding_box\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundingBox\"},{\"type\":\"null\"}]},\"osm_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"},\"osm_type\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"display_name\",\"coordinate\",\"place_type\",\"importance\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"BoundingBox\":{\"type\":\"object\",\"properties\":{\"min_lat\":{\"type\":\"number\",\"format\":\"double\"},\"min_lon\":{\"type\":\"number\",\"format\":\"double\"},\"max_lat\":{\"type\":\"number\",\"format\":\"double\"},\"max_lon\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"min_lat\",\"min_lon\",\"max_lat\",\"max_lon\"]}}}",
         "index": 4
+      },
+      {
+        "name": "geometry_out",
+        "friendlyName": "First Geometry",
+        "description": "Point for the first match. Unset when no location matches.",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Normal",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 5
+      },
+      {
+        "name": "geometries",
+        "friendlyName": "Geometries",
+        "description": "Points for all matches, in the same order as Results",
+        "pinType": "Output",
+        "dataType": "Geometry",
+        "valueType": "Array",
+        "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+        "index": 6
       }
     ],
     "inputCount": 4,
-    "outputCount": 4,
+    "outputCount": 6,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -163316,8 +163463,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Web",
     "slug": "nodes/web",
     "depth": 1,
-    "count": 223,
-    "description": "Browse 223 generated Flow-Like node references in Web with pin details and available schema, package, and risk-rating metadata."
+    "count": 224,
+    "description": "Browse 224 generated Flow-Like node references in Web with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "API",
@@ -163364,16 +163511,16 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Web/Geo",
     "slug": "nodes/web/geo",
     "depth": 2,
-    "count": 152,
-    "description": "Browse 152 generated Flow-Like node references in Web/Geo with pin details and available schema, package, and risk-rating metadata."
+    "count": 153,
+    "description": "Browse 153 generated Flow-Like node references in Web/Geo with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Geometry",
     "path": "Web/Geo/Geometry",
     "slug": "nodes/web/geo/geometry",
     "depth": 3,
-    "count": 130,
-    "description": "Browse 130 generated Flow-Like node references in Web/Geo/Geometry with pin details and available schema, package, and risk-rating metadata."
+    "count": 131,
+    "description": "Browse 131 generated Flow-Like node references in Web/Geo/Geometry with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "H3",

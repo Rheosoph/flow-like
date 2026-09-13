@@ -18,6 +18,8 @@ type Run = {
 const runs: Run[] = [];
 const intervals = new Set<() => void>();
 let hydration: Promise<void> = Promise.resolve();
+let failNextRun = false;
+const captureReadiness: boolean[] = [];
 const globalGetAll = mock(async () => {
 	await hydration;
 	return { theme: "saved" };
@@ -63,6 +65,10 @@ const backend = {
 			_onStarted: unknown,
 			onEvents: Run["onEvents"],
 		) => {
+			if (failNextRun) {
+				failNextRun = false;
+				throw new Error("Page load failed");
+			}
 			runs.push({ payload, onEvents });
 		},
 	},
@@ -72,10 +78,18 @@ mock.module("../../state/execution-service-context", () => ({
 	useExecutionServiceOptional: () => null,
 }));
 const childrenOnly = ({ children }: { children: ReactNode }) => children;
-mock.module("../a2ui/A2UIRenderer", () => ({ A2UIRenderer: () => null }));
+mock.module("../a2ui/A2UIRenderer", () => ({
+	A2UIRenderer: ({ agentBridge }: { agentBridge: ReactNode }) => agentBridge,
+}));
 mock.module("../a2ui/DataContext", () => ({ DataProvider: childrenOnly }));
 mock.module("../a2ui/LivePageAgentBridge", () => ({
 	LivePageAgentBridge: () => null,
+}));
+mock.module("./native-widget-page-capture", () => ({
+	NativeWidgetPageCaptureBridge: ({ ready }: { ready: boolean }) => {
+		captureReadiness.push(ready);
+		return null;
+	},
 }));
 const dialogs = { openDialog: () => {}, closeDialog: () => {} };
 mock.module("../a2ui/RouteDialogProvider", () => ({
@@ -110,6 +124,8 @@ afterEach(async () => {
 	intervals.clear();
 	runs.length = 0;
 	hydration = Promise.resolve();
+	failNextRun = false;
+	captureReadiness.length = 0;
 	hostSearch = "host=ignored";
 	router.push.mockClear();
 	router.replace.mockClear();
@@ -191,6 +207,13 @@ async function mount(appId: string, page: IPage, embedded = true) {
 }
 
 describe("page lifecycle frontend state", () => {
+	test("does not mark failed page loads as fresh native widget content", async () => {
+		failNextRun = true;
+		const mounted = await mount("failed-native-load", createPage("first"));
+		expect(captureReadiness.at(-1)).toBe(false);
+		await mounted.rerender(createPage("next"));
+		expect(captureReadiness.at(-1)).toBe(true);
+	});
 	test("native app query reaches page load and its updates cannot change the outer app", async () => {
 		const url = new URL(
 			appRouteUrl(

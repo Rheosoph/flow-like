@@ -142,6 +142,48 @@ describe("foreground browser location", () => {
 		expect(mockBrowser.clearWatch).toHaveBeenCalledWith(7);
 		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
 	});
+	test("waits for a fresh fix after cached readings and transient acquisition failures", async () => {
+		const mockBrowser = browser();
+		const pending = readBrowserLocation(normalizeLocationOptions({}), {
+			appId: "app",
+		});
+		mockBrowser.position(fix(Date.now() - 10_000));
+		mockBrowser.error(2);
+		expect(mockBrowser.clearWatch).not.toHaveBeenCalled();
+		mockBrowser.position();
+		expect(await pending).toMatchObject({
+			geometry: { type: "Point", coordinates: [13.405, 52.52] },
+		});
+		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
+	});
+	test("ends unsuccessful acquisition at its deadline and permits a new request", async () => {
+		const mockBrowser = browser();
+		const pending = readBrowserLocation(
+			normalizeLocationOptions({ timeoutMs: 100 }),
+			{ appId: "app" },
+		);
+		mockBrowser.position(fix(Date.now() - 10_000));
+		mockBrowser.error(2);
+		await expect(pending).rejects.toMatchObject({ code: "timeout" });
+		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
+		mockBrowser.position();
+		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
+		const retry = readBrowserLocation(normalizeLocationOptions({}), {
+			appId: "app",
+		});
+		mockBrowser.position();
+		expect(await retry).toMatchObject({ latitude: 52.52 });
+		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(2);
+	});
+	test("invalid fresh coordinates still fail immediately", async () => {
+		const mockBrowser = browser();
+		const pending = readBrowserLocation(normalizeLocationOptions({}), {
+			appId: "app",
+		});
+		mockBrowser.position({ ...fix(), latitude: 100 });
+		await expect(pending).rejects.toMatchObject({ code: "invalid_location" });
+		expect(mockBrowser.clearWatch).toHaveBeenCalledOnce();
+	});
 	test("rejects hidden or insecure contexts without starting a watch", async () => {
 		const mockBrowser = browser();
 		mockBrowser.doc.visibilityState = "hidden";

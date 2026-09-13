@@ -431,6 +431,47 @@ describe("location device commands", () => {
 });
 
 describe("live frontend device bridge", () => {
+	test("a stalled location provider sends one timeout reply and ignores a late fix", async () => {
+		const replies: DeviceReply[] = [];
+		let resolveLocation!: (value: unknown) => void;
+		let signal: AbortSignal | undefined;
+		const session = createDeviceCommandSession(
+			{ appId: "app", executionTarget: "local" },
+			{
+				execute: async (_command, _args, context) => {
+					signal = context.signal;
+					return new Promise((resolve) => {
+						resolveLocation = resolve;
+					});
+				},
+				reply: async (_channel, value) => {
+					replies.push(value as DeviceReply);
+				},
+			},
+		);
+		try {
+			session.filter([
+				event(
+					message({ command: "location.current", args: {}, timeout_ms: 100 }),
+				),
+			]);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			expect(signal?.aborted).toBe(true);
+			expect(replies).toEqual([
+				{
+					ok: false,
+					error: { code: "timeout", message: "Device request timed out" },
+				},
+			]);
+			resolveLocation({
+				geometry: { type: "Point", coordinates: [13.4, 52.5] },
+			});
+			await flush();
+			expect(replies).toHaveLength(1);
+		} finally {
+			session.close();
+		}
+	});
 	test("cancel stops a pending device operation before its execution stream closes", async () => {
 		const replies: DeviceReply[] = [];
 		let signal: AbortSignal | undefined;

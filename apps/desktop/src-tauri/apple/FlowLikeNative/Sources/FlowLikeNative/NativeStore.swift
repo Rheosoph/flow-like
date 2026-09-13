@@ -54,6 +54,7 @@ public struct NativeStore: Sendable {
         guard data.count <= 2_097_152 else { throw NativeIntegrationError.oversized }
         var snapshot = try JSONDecoder().decode(NativeSnapshot.self, from: data)
         guard snapshot.isCurrent else { throw NativeIntegrationError.expired }
+        snapshot.customWidgets = NativeCustomWidget.normalize(snapshot.customWidgets, apps: snapshot.apps)
         for section in snapshot.sections.indices {
             for item in snapshot.sections[section].items.indices {
                 snapshot.sections[section].items[item].icon = snapshot.sections[section].items[item].icon?.normalized()

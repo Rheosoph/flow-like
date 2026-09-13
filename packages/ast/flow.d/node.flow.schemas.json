@@ -5671,14 +5671,13 @@
   },
   "geo_get_current_location": {
     "outputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
       "geometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "location": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocationFix\",\"description\":\"A device measurement. Geometry stays two-dimensional; altitude is in meters.\",\"type\":\"object\",\"properties\":{\"geometry\":true,\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"},\"accuracy\":{\"type\":\"number\",\"format\":\"double\"},\"timestamp\":{\"type\":\"number\",\"format\":\"double\"},\"altitude\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"altitudeAccuracy\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"speed\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"heading\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"}},\"required\":[\"geometry\",\"latitude\",\"longitude\",\"accuracy\",\"timestamp\"]}"
     }
   },
   "geo_get_map_image": {
     "inputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "geometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     },
     "outputs": {
       "image": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeImage\",\"type\":\"object\",\"properties\":{\"image_ref\":{\"type\":\"string\"}},\"required\":[\"image_ref\"]}"
@@ -5686,28 +5685,32 @@
   },
   "geo_osrm_match_trace": {
     "inputs": {
-      "coordinates": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+      "geometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "profile": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteProfile\",\"type\":\"string\",\"enum\":[\"Car\",\"Bike\",\"Foot\"]}"
     },
     "outputs": {
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
       "matchings": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
       "primaryMatching": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
+      "routeGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
       "tracepoints": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Tracepoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]},\"matchings_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"waypoint_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"alternatives_count\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0}},\"required\":[\"name\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
     }
   },
   "geo_osrm_nearest": {
     "inputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+      "geometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "profile": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteProfile\",\"type\":\"string\",\"enum\":[\"Car\",\"Bike\",\"Foot\"]}"
     },
     "outputs": {
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "nearest": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NearestWaypoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"distance\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
+      "waypointGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "waypoints": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NearestWaypoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"distance\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
     }
   },
   "geo_osrm_table": {
     "inputs": {
-      "coordinates": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "geometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     },
     "outputs": {
       "distances": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TableMatrixRow\",\"type\":\"object\",\"properties\":{\"values\":{\"type\":\"array\",\"items\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"}}},\"required\":[\"values\"]}",
@@ -5726,39 +5729,45 @@
   },
   "geo_osrm_trip": {
     "inputs": {
-      "coordinates": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+      "geometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "profile": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteProfile\",\"type\":\"string\",\"enum\":[\"Car\",\"Bike\",\"Foot\"]}"
     },
     "outputs": {
-      "geometry": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+      "routeGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
       "trip": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
       "trips": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
+      "waypointGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "waypoints": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TripWaypoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]},\"waypoint_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0}},\"required\":[\"name\",\"distance\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
     }
   },
   "geo_plan_route": {
     "inputs": {
-      "end": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-      "start": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}",
-      "waypoints": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "endGeometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+      "startGeometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+      "waypointGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     },
     "outputs": {
       "alternativesOut": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
-      "geometry": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteGeometry\",\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}",
-      "route": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}"
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}",
+      "route": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteResult\",\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"geometry\":{\"$ref\":\"#/$defs/RouteGeometry\"},\"legs\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteLeg\"}},\"weight_name\":{\"type\":\"string\"}},\"required\":[\"distance\",\"duration\",\"geometry\",\"legs\",\"weight_name\"],\"$defs\":{\"RouteGeometry\":{\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"]},\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"RouteLeg\":{\"type\":\"object\",\"properties\":{\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"summary\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RouteStep\"}}},\"required\":[\"distance\",\"duration\",\"summary\",\"steps\"]},\"RouteStep\":{\"type\":\"object\",\"properties\":{\"instruction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"duration\":{\"type\":\"number\",\"format\":\"double\"},\"name\":{\"type\":\"string\"},\"maneuver_type\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"required\":[\"instruction\",\"distance\",\"duration\",\"name\",\"maneuver_type\",\"coordinate\"]}}}",
+      "routeGeometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
     }
   },
   "geo_reverse_geocode": {
     "inputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "geometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     },
     "outputs": {
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "result": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ReverseGeocodeResult\",\"type\":\"object\",\"properties\":{\"display_name\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"address\":{\"$ref\":\"#/$defs/Address\"},\"osm_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"},\"osm_type\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"display_name\",\"coordinate\",\"address\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"Address\":{\"type\":\"object\",\"properties\":{\"house_number\":{\"type\":[\"string\",\"null\"]},\"road\":{\"type\":[\"string\",\"null\"]},\"suburb\":{\"type\":[\"string\",\"null\"]},\"city\":{\"type\":[\"string\",\"null\"]},\"county\":{\"type\":[\"string\",\"null\"]},\"state\":{\"type\":[\"string\",\"null\"]},\"postcode\":{\"type\":[\"string\",\"null\"]},\"country\":{\"type\":[\"string\",\"null\"]},\"country_code\":{\"type\":[\"string\",\"null\"]}}}}}"
     }
   },
   "geo_search_location": {
     "outputs": {
       "firstResult": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"SearchResult\",\"type\":\"object\",\"properties\":{\"display_name\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"place_type\":{\"type\":\"string\"},\"importance\":{\"type\":\"number\",\"format\":\"double\"},\"bounding_box\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundingBox\"},{\"type\":\"null\"}]},\"osm_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"},\"osm_type\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"display_name\",\"coordinate\",\"place_type\",\"importance\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"BoundingBox\":{\"type\":\"object\",\"properties\":{\"min_lat\":{\"type\":\"number\",\"format\":\"double\"},\"min_lon\":{\"type\":\"number\",\"format\":\"double\"},\"max_lat\":{\"type\":\"number\",\"format\":\"double\"},\"max_lon\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"min_lat\",\"min_lon\",\"max_lat\",\"max_lon\"]}}}",
+      "geometries": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}",
       "results": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"SearchResult\",\"type\":\"object\",\"properties\":{\"display_name\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"place_type\":{\"type\":\"string\"},\"importance\":{\"type\":\"number\",\"format\":\"double\"},\"bounding_box\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundingBox\"},{\"type\":\"null\"}]},\"osm_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"},\"osm_type\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"display_name\",\"coordinate\",\"place_type\",\"importance\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"BoundingBox\":{\"type\":\"object\",\"properties\":{\"min_lat\":{\"type\":\"number\",\"format\":\"double\"},\"min_lon\":{\"type\":\"number\",\"format\":\"double\"},\"max_lat\":{\"type\":\"number\",\"format\":\"double\"},\"max_lon\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"min_lat\",\"min_lon\",\"max_lat\",\"max_lon\"]}}}"
     }
   },
@@ -5968,6 +5977,14 @@
     },
     "outputs": {
       "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
+    }
+  },
+  "geometry_legacy_adapter": {
+    "inputs": {
+      "value": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+    },
+    "outputs": {
+      "converted": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     }
   },
   "geometry_line_is_closed": {
@@ -6306,19 +6323,14 @@
       "unit": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"AreaUnit\",\"type\":\"string\",\"enum\":[\"SquareMeters\",\"SquareKilometers\",\"SquareMiles\",\"Hectares\",\"Acres\"]}"
     }
   },
-  "h3_cell_to_boundary": {
-    "outputs": {
-      "boundary": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
-    }
-  },
   "h3_cell_to_latlng": {
     "outputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     }
   },
   "h3_cells_to_multi_polygon": {
     "outputs": {
-      "polygons": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Polygon\",\"type\":\"object\",\"properties\":{\"exterior\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"interiors\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}}},\"required\":[\"exterior\",\"interiors\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
+      "geometryOut": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"MultiPolygon\"}"
     }
   },
   "h3_edge_length": {
@@ -6328,7 +6340,7 @@
   },
   "h3_latlng_to_cell": {
     "inputs": {
-      "coordinate": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+      "geometry": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
     }
   },
   "hmac_sha256_auth": {

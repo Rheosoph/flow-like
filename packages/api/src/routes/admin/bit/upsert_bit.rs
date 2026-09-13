@@ -1,6 +1,7 @@
 use flow_like_storage::object_store::ObjectStoreExt;
 use std::sync::Arc;
 
+use super::mirror_cache::{self, MirroredArtifact};
 use crate::{
     entity::{bit, bit_tree_cache},
     error::ApiError,
@@ -22,7 +23,7 @@ use flow_like_types::{
 use flow_like_types::{create_id, reqwest};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
-use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, ETAG};
+use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, ETAG, IF_MATCH};
 use sea_orm::{
     ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter,
 };
@@ -188,6 +189,33 @@ fn bit_identity_changed(existing: &bit::Model, incoming: &bit::Model) -> bool {
         || existing.file_name != incoming.file_name
         || existing.r#type != incoming.r#type
         || existing.dependencies != incoming.dependencies
+}
+
+fn artifact_request(
+    client: &reqwest::Client,
+    url: &str,
+    etag: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let request = client.get(url);
+    match etag {
+        Some(etag) => request.header(IF_MATCH, etag),
+        None => request,
+    }
+}
+
+fn apply_mirrored_artifact(bit: &mut bit::Model, artifact: &MirroredArtifact, cdn: &str) {
+    bit.hash = Some(artifact.hash.clone());
+    bit.size = Some(artifact.size as i64);
+    bit.download_link = Some(format!(
+        "{}/{}",
+        cdn.trim_end_matches('/'),
+        artifact.object_key
+    ));
+    bit.dependency_tree_hash = Some(artifact_dependency_tree_hash(
+        &artifact.hash,
+        bit.file_name.as_deref(),
+        &bit.r#type.to_value(),
+    ));
 }
 
 #[tracing::instrument(name = "PUT /admin/bit/{bit_id}", skip(state, user, bit))]
@@ -407,12 +435,8 @@ async fn download_and_hash(
 
     let store = state.cdn_bucket.clone();
 
-    let old_location = flow_like_storage::object_store::path::Path::from("bits")
-        .join(bit.hash.clone().unwrap_or(bit.id.clone()));
-    let _delete = store.as_generic().delete(&old_location).await;
-
-    let url = match bit.download_link {
-        Some(ref link) => link,
+    let url = match bit.download_link.clone() {
+        Some(link) => link,
         None => return Ok(()),
     };
 
@@ -426,7 +450,7 @@ async fn download_and_hash(
         .build()?;
 
     let response =
-        successful_upstream_response(client.head(url).send().await?, "HEAD").map_err(|error| {
+        successful_upstream_response(client.head(&url).send().await?, "HEAD").map_err(|error| {
             tracing::warn!(
                 "Rejected upstream HEAD response for bit {}: {}",
                 bit.id,
@@ -439,6 +463,11 @@ async fn download_and_hash(
         .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
+    if content_length.is_some_and(|size| size > i64::MAX as u64) {
+        return Err(flow_like_types::Error::msg(
+            "Upstream artifact exceeds the supported size",
+        ));
+    }
 
     let supports_ranges = response
         .headers()
@@ -446,23 +475,42 @@ async fn download_and_hash(
         .map(|v| v.to_str().unwrap_or("").contains("bytes"))
         .unwrap_or(false);
 
-    // The validator becomes the object key, so anything that is not a single path
-    // segment has to be rejected. A weak validator arrives as `W/"<value>"`, and a
-    // base64 validator can carry a `/` of its own; either one silently turns the key
-    // into a nested path and the mirrored artifact answers 404 on download.
-    let e_tag = response
-        .headers()
-        .get(ETAG)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| {
-            s.trim()
-                .strip_prefix("W/")
-                .unwrap_or(s.trim())
-                .trim_matches('"')
-                .to_string()
-        })
-        .filter(|tag| !tag.is_empty() && !tag.contains('/'))
-        .unwrap_or_else(create_id);
+    let upstream_etag =
+        mirror_cache::strong_etag(response.headers().get(ETAG).and_then(|v| v.to_str().ok()));
+    let cdn_store = store.as_generic();
+    let cache_store = state.meta_bucket.as_generic();
+
+    // Both new imports and updates reach this check. Draft IDs and the registry's
+    // rewritten CDN URL do not identify the original download source.
+    if let Some(etag) = upstream_etag.as_deref()
+        && let Some(artifact) = mirror_cache::lookup(
+            cache_store.as_ref(),
+            cdn_store.as_ref(),
+            &url,
+            etag,
+            content_length,
+        )
+        .await?
+    {
+        apply_mirrored_artifact(
+            bit,
+            &artifact,
+            state.platform_config.cdn.as_deref().unwrap_or_default(),
+        );
+        if let Some(tx) = &tx {
+            let _ = tx
+                .send(StreamMsg::Progress(Progress {
+                    stage: "reused",
+                    message: Some("Reusing the existing CDN artifact".into()),
+                    downloaded: Some(0),
+                    total: Some(artifact.size),
+                    percent: Some(100.0),
+                    hash: Some(artifact.hash),
+                }))
+                .await;
+        }
+        return Ok(());
+    }
 
     if let Some(tx) = &tx {
         let _ = tx
@@ -477,7 +525,11 @@ async fn download_and_hash(
             .await;
     }
 
-    let path = flow_like_storage::object_store::path::Path::from("bits").join(e_tag.clone());
+    let object_key = upstream_etag
+        .as_deref()
+        .map(|etag| mirror_cache::object_key(&url, etag))
+        .unwrap_or_else(|| format!("bits/{}", create_id()));
+    let path = flow_like_storage::object_store::path::Path::from(object_key.clone());
 
     // For ranged downloads
     const CHUNK_SIZE: usize = 50 * 1024 * 1024; // 50MB chunks
@@ -491,7 +543,12 @@ async fn download_and_hash(
 
     // Fast path: small files -> single put (avoid multipart altogether)
     if content_length.is_some() && content_length.unwrap() <= SINGLE_PUT_THRESHOLD {
-        let resp = successful_upstream_response(client.get(url).send().await?, "GET")?;
+        let resp = successful_upstream_response(
+            artifact_request(&client, &url, upstream_etag.as_deref())
+                .send()
+                .await?,
+            "GET",
+        )?;
         let bytes = resp.bytes().await?;
         hasher.update(&bytes);
         total_downloaded = bytes.len() as u64;
@@ -528,7 +585,11 @@ async fn download_and_hash(
             const MAX_RETRIES: u32 = 3;
 
             loop {
-                match client.get(url).header("Range", &range_header).send().await {
+                match artifact_request(&client, &url, upstream_etag.as_deref())
+                    .header("Range", &range_header)
+                    .send()
+                    .await
+                {
                     Ok(chunk_response) => {
                         let chunk_response = successful_range_response(chunk_response)?;
                         let chunk_bytes = chunk_response.bytes().await?;
@@ -590,7 +651,12 @@ async fn download_and_hash(
         upload_request.complete().await?;
     } else {
         // Streaming download without range support: buffer to meet multipart minimum part size
-        let response = successful_upstream_response(client.get(url).send().await?, "GET")?;
+        let response = successful_upstream_response(
+            artifact_request(&client, &url, upstream_etag.as_deref())
+                .send()
+                .await?,
+            "GET",
+        )?;
         let mut download_stream = response.bytes_stream();
         let mut upload_request = store.as_generic().put_multipart(&path).await?;
         let mut buffer: Vec<u8> = Vec::with_capacity(MIN_MULTIPART_PART_SIZE * 2);
@@ -647,19 +713,40 @@ async fn download_and_hash(
         upload_request.complete().await?;
     }
 
+    if total_downloaded > i64::MAX as u64 {
+        return Err(flow_like_types::Error::msg(
+            "Downloaded artifact exceeds the supported size",
+        ));
+    }
+    if let Some(expected) = content_length
+        && total_downloaded != expected
+    {
+        return Err(flow_like_types::Error::msg(format!(
+            "Upstream download returned {total_downloaded} bytes; expected {expected}"
+        )));
+    }
+
     let file_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-    bit.hash = Some(file_hash.clone());
-    bit.dependency_tree_hash = Some(artifact_dependency_tree_hash(
-        &file_hash,
-        bit.file_name.as_deref(),
-        &bit.r#type.to_value(),
-    ));
-
-    bit.size = Some(total_downloaded as i64);
-
-    let url = state.platform_config.cdn.clone().unwrap_or("".to_string());
-    let url = format!("{}/bits/{}", url, e_tag);
-    bit.download_link = Some(url.to_string());
+    let artifact = MirroredArtifact {
+        object_key,
+        hash: file_hash.clone(),
+        size: total_downloaded,
+    };
+    apply_mirrored_artifact(
+        bit,
+        &artifact,
+        state.platform_config.cdn.as_deref().unwrap_or_default(),
+    );
+    if let Some(etag) = upstream_etag.as_deref() {
+        mirror_cache::record(
+            cache_store.as_ref(),
+            cdn_store.as_ref(),
+            &url,
+            etag,
+            artifact,
+        )
+        .await?;
+    }
 
     if let Some(tx) = &tx {
         let _ = tx
@@ -820,6 +907,56 @@ mod tests {
             ..Bit::default()
         }
         .into()
+    }
+
+    #[test]
+    fn reused_artifact_preserves_the_requested_layout_and_dependencies() {
+        let mut incoming = existing_downloadable_model();
+        incoming.download_link = Some("https://models.example.test/config.json".into());
+        incoming.file_name = Some("nested/config.json".into());
+        incoming.r#type = flow_like::bit::BitTypes::Config.into();
+        let dependencies = incoming.dependencies.clone();
+        let artifact = MirroredArtifact {
+            object_key: "bits/cached-artifact".into(),
+            hash: "verified-content-hash".into(),
+            size: 1234,
+        };
+
+        apply_mirrored_artifact(&mut incoming, &artifact, "https://cdn.example.test/");
+
+        assert_eq!(incoming.hash.as_deref(), Some("verified-content-hash"));
+        assert_eq!(incoming.size, Some(1234));
+        assert_eq!(
+            incoming.download_link.as_deref(),
+            Some("https://cdn.example.test/bits/cached-artifact")
+        );
+        assert_eq!(incoming.file_name.as_deref(), Some("nested/config.json"));
+        assert_eq!(incoming.r#type.to_value(), "CONFIG");
+        assert_eq!(incoming.dependencies, dependencies);
+        assert_eq!(
+            incoming.dependency_tree_hash,
+            Some(artifact_dependency_tree_hash(
+                "verified-content-hash",
+                Some("nested/config.json"),
+                "CONFIG"
+            ))
+        );
+    }
+
+    #[test]
+    fn artifact_body_requests_are_pinned_to_the_head_validator() {
+        let client = reqwest::Client::new();
+        let request = artifact_request(
+            &client,
+            "https://models.example.test/weights",
+            Some("\"revision-1\""),
+        )
+        .header("Range", "bytes=0-1023")
+        .build()
+        .unwrap();
+        assert_eq!(request.headers()[IF_MATCH], "\"revision-1\"");
+        assert_eq!(request.headers()["Range"], "bytes=0-1023");
+        assert!(validate_upstream_status(reqwest::StatusCode::PRECONDITION_FAILED, "GET").is_err());
     }
 
     #[test]

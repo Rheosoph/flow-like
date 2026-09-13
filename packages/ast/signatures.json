@@ -61170,16 +61170,6 @@
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocationFix\",\"description\":\"A device measurement. Geometry stays two-dimensional; altitude is in meters.\",\"type\":\"object\",\"properties\":{\"geometry\":true,\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"},\"accuracy\":{\"type\":\"number\",\"format\":\"double\"},\"timestamp\":{\"type\":\"number\",\"format\":\"double\"},\"altitude\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"altitudeAccuracy\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"speed\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"heading\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"}},\"required\":[\"geometry\",\"latitude\",\"longitude\",\"accuracy\",\"timestamp\"]}"
         },
         {
-          "name": "coordinate",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Latitude and longitude for existing Geo nodes",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
-        },
-        {
           "name": "error",
           "ty": {
             "base": "Struct",
@@ -61201,14 +61191,15 @@
       "category": "Web/Geo/Map",
       "inputs": [
         {
-          "name": "coordinate",
+          "name": "geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "The geographic coordinate (latitude, longitude) to center the map on",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Point at the map center",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "zoom",
@@ -61271,14 +61262,15 @@
       "category": "Web/Geo/Routing",
       "inputs": [
         {
-          "name": "coordinates",
+          "name": "geometries",
           "ty": {
-            "base": "Struct",
-            "container": "Array"
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
           },
-          "optional": true,
-          "doc": "Ordered GPS coordinates to match",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "optional": false,
+          "doc": "Ordered Point geometries",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "profile",
@@ -61366,6 +61358,28 @@
           "optional": false,
           "doc": "Tracepoints mapped to the road network",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Tracepoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]},\"matchings_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"waypoint_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0},\"alternatives_count\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint\",\"minimum\":0}},\"required\":[\"name\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
+        },
+        {
+          "name": "geometry_out",
+          "ty": {
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "LineString"
+          },
+          "optional": false,
+          "doc": "Primary route as a LineString geometry. Unset when no route is found.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
+        },
+        {
+          "name": "route_geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "LineString"
+          },
+          "optional": false,
+          "doc": "LineString geometries for all returned routes, with the primary route first.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
         }
       ],
       "impure": true,
@@ -61380,14 +61394,15 @@
       "category": "Web/Geo/Routing",
       "inputs": [
         {
-          "name": "coordinate",
+          "name": "geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "The coordinate to snap to the road network",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Point geometry to snap to the road network",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "profile",
@@ -61438,6 +61453,28 @@
           "optional": false,
           "doc": "List of nearest routable points",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NearestWaypoint\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\",\"format\":\"double\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"hint\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"distance\",\"coordinate\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
+        },
+        {
+          "name": "geometry_out",
+          "ty": {
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Closest routable Point geometry. Unset when no point is found.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
+        },
+        {
+          "name": "waypoint_geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Nearest routable Point geometries in the same order as Waypoints.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         }
       ],
       "impure": true,
@@ -61452,14 +61489,15 @@
       "category": "Web/Geo/Routing",
       "inputs": [
         {
-          "name": "coordinates",
+          "name": "geometries",
           "ty": {
-            "base": "Struct",
-            "container": "Array"
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
           },
-          "optional": true,
-          "doc": "List of coordinates to include in the matrix",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "optional": false,
+          "doc": "Ordered Point geometries",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "profile",
@@ -61649,14 +61687,15 @@
       "category": "Web/Geo/Routing",
       "inputs": [
         {
-          "name": "coordinates",
+          "name": "geometries",
           "ty": {
-            "base": "Struct",
-            "container": "Array"
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
           },
-          "optional": true,
-          "doc": "Ordered coordinates for the trip",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "optional": false,
+          "doc": "Ordered Point geometries",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "profile",
@@ -61755,14 +61794,37 @@
           "doc": "Total trip duration in seconds"
         },
         {
-          "name": "geometry",
+          "name": "geometry_out",
           "ty": {
-            "base": "Struct",
-            "container": "Array"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "LineString"
           },
           "optional": false,
-          "doc": "Trip geometry as array of coordinates",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Primary route as a LineString geometry. Unset when no route is found.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
+        },
+        {
+          "name": "route_geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "LineString"
+          },
+          "optional": false,
+          "doc": "LineString geometries for all returned routes, with the primary route first.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
+        },
+        {
+          "name": "waypoint_geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Snapped Point geometries in the same order as Waypoints. Use waypoint_index in Waypoints for the optimized visit order.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         }
       ],
       "impure": true,
@@ -61777,34 +61839,37 @@
       "category": "Web/Geo/Routing",
       "inputs": [
         {
-          "name": "start",
+          "name": "start_geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "Starting coordinate for the route",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Starting Point geometry for the route",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
-          "name": "end",
+          "name": "end_geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "Ending coordinate for the route",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Ending Point geometry for the route",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
-          "name": "waypoints",
+          "name": "waypoint_geometries",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
           },
           "optional": true,
-          "doc": "Optional intermediate waypoints to pass through",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Optional intermediate Point geometries in visit order",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "profile",
@@ -61865,14 +61930,26 @@
           "doc": "Estimated travel time in seconds"
         },
         {
-          "name": "geometry",
+          "name": "geometry_out",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "LineString"
           },
           "optional": false,
-          "doc": "Route geometry as array of coordinates",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"RouteGeometry\",\"type\":\"object\",\"properties\":{\"points\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}},\"required\":[\"points\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
+          "doc": "Primary route as a LineString geometry. Unset when no route is found.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
+        },
+        {
+          "name": "route_geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "LineString"
+          },
+          "optional": false,
+          "doc": "LineString geometries for all returned routes, with the primary route first.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"LineString\"}"
         }
       ],
       "impure": true,
@@ -61887,14 +61964,15 @@
       "category": "Web/Geo/Search",
       "inputs": [
         {
-          "name": "coordinate",
+          "name": "geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "The geographic coordinate (latitude, longitude) to look up",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Point to look up",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "zoom",
@@ -61925,6 +62003,17 @@
           },
           "optional": false,
           "doc": "The full formatted address string"
+        },
+        {
+          "name": "geometry_out",
+          "ty": {
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Point returned by the geocoding service",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         }
       ],
       "impure": true,
@@ -61986,6 +62075,28 @@
           "optional": false,
           "doc": "The first/best matching result (if any)",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"SearchResult\",\"type\":\"object\",\"properties\":{\"display_name\":{\"type\":\"string\"},\"coordinate\":{\"$ref\":\"#/$defs/GeoCoordinate\"},\"place_type\":{\"type\":\"string\"},\"importance\":{\"type\":\"number\",\"format\":\"double\"},\"bounding_box\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundingBox\"},{\"type\":\"null\"}]},\"osm_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"},\"osm_type\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"display_name\",\"coordinate\",\"place_type\",\"importance\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]},\"BoundingBox\":{\"type\":\"object\",\"properties\":{\"min_lat\":{\"type\":\"number\",\"format\":\"double\"},\"min_lon\":{\"type\":\"number\",\"format\":\"double\"},\"max_lat\":{\"type\":\"number\",\"format\":\"double\"},\"max_lon\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"min_lat\",\"min_lon\",\"max_lat\",\"max_lon\"]}}}"
+        },
+        {
+          "name": "geometry_out",
+          "ty": {
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Point for the first match. Unset when no location matches.",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
+        },
+        {
+          "name": "geometries",
+          "ty": {
+            "base": "geometry",
+            "container": "Array",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Points for all matches, in the same order as Results",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         }
       ],
       "impure": true,
@@ -64408,6 +64519,59 @@
       "namespace": "geometry",
       "alias": "isTopologicallyValid",
       "receiver": "geometry"
+    },
+    {
+      "node_type": "geometry_legacy_adapter",
+      "display": "geometryLegacyAdapter",
+      "friendly": "Legacy Geo Adapter",
+      "category": "Web/Geo/Geometry",
+      "inputs": [
+        {
+          "name": "mode",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Historical payload conversion"
+        },
+        {
+          "name": "value",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Value to convert",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+        },
+        {
+          "name": "source",
+          "ty": {
+            "base": "any",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Original H3 cell or cells used to preserve historical boundaries"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "converted",
+          "ty": {
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
+          },
+          "optional": false,
+          "doc": "Converted historical value or Geometry",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
+        }
+      ],
+      "impure": false,
+      "doc": "Preserves connections to historical coordinate and route data when a saved board upgrades to Geometry pins.",
+      "namespace": "geometry",
+      "alias": "legacyAdapter"
     },
     {
       "node_type": "geometry_line_is_closed",
@@ -68806,14 +68970,13 @@
       ],
       "outputs": [
         {
-          "name": "boundary",
+          "name": "geometry_out",
           "ty": {
-            "base": "Struct",
+            "base": "geometry",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Array of coordinates representing the cell boundary (closed polygon)",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Cell boundary as a Polygon, or MultiPolygon when it crosses the antimeridian"
         },
         {
           "name": "vertex_count",
@@ -68898,14 +69061,15 @@
       ],
       "outputs": [
         {
-          "name": "coordinate",
+          "name": "geometry_out",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "The center coordinate of the H3 cell",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Point at the center of the H3 cell",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         }
       ],
       "impure": false,
@@ -68981,14 +69145,15 @@
       ],
       "outputs": [
         {
-          "name": "polygons",
+          "name": "geometry_out",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "MultiPolygon"
           },
           "optional": false,
-          "doc": "Array of polygons representing the merged cell boundaries",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Polygon\",\"type\":\"object\",\"properties\":{\"exterior\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}},\"interiors\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GeoCoordinate\"}}}},\"required\":[\"exterior\",\"interiors\"],\"$defs\":{\"GeoCoordinate\":{\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}}}"
+          "doc": "Merged cell boundaries as a MultiPolygon, split at the antimeridian",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"MultiPolygon\"}"
         },
         {
           "name": "polygon_count",
@@ -68997,7 +69162,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Number of separate polygons (disconnected regions)"
+          "doc": "Number of polygons in Geometry, including pieces split at the antimeridian"
         }
       ],
       "impure": false,
@@ -69254,14 +69419,15 @@
       "category": "Web/Geo/H3",
       "inputs": [
         {
-          "name": "coordinate",
+          "name": "geometry",
           "ty": {
-            "base": "Struct",
-            "container": "Normal"
+            "base": "geometry",
+            "container": "Normal",
+            "geometry_kind": "Point"
           },
           "optional": false,
-          "doc": "The geographic coordinate (latitude, longitude)",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GeoCoordinate\",\"type\":\"object\",\"properties\":{\"latitude\":{\"type\":\"number\",\"format\":\"double\"},\"longitude\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"latitude\",\"longitude\"]}"
+          "doc": "Point to index as an H3 cell",
+          "schema": "{\"$id\":\"flow:geometry\",\"x-geometry\":\"Point\"}"
         },
         {
           "name": "resolution",

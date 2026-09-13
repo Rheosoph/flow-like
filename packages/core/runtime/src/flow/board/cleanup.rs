@@ -19,6 +19,7 @@ pub mod fix_initial_coordinates;
 pub mod fix_layer_parents;
 pub mod fix_pin_connections;
 pub mod fix_refs;
+mod migrate_geo_geometry;
 pub mod order_pin_indices;
 pub mod sync_known_schemas;
 pub mod sync_node_schema;

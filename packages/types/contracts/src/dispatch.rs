@@ -16,6 +16,24 @@ pub const ETAG_BOUND_LATEST_VERSION_SENTINEL: (u32, u32, u32) = (u32::MAX, u32::
 /// dispatch. The executor uses it to turn route failures into invocation
 /// errors without changing Function URL or API Gateway HTTP behavior.
 pub const DIRECT_LAMBDA_INVOKE_API_ID: &str = "lambda-invoke";
+
+/// Maximum serialized event accepted by native asynchronous Lambda invocation.
+pub const LAMBDA_ASYNC_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+/// Stage larger events so failure-destination records also fit within SQS limits.
+pub const LAMBDA_ASYNC_INLINE_PAYLOAD_BYTES: usize = 256 * 1024;
+
+/// Shared tenant identity for dispatch and executor verification. Keep this
+/// derivation stable: changing it assigns every subject new Lambda environments.
+/// Hashing also keeps federated subject syntax and user identifiers out of the
+/// AWS tenant parameter.
+pub fn lambda_tenant_id(subject: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like:lambda-tenant:v1:");
+    hasher.update(subject.as_bytes());
+    format!("u{}", &hasher.finalize().to_hex()[..32])
+}
+
 use std::collections::HashMap;
 
 /// Store reference used for files uploaded through HTTP event sink requests.
@@ -381,10 +399,9 @@ mod execution_binding_tests {
 /// Reference to a dispatch payload that may be either embedded inline or
 /// stored remotely behind a (presigned) URL.
 ///
-/// This is the wire format consumed by queue-based executor runtimes (SQS →
-/// Lambda, EventBridge → ECS, etc.). When the payload exceeds queue size
-/// limits (~256 KB for SQS, ~8 KB for ECS container overrides) the API
-/// stages the full payload to object storage and sends only the URL.
+/// Native asynchronous Lambda and queue-based executors consume this format.
+/// The API can stage a large payload in object storage and send its reference
+/// within the transport's event-size limit.
 ///
 /// Deserialisation is untagged so that a plain `DispatchPayload` JSON object
 /// is accepted as `Inline` while `{ "remote_url": "https://..." }` is parsed

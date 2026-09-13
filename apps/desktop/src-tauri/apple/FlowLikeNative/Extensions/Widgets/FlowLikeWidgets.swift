@@ -1,4 +1,5 @@
 import AppIntents
+import Charts
 import FlowLikeNative
 import SwiftUI
 import WidgetKit
@@ -1023,6 +1024,534 @@ struct OpenAppWidget: Widget {
     }
 }
 
+struct NativeChartWidgetEntity: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Data Chart"
+    static let defaultQuery = NativeChartWidgetQuery()
+    var id: String
+    var sourceId: String
+    var scope: String
+    var appId: String
+    @Property(title: "Name") var title: String
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)", image: NativeStore.shared.appIconData(scope: scope, appId: appId)
+            .map { .init(data: $0, isTemplate: false) } ?? .init(systemName: "chart.xyaxis.line"))
+    }
+    init(_ widget: NativeCustomWidget, scope: String) {
+        id = "\(scope.utf8.count):\(scope)chart:\(widget.id)"
+        sourceId = widget.id; self.scope = scope; appId = widget.appId; title = widget.title
+    }
+}
+
+struct NativeChartWidgetQuery: EntityStringQuery {
+    private var entities: [NativeChartWidgetEntity] {
+        guard let snapshot = NativeStore.shared.catalog() else { return [] }
+        return (snapshot.customWidgets ?? []).filter { $0.kind == "chart" }.map { NativeChartWidgetEntity($0, scope: snapshot.scope) }
+    }
+    func entities(for identifiers: [String]) async throws -> [NativeChartWidgetEntity] { entities.filter { identifiers.contains($0.id) } }
+    func entities(matching string: String) async throws -> [NativeChartWidgetEntity] { entities.filter { $0.title.localizedStandardContains(string) } }
+    func suggestedEntities() async throws -> [NativeChartWidgetEntity] { entities }
+}
+
+struct NativePageWidgetEntity: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "App Page"
+    static let defaultQuery = NativePageWidgetQuery()
+    var id: String
+    var sourceId: String
+    var scope: String
+    var appId: String
+    @Property(title: "Name") var title: String
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)", image: NativeStore.shared.appIconData(scope: scope, appId: appId)
+            .map { .init(data: $0, isTemplate: false) } ?? .init(systemName: "rectangle.on.rectangle"))
+    }
+    init(_ widget: NativeCustomWidget, scope: String) {
+        id = "\(scope.utf8.count):\(scope)page:\(widget.id)"
+        sourceId = widget.id; self.scope = scope; appId = widget.appId; title = widget.title
+    }
+}
+
+struct NativePageWidgetQuery: EntityStringQuery {
+    private var entities: [NativePageWidgetEntity] {
+        guard let snapshot = NativeStore.shared.catalog() else { return [] }
+        return (snapshot.customWidgets ?? []).filter { $0.kind == "page" }.map { NativePageWidgetEntity($0, scope: snapshot.scope) }
+    }
+    func entities(for identifiers: [String]) async throws -> [NativePageWidgetEntity] { entities.filter { identifiers.contains($0.id) } }
+    func entities(matching string: String) async throws -> [NativePageWidgetEntity] { entities.filter { $0.title.localizedStandardContains(string) } }
+    func suggestedEntities() async throws -> [NativePageWidgetEntity] { entities }
+}
+
+struct NativeChartWidgetConfiguration: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "Data Chart"
+    static let description = IntentDescription("Choose a data chart saved in Flow Like's Native Widgets settings.")
+    @Parameter(title: "Saved chart") var chart: NativeChartWidgetEntity?
+    static var parameterSummary: some ParameterSummary { Summary("Show \(\.$chart)") }
+}
+
+struct NativePageWidgetConfiguration: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "App Page"
+    static let description = IntentDescription("Choose an app page saved in Flow Like's Native Widgets settings.")
+    @Parameter(title: "Saved page") var page: NativePageWidgetEntity?
+    static var parameterSummary: some ParameterSummary { Summary("Show \(\.$page)") }
+}
+
+struct NativeCustomWidgetEntry: TimelineEntry {
+    let date: Date
+    let snapshot: NativeSnapshot?
+    let id: String?
+    let scope: String?
+    let kind: String
+    var isPreview = false
+
+    static func preview(kind: String, family: WidgetFamily = .systemMedium) -> NativeCustomWidgetEntry {
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        let chart: [String: Any] = ["type": "line", "format": ["style": "number", "currency": "USD", "decimals": 0],
+            "points": zip(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], [24, 38, 32, 58, 47, 69, 82]).enumerated().map { index, point in
+                ["id": "\(index)", "label": point.0, "series": "Completed", "value": point.1, "formattedValue": "\(point.1)"] as [String: Any]
+            }]
+        var pageChildren: [[String: Any]] = [
+            ["id": "status", "kind": "badge", "text": "On track", "tone": "success"],
+            ["id": "title", "kind": "text", "text": family == .systemSmall ? "Work in sync" : "Your team, in sync.", "role": "title"],
+            ["id": "progress", "kind": "progress", "progress": 0.78, "value": "78%"],
+            ["id": "detail", "kind": "text", "text": "Project updates, right here.", "role": "caption", "tone": "muted"],
+        ]
+        if family == .systemLarge {
+            pageChildren += [
+                ["id": "spacer", "kind": "spacer", "spacing": 8],
+                ["id": "card", "kind": "card", "text": "This week", "children": [
+                    ["id": "stats", "kind": "table", "table": ["columns": ["Team", "Completed", "Status"], "rows": [["Design", "24 tasks", "On track"], ["Engineering", "38 tasks", "On track"], ["Operations", "16 tasks", "In review"]]]]
+                ]],
+                ["id": "link", "kind": "link", "text": "Open workspace"],
+            ]
+        }
+        let page: [String: Any] = ["id": "root", "kind": "column", "spacing": 8, "children": pageChildren]
+        var widget: [String: Any] = ["id": "example", "kind": kind, "title": kind == "chart" ? "Weekly activity" : "Team workspace", "appId": "example", "state": "ready", "accent": "orange",
+            "updatedAt": iso.string(from: now), "staleAt": iso.string(from: now.addingTimeInterval(1800)), "expiresAt": iso.string(from: now.addingTimeInterval(3600)), "action": ["kind": "open_app", "appId": "example"]]
+        widget[kind == "chart" ? "chart" : "page"] = kind == "chart" ? chart : page
+        let object: [String: Any] = ["version": 1, "scope": "preview", "generatedAt": iso.string(from: now), "expiresAt": iso.string(from: now.addingTimeInterval(3600)), "sections": [], "events": [], "apps": [["id": "example", "title": "Example app"]], "customWidgets": [widget]]
+        let snapshot = (try? JSONSerialization.data(withJSONObject: object)).flatMap { try? JSONDecoder().decode(NativeSnapshot.self, from: $0) }
+        return NativeCustomWidgetEntry(date: now, snapshot: snapshot, id: "example", scope: "preview", kind: kind, isPreview: true)
+    }
+
+    var selection: NativeCustomWidgetSelection {
+        NativeCustomWidgetSelection(snapshot: snapshot, id: id, scope: scope, kind: kind, now: date)
+    }
+    func timeline() -> Timeline<NativeCustomWidgetEntry> {
+        var entries = [self]
+        if let widget = selection.widget {
+            for timestamp in [widget.staleAt, widget.expiresAt] {
+                if let transition = NativeSnapshot.date(timestamp), transition > date {
+                    entries.append(NativeCustomWidgetEntry(date: transition, snapshot: snapshot, id: id, scope: scope, kind: kind))
+                }
+            }
+        }
+        return Timeline(entries: entries.sorted { $0.date < $1.date }, policy: .after(date.addingTimeInterval(900)))
+    }
+}
+
+struct NativeChartWidgetProvider: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> NativeCustomWidgetEntry {
+        NativeCustomWidgetEntry.preview(kind: "chart", family: context.family)
+    }
+    func snapshot(for configuration: NativeChartWidgetConfiguration, in context: Context) async -> NativeCustomWidgetEntry {
+        if context.isPreview, configuration.chart == nil { return NativeCustomWidgetEntry.preview(kind: "chart", family: context.family) }
+        return NativeCustomWidgetEntry(date: Date(), snapshot: NativeStore.shared.catalog(), id: configuration.chart?.sourceId,
+                                scope: configuration.chart?.scope, kind: "chart")
+    }
+    func timeline(for configuration: NativeChartWidgetConfiguration, in context: Context) async -> Timeline<NativeCustomWidgetEntry> {
+        await snapshot(for: configuration, in: context).timeline()
+    }
+}
+
+struct NativePageWidgetProvider: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> NativeCustomWidgetEntry {
+        NativeCustomWidgetEntry.preview(kind: "page", family: context.family)
+    }
+    func snapshot(for configuration: NativePageWidgetConfiguration, in context: Context) async -> NativeCustomWidgetEntry {
+        if context.isPreview, configuration.page == nil { return NativeCustomWidgetEntry.preview(kind: "page", family: context.family) }
+        return NativeCustomWidgetEntry(date: Date(), snapshot: NativeStore.shared.catalog(), id: configuration.page?.sourceId,
+                                scope: configuration.page?.scope, kind: "page")
+    }
+    func timeline(for configuration: NativePageWidgetConfiguration, in context: Context) async -> Timeline<NativeCustomWidgetEntry> {
+        await snapshot(for: configuration, in: context).timeline()
+    }
+}
+
+struct NativeCustomWidgetView: View {
+    let entry: NativeCustomWidgetEntry
+    @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FlowWidgetPalette { FlowWidgetPalette(dark: colorScheme == .dark) }
+    private var small: Bool { family == .systemSmall }
+    private var selection: NativeCustomWidgetSelection { entry.selection }
+    private var accent: Color { customWidgetAccent(selection.widget?.accent, dark: colorScheme == .dark) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: small ? 8 : 10) {
+            FlowWidgetHeader(title: selection.widget?.title ?? (entry.kind == "chart" ? "Data Chart" : "App Page"))
+            if let widget = selection.widget {
+                GeometryReader { geometry in
+                    widgetContent(widget)
+                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                }
+                footer(widget)
+            } else {
+                emptyContent(title: selectionTitle, detail: selectionDetail)
+            }
+        }
+        .foregroundStyle(palette.ink)
+        .containerBackground(for: .widget) { FlowWidgetBackground(kind: entry.kind) }
+        .widgetURL(selection.widget?.launchURL(scope: entry.scope ?? "") ?? NativeWidgetLaunchURL.home)
+        .privacySensitive()
+    }
+
+    @ViewBuilder private func widgetContent(_ widget: NativeCustomWidget) -> some View {
+        if widget.state == "ready", let chart = widget.chart {
+            NativeWidgetChartView(chart: chart, accent: accent, compact: small)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if widget.state == "ready", let page = widget.page {
+            NativeWidgetFittedPageView(node: page, scope: entry.scope ?? "", accent: accent, compact: small)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            emptyContent(title: stateTitle(widget.state), detail: widget.message ?? "Open the app to update this widget.")
+        }
+    }
+
+    private func footer(_ widget: NativeCustomWidget) -> some View {
+        HStack(spacing: 5) {
+            if entry.isPreview {
+                Text("Example content").lineLimit(1)
+            } else {
+                Image(systemName: widget.isStale(at: entry.date) ? "clock.arrow.circlepath" : "clock")
+                if widget.isStale(at: entry.date) { Text("Last saved").lineLimit(1) }
+                if let date = NativeSnapshot.date(widget.updatedAt) { Text(date, style: .relative).lineLimit(1) }
+            }
+            Spacer(minLength: 0)
+            if !(widget.warnings ?? []).isEmpty {
+                Image(systemName: "exclamationmark.circle").accessibilityLabel("Some page elements are unavailable in this widget")
+            }
+            Image(systemName: "arrow.up.right").accessibilityHidden(true)
+        }.font(.system(size: 9, weight: .medium)).foregroundStyle(palette.secondary)
+    }
+
+    private func emptyContent(title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Image(systemName: entry.kind == "chart" ? "chart.xyaxis.line" : "rectangle.on.rectangle")
+                .font(.system(size: small ? 23 : 28, weight: .medium)).foregroundStyle(accent).padding(.bottom, 2)
+            Text(title).font(.subheadline.weight(.semibold)).lineLimit(2)
+            Text(detail).font(.caption).foregroundStyle(palette.secondary).lineLimit(small ? 3 : 4)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+    private func stateTitle(_ state: String) -> String {
+        switch state {
+        case "empty": return "No data yet"
+        case "unsupported": return "Open the full page"
+        case "unavailable": return "Content unavailable"
+        default: return "Update needed"
+        }
+    }
+    private var selectionTitle: String {
+        switch selection.state {
+        case .chooseWidget: return entry.kind == "chart" ? "Choose a saved chart" : "Choose a saved page"
+        case .expired: return "Refresh widget"
+        default: return "Widget unavailable"
+        }
+    }
+    private var selectionDetail: String {
+        selection.state == .chooseWidget ? "Create one in Settings → Native widgets, then edit this widget." : "Open Flow Like to reconnect or update this widget."
+    }
+}
+
+private func customWidgetAccent(_ value: String?, dark: Bool) -> Color {
+    switch value {
+    case "blue": return Color(widgetHex: dark ? 0x80b7ff : 0x2165cd)
+    case "teal": return Color(widgetHex: dark ? 0x58d6bd : 0x087f72)
+    case "purple": return Color(widgetHex: dark ? 0xc2a4ff : 0x7952c7)
+    default: return Color(widgetHex: dark ? 0xffa665 : 0xd56123)
+    }
+}
+
+struct NativeWidgetChartView: View {
+    let chart: NativeWidgetChart
+    let accent: Color
+    let compact: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FlowWidgetPalette { FlowWidgetPalette(dark: colorScheme == .dark) }
+    private var value: Double { chart.value ?? chart.points.last?.value ?? 0 }
+    private var formattedValue: String { chart.formattedValue ?? chart.points.last?.formattedValue ?? "0" }
+    private var ratio: Double { min(1, max(0, value / max(chart.target ?? 1, 0.000_001))) }
+    private var circular: Bool { ["donut", "pie"].contains(chart.type) }
+    private var categories: [String] {
+        var seen = Set<String>()
+        return chart.points.map { circular ? $0.label : $0.series }.filter { seen.insert($0).inserted }
+    }
+    private var colors: [Color] {
+        [accent, Color(widgetHex: 0x4c9dce), Color(widgetHex: 0x60ad99), Color(widgetHex: 0x9b80c3), Color(widgetHex: 0xd5aa49), Color(widgetHex: 0xd87693)]
+    }
+
+    var body: some View {
+        Group {
+            switch chart.type {
+            case "stat":
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(formattedValue).font(.system(size: compact ? 35 : 44, weight: .semibold, design: .rounded))
+                        .minimumScaleFactor(0.5).lineLimit(1).foregroundStyle(accent)
+                    if let point = chart.points.last { Text(point.label).font(.caption).foregroundStyle(palette.secondary).lineLimit(2) }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            case "progress":
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(formattedValue).font(.system(size: compact ? 30 : 38, weight: .semibold, design: .rounded))
+                        .minimumScaleFactor(0.5).lineLimit(1)
+                    NativeWidgetProgressBar(value: ratio, accent: accent)
+                    if let target = chart.target { Text("of \(format(target))").font(.caption).foregroundStyle(palette.secondary).lineLimit(1) }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            case "gauge":
+                Gauge(value: ratio) { Text("Goal").font(.system(size: 10)) } currentValueLabel: {
+                    Text(formattedValue).font(.system(size: 15, weight: .semibold, design: .rounded)).minimumScaleFactor(0.5)
+                }.gaugeStyle(.accessoryCircular).tint(accent).scaleEffect(compact ? 1.05 : 1.3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            default:
+                if chart.points.isEmpty {
+                    Text("No data yet").font(.caption).foregroundStyle(palette.secondary)
+                } else {
+                    plot
+                }
+            }
+        }
+    }
+
+    private var plot: some View {
+        Chart {
+            ForEach(chart.points) { point in
+                switch chart.type {
+                case "line":
+                    LineMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                        .foregroundStyle(by: .value("Series", point.series)).lineStyle(StrokeStyle(lineWidth: 2.5))
+                        .symbol(.circle).symbolSize(compact ? 8 : 16)
+                        .accessibilityLabel("\(point.label), \(point.series)").accessibilityValue(point.formattedValue)
+                case "area":
+                    AreaMark(x: .value("Label", point.label), y: .value("Value", point.value), stacking: .unstacked)
+                        .foregroundStyle(by: .value("Series", point.series)).opacity(0.35)
+                        .accessibilityLabel("\(point.label), \(point.series)").accessibilityValue(point.formattedValue)
+                case "horizontal":
+                    BarMark(x: .value("Value", point.value), y: .value("Label", point.label))
+                        .foregroundStyle(by: .value("Series", point.series)).position(by: .value("Series", point.series))
+                        .cornerRadius(3).accessibilityLabel("\(point.label), \(point.series)").accessibilityValue(point.formattedValue)
+                case "pie", "donut":
+                    SectorMark(angle: .value("Value", point.value), innerRadius: .ratio(chart.type == "donut" ? 0.66 : 0), angularInset: 2)
+                        .foregroundStyle(by: .value("Label", point.label)).cornerRadius(3)
+                        .accessibilityLabel(point.label).accessibilityValue(point.formattedValue)
+                case "stacked":
+                    BarMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                        .foregroundStyle(by: .value("Series", point.series)).cornerRadius(2)
+                        .accessibilityLabel("\(point.label), \(point.series)").accessibilityValue(point.formattedValue)
+                default:
+                    BarMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                        .foregroundStyle(by: .value("Series", point.series)).position(by: .value("Series", point.series))
+                        .cornerRadius(3).accessibilityLabel("\(point.label), \(point.series)").accessibilityValue(point.formattedValue)
+                }
+            }
+        }
+        .chartForegroundStyleScale(domain: categories, range: categories.indices.map { colors[$0 % colors.count] })
+        .chartLegend(position: .bottom, alignment: .leading, spacing: 4) {
+            HStack(spacing: 9) {
+                ForEach(Array(categories.prefix(4).enumerated()), id: \.offset) { index, category in
+                    HStack(spacing: 4) {
+                        Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
+                        Text(category).lineLimit(1)
+                    }
+                }
+                if categories.count > 4 { Text("+\(categories.count - 4)").foregroundStyle(palette.secondary) }
+            }.font(.system(size: 9))
+        }
+        .chartLegend(compact || categories.count <= 1 ? .hidden : .visible)
+        .chartXAxis(compact || circular ? .hidden : .automatic)
+        .chartYAxis(compact || circular ? .hidden : .automatic)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisValueLabel {
+                    if let number = value.as(Double.self) { Text(format(number)) }
+                    else if let label = value.as(String.self) { Text(label) }
+                }.font(.system(size: 9))
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(palette.border)
+                AxisValueLabel {
+                    if let number = value.as(Double.self) { Text(format(number)) }
+                    else if let label = value.as(String.self) { Text(label) }
+                }.font(.system(size: 9))
+            }
+        }
+        .font(.system(size: 9))
+    }
+    private func format(_ number: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = chart.format.style == "currency" ? .currency : chart.format.style == "percent" ? .percent : .decimal
+        formatter.currencyCode = chart.format.currency
+        formatter.maximumFractionDigits = chart.format.decimals
+        return formatter.string(from: NSNumber(value: number)) ?? "\(number)"
+    }
+}
+
+struct NativeWidgetFittedPageView: View {
+    let node: NativeWidgetPageNode
+    let scope: String
+    let accent: Color
+    let compact: Bool
+    private var childCounts: [Int] {
+        guard ["column", "card"].contains(node.kind), let count = node.children?.count, count > 1 else { return [] }
+        return Array(Set([count - 1, 8, 6, 4, 3, 2, 1].filter { $0 > 0 && $0 < count })).sorted(by: >)
+    }
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            NativeWidgetPageView(node: node, scope: scope, accent: accent, compact: compact)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(childCounts, id: \.self) { count in
+                NativeWidgetPageView(node: shortened(to: count), scope: scope, accent: accent, compact: compact)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Open the full page").font(.caption).foregroundStyle(accent)
+        }
+    }
+    private func shortened(to count: Int) -> NativeWidgetPageNode {
+        var copy = node
+        copy.children = Array((node.children ?? []).prefix(count))
+        return copy
+    }
+}
+
+struct NativeWidgetProgressBar: View {
+    let value: Double
+    let accent: Color
+    @Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(FlowWidgetPalette(dark: colorScheme == .dark).inset)
+                Capsule().fill(accent).frame(width: geometry.size.width * min(1, max(0, value)))
+            }
+        }.frame(height: 6)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Progress")
+            .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) percent")
+    }
+}
+
+struct NativeWidgetPageView: View {
+    let node: NativeWidgetPageNode
+    let scope: String
+    let accent: Color
+    let compact: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: FlowWidgetPalette { FlowWidgetPalette(dark: colorScheme == .dark) }
+    private var alignment: HorizontalAlignment { node.alignment == "center" ? .center : node.alignment == "trailing" ? .trailing : .leading }
+    private var spacing: CGFloat { CGFloat(node.spacing ?? 8) }
+    private var tone: Color {
+        switch node.tone {
+        case "muted": return palette.secondary
+        case "accent": return accent
+        case "success": return Color(widgetHex: colorScheme == .dark ? 0x78d8ae : 0x187a51)
+        case "warning": return Color(widgetHex: colorScheme == .dark ? 0xefc779 : 0x936614)
+        case "danger": return Color(widgetHex: colorScheme == .dark ? 0xff9c9c : 0xb43c42)
+        default: return palette.ink
+        }
+    }
+    private var font: Font {
+        switch node.role {
+        case "title": return .system(size: compact ? 20 : 25, weight: .semibold, design: .rounded)
+        case "headline": return .subheadline.weight(.semibold)
+        case "caption": return .caption2
+        default: return .caption
+        }
+    }
+    var body: some View { content.foregroundStyle(tone) }
+
+    private var content: AnyView {
+        switch node.kind {
+        case "row": return AnyView(HStack(alignment: .top, spacing: spacing) { children })
+        case "stack": return AnyView(ZStack(alignment: .topLeading) { children })
+        case "grid": return AnyView(LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: .topLeading), count: min(compact ? 2 : 6, node.columns ?? 2)), alignment: alignment, spacing: spacing) { children })
+        case "column": return AnyView(VStack(alignment: alignment, spacing: spacing) { children })
+        case "card": return AnyView(VStack(alignment: alignment, spacing: spacing) {
+            if let text = node.text { Text(text).font(.subheadline.weight(.semibold)).lineLimit(2) }
+            if let value = node.value { Text(value).font(.caption2).foregroundStyle(palette.secondary).lineLimit(2) }
+            children
+        }.padding(compact ? 8 : 10).frame(maxWidth: .infinity, alignment: .leading).background(palette.inset, in: RoundedRectangle(cornerRadius: 12)))
+        case "text": return AnyView(Text(node.text ?? "").font(font).lineLimit(compact ? 3 : 6).minimumScaleFactor(0.8).multilineTextAlignment(node.alignment == "center" ? .center : node.alignment == "trailing" ? .trailing : .leading))
+        case "badge": return AnyView(Text(node.text ?? "").font(.caption2.weight(.semibold)).lineLimit(1).padding(.horizontal, 8).padding(.vertical, 4).background(tone.opacity(0.1), in: Capsule()))
+        case "divider": return AnyView(Rectangle().fill(palette.border).frame(height: 1))
+        case "spacer": return AnyView(Color.clear.frame(height: max(1, spacing)))
+        case "progress": return AnyView(VStack(alignment: .leading, spacing: 5) {
+            if let text = node.text { Text(text).font(.caption).lineLimit(1) }
+            HStack(spacing: 8) { NativeWidgetProgressBar(value: node.progress ?? 0, accent: accent); if let value = node.value { Text(value).font(.caption2).lineLimit(1) } }
+        })
+        case "image", "icon": return AnyView(imageContent)
+        case "chart":
+            if let chart = node.chart { return AnyView(NativeWidgetChartView(chart: chart, accent: accent, compact: compact).frame(height: compact ? 76 : 128)) }
+            return AnyView(EmptyView())
+        case "table": return AnyView(tableContent)
+        case "link":
+            if let action = node.action, let appId = action.appId,
+               let url = try? NativeWidgetLaunchURL.app(appId: appId, scope: scope, path: action.path, queryNames: action.queryParams?.map(\.name), queryValues: action.queryParams?.map(\.value)) {
+                return AnyView(Link(destination: url) { HStack(spacing: 5) { Text(node.text ?? "Open app").lineLimit(1); Image(systemName: "arrow.up.right").font(.caption2) }.font(.caption.weight(.semibold)).foregroundStyle(accent) })
+            }
+            return AnyView(Text(node.text ?? "Open app").font(.caption).foregroundStyle(accent))
+        default: return AnyView(EmptyView())
+        }
+    }
+    @ViewBuilder private var children: some View {
+        ForEach(node.children ?? []) { child in NativeWidgetPageView(node: child, scope: scope, accent: accent, compact: compact) }
+    }
+    @ViewBuilder private var imageContent: some View {
+        if let text = node.image?.text {
+            Text(text).font(.system(size: node.kind == "icon" ? 23 : 36)).accessibilityLabel(node.text ?? "")
+        } else if let png = node.image?.png, let data = Data(base64Encoded: png), let image = platformImage(data) {
+            image.resizable().renderingMode(node.image?.template == true ? .template : .original).scaledToFit()
+                .frame(maxWidth: node.kind == "icon" ? 28 : .infinity, maxHeight: node.kind == "icon" ? 28 : compact ? 64 : 112)
+                .clipShape(RoundedRectangle(cornerRadius: node.kind == "icon" ? 0 : 8)).accessibilityLabel(node.text ?? "")
+        } else {
+            Image(systemName: "photo").font(.title3).foregroundStyle(palette.secondary).accessibilityLabel(node.text ?? "Image unavailable")
+        }
+    }
+    private func platformImage(_ data: Data) -> Image? {
+        #if os(iOS)
+        return UIImage(data: data).map { Image(uiImage: $0) }
+        #else
+        return NSImage(data: data).map { Image(nsImage: $0) }
+        #endif
+    }
+    @ViewBuilder private var tableContent: some View {
+        if let table = node.table {
+            Grid(alignment: .leading, horizontalSpacing: compact ? 6 : 10, verticalSpacing: 5) {
+                GridRow { ForEach(Array(table.columns.enumerated()), id: \.offset) { _, title in Text(title).font(.system(size: 9, weight: .semibold)).foregroundStyle(palette.secondary).lineLimit(1) } }
+                ForEach(Array(table.rows.prefix(compact ? 3 : 8).enumerated()), id: \.offset) { _, row in
+                    GridRow { ForEach(Array(row.enumerated()), id: \.offset) { _, value in Text(value).font(.system(size: compact ? 10 : 11)).lineLimit(1) } }
+                }
+            }
+        }
+    }
+}
+
+struct NativeDataChartWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: "com.flow-like.app.data_chart", intent: NativeChartWidgetConfiguration.self, provider: NativeChartWidgetProvider()) { entry in NativeCustomWidgetView(entry: entry) }
+            .configurationDisplayName("Data Chart")
+            .description("Charts and metrics from an app's tables or ontology. Configure the data in Flow Like.")
+            .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct NativeAppPageWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: "com.flow-like.app.app_page", intent: NativePageWidgetConfiguration.self, provider: NativePageWidgetProvider()) { entry in NativeCustomWidgetView(entry: entry) }
+            .configurationDisplayName("App Page")
+            .description("A native view of a saved app page. Tap to open its full content in Flow Like.")
+            .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
 #if os(iOS)
 struct FlowRunActivityWidget: Widget {
     var body: some WidgetConfiguration {
@@ -1105,6 +1634,8 @@ struct FlowLikeWidgetBundle: WidgetBundle {
         WorkspaceWidget()
         EventFavoritesWidget()
         OpenAppWidget()
+        NativeDataChartWidget()
+        NativeAppPageWidget()
         #if os(iOS)
         FlowRunActivityWidget()
         #endif

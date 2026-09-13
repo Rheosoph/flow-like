@@ -1554,12 +1554,11 @@ dependencies = [
 name = "aws-executor-async"
 version = "0.1.0"
 dependencies = [
- "aws_lambda_events 0.16.1",
  "flow-like-catalog",
  "flow-like-executor",
- "flow-like-runtime",
  "flow-like-types",
- "lambda_runtime 0.14.4",
+ "flow-like-types-contracts",
+ "lambda_runtime 1.1.2",
  "mimalloc",
  "serde",
  "serde_json",
@@ -13913,7 +13912,6 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edb1a631df22d6d81314268a94fda06ab15b3fa1fcea660e7c5c162caa8fba6b"
 dependencies = [
- "anyhow",
  "async-stream",
  "base64 0.22.1",
  "bytes",

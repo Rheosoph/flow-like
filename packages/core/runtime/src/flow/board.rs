@@ -909,7 +909,89 @@ impl Board {
             return (node, false);
         };
         let previous_pins: Vec<String> = node.pins.keys().cloned().collect();
+        let previous_defaults: Vec<_> = node
+            .pins
+            .values()
+            .filter_map(|pin| {
+                pin.default_value.as_ref().map(|value| {
+                    (
+                        pin.id.clone(),
+                        pin.data_type.clone(),
+                        pin.value_type.clone(),
+                        pin.schema.clone(),
+                        value.clone(),
+                    )
+                })
+            })
+            .collect();
         node_logic.on_update(&mut node, self).await;
+
+        // Variable edits and generic inference can change a pin's contract while retaining
+        // its old literal. A String default, for example, cannot become a Geometry default.
+        // Only discard an inherited literal after a type change; explicit invalid geometry
+        // supplied by a command or by node logic must still fail validation.
+        for (id, data_type, value_type, schema, default) in previous_defaults {
+            let Some(pin) = node.pins.get_mut(&id) else {
+                continue;
+            };
+            if pin.data_type != VariableType::Geometry
+                || pin.default_value.as_ref() != Some(&default)
+            {
+                continue;
+            }
+            let resolved_schema = pin
+                .schema
+                .as_deref()
+                .map(|schema| super::pin::resolve_schema(schema, &self.refs))
+                .transpose();
+            let Ok(resolved_schema) = resolved_schema else {
+                continue;
+            };
+            let Ok(kind) = super::variable::geometry_kind_from_schema(resolved_schema) else {
+                continue;
+            };
+            let previous_kind = schema
+                .as_deref()
+                .map(|schema| super::pin::resolve_schema(schema, &self.refs))
+                .transpose()
+                .and_then(super::variable::geometry_kind_from_schema);
+            if pin.data_type == data_type
+                && pin.value_type == value_type
+                && previous_kind.is_ok_and(|previous| previous == kind)
+            {
+                continue;
+            }
+            if data_type == VariableType::Geometry {
+                let Ok(previous_schema) = schema
+                    .as_deref()
+                    .map(|schema| super::pin::resolve_schema(schema, &self.refs))
+                    .transpose()
+                else {
+                    continue;
+                };
+                // Keep values that were already invalid so validation can reject the edit.
+                if super::variable::validate_typed_default(
+                    &data_type,
+                    &value_type,
+                    previous_schema,
+                    Some(&default),
+                )
+                .is_err()
+                {
+                    continue;
+                }
+            }
+            if super::variable::validate_typed_default(
+                &pin.data_type,
+                &pin.value_type,
+                resolved_schema,
+                pin.default_value.as_deref(),
+            )
+            .is_err()
+            {
+                pin.default_value = None;
+            }
+        }
 
         node.hash();
         let changed = node.hash != old_hash;
@@ -1022,68 +1104,83 @@ impl Board {
         Ok(command)
     }
 
-    /// Restate every node whose pin identities `on_update` derived rather than the batch itself.
+    /// Restate graph state changed by schema migration and `on_update`.
     ///
-    /// Pins minted inside `on_update` — function-call mirrors, `string_format` placeholders — are
-    /// allocated with `create_id()`, so any machine that re-derives them gets *different* ids. The
+    /// Pins minted inside `on_update`, such as function-call mirrors and `string_format`
+    /// placeholders, use `create_id()`, so any machine that re-derives them gets different ids. The
     /// returned batch is not only local undo history: the desktop ships it to the Hub and replays it
     /// there verbatim. A `ConnectPin` that targets such a pin therefore only resolves if the batch
     /// also carries the node state that owns it.
     ///
     /// `on_update` implementations reconcile mirrored pins by name, so replaying explicit node state
     /// makes the replayer adopt these ids instead of minting a second set.
+    /// Migration adapters, reciprocal edges, and retyped Geometry defaults also need receipts
+    /// so replay preserves the migrated graph and undo restores the pre-update state.
     fn derived_node_state_commands(
         &self,
         before: &HashMap<String, Node>,
-        executed: &[GenericCommand],
+        layers_before: &HashMap<String, Layer>,
     ) -> Vec<GenericCommand> {
-        let mut described = HashMap::<&str, &Node>::new();
-        for command in executed {
-            match command {
-                GenericCommand::AddNode(command) => {
-                    described.insert(command.node.id.as_str(), &command.node);
-                }
-                GenericCommand::UpdateNode(command) => {
-                    described.insert(command.node.id.as_str(), &command.node);
-                }
-                GenericCommand::CopyPaste(command) => {
-                    for node in &command.new_nodes {
-                        described.insert(node.id.as_str(), node);
-                    }
-                }
-                GenericCommand::UpsertLayer(command) => {
-                    for node in command.layer.nodes.values() {
-                        described.insert(node.id.as_str(), node);
-                    }
-                }
-                _ => {}
-            }
+        fn pins_changed(current: &HashMap<String, Pin>, previous: &HashMap<String, Pin>) -> bool {
+            current.len() != previous.len()
+                || current.iter().any(|(id, pin)| {
+                    previous.get(id).is_none_or(|previous| {
+                        pin.depends_on != previous.depends_on
+                            || pin.connected_to != previous.connected_to
+                            || (pin.data_type == VariableType::Geometry
+                                && pin.default_value != previous.default_value)
+                    })
+                })
         }
 
         let mut restated = self
             .nodes
             .iter()
             .filter_map(|(node_id, current)| {
-                // `node_updates` runs `on_update` on every node, so a layer edit can re-mint pins on
-                // a node no command in this batch mentions.
-                let previous = described
-                    .get(node_id.as_str())
-                    .copied()
-                    .or_else(|| before.get(node_id))?;
-                if pin_ids_match(current, previous) {
+                let previous = before.get(node_id);
+                if previous.is_some_and(|previous| {
+                    pin_ids_match(current, previous) && !pins_changed(&current.pins, &previous.pins)
+                }) {
                     return None;
                 }
                 Some((
-                    node_id.clone(),
+                    format!("node:{node_id}"),
                     GenericCommand::UpdateNode(UpdateNodeCommand {
                         node: current.clone(),
-                        old_node: Some(previous.clone()),
+                        old_node: previous.cloned(),
                     }),
                 ))
             })
             .collect::<Vec<_>>();
+
+        // Legacy layers own their nodes inline; UpdateNode only writes to the board's root map.
+        // A layer receipt also carries boundary-pin edges changed by migration.
+        restated.extend(self.layers.iter().filter_map(|(layer_id, current)| {
+            let previous = layers_before.get(layer_id);
+            if previous.is_some_and(|previous| {
+                !pins_changed(&current.pins, &previous.pins)
+                    && current.nodes.len() == previous.nodes.len()
+                    && current.nodes.iter().all(|(id, node)| {
+                        previous
+                            .nodes
+                            .get(id)
+                            .is_some_and(|previous| !pins_changed(&node.pins, &previous.pins))
+                    })
+            }) {
+                return None;
+            }
+            Some((
+                format!("layer:{layer_id}"),
+                GenericCommand::UpsertLayer(commands::layer::upsert_layer::UpsertLayerCommand {
+                    layer: current.clone(),
+                    old_layer: previous.cloned(),
+                    node_ids: Vec::new(),
+                    current_layer: current.parent_id.clone(),
+                }),
+            ))
+        }));
         // Map iteration order is randomized, and the remote retry identity is a digest of the exact
-        // payload — an unstable order would turn every retry into an idempotency conflict.
+        // payload. An unstable order would turn every retry into an idempotency conflict.
         restated.sort_by(|(left, _), (right, _)| left.cmp(right));
         restated.into_iter().map(|(_, command)| command).collect()
     }
@@ -1096,7 +1193,6 @@ impl Board {
         self.ensure_supported_format()?;
         let format_snapshot = self.format_rollback_snapshot();
         let mut commands = commands;
-        let nodes_before = self.nodes.clone();
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
                 let recovery_errors = self
@@ -1137,11 +1233,14 @@ impl Board {
         for command in &commands {
             command.touched(&mut touched);
         }
+        // Receipts undo only the derived changes. Explicit commands retain their own undo state.
+        let nodes_before = self.nodes.clone();
+        let layers_before = self.layers.clone();
         self.node_updates_scoped(state, Some(&touched)).await;
         self.cleanup();
         self.finish_format_mutation(format_snapshot)?;
         self.mark_changed();
-        let derived = self.derived_node_state_commands(&nodes_before, &commands);
+        let derived = self.derived_node_state_commands(&nodes_before, &layers_before);
         commands.extend(derived);
         Ok(commands)
     }
@@ -3173,6 +3272,388 @@ mod tests {
         assert_eq!(board.hash, Some(0xdead_beef));
     }
 
+    struct GeoReceiptDefinition(crate::flow::node::Node);
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for GeoReceiptDefinition {
+        fn get_node(&self) -> crate::flow::node::Node {
+            self.0.clone()
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn geo_receipt_fixture(
+        state: &Arc<crate::state::FlowLikeState>,
+    ) -> Vec<crate::flow::node::Node> {
+        use crate::flow::{node::Node, variable::VariableType};
+        use flow_like_types::json::json;
+
+        let mut source = Node::new("geo_receipt_source", "Cell", "", "test");
+        let source_pin = source
+            .add_output_pin("cell", "Cell", "", VariableType::String)
+            .set_default_value(Some(json!("8928308280fffff")))
+            .id
+            .clone();
+        let mut legacy = Node::new("h3_cell_to_boundary", "Cell Boundary", "", "test");
+        legacy.set_version(1);
+        let cell = legacy
+            .add_input_pin("cell", "Cell", "", VariableType::String)
+            .set_default_value(Some(json!("840d9edffffffff")))
+            .id
+            .clone();
+        let boundary = legacy
+            .add_output_pin("boundary", "Boundary", "", VariableType::Struct)
+            .id
+            .clone();
+        legacy.add_output_pin("vertex_count", "Vertices", "", VariableType::Integer);
+        let mut consumer = Node::new("geo_receipt_consumer", "Boundary Consumer", "", "test");
+        let input = consumer
+            .add_input_pin("boundary", "Boundary", "", VariableType::Struct)
+            .id
+            .clone();
+        source
+            .pins
+            .get_mut(&source_pin)
+            .unwrap()
+            .connected_to
+            .insert(cell.clone());
+        legacy
+            .pins
+            .get_mut(&cell)
+            .unwrap()
+            .depends_on
+            .insert(source_pin);
+        legacy
+            .pins
+            .get_mut(&boundary)
+            .unwrap()
+            .connected_to
+            .insert(input.clone());
+        consumer
+            .pins
+            .get_mut(&input)
+            .unwrap()
+            .depends_on
+            .insert(boundary);
+
+        let mut latest = legacy.clone();
+        latest.set_version(2);
+        latest.pins.retain(|_, pin| pin.name != "boundary");
+        latest.add_output_pin("geometry_out", "Geometry", "", VariableType::Geometry);
+        let mut adapter = Node::new("geometry_legacy_adapter", "Legacy Geometry", "", "test");
+        adapter.set_version(1);
+        adapter
+            .add_input_pin("mode", "Mode", "", VariableType::String)
+            .set_default_value(Some(json!("coordinate_to_point")));
+        adapter.add_input_pin("value", "Value", "", VariableType::Struct);
+        adapter.add_input_pin("source", "Source", "", VariableType::Generic);
+        adapter.add_output_pin("converted", "Converted", "", VariableType::Geometry);
+        let node_registry = state.node_registry();
+        let mut registry = node_registry.write().await;
+        for mut definition in [source.clone(), consumer.clone(), latest, adapter] {
+            for pin in definition.pins.values_mut() {
+                pin.depends_on.clear();
+                pin.connected_to.clear();
+            }
+            registry.push_node(Arc::new(GeoReceiptDefinition(definition)));
+        }
+        vec![source, legacy, consumer]
+    }
+
+    fn assert_geo_receipt_graph(board: &super::Board, node_count: usize) -> serde_json::Value {
+        use flow_like_types::json::json;
+
+        let nodes: Vec<_> = board
+            .nodes
+            .values()
+            .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+            .collect();
+        assert_eq!(nodes.len(), node_count);
+        assert!(nodes.iter().all(|node| node.error.is_none()));
+        let geo = nodes
+            .iter()
+            .find(|node| node.name == "h3_cell_to_boundary")
+            .unwrap();
+        assert_eq!(geo.version, Some(2));
+        assert!(geo.get_pin_by_name("boundary").is_none());
+        let adapters: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.name == "geometry_legacy_adapter")
+            .collect();
+        assert_eq!(adapters.len(), 1);
+        let adapter = adapters[0];
+        assert_eq!(adapter.layer, geo.layer);
+        let source = board
+            .get_pin_by_id(
+                geo.get_pin_by_name("cell")
+                    .unwrap()
+                    .depends_on
+                    .first()
+                    .unwrap(),
+            )
+            .unwrap();
+        let adapter_source = adapter.get_pin_by_name("source").unwrap();
+        assert!(source.connected_to.contains(&adapter_source.id));
+        assert_eq!(adapter_source.depends_on.len(), 1);
+        assert_eq!(
+            adapter_source.default_value,
+            Some(serde_json::to_vec(&json!("840d9edffffffff")).unwrap())
+        );
+        assert_eq!(
+            adapter.get_pin_by_name("mode").unwrap().default_value,
+            Some(serde_json::to_vec(&json!("h3_boundary")).unwrap())
+        );
+        assert!(
+            geo.get_pin_by_name("geometry_out")
+                .unwrap()
+                .connected_to
+                .contains(&adapter.get_pin_by_name("value").unwrap().id)
+        );
+        let consumer = nodes
+            .iter()
+            .find(|node| node.name == "geo_receipt_consumer")
+            .unwrap();
+        assert!(
+            consumer
+                .get_pin_by_name("boundary")
+                .unwrap()
+                .depends_on
+                .contains(&adapter.get_pin_by_name("converted").unwrap().id)
+        );
+        for pin in nodes
+            .iter()
+            .flat_map(|node| node.pins.values())
+            .chain(board.layers.values().flat_map(|layer| layer.pins.values()))
+        {
+            for target in &pin.connected_to {
+                assert!(
+                    board
+                        .get_pin_by_id(target)
+                        .unwrap()
+                        .depends_on
+                        .contains(&pin.id)
+                );
+            }
+            for source in &pin.depends_on {
+                assert!(
+                    board
+                        .get_pin_by_id(source)
+                        .unwrap()
+                        .connected_to
+                        .contains(&pin.id)
+                );
+            }
+        }
+        board.validate_geometry_contracts().unwrap();
+        fn remove_hashes(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(object) => {
+                    object.remove("hash");
+                    object.values_mut().for_each(remove_hashes);
+                }
+                serde_json::Value::Array(array) => array.iter_mut().for_each(remove_hashes),
+                _ => {}
+            }
+        }
+        let mut snapshot = json!({"nodes": board.nodes, "layers": board.layers});
+        remove_hashes(&mut snapshot);
+        snapshot
+    }
+
+    async fn assert_geo_receipt_history(
+        command: super::GenericCommand,
+        state: Arc<crate::state::FlowLikeState>,
+        node_count: usize,
+    ) {
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let commands = board
+            .execute_commands(vec![command], state.clone())
+            .await
+            .unwrap();
+        let expected = assert_geo_receipt_graph(&board, node_count);
+        assert!(
+            commands.len() > 1,
+            "migration must be included in the returned batch"
+        );
+        let serialized = serde_json::to_vec(&commands).unwrap();
+        let received = serde_json::from_slice(&serialized).unwrap();
+        let mut remote = super::Board::new(None, Path::from("remote"), state.clone());
+        let replayed = remote
+            .execute_commands(received, state.clone())
+            .await
+            .unwrap();
+        assert_eq!(assert_geo_receipt_graph(&remote, node_count), expected);
+        assert_eq!(
+            replayed.len(),
+            commands.len(),
+            "replay must not derive more adapters or receipts"
+        );
+        remote.undo(replayed, state.clone()).await.unwrap();
+        assert!(remote.nodes.is_empty());
+        assert!(remote.layers.is_empty());
+        board.undo(commands.clone(), state.clone()).await.unwrap();
+        assert!(
+            board.nodes.is_empty(),
+            "undo must remove migration adapters"
+        );
+        assert!(board.layers.is_empty());
+        board.redo(commands.clone(), state.clone()).await.unwrap();
+        assert_eq!(assert_geo_receipt_graph(&board, node_count), expected);
+        board.undo(commands, state).await.unwrap();
+        assert!(board.nodes.is_empty());
+        assert!(board.layers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn derived_receipts_leave_explicit_connections_to_their_own_undo() {
+        use super::commands::{GenericCommand, pins::connect_pins::ConnectPinsCommand};
+        use crate::flow::{node::Node, variable::VariableType};
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let mut source = Node::new("receipt_connection_source", "Source", "", "test");
+        let output = source
+            .add_output_pin("out", "Out", "", VariableType::String)
+            .id
+            .clone();
+        let mut target = Node::new("receipt_connection_target", "Target", "", "test");
+        let input = target
+            .add_input_pin("in", "In", "", VariableType::String)
+            .id
+            .clone();
+        let command = GenericCommand::ConnectPin(ConnectPinsCommand::new(
+            source.id.clone(),
+            target.id.clone(),
+            output.clone(),
+            input.clone(),
+        ));
+        for node in [source, target] {
+            state
+                .node_registry()
+                .write()
+                .await
+                .push_node(Arc::new(GeoReceiptDefinition(node.clone())));
+            board.nodes.insert(node.id.clone(), node);
+        }
+        let commands = board
+            .execute_commands(vec![command], state.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            commands.len(),
+            1,
+            "explicit edges do not need derived receipts"
+        );
+        assert!(
+            board
+                .get_pin_by_id(&output)
+                .unwrap()
+                .connected_to
+                .contains(&input)
+        );
+        assert!(
+            board
+                .get_pin_by_id(&input)
+                .unwrap()
+                .depends_on
+                .contains(&output)
+        );
+        board.undo(commands.clone(), state.clone()).await.unwrap();
+        assert!(
+            board
+                .get_pin_by_id(&output)
+                .unwrap()
+                .connected_to
+                .is_empty()
+        );
+        assert!(board.get_pin_by_id(&input).unwrap().depends_on.is_empty());
+        board.redo(commands, state).await.unwrap();
+        assert!(
+            board
+                .get_pin_by_id(&output)
+                .unwrap()
+                .connected_to
+                .contains(&input)
+        );
+        assert!(
+            board
+                .get_pin_by_id(&input)
+                .unwrap()
+                .depends_on
+                .contains(&output)
+        );
+    }
+
+    #[tokio::test]
+    async fn geo_migration_receipts_preserve_copy_paste_undo_redo_and_replay() {
+        use super::commands::{GenericCommand, nodes::copy_paste::CopyPasteCommand};
+
+        for layout in ["root", "scoped", "boundary"] {
+            let state = flow_state().await;
+            let mut nodes = geo_receipt_fixture(&state).await;
+            let mut layers = Vec::new();
+            if layout != "root" {
+                let mut layer = super::Layer::new(
+                    "function".to_string(),
+                    "Function".to_string(),
+                    super::LayerType::Function,
+                );
+                for node in &mut nodes {
+                    node.layer = Some(layer.id.clone());
+                }
+                if layout == "boundary" {
+                    let source = nodes.remove(0);
+                    layer.pins = source.pins;
+                    for pin in layer.pins.values_mut() {
+                        pin.pin_type = crate::flow::pin::PinType::Input;
+                    }
+                }
+                layers.push(layer);
+            }
+            let node_count = nodes.len() + 1;
+            assert_geo_receipt_history(
+                GenericCommand::CopyPaste(CopyPasteCommand::new(
+                    nodes,
+                    Vec::new(),
+                    layers,
+                    (0.0, 0.0, 0.0),
+                )),
+                state,
+                node_count,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn geo_migration_receipts_preserve_inline_layer_undo_redo_and_replay() {
+        use super::commands::{GenericCommand, layer::upsert_layer::UpsertLayerCommand};
+
+        let state = flow_state().await;
+        let nodes = geo_receipt_fixture(&state).await;
+        let mut layer = super::Layer::new(
+            "legacy-function".to_string(),
+            "Function".to_string(),
+            super::LayerType::Function,
+        );
+        for mut node in nodes {
+            node.layer = Some(layer.id.clone());
+            layer.nodes.insert(node.id.clone(), node);
+        }
+        assert_geo_receipt_history(
+            GenericCommand::UpsertLayer(UpsertLayerCommand::new(layer)),
+            state,
+            4,
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn pin_index_answers_exactly_like_the_scan() {
         use crate::flow::node::Node;
@@ -3258,6 +3739,271 @@ mod tests {
             for pin in node.pins.values_mut() {
                 pin.data_type = data_type.clone();
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_connections_reconcile_inherited_generic_literals() {
+        use crate::flow::{
+            board::commands::{GenericCommand, pins::connect_pins::ConnectPinsCommand},
+            node::{Node, NodeLogic},
+            variable::VariableType,
+        };
+        use flow_like_types::json::json;
+
+        let state = flow_state().await;
+        state
+            .node_registry()
+            .write()
+            .await
+            .push_node(Arc::new(TypeMirrorLogic));
+        let point = json!({"type":"Point","coordinates":[13.405,52.52]});
+        for literal in [
+            json!("previous text"),
+            json!(false),
+            json!(0),
+            point.clone(),
+        ] {
+            let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+            let mut source = Node::new(
+                "geo_get_current_location",
+                "Get Current Location",
+                "",
+                "test",
+            );
+            let source_pin = source
+                .add_output_pin("geometry", "Geometry", "", VariableType::Geometry)
+                .id
+                .clone();
+            let source_id = source.id.clone();
+            board.nodes.insert(source_id.clone(), source);
+            let mut target = TypeMirrorLogic.get_node();
+            let target_pin = target.get_pin_mut_by_name("in").unwrap();
+            target_pin.set_default_value(Some(literal.clone()));
+            let target_pin_id = target_pin.id.clone();
+            let target_id = target.id.clone();
+            board.nodes.insert(target_id.clone(), target);
+
+            let commands = board
+                .execute_commands(
+                    vec![GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                        source_id,
+                        target_id.clone(),
+                        source_pin,
+                        target_pin_id.clone(),
+                    ))],
+                    state.clone(),
+                )
+                .await
+                .expect("connecting a location output must replace stale generic defaults");
+            let pin = &board.nodes[&target_id].pins[&target_pin_id];
+            assert_eq!(pin.data_type, VariableType::Geometry);
+            assert_eq!(
+                pin.default_value,
+                (literal == point).then(|| serde_json::to_vec(&point).unwrap())
+            );
+            board.save(None).await.unwrap();
+            let loaded = super::Board::load(Path::from("boards"), &board.id, state.clone(), None)
+                .await
+                .unwrap();
+            loaded.validate_geometry_contracts().unwrap();
+            board.undo(commands.clone(), state.clone()).await.unwrap();
+            assert_eq!(
+                board.nodes[&target_id].pins[&target_pin_id].default_value,
+                Some(serde_json::to_vec(&literal).unwrap())
+            );
+            board.redo(commands, state.clone()).await.unwrap();
+            assert_eq!(
+                board.nodes[&target_id].pins[&target_pin_id].default_value,
+                (literal == point).then(|| serde_json::to_vec(&point).unwrap())
+            );
+        }
+    }
+
+    struct VariableGeometryMirrorLogic;
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for VariableGeometryMirrorLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            use crate::flow::{node::Node, variable::VariableType};
+            let mut node = Node::new("variable_set", "Set Variable", "", "test");
+            node.add_input_pin("var_ref", "Variable", "", VariableType::String);
+            node.add_input_pin("value_in", "Value", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, board: &super::Board) {
+            let id: String = serde_json::from_slice(
+                node.get_pin_by_name("var_ref")
+                    .unwrap()
+                    .default_value
+                    .as_deref()
+                    .unwrap(),
+            )
+            .unwrap();
+            let variable = board.get_any_variable(&id).unwrap();
+            let pin = node.get_pin_mut_by_name("value_in").unwrap();
+            pin.data_type = variable.data_type.clone();
+            pin.value_type = variable.value_type.clone();
+            pin.schema = variable.schema.clone();
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_variable_edits_reconcile_set_node_literals_and_subtypes() {
+        use crate::flow::{
+            board::commands::{GenericCommand, variables::upsert_variable::UpsertVariableCommand},
+            node::NodeLogic,
+            pin::ValueType,
+            variable::{Variable, VariableType},
+        };
+        use flow_like_types::{
+            geometry::{GeometryKind, marker},
+            json::json,
+        };
+
+        let state = flow_state().await;
+        state
+            .node_registry()
+            .write()
+            .await
+            .push_node(Arc::new(VariableGeometryMirrorLogic));
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let mut variable = Variable::new("Location", VariableType::String, ValueType::Normal);
+        board
+            .variables
+            .insert(variable.id.clone(), variable.clone());
+        let mut node = VariableGeometryMirrorLogic.get_node();
+        node.get_pin_mut_by_name("var_ref")
+            .unwrap()
+            .set_default_value(Some(json!(variable.id)));
+        node.get_pin_mut_by_name("value_in")
+            .unwrap()
+            .set_default_value(Some(json!("previous text")));
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board.node_updates(state.clone()).await;
+
+        for kind in [GeometryKind::Point, GeometryKind::Polygon] {
+            let previous_literal = board.nodes[&node_id]
+                .get_pin_by_name("value_in")
+                .unwrap()
+                .default_value
+                .clone();
+            variable.data_type = VariableType::Geometry;
+            variable.schema = Some(marker(kind).to_string());
+            variable.set_default_value(serde_json::Value::Null);
+            let commands = board
+                .execute_commands(
+                    vec![GenericCommand::UpsertVariable(UpsertVariableCommand::new(
+                        variable.clone(),
+                    ))],
+                    state.clone(),
+                )
+                .await
+                .expect("changing a variable type must reconcile its Set Variable input");
+            let input = board.nodes[&node_id].get_pin_by_name("value_in").unwrap();
+            assert_eq!(input.data_type, VariableType::Geometry);
+            assert!(input.default_value.is_none());
+            board.save(None).await.unwrap();
+            board.undo(commands.clone(), state.clone()).await.unwrap();
+            assert_eq!(
+                board.nodes[&node_id]
+                    .get_pin_by_name("value_in")
+                    .unwrap()
+                    .default_value,
+                previous_literal
+            );
+            board.redo(commands, state.clone()).await.unwrap();
+            assert!(
+                board.nodes[&node_id]
+                    .get_pin_by_name("value_in")
+                    .unwrap()
+                    .default_value
+                    .is_none()
+            );
+            if kind == GeometryKind::Point {
+                board
+                    .nodes
+                    .get_mut(&node_id)
+                    .unwrap()
+                    .get_pin_mut_by_name("value_in")
+                    .unwrap()
+                    .set_default_value(Some(json!({"type":"Point","coordinates":[13.405,52.52]})));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_schema_normalization_does_not_hide_invalid_literals() {
+        use crate::flow::{
+            board::commands::{GenericCommand, nodes::update_node::UpdateNodeCommand},
+            node::NodeLogic,
+            pin::ValueType,
+            variable::{Variable, VariableType},
+        };
+        use flow_like_types::{
+            geometry::{GeometryKind, marker},
+            json::json,
+        };
+
+        let state = flow_state().await;
+        state
+            .node_registry()
+            .write()
+            .await
+            .push_node(Arc::new(VariableGeometryMirrorLogic));
+        for schema in [
+            Some(r#"{ "x-geometry": "Point", "$id": "flow:geometry" }"#),
+            Some("point-schema-ref"),
+            None,
+        ] {
+            let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+            board.refs.insert(
+                "point-schema-ref".into(),
+                marker(GeometryKind::Point).into(),
+            );
+            let mut variable = Variable::new("Location", VariableType::Geometry, ValueType::Normal);
+            variable.schema = Some(marker(GeometryKind::Point).into());
+            board
+                .variables
+                .insert(variable.id.clone(), variable.clone());
+            let mut node = VariableGeometryMirrorLogic.get_node();
+            node.get_pin_mut_by_name("var_ref")
+                .unwrap()
+                .set_default_value(Some(json!(variable.id)));
+            let input = node.get_pin_mut_by_name("value_in").unwrap();
+            input.data_type = VariableType::Geometry;
+            input.schema = schema.map(str::to_string);
+            input.set_default_value(Some(json!("invalid geometry literal")));
+            let invalid_default = input.default_value.clone();
+            let node_id = node.id.clone();
+            board.nodes.insert(node_id.clone(), node.clone());
+
+            board
+                .execute_commands(
+                    vec![GenericCommand::UpdateNode(UpdateNodeCommand::new(node))],
+                    state.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                board.nodes[&node_id]
+                    .get_pin_by_name("value_in")
+                    .unwrap()
+                    .default_value,
+                invalid_default
+            );
+            let error = board.save(None).await.unwrap_err().to_string();
+            assert!(error.contains("Pin 'Value' on 'Set Variable'"), "{error}");
+            assert!(error.contains("received a string"), "{error}");
         }
     }
 

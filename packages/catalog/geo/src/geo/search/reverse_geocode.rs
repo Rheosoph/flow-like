@@ -1,14 +1,13 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::geo::GeoCoordinate;
+use crate::geo::{GeoCoordinate, pins};
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Default)]
 pub struct ReverseGeocodeResult {
@@ -51,6 +50,7 @@ impl NodeLogic for ReverseGeocodeNode {
             "Converts geographic coordinates to a human-readable address using the Nominatim service (OpenStreetMap).",
             "Web/Geo/Search",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "reverseGeocode");
         node.add_icon("/flow/icons/map.svg");
 
@@ -60,14 +60,13 @@ impl NodeLogic for ReverseGeocodeNode {
             "Initiate reverse geocoding",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinate",
-            "Coordinate",
-            "The geographic coordinate (latitude, longitude) to look up",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        pins::geometry_input(
+            &mut node,
+            "geometry",
+            "Geometry",
+            "Point to look up",
+            Some(GeometryKind::Point),
+        );
 
         node.add_input_pin(
             "zoom",
@@ -104,6 +103,14 @@ impl NodeLogic for ReverseGeocodeNode {
             VariableType::String,
         );
 
+        pins::geometry_output(
+            &mut node,
+            "geometry_out",
+            "Result Geometry",
+            "Point returned by the geocoding service",
+            Some(GeometryKind::Point),
+        );
+
         node.set_scores(
             NodeScores::new()
                 .set_privacy(7)
@@ -123,8 +130,9 @@ impl NodeLogic for ReverseGeocodeNode {
 
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
+        pins::clear_output(context, "geometry_out").await?;
 
-        let coordinate: GeoCoordinate = context.evaluate_pin("coordinate").await?;
+        let coordinate = pins::coordinate_input(context, "geometry").await?;
         let zoom: i64 = context.evaluate_pin("zoom").await?;
         let zoom = zoom.clamp(0, 18);
 
@@ -132,10 +140,7 @@ impl NodeLogic for ReverseGeocodeNode {
             .user_agent("FlowLike/1.0")
             .build()?;
 
-        let url = format!(
-            "https://nominatim.openstreetmap.org/reverse?lat={}&lon={}&format=json&addressdetails=1&zoom={}",
-            coordinate.latitude, coordinate.longitude, zoom
-        );
+        let url = reverse_url(&coordinate, zoom);
 
         let response = client.get(&url).send().await?;
 
@@ -148,36 +153,7 @@ impl NodeLogic for ReverseGeocodeNode {
 
         let body: NominatimReverseResult = response.json().await?;
 
-        let address = body
-            .address
-            .map(|a| Address {
-                house_number: a.house_number,
-                road: a.road,
-                suburb: a.suburb,
-                city: a.city.or(a.town).or(a.village),
-                county: a.county,
-                state: a.state,
-                postcode: a.postcode,
-                country: a.country,
-                country_code: a.country_code,
-            })
-            .unwrap_or_default();
-
-        let result = ReverseGeocodeResult {
-            display_name: body.display_name.clone(),
-            coordinate: GeoCoordinate::new(
-                body.lat.parse().unwrap_or(coordinate.latitude),
-                body.lon.parse().unwrap_or(coordinate.longitude),
-            ),
-            address,
-            osm_id: body.osm_id,
-            osm_type: body.osm_type,
-        };
-
-        context.set_pin_value("result", json!(result)).await?;
-        context
-            .set_pin_value("display_name", json!(body.display_name))
-            .await?;
+        publish_result(context, body).await?;
 
         context.deactivate_exec_pin("exec_error").await?;
         context.activate_exec_pin("exec_success").await?;
@@ -191,6 +167,52 @@ impl NodeLogic for ReverseGeocodeNode {
             "This node requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+fn reverse_url(coordinate: &GeoCoordinate, zoom: i64) -> String {
+    format!(
+        "https://nominatim.openstreetmap.org/reverse?lat={}&lon={}&format=json&addressdetails=1&zoom={}",
+        coordinate.latitude, coordinate.longitude, zoom
+    )
+}
+
+#[cfg(feature = "execute")]
+async fn publish_result(
+    context: &mut ExecutionContext,
+    body: NominatimReverseResult,
+) -> flow_like_types::Result<()> {
+    let address = body
+        .address
+        .map(|a| Address {
+            house_number: a.house_number,
+            road: a.road,
+            suburb: a.suburb,
+            city: a.city.or(a.town).or(a.village),
+            county: a.county,
+            state: a.state,
+            postcode: a.postcode,
+            country: a.country,
+            country_code: a.country_code,
+        })
+        .unwrap_or_default();
+
+    let result = ReverseGeocodeResult {
+        display_name: body.display_name.clone(),
+        coordinate: GeoCoordinate::new(body.lat.parse()?, body.lon.parse()?),
+        address,
+        osm_id: body.osm_id,
+        osm_type: body.osm_type,
+    };
+
+    let geometry = pins::point_geometry(&result.coordinate)?;
+    context.set_pin_value("result", json!(result)).await?;
+    context
+        .set_pin_value("display_name", json!(body.display_name))
+        .await?;
+    context.set_pin_value("geometry_out", geometry).await?;
+
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -218,4 +240,65 @@ struct NominatimAddress {
     postcode: Option<String>,
     country: Option<String>,
     country_code: Option<String>,
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use flow_like_types::Value;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn geometry_drives_reverse_request_and_response_exposes_returned_point() {
+        let mut context = pins::tests::execution_context(Arc::new(ReverseGeocodeNode::new())).await;
+        context
+            .set_pin_value(
+                "geometry",
+                json!({"type":"Point","coordinates":[13.405,52.52]}),
+            )
+            .await
+            .unwrap();
+        let coordinate = pins::coordinate_input(&context, "geometry").await.unwrap();
+        assert_eq!(
+            reverse_url(&coordinate, 18),
+            "https://nominatim.openstreetmap.org/reverse?lat=52.52&lon=13.405&format=json&addressdetails=1&zoom=18"
+        );
+
+        let body = flow_like_types::json::from_value(json!({
+            "display_name":"Berlin, Germany", "lat":"52.5201", "lon":"13.4051",
+            "address":{"city":"Berlin","country":"Germany"}
+        }))
+        .unwrap();
+        publish_result(&mut context, body).await.unwrap();
+        let geometry = context.evaluate_pin::<Value>("geometry_out").await.unwrap();
+        assert_eq!(
+            geometry,
+            json!({"type":"Point","coordinates":[13.4051,52.5201]})
+        );
+        let result: ReverseGeocodeResult = context.evaluate_pin("result").await.unwrap();
+        assert_eq!(result.address.city.as_deref(), Some("Berlin"));
+        assert_eq!(result.coordinate.longitude, geometry["coordinates"][0]);
+
+        // A later input failure must clear the previous returned point before requesting a location.
+        context
+            .set_pin_value("zoom", json!("invalid"))
+            .await
+            .unwrap();
+        assert!(ReverseGeocodeNode::new().run(&mut context).await.is_err());
+        assert!(context.evaluate_pin::<Value>("geometry_out").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reverse_geocode_rejects_invalid_response_coordinates() {
+        for longitude in ["bad", "NaN", "181"] {
+            let mut context =
+                pins::tests::execution_context(Arc::new(ReverseGeocodeNode::new())).await;
+            let body = flow_like_types::json::from_value(json!({
+                "display_name":"Invalid", "lat":"52.52", "lon":longitude
+            }))
+            .unwrap();
+            assert!(publish_result(&mut context, body).await.is_err());
+            assert!(context.evaluate_pin::<Value>("geometry_out").await.is_err());
+        }
+    }
 }

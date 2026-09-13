@@ -211,8 +211,8 @@ pub async fn native_geofence_permission(mode: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn native_publish_snapshot(snapshot: Value) -> Result<(), String> {
-    if snapshot.to_string().len() > 1024 * 1024 {
-        return Err("Native snapshot exceeds 1 MiB".into());
+    if snapshot.to_string().len() > 2 * 1024 * 1024 {
+        return Err("Native snapshot exceeds 2 MiB".into());
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::publish(snapshot);

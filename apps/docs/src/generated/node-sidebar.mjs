@@ -9667,6 +9667,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-coordinate"
               },
               {
+                "label": "Legacy Geo Adapter",
+                "slug": "nodes/web/geo/geometry/geometry-legacy-adapter"
+              },
+              {
                 "label": "Legacy H3 Polygons to MultiPolygon",
                 "slug": "nodes/web/geo/geometry/geometry-from-legacy-polygons"
               },

@@ -38,9 +38,9 @@ def merge(records, cloud="all"):
 class MatrixTests(unittest.TestCase):
     def test_matrix_covers_portable_targets_and_real_recipes(self):
         entries = containers.matrix("all")["include"]
-        self.assertEqual(len(entries), 55)
-        self.assertEqual(len({entry["id"] for entry in entries}), 55)
-        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [10, 7, 8])
+        self.assertEqual(len(entries), 56)
+        self.assertEqual(len({entry["id"] for entry in entries}), 56)
+        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [11, 7, 8])
         self.assertIn("gcp-api", {entry["id"] for entry in entries})
         self.assertIn("azure-api", {entry["id"] for entry in entries})
         self.assertEqual({entry["cloud"] for entry in entries if entry["workload"] == "web"}, {"docker-compose", "kubernetes"})
@@ -87,10 +87,12 @@ class MatrixTests(unittest.TestCase):
     def test_nonstandard_recipes_and_context_are_preserved(self):
         entries = {entry["id"]: entry for entry in containers.matrix("all")["include"]}
         self.assertEqual(entries["aws-executor-async"]["dockerfile"], "apps/backend/aws/executor-ecs/Dockerfile")
+        self.assertEqual(entries["aws-executor-lambda-async"]["dockerfile"], "apps/backend/aws/executor-async/Dockerfile")
+        self.assertEqual(entries["aws-executor-lambda-async"]["platform"], "linux/arm64")
         self.assertEqual(entries["aws-compiler"]["dockerfile"], "apps/backend/aws/compiler-ecs/Dockerfile")
         self.assertEqual(entries["aws-signaling"]["dockerfile"], "apps/backend/docker-compose/signaling/Dockerfile")
         self.assertEqual(entries["azure-otel-collector"]["context"], ".")
-        self.assertEqual(entries["aws-executor"]["platform"], "linux/amd64")
+        self.assertEqual(entries["aws-executor"]["platform"], "linux/arm64")
         self.assertEqual(entries["aws-api"]["platform"], "linux/arm64")
 
     def test_self_hosted_selectors_cover_both_native_architectures(self):
@@ -540,7 +542,7 @@ class PublishTests(unittest.TestCase):
     def test_cloud_repositories_are_carbon_copied_without_annotations(self):
         release = release_manifest("aws")
         document, run, _ = self.publish(release, "refs/heads/main")
-        self.assertEqual(len(document["images"]), 10)
+        self.assertEqual(len(document["images"]), 11)
         records = {entry["repository"]: entry for entry in release["images"]}
         for image in document["images"]:
             self.assertEqual(image["kind"], "manifest")

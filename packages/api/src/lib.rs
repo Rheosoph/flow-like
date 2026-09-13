@@ -138,6 +138,21 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         ));
     }
 
+    {
+        let resolver_state = state.clone();
+        state
+            .dispatcher
+            .set_async_wasm_package_resolver(std::sync::Arc::new(move |app_id, target| {
+                let state = resolver_state.clone();
+                Box::pin(async move {
+                    crate::execution::wasm_resolve::resolve_wasm_packages_for_platform(
+                        &state, &app_id, &target,
+                    )
+                    .await
+                })
+            }));
+    }
+
     if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
         if state.platform_config.audit.require_signing {
             panic!(

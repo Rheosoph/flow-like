@@ -17,6 +17,7 @@ import {
 	nativeEventActionKind,
 	nativeEventSettings,
 } from "@flow-like/flow-like-ui/lib/native-event";
+import type { NativeCustomWidget } from "@flow-like/flow-like-ui/lib/native-widget";
 import type { RecentAppUse } from "@flow-like/flow-like-ui/lib/recent-apps";
 import { routePathsEqual } from "@flow-like/flow-like-ui/lib/route-path";
 import {
@@ -101,6 +102,7 @@ export interface NativeEventEntity {
 	surfaces: NativeSurface[];
 }
 export interface NativeSnapshot {
+	customWidgets?: NativeCustomWidget[];
 	version: 1;
 	scope: string;
 	generatedAt: string;

@@ -22,13 +22,12 @@ use flow_like::flow::ast::apply_board_commands_to_board;
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, PlatformSpecialist,
-    enrich_node_metadata, run_ontology_query_chat, run_specialist_chat_with_access,
-    score_catalog_metadata,
+    BoardCommand, CatalogProvider, FlowIrDraftStore, NodeMetadata, PlatformSpecialist,
+    enrich_node_metadata, pin_to_metadata, run_ontology_query_chat,
+    run_specialist_chat_with_access, score_catalog_metadata,
 };
 use flow_like::flow::node::{Node, NodeLogic};
-use flow_like::flow::pin::{Pin, PinType};
-use flow_like::flow::variable::VariableType;
+use flow_like::flow::pin::PinType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
@@ -352,33 +351,6 @@ impl ServerCatalogProvider {
             .iter()
             .map(|logic| logic.get_node())
             .chain(self.wasm_nodes.iter().cloned())
-    }
-}
-
-fn pin_to_metadata(pin: &Pin) -> PinMetadata {
-    let is_generic = pin.data_type == VariableType::Generic;
-    let enforce_schema = pin
-        .options
-        .as_ref()
-        .and_then(|o| o.enforce_schema)
-        .unwrap_or(false);
-    let valid_values = pin.options.as_ref().and_then(|o| o.valid_values.clone());
-
-    PinMetadata {
-        name: pin.name.clone(),
-        friendly_name: pin.friendly_name.clone(),
-        description: pin.description.clone(),
-        data_type: format!("{:?}", pin.data_type),
-        value_type: format!("{:?}", pin.value_type),
-        default_value: pin
-            .default_value
-            .as_ref()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .filter(|value| !value.is_empty() && value != "null"),
-        schema: pin.schema.clone(),
-        is_generic,
-        valid_values,
-        enforce_schema,
     }
 }
 
